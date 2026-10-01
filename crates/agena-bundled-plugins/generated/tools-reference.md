@@ -6,9 +6,9 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 138 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 135 tool definitions**.
 
-- Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming runtime flags, examples, an input parameter table, and the full input / output JSON Schema.
+- Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
 - Tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.
 
@@ -17,8 +17,9 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.chatgpt`](#agenachatgpt) — OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (11 tools)
 - [`agena.claude`](#agenaclaude) — Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback. (9 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (2 tools)
+- [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skill packages as commands. (6 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
-- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
+- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (8 tools)
 - [`agena.gemini`](#agenagemini) — Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (12 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
@@ -31,7 +32,6 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (5 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell command execution and background process tools. (7 tools)
-- [`agena.skills`](#agenaskills) — Discover and read plain-text skills and slash commands. (7 tools)
 - [`agena.snapshot`](#agenasnapshot) — Managed snapshot tools backed by Rift or git worktree. (3 tools)
 - [`agena.tasks`](#agenatasks) — Delegated subtask orchestration tools. (7 tools)
 - [`agena.tools`](#agenatools) — Tool API discovery functions. The runtime resolves tools_call directly to its execution target. (7 tools)
@@ -49,7 +49,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.
@@ -144,7 +144,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
@@ -268,7 +268,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `mutate` `network`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
@@ -302,7 +302,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.
@@ -397,7 +397,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
@@ -431,7 +431,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `mutate` `network`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
@@ -486,7 +486,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.
@@ -547,7 +547,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.
@@ -642,7 +642,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
@@ -766,7 +766,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.
@@ -861,7 +861,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.
@@ -962,7 +962,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `network` `interactive` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.
@@ -1077,7 +1077,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `network` `interactive` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.
@@ -1192,7 +1192,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
@@ -1316,7 +1316,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `mutate` `network`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
@@ -1350,7 +1350,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
@@ -1384,7 +1384,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `mutate` `network`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
@@ -1439,7 +1439,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
@@ -1563,7 +1563,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.
@@ -1678,7 +1678,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.
@@ -1799,7 +1799,7 @@ Structured code search and syntax inspection tools.
 
 **Tags**: `query` `filesystem` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.
@@ -1897,7 +1897,7 @@ Structured code search and syntax inspection tools.
 
 **Tags**: `query` `filesystem` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension.
@@ -1983,6 +1983,229 @@ Structured code search and syntax inspection tools.
 }
 ```
 
+## agena.commands
+
+**Version** `0.1.0` · **Tools** 6
+
+Declare the built-in commands every Agena client renders locally, and project skill packages as commands.
+
+### get
+
+`agena.commands.get` · **Summary**: Read one discovered command package.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Read one package's instructions in full and apply them to the current task.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `name` | `string` | ✓ | — | Canonical name, or an alias, of the command package to read. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "description": "Canonical name, or an alias, of the command package to read.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+### install
+
+`agena.commands.install` · **Summary**: Install a workspace-managed command package document.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Writes `.agena/skills/<name>/SKILL.md` from a complete package document. Only workspace-local packages are mutable; declared, plugin and user-global packages remain read-only.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `document` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "description": "A complete package document. Keeping the editor boundary at the native\ndocument format lets callers preserve a package's YAML frontmatter\nalongside its Markdown instructions instead of maintaining a second,\nlossy model.",
+  "properties": {
+    "document": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "document"
+  ],
+  "type": "object"
+}
+```
+
+### list
+
+`agena.commands.list` · **Summary**: List discovered command packages.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> List discovered command packages, with paging. Each entry names the package, its source, and whether it can be edited in this workspace.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `limit` | `integer / null` | — | — |  |
+| `offset` | `integer / null` | — | — |  |
+| `verbose` | `boolean` | — | `false` |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "offset": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "verbose": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "type": "object"
+}
+```
+
+### read_resource
+
+`agena.commands.read_resource` · **Summary**: Read a bounded UTF-8 resource contained by one package.
+
+**Tags**: `query` `filesystem` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `max_bytes` | `integer` | — | `262144` |  |
+| `name` | `string` | ✓ | — |  |
+| `path` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "max_bytes": {
+      "default": 262144,
+      "format": "uint32",
+      "maximum": 1048576,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "name": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+### refresh
+
+`agena.commands.refresh` · **Summary**: Rescan filesystem-backed packages and report the catalog generation.
+
+**Tags**: `mutate` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `verbose` | `boolean` | — | `false` | Include discovery diagnostics in the human-readable response. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "verbose": {
+      "default": false,
+      "description": "Include discovery diagnostics in the human-readable response.",
+      "type": "boolean"
+    }
+  },
+  "type": "object"
+}
+```
+
+### remove
+
+`agena.commands.remove` · **Summary**: Remove a workspace-managed command package document.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Deletes only `.agena/skills/<name>/SKILL.md`; declared, plugin and user-global packages cannot be removed through this tool.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `name` | `string` | ✓ | — | Canonical name (or alias) of the workspace-managed package to remove. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "description": "Canonical name (or alias) of the workspace-managed package to remove.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
 ## agena.cron
 
 **Version** `0.1.0` · **Tools** 7
@@ -1995,7 +2218,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Tags**: `mutate` `scheduler`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Schedule a recurring wake with a 6-field cron expression (second minute hour day-of-month month day-of-week). Always pass the IANA timezone from environment_context; wall-clock fields are evaluated in that timezone and returned times are explicit RFC 3339 instants. When the job fires while the session is idle, its prompt is appended chronologically as a typed system_notification and wakes the model; never use it to poll. Jobs are session-only and auto-expire after seven days. When the exact time does not matter, avoid :00 and :30 to reduce clumping.
@@ -2118,7 +2341,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Tags**: `mutate` `scheduler`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Permanently remove a scheduled job from this session. Deleting stops future firings immediately.
@@ -2152,7 +2375,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Tags**: `query` `scheduler` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Read the bounded delivery history (fire times, outcome, last error) for scheduled jobs. Never poll this waiting for a job to fire — the firing itself appends its prompt to the session and wakes you.
@@ -2196,7 +2419,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Tags**: `query` `scheduler` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > List every scheduled job registered in this session. Jobs are session-only — they exist for this session's lifetime and are gone when it ends — and recurring jobs auto-expire after seven days. Use this to review schedules you created; never poll it waiting for a job to fire.
@@ -2216,7 +2439,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Tags**: `mutate` `scheduler`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Temporarily suspend a job's future firings while keeping its definition. Use resume to start it again.
@@ -2250,7 +2473,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Tags**: `mutate` `scheduler`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Re-enable a job that was paused so its future firings happen again.
@@ -2284,7 +2507,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Tags**: `mutate` `scheduler`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Change the prompt or cron parameters of an existing job. The updated schedule takes effect for subsequent firings.
@@ -2415,7 +2638,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 ## agena.fs
 
-**Version** `0.1.0` · **Tools** 10
+**Version** `0.1.0` · **Tools** 8
 
 Filesystem command tools for read/search and explicit edits.
 
@@ -2425,17 +2648,10 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root.
-
-**Examples**:
-```json
-{
-  "patch": "*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n*** End Patch"
-}
-```
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2467,18 +2683,10 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `query` `filesystem` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.
-
-**Examples**:
-```json
-{
-  "path": "crates",
-  "pattern": "**/*.rs"
-}
-```
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2549,18 +2757,10 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `query` `filesystem` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated.
-
-**Examples**:
-```json
-{
-  "path": "crates",
-  "pattern": "agena_plugin"
-}
-```
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2613,133 +2813,16 @@ Filesystem command tools for read/search and explicit edits.
 }
 ```
 
-### output_read
-
-`agena.fs.output_read` · **Summary**: Read a byte range of captured tool output owned by this session.
-
-**Tags**: `query` `read_only`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
-
-**Help**:
-> Use output_id from a tool result. Offsets are UTF-8 byte offsets; next_offset continues the capture. Capture can expire, be evicted, or already be truncated.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `limit` | `integer` | — | `8000` |  |
-| `offset` | `integer` | — | `0` |  |
-| `output_id` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "limit": {
-      "default": 8000,
-      "format": "uint",
-      "maximum": 16000,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "offset": {
-      "default": 0,
-      "format": "uint",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000001"
-    },
-    "output_id": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "output_id"
-  ],
-  "type": "object"
-}
-```
-
-### output_search
-
-`agena.fs.output_search` · **Summary**: Find literal text within captured tool output owned by this session.
-
-**Tags**: `query` `read_only`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
-
-**Help**:
-> Search before reading long logs. Results return byte offsets accepted by output_read. This searches captured bytes only, not content already dropped upstream.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `limit` | `integer` | — | `20` |  |
-| `offset` | `integer` | — | `0` |  |
-| `output_id` | `string` | ✓ | — |  |
-| `pattern` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "limit": {
-      "default": 20,
-      "format": "uint",
-      "maximum": 100,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000003"
-    },
-    "offset": {
-      "default": 0,
-      "format": "uint",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "output_id": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "pattern": {
-      "maxLength": 4096,
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "output_id",
-    "pattern"
-  ],
-  "type": "object"
-}
-```
-
 ### read
 
 `agena.fs.read` · **Summary**: Read workspace files.
 
 **Tags**: `query` `filesystem` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use `read` for text previews and directory listings. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents.
-
-**Examples**:
-```json
-{
-  "file_path": "Cargo.toml"
-}
-```
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2811,7 +2894,7 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `query` `filesystem` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2856,7 +2939,7 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2925,7 +3008,7 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `query` `filesystem` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2962,7 +3045,7 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites.
@@ -3025,7 +3108,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.
@@ -3106,7 +3189,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
@@ -3230,7 +3313,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `mutate` `network`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
@@ -3264,7 +3347,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k.
@@ -3345,7 +3428,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
@@ -3379,7 +3462,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `mutate` `network`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
@@ -3434,7 +3517,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude.
@@ -3515,7 +3598,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search.
@@ -3596,7 +3679,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to Google; returned images are saved as separate local artifacts. Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.
@@ -3672,7 +3755,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.
@@ -3738,7 +3821,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `query` `network` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
@@ -3862,7 +3945,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields.
@@ -3949,7 +4032,7 @@ User interaction tools.
 
 **Tags**: `interactive`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use only when you are blocked on a decision that belongs to the user: a preference, a direction choice, or a choice with no reasonable default. If a sensible default exists or you can verify the answer yourself, proceed instead of asking. Ask all necessary clarifying questions at once. Never use this tool to ask whether you should proceed or to seek plan approval.
@@ -4065,7 +4148,7 @@ User interaction tools.
 
 **Tags**: `interactive`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4130,7 +4213,7 @@ LSP read-only observability and navigation tools.
 
 **Tags**: `query` `lsp` `filesystem` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4177,7 +4260,7 @@ LSP read-only observability and navigation tools.
 
 **Tags**: `query` `lsp` `filesystem` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4208,7 +4291,7 @@ LSP read-only observability and navigation tools.
 
 **Tags**: `query` `lsp` `filesystem` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4255,7 +4338,7 @@ LSP read-only observability and navigation tools.
 
 **Tags**: `query` `lsp` `filesystem` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4308,7 +4391,7 @@ LSP read-only observability and navigation tools.
 
 **Tags**: `query` `lsp` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -4331,7 +4414,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `query` `mcp` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4381,7 +4464,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `query` `mcp` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4420,7 +4503,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `query` `mcp` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4459,7 +4542,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `query` `mcp` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4497,7 +4580,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `query` `mcp` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4536,7 +4619,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `mutate` `mcp`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4567,7 +4650,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `query` `mcp` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -4584,7 +4667,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `execute` `mcp` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4627,7 +4710,7 @@ MCP discovery and bridge tools.
 
 **Tags**: `query` `mcp` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4670,7 +4753,7 @@ Persistent memory with searchable retrieval and write tools.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4704,7 +4787,7 @@ Persistent memory with searchable retrieval and write tools.
 
 **Tags**: `query` `filesystem` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4738,7 +4821,7 @@ Persistent memory with searchable retrieval and write tools.
 
 **Tags**: `query` `filesystem` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4770,7 +4853,7 @@ Persistent memory with searchable retrieval and write tools.
 
 **Tags**: `query` `filesystem` `discovery` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4811,7 +4894,7 @@ Persistent memory with searchable retrieval and write tools.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4901,7 +4984,7 @@ Continuous-stream background monitoring tools.
 
 **Tags**: `execute` `shell` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`, or it ends when the session does.
@@ -4988,7 +5071,7 @@ Continuous-stream background monitoring tools.
 
 **Tags**: `mutate` `execute` `shell`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5025,7 +5108,7 @@ Revision-safe Jupyter notebook cell editing.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5128,7 +5211,7 @@ Plan orchestration and plan-autorun tools.
 
 **Tags**: `mutate` `planning`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -5145,7 +5228,7 @@ Plan orchestration and plan-autorun tools.
 
 **Tags**: `mutate` `planning`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Address steps and checks by 1-based index: `step` + `status` (with an optional `note`) updates a step, `step` + `check` + `status` updates a check. This tool NEVER requests user approval and NEVER changes the plan phase — the plan stays in whatever phase it is in. Use `plan.phase` for plan-level phase transitions and `plan.review` to request approval.
@@ -5234,7 +5317,7 @@ Plan orchestration and plan-autorun tools.
 
 **Tags**: `query` `planning` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5272,7 +5355,7 @@ Plan orchestration and plan-autorun tools.
 
 **Tags**: `mutate` `interactive` `planning`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Plan-level phase transitions between `planning`, `active`, `blocked`, `completed`, and `cancelled`, with optional `autorun` and (for `completed`) `summary`. Transitions into `active`, `blocked`, or `completed` require user approval by default: pass `request_approval: true` (or omit it) to route them through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply them directly. To complete a plan with steps, mark the required steps/checks `completed` via `plan.edit` first, then call this tool separately with `phase: completed`.
@@ -5359,7 +5442,7 @@ Plan orchestration and plan-autorun tools.
 
 **Tags**: `mutate` `interactive` `planning`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > This is the only plan tool that requests user approval and may pause for the user. It reviews the current saved plan and, when the user approves, moves it from `planning` to `active`. Call it after creating or refining the plan with `plan.set` / `plan.edit`. If the user leaves feedback or rejects, the plan stays in `planning` so you can revise it and propose again.
@@ -5380,7 +5463,7 @@ Plan orchestration and plan-autorun tools.
 
 **Tags**: `mutate` `planning`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only when the user has already declared that the plan can be created directly without approval — the plan then becomes active immediately. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `ask`.
@@ -5557,7 +5640,7 @@ Structured review and verification findings.
 
 **Tags**: `mutate` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5664,7 +5747,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -5681,7 +5764,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -5698,7 +5781,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -5715,7 +5798,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 **Tags**: `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5746,7 +5829,7 @@ Inspect and manage the current runtime session and its environment, model, and t
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -5769,7 +5852,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 **Tags**: `mutate` `filesystem` `settings` `settings_write`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Deletes from the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing.
@@ -5856,7 +5939,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 **Tags**: `query` `discovery` `filesystem` `settings` `settings_read`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use `source=file` with `layer=global|workspace` for persisted values. Effective reads merge both files plus environment and CLI layers; prefer explicit `scope=config|meta` with a relative path.
@@ -5954,7 +6037,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 **Tags**: `query` `discovery` `filesystem` `settings` `settings_read`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Returns the persisted global value, persisted workspace value, effective merged value, source file paths, and applied-layer metadata. Secret values are always redacted.
@@ -5988,7 +6071,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 **Tags**: `query` `discovery` `filesystem` `settings` `settings_read`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6092,7 +6175,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 **Tags**: `mutate` `filesystem` `settings` `settings_write`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Deep-merges a JSON object into the global or workspace config selected by `layer`, then validates the combined layered configuration; null object entries delete keys. Use `dry_run=true` to preview without writing.
@@ -6186,7 +6269,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 **Tags**: `mutate` `filesystem` `settings` `settings_write`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Writes the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing; dry runs request read permission for both config files instead of write permission.
@@ -6278,7 +6361,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 **Tags**: `query` `filesystem` `settings` `settings_read`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6329,7 +6412,7 @@ Shell command execution and background process tools.
 
 **Tags**: `query` `discovery` `shell` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -6346,7 +6429,7 @@ Shell command execution and background process tools.
 
 **Tags**: `query` `shell` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6403,7 +6486,7 @@ Shell command execution and background process tools.
 
 **Tags**: `mutate` `shell`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6452,7 +6535,7 @@ Shell command execution and background process tools.
 
 **Tags**: `execute` `shell` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Run a shell command. Declare `reads`, `writes` and outbound `network` targets; use empty arrays when none. Set `tty=true` for an interactive CLI, REPL or full-screen terminal. This retains a PTY across tool calls and returns a process_id, incremental output, last_seq, and a current terminal screen. `yield_time_ms` (default 1000, maximum 30000) only controls this call's initial output wait: it never terminates the process. `timeout_ms`, when supplied, is the terminal's overall lifetime limit. Continue with shell.write; read without input with shell.write(chars="") or shell.logs; use shell.resize for dimensions, shell.signal for interrupt/terminate/kill, and shell.stop for cleanup. Never assume a quiet prompt means completion. tty is incompatible with monitor. Without tty, normal foreground behavior is unchanged. `run_in_background=true` or `monitor` starts a non-interactive managed command; completion is notified by system_notification, so do not poll merely to wait for those jobs.
@@ -6700,7 +6783,7 @@ Shell command execution and background process tools.
 
 **Tags**: `mutate` `execute` `shell`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > interrupt targets the current Unix foreground process group without closing the shell (ConPTY uses terminal Ctrl-C). terminate requests graceful session cleanup and then kills remaining jobs; kill skips the grace period. This is distinct from typing a control byte into a raw-mode program. The same owning session/workspace is required. shell.stop is equivalent to terminate.
@@ -6751,7 +6834,7 @@ Shell command execution and background process tools.
 
 **Tags**: `mutate` `execute` `shell`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6782,7 +6865,7 @@ Shell command execution and background process tools.
 
 **Tags**: `mutate` `execute` `shell`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Continue a process started with shell.run(tty=true). chars is exact terminal input: never trim or automatically append a newline. Send \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D, \t for Tab, or terminal escape sequences for arrow/function keys. Use chars="" to read without sending input. Omit since_seq to read previously unread output; use an explicit last_seq to replay/page output. wait_ms defaults to 250 and is capped at 30000; a wait timeout does not kill the CLI. Input is an execution operation: declare every affected reads/writes path (relative to the Agena workspace) and network target, including effects of commands entered inside a shell/REPL. Requires the same owning session and workspace as the launch. A partial-write error requests terminal termination; do not resend the full input blindly. Process exit, not absence of output, indicates completion.
@@ -6868,308 +6951,6 @@ Shell command execution and background process tools.
 }
 ```
 
-## agena.skills
-
-**Version** `0.1.0` · **Tools** 7
-
-Discover and read plain-text skills and slash commands.
-
-### create
-
-`agena.skills.create` · **Summary**: Create a workspace-managed Skill document.
-
-**Tags**: `mutate` `filesystem`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
-
-**Help**:
-> Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, and user-global Skills remain read-only.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `document` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "description": "A complete `SKILL.md` document. Keeping the editor boundary at the native\ndocument format lets callers preserve a Skill's YAML frontmatter alongside\nits Markdown instructions instead of maintaining a second, lossy model.",
-  "properties": {
-    "document": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "document"
-  ],
-  "type": "object"
-}
-```
-
-### delete
-
-`agena.skills.delete` · **Summary**: Delete a workspace-managed Skill document.
-
-**Tags**: `mutate` `filesystem`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
-
-**Help**:
-> Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, and user-global Skills cannot be deleted through this tool.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `expected_revision` | `string / null` | — | `null` | Exact document revision from skills.get; required for update/delete. |
-| `name` | `string` | ✓ | — | Canonical name (or alias) of the workspace-managed Skill to remove. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "expected_revision": {
-      "default": null,
-      "description": "Exact document revision from skills.get; required for update/delete.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "name": {
-      "description": "Canonical name (or alias) of the workspace-managed Skill to remove.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "name"
-  ],
-  "type": "object"
-}
-```
-
-### get
-
-`agena.skills.get` · **Summary**: Read one discovered skill or slash command.
-
-**Tags**: `query` `discovery` `read_only`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `name` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "name": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "name"
-  ],
-  "type": "object"
-}
-```
-
-### list
-
-`agena.skills.list` · **Summary**: List discovered skills and slash commands.
-
-**Tags**: `query` `discovery` `read_only`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `kind` | `string / null` | — | — |  |
-| `limit` | `integer / null` | — | — |  |
-| `offset` | `integer / null` | — | — |  |
-| `verbose` | `boolean` | — | `false` |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "kind": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "limit": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "offset": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "verbose": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000003"
-    }
-  },
-  "type": "object"
-}
-```
-
-### read_resource
-
-`agena.skills.read_resource` · **Summary**: Read a bounded UTF-8 resource contained by one skill package.
-
-**Tags**: `query` `filesystem` `read_only`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `max_bytes` | `integer` | — | `262144` |  |
-| `name` | `string` | ✓ | — |  |
-| `path` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "max_bytes": {
-      "default": 262144,
-      "format": "uint32",
-      "maximum": 1048576,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "name": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "path": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "name",
-    "path"
-  ],
-  "type": "object"
-}
-```
-
-### refresh
-
-`agena.skills.refresh` · **Summary**: Rescan filesystem-backed Skills and report the catalog generation.
-
-**Tags**: `mutate` `discovery` `read_only`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `verbose` | `boolean` | — | `false` | Include discovery diagnostics in the human-readable response. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "verbose": {
-      "default": false,
-      "description": "Include discovery diagnostics in the human-readable response.",
-      "type": "boolean",
-      "x-agena-order": "000000"
-    }
-  },
-  "type": "object"
-}
-```
-
-### update
-
-`agena.skills.update` · **Summary**: Update a workspace-managed Skill document.
-
-**Tags**: `mutate` `filesystem`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
-
-**Help**:
-> Replaces an existing `.agena/skills/<name>/SKILL.md` document. The replacement frontmatter must keep the same canonical name.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `document` | `string` | ✓ | — | Replacement `SKILL.md` document. Its frontmatter name must not change. |
-| `expected_revision` | `string / null` | — | `null` | Exact document revision from skills.get; required for update/delete. |
-| `name` | `string` | ✓ | — | Canonical name (or alias) of the workspace-managed Skill to replace. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "document": {
-      "description": "Replacement `SKILL.md` document. Its frontmatter name must not change.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000002"
-    },
-    "expected_revision": {
-      "default": null,
-      "description": "Exact document revision from skills.get; required for update/delete.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "name": {
-      "description": "Canonical name (or alias) of the workspace-managed Skill to replace.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "name",
-    "document"
-  ],
-  "type": "object"
-}
-```
-
 ## agena.snapshot
 
 **Version** `0.1.0` · **Tools** 3
@@ -7182,7 +6963,7 @@ Managed snapshot tools backed by Rift or git worktree.
 
 **Tags**: `mutate` `snapshot`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -7240,7 +7021,7 @@ Managed snapshot tools backed by Rift or git worktree.
 
 **Tags**: `mutate` `snapshot`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7284,7 +7065,7 @@ Managed snapshot tools backed by Rift or git worktree.
 
 **Tags**: `query` `snapshot` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -7307,7 +7088,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate` `task`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7338,7 +7119,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate` `task`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7406,7 +7187,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `query` `read_only` `task`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7437,7 +7218,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `query` `discovery` `read_only` `task`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7467,7 +7248,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate` `task`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7505,7 +7286,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `query` `read_only` `task`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7549,14 +7330,14 @@ Delegated subtask orchestration tools.
 
 ### run
 
-`agena.tasks.run` · **Summary**: Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach Skill names in `skills` so the child session applies them as task guidance.
+`agena.tasks.run` · **Summary**: Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach command names in `skills` so the child session applies their instructions as task guidance.
 
 **Tags**: `subtask` `execute` `task`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
-> Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.
+> Reach for this tool when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to command names, slash spellings or aliases (for example a read-only review command for a review task, or an explore command for an exploration task); the child session receives the instructions those commands name and should follow them. Unknown names are rejected before the subtask starts. Use the `agena.commands` plugin's `list` tool to discover what this workspace offers. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7567,7 +7348,7 @@ Delegated subtask orchestration tools.
 | `prompt` | `string` | ✓ | — | Full instruction payload for the delegated subtask. |
 | `run_in_background` | `boolean` | — | `false` | Run the subtask in the background (default false). When false (default)<br>the subtask runs inline and this call returns its final result before<br>the tool call returns. When true, the tool returns immediately with a<br>task id and the result is delivered as a `system_notification` when the<br>subtask settles — do not poll tasks.get/tasks.output waiting for it. |
 | `selection` | `TaskModelSelection / null` | — | — | Optional model and mode overrides. Explicit values take precedence over<br>the parent session. |
-| `skills` | `array<string>` | — | — | Optional Skill names or aliases to attach to the delegated subtask's<br>first user message as lazy Skill references. The child model receives<br>catalog metadata and can call `agena.skills.get` when it needs the Skill<br>body. Use skills appropriate to the task: for example a read-only review<br>task can attach a review/read-only skill, an exploration task can attach<br>an explore skill. Unknown names or aliases are rejected before the<br>subtask starts. |
+| `skills` | `array<string>` | — | — | Optional command names, slash spellings or aliases to attach to the<br>delegated subtask's first user message as lazy references. The child<br>model receives catalog metadata and reads the instructions through the<br>plugin that declared the command. Use commands appropriate to the task:<br>for example a read-only review task can attach a review command, an<br>exploration task can attach an explore command. Unknown names are<br>rejected before the subtask starts. |
 | `task_id` | `string / null` | — | — | Resume an existing subtask session instead of creating a new one. |
 | `timeout_ms` | `integer / null` | — | — | Overall task timeout. A timeout cancels the child execution and returns<br>a structured `timed_out` task result. |
 
@@ -7679,7 +7460,7 @@ Delegated subtask orchestration tools.
       "x-agena-order": "000005"
     },
     "skills": {
-      "description": "Optional Skill names or aliases to attach to the delegated subtask's\nfirst user message as lazy Skill references. The child model receives\ncatalog metadata and can call `agena.skills.get` when it needs the Skill\nbody. Use skills appropriate to the task: for example a read-only review\ntask can attach a review/read-only skill, an exploration task can attach\nan explore skill. Unknown names or aliases are rejected before the\nsubtask starts.",
+      "description": "Optional command names, slash spellings or aliases to attach to the\ndelegated subtask's first user message as lazy references. The child\nmodel receives catalog metadata and reads the instructions through the\nplugin that declared the command. Use commands appropriate to the task:\nfor example a read-only review task can attach a review command, an\nexploration task can attach an explore command. Unknown names are\nrejected before the subtask starts.",
       "items": {
         "type": "string"
       },
@@ -7729,7 +7510,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7778,7 +7559,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7873,7 +7654,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7968,7 +7749,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8073,7 +7854,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8147,7 +7928,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8252,7 +8033,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 **Tags**: `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8332,7 +8113,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8393,7 +8174,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8424,7 +8205,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `mutate` `filesystem`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8473,7 +8254,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `query` `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input schema**:
 ```json
@@ -8490,7 +8271,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `mutate` `read_only`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8530,7 +8311,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `mutate` `filesystem`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8575,7 +8356,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.
@@ -8595,7 +8376,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `query` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8626,7 +8407,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8698,7 +8479,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `interactive` `query` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8756,7 +8537,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `discovery` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8828,23 +8609,10 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.
-
-**Examples**:
-```json
-{
-  "url": "https://openai.com"
-}
-```
-```json
-{
-  "prompt": "extract the release date and breaking changes",
-  "url": "https://example.com/docs"
-}
-```
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8897,27 +8665,10 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `discovery` `read_only`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered`
+**Runtime**: streaming `buffered`
 
 **Help**:
 > Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.
-
-**Examples**:
-```json
-{
-  "max_results": 5,
-  "query": "Agena plugin architecture"
-}
-```
-```json
-{
-  "allowed_domains": [
-    "docs.rs",
-    "github.com"
-  ],
-  "query": "Rust schemars derive examples"
-}
-```
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

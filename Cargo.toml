@@ -59,7 +59,6 @@ members = [
     "crates/agena-plugin-sdk",
     "crates/agena-rollout",
     "crates/agena-scheduler",
-    "crates/agena-skills",
     "examples/echo_plugin",
     "examples/echo_plugin_stdio",
     "examples/multi_tool_plugin_stdio",
@@ -125,7 +124,6 @@ agena-plugin-host = { path = "crates/agena-plugin-host" }
 agena-plugin-marketplace = { path = "crates/agena-plugin-marketplace" }
 agena-plugin-sdk = { path = "crates/agena-plugin-sdk" }
 agena-scheduler = { path = "crates/agena-scheduler" }
-agena-skills = { path = "crates/agena-skills" }
 agena-tui-components = { path = "crates/agena-tui-components" }
 agena-tui = { path = "crates/agena-tui" }
 agena-tui-media = { path = "crates/agena-tui-media" }

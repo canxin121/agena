@@ -700,7 +700,7 @@ impl PluginHost {
             }
         }
 
-        let operation_registry = host_handle.operation_registry();
+        let command_registry = host_handle.command_registry();
         let tool_before_pipeline =
             Arc::new(crate::event_pipeline::PluginTransformBailPipeline::new(
                 crate::event_pipeline::PluginPipelineFailurePolicy::Abort,
@@ -921,8 +921,8 @@ impl PluginHost {
             plugins: loaded,
             plugins_by_id: by_id,
             tool_registry: tool_registry_shared,
-            operation_registry,
-            operation_pipeline: Arc::new(crate::event_pipeline::PluginAroundPipeline::new()),
+            command_registry,
+            command_pipeline: Arc::new(crate::event_pipeline::PluginAroundPipeline::new()),
             tool_before_pipeline,
             tool_after_pipeline,
             statuses: statuses_shared,
@@ -2155,38 +2155,35 @@ mod tests {
         );
     }
 
-    struct OperationPlugin {
+    struct CommandPlugin {
         manifest: PluginManifest,
     }
 
-    impl OperationPlugin {
+    impl CommandPlugin {
         fn new() -> Self {
-            let mut manifest = PluginManifest::new("example", "operation", "0.1.0");
-            manifest
-                .operations
-                .push(agena_plugin_sdk::PluginOperationDefinition {
-                    id: "run".to_string(),
-                    title: "Run".to_string(),
-                    description: String::new(),
-                    group: "Test".to_string(),
-                    category: None,
-                    slash: Some("/run".to_string()),
-                    aliases: Vec::new(),
-                    usage: None,
-                    input: agena_plugin_sdk::SettingsContract::new(
-                        agena_plugin_sdk::SettingsNode::root_object("Input", ""),
-                    ),
-                    discoverability: Default::default(),
-                    target: agena_plugin_sdk::PluginOperationTarget::Method {
-                        handler: "run".to_string(),
-                    },
-                });
+            let mut manifest = PluginManifest::new("example", "command", "0.1.0");
+            manifest.commands.push(agena_plugin_sdk::CommandDefinition {
+                id: "run".to_string(),
+                title: "Run".to_string(),
+                docs: agena_plugin_sdk::CommandDocs::default(),
+                group: "Test".to_string(),
+                category: None,
+                slash: Some("/run".to_string()),
+                aliases: Vec::new(),
+                input: agena_plugin_sdk::SettingsContract::new(
+                    agena_plugin_sdk::SettingsNode::root_object("Input", ""),
+                ),
+                discoverability: Default::default(),
+                target: agena_plugin_sdk::CommandTarget::Method {
+                    handler: "run".to_string(),
+                },
+            });
             Self { manifest }
         }
     }
 
     #[async_trait]
-    impl Plugin for OperationPlugin {
+    impl Plugin for CommandPlugin {
         fn manifest(&self) -> PluginManifest {
             self.manifest.clone()
         }
@@ -2199,28 +2196,26 @@ mod tests {
             Ok(InitOutcome::ack(self.manifest()))
         }
 
-        async fn operation_invoke(
+        async fn command_invoke(
             &self,
-            _input: agena_plugin_sdk::PluginOperationInvokeInput,
-        ) -> crate::sdk::Result<agena_plugin_sdk::PluginOperationResult> {
-            Ok(agena_plugin_sdk::PluginOperationResult::succeeded(
-                "terminal",
-            ))
+            _input: agena_plugin_sdk::CommandInvokeInput,
+        ) -> crate::sdk::Result<agena_plugin_sdk::CommandResult> {
+            Ok(agena_plugin_sdk::CommandResult::succeeded("terminal"))
         }
     }
 
     #[tokio::test]
-    async fn operation_dispatch_runs_through_effect_owned_around_middleware() {
-        let plugin_key: PluginKey = "example.operation".parse().expect("plugin key");
+    async fn command_dispatch_runs_through_effect_owned_around_middleware() {
+        let plugin_key: PluginKey = "example.command".parse().expect("plugin key");
         let mut config = PluginsConfig::default();
         config.list.insert(plugin_key.to_string(), configured(&[]));
         let host = PluginHost::new(PluginHostBuildConfig {
             static_plugins: vec![StaticPluginRegistration::new(
                 plugin_key,
-                OperationPlugin::new(),
+                CommandPlugin::new(),
             )],
             config,
-            workspace_root: PathBuf::from("/tmp/agena-plugin-operation-pipeline-test"),
+            workspace_root: PathBuf::from("/tmp/agena-plugin-command-pipeline-test"),
             agena_version: "0.1.0".to_string(),
             callback_base_url: None,
             host_client: None,
@@ -2233,12 +2228,12 @@ mod tests {
         assert_eq!(
             host.plugins().len(),
             1,
-            "operation plugin did not reach loaded state: inspect={:#?} logs={:#?}",
-            host.plugin_inspect("example.operation"),
-            host.plugin_logs("example.operation", None, 50)
+            "command plugin did not reach loaded state: inspect={:#?} logs={:#?}",
+            host.plugin_inspect("example.command"),
+            host.plugin_logs("example.command", None, 50)
         );
         let before_middleware = host
-            .plugin_inspect("example.operation")
+            .plugin_inspect("example.command")
             .expect("inspect before middleware")
             .effects
             .expect("effect scope before middleware");
@@ -2248,8 +2243,8 @@ mod tests {
             "effect scope closed before runtime middleware registration: {before_middleware:#?}"
         );
 
-        host.register_operation_middleware(
-            "example.operation",
+        host.register_command_middleware(
+            "example.command",
             10,
             "wrap result",
             |dispatch, next| async move {
@@ -2258,13 +2253,13 @@ mod tests {
                 Ok(result)
             },
         )
-        .expect("register operation middleware");
+        .expect("register command middleware");
 
         let result = host
-            .invoke_plugin_operation_async(
-                "example.operation",
-                agena_plugin_sdk::PluginOperationInvokeInput {
-                    operation_id: "run".to_string(),
+            .invoke_plugin_command_async(
+                "example.command",
+                agena_plugin_sdk::CommandInvokeInput {
+                    command_id: "run".to_string(),
                     input: serde_json::json!({}),
                     session_id: None,
                     call_id: None,
@@ -2274,10 +2269,10 @@ mod tests {
                 },
             )
             .await
-            .expect("invoke operation");
+            .expect("invoke command");
         assert_eq!(result.summary, "wrapped:terminal");
         assert!(
-            host.plugin_inspect("example.operation")
+            host.plugin_inspect("example.command")
                 .expect("inspect")
                 .effects
                 .as_ref()

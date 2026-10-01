@@ -455,9 +455,9 @@ settings-activity-kind-resource-label = リソース
 
 settings-activity-kind-resource-description = 添付ファイルおよびその他のリソースコンテンツ。
 
-settings-activity-kind-skill_reference-label = スキルリファレンス
+settings-activity-kind-skill_reference-label = コマンド参照
 
-settings-activity-kind-skill_reference-description = 回答に使用するスキルへの参照。
+settings-activity-kind-skill_reference-description = 回答で選択したコマンドへの参照。
 
 settings-activity-kind-interaction-label = インタラクション
 
@@ -545,7 +545,6 @@ settings-field-parse-float = {$field} 数値の値が期待される
 
 settings-choice-adapter-fallback = アダプター
 
-
 settings-plugin-workbench-label = プラグイン設定ワークベンチ
 
 settings-mcp-server-label = Agena MCP サーバー
@@ -579,9 +578,6 @@ settings-mcp-anonymous-access-read-only = 許可契約読み取り専用ツー�
 settings-mcp-registration-label = 会員登録
 
 settings-mcp-pkce-label = ピクチャー
-
-
-
 
 settings-mcp-public-url-label = 公開 MCP URL
 
@@ -1021,7 +1017,6 @@ settings-mcp-auth-mode-updated = エイジナ MCP 認証モードを {$mode} に
 
 settings-mcp-anonymous-access-updated = エイジナ MCP 匿名ツール {$policy}
 
-
 settings-mcp-oauth-password-cleared = エイジナ MCP OAuth パスワードクリア
 
 permission-studio-command-pattern-title = {$tool_name} コマンドパターン
@@ -1188,7 +1183,7 @@ settings-field-tui-graphics-description = サポートされている場合は�
 settings-field-activity-default-expanded-description = 種類固有のオーバーライドを持たないアクティビティのデフォルトの展開状態。推論の種類が明示的に設定されない限り、推論は拡張されたままになります。
 settings-activity-kind-reasoning-description = モデルの完全な思考の軌跡。デフォルトでは展開されていますが、種類ごとに折りたたむことができます。
 runtime-setting-choice-supported-model = 現行モデルでサポートされている
-settings-plugin-workbench-detail = 構造化されたプラグイン ワークベンチを開いて、ランタイム ステータス、構成、ツール、操作、ログ、診断を表示します。
+settings-plugin-workbench-detail = 構造化されたプラグイン ワークベンチを開いて、ランタイム ステータス、構成、ツール、コマンド、ログ、診断を表示します。
 settings-mcp-server-detail = Agena のライブ HTTP MCP サーフェスを切り替えます。接続された Agena サーバー プロセスは実際のランタイムのままです。
 settings-mcp-auth-detail = 非認証、完全な OAuth、および ChatGPT 混合認証をサイクルします。混合モードでは、初期化とツール検出が公開されたままになります。匿名アクセスが明示的に有効になっていない限り、ツール呼び出しは OAuth で保護されたままになります。
 settings-mcp-anonymous-access-none-detail = 安全なデフォルト: どのツール呼び出しも匿名ではありません。 ChatGPT は、サインインする前にカタログを初期化し、検出することができます。
@@ -1240,7 +1235,6 @@ value-open = 開く
 composer-prompt-history-title = プロンプト履歴
 overlay-commands-title = コマンドパレット
 overlay-commands-prompt = 検索アクション。テキストが必要なコマンドはコンポーザーで続行されます
-overlay-skill-studio-title = スキルの管理
 overlay-lineage-title = ブランチ履歴 [#{ $session }]
 overlay-lineage-prompt = 現在のブランチ ツリーを探索し、祖先、兄弟、または子のセッションにジャンプします
 overlay-rewind-title = セッションを巻き戻す [#{ $session }]
@@ -1595,7 +1589,7 @@ plugin-workbench-column-arguments = 引数
 plugin-workbench-column-before = 変更前
 plugin-workbench-column-category = カテゴリ
 plugin-workbench-column-change = 変更
-plugin-workbench-column-operation = 操作
+plugin-workbench-column-command = コマンド
 plugin-workbench-column-description = 説明
 plugin-workbench-column-field = フィールド
 plugin-workbench-column-inputs = 入力
@@ -1608,7 +1602,7 @@ plugin-workbench-column-summary = 概要
 plugin-workbench-column-tool = ツール
 plugin-workbench-column-version = バージョン
 plugin-workbench-column-visible-tool = 表示ツール
-plugin-workbench-operation-arguments = 引数: {$operation}
+plugin-workbench-command-arguments = 引数: {$command}
 plugin-workbench-config = 設定
 plugin-workbench-config-action = アクション
 plugin-workbench-config-choose-shape = 形式を選択
@@ -1634,7 +1628,7 @@ plugin-workbench-detail-footer = Tab/Shift+Tab セクション · ↑/↓ スク
 plugin-workbench-detail-tools-footer = Tab/Shift+Tab セクション · ↑/↓ 選択 · Enter 設定して実行 · Esc 戻る
 plugin-workbench-filter-all = すべて
 plugin-workbench-filter-other = その他
-plugin-workbench-header-summary = ツール: {$tools}        操作: {$operations}        設定: {$config}
+plugin-workbench-header-summary = ツール: {$tools}        コマンド: {$commands}        設定: {$config}
 plugin-workbench-input-preview = 入力プレビュー: {$tool}
 plugin-workbench-last-result-failed = 直近の結果 · {$tool} · 失敗
 plugin-workbench-last-result-success = 直近の結果 · {$tool} · 成功
@@ -1643,7 +1637,7 @@ plugin-workbench-list-summary = プラグイン検索… {$query}        トラ�
 plugin-workbench-loading-actions = アクションを読み込み中…
 plugin-workbench-loading-choices = 選択肢を読み込み中…
 plugin-workbench-no-changes = 変更なし
-plugin-workbench-no-operations = 操作はありません。
+plugin-workbench-no-commands = コマンドはありません。
 plugin-workbench-no-config-section = 設定セクションがありません。
 plugin-workbench-no-editable-rows = 編集可能な行がありません。
 plugin-workbench-no-filter-matches = 現在のフィルターに一致するプラグインはありません。
@@ -1673,7 +1667,7 @@ plugin-workbench-status-valid = 有効
 plugin-workbench-status-warning = 警告
 plugin-workbench-summary = 検索: {$query} · トランスポート {$transport} · 設定 {$config} · {$shown}/{$total} 件表示
 plugin-workbench-tab-capabilities = 機能
-plugin-workbench-tab-operations = 操作
+plugin-workbench-tab-commands = コマンド
 plugin-workbench-tab-config = 設定
 plugin-workbench-tab-diagnostics = 診断
 plugin-workbench-tab-logs = ログ
@@ -1685,7 +1679,6 @@ plugin-workbench-tools-help = ↑/↓ でツールを選択します。Enter で
 plugin-workbench-transport = トランスポート
 plugin-workbench-trust-level = 信頼レベル: {$level}
 plugin-workbench-unavailable = 利用不可
-
 
 # Plugin Workbench structured editor i18n completion
 plugin-workbench-editor-also-matches = 次にも一致: {$matches}

@@ -2,7 +2,7 @@ use super::{
     AgenaCli, AgenaCommand, AppError, ApplyArgs, AuthCommand, CommitArgs, CompletionArgs,
     ConfigCommand, ContinueArgs, CostArgs, DebugCommand, DiagnosticsArgs, ExecArgs, ForkArgs,
     GitArgs, InspectArgs, LoginArgs, LogoutArgs, McpCommand, McpGetArgs, McpServerArgs,
-    McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat, PermissionsArgs, PluginOperation,
+    McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat, PermissionsArgs, PluginCommand,
     PluginReleaseSubcommand, PluginSubcommand, PluginTemplateArg, PrArgs, ProviderCommand,
     ResumeArgs, ReviewArgs, SessionsCommand, SnapshotArgs, UsageArgs, render_completion_command,
     render_plugin_validate_output, validate_plugin_target,
@@ -77,7 +77,7 @@ impl AgenaCli {
         Ok(())
     }
 
-    pub(super) async fn run_plugin(self, command: PluginOperation) -> Result<(), AppError> {
+    pub(super) async fn run_plugin(self, command: PluginCommand) -> Result<(), AppError> {
         use agena_plugin_marketplace::{
             AssembleReleaseRequest, PackagePluginRequest, PluginReleaseSource, PluginTemplateKind,
             ScaffoldPluginRequest, assemble_release, current_target_triple,

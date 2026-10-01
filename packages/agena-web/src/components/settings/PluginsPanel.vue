@@ -14,8 +14,8 @@ import { apiJson } from '@/lib/api'
 import {
   clonePluginJson,
   type PluginHostEffect,
-  type PluginOperationCatalogItem,
-  type PluginOperationResult,
+  type PluginCommandCatalogItem,
+  type PluginCommandResult,
   type PluginSettingsContract,
   type PluginSettingsState,
   type PluginSettingsUpdateResponse,
@@ -56,7 +56,7 @@ type PluginManifest = {
   authors?: string[]
   transports?: string[]
   tools?: PluginTool[]
-  operations?: Array<{ id?: string; title?: string }>
+  commands?: Array<{ id?: string; title?: string }>
   skills?: Array<{ name?: string; description?: string }>
   settings?: PluginSettingsContract | null
 }
@@ -217,12 +217,12 @@ type PluginArchitectureCatalog = {
   effects?: PluginArchitectureEffect[]
   pipelines?: PluginArchitecturePipeline[]
   tool_registrations?: PluginScopedRegistration[]
-  operation_registrations?: PluginScopedRegistration[]
+  command_registrations?: PluginScopedRegistration[]
 }
 
 type PluginSurfaceCatalogResponse = {
   catalog?: {
-    operations?: PluginOperationCatalogItem[]
+    commands?: PluginCommandCatalogItem[]
   }
   tool_registry_generation?: number
 }
@@ -239,12 +239,12 @@ type PluginLog = {
 }
 
 type PluginLogsResponse = { plugin_id: string; logs?: PluginLog[] }
-type PanelTab = 'overview' | 'settings' | 'operations' | 'tools' | 'logs' | 'diagnostics'
+type PanelTab = 'overview' | 'settings' | 'commands' | 'tools' | 'logs' | 'diagnostics'
 
 const PANEL_TABS: Array<{ id: PanelTab; label: string }> = [
   { id: 'overview', label: st('Overview') },
   { id: 'settings', label: st('Settings') },
-  { id: 'operations', label: st('Operations') },
+  { id: 'commands', label: st('Commands') },
   { id: 'tools', label: st('Tools') },
   { id: 'logs', label: st('Logs') },
   { id: 'diagnostics', label: st('Diagnostics') },
@@ -271,9 +271,9 @@ const activeTab = ref<PanelTab>('overview')
 const settingsState = ref<PluginSettingsState | null>(null)
 const settingsDraft = ref<JsonValue>({})
 const settingsSaving = ref(false)
-const operationDrafts = ref<Record<string, JsonValue>>({})
-const busyOperationKey = ref('')
-const lastOperationResult = ref<PluginOperationResult | null>(null)
+const commandDrafts = ref<Record<string, JsonValue>>({})
+const busyCommandKey = ref('')
+const lastCommandResult = ref<PluginCommandResult | null>(null)
 const pluginQuery = ref('')
 const transportFilter = ref('')
 const stateFilter = ref('')
@@ -350,8 +350,8 @@ const selectedPipelineHandlers = computed(() =>
     }))
     .filter((pipeline) => pipeline.handlers.length > 0),
 )
-const selectedOperationRegistrations = computed(() =>
-  (architecture.value?.operation_registrations || []).filter((entry) => entry.owner === selectedPluginId.value),
+const selectedCommandRegistrations = computed(() =>
+  (architecture.value?.command_registrations || []).filter((entry) => entry.owner === selectedPluginId.value),
 )
 const selectedToolRegistrations = computed(() =>
   (architecture.value?.tool_registrations || []).filter((entry) => entry.owner === selectedPluginId.value),
@@ -362,11 +362,11 @@ const selectedIncomingDependencies = computed(() =>
 const selectedOutgoingDependencies = computed(() =>
   (architecture.value?.dependencies || []).filter((edge) => edge.provider_id === selectedPluginId.value),
 )
-const allOperations = computed(() =>
-  Array.isArray(catalog.value?.catalog?.operations) ? catalog.value!.catalog!.operations! : [],
+const allCommands = computed(() =>
+  Array.isArray(catalog.value?.catalog?.commands) ? catalog.value!.catalog!.commands! : [],
 )
-const selectedOperations = computed(() =>
-  allOperations.value.filter((operation) => operation.plugin_id === selectedPluginId.value),
+const selectedCommands = computed(() =>
+  allCommands.value.filter((command) => command.plugin_id === selectedPluginId.value),
 )
 const selectedTools = computed(() =>
   Array.isArray(selectedManifest.value?.tools) ? selectedManifest.value!.tools! : [],
@@ -384,16 +384,16 @@ const activeSessionId = computed(() => {
 })
 
 watch(
-  selectedOperations,
-  (operations) => {
+  selectedCommands,
+  (commands) => {
     const next: Record<string, JsonValue> = {}
-    for (const operation of operations) {
-      const key = operationKey(operation)
-      next[key] = Object.prototype.hasOwnProperty.call(operationDrafts.value, key)
-        ? operationDrafts.value[key]
-        : clonePluginJson(operation.default_input)
+    for (const command of commands) {
+      const key = commandKey(command)
+      next[key] = Object.prototype.hasOwnProperty.call(commandDrafts.value, key)
+        ? commandDrafts.value[key]
+        : clonePluginJson(command.default_input)
     }
-    operationDrafts.value = next
+    commandDrafts.value = next
   },
   { immediate: true },
 )
@@ -417,7 +417,7 @@ function statusTone(state: string): string {
 }
 
 function preferredPluginId(): string {
-  const contributedIds = new Set(allOperations.value.map((operation) => operation.plugin_id))
+  const contributedIds = new Set(allCommands.value.map((command) => command.plugin_id))
   return (
     sortedStatuses.value.find((status) => contributedIds.has(status.plugin_id))?.plugin_id ||
     sortedStatuses.value[0]?.plugin_id ||
@@ -425,17 +425,17 @@ function preferredPluginId(): string {
   )
 }
 
-function operationKey(operation: PluginOperationCatalogItem): string {
-  return `${operation.plugin_id}:${operation.id}`
+function commandKey(command: PluginCommandCatalogItem): string {
+  return `${command.plugin_id}:${command.id}`
 }
 
-function operationValue(operation: PluginOperationCatalogItem): JsonValue {
-  const current = operationDrafts.value[operationKey(operation)]
-  return current === undefined ? clonePluginJson(operation.default_input) : current
+function commandValue(command: PluginCommandCatalogItem): JsonValue {
+  const current = commandDrafts.value[commandKey(command)]
+  return current === undefined ? clonePluginJson(command.default_input) : current
 }
 
-function setOperationValue(operation: PluginOperationCatalogItem, value: JsonValue) {
-  operationDrafts.value = { ...operationDrafts.value, [operationKey(operation)]: value }
+function setCommandValue(command: PluginCommandCatalogItem, value: JsonValue) {
+  commandDrafts.value = { ...commandDrafts.value, [commandKey(command)]: value }
 }
 
 function resultPayload(value: JsonValue | undefined): string {
@@ -443,16 +443,16 @@ function resultPayload(value: JsonValue | undefined): string {
   return JSON.stringify(value, null, 2)
 }
 
-function showOperationFeedback(result: PluginOperationResult) {
+function showCommandFeedback(result: PluginCommandResult) {
   const message = [result.title, result.summary].filter((value) => String(value || '').trim()).join(': ')
-  if (result.status === 'succeeded') toasts.push('success', message || st('Plugin operation completed'))
+  if (result.status === 'succeeded') toasts.push('success', message || st('Plugin command completed'))
   else if (result.status === 'failed')
-    toasts.push('error', result.detail?.trim() || message || st('Plugin operation failed'))
+    toasts.push('error', result.detail?.trim() || message || st('Plugin command failed'))
   else
-    toasts.push('info', result.detail?.trim() || message || st('Plugin operation {status}', { status: result.status }))
+    toasts.push('info', result.detail?.trim() || message || st('Plugin command {status}', { status: result.status }))
 }
 
-async function applyOperationEffect(effect: PluginHostEffect) {
+async function applyCommandEffect(effect: PluginHostEffect) {
   if (effect.kind === 'navigate') {
     if (!effect.path.startsWith('/')) throw new Error(st('Plugin navigation must use an application-relative path.'))
     await router.push(effect.path)
@@ -479,33 +479,33 @@ async function applyOperationEffect(effect: PluginHostEffect) {
   if (effect.kind === 'refresh_plugin_surface') await loadSelectedPlugin()
 }
 
-async function runOperation(operation: PluginOperationCatalogItem) {
-  const key = operationKey(operation)
-  if (busyOperationKey.value) return
-  busyOperationKey.value = key
-  lastOperationResult.value = null
+async function runCommand(command: PluginCommandCatalogItem) {
+  const key = commandKey(command)
+  if (busyCommandKey.value) return
+  busyCommandKey.value = key
+  lastCommandResult.value = null
   try {
-    const response = await apiJson<{ result: PluginOperationResult }>(
-      `/api/v1/plugins/${encodeURIComponent(operation.plugin_id)}/operations/${encodeURIComponent(operation.id)}/invoke`,
+    const response = await apiJson<{ result: PluginCommandResult }>(
+      `/api/v1/plugins/${encodeURIComponent(command.plugin_id)}/commands/${encodeURIComponent(command.id)}/invoke`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          input: operationValue(operation),
+          input: commandValue(command),
           session_id: activeSessionId.value,
-          slash: operation.slash || null,
+          slash: command.slash || null,
           raw: '',
         }),
       },
     )
-    if (!response?.result) throw new Error(st('The server omitted the plugin operation result.'))
-    lastOperationResult.value = response.result
-    showOperationFeedback(response.result)
-    for (const effect of response.result.effects || []) await applyOperationEffect(effect)
+    if (!response?.result) throw new Error(st('The server omitted the plugin command result.'))
+    lastCommandResult.value = response.result
+    showCommandFeedback(response.result)
+    for (const effect of response.result.effects || []) await applyCommandEffect(effect)
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   } finally {
-    busyOperationKey.value = ''
+    busyCommandKey.value = ''
   }
 }
 
@@ -546,7 +546,7 @@ async function loadSelectedPlugin() {
   settingsState.value = null
   settingsDraft.value = {}
   detailError.value = ''
-  lastOperationResult.value = null
+  lastCommandResult.value = null
   if (!id) return
   detailLoading.value = true
   try {
@@ -636,7 +636,7 @@ onMounted(() => void refresh())
         <div class="mt-1 text-sm text-muted-foreground">
           {{
             $st(
-              'Dependency-aware lifecycle, shared settings contracts, server-owned operations, tools, logs and diagnostics.',
+              'Dependency-aware lifecycle, shared settings contracts, server-owned commands, tools, logs and diagnostics.',
             )
           }}
         </div>
@@ -727,7 +727,7 @@ onMounted(() => void refresh())
                 <span :class="statusTone(selectedStatus.state)">{{ selectedStatus.state }}</span>
                 <span>{{ $st('transport:') }} {{ selectedStatus.kind }}</span>
                 <span v-if="selectedManifest?.version">{{ $st('version:') }} {{ selectedManifest.version }}</span>
-                <span>{{ selectedOperations.length }} {{ $st('operations') }}</span>
+                <span>{{ selectedCommands.length }} {{ $st('commands') }}</span>
                 <span>{{ selectedTools.length }} {{ $st('tools') }}</span>
                 <span v-if="catalog?.tool_registry_generation !== undefined"
                   >{{ $st('tool registry:') }} {{ catalog.tool_registry_generation }}</span
@@ -961,7 +961,7 @@ onMounted(() => void refresh())
                 v-if="
                   selectedPipelineHandlers.length ||
                   selectedToolRegistrations.length ||
-                  selectedOperationRegistrations.length
+                  selectedCommandRegistrations.length
                 "
                 class="grid gap-4 lg:grid-cols-2"
               >
@@ -1015,11 +1015,11 @@ onMounted(() => void refresh())
                     </div>
                   </div>
                 </div>
-                <div v-if="selectedOperationRegistrations.length">
-                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Scoped operation registrations') }}</h3>
+                <div v-if="selectedCommandRegistrations.length">
+                  <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Scoped command registrations') }}</h3>
                   <div class="mt-2 divide-y divide-border/50 rounded-md border border-border/60">
                     <div
-                      v-for="entry in selectedOperationRegistrations"
+                      v-for="entry in selectedCommandRegistrations"
                       :key="`${entry.generation}:${entry.key}`"
                       class="px-3 py-2 text-xs"
                     >
@@ -1082,66 +1082,66 @@ onMounted(() => void refresh())
               </template>
             </section>
 
-            <section v-else-if="activeTab === 'operations'" class="space-y-5">
-              <div v-if="selectedOperations.length === 0" class="text-sm text-muted-foreground">
-                {{ $st('This plugin does not expose user operations.') }}
+            <section v-else-if="activeTab === 'commands'" class="space-y-5">
+              <div v-if="selectedCommands.length === 0" class="text-sm text-muted-foreground">
+                {{ $st('This plugin does not expose user commands.') }}
               </div>
               <article
-                v-for="operation in selectedOperations"
-                :key="operationKey(operation)"
+                v-for="command in selectedCommands"
+                :key="commandKey(command)"
                 class="space-y-3 border-b border-border/60 pb-5 last:border-b-0"
               >
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <div class="min-w-0">
                     <div class="flex items-center gap-2 text-sm font-medium">
                       <RiCommandLine class="h-4 w-4 text-muted-foreground" />
-                      <span>{{ operation.title }}</span>
+                      <span>{{ command.title }}</span>
                     </div>
-                    <p v-if="operation.description" class="mt-1 text-xs text-muted-foreground">
-                      {{ operation.description }}
+                    <p v-if="command.docs?.summary" class="mt-1 text-xs text-muted-foreground">
+                      {{ command.docs.summary }}
                     </p>
                     <div class="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground">
-                      <span class="font-mono">{{ operation.id }}</span>
-                      <span v-if="operation.slash" class="font-mono"
-                        >/{{ String(operation.slash).replace(/^\/+/, '') }}</span
+                      <span class="font-mono">{{ command.id }}</span>
+                      <span v-if="command.slash" class="font-mono"
+                        >/{{ String(command.slash).replace(/^\/+/, '') }}</span
                       >
-                      <span>{{ operation.category || operation.group }}</span>
-                      <span>{{ operation.target.kind }}</span>
+                      <span>{{ command.category || command.group }}</span>
+                      <span>{{ command.target.kind }}</span>
                     </div>
                   </div>
-                  <Button size="sm" :disabled="Boolean(busyOperationKey)" @click="runOperation(operation)">
+                  <Button size="sm" :disabled="Boolean(busyCommandKey)" @click="runCommand(command)">
                     <RiPlayLine class="mr-2 h-4 w-4" />
-                    {{ busyOperationKey === operationKey(operation) ? $st('Running...') : $st('Run') }}
+                    {{ busyCommandKey === commandKey(command) ? $st('Running...') : $st('Run') }}
                   </Button>
                 </div>
                 <PluginContractEditor
-                  :node="operation.input.root"
-                  :model-value="operationValue(operation)"
-                  :disabled="Boolean(busyOperationKey)"
-                  @update:model-value="setOperationValue(operation, $event)"
+                  :node="command.input.root"
+                  :model-value="commandValue(command)"
+                  :disabled="Boolean(busyCommandKey)"
+                  @update:model-value="setCommandValue(command, $event)"
                 />
               </article>
 
-              <div v-if="lastOperationResult" class="rounded-md border border-border/70 p-4">
+              <div v-if="lastCommandResult" class="rounded-md border border-border/70 p-4">
                 <div class="flex flex-wrap items-center justify-between gap-2">
-                  <div class="text-sm font-semibold">{{ lastOperationResult.title }}</div>
-                  <span class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ lastOperationResult.status }}</span>
+                  <div class="text-sm font-semibold">{{ lastCommandResult.title }}</div>
+                  <span class="rounded bg-muted px-2 py-1 font-mono text-[10px]">{{ lastCommandResult.status }}</span>
                 </div>
-                <p v-if="lastOperationResult.summary" class="mt-2 text-sm text-muted-foreground">
-                  {{ lastOperationResult.summary }}
+                <p v-if="lastCommandResult.summary" class="mt-2 text-sm text-muted-foreground">
+                  {{ lastCommandResult.summary }}
                 </p>
                 <pre
-                  v-if="lastOperationResult.detail"
+                  v-if="lastCommandResult.detail"
                   class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs"
-                  >{{ lastOperationResult.detail }}</pre
+                  >{{ lastCommandResult.detail }}</pre
                 >
                 <pre
-                  v-if="resultPayload(lastOperationResult.output)"
+                  v-if="resultPayload(lastCommandResult.output)"
                   class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-3 text-xs"
-                  >{{ resultPayload(lastOperationResult.output) }}</pre
+                  >{{ resultPayload(lastCommandResult.output) }}</pre
                 >
                 <div
-                  v-for="diagnostic in lastOperationResult.diagnostics || []"
+                  v-for="diagnostic in lastCommandResult.diagnostics || []"
                   :key="`${diagnostic.code}:${diagnostic.path || ''}`"
                   class="mt-2 text-xs text-destructive"
                 >

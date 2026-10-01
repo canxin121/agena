@@ -172,8 +172,8 @@ pub fn router(state: AppState) -> Router {
                 get(rest::get_plugin_settings).put(rest::update_plugin_settings),
             )
             .route(
-                "/api/v1/plugins/{plugin_id}/operations/{operation_id}/invoke",
-                post(rest::run_plugin_operation),
+                "/api/v1/plugins/{plugin_id}/commands/{command_id}/invoke",
+                post(rest::run_plugin_command),
             )
             .route(
                 "/api/v1/plugins/{plugin_id}/logs",
@@ -1111,7 +1111,7 @@ mod router_contract_tests {
         assert!(architecture["plugins"].is_array());
         assert!(architecture["dependencies"].is_array());
         assert!(architecture["pipelines"].is_array());
-        assert!(architecture["operation_registrations"].is_array());
+        assert!(architecture["command_registrations"].is_array());
         assert!(architecture["tool_registrations"].is_array());
         assert!(architecture["reload"]["decisions"].is_array());
         assert!(
@@ -1150,7 +1150,7 @@ mod router_contract_tests {
             .get("catalog")
             .and_then(serde_json::Value::as_object)
             .expect("plugin surface catalog object");
-        assert!(catalog.get("operations").is_some());
+        assert!(catalog.get("commands").is_some());
         assert!(catalog.get("terminal").is_some());
         assert!(catalog.get("studio").is_none());
         assert!(catalog.get("tui").is_none());

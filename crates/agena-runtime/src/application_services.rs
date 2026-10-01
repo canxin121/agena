@@ -8,7 +8,7 @@ use crate::{
     RuntimeAuthenticationService, RuntimeConfigSettingsService, RuntimeConfigurationService,
     RuntimeControlService, RuntimeDraftAuthenticationService, RuntimeLiveSignalService,
     RuntimeStatusService, RuntimeToolExecutionService, SessionExecutionCommandService,
-    SessionExecutionControl, SessionPluginOperationService, SessionQueryService,
+    SessionExecutionControl, SessionPluginCommandService, SessionQueryService,
     SessionToolExecutionService,
 };
 
@@ -49,7 +49,7 @@ pub struct RuntimeApplicationServices {
     pub execution_control: Option<Arc<dyn SessionExecutionControl>>,
     pub execution_commands: Option<Arc<dyn SessionExecutionCommandService>>,
     pub tool_execution: Option<Arc<dyn SessionToolExecutionService>>,
-    pub plugin_operations: Option<Arc<dyn SessionPluginOperationService>>,
+    pub plugin_commands: Option<Arc<dyn SessionPluginCommandService>>,
 }
 
 /// Storage contracts that accompany a composed Runtime application service
@@ -85,7 +85,7 @@ pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) execution_control: Option<Arc<dyn SessionExecutionControl>>,
     pub(crate) execution_commands: Option<Arc<dyn SessionExecutionCommandService>>,
     pub(crate) tool_execution: Option<Arc<dyn SessionToolExecutionService>>,
-    pub(crate) plugin_operations: Option<Arc<dyn SessionPluginOperationService>>,
+    pub(crate) plugin_commands: Option<Arc<dyn SessionPluginCommandService>>,
 }
 
 pub(crate) fn compose_runtime_application_services(
@@ -111,6 +111,6 @@ pub(crate) fn compose_runtime_application_services(
         execution_control: inputs.execution_control,
         execution_commands: inputs.execution_commands,
         tool_execution: inputs.tool_execution,
-        plugin_operations: inputs.plugin_operations,
+        plugin_commands: inputs.plugin_commands,
     }
 }

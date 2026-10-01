@@ -195,7 +195,6 @@ const fn fixture_part_status(
         ExecutionStatus::Cancelled => agena_api::part::PartExecutionStatusResource::Cancelled,
     }
 }
-use crate::commands::{CommandId, CommandSpec};
 use crate::composer_queue::ComposerQueue;
 use agena_application::dto::{
     CatalogModelResource, ModelCatalogListResponse, ModelCatalogResponse,
@@ -246,8 +245,6 @@ mod app_session_interactive;
 mod app_settings;
 mod app_settings_choices;
 mod app_settings_helpers;
-mod app_skill_picker;
-mod app_skill_studio;
 mod app_status_context;
 mod app_studio_overlays;
 mod app_studio_state_impls;

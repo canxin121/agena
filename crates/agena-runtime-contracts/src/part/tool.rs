@@ -291,13 +291,13 @@ pub struct TaskToolInput {
     /// subtask settles — do not poll tasks.get/tasks.output waiting for it.
     #[serde(default)]
     pub run_in_background: bool,
-    /// Optional Skill names or aliases to attach to the delegated subtask's
-    /// first user message as lazy Skill references. The child model receives
-    /// catalog metadata and can call `agena.skills.get` when it needs the Skill
-    /// body. Use skills appropriate to the task: for example a read-only review
-    /// task can attach a review/read-only skill, an exploration task can attach
-    /// an explore skill. Unknown names or aliases are rejected before the
-    /// subtask starts.
+    /// Optional command names, slash spellings or aliases to attach to the
+    /// delegated subtask's first user message as lazy references. The child
+    /// model receives catalog metadata and reads the instructions through the
+    /// plugin that declared the command. Use commands appropriate to the task:
+    /// for example a read-only review task can attach a review command, an
+    /// exploration task can attach an explore command. Unknown names are
+    /// rejected before the subtask starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
     /// Resume an existing subtask session instead of creating a new one.

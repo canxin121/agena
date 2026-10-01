@@ -175,8 +175,7 @@ impl LspPlugin {
 
     #[tool(
         tags(query, lsp, discovery, read_only),
-        summary = "List configured language servers.",
-        concurrency_safe
+        summary = "List configured language servers."
     )]
     async fn dispatch_servers(&self) -> SdkResult<ToolInvokeOutput> {
         let HostLspListServersResponse { servers } = self.host()?.lsp_list_servers().await?;
@@ -208,8 +207,7 @@ impl LspPlugin {
 
     #[tool(
         tags(query, lsp, filesystem, read_only),
-        summary = "Resolve symbol definitions.",
-        concurrency_safe
+        summary = "Resolve symbol definitions."
     )]
     async fn dispatch_definition(
         &self,
@@ -221,8 +219,7 @@ impl LspPlugin {
 
     #[tool(
         tags(query, lsp, filesystem, read_only),
-        summary = "Find symbol references.",
-        concurrency_safe
+        summary = "Find symbol references."
     )]
     async fn dispatch_references(
         &self,
@@ -232,11 +229,7 @@ impl LspPlugin {
         self.invoke_routed_tool("lsp_references", args, context.session_id, context.call_id)
     }
 
-    #[tool(
-        tags(query, lsp, filesystem, read_only),
-        summary = "Fetch hover text.",
-        concurrency_safe
-    )]
+    #[tool(tags(query, lsp, filesystem, read_only), summary = "Fetch hover text.")]
     async fn dispatch_hover(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -247,8 +240,7 @@ impl LspPlugin {
 
     #[tool(
         tags(query, lsp, filesystem, read_only),
-        summary = "Fetch file diagnostics.",
-        concurrency_safe
+        summary = "Fetch file diagnostics."
     )]
     async fn dispatch_diagnostics(
         &self,

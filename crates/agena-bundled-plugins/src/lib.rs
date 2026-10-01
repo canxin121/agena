@@ -2,8 +2,8 @@
 //!
 //! The crate also publishes a generated Markdown reference of every bundled
 //! tool — see [`tools_docs`] — so `cargo doc` renders all tool definitions
-//! together with their detailed help text, examples, tags, runtime flags, and
-//! JSON Schema contracts.
+//! together with their detailed help text, tags, runtime flags, and JSON
+//! Schema contracts.
 
 mod artifact_file;
 pub mod capability_manifest;
@@ -24,7 +24,7 @@ pub(crate) static PROVIDER_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
     });
 
 /// Generated Markdown reference for every bundled tool: definitions, detailed
-/// help text, examples, tags, runtime flags, and JSON Schema contracts.
+/// help text, tags, runtime flags, and JSON Schema contracts.
 ///
 /// The committed copy lives at `generated/tools-reference.md` (in this crate) and is
 /// regenerated with `agena inspect --tools-reference`; a CI drift test keeps

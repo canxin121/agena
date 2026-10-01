@@ -31,14 +31,13 @@ impl ManifestPlugin {
     #[tool(
         summary = "Render text.",
         stream = render_stream,
-        operation(
+        command(
             "/manifest-render",
             id = "manifest.render",
             title = "Manifest Render",
             aliases("render-manifest"),
             usage = "/manifest-render {\"text\":\"hello\"}",
         ),
-        concurrency_safe,
         tags(read_only)
     )]
     fn render(&self, input: &ManifestInput) -> Result<ManifestOutput> {
@@ -57,7 +56,7 @@ impl ManifestPlugin {
     /// Render docs summary.
     ///
     /// Render docs help.
-    #[tool(operation("/doc-render"), tags(read_only))]
+    #[tool(command("/doc-render"), tags(read_only))]
     fn doc_render(&self) -> String {
         "doc".to_string()
     }
@@ -74,18 +73,14 @@ impl ManifestPlugin {
         }
     }
 
-    #[tool(
-        summary = "Semantic permissions.",
-        operation("/semantic"),
-        tags(mutate)
-    )]
+    #[tool(summary = "Semantic permissions.", command("/semantic"), tags(mutate))]
     fn semantic(&self, input: &SemanticInput) -> String {
         format!("{} -> {}", input.path, input.endpoint)
     }
 
     #[tool(
         summary = "Inline semantic permissions.",
-        operation("/inline-semantic"),
+        command("/inline-semantic"),
         tags(read_only)
     )]
     fn inline_semantic(
@@ -98,7 +93,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline auto usage.",
-        operation("/inline-auto"),
+        command("/inline-auto"),
         tags(read_only)
     )]
     fn inline_auto(&self, path: String, count: usize) -> String {
@@ -107,7 +102,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline count usage.",
-        operation("/inline-count"),
+        command("/inline-count"),
         tags(read_only)
     )]
     fn inline_count(&self, #[arg(example = 3)] count: usize) -> String {
@@ -116,7 +111,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline rename support.",
-        operation("/inline-rename"),
+        command("/inline-rename"),
         tags(read_only)
     )]
     fn inline_rename(
@@ -128,7 +123,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline default support.",
-        operation("/inline-default"),
+        command("/inline-default"),
         tags(read_only)
     )]
     fn inline_default(&self, #[arg(default = 3)] count: usize) -> String {
@@ -137,7 +132,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline nested ToolInput support.",
-        operation("/inline-nested"),
+        command("/inline-nested"),
         tags(read_only)
     )]
     fn inline_nested(
@@ -150,7 +145,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Inline flatten ToolInput support.",
-        operation("/inline-flatten"),
+        command("/inline-flatten"),
         tags(read_only)
     )]
     fn inline_flatten(
@@ -163,7 +158,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Plain string input.",
-        operation("/plain-string"),
+        command("/plain-string"),
         tags(read_only)
     )]
     fn plain_string(&self, text: String) -> String {
@@ -175,7 +170,7 @@ impl ManifestPlugin {
         format!("{} @ {}", input.path, input.host)
     }
 
-    #[operation(
+    #[command(
         "/manifest-greet",
         id = "manifest.greet",
         title = "Manifest Greet",
@@ -184,68 +179,68 @@ impl ManifestPlugin {
         aliases("hello-manifest"),
         usage = "/manifest-greet {\"name\":\"Ada\"}"
     )]
-    fn greet_operation(&self, input: &ManifestCommandInput) -> String {
+    fn greet_command(&self, input: &ManifestCommandInput) -> String {
         format!("hello {}", input.name)
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline",
         id = "manifest.inline",
         title = "Manifest Inline",
         description = "Greet from inline command arguments.",
         category = "Test"
     )]
-    fn inline_operation(
+    fn inline_command(
         &self,
         #[arg(trim, non_empty, example = "Ada", description = "Name to greet.")] name: String,
     ) -> String {
         format!("hello {name}")
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-auto",
         id = "manifest.inline_auto",
         title = "Manifest Inline Auto",
         description = "Greet from inline command arguments without explicit examples.",
         category = "Test"
     )]
-    fn inline_auto_operation(&self, #[arg(trim)] name: String) -> String {
+    fn inline_auto_command(&self, #[arg(trim)] name: String) -> String {
         format!("hello {name}")
     }
 
-    #[operation(
+    #[command(
         "/manifest-renamed",
         id = "manifest.renamed",
         title = "Manifest Renamed",
         description = "Command arg rename and alias support.",
         category = "Test"
     )]
-    fn renamed_operation(
+    fn renamed_command(
         &self,
         #[arg(name = "filePath", alias = "path", trim)] file_path: String,
     ) -> String {
         file_path
     }
 
-    #[operation(
+    #[command(
         "/manifest-default",
         id = "manifest.default",
         title = "Manifest Default",
         description = "Inline command default support.",
         category = "Test"
     )]
-    fn default_operation(&self, #[arg(default = 3)] count: usize) -> String {
+    fn default_command(&self, #[arg(default = 3)] count: usize) -> String {
         count.to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-nested",
         id = "manifest.inline_nested",
         title = "Manifest Inline Nested",
         description = "Inline command nested ToolInput support.",
         category = "Test"
     )]
-    fn inline_nested_operation(
+    fn inline_nested_command(
         &self,
         #[arg(alias = "body", nested_shape)] payload: InlineNestedArgInner,
         #[arg(trim, non_empty)] query_text: String,
@@ -253,14 +248,14 @@ impl ManifestPlugin {
         format!("{}:{query_text}", payload.file_path)
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-flatten",
         id = "manifest.inline_flatten",
         title = "Manifest Inline Flatten",
         description = "Inline command flatten ToolInput support.",
         category = "Test"
     )]
-    fn inline_flatten_operation(
+    fn inline_flatten_command(
         &self,
         #[arg(flatten_shape)] payload: InlineFlattenArgInner,
         #[arg(trim, non_empty)] query_text: String,
@@ -270,7 +265,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level choices.",
-        operation("/path-choice"),
+        command("/path-choice"),
         tags(read_only)
     )]
     fn path_choice(&self, input: &PathChoiceInput) -> String {
@@ -279,7 +274,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Field-level choices.",
-        operation("/field-choice"),
+        command("/field-choice"),
         tags(read_only)
     )]
     fn field_choice(&self, input: &FieldChoiceInput) -> String {
@@ -288,7 +283,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level format.",
-        operation("/path-format"),
+        command("/path-format"),
         tags(read_only)
     )]
     fn path_format(&self, input: &PathFormatInput) -> String {
@@ -297,7 +292,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level pattern.",
-        operation("/path-pattern"),
+        command("/path-pattern"),
         tags(read_only)
     )]
     fn path_pattern(&self, input: &PathPatternInput) -> String {
@@ -306,7 +301,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level numeric.",
-        operation("/path-number"),
+        command("/path-number"),
         tags(read_only)
     )]
     fn path_number(&self, input: &PathNumericInput) -> String {
@@ -315,7 +310,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level strict numeric bounds.",
-        operation("/path-exclusive-number"),
+        command("/path-exclusive-number"),
         tags(read_only)
     )]
     fn path_exclusive_number(&self, input: &PathExclusiveNumericInput) -> String {
@@ -324,7 +319,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level object bounds.",
-        operation("/path-object"),
+        command("/path-object"),
         tags(read_only)
     )]
     fn path_object(&self, input: &PathObjectInput) -> String {
@@ -333,7 +328,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item constraints.",
-        operation("/path-item-pattern"),
+        command("/path-item-pattern"),
         tags(read_only)
     )]
     fn path_item_pattern(&self, input: &PathItemPatternInput) -> String {
@@ -342,7 +337,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item choice constraints.",
-        operation("/path-item-choice"),
+        command("/path-item-choice"),
         tags(read_only)
     )]
     fn path_item_choice(&self, input: &PathItemChoiceInput) -> String {
@@ -351,7 +346,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item format constraints.",
-        operation("/path-item-format"),
+        command("/path-item-format"),
         tags(read_only)
     )]
     fn path_item_format(&self, input: &PathItemFormatInput) -> String {
@@ -360,7 +355,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item numeric bounds.",
-        operation("/path-item-number"),
+        command("/path-item-number"),
         tags(read_only)
     )]
     fn path_item_number(&self, input: &PathItemNumericInput) -> String {
@@ -369,7 +364,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item strict numeric bounds.",
-        operation("/path-item-exclusive-number"),
+        command("/path-item-exclusive-number"),
         tags(read_only)
     )]
     fn path_item_exclusive_number(&self, input: &PathItemExclusiveNumericInput) -> String {
@@ -378,7 +373,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item object bounds.",
-        operation("/path-item-object"),
+        command("/path-item-object"),
         tags(read_only)
     )]
     fn path_item_object(&self, input: &PathItemObjectInput) -> String {
@@ -387,7 +382,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level item normalization.",
-        operation("/path-item-normalize"),
+        command("/path-item-normalize"),
         tags(read_only)
     )]
     fn path_item_normalize(&self, input: &PathItemNormalizeInput) -> String {
@@ -396,7 +391,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level optional item non-empty.",
-        operation("/path-item-optional-non-empty"),
+        command("/path-item-optional-non-empty"),
         tags(read_only)
     )]
     fn path_item_optional_non_empty(&self, input: &PathOptionalItemNonEmptyInput) -> String {
@@ -405,7 +400,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level auto item string constraints.",
-        operation("/path-auto-item-string"),
+        command("/path-auto-item-string"),
         tags(read_only)
     )]
     fn path_auto_item_string(&self, input: &PathAutoItemStringInput) -> String {
@@ -414,7 +409,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level auto item numeric constraints.",
-        operation("/path-auto-item-number"),
+        command("/path-auto-item-number"),
         tags(read_only)
     )]
     fn path_auto_item_number(&self, input: &PathAutoItemNumericInput) -> String {
@@ -423,7 +418,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level auto item choice constraints.",
-        operation("/path-auto-item-choice"),
+        command("/path-auto-item-choice"),
         tags(read_only)
     )]
     fn path_auto_item_choice(&self, input: &PathAutoItemChoiceInput) -> String {
@@ -432,7 +427,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level field relation metadata.",
-        operation("/path-relation"),
+        command("/path-relation"),
         tags(read_only)
     )]
     fn path_relation(&self, input: &PathRelationInput) -> String {
@@ -441,7 +436,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Path-level field group metadata.",
-        operation("/path-group"),
+        command("/path-group"),
         tags(read_only)
     )]
     fn path_group(&self, input: &PathGroupInput) -> String {
@@ -454,7 +449,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed format metadata.",
-        operation("/renamed-format"),
+        command("/renamed-format"),
         tags(read_only)
     )]
     fn renamed_format(&self, input: &RenamedFormatInput) -> String {
@@ -463,7 +458,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed field constraint metadata.",
-        operation("/renamed-pattern"),
+        command("/renamed-pattern"),
         tags(read_only)
     )]
     fn renamed_pattern(&self, input: &RenamedPatternInput) -> String {
@@ -472,7 +467,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed numeric constraint metadata.",
-        operation("/renamed-number"),
+        command("/renamed-number"),
         tags(read_only)
     )]
     fn renamed_number(&self, input: &RenamedNumericInput) -> String {
@@ -481,7 +476,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed strict numeric metadata.",
-        operation("/renamed-exclusive-number"),
+        command("/renamed-exclusive-number"),
         tags(read_only)
     )]
     fn renamed_exclusive_number(&self, input: &RenamedExclusiveNumericInput) -> String {
@@ -490,7 +485,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed object property bounds metadata.",
-        operation("/renamed-object"),
+        command("/renamed-object"),
         tags(read_only)
     )]
     fn renamed_object(&self, input: &RenamedObjectInput) -> String {
@@ -499,7 +494,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item format metadata.",
-        operation("/renamed-item-format"),
+        command("/renamed-item-format"),
         tags(read_only)
     )]
     fn renamed_item_format(&self, input: &RenamedItemFormatInput) -> String {
@@ -508,7 +503,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item constraint metadata.",
-        operation("/renamed-item-pattern"),
+        command("/renamed-item-pattern"),
         tags(read_only)
     )]
     fn renamed_item_pattern(&self, input: &RenamedItemPatternInput) -> String {
@@ -517,7 +512,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item choice metadata.",
-        operation("/renamed-item-choice"),
+        command("/renamed-item-choice"),
         tags(read_only)
     )]
     fn renamed_item_choice(&self, input: &RenamedItemChoiceInput) -> String {
@@ -526,7 +521,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item numeric bounds metadata.",
-        operation("/renamed-item-number"),
+        command("/renamed-item-number"),
         tags(read_only)
     )]
     fn renamed_item_number(&self, input: &RenamedItemNumericInput) -> String {
@@ -535,7 +530,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item strict numeric bounds metadata.",
-        operation("/renamed-item-exclusive-number"),
+        command("/renamed-item-exclusive-number"),
         tags(read_only)
     )]
     fn renamed_item_exclusive_number(&self, input: &RenamedItemExclusiveNumericInput) -> String {
@@ -544,7 +539,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item object bounds metadata.",
-        operation("/renamed-item-object"),
+        command("/renamed-item-object"),
         tags(read_only)
     )]
     fn renamed_item_object(&self, input: &RenamedItemObjectInput) -> String {
@@ -553,7 +548,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed item normalization metadata.",
-        operation("/renamed-item-normalize"),
+        command("/renamed-item-normalize"),
         tags(read_only)
     )]
     fn renamed_item_normalize(&self, input: &RenamedItemNormalizeInput) -> String {
@@ -562,7 +557,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed optional item non-empty metadata.",
-        operation("/renamed-item-optional-non-empty"),
+        command("/renamed-item-optional-non-empty"),
         tags(read_only)
     )]
     fn renamed_item_optional_non_empty(&self, input: &RenamedOptionalItemNonEmptyInput) -> String {
@@ -571,7 +566,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed auto item string metadata.",
-        operation("/renamed-auto-item-string"),
+        command("/renamed-auto-item-string"),
         tags(read_only)
     )]
     fn renamed_auto_item_string(&self, input: &RenamedAutoItemStringInput) -> String {
@@ -580,7 +575,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed auto item numeric metadata.",
-        operation("/renamed-auto-item-number"),
+        command("/renamed-auto-item-number"),
         tags(read_only)
     )]
     fn renamed_auto_item_number(&self, input: &RenamedAutoItemNumericInput) -> String {
@@ -589,7 +584,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed auto item choice metadata.",
-        operation("/renamed-auto-item-choice"),
+        command("/renamed-auto-item-choice"),
         tags(read_only)
     )]
     fn renamed_auto_item_choice(&self, input: &RenamedAutoItemChoiceInput) -> String {
@@ -598,7 +593,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Variant-local enum normalization.",
-        operation("/variant-normalize"),
+        command("/variant-normalize"),
         tags(read_only)
     )]
     fn variant_normalize(&self, input: &VariantNormalizeInput) -> String {
@@ -615,20 +610,20 @@ impl ManifestPlugin {
         }
     }
 
-    #[operation(
+    #[command(
         "/manifest-variant-normalize",
         id = "manifest.variant_normalize",
         title = "Manifest Variant Normalize",
         description = "Typed command enum variant normalization support.",
         category = "Test"
     )]
-    fn variant_normalize_operation(&self, input: &VariantNormalizeInput) -> String {
+    fn variant_normalize_command(&self, input: &VariantNormalizeInput) -> String {
         self.variant_normalize(input)
     }
 
     #[tool(
         summary = "Variant renamed field enum input.",
-        operation("/variant-renamed-fields"),
+        command("/variant-renamed-fields"),
         tags(read_only)
     )]
     fn variant_renamed_fields(&self, input: &VariantRenamedFieldInput) -> String {
@@ -645,20 +640,20 @@ impl ManifestPlugin {
         }
     }
 
-    #[operation(
+    #[command(
         "/manifest-variant-renamed-fields",
         id = "manifest.variant_renamed_fields",
         title = "Manifest Variant Renamed Fields",
         description = "Typed command enum renamed field support.",
         category = "Test"
     )]
-    fn variant_renamed_fields_operation(&self, input: &VariantRenamedFieldInput) -> String {
+    fn variant_renamed_fields_command(&self, input: &VariantRenamedFieldInput) -> String {
         self.variant_renamed_fields(input)
     }
 
     #[tool(
         summary = "Variant field arg enum input.",
-        operation("/variant-field-args"),
+        command("/variant-field-args"),
         tags(read_only)
     )]
     fn variant_field_args(&self, input: &VariantFieldArgInput) -> String {
@@ -671,20 +666,20 @@ impl ManifestPlugin {
         }
     }
 
-    #[operation(
+    #[command(
         "/manifest-variant-field-args",
         id = "manifest.variant_field_args",
         title = "Manifest Variant Field Args",
         description = "Typed command enum variant field arg support.",
         category = "Test"
     )]
-    fn variant_field_args_operation(&self, input: &VariantFieldArgInput) -> String {
+    fn variant_field_args_command(&self, input: &VariantFieldArgInput) -> String {
         self.variant_field_args(input)
     }
 
     #[tool(
         summary = "Variant inference enum input.",
-        operation("/variant-inference"),
+        command("/variant-inference"),
         tags(read_only)
     )]
     fn variant_inference(&self, input: &VariantInferenceInput) -> String {
@@ -702,20 +697,20 @@ impl ManifestPlugin {
         }
     }
 
-    #[operation(
+    #[command(
         "/manifest-variant-inference",
         id = "manifest.variant_inference",
         title = "Manifest Variant Inference",
         description = "Typed command enum inference support.",
         category = "Test"
     )]
-    fn variant_inference_operation(&self, input: &VariantInferenceInput) -> String {
+    fn variant_inference_command(&self, input: &VariantInferenceInput) -> String {
         self.variant_inference(input)
     }
 
     #[tool(
         summary = "Variant declarative enum permissions.",
-        operation("/variant-semantic"),
+        command("/variant-semantic"),
         tags(read_only)
     )]
     fn variant_semantic(&self, input: &VariantSemanticInput) -> String {
@@ -727,7 +722,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Enum flatten semantic permissions.",
-        operation("/variant-flatten-semantic"),
+        command("/variant-flatten-semantic"),
         tags(read_only)
     )]
     fn variant_flatten_semantic(&self, input: &FlattenVariantSemanticInput) -> String {
@@ -743,21 +738,21 @@ impl ManifestPlugin {
         summary = "Inline item value relations.",
         forbid_substrings("tags", "..", "~"),
         distinct_trimmed("tags"),
-        operation("/inline-item-value-relations"),
+        command("/inline-item-value-relations"),
         tags(read_only)
     )]
     fn inline_item_value_relations(&self, #[arg] tags: Vec<String>) -> String {
         tags.join(",")
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-auto-item-pattern",
         id = "manifest.inline_auto_item_pattern",
         title = "Manifest Inline Auto Item Pattern",
         description = "Inline command direct array string constraints support.",
         category = "Test"
     )]
-    fn inline_auto_item_pattern_operation(
+    fn inline_auto_item_pattern_command(
         &self,
         #[arg(trim, trim_suffix = ".rs", min_chars = 3, pattern = "^[a-z0-9-]+$")] tags: Vec<
             String,
@@ -766,42 +761,42 @@ impl ManifestPlugin {
         tags.join(",")
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-auto-item-number",
         id = "manifest.inline_auto_item_number",
         title = "Manifest Inline Auto Item Number",
         description = "Inline command direct array numeric constraints support.",
         category = "Test"
     )]
-    fn inline_auto_item_number_operation(
+    fn inline_auto_item_number_command(
         &self,
         #[arg(minimum = 2, maximum = 4)] counts: Vec<u32>,
     ) -> String {
         counts.len().to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-auto-item-choice",
         id = "manifest.inline_auto_item_choice",
         title = "Manifest Inline Auto Item Choice",
         description = "Inline command direct array choices support.",
         category = "Test"
     )]
-    fn inline_auto_item_choice_operation(
+    fn inline_auto_item_choice_command(
         &self,
         #[arg(choices = ["cargo", "git"])] tools: Vec<String>,
     ) -> String {
         tools.join(",")
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-relation",
         id = "manifest.inline_relation",
         title = "Manifest Inline Relation",
         description = "Inline command relation and string-list rules support.",
         category = "Test"
     )]
-    fn inline_relation_operation(
+    fn inline_relation_command(
         &self,
         #[arg(requires = "mode")] path: Option<String>,
         mode: Option<String>,
@@ -818,7 +813,7 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed group metadata.",
-        operation("/renamed-group"),
+        command("/renamed-group"),
         tags(read_only)
     )]
     fn renamed_group(&self, input: &RenamedGroupInput) -> String {
@@ -829,14 +824,14 @@ impl ManifestPlugin {
             .unwrap_or_default()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-group",
         id = "manifest.inline_group",
         title = "Manifest Inline Group",
         description = "Inline command group rules support.",
         category = "Test"
     )]
-    fn inline_group_operation(
+    fn inline_group_command(
         &self,
         #[arg(name = "filePath", exactly_one_of = ["stdin_payload"])] file_path: Option<String>,
         #[arg(name = "stdinPayload")] stdin_payload: Option<String>,
@@ -847,49 +842,49 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Renamed relation metadata.",
-        operation("/renamed-relation"),
+        command("/renamed-relation"),
         tags(read_only)
     )]
     fn renamed_relation(&self, input: &RenamedRelationInput) -> String {
         input.mode_value.clone().unwrap_or_default()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-item-number",
         id = "manifest.inline_item_number",
         title = "Manifest Inline Item Number",
         description = "Inline command item numeric bounds support.",
         category = "Test"
     )]
-    fn inline_item_number_operation(
+    fn inline_item_number_command(
         &self,
         #[arg(item_minimum = 2, item_maximum = 4)] counts: Vec<u32>,
     ) -> String {
         counts.len().to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-item-exclusive-number",
         id = "manifest.inline_item_exclusive_number",
         title = "Manifest Inline Item Exclusive Number",
         description = "Inline command item strict numeric bounds support.",
         category = "Test"
     )]
-    fn inline_item_exclusive_number_operation(
+    fn inline_item_exclusive_number_command(
         &self,
         #[arg(item_exclusive_minimum = 2, item_exclusive_maximum = 5)] counts: Vec<i32>,
     ) -> String {
         counts.len().to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-item-object",
         id = "manifest.inline_item_object",
         title = "Manifest Inline Item Object",
         description = "Inline command item object property bounds support.",
         category = "Test"
     )]
-    fn inline_item_object_operation(
+    fn inline_item_object_command(
         &self,
         #[arg(item_min_properties = 1, item_max_properties = 2)] entries: Vec<
             std::collections::BTreeMap<String, String>,
@@ -898,75 +893,75 @@ impl ManifestPlugin {
         entries.len().to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-choice",
         id = "manifest.inline_choice",
         title = "Manifest Inline Choice",
         description = "Inline command choices support.",
         category = "Test"
     )]
-    fn inline_choice_operation(&self, #[arg(choices = ["cargo", "git"])] tool: String) -> String {
+    fn inline_choice_command(&self, #[arg(choices = ["cargo", "git"])] tool: String) -> String {
         tool
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-format",
         id = "manifest.inline_format",
         title = "Manifest Inline Format",
         description = "Inline command format support.",
         category = "Test"
     )]
-    fn inline_format_operation(&self, #[arg(format = "uri")] endpoint: String) -> String {
+    fn inline_format_command(&self, #[arg(format = "uri")] endpoint: String) -> String {
         endpoint
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-pattern",
         id = "manifest.inline_pattern",
         title = "Manifest Inline Pattern",
         description = "Inline command pattern support.",
         category = "Test"
     )]
-    fn inline_pattern_operation(
+    fn inline_pattern_command(
         &self,
         #[arg(min_chars = 3, pattern = "^[a-z0-9-]+$")] slug: String,
     ) -> String {
         slug
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-number",
         id = "manifest.inline_number",
         title = "Manifest Inline Number",
         description = "Inline command numeric bounds support.",
         category = "Test"
     )]
-    fn inline_number_operation(&self, #[arg(minimum = 2, maximum = 4)] count: u32) -> String {
+    fn inline_number_command(&self, #[arg(minimum = 2, maximum = 4)] count: u32) -> String {
         count.to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-exclusive-number",
         id = "manifest.inline_exclusive_number",
         title = "Manifest Inline Exclusive Number",
         description = "Inline command strict numeric bounds support.",
         category = "Test"
     )]
-    fn inline_exclusive_number_operation(
+    fn inline_exclusive_number_command(
         &self,
         #[arg(exclusive_minimum = 2, exclusive_maximum = 5)] count: i32,
     ) -> String {
         count.to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-object",
         id = "manifest.inline_object",
         title = "Manifest Inline Object",
         description = "Inline command object property bounds support.",
         category = "Test"
     )]
-    fn inline_object_operation(
+    fn inline_object_command(
         &self,
         #[arg(min_properties = 1, max_properties = 2)] labels: std::collections::BTreeMap<
             String,
@@ -976,103 +971,100 @@ impl ManifestPlugin {
         labels.len().to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-item-format",
         id = "manifest.inline_item_format",
         title = "Manifest Inline Item Format",
         description = "Inline command item format support.",
         category = "Test"
     )]
-    fn inline_item_format_operation(
-        &self,
-        #[arg(item_format = "uuid")] ids: Vec<String>,
-    ) -> String {
+    fn inline_item_format_command(&self, #[arg(item_format = "uuid")] ids: Vec<String>) -> String {
         ids.join(",")
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-item-pattern",
         id = "manifest.inline_item_pattern",
         title = "Manifest Inline Item Pattern",
         description = "Inline command item constraints support.",
         category = "Test"
     )]
-    fn inline_item_pattern_operation(
+    fn inline_item_pattern_command(
         &self,
         #[arg(item_min_chars = 3, item_pattern = "^[a-z0-9-]+$")] tags: Vec<String>,
     ) -> String {
         tags.join(",")
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-item-choice",
         id = "manifest.inline_item_choice",
         title = "Manifest Inline Item Choice",
         description = "Inline command item choices support.",
         category = "Test"
     )]
-    fn inline_item_choice_operation(
+    fn inline_item_choice_command(
         &self,
         #[arg(item_choices = ["cargo", "git"])] tools: Vec<String>,
     ) -> String {
         tools.join(",")
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-item-normalize",
         id = "manifest.inline_item_normalize",
         title = "Manifest Inline Item Normalize",
         description = "Inline command item normalization support.",
         category = "Test"
     )]
-    fn inline_item_normalize_operation(
+    fn inline_item_normalize_command(
         &self,
         #[arg(item_trim, item_trim_suffix = ".rs", item_non_empty)] tags: Vec<String>,
     ) -> String {
         tags.join(",")
     }
 
-    #[operation(
+    #[command(
         "/manifest-inline-item-non-empty-if-present",
         id = "manifest.inline_item_non_empty_if_present",
         title = "Manifest Inline Item Optional",
         description = "Inline command optional item non-empty support.",
         category = "Test"
     )]
-    fn inline_item_non_empty_if_present_operation(
+    fn inline_item_non_empty_if_present_command(
         &self,
         #[arg(item_non_empty_if_present)] tags: Option<Vec<String>>,
     ) -> String {
         tags.unwrap_or_default().join(",")
     }
 
-    #[operation(
+    #[command(
         "/manifest-bool",
         id = "manifest.bool",
         title = "Manifest Bool",
         description = "Top-level primitive command input.",
         category = "Test"
     )]
-    fn bool_operation(&self, enabled: bool) -> String {
+    fn bool_command(&self, enabled: bool) -> String {
         enabled.to_string()
     }
 
-    #[operation(
+    #[command(
         "/manifest-context",
         id = "manifest.context",
         title = "Manifest Context",
         description = "Greet with command context.",
         category = "Test"
     )]
-    fn context_operation(
+    fn context_command(
         &self,
         input: &ManifestCommandInput,
-        context: PluginOperationContext<'_>,
+        context: PluginCommandContext<'_>,
     ) -> String {
         format!(
             "{} via {}",
             input.name,
-            context.slash.unwrap_or(context.operation_id)
+            context.slash.unwrap_or(context.command_id)
         )
     }
 

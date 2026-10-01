@@ -42,7 +42,7 @@ pub struct Application {
     execution_control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
     execution_commands: Option<Arc<dyn agena_runtime::SessionExecutionCommandService>>,
     tool_execution: Option<Arc<dyn agena_runtime::SessionToolExecutionService>>,
-    plugin_operations: Option<Arc<dyn agena_runtime::SessionPluginOperationService>>,
+    plugin_commands: Option<Arc<dyn agena_runtime::SessionPluginCommandService>>,
 }
 
 #[derive(Default)]
@@ -73,7 +73,7 @@ pub struct ApplicationSessionServices {
     pub queries: Arc<dyn agena_runtime::SessionQueryService>,
     pub commands: Arc<dyn agena_runtime::SessionExecutionCommandService>,
     pub tool_execution: Arc<dyn agena_runtime::SessionToolExecutionService>,
-    pub plugin_operations: Arc<dyn agena_runtime::SessionPluginOperationService>,
+    pub plugin_commands: Arc<dyn agena_runtime::SessionPluginCommandService>,
 }
 
 /// Authentication flow selected by a transport or terminal command.
@@ -119,7 +119,7 @@ impl Application {
             execution_control,
             execution_commands,
             tool_execution,
-            plugin_operations,
+            plugin_commands,
         } = runtime;
         let application = Self {
             provider_catalog,
@@ -152,7 +152,7 @@ impl Application {
             execution_control,
             execution_commands,
             tool_execution,
-            plugin_operations,
+            plugin_commands,
         };
         application.spawn_notification_aggregator();
         Ok(application)
@@ -841,7 +841,7 @@ impl Application {
             tool_execution: self.tool_execution.clone().ok_or_else(|| {
                 ApplicationError::service_unavailable("session runtime not initialised")
             })?,
-            plugin_operations: self.plugin_operations.clone().ok_or_else(|| {
+            plugin_commands: self.plugin_commands.clone().ok_or_else(|| {
                 ApplicationError::service_unavailable("session runtime not initialised")
             })?,
         })
@@ -876,9 +876,9 @@ impl Application {
     ) -> Result<agena_api::resource::RuntimeStatusResponse, ApplicationError> {
         use agena_api::resource::{
             DefaultSelectionResource, ModelCatalogResponse, RuntimeAutomationResource,
-            RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource,
-            RuntimeMcpServerResource, RuntimeOperatorResource, RuntimePluginSurfaceResource,
-            RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse,
+            RuntimeCommandResource, RuntimeCommandsResource, RuntimeLspResource,
+            RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+            RuntimeOperatorResource, RuntimePluginSurfaceResource, RuntimeStatusResponse,
             RuntimeTaskResource,
         };
 
@@ -943,29 +943,32 @@ impl Application {
                 })
                 .collect(),
         };
-        let skills = RuntimeSkillsResource {
-            skill_count: status.skills.skills.len(),
-            command_count: status.skills.commands.len(),
-            skills: status
-                .skills
-                .skills
-                .into_iter()
-                .map(|item| RuntimeSkillResource {
-                    name: item.name,
-                    description: item.description,
-                    aliases: item.aliases,
-                    source_path: item.source_path,
-                })
-                .collect(),
+        let commands = RuntimeCommandsResource {
+            client_count: status
+                .commands
+                .commands
+                .iter()
+                .filter(|command| command.target == "client")
+                .count(),
+            served_count: status
+                .commands
+                .commands
+                .iter()
+                .filter(|command| command.target != "client")
+                .count(),
             commands: status
-                .skills
+                .commands
                 .commands
                 .into_iter()
-                .map(|item| RuntimeSkillResource {
-                    name: item.name,
-                    description: item.description,
-                    aliases: item.aliases,
-                    source_path: item.source_path,
+                .map(|command| RuntimeCommandResource {
+                    name: command.name,
+                    slash: command.slash,
+                    description: command.description,
+                    aliases: command.aliases,
+                    group: command.group,
+                    category: command.category,
+                    plugin_id: command.plugin_id,
+                    target: command.target,
                 })
                 .collect(),
         };
@@ -1012,7 +1015,7 @@ impl Application {
                 mcp,
                 lsp,
                 agent_id: status.agent_id,
-                skills,
+                commands,
                 plugins: RuntimePluginSurfaceResource {
                     catalog: plugin_surface_catalog_resource_from_domain(
                         status.plugin_surface_catalog,
@@ -1311,20 +1314,20 @@ fn plugin_surface_catalog_resource_from_domain(
     value: agena_plugin_host::PluginSurfaceCatalog,
 ) -> agena_api::resource::PluginSurfaceCatalogResource {
     use agena_api::resource::{
-        PluginDisplayContributionResource, PluginOperationResource, PluginSurfaceCatalogResource,
+        PluginCommandResource, PluginDisplayContributionResource, PluginSurfaceCatalogResource,
         PluginTerminalSurfaceCatalogResource, PluginThemeColorsResource,
         PluginThemePaletteResource,
     };
 
     PluginSurfaceCatalogResource {
-        operations: value
-            .operations
+        commands: value
+            .commands
             .into_iter()
-            .map(|item| PluginOperationResource {
+            .map(|item| PluginCommandResource {
                 plugin_id: item.plugin_id.to_string(),
                 accepts_empty_input: item.accepts_empty_input,
                 default_input: item.default_input,
-                operation: item.operation,
+                command: item.command,
             })
             .collect(),
         terminal: PluginTerminalSurfaceCatalogResource {

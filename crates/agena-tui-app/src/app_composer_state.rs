@@ -166,21 +166,6 @@ impl App {
         })
     }
 
-    pub(crate) fn stage_skill_reference(&mut self, mut item: ComposerItem) {
-        let placeholder = self.make_unique_composer_placeholder(item.placeholder.clone());
-        item.placeholder = placeholder.clone();
-        let name = match item.payload() {
-            agena_domain::ActivityPayload::SkillReference(skill) => skill.name.clone(),
-            _ => return,
-        };
-        self.composer.insert_element(placeholder.as_str());
-        self.composer_items.push(item);
-        self.flash_success(
-            self.i18n
-                .text_args("flash-skill-attached", &agena_tui::fl_args!("name" => name)),
-        );
-    }
-
     /// Reserve one in-flight media part. The reservation is an ordinary
     /// composer item whose payload already describes the resource it will
     /// become; only its `state` marks it as still preparing.
@@ -1412,26 +1397,26 @@ mod tests {
 
     #[test]
     fn mixed_document_preserves_inline_order_without_placeholder_text() {
-        let skill_placeholder = "[Skill: doctor]";
+        let command_placeholder = "[Command: doctor]";
         let directory_placeholder = "[folder apps]";
-        let skill_id = ActivityId::new();
+        let command_id = ActivityId::new();
         let directory_id = ActivityId::new();
-        let source = format!("hi {skill_placeholder} hi {directory_placeholder}");
-        let skill_start = 3;
-        let directory_start = skill_start + skill_placeholder.len() + 4;
+        let source = format!("hi {command_placeholder} hi {directory_placeholder}");
+        let command_start = 3;
+        let directory_start = command_start + command_placeholder.len() + 4;
         let document = composer_document_from_editor(
             source.as_str(),
             &[
-                skill_start..skill_start + skill_placeholder.len(),
+                command_start..command_start + command_placeholder.len(),
                 directory_start..directory_start + directory_placeholder.len(),
             ],
             &[
                 ComposerItem {
-                    placeholder: skill_placeholder.to_owned(),
+                    placeholder: command_placeholder.to_owned(),
                     state: agena_api::part::PartExecutionStatusResource::Completed,
                     recovery_text: None,
                     activity: ComposerActivity {
-                        id: skill_id,
+                        id: command_id,
                         payload: ActivityPayload::SkillReference(SkillReferenceActivity {
                             name: "doctor".to_owned(),
                             description: String::new(),
@@ -1469,7 +1454,7 @@ mod tests {
         );
         assert!(matches!(&document.0[0], ComposerNode::Text { text } if text == "hi "));
         assert!(
-            matches!(&document.0[1], ComposerNode::Activity { activity } if activity.id == skill_id)
+            matches!(&document.0[1], ComposerNode::Activity { activity } if activity.id == command_id)
         );
         assert!(matches!(&document.0[2], ComposerNode::Text { text } if text == " hi "));
         assert!(matches!(

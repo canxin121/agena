@@ -18,13 +18,11 @@ impl App {
             Route::PermissionRuleStudio(dialog) => dialog.editor.is_some(),
             Route::SessionSearch(_)
             | Route::CommandPalette(_)
-            | Route::SkillPicker(_)
             | Route::SessionNavigation(_)
             | Route::SelectionPicker(_)
             | Route::SessionModelChooser(_)
             | Route::Timeline(_)
             | Route::PluginWorkbench(_) => true,
-            Route::SkillStudio(dialog) => dialog.editor.is_some() || dialog.detail.is_none(),
             Route::ProviderStudio(dialog) => dialog.editor.is_some(),
             Route::ModelCatalogStudio(dialog) => dialog.editor.is_some(),
         }
@@ -84,24 +82,6 @@ impl App {
                         &mut dialog.presentation,
                         agena_tui::command_palette::CommandPaletteAction::Paste(text.clone()),
                     );
-                    handled_route = true;
-                }
-                Route::SkillPicker(dialog) => {
-                    let _ = agena_tui::selection_picker::reduce(
-                        &mut dialog.presentation,
-                        agena_tui::selection_picker::SelectionPickerAction::Paste(text.clone()),
-                    );
-                    handled_route = true;
-                }
-                Route::SkillStudio(dialog) => {
-                    if let Some(editor) = dialog.editor.as_mut() {
-                        editor.input.insert_str(text.as_str());
-                    } else if dialog.detail.is_none() {
-                        let _ = agena_tui::selection_picker::reduce(
-                            &mut dialog.presentation,
-                            agena_tui::selection_picker::SelectionPickerAction::Paste(text.clone()),
-                        );
-                    }
                     handled_route = true;
                 }
                 Route::SessionNavigation(dialog) => {

@@ -1,0 +1,5 @@
+error: unsupported inline tool list 'examples'
+  --> tests/ui/fail/bad_tool_removed_examples.rs:13:73
+   |
+13 |     #[tool(summary = "Declares its own example text.", tags(read_only), examples(r#"{"path":"README.md"}"#))]
+   |                                                                         ^^^^^^^^

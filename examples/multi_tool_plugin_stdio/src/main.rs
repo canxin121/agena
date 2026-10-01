@@ -97,7 +97,6 @@ impl NotesPlugin {
         summary = "Format text with the configured notes prefix.",
         help = "Formats text using this plugin's runtime config. The streaming path emits the formatted text in line-sized chunks.",
         stream = format_stream,
-        concurrency_safe,
         tags(read_only)
     )]
     async fn format(&self, input: &FormatNoteInput) -> Result<FormatNoteOutput> {

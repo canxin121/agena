@@ -37,32 +37,29 @@ impl App {
     pub(crate) fn open_command_palette(&mut self) {
         let mut actions = BTreeMap::new();
         let mut items = Vec::new();
-        for spec in commands::COMMANDS {
-            let key = format!("command:{}", spec.name);
-            let label = spec.palette_invocation();
-            let detail = ui_text::t(&self.i18n, spec.summary_key);
+        for command in self.client_palette_commands() {
+            let key = format!("command:{}", command.id());
+            let label = command.palette_invocation();
+            let detail = commands::docs_summary(&self.i18n, command.docs(), command.id());
             items.push(CommandPaletteItem::new(
                 key.clone(),
                 label.clone(),
                 detail.clone(),
                 format!(
                     "{label} {detail} {} {}",
-                    spec.aliases.join(" "),
-                    spec.arguments
+                    command.aliases().join(" "),
+                    command.docs().usage.as_deref().unwrap_or_default()
                 ),
             ));
-            actions.insert(key, CommandPaletteCommand::BuiltIn(spec));
+            actions.insert(key, CommandPaletteCommand::BuiltIn(Box::new(command)));
         }
-        for entry in self.plugin_slash_operations() {
-            let Some(name) = plugin_operation_slash_name(&entry) else {
+        for entry in self.plugin_slash_commands() {
+            let Some(name) = plugin_command_slash_name(&entry) else {
                 continue;
             };
-            let key = format!(
-                "plugin-operation:{}:{}",
-                entry.plugin_id, entry.operation.id
-            );
+            let key = format!("plugin-operation:{}:{}", entry.plugin_id, entry.command.id);
             let label = format!("/{name}");
-            let detail = plugin_operation_detail(&entry);
+            let detail = plugin_command_detail(&entry);
             items.push(CommandPaletteItem::new(
                 key.clone(),
                 label.clone(),
@@ -84,16 +81,24 @@ impl App {
         });
     }
 
-    pub(crate) fn plugin_slash_operations(
-        &self,
-    ) -> Vec<agena_plugin_host::PluginOperationCatalogItem> {
-        crate::app_backend::plugin_effects::plugin_slash_operations(&self.application)
-            .into_iter()
-            .filter(|entry| {
-                plugin_operation_slash_name(entry)
-                    .is_some_and(|name| commands::find_command(name.as_str()).is_none())
-            })
-            .collect()
+    /// The built-in commands a palette offers, in catalog order.
+    ///
+    /// The published catalog is the only source: before the first plugin
+    /// surface snapshot arrives the list is empty rather than a hand-written
+    /// fallback.
+    pub(crate) fn client_palette_commands(&self) -> Vec<commands::ClientCommand> {
+        commands::client_palette_commands(self.application.plugin_catalog().as_ref())
+    }
+
+    /// Resolve `/name` to a built-in command this client can run.
+    pub(crate) fn find_client_command(&self, name: &str) -> Option<commands::ClientCommand> {
+        commands::find_client_command(self.application.plugin_catalog().as_ref(), name)
+    }
+
+    /// The commands a server-owned target resolves, i.e. everything that is not
+    /// this client's own to run.
+    pub(crate) fn plugin_slash_commands(&self) -> Vec<agena_plugin_host::CommandCatalogItem> {
+        crate::app_backend::plugin_effects::plugin_slash_commands(&self.application)
     }
 
     pub(crate) fn open_resume_session_picker(&mut self) {
@@ -180,7 +185,7 @@ impl App {
 use crate::{
     App, CommandPaletteCommand, CommandPaletteOverlay, Editor, PermissionRuleDraft,
     PermissionRuleStudioOverlay, Route, SessionNavigationQuery, commands,
-    permission_rule_studio_items, plugin_operation_detail, plugin_operation_slash_name,
+    permission_rule_studio_items, plugin_command_detail, plugin_command_slash_name,
     refresh_permission_rule_studio_dialog, ui_text,
 };
 use agena_tui::command_palette::CommandPaletteItem;

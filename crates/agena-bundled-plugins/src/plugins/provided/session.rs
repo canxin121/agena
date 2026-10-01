@@ -149,8 +149,7 @@ impl SessionPlugin {
 
     #[tool(
         tags(query, discovery, read_only),
-        summary = "Inspect the current session metadata.",
-        concurrency_safe
+        summary = "Inspect the current session metadata."
     )]
     async fn get(&self) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_get_session().await
@@ -158,8 +157,7 @@ impl SessionPlugin {
 
     #[tool(
         tags(query, discovery, read_only),
-        summary = "Inspect the current runtime environment: working directory, git state, shell, OS, and architecture.",
-        concurrency_safe
+        summary = "Inspect the current runtime environment: working directory, git state, shell, OS, and architecture."
     )]
     async fn environment(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = context.workspace_root.to_string();
@@ -229,7 +227,7 @@ impl SessionPlugin {
                         .map_err(|error| PluginError::internal_error(&error))?;
                     Some(
                         serde_json::json!({"status":"available","count":tools.len(),"sha256":hex::encode(Sha256::digest(&bytes)),
-                        "interactive_shell":tools.iter().any(|tool|tool.name.ends_with("shell.write")),"output_recovery":tools.iter().any(|tool|tool.name.ends_with("fs.output_read"))}),
+                        "interactive_shell":tools.iter().any(|tool|tool.name.ends_with("shell.write")),"output_recovery":tools.iter().any(|tool|tool.name.ends_with("fs.read"))}),
                     )
                 }
                 Err(_) => None,
@@ -288,8 +286,7 @@ impl SessionPlugin {
 
     #[tool(
         tags(query, discovery, read_only),
-        summary = "Inspect the current session model identity, runtime modes, and model token limits.",
-        concurrency_safe
+        summary = "Inspect the current session model identity, runtime modes, and model token limits."
     )]
     async fn model(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
         let status = self.execution_snapshot(context).await?;
@@ -338,8 +335,7 @@ impl SessionPlugin {
 
     #[tool(
         tags(query, discovery, read_only),
-        summary = "Inspect current and projected token use, effective limits, and remaining session budget.",
-        concurrency_safe
+        summary = "Inspect current and projected token use, effective limits, and remaining session budget."
     )]
     async fn tokens(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
         let status = self.execution_snapshot(context).await?;

@@ -678,14 +678,13 @@ fn tool_result_fragment(
                 return Some(fragment);
             }
         }
-        "skills.create"
-        | "skills.update"
-        | "skills.delete"
-        | "skills.get"
-        | "skills.list"
-        | "skills.read_resource"
-        | "skills.refresh" => {
-            if let Some(fragment) = skill_result_fragment(key, object) {
+        "commands.install"
+        | "commands.remove"
+        | "commands.get"
+        | "commands.list"
+        | "commands.read_resource"
+        | "commands.refresh" => {
+            if let Some(fragment) = command_result_fragment(key, object) {
                 return Some(fragment);
             }
         }
@@ -842,32 +841,6 @@ fn tool_result_fragment(
                 .and_then(value_as_u64)
             {
                 return Some(format!("loaded · {}", format_bytes(size)));
-            }
-        }
-        "fs.output_read" | "fs.output_search" => {
-            let fact = if key == "fs.output_read" {
-                object
-                    .get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|text| format!("{} read", format_bytes(text.len() as u64)))
-            } else {
-                object
-                    .get("matches")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|matches| format_count(matches.len(), "matches"))
-            };
-            if let Some(mut fact) = fact {
-                if object.get("next_offset").and_then(value_as_u64).is_some() {
-                    fact.push_str(" · more available");
-                }
-                if object
-                    .get("capture_truncated")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
-                {
-                    fact.push_str(" · capture truncated");
-                }
-                return Some(fact);
             }
         }
         "fs.read_many" => {
@@ -1447,12 +1420,12 @@ fn task_status(object: &serde_json::Map<String, serde_json::Value>) -> Option<St
         .and_then(normalize_result_status)
 }
 
-fn skill_result_fragment(
+fn command_result_fragment(
     key: &str,
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
     match key {
-        "skills.create" | "skills.update" | "skills.delete" => {
+        "commands.install" | "commands.remove" => {
             let operation = object
                 .get("operation")
                 .and_then(serde_json::Value::as_str)
@@ -1470,33 +1443,29 @@ fn skill_result_fragment(
                 return Some(parts.join(" · "));
             }
         }
-        "skills.list" => {
-            let returned = object.get("returned").and_then(value_as_u64).or_else(|| {
-                object
-                    .get("tools")
-                    .and_then(|value| value.as_array().map(|v| v.len() as u64))
-            });
+        "commands.list" => {
+            let returned = object.get("returned").and_then(value_as_u64);
             if let Some(returned) = returned {
                 let total = object.get("total").and_then(value_as_u64);
                 return Some(match total {
-                    Some(total) => format!("{returned} of {total} tools"),
-                    None => format_count(returned as usize, "tools"),
+                    Some(total) => format!("{returned} of {total} packages"),
+                    None => format_count(returned as usize, "packages"),
                 });
             }
         }
-        "skills.get" => {
+        "commands.get" => {
             let name = object.get("name").and_then(serde_json::Value::as_str);
-            let kind = object.get("kind").and_then(serde_json::Value::as_str);
+            let source = object.get("source").and_then(serde_json::Value::as_str);
             let parts = name
                 .into_iter()
-                .chain(kind)
+                .chain(source)
                 .map(normalize_tool_title)
                 .collect::<Vec<_>>();
             if !parts.is_empty() {
                 return Some(parts.join(" · "));
             }
         }
-        "skills.read_resource" => {
+        "commands.read_resource" => {
             let path = object.get("path").and_then(serde_json::Value::as_str);
             let bytes = object.get("bytes").and_then(value_as_u64);
             let parts = path
@@ -1508,7 +1477,7 @@ fn skill_result_fragment(
                 return Some(parts.join(" · "));
             }
         }
-        "skills.refresh" => {
+        "commands.refresh" => {
             let changed = object
                 .get("changed")
                 .and_then(serde_json::Value::as_bool)
@@ -2369,8 +2338,6 @@ fn tool_action_label(tool_name: &str) -> String {
     match key.as_str() {
         "fs.read" | "read" => "Read".to_owned(),
         "fs.read_many" => "Read files".to_owned(),
-        "fs.output_read" => "Read captured output".to_owned(),
-        "fs.output_search" => "Search captured output".to_owned(),
         "fs.write" | "write" => "Write".to_owned(),
         "fs.apply_patch" | "apply_patch" => "Apply patch".to_owned(),
         "fs.glob" | "glob" => "Find files".to_owned(),
@@ -2487,13 +2454,12 @@ fn tool_action_label(tool_name: &str) -> String {
         "settings.delete" => "Delete setting".to_owned(),
         "settings.patch" => "Patch settings".to_owned(),
         "settings.validate" => "Validate settings".to_owned(),
-        "skills.create" => "Create skill".to_owned(),
-        "skills.delete" => "Delete skill".to_owned(),
-        "skills.get" => "Inspect skill".to_owned(),
-        "skills.list" => "List skills".to_owned(),
-        "skills.read_resource" => "Read skill resource".to_owned(),
-        "skills.refresh" => "Refresh skills".to_owned(),
-        "skills.update" => "Update skill".to_owned(),
+        "commands.install" => "Install command".to_owned(),
+        "commands.remove" => "Remove command".to_owned(),
+        "commands.get" => "Inspect command".to_owned(),
+        "commands.list" => "List commands".to_owned(),
+        "commands.read_resource" => "Read command resource".to_owned(),
+        "commands.refresh" => "Refresh commands".to_owned(),
         "snapshot.status" => "Inspect snapshot".to_owned(),
         "repo.status" => "Inspect repository".to_owned(),
         "web.browser_open" | "browser_open" => "Open page".to_owned(),
@@ -2573,10 +2539,6 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
         &["monitor_id", "id"]
     } else if key.ends_with("fs.read") || key.ends_with("fs.write") {
         &["file_path", "path", "name"]
-    } else if key.ends_with("fs.output_read") {
-        &["output_id"]
-    } else if key.ends_with("fs.output_search") {
-        &["pattern", "output_id"]
     } else if key.ends_with("fs.read_many") {
         &["paths", "path"]
     } else if key.ends_with("fs.replace")
@@ -2675,7 +2637,7 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
         &["name", "path"]
     } else if key.starts_with("session.") {
         &["title", "name", "session_id"]
-    } else if key.starts_with("skills.") {
+    } else if key.starts_with("commands.") {
         &["name", "path", "resource", "document"]
     } else if key.starts_with("chatgpt.")
         || key.starts_with("claude.")
@@ -3789,7 +3751,7 @@ mod tool_title_tests {
     }
 
     #[test]
-    fn completed_titles_cover_code_session_task_skill_browser_and_repo_results() {
+    fn completed_titles_cover_code_session_task_command_browser_and_repo_results() {
         let check =
             |name: &str, input: serde_json::Value, payload: serde_json::Value, facts: &[&str]| {
                 let invocation = ToolInvocation::new(
@@ -3889,7 +3851,7 @@ mod tool_title_tests {
             &["2 chunks", "completed", "more available"],
         );
         check(
-            "agena.skills.create",
+            "agena.commands.install",
             json!({"document": "---\nname: team_review\n---\nReview."}),
             json!({"operation": "created", "name": "team_review", "catalog_generation": 3}),
             &["created", "team_review"],

@@ -209,17 +209,20 @@ impl App {
                     return false;
                 };
                 match action {
-                    CommandPaletteCommand::BuiltIn(spec) => {
-                        if spec.requires_arguments() {
-                            self.prepare_composer_command(spec.name);
+                    CommandPaletteCommand::BuiltIn(command) => {
+                        // A required argument cannot be conjured here, so stage
+                        // the command in the composer; everything else runs.
+                        if command.requires_arguments() {
+                            let name = command.name();
+                            self.prepare_composer_command(name.as_str());
                         } else {
-                            self.execute_command(spec, "");
+                            self.execute_command(command.as_ref(), "");
                         }
                     }
                     CommandPaletteCommand::Plugin(entry) => {
-                        if plugin_operation_accepts_empty_arguments(&entry) {
-                            self.execute_plugin_slash_operation(*entry, "");
-                        } else if let Some(command_name) = plugin_operation_slash_name(&entry) {
+                        if plugin_command_accepts_empty_arguments(&entry) {
+                            self.execute_plugin_slash_command(*entry, "");
+                        } else if let Some(command_name) = plugin_command_slash_name(&entry) {
                             self.prepare_composer_command(command_name.as_str());
                         }
                     }
@@ -547,8 +550,8 @@ use crate::{
     SearchPickerInputResult, SelectionPickerCommand, SelectionPickerOverlay,
     SessionModelChooserOverlay, SessionModelChooserPurpose, SessionModelModeStep,
     SessionNavigationCommand, SessionNavigationOverlay, SessionSearchOverlay, TimelineOverlay,
-    drive_editor_dialog_key, drive_input_dialog_key, plugin_operation_accepts_empty_arguments,
-    plugin_operation_slash_name, provider_studio_selected_adapter_models, ui_text,
+    drive_editor_dialog_key, drive_input_dialog_key, plugin_command_accepts_empty_arguments,
+    plugin_command_slash_name, provider_studio_selected_adapter_models, ui_text,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;

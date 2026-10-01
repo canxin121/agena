@@ -59,8 +59,7 @@ impl CronPlugin {
     #[tool(
         tags(query, scheduler, discovery, read_only),
         summary = "List registered cron jobs and wakeups.",
-        help = "List every scheduled job registered in this session. Jobs are session-only — they exist for this session's lifetime and are gone when it ends — and recurring jobs auto-expire after seven days. Use this to review schedules you created; never poll it waiting for a job to fire.",
-        concurrency_safe
+        help = "List every scheduled job registered in this session. Jobs are session-only — they exist for this session's lifetime and are gone when it ends — and recurring jobs auto-expire after seven days. Use this to review schedules you created; never poll it waiting for a job to fire."
     )]
     async fn invoke_list(
         &self,
@@ -174,8 +173,7 @@ impl CronPlugin {
     #[tool(
         tags(query, scheduler, read_only),
         summary = "Inspect bounded persisted delivery history for scheduled jobs.",
-        help = "Read the bounded delivery history (fire times, outcome, last error) for scheduled jobs. Never poll this waiting for a job to fire — the firing itself appends its prompt to the session and wakes you.",
-        concurrency_safe
+        help = "Read the bounded delivery history (fire times, outcome, last error) for scheduled jobs. Never poll this waiting for a job to fire — the firing itself appends its prompt to the session and wakes you."
     )]
     async fn invoke_history(
         &self,

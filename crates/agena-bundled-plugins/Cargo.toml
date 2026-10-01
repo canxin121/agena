@@ -20,7 +20,6 @@ agena-runtime-config = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-runtime-plugins = { workspace = true }
 agena-runtime-tools = { workspace = true }
-agena-skills = { workspace = true }
 agena-storage = { workspace = true }
 agena-tool = { workspace = true }
 agena-web = { workspace = true }
@@ -29,6 +28,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
+ignore = { workspace = true }
 notify = { workspace = true }
 process_control = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "multipart", "stream"] }
@@ -54,6 +54,7 @@ plugin-signing = ["agena-plugin-host/signing"]
 sha2 = { workspace = true }
 
 [dev-dependencies]
+agena-api = { workspace = true }
 axum = { workspace = true }
 
 [lints]

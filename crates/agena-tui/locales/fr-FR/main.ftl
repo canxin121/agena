@@ -455,9 +455,9 @@ settings-activity-kind-resource-label = Ressources
 
 settings-activity-kind-resource-description = Pièces jointes et autres ressources.
 
-settings-activity-kind-skill_reference-label = Références
+settings-activity-kind-skill_reference-label = Références de commande
 
-settings-activity-kind-skill_reference-description = Références aux compétences utilisées dans la réponse.
+settings-activity-kind-skill_reference-description = Références aux commandes sélectionnées dans la réponse.
 
 settings-activity-kind-interaction-label = Interactions
 
@@ -545,7 +545,6 @@ settings-field-parse-float = {$field} s'attend à une valeur numérique
 
 settings-choice-adapter-fallback = adaptateur
 
-
 settings-plugin-workbench-label = Atelier de configuration des plugins
 
 settings-mcp-server-label = Serveur MCP Agena
@@ -579,9 +578,6 @@ settings-mcp-anonymous-access-read-only = outils en lecture seule pour l'autoris
 settings-mcp-registration-label = enregistrement
 
 settings-mcp-pkce-label = PKCE
-
-
-
 
 settings-mcp-public-url-label = URL publique MCP
 
@@ -848,7 +844,6 @@ overlay-provider-studio-catalog-loading = Recherche d’une correspondance dans 
 
 overlay-provider-studio-catalog-no-match = Aucune correspondance dans le catalogue · choisissez dans les réglages du modèle
 
-
 overlay-provider-studio-detail = Détail
 
 overlay-provider-studio-adapter-models-empty = Sélectionnez les adaptateurs, puis listez leurs modèles en direct
@@ -1021,7 +1016,6 @@ settings-mcp-auth-mode-updated = Mode d'authentification MCP d'Agena défini à 
 
 settings-mcp-anonymous-access-updated = Accès anonyme à l'outil Agena MCP défini à {$policy}
 
-
 settings-mcp-oauth-password-cleared = MCP d'Agena Mot de passe OAuth effacé
 
 permission-studio-command-pattern-title = Modèle de commande {$tool_name}
@@ -1188,7 +1182,7 @@ settings-field-tui-graphics-description = Affichez des images et des formules de
 settings-field-activity-default-expanded-description = État d'expansion par défaut pour les activités sans remplacement spécifique au type. Le raisonnement reste étendu à moins que son type ne soit défini explicitement.
 settings-activity-kind-reasoning-description = Le parcours de réflexion complet du modèle. La valeur par défaut est développée et peut être réduite par type.
 runtime-setting-choice-supported-model = soutenu par le modèle actuel
-settings-plugin-workbench-detail = Ouvrez l'atelier de plug-in structuré pour connaître l'état d'exécution, la configuration, les outils, les opérations, les journaux et les diagnostics.
+settings-plugin-workbench-detail = Ouvrez l'atelier de plug-in structuré pour connaître l'état d'exécution, la configuration, les outils, les commandes, les journaux et les diagnostics.
 settings-mcp-server-detail = Activez/désactivez la surface HTTP MCP en direct d'Agena. Le processus du serveur Agena connecté reste le moteur d'exécution réel.
 settings-mcp-auth-detail = Cycle sans authentification, OAuth complet et authentification mixte ChatGPT. Le mode mixte maintient l'initialisation et la découverte d'outils publiques ; les appels d'outils restent protégés par OAuth à moins que l'accès anonyme ne soit explicitement activé.
 settings-mcp-anonymous-access-none-detail = Valeur par défaut sûre : aucun appel d'outil n'est anonyme ; ChatGPT peut toujours initialiser et découvrir le catalogue avant de se connecter.
@@ -1240,7 +1234,6 @@ value-open = ouvert
 composer-prompt-history-title = Historique rapide
 overlay-commands-title = Palette de commandes
 overlay-commands-prompt = Actions de recherche ; les commandes qui nécessitent du texte continuent dans le compositeur
-overlay-skill-studio-title = Gérer les compétences
 overlay-lineage-title = Historique de la succursale [#{ $session }]
 overlay-lineage-prompt = Explorez l'arborescence des branches actuelle et accédez à une session ancêtre, frère ou enfant.
 overlay-rewind-title = Rembobinage de la session [#{ $session }]
@@ -1595,7 +1588,7 @@ plugin-workbench-column-arguments = Arguments
 plugin-workbench-column-before = Avant
 plugin-workbench-column-category = Catégorie
 plugin-workbench-column-change = Modification
-plugin-workbench-column-operation = Opération
+plugin-workbench-column-command = Commande
 plugin-workbench-column-description = Description
 plugin-workbench-column-field = Champ
 plugin-workbench-column-inputs = Entrées
@@ -1608,7 +1601,7 @@ plugin-workbench-column-summary = Résumé
 plugin-workbench-column-tool = Outil
 plugin-workbench-column-version = Version
 plugin-workbench-column-visible-tool = Outil visible
-plugin-workbench-operation-arguments = Arguments : {$operation}
+plugin-workbench-command-arguments = Arguments : {$command}
 plugin-workbench-config = Configuration
 plugin-workbench-config-action = Action
 plugin-workbench-config-choose-shape = choisir la forme
@@ -1634,7 +1627,7 @@ plugin-workbench-detail-footer = Tab/Maj+Tab section · Haut/Bas défiler · Éc
 plugin-workbench-detail-tools-footer = Tab/Maj+Tab section · Haut/Bas sélectionner · Entrée configurer et exécuter · Échap retour
 plugin-workbench-filter-all = Tous
 plugin-workbench-filter-other = autre
-plugin-workbench-header-summary = Outils : {$tools}        Opérations : {$operations}        Configuration : {$config}
+plugin-workbench-header-summary = Outils : {$tools}        Commandes : {$commands}        Configuration : {$config}
 plugin-workbench-input-preview = Aperçu de l’entrée : {$tool}
 plugin-workbench-last-result-failed = Dernier résultat · {$tool} · échec
 plugin-workbench-last-result-success = Dernier résultat · {$tool} · réussi
@@ -1643,7 +1636,7 @@ plugin-workbench-list-summary = Rechercher des plugins… {$query}        Transp
 plugin-workbench-loading-actions = Chargement des actions…
 plugin-workbench-loading-choices = Chargement des choix…
 plugin-workbench-no-changes = Aucune modification
-plugin-workbench-no-operations = Aucune opération.
+plugin-workbench-no-commands = Aucune commande.
 plugin-workbench-no-config-section = Aucune section de configuration.
 plugin-workbench-no-editable-rows = Aucune ligne modifiable.
 plugin-workbench-no-filter-matches = Aucun plugin ne correspond aux filtres actuels.
@@ -1673,7 +1666,7 @@ plugin-workbench-status-valid = Valide
 plugin-workbench-status-warning = Avertissement
 plugin-workbench-summary = Requête : {$query} · transport {$transport} · configuration {$config} · {$shown}/{$total} affichés
 plugin-workbench-tab-capabilities = Capacités
-plugin-workbench-tab-operations = Opérations
+plugin-workbench-tab-commands = Commandes
 plugin-workbench-tab-config = Configuration
 plugin-workbench-tab-diagnostics = Diagnostic
 plugin-workbench-tab-logs = Journaux
@@ -1685,7 +1678,6 @@ plugin-workbench-tools-help = Haut/Bas sélectionne un outil. Entrée ouvre le f
 plugin-workbench-transport = Transport
 plugin-workbench-trust-level = Niveau de confiance : {$level}
 plugin-workbench-unavailable = indisponible
-
 
 # Plugin Workbench structured editor i18n completion
 plugin-workbench-editor-also-matches = correspond aussi à : {$matches}

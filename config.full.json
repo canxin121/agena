@@ -78,7 +78,7 @@
   },
   "plugins": {
     "list": {
-      "agena.skills": {
+      "agena.commands": {
         "package": {
           "kind": "static"
         }

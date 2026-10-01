@@ -491,9 +491,9 @@ settings-activity-kind-resource-label = 資源
 
 settings-activity-kind-resource-description = 附件及其他資源內容。
 
-settings-activity-kind-skill_reference-label = 技能引用
+settings-activity-kind-skill_reference-label = 指令引用
 
-settings-activity-kind-skill_reference-description = 回覆中使用的技能引用。
+settings-activity-kind-skill_reference-description = 回覆中選用的指令引用。
 
 settings-activity-kind-interaction-label = 交互
 
@@ -581,10 +581,9 @@ settings-field-parse-float = {$field} 需要數值
 
 settings-choice-adapter-fallback = 適配器
 
-
 settings-plugin-workbench-label = 插件設定工作台
 
-settings-plugin-workbench-detail = 打開結構化插件工作台，查看運行時狀態、配置、工具、操作、日誌和診斷。
+settings-plugin-workbench-detail = 打開結構化插件工作台，查看運行時狀態、配置、工具、命令、日誌和診斷。
 
 settings-mcp-server-label = Agena MCP 伺服器
 
@@ -627,11 +626,6 @@ settings-mcp-anonymous-access-inactive-detail = 此策略僅用於混合鑑權�
 settings-mcp-registration-label = 註冊
 
 settings-mcp-pkce-label = PKCE
-
-
-
-
-
 
 settings-mcp-public-url-label = MCP 公共 URL
 
@@ -1121,7 +1115,6 @@ settings-mcp-auth-mode-updated = Agena MCP 身份驗證模式已設為 {$mode}
 
 settings-mcp-anonymous-access-updated = Agena MCP 匿名工具訪問策略已設為 {$policy}
 
-
 settings-mcp-oauth-password-cleared = Agena MCP OAuth 密碼已清除
 
 permission-studio-command-pattern-title = {$tool_name} 命令模式
@@ -1297,7 +1290,6 @@ value-open = 打開
 composer-prompt-history-title = 即時歷史記錄
 overlay-commands-title = 命令面板
 overlay-commands-prompt = 搜尋動作；需要文字的命令在編輯器中繼續
-overlay-skill-studio-title = 管理技能
 overlay-lineage-title = 分支歷史 [#{ $session }]
 overlay-lineage-prompt = 探索目前分支樹並跳到祖先、兄弟或子會話
 overlay-rewind-title = 回放會議 [#{ $session }]
@@ -1633,7 +1625,6 @@ terminal-diagnostics-confidence-strong = 強
 terminal-diagnostics-confidence-compatibility = 僅相容性
 terminal-diagnostics-confidence-unknown = 未知
 
-
 # Plugin Workbench i18n completion
 plugin-workbench-action-diff = 差異
 plugin-workbench-action-refresh = 重新整理
@@ -1652,7 +1643,7 @@ plugin-workbench-column-arguments = 參數
 plugin-workbench-column-before = 修改前
 plugin-workbench-column-category = 類別
 plugin-workbench-column-change = 變更
-plugin-workbench-column-operation = 操作
+plugin-workbench-column-command = 命令
 plugin-workbench-column-description = 說明
 plugin-workbench-column-field = 欄位
 plugin-workbench-column-inputs = 輸入
@@ -1665,7 +1656,7 @@ plugin-workbench-column-summary = 摘要
 plugin-workbench-column-tool = 工具
 plugin-workbench-column-version = 版本
 plugin-workbench-column-visible-tool = 可見工具
-plugin-workbench-operation-arguments = 參數：{$operation}
+plugin-workbench-command-arguments = 參數：{$command}
 plugin-workbench-config = 設定
 plugin-workbench-config-action = 操作
 plugin-workbench-config-choose-shape = 選擇結構
@@ -1691,7 +1682,7 @@ plugin-workbench-detail-footer = Tab/Shift+Tab 切換區段 · 上下鍵捲動 �
 plugin-workbench-detail-tools-footer = Tab/Shift+Tab 切換區段 · 上下鍵選擇 · Enter 設定並執行 · Esc 返回
 plugin-workbench-filter-all = 全部
 plugin-workbench-filter-other = 其他
-plugin-workbench-header-summary = 工具：{$tools}        操作：{$operations}        設定：{$config}
+plugin-workbench-header-summary = 工具：{$tools}        命令：{$commands}        設定：{$config}
 plugin-workbench-input-preview = 輸入預覽：{$tool}
 plugin-workbench-last-result-failed = 最近結果 · {$tool} · 失敗
 plugin-workbench-last-result-success = 最近結果 · {$tool} · 成功
@@ -1700,7 +1691,7 @@ plugin-workbench-list-summary = 搜尋外掛… {$query}        傳輸方式：{
 plugin-workbench-loading-actions = 正在載入操作…
 plugin-workbench-loading-choices = 正在載入選項…
 plugin-workbench-no-changes = 沒有變更
-plugin-workbench-no-operations = 沒有操作。
+plugin-workbench-no-commands = 沒有命令。
 plugin-workbench-no-config-section = 沒有設定區段。
 plugin-workbench-no-editable-rows = 沒有可編輯列。
 plugin-workbench-no-filter-matches = 沒有外掛符合目前篩選條件。
@@ -1730,7 +1721,7 @@ plugin-workbench-status-valid = 有效
 plugin-workbench-status-warning = 警告
 plugin-workbench-summary = 查詢：{$query} · 傳輸方式 {$transport} · 設定 {$config} · 顯示 {$shown}/{$total}
 plugin-workbench-tab-capabilities = 能力
-plugin-workbench-tab-operations = 操作
+plugin-workbench-tab-commands = 命令
 plugin-workbench-tab-config = 設定
 plugin-workbench-tab-diagnostics = 診斷
 plugin-workbench-tab-logs = 日誌
@@ -1742,7 +1733,6 @@ plugin-workbench-tools-help = 使用上下鍵選擇工具。Enter 開啟由主�
 plugin-workbench-transport = 傳輸方式
 plugin-workbench-trust-level = 信任層級：{$level}
 plugin-workbench-unavailable = 無法使用
-
 
 # Plugin Workbench structured editor i18n completion
 plugin-workbench-editor-also-matches = 同時符合：{$matches}

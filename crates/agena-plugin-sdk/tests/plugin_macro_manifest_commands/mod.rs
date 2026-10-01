@@ -199,28 +199,31 @@ fn tool_macro_invoke_dispatch_applies_type_level_inline_item_value_relations() {
 }
 
 #[test]
-fn typed_operation_declaration_is_generated_from_method_signature() {
+fn typed_command_declaration_is_generated_from_method_signature() {
     let manifest = Plugin::manifest(&ManifestPlugin);
-    let operation = operation_by_id(&manifest, "manifest.greet");
+    let command = command_by_id(&manifest, "manifest.greet");
 
-    assert_eq!(operation.title, "Manifest Greet");
-    assert_eq!(operation.description, "Greet from a typed command.");
-    assert_eq!(operation.group, "command_palette");
-    assert_eq!(operation.category.as_deref(), Some("Test"));
-    assert_eq!(operation.slash.as_deref(), Some("/manifest-greet"));
-    assert_eq!(operation.aliases, vec!["hello-manifest"]);
+    assert_eq!(command.title, "Manifest Greet");
     assert_eq!(
-        operation.usage.as_deref(),
+        command.docs.summary.as_deref(),
+        Some("Greet from a typed command.")
+    );
+    assert_eq!(command.group, "command_palette");
+    assert_eq!(command.category.as_deref(), Some("Test"));
+    assert_eq!(command.slash.as_deref(), Some("/manifest-greet"));
+    assert_eq!(command.aliases, vec!["hello-manifest"]);
+    assert_eq!(
+        command.docs.usage.as_deref(),
         Some("/manifest-greet {\"name\":\"Ada\"}")
     );
     assert_eq!(
-        operation.target,
-        PluginOperationTarget::Method {
-            handler: "greet_operation".to_string(),
+        command.target,
+        CommandTarget::Method {
+            handler: "greet_command".to_string(),
         }
     );
-    let SettingsNodeKind::Object { fields } = &operation.input.root.kind else {
-        panic!("typed operation input should use an object root")
+    let SettingsNodeKind::Object { fields } = &command.input.root.kind else {
+        panic!("typed command input should use an object root")
     };
     let name = fields
         .iter()
@@ -229,20 +232,20 @@ fn typed_operation_declaration_is_generated_from_method_signature() {
     assert!(matches!(name.kind, SettingsNodeKind::Text));
     assert!(name.required);
     assert_eq!(name.constraints.min_length, Some(1));
-    operation
+    command
         .input
         .validate_value(&json!({"name":"Ada"}))
-        .expect("valid operation input");
-    assert!(operation.input.validate_value(&json!({"name":""})).is_err());
+        .expect("valid command input");
+    assert!(command.input.validate_value(&json!({"name":""})).is_err());
 }
 
 #[test]
-fn inline_operation_arguments_generate_the_same_closed_contract() {
+fn inline_command_arguments_generate_the_same_closed_contract() {
     let manifest = Plugin::manifest(&ManifestPlugin);
-    let operation = operation_by_id(&manifest, "manifest.inline");
+    let command = command_by_id(&manifest, "manifest.inline");
 
-    let SettingsNodeKind::Object { fields } = &operation.input.root.kind else {
-        panic!("inline operation input should use an object root")
+    let SettingsNodeKind::Object { fields } = &command.input.root.kind else {
+        panic!("inline command input should use an object root")
     };
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].id, "name");
@@ -250,7 +253,7 @@ fn inline_operation_arguments_generate_the_same_closed_contract() {
     assert_eq!(fields[0].description, "Name to greet.");
     assert_eq!(fields[0].constraints.min_length, Some(1));
     assert_eq!(
-        operation
+        command
             .input
             .parse_shorthand("Ada")
             .expect("shared shorthand parser"),
@@ -259,22 +262,22 @@ fn inline_operation_arguments_generate_the_same_closed_contract() {
 }
 
 #[test]
-fn renamed_defaulted_and_nested_operation_arguments_remain_typed() {
+fn renamed_defaulted_and_nested_command_arguments_remain_typed() {
     let manifest = Plugin::manifest(&ManifestPlugin);
 
-    let renamed = operation_by_id(&manifest, "manifest.renamed");
+    let renamed = command_by_id(&manifest, "manifest.renamed");
     let SettingsNodeKind::Object { fields } = &renamed.input.root.kind else {
         panic!("renamed input should be an object")
     };
     assert_eq!(fields[0].id, "filePath");
 
-    let defaulted = operation_by_id(&manifest, "manifest.default");
+    let defaulted = command_by_id(&manifest, "manifest.default");
     assert_eq!(
-        defaulted.input.default_value().expect("operation default"),
+        defaulted.input.default_value().expect("command default"),
         json!({"count":3})
     );
 
-    let nested = operation_by_id(&manifest, "manifest.inline_nested");
+    let nested = command_by_id(&manifest, "manifest.inline_nested");
     let SettingsNodeKind::Object { fields } = &nested.input.root.kind else {
         panic!("nested input should be an object")
     };
@@ -285,29 +288,29 @@ fn renamed_defaulted_and_nested_operation_arguments_remain_typed() {
 }
 
 #[test]
-fn operation_contract_handles_choices_numbers_patterns_and_objects() {
+fn command_contract_handles_choices_numbers_patterns_and_objects() {
     let manifest = Plugin::manifest(&ManifestPlugin);
 
-    let choice = operation_by_id(&manifest, "manifest.inline_choice");
+    let choice = command_by_id(&manifest, "manifest.inline_choice");
     let SettingsNodeKind::Object { fields } = &choice.input.root.kind else {
         panic!("choice input should be an object")
     };
     assert!(matches!(fields[0].kind, SettingsNodeKind::Choice { .. }));
 
-    let pattern = operation_by_id(&manifest, "manifest.inline_pattern");
+    let pattern = command_by_id(&manifest, "manifest.inline_pattern");
     let SettingsNodeKind::Object { fields } = &pattern.input.root.kind else {
         panic!("pattern input should be an object")
     };
     assert!(fields[0].constraints.pattern.is_some());
 
-    let number = operation_by_id(&manifest, "manifest.inline_number");
+    let number = command_by_id(&manifest, "manifest.inline_number");
     let SettingsNodeKind::Object { fields } = &number.input.root.kind else {
         panic!("number input should be an object")
     };
     assert!(matches!(fields[0].kind, SettingsNodeKind::Integer));
     assert!(fields[0].constraints.minimum.is_some());
 
-    let object = operation_by_id(&manifest, "manifest.inline_object");
+    let object = command_by_id(&manifest, "manifest.inline_object");
     let SettingsNodeKind::Object { fields } = &object.input.root.kind else {
         panic!("object input should be an object")
     };
@@ -315,26 +318,84 @@ fn operation_contract_handles_choices_numbers_patterns_and_objects() {
 }
 
 #[test]
-fn tool_declared_operation_targets_the_normal_tool_execution_path() {
+fn tool_declared_command_targets_the_normal_tool_execution_path() {
     let manifest = Plugin::manifest(&ManifestPlugin);
-    let operation = manifest
-        .operations
+    let command = manifest
+        .commands
         .iter()
-        .find(|operation| {
+        .find(|command| {
             matches!(
-                &operation.target,
-                PluginOperationTarget::Tool { tool } if tool == "path_choice"
+                &command.target,
+                CommandTarget::Tool { tool } if tool == "path_choice"
             )
         })
-        .expect("path_choice tool operation");
+        .expect("path_choice tool command");
 
-    assert!(operation.discoverability.catalog);
-    operation
+    assert!(command.discoverability.catalog);
+    command
         .input
         .validate_value(&json!({"mode":"fast"}))
-        .expect("tool-backed operation uses the same input contract");
+        .expect("tool-backed command uses the same input contract");
 }
 
-use super::ManifestPlugin;
-use super::{operation_by_id, schema_relation_labels, tool_by_name};
+use super::{ManifestPlugin, command_by_id, schema_relation_labels, tool_by_name};
+use super::{
+    PathChoiceInput, VariantFieldArgInput, VariantInferenceInput, VariantNormalizeInput,
+    VariantRenamedFieldInput,
+};
 use agena_plugin_sdk::prelude::*;
+
+/// A command's documentation is derived from its input contract at build time,
+/// never hand-written. These typed commands declare no explicit `usage`, so the
+/// macro must produce exactly what the SDK derives from the same schema — a
+/// drift here would publish a usage line or an example the input contract does
+/// not accept.
+#[test]
+fn typed_command_docs_match_the_schema_derived_usage_and_examples() {
+    fn assert_derived_docs<T: ToolInput>(manifest: &PluginManifest, id: &str) {
+        let command = command_by_id(manifest, id);
+        let slash = command.slash.as_deref().expect("typed command has a slash");
+        let schema = T::input_schema();
+        let expected_usage = match T::input_usage() {
+            Some(usage) if !usage.trim().is_empty() => format!("{slash} {usage}"),
+            _ => slash.to_string(),
+        };
+        assert_eq!(
+            command.docs.usage.as_deref(),
+            Some(expected_usage.as_str()),
+            "{id} usage must be the slash plus the schema-derived argument text"
+        );
+        assert_eq!(
+            command.docs.examples,
+            schema_example_texts(&schema),
+            "{id} examples must be the schema-derived example invocations"
+        );
+    }
+
+    let manifest = Plugin::manifest(&ManifestPlugin);
+    assert_derived_docs::<VariantNormalizeInput>(&manifest, "manifest.variant_normalize");
+    assert_derived_docs::<VariantRenamedFieldInput>(&manifest, "manifest.variant_renamed_fields");
+    assert_derived_docs::<VariantFieldArgInput>(&manifest, "manifest.variant_field_args");
+    assert_derived_docs::<VariantInferenceInput>(&manifest, "manifest.variant_inference");
+    assert_derived_docs::<PathChoiceInput>(&manifest, "path_choice");
+}
+
+#[test]
+fn every_slashed_command_documents_itself_under_its_own_slash() {
+    let manifest = Plugin::manifest(&ManifestPlugin);
+    for command in &manifest.commands {
+        let Some(slash) = command.slash.as_deref() else {
+            continue;
+        };
+        let usage = command
+            .docs
+            .usage
+            .as_deref()
+            .unwrap_or_else(|| panic!("{} publishes a slash without a usage line", command.id));
+        assert!(
+            usage == slash || usage.starts_with(&format!("{slash} ")),
+            "{} usage {usage:?} must start with its own slash {slash:?}",
+            command.id
+        );
+    }
+}

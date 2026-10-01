@@ -35,7 +35,7 @@ pub struct RuntimeStatusSnapshot {
         Result<Vec<agena_scheduler::ScheduledJob>, crate::SessionExecutionControlError>,
     pub mcp: RuntimeMcpStatus,
     pub lsp: RuntimeLspStatus,
-    pub skills: RuntimeSkillsStatus,
+    pub commands: RuntimeCommandsStatus,
     pub agent_id: String,
     pub plugin_surface_catalog: agena_plugin_host::PluginSurfaceCatalog,
     pub tool_registry_generation: u64,
@@ -112,19 +112,27 @@ pub struct RuntimeLspServerStatus {
 }
 
 #[derive(Debug, Clone, Default)]
-/// Status of skills in the runtime.
-pub struct RuntimeSkillsStatus {
-    pub skills: Vec<RuntimeSkillStatus>,
-    pub commands: Vec<RuntimeSkillStatus>,
+/// Status of the published command catalog in the runtime.
+///
+/// There is one command surface: what a client renders is exactly what this
+/// lists. `client` counts the commands a client runs locally through its own
+/// action vocabulary; the rest are served by the plugin that declared them.
+pub struct RuntimeCommandsStatus {
+    pub commands: Vec<RuntimeCommandStatus>,
 }
 
 #[derive(Debug, Clone)]
-/// Status of one skill.
-pub struct RuntimeSkillStatus {
+/// Status of one published command.
+pub struct RuntimeCommandStatus {
     pub name: String,
+    pub slash: Option<String>,
     pub description: String,
     pub aliases: Vec<String>,
-    pub source_path: Option<String>,
+    pub group: String,
+    pub category: Option<String>,
+    pub plugin_id: String,
+    /// `client`, `method` or `tool` — the target kind the declaration names.
+    pub target: String,
 }
 
 /// Read-only operational projection from a composed runtime.

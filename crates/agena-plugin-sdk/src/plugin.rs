@@ -215,13 +215,10 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(ToolStreamEnd::from_output(stream_id, result))
     }
 
-    async fn operation_invoke(
-        &self,
-        input: PluginOperationInvokeInput,
-    ) -> Result<PluginOperationResult> {
+    async fn command_invoke(&self, input: CommandInvokeInput) -> Result<CommandResult> {
         Err(crate::error::PluginError::not_implemented(format!(
-            "operation_invoke({})",
-            input.operation_id
+            "command_invoke({})",
+            input.command_id
         )))
     }
 

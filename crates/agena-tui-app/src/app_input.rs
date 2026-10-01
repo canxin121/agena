@@ -291,8 +291,6 @@ impl App {
             Route::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
             Route::Hub(state) => self.handle_hub_key(key, state),
             Route::CommandPalette(dialog) => self.handle_command_palette_key(key, dialog),
-            Route::SkillPicker(dialog) => self.handle_skill_picker_key(key, dialog),
-            Route::SkillStudio(dialog) => self.handle_skill_studio_key(key, dialog),
             Route::SessionNavigation(dialog) => self.handle_session_navigation_key(key, dialog),
             Route::SelectionPicker(dialog) => self.handle_selection_picker_key(key, dialog),
             Route::SessionModelChooser(dialog) => {
@@ -338,7 +336,7 @@ fn prompt_history_preempts_global_interrupt(history_open: bool, key: KeyEvent) -
 }
 
 /// Keeps the Ctrl+C precedence rule testable without requiring a live backend
-/// to construct an [`App`]. A staged attachment, paste, or Skill makes the
+/// to construct an [`App`]. A staged attachment, paste, or command makes the
 /// Composer non-empty even when its ordinary text buffer has no characters.
 fn composer_ctrl_c_clears_input(
     focus: Focus,
@@ -391,7 +389,7 @@ mod tests {
             true,
             false,
         ));
-        // Inline attachments, Skills, and long-paste file refs are all visible draft
+        // Inline attachments, commands, and long-paste file refs are all visible draft
         // content even if the text editor itself is empty.
         assert!(composer_ctrl_c_clears_input(
             Focus::Composer,

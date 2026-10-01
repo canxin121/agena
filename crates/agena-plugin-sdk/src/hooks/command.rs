@@ -1,35 +1,35 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-pub use agena_plugin_contracts::{PluginOperationInvokeInput, PluginOperationResult};
+pub use agena_plugin_contracts::{CommandInvokeInput, CommandResult};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-// ── plugin operation invocation ────────────────────────────────────────────
+// ── plugin command invocation ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
-/// Context of a plugin operation invocation.
-pub struct PluginOperationContext<'a> {
+/// Context of a plugin command invocation.
+pub struct PluginCommandContext<'a> {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
     pub workspace_root: Option<&'a str>,
-    pub operation_id: &'a str,
+    pub command_id: &'a str,
     pub slash: Option<&'a str>,
     pub raw: &'a str,
 }
 
-impl<'a> PluginOperationContext<'a> {
-    pub fn from_input(input: &'a PluginOperationInvokeInput) -> Self {
+impl<'a> PluginCommandContext<'a> {
+    pub fn from_input(input: &'a CommandInvokeInput) -> Self {
         Self {
             session_id: input.session_id,
             call_id: input.call_id,
             workspace_root: input.workspace_root.as_deref(),
-            operation_id: input.operation_id.as_str(),
+            command_id: input.command_id.as_str(),
             slash: input.slash.as_deref(),
             raw: input.raw.as_str(),
         }
     }
 
-    pub fn parse_input<T>(input: &PluginOperationInvokeInput) -> crate::Result<T>
+    pub fn parse_input<T>(input: &CommandInvokeInput) -> crate::Result<T>
     where
         T: DeserializeOwned,
     {
@@ -38,61 +38,61 @@ impl<'a> PluginOperationContext<'a> {
     }
 }
 
-/// Conversion into the structured operation result contract.
-pub trait IntoPluginOperationResult {
-    fn into_plugin_operation_result(self) -> crate::Result<PluginOperationResult>;
+/// Conversion into the structured command result contract.
+pub trait IntoCommandResult {
+    fn into_command_result(self) -> crate::Result<CommandResult>;
 }
 
-pub fn into_plugin_operation_result<T>(value: T) -> crate::Result<PluginOperationResult>
+pub fn into_command_result<T>(value: T) -> crate::Result<CommandResult>
 where
-    T: IntoPluginOperationResult,
+    T: IntoCommandResult,
 {
-    value.into_plugin_operation_result()
+    value.into_command_result()
 }
 
-impl IntoPluginOperationResult for PluginOperationResult {
-    fn into_plugin_operation_result(self) -> crate::Result<PluginOperationResult> {
+impl IntoCommandResult for CommandResult {
+    fn into_command_result(self) -> crate::Result<CommandResult> {
         Ok(self)
     }
 }
 
-impl IntoPluginOperationResult for () {
-    fn into_plugin_operation_result(self) -> crate::Result<PluginOperationResult> {
-        Ok(PluginOperationResult::succeeded("No output"))
+impl IntoCommandResult for () {
+    fn into_command_result(self) -> crate::Result<CommandResult> {
+        Ok(CommandResult::succeeded("No output"))
     }
 }
 
-impl IntoPluginOperationResult for String {
-    fn into_plugin_operation_result(self) -> crate::Result<PluginOperationResult> {
-        Ok(PluginOperationResult::succeeded(self))
+impl IntoCommandResult for String {
+    fn into_command_result(self) -> crate::Result<CommandResult> {
+        Ok(CommandResult::succeeded(self))
     }
 }
 
-impl IntoPluginOperationResult for &str {
-    fn into_plugin_operation_result(self) -> crate::Result<PluginOperationResult> {
-        Ok(PluginOperationResult::succeeded(self))
+impl IntoCommandResult for &str {
+    fn into_command_result(self) -> crate::Result<CommandResult> {
+        Ok(CommandResult::succeeded(self))
     }
 }
 
-impl<T> IntoPluginOperationResult for Option<T>
+impl<T> IntoCommandResult for Option<T>
 where
-    T: IntoPluginOperationResult,
+    T: IntoCommandResult,
 {
-    fn into_plugin_operation_result(self) -> crate::Result<PluginOperationResult> {
+    fn into_command_result(self) -> crate::Result<CommandResult> {
         match self {
-            Some(value) => value.into_plugin_operation_result(),
-            None => Ok(PluginOperationResult::succeeded("No output")),
+            Some(value) => value.into_command_result(),
+            None => Ok(CommandResult::succeeded("No output")),
         }
     }
 }
 
-impl<T, E> IntoPluginOperationResult for std::result::Result<T, E>
+impl<T, E> IntoCommandResult for std::result::Result<T, E>
 where
-    T: IntoPluginOperationResult,
+    T: IntoCommandResult,
     E: Into<crate::PluginError>,
 {
-    fn into_plugin_operation_result(self) -> crate::Result<PluginOperationResult> {
-        self.map_err(Into::into)?.into_plugin_operation_result()
+    fn into_command_result(self) -> crate::Result<CommandResult> {
+        self.map_err(Into::into)?.into_command_result()
     }
 }
 
@@ -177,16 +177,15 @@ pub struct CommandAfterPatch {
 
 #[cfg(test)]
 mod tests {
-    use agena_plugin_contracts::{PluginHostEffect, PluginOperationResult};
+    use agena_plugin_contracts::{CommandHostEffect, CommandResult};
 
     #[test]
-    fn operation_results_only_contain_controlled_host_effects() {
-        let output = PluginOperationResult::succeeded("done").with_effect(
-            PluginHostEffect::RefreshPluginSurface {
+    fn command_results_only_contain_controlled_host_effects() {
+        let output =
+            CommandResult::succeeded("done").with_effect(CommandHostEffect::RefreshPluginSurface {
                 plugin_id: "example.plugin".to_string(),
-            },
-        );
-        let encoded = serde_json::to_value(output).expect("serialize operation result");
+            });
+        let encoded = serde_json::to_value(output).expect("serialize command result");
         assert_eq!(encoded["status"], "succeeded");
         assert!(encoded["effects"][0]["kind"] == "refresh_plugin_surface");
         assert!(encoded.get("invoke_tool").is_none());

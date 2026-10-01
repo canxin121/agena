@@ -1,0 +1,5 @@
+error: unsupported inline tool flag 'concurrency_safe'
+  --> tests/ui/fail/bad_tool_removed_runtime_flag.rs:13:62
+   |
+13 |     #[tool(summary = "Bare flag spelling.", tags(read_only), concurrency_safe)]
+   |                                                              ^^^^^^^^^^^^^^^^

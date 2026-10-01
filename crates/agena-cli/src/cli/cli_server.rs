@@ -2539,7 +2539,7 @@ mod tests {
             "agena.mcp",
             "agena.settings",
             "agena.memory",
-            "agena.skills",
+            "agena.commands",
             "agena.tools",
         ] {
             assert!(!mcp_tool_is_exposed(&operator_tool(

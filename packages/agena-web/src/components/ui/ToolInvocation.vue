@@ -203,7 +203,7 @@ const icon = computed(() => {
   if (t === 'glob') return RiFileSearchLine
   if (['fetch', 'curl', 'wget', 'webfetch', 'web-search', 'google'].includes(t)) return RiGlobalLine
   if (['todowrite', 'todoread'].includes(t)) return RiListCheck3
-  if (t === 'skill') return RiBookLine
+  if (t === 'command') return RiBookLine
   if (t === 'question') return RiSurveyLine
   if (t === 'plan_enter') return RiFileList2Line
   if (t === 'plan_exit') return RiTaskLine

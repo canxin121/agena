@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use agena_plugin_contracts::{
-    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, OperationDiscoverability, PathInputKind,
+    CommandDiscoverability, MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathInputKind,
     SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
     SettingsVariant,
 };
@@ -907,7 +907,7 @@ impl NodeMetadata {
 }
 
 #[allow(dead_code)]
-fn _keep_contract_types_linked(_: OperationDiscoverability) {}
+fn _keep_contract_types_linked(_: CommandDiscoverability) {}
 
 #[cfg(test)]
 mod tests {

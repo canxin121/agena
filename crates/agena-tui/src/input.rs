@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_a_opens_the_unified_file_and_skill_picker() {
+    fn ctrl_a_opens_the_file_picker() {
         let bindings = ComposerKeyBindings::default();
         assert_eq!(
             bindings.match_action(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),

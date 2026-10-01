@@ -29,7 +29,7 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     // and nesting MCP through MCP creates a confused-deputy/recursion seam.
     "agena.settings",
     "agena.memory",
-    "agena.skills",
+    "agena.commands",
     "agena.tools",
     "agena.mcp",
 ];

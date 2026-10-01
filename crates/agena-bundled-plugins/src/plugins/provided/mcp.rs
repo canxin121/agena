@@ -145,8 +145,7 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "resources.list",
-        summary = "List MCP resources from one server.",
-        concurrency_safe
+        summary = "List MCP resources from one server."
     )]
     async fn invoke_resources_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -162,8 +161,7 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "resources.templates.list",
-        summary = "List MCP resource templates from one server.",
-        concurrency_safe
+        summary = "List MCP resource templates from one server."
     )]
     async fn invoke_resource_templates_list(
         &self,
@@ -185,8 +183,7 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, read_only),
         name = "resources.read",
-        summary = "Read one MCP resource by URI.",
-        concurrency_safe
+        summary = "Read one MCP resource by URI."
     )]
     async fn invoke_resources_read(
         &self,
@@ -208,8 +205,7 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "prompts.list",
-        summary = "List MCP prompt templates from one server.",
-        concurrency_safe
+        summary = "List MCP prompt templates from one server."
     )]
     async fn invoke_prompts_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -225,8 +221,7 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, read_only),
         name = "prompts.get",
-        summary = "Fetch one MCP prompt template.",
-        concurrency_safe
+        summary = "Fetch one MCP prompt template."
     )]
     async fn invoke_prompts_get(&self, input: &GetPromptInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -268,8 +263,7 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "tools.search",
-        summary = "Search the current MCP tool index without expanding all schemas.",
-        concurrency_safe
+        summary = "Search the current MCP tool index without expanding all schemas."
     )]
     async fn invoke_tools_search(&self, input: &McpToolSearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.trim().to_ascii_lowercase();
@@ -358,8 +352,7 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "servers.status",
-        summary = "Inspect configured MCP connection health and discovered tool counts.",
-        concurrency_safe
+        summary = "Inspect configured MCP connection health and discovered tool counts."
     )]
     async fn invoke_servers_status(&self) -> SdkResult<ToolInvokeOutput> {
         let statuses = self.manager.statuses().await;

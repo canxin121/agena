@@ -47,6 +47,15 @@ impl I18n {
         LOCALES.lookup(&self.locale, key)
     }
 
+    /// Look a key up without the loader's `Unknown localization key: "…"`
+    /// placeholder, returning `None` when no locale in the fallback chain
+    /// carries it. Callers that own their own fallback text (a catalog's
+    /// literal summary, a declaration's id) use this instead of comparing
+    /// [`I18n::text`] against a sentinel string.
+    pub fn try_text(&self, key: &str) -> Option<String> {
+        LOCALES.try_lookup(&self.locale, key)
+    }
+
     pub fn text_args(&self, key: &str, args: &FluentArgs) -> String {
         LOCALES.lookup_with_args(&self.locale, key, args)
     }

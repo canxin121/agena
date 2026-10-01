@@ -5,18 +5,18 @@ use super::{
     transcript_since,
 };
 
+mod builtin_commands;
 mod builtin_io;
 mod builtin_plugins;
 mod builtin_runtime;
-mod builtin_skills;
 mod common;
 mod integration;
 mod meta;
 
+pub(super) use self::builtin_commands::{run_code_cases, run_command_cases, run_lsp_cases};
 pub(super) use self::builtin_io::{run_cron_cases, run_fs_cases, run_settings_cases};
 pub(super) use self::builtin_plugins::{run_mcp_cases, run_memory_cases, run_schema_lab_cases};
 pub(super) use self::builtin_runtime::{run_plan_cases, run_runtime_cases, run_shell_cases};
-pub(super) use self::builtin_skills::{run_code_cases, run_lsp_cases, run_skills_cases};
 pub(super) use self::common::run_single;
 pub(super) use self::integration::{
     run_external_plugin_suite, run_nested_permission_suite, run_snapshot_cases, run_task_case,
@@ -29,7 +29,7 @@ pub(crate) async fn run_builtin_suite(
     fixture: &Fixture,
     report: &mut SuiteReport,
 ) -> anyhow::Result<()> {
-    run_skills_cases(harness, report).await?;
+    run_command_cases(harness, report).await?;
     run_code_cases(harness, report).await?;
     run_lsp_cases(harness, report).await?;
     run_cron_cases(harness, report).await?;

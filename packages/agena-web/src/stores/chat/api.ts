@@ -429,7 +429,7 @@ export function messageErrorFromAgenaPart(raw: JsonValue): MessageError | null {
  *   tool_call     → type 'tool', tool = content.name, state {status, input, output, error, metadata}
  *   file_ref      → type 'file', url/filename/mime from content
  *   paste_ref     → type 'text', text
- *   skill_ref     → type 'tool' (tool='skill')
+ *   skill_ref     → type 'tool' (tool='command')
  *   notice/hook   → type 'tool' (tool=hook/kind, output=summary)
  *   compaction    → type 'compaction', text = summary
  *   system_notification → type 'tool' (tool=operation_kind, output=summary)
@@ -569,12 +569,12 @@ export function normalizeAgenaPart(
       const contentRecord = asObject(content)
       const skills = Array.isArray(contentRecord.skills) ? contentRecord.skills : []
       const firstSkill = skills.length > 0 ? asObject(skills[0]) : {}
-      const name = stringField(content, ['skill', 'name']) || stringField(firstSkill, ['name']) || 'skill'
+      const name = stringField(content, ['skill', 'name']) || stringField(firstSkill, ['name']) || 'command'
       const description = stringField(content, ['description']) || stringField(firstSkill, ['description'])
       return {
         ...base,
         type: 'tool',
-        tool: 'skill',
+        tool: 'command',
         state: {
           ...(toStatus(state) ? { status: toStatus(state) } : {}),
           input: { name },

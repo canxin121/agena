@@ -76,7 +76,7 @@ where
 
 /// Build a cross-plugin service method from ordinary Rust input/output types.
 /// Both sides compile through the same constrained contract used by settings
-/// and operations, so service authors get typed RPC without hand-written JSON
+/// and commands, so service authors get typed RPC without hand-written JSON
 /// schemas or renderer-specific metadata.
 pub fn service_method_for<I, O>(id: impl Into<String>) -> PluginServiceMethod
 where
@@ -132,7 +132,7 @@ where
         .expect("typed plugin settings must compile to the constrained settings contract")
 }
 
-/// Contract for an operation that accepts no structured input.
+/// Contract for a command that accepts no structured input.
 pub fn empty_settings_contract() -> SettingsContract {
     SettingsContract::new(SettingsNode {
         id: "root".to_string(),
@@ -148,7 +148,7 @@ pub fn empty_settings_contract() -> SettingsContract {
     })
 }
 
-/// Contract for an operation whose handler explicitly opts into bounded JSON.
+/// Contract for a command whose handler explicitly opts into bounded JSON.
 pub fn json_settings_contract() -> SettingsContract {
     SettingsContract::new(SettingsNode {
         id: "root".to_string(),

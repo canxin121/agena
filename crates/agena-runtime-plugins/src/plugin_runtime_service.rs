@@ -49,7 +49,7 @@ pub trait PluginRuntimeService: Send + Sync {
 
     fn theme_palettes(&self) -> Vec<agena_plugin_host::HostThemePalette>;
 
-    fn operation_catalog(&self) -> Vec<agena_plugin_host::PluginOperationCatalogItem>;
+    fn command_catalog(&self) -> Vec<agena_plugin_host::CommandCatalogItem>;
 
     fn tool_registry_generation(&self) -> u64;
 
@@ -74,11 +74,11 @@ pub trait PluginRuntimeService: Send + Sync {
         tool_name: &str,
     ) -> Option<PluginToolDescriptor>;
 
-    async fn invoke_plugin_operation(
+    async fn invoke_plugin_command(
         &self,
         plugin_id: &str,
-        input: agena_plugin_host::sdk::PluginOperationInvokeInput,
-    ) -> Result<agena_plugin_host::sdk::PluginOperationResult, String>;
+        input: agena_plugin_host::sdk::CommandInvokeInput,
+    ) -> Result<agena_plugin_host::sdk::CommandResult, String>;
 
     async fn plugin_rpc(
         &self,

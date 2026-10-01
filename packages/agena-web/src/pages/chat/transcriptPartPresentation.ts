@@ -63,10 +63,9 @@ export type AttachmentPresentation = {
   pageCount: number | null
 }
 
-export type SkillPresentation = {
+export type CommandPresentation = {
   name: string
   description: string
-  instructions: string
   source: string
   contentHash: string
 }
@@ -540,24 +539,23 @@ export function attachmentPresentations(part: TranscriptDisplayPart): Attachment
   ]
 }
 
-export function skillPresentations(part: TranscriptDisplayPart): SkillPresentation[] {
+export function commandPresentations(part: TranscriptDisplayPart): CommandPresentation[] {
   const content = jsonRecord(part.source.agenaContent)
   const values = jsonArray(content.skills)
   const sourceValues = values.length ? values : [content]
   return sourceValues
     .map((value) => {
-      const skill = jsonRecord(value)
-      const name = firstString(skill, ['name', 'skill'])
+      const command = jsonRecord(value)
+      const name = firstString(command, ['name', 'skill'])
       if (!name) return null
       return {
         name,
-        description: firstString(skill, ['description']),
-        instructions: firstString(skill, ['instructions']),
-        source: firstString(skill, ['source']),
-        contentHash: firstString(skill, ['content_hash']),
+        description: firstString(command, ['description']),
+        source: firstString(command, ['source']),
+        contentHash: firstString(command, ['content_hash']),
       }
     })
-    .filter((item): item is SkillPresentation => Boolean(item))
+    .filter((item): item is CommandPresentation => Boolean(item))
 }
 
 function interactionQuestion(value: JsonValue, index: number): InteractionQuestionPresentation | null {

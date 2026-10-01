@@ -1,9 +1,9 @@
-fn parse_plugin_key_for_lookup(plugin_id: &str, operation: &str) -> Option<PluginKey> {
+fn parse_plugin_key_for_lookup(plugin_id: &str, command: &str) -> Option<PluginKey> {
     match plugin_id.parse() {
         Ok(key) => Some(key),
         Err(error) => {
             tracing::warn!(
-                operation,
+                command,
                 plugin_id,
                 diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
                     "parse plugin identifier",
@@ -35,13 +35,13 @@ fn registered_tool_matches_name(tool: &RegisteredTool, name: &str) -> bool {
 
 fn plugin_tool_registry_read<'a>(
     registry: &'a RwLock<PluginToolRegistry>,
-    operation: &str,
+    command: &str,
 ) -> std::sync::RwLockReadGuard<'a, PluginToolRegistry> {
     match registry.read() {
         Ok(registry) => registry,
         Err(error) => {
             tracing::error!(
-                operation,
+                command,
                 diagnostic = %error,
                 "plugin tool-registry lock was poisoned; recovering its inner state"
             );
@@ -113,13 +113,13 @@ impl PluginHost {
             Arc::clone(&logs),
             None,
         ));
-        let operation_registry = host_handle.operation_registry();
+        let command_registry = host_handle.command_registry();
         Arc::new(Self {
             plugins: Vec::new(),
             plugins_by_id: HashMap::new(),
             tool_registry,
-            operation_registry,
-            operation_pipeline: Arc::new(crate::event_pipeline::PluginAroundPipeline::new()),
+            command_registry,
+            command_pipeline: Arc::new(crate::event_pipeline::PluginAroundPipeline::new()),
             tool_before_pipeline: Arc::new(
                 crate::event_pipeline::PluginTransformBailPipeline::new(
                     crate::event_pipeline::PluginPipelineFailurePolicy::Abort,
@@ -444,13 +444,13 @@ impl PluginHost {
             },
             PluginArchitecturePipeline {
                 definition: crate::event_pipeline::PluginEventDefinition {
-                    id: "operation.invoke".to_string(),
+                    id: "command.invoke".to_string(),
                     mode: crate::event_pipeline::PluginEventMode::Around,
                     durable: false,
                     scoped: true,
                 },
                 failure_policy: None,
-                handlers: self.operation_pipeline.inventory(),
+                handlers: self.command_pipeline.inventory(),
             },
         ];
         PluginArchitectureCatalog {
@@ -461,7 +461,7 @@ impl PluginHost {
             effects,
             pipelines,
             tool_registrations: self._host_handle.scoped_tool_registry().inspect(),
-            operation_registrations: self.operation_registry.inspect(),
+            command_registrations: self.command_registry.inspect(),
         }
     }
 
@@ -692,7 +692,7 @@ impl PluginHost {
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params_error(&e))
     }
 
-    pub fn register_operation_middleware<F, Fut>(
+    pub fn register_command_middleware<F, Fut>(
         &self,
         owner_plugin_id: &str,
         priority: i32,
@@ -701,19 +701,13 @@ impl PluginHost {
     ) -> Result<crate::event_pipeline::PluginPipelineRegistration, PluginError>
     where
         F: Fn(
-                PluginOperationDispatch,
-                crate::event_pipeline::PluginAroundNext<
-                    PluginOperationDispatch,
-                    PluginOperationResult,
-                    PluginError,
-                >,
+                CommandDispatch,
+                crate::event_pipeline::PluginAroundNext<CommandDispatch, CommandResult, PluginError>,
             ) -> Fut
             + Send
             + Sync
             + 'static,
-        Fut: std::future::Future<Output = Result<PluginOperationResult, PluginError>>
-            + Send
-            + 'static,
+        Fut: std::future::Future<Output = Result<CommandResult, PluginError>> + Send + 'static,
     {
         let owner: PluginKey = owner_plugin_id.parse().map_err(|error| {
             PluginError::invalid_params(format!("invalid middleware owner plugin id: {error}"))
@@ -723,16 +717,16 @@ impl PluginHost {
                 "plugin `{owner_plugin_id}` has no active effect scope"
             ))
         })?;
-        self.operation_pipeline
+        self.command_pipeline
             .register(&scope, priority, label, handler)
             .map_err(|error| PluginError::internal_error(&error))
     }
 
-    pub async fn invoke_plugin_operation_async(
+    pub async fn invoke_plugin_command_async(
         &self,
         plugin_id: &str,
-        mut input: PluginOperationInvokeInput,
-    ) -> Result<PluginOperationResult, PluginError> {
+        mut input: CommandInvokeInput,
+    ) -> Result<CommandResult, PluginError> {
         let plugin_key: PluginKey = plugin_id
             .parse()
             .map_err(|err| PluginError::invalid_params(format!("invalid plugin id: {err}")))?;
@@ -743,26 +737,23 @@ impl PluginHost {
             .ok_or_else(|| {
                 PluginError::not_implemented(format!("plugin `{plugin_id}` not loaded"))
             })?;
-        if input.operation_id.is_empty() {
+        if input.command_id.is_empty() {
             return Err(PluginError::invalid_params(
-                "operation_id must not be empty".to_string(),
+                "command_id must not be empty".to_string(),
             ));
         }
         let definition = self
-            .resolve_operation(plugin_id, input.operation_id.as_str())
+            .resolve_command(plugin_id, input.command_id.as_str())
             .ok_or_else(|| {
                 PluginError::not_implemented(format!(
-                    "plugin `{plugin_id}` does not declare operation `{}`",
-                    input.operation_id
+                    "plugin `{plugin_id}` does not declare command `{}`",
+                    input.command_id
                 ))
             })?;
-        if !matches!(
-            &definition.target,
-            crate::sdk::PluginOperationTarget::Method { .. }
-        ) {
+        if !matches!(&definition.target, crate::sdk::CommandTarget::Method { .. }) {
             return Err(PluginError::invalid_params(format!(
-                "operation `{}` is tool-backed and must execute through the Runtime operation resolver",
-                input.operation_id
+                "command `{}` is tool-backed and must execute through the Runtime command resolver",
+                input.command_id
             )));
         }
         let input_is_empty = input.input.is_null()
@@ -784,17 +775,17 @@ impl PluginHost {
 
         let timeout = self.timeouts.fast_or(Duration::from_secs(10));
         let contract = definition.input.clone();
-        let dispatch = PluginOperationDispatch::new(plugin_key.clone(), input);
+        let dispatch = CommandDispatch::new(plugin_key.clone(), input);
         let host_handle = Arc::clone(&self._host_handle);
         let result = self
-            .operation_pipeline
+            .command_pipeline
             .dispatch(dispatch, move |dispatch| {
                 let plugin = Arc::clone(&plugin);
                 let contract = contract.clone();
                 let host_handle = Arc::clone(&host_handle);
                 async move {
                     let plugin_key = dispatch.plugin_id().clone();
-                    let operation_id = dispatch.operation_id().to_string();
+                    let command_id = dispatch.command_id().to_string();
                     let input = dispatch.into_input();
                     contract
                         .validate_value(&input.input)
@@ -814,19 +805,18 @@ impl PluginHost {
                                 tool_name: None,
                                 ..Default::default()
                             },
-                            call_with_timeout(&plugin, method::OPERATION_INVOKE, params, timeout),
+                            call_with_timeout(&plugin, method::COMMAND_INVOKE, params, timeout),
                         )
                         .await
                         .map_err(transport_to_plugin_error)?;
-                    let result: PluginOperationResult =
-                        serde_json::from_value(value).map_err(|error| {
-                            PluginError::invalid_params(format!(
-                                "invalid operation result for `{operation_id}`: {error}"
-                            ))
-                        })?;
+                    let result: CommandResult = serde_json::from_value(value).map_err(|error| {
+                        PluginError::invalid_params(format!(
+                            "invalid command result for `{command_id}`: {error}"
+                        ))
+                    })?;
                     result.validate().map_err(|error| {
                         PluginError::invalid_params(format!(
-                            "invalid operation result for `{operation_id}`: {error}"
+                            "invalid command result for `{command_id}`: {error}"
                         ))
                     })?;
                     Ok(result)
@@ -835,7 +825,7 @@ impl PluginHost {
             .await?;
         result.validate().map_err(|error| {
             PluginError::invalid_params(format!(
-                "operation middleware produced an invalid result for `{}`: {error}",
+                "command middleware produced an invalid result for `{}`: {error}",
                 definition.id
             ))
         })?;
@@ -1640,7 +1630,7 @@ impl PluginHost {
         self.push_hook_runs(records);
         let scope = PluginScopeKey::session(input.session_id);
         self._host_handle.dispose_tool_scope(&scope);
-        self.operation_registry.clear_scope_tree(&scope);
+        self.command_registry.clear_scope_tree(&scope);
     }
 
     // ── user.prompt.submit ─────────────────────────────────────────────────
@@ -2251,55 +2241,52 @@ impl PluginHost {
         self._host_handle.host_notifications()
     }
 
-    pub fn operation_catalog(&self) -> Vec<PluginOperationCatalogItem> {
-        let mut operations = self
-            .operation_registry
+    pub fn command_catalog(&self) -> Vec<CommandCatalogItem> {
+        let mut commands = self
+            .command_registry
             .visible(None)
             .into_values()
             .map(|entry| entry.value)
             .collect::<Vec<_>>();
-        sort_operation_catalog(&mut operations);
-        operations
+        sort_command_catalog(&mut commands);
+        commands
     }
 
-    pub fn operation_catalog_for_scope(
-        &self,
-        scope: &PluginScopeKey,
-    ) -> Vec<PluginOperationCatalogItem> {
-        let mut operations = self
-            .operation_registry
+    pub fn command_catalog_for_scope(&self, scope: &PluginScopeKey) -> Vec<CommandCatalogItem> {
+        let mut commands = self
+            .command_registry
             .visible(Some(scope))
             .into_values()
             .map(|entry| entry.value)
             .collect::<Vec<_>>();
-        sort_operation_catalog(&mut operations);
-        operations
+        sort_command_catalog(&mut commands);
+        commands
     }
 
-    pub fn declare_operation_scope(
+    pub fn declare_command_scope(
         &self,
         scope: PluginScopeKey,
         parent: Option<PluginScopeKey>,
     ) -> Result<bool, String> {
         match parent {
             Some(parent) => {
-                let changed = self.operation_registry.parent(&scope).as_ref() != Some(&parent);
-                self.operation_registry
+                let changed = self.command_registry.parent(&scope).as_ref() != Some(&parent);
+                self.command_registry
                     .set_parent(scope, parent)
                     .map_err(|error| {
                         agena_failure::diagnostic::format_error_chain_with_context(
-                            "failed to declare the plugin operation scope parent",
+                            "failed to declare the plugin command scope parent",
                             &error,
                         )
                     })?;
                 Ok(changed)
             }
-            None => Ok(self.operation_registry.clear_parent(&scope).is_some()),
+            None => Ok(self.command_registry.clear_parent(&scope).is_some()),
         }
     }
 
-    pub fn remove_operation_scope(&self, scope: &PluginScopeKey) -> Result<bool, String> {
-        Ok(self.operation_registry.clear_parent(scope).is_some())
+    pub fn remove_command_scope(&self, scope: &PluginScopeKey) -> Result<bool, String> {
+        Ok(self.command_registry.clear_parent(scope).is_some())
     }
 
     pub fn surface_catalog(&self) -> PluginSurfaceCatalog {
@@ -2308,7 +2295,7 @@ impl PluginHost {
         // the catalog key so two plugins cannot silently overwrite one
         // another while building the aggregate UI catalog.
         let mut themes_by_key = BTreeMap::<(PluginKey, String), HostThemePalette>::new();
-        let operations = self.operation_catalog();
+        let commands = self.command_catalog();
 
         for plugin in &self.plugins {
             // Declarative manifest display contributions (Phase 6). Dynamic
@@ -2361,37 +2348,33 @@ impl PluginHost {
         let themes = themes_by_key.into_values().collect::<Vec<_>>();
 
         PluginSurfaceCatalog {
-            operations,
+            commands,
             terminal: PluginTerminalSurfaceCatalog { display, themes },
         }
     }
 
-    pub fn resolve_operation(
-        &self,
-        plugin_id: &str,
-        operation_id: &str,
-    ) -> Option<PluginOperationDefinition> {
-        let plugin_key = parse_plugin_key_for_lookup(plugin_id, "resolve plugin operation")?;
-        let name = operation_registry_name(&plugin_key, operation_id);
-        self.operation_registry
+    pub fn resolve_command(&self, plugin_id: &str, command_id: &str) -> Option<CommandDefinition> {
+        let plugin_key = parse_plugin_key_for_lookup(plugin_id, "resolve plugin command")?;
+        let name = command_registry_name(&plugin_key, command_id);
+        self.command_registry
             .resolve(None, &name)
-            .map(|entry| entry.value.operation)
+            .map(|entry| entry.value.command)
     }
 
-    pub fn resolve_operation_for_scope(
+    pub fn resolve_command_for_scope(
         &self,
         scope: &PluginScopeKey,
         plugin_id: &str,
-        operation_id: &str,
-    ) -> Result<Option<PluginOperationDefinition>, String> {
+        command_id: &str,
+    ) -> Result<Option<CommandDefinition>, String> {
         let plugin_key: PluginKey = plugin_id
             .parse()
             .map_err(|error| format!("invalid plugin id `{plugin_id}`: {error}"))?;
-        let name = operation_registry_name(&plugin_key, operation_id);
+        let name = command_registry_name(&plugin_key, command_id);
         Ok(self
-            .operation_registry
+            .command_registry
             .resolve(Some(scope), &name)
-            .map(|entry| entry.value.operation))
+            .map(|entry| entry.value.command))
     }
 
     pub fn resolve_registered_tool_for_plugin_tool(
@@ -2502,24 +2485,23 @@ use super::{
     ChatMessagePatch, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatParamsInput,
     ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput,
     CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse,
+    CommandCatalogItem, CommandDefinition, CommandDispatch, CommandInvokeInput, CommandResult,
     ConfigInput, ConfigPatch, Duration, EventEnvelope, HashMap, HookRunRecord, HookRunStatus,
     HookSubscription, HostCallbackContext, HostDisplayContribution, HostHandle, HostNotification,
     HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput, PluginActivationDiagnostic,
     PluginActivationInspect, PluginArchitectureCatalog, PluginArchitectureEffect,
     PluginArchitectureNode, PluginArchitecturePipeline, PluginDependencyEdge, PluginDependencyKind,
     PluginError, PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,
-    PluginOperationCatalogItem, PluginOperationDefinition, PluginOperationDispatch,
-    PluginOperationInvokeInput, PluginOperationResult, PluginScopeKey, PluginServiceBindingKey,
-    PluginServiceImportInspect, PluginServiceInspect, PluginSurfaceCatalog,
-    PluginTerminalSurfaceCatalog, PluginToolRegistry, PostRunInput, PreRunInput, ProviderListInput,
-    ProviderListPatch, RegisteredTool, RwLock, SessionEndInput, SessionStartInput,
-    SessionStartPatch, ShellEnvInput, ShellEnvPatch, TimeoutsConfig, ToolAfterDispatch,
-    ToolAfterInput, ToolBeforeBail, ToolBeforeDispatch, ToolBeforeInput, ToolDefinitionInput,
-    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStream,
-    ToolKey, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd, TransportError,
-    UserPromptSubmitInput, UserPromptSubmitPatch, call_with_timeout, dispatcher,
-    hook_registration_for_plugin, host_api, merge_json, method, operation_registry_name,
-    push_hook_runs_into, shutdown_transport, sort_operation_catalog, tool_hook_context,
+    PluginScopeKey, PluginServiceBindingKey, PluginServiceImportInspect, PluginServiceInspect,
+    PluginSurfaceCatalog, PluginTerminalSurfaceCatalog, PluginToolRegistry, PostRunInput,
+    PreRunInput, ProviderListInput, ProviderListPatch, RegisteredTool, RwLock, SessionEndInput,
+    SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch, TimeoutsConfig,
+    ToolAfterDispatch, ToolAfterInput, ToolBeforeBail, ToolBeforeDispatch, ToolBeforeInput,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolInvokeStream, ToolKey, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd,
+    TransportError, UserPromptSubmitInput, UserPromptSubmitPatch, call_with_timeout,
+    command_registry_name, dispatcher, hook_registration_for_plugin, host_api, merge_json, method,
+    push_hook_runs_into, shutdown_transport, sort_command_catalog, tool_hook_context,
     transport_to_plugin_error,
 };
 
@@ -2532,7 +2514,6 @@ mod tests {
         crate::sdk::ToolDefinition {
             name: name.to_owned(),
             contract: Default::default(),
-            model: Default::default(),
             docs: Default::default(),
             runtime: Default::default(),
             tags: Vec::new(),
@@ -2590,30 +2571,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scoped_operation_catalog_uses_the_same_nearest_visibility_resolver_as_lookup() {
+    async fn scoped_command_catalog_uses_the_same_nearest_visibility_resolver_as_lookup() {
         use crate::PluginScopeKey;
         use crate::sdk::{
-            OperationDiscoverability, PluginOperationDefinition, PluginOperationTarget,
+            CommandDefinition, CommandDiscoverability, CommandDocs, CommandTarget,
             SettingsContract, SettingsNode,
         };
 
-        fn item(plugin_id: &PluginKey, title: &str) -> PluginOperationCatalogItem {
-            PluginOperationCatalogItem {
+        fn item(plugin_id: &PluginKey, title: &str) -> CommandCatalogItem {
+            CommandCatalogItem {
                 plugin_id: plugin_id.clone(),
                 accepts_empty_input: true,
                 default_input: serde_json::json!({}),
-                operation: PluginOperationDefinition {
+                command: CommandDefinition {
                     id: "open".to_string(),
                     title: title.to_string(),
-                    description: String::new(),
+                    docs: CommandDocs::default(),
                     group: "Plugin".to_string(),
                     category: None,
                     slash: Some("open".to_string()),
                     aliases: Vec::new(),
-                    usage: None,
                     input: SettingsContract::new(SettingsNode::root_object("Input", "")),
-                    discoverability: OperationDiscoverability::default(),
-                    target: PluginOperationTarget::Method {
+                    discoverability: CommandDiscoverability::default(),
+                    target: CommandTarget::Method {
                         handler: "open".to_string(),
                     },
                 },
@@ -2621,46 +2601,44 @@ mod tests {
         }
 
         let host = PluginHost::new_empty();
-        let plugin_id: PluginKey = "example.operations".parse().expect("plugin key");
+        let plugin_id: PluginKey = "example.commands".parse().expect("plugin key");
         let workspace: PluginScopeKey = "workspace.main".parse().expect("workspace scope");
         let session: PluginScopeKey = "session.7".parse().expect("session scope");
-        host.declare_operation_scope(session.clone(), Some(workspace.clone()))
+        host.declare_command_scope(session.clone(), Some(workspace.clone()))
             .expect("declare session");
 
-        let registry_name = operation_registry_name(&plugin_id, "open");
+        let registry_name = command_registry_name(&plugin_id, "open");
         let owner = crate::effect_scope::PluginEffectScope::new(plugin_id.clone());
         let _global_registration = host
-            .operation_registry
+            .command_registry
             .register(
                 &owner,
                 None,
                 registry_name.clone(),
                 item(&plugin_id, "Global Open"),
-                "global operation",
+                "global command",
             )
-            .expect("global operation");
+            .expect("global command");
         let scoped_registration = host
-            .operation_registry
+            .command_registry
             .register(
                 &owner,
                 Some(session.clone()),
                 registry_name.clone(),
                 item(&plugin_id, "Session Open"),
-                "session operation",
+                "session command",
             )
-            .expect("session operation");
+            .expect("session command");
 
-        assert_eq!(host.operation_catalog()[0].operation.title, "Global Open");
+        assert_eq!(host.command_catalog()[0].command.title, "Global Open");
         assert_eq!(
-            host.operation_catalog_for_scope(&session)[0]
-                .operation
-                .title,
+            host.command_catalog_for_scope(&session)[0].command.title,
             "Session Open"
         );
         assert_eq!(
-            host.resolve_operation_for_scope(&session, "example.operations", "open")
+            host.resolve_command_for_scope(&session, "example.commands", "open")
                 .expect("session lookup")
-                .expect("operation")
+                .expect("command")
                 .title,
             "Session Open"
         );
@@ -2668,17 +2646,16 @@ mod tests {
         scoped_registration
             .dispose()
             .await
-            .expect("dispose session operation");
+            .expect("dispose session command");
         assert_eq!(
-            host.resolve_operation_for_scope(&session, "example.operations", "open")
+            host.resolve_command_for_scope(&session, "example.commands", "open")
                 .expect("fallback lookup")
-                .expect("operation")
+                .expect("command")
                 .title,
             "Global Open"
         );
-        host.remove_operation_scope(&session)
-            .expect("remove session");
-        host.remove_operation_scope(&workspace)
+        host.remove_command_scope(&session).expect("remove session");
+        host.remove_command_scope(&workspace)
             .expect("remove workspace");
     }
 
@@ -2786,7 +2763,7 @@ mod tests {
             Arc::clone(&logs),
             None,
         ));
-        let operation_registry = host_handle.operation_registry();
+        let command_registry = host_handle.command_registry();
         let host = Arc::new(PluginHost {
             plugins: vec![Arc::new(LoadedPlugin::new(
                 "static",
@@ -2801,8 +2778,8 @@ mod tests {
             ))],
             plugins_by_id: Default::default(),
             tool_registry: Arc::clone(&tool_registry),
-            operation_registry,
-            operation_pipeline: Arc::new(crate::event_pipeline::PluginAroundPipeline::new()),
+            command_registry,
+            command_pipeline: Arc::new(crate::event_pipeline::PluginAroundPipeline::new()),
             tool_before_pipeline: Arc::new(
                 crate::event_pipeline::PluginTransformBailPipeline::new(
                     crate::event_pipeline::PluginPipelineFailurePolicy::Abort,

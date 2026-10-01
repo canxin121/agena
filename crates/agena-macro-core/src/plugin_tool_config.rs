@@ -5,9 +5,9 @@ use syn::punctuated::Punctuated;
 use syn::{Attribute, Expr, Ident, LitStr, Meta, Result, Token, parse_quote};
 
 use crate::{
-    PluginToolAttrConfig, PluginToolOperationConfig, default_tool_name, empty_tool_spec_config,
-    expr_lit_bool, expr_lit_str, expr_path, expr_path_ident, parse_expr_list,
-    parse_item_lit_str_list, parse_item_path_expr_constraint, parse_item_path_expr_list_constraint,
+    PluginToolAttrConfig, PluginToolCommandConfig, default_tool_name, empty_tool_spec_config,
+    expr_lit_str, expr_path, expr_path_ident, parse_expr_list, parse_item_lit_str_list,
+    parse_item_path_expr_constraint, parse_item_path_expr_list_constraint,
     parse_item_path_format_constraint, parse_item_path_lit_str_constraint,
     parse_item_path_pattern_constraint, parse_item_path_usize_constraint, parse_lit_str_list,
     parse_path_expr_constraint, parse_path_expr_list_constraint, parse_path_format_constraint,
@@ -37,7 +37,7 @@ fn parse_plugin_inline_tool_config(
         method_ident.span(),
     ));
     let mut stream_method = None;
-    let mut operation = None;
+    let mut command = None;
 
     for meta in metas {
         match meta {
@@ -71,13 +71,10 @@ fn parse_plugin_inline_tool_config(
                             return Err(syn::Error::new_spanned(ident, "duplicate stream handler"));
                         }
                     }
-                    "concurrency_safe" => {
-                        spec.concurrency_safe = expr_lit_bool(&value.value, "concurrency_safe")?
-                    }
-                    "operation" => {
+                    "command" => {
                         return Err(syn::Error::new_spanned(
                             ident,
-                            "use `operation(...)` for operation metadata",
+                            "use `command(...)` for command metadata",
                         ));
                     }
                     other => {
@@ -127,7 +124,6 @@ fn parse_plugin_inline_tool_config(
                     "at_least_one_of" => {
                         spec.at_least_one_of.push(parse_lit_str_list(list.tokens)?)
                     }
-                    "examples" => spec.examples.extend(parse_lit_str_list(list.tokens)?),
                     "requires" => spec
                         .requires
                         .push(parse_path_pair_constraint(list.tokens, "requires")?),
@@ -251,15 +247,12 @@ fn parse_plugin_inline_tool_config(
                     }
                     "capabilities" => spec.capabilities = parse_expr_list(list.tokens)?,
                     "output" => spec.output_ty = Some(parse_type_list(list.tokens, "output")?),
-                    "operation" => {
-                        if operation
-                            .replace(parse_inline_tool_operation_config(list.tokens)?)
+                    "command" => {
+                        if command
+                            .replace(parse_inline_tool_command_config(list.tokens)?)
                             .is_some()
                         {
-                            return Err(syn::Error::new_spanned(
-                                ident,
-                                "duplicate operation config",
-                            ));
+                            return Err(syn::Error::new_spanned(ident, "duplicate command config"));
                         }
                     }
                     other => {
@@ -275,16 +268,12 @@ fn parse_plugin_inline_tool_config(
                     return Err(syn::Error::new_spanned(path, "expected identifier"));
                 };
                 match ident.to_string().as_str() {
-                    "concurrency_safe" => spec.concurrency_safe = true,
-                    "operation" => {
-                        if operation
-                            .replace(PluginToolOperationConfig::default())
+                    "command" => {
+                        if command
+                            .replace(PluginToolCommandConfig::default())
                             .is_some()
                         {
-                            return Err(syn::Error::new_spanned(
-                                ident,
-                                "duplicate operation config",
-                            ));
+                            return Err(syn::Error::new_spanned(ident, "duplicate command config"));
                         }
                     }
                     // The tool's tag vocabulary: what the tool is and does,
@@ -309,17 +298,17 @@ fn parse_plugin_inline_tool_config(
     Ok(PluginToolAttrConfig {
         spec,
         stream_method,
-        operation,
+        command,
     })
 }
 
-fn parse_inline_tool_operation_config(
+fn parse_inline_tool_command_config(
     tokens: proc_macro2::TokenStream,
-) -> Result<PluginToolOperationConfig> {
-    let args = syn::parse2::<crate::PluginOperationAttrArgs>(tokens)?;
-    let mut config = PluginToolOperationConfig {
+) -> Result<PluginToolCommandConfig> {
+    let args = syn::parse2::<crate::CommandAttrArgs>(tokens)?;
+    let mut config = PluginToolCommandConfig {
         slash: args.slash,
-        ..PluginToolOperationConfig::default()
+        ..PluginToolCommandConfig::default()
     };
     for meta in args.metas {
         match meta {
@@ -348,7 +337,7 @@ fn parse_inline_tool_operation_config(
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
-                            format!("unsupported tool operation argument '{other}'"),
+                            format!("unsupported tool command argument '{other}'"),
                         ));
                     }
                 }
@@ -362,7 +351,7 @@ fn parse_inline_tool_operation_config(
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
-                            format!("unsupported tool operation list '{other}'"),
+                            format!("unsupported tool command list '{other}'"),
                         ));
                     }
                 }
@@ -374,7 +363,7 @@ fn parse_inline_tool_operation_config(
                 let other = ident.to_string();
                 return Err(syn::Error::new_spanned(
                     ident,
-                    format!("unsupported tool operation flag '{other}'"),
+                    format!("unsupported tool command flag '{other}'"),
                 ));
             }
         }
@@ -384,7 +373,7 @@ fn parse_inline_tool_operation_config(
     {
         return Err(syn::Error::new_spanned(
             slash,
-            "tool operation slash value must start with `/`",
+            "tool command slash value must start with `/`",
         ));
     }
     Ok(config)

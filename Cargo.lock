@@ -247,6 +247,7 @@ dependencies = [
 name = "agena-bundled-plugins"
 version = "0.1.0"
 dependencies = [
+ "agena-api",
  "agena-domain",
  "agena-failure",
  "agena-macros",
@@ -259,7 +260,6 @@ dependencies = [
  "agena-runtime-contracts",
  "agena-runtime-plugins",
  "agena-runtime-tools",
- "agena-skills",
  "agena-storage",
  "agena-tool",
  "agena-web",
@@ -269,6 +269,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "hex",
+ "ignore",
  "libc",
  "notify",
  "portable-atomic",
@@ -1022,7 +1023,6 @@ dependencies = [
  "agena-runtime-session-core",
  "agena-runtime-tools",
  "agena-scheduler",
- "agena-skills",
  "agena-storage",
  "agena-storage-sqlite",
  "agena-tool",
@@ -1139,21 +1139,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "agena-skills"
-version = "0.1.0"
-dependencies = [
- "agena-failure",
- "hex",
- "ignore",
- "serde",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
- "yaml_serde",
 ]
 
 [[package]]

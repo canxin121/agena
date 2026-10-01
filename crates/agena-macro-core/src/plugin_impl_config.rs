@@ -14,6 +14,10 @@ pub struct PluginImplConfig {
     pub summary: Option<Expr>,
     pub help: Option<Expr>,
     pub skills: Option<Expr>,
+    /// Data-style command declarations, mirroring `skills = [...]`. The bridge
+    /// plugin and the built-in command table declare their catalog as data
+    /// rather than through method-level `#[command(...)]`.
+    pub commands: Option<Expr>,
     pub activity_kinds: Option<Expr>,
     /// Typed settings are compiled internally to the constrained contract.
     pub settings: Option<Type>,
@@ -38,6 +42,7 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
     let mut summary = None;
     let mut help = None;
     let mut skills = None;
+    let mut commands = None;
     let mut activity_kinds = None;
     let mut settings = None;
     let mut settings_default = None;
@@ -86,12 +91,7 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                         settings_field = Some(expr_path_ident(value.value, "settings_field")?)
                     }
                     "settings_store" => settings_store = expr_bool(value.value, "settings_store")?,
-                    "commands" => {
-                        return Err(syn::Error::new_spanned(
-                            ident,
-                            "plugin-level `commands = ...` was removed; define commands with method-level #[command(...)]",
-                        ));
-                    }
+                    "commands" => commands = Some(value.value),
                     "tags" => {
                         return Err(syn::Error::new_spanned(
                             ident,
@@ -186,6 +186,7 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
         summary,
         help,
         skills,
+        commands,
         activity_kinds,
         settings,
         settings_default,

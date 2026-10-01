@@ -16,7 +16,8 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::{
-    PathKind, PluginDisplayContribution, PluginTerminalThemeColors, ToolDefinition,
+    CommandDefinition, PathKind, PluginDisplayContribution, PluginTerminalThemeColors,
+    ToolDefinition,
 };
 pub use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 
@@ -238,6 +239,38 @@ pub trait HostClient: Send + Sync + 'static {
 
     /// Long-lived background process registry — stop.
     async fn monitor_stop(&self, _req: MonitorStopRequest) -> Result<MonitorHandle> {
+        Err(unavailable())
+    }
+
+    /// Dynamic command registry — register a new user-facing command owned by
+    /// this plugin. Commands are the only user-facing surface of their kind:
+    /// both clients read them from the server catalog.
+    async fn register_command(
+        &self,
+        _req: HostCommandRegisterRequest,
+    ) -> Result<HostCommandMutationResponse> {
+        Err(unavailable())
+    }
+
+    /// Dynamic command registry — replace the definition of an existing command
+    /// owned by this plugin (matched by `command.id`).
+    async fn update_command(
+        &self,
+        _req: HostCommandUpdateRequest,
+    ) -> Result<HostCommandMutationResponse> {
+        Err(unavailable())
+    }
+
+    /// Dynamic command registry — remove a command owned by this plugin.
+    async fn remove_command(
+        &self,
+        _req: HostCommandRemoveRequest,
+    ) -> Result<HostCommandMutationResponse> {
+        Err(unavailable())
+    }
+
+    /// Dynamic command registry — list the commands visible to the caller.
+    async fn list_registered_commands(&self) -> Result<HostRegisteredCommandListResponse> {
         Err(unavailable())
     }
 
@@ -901,8 +934,6 @@ pub struct ToolDescriptor {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub examples: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
 }
@@ -1198,6 +1229,42 @@ pub struct MonitorStopRequest {
     pub id: String,
     #[serde(default)]
     pub force: bool,
+}
+
+// ---------------- command registry ----------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to register a command in the host command registry.
+pub struct HostCommandRegisterRequest {
+    pub command: CommandDefinition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to update a registered command.
+pub struct HostCommandUpdateRequest {
+    pub command: CommandDefinition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to remove a registered command.
+pub struct HostCommandRemoveRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of a command registry mutation. Commands carry no model-facing
+/// alias, so the response reports the command itself rather than a name.
+pub struct HostCommandMutationResponse {
+    pub generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CommandDefinition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response listing the commands visible to the caller's scope.
+pub struct HostRegisteredCommandListResponse {
+    pub generation: u64,
+    pub commands: Vec<CommandDefinition>,
 }
 
 // ---------------- tool registry ----------------

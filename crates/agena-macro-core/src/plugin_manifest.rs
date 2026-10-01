@@ -5,11 +5,11 @@ use syn::{Result, Type};
 
 use crate::plugin_hooks::plugin_layer_hooks_expr;
 use crate::plugin_impl_config::expr_is_ident;
-use crate::plugin_tooling::{expand_plugin_operation_definition, expand_plugin_tool_definition};
+use crate::plugin_tooling::{expand_plugin_command_definition, expand_plugin_tool_definition};
 
 use super::{
-    PluginHookPlan, PluginImplConfig, PluginOperationPlan, PluginServiceInputPlan,
-    PluginServicePlan, PluginServiceTargetPlan, PluginToolPlan, doc_summary, lit_str_from_text,
+    PluginCommandPlan, PluginHookPlan, PluginImplConfig, PluginServiceInputPlan, PluginServicePlan,
+    PluginServiceTargetPlan, PluginToolPlan, doc_summary, lit_str_from_text,
 };
 
 pub fn expand_plugin_layer_export(
@@ -71,7 +71,7 @@ pub fn expand_plugin_layer_manifest(
     docs: Option<&str>,
     tools: &[PluginToolPlan],
     hooks: &[PluginHookPlan],
-    operations: &[PluginOperationPlan],
+    commands: &[PluginCommandPlan],
     services: &[PluginServicePlan],
 ) -> Result<proc_macro2::TokenStream> {
     let namespace = config
@@ -104,6 +104,11 @@ pub fn expand_plugin_layer_manifest(
         .skills
         .as_ref()
         .map(|skills| quote! { manifest.skills.extend(#skills); })
+        .unwrap_or_default();
+    let commands_assignment = config
+        .commands
+        .as_ref()
+        .map(|commands| quote! { manifest.commands.extend(#commands); })
         .unwrap_or_default();
     let activity_kinds_assignment = config
         .activity_kinds
@@ -181,9 +186,9 @@ pub fn expand_plugin_layer_manifest(
             Ok(quote! { manifest.tools.push(#definition); })
         })
         .collect::<Result<Vec<_>>>()?;
-    let operation_definition_assignments = operations
+    let command_definition_assignments = commands
         .iter()
-        .map(expand_plugin_operation_definition)
+        .map(expand_plugin_command_definition)
         .collect::<Result<Vec<_>>>()?;
 
     let build_manifest = quote! {{
@@ -193,12 +198,13 @@ pub fn expand_plugin_layer_manifest(
             #settings_assignment
             #help_assignment
             #skills_assignment
+            #commands_assignment
             #activity_kinds_assignment
             #(#plugin_tag_assignments)*
             #(#service_import_assignments)*
             #(#typed_service_assignments)*
             #(#tool_definition_assignments)*
-            #(#operation_definition_assignments)*
+            #(#command_definition_assignments)*
             manifest
     }};
     let body = if cacheable {

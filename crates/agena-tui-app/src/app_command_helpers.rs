@@ -128,11 +128,11 @@ pub(crate) fn parse_pr_command_args(
     Ok((title_parts.join(" "), body, base, head))
 }
 
-pub(crate) fn plugin_operation_slash_name(
-    entry: &agena_plugin_host::PluginOperationCatalogItem,
+pub(crate) fn plugin_command_slash_name(
+    entry: &agena_plugin_host::CommandCatalogItem,
 ) -> Option<String> {
     let name = entry
-        .operation
+        .command
         .slash
         .as_deref()?
         .trim()
@@ -140,13 +140,13 @@ pub(crate) fn plugin_operation_slash_name(
     (!name.is_empty() && !name.chars().any(char::is_whitespace)).then(|| name.to_string())
 }
 
-pub(crate) fn plugin_operation_matches_name(
-    entry: &agena_plugin_host::PluginOperationCatalogItem,
+pub(crate) fn plugin_command_matches_name(
+    entry: &agena_plugin_host::CommandCatalogItem,
     name: &str,
 ) -> bool {
     let name = name.trim().trim_start_matches('/');
-    plugin_operation_slash_name(entry).is_some_and(|slash| slash.eq_ignore_ascii_case(name))
-        || entry.operation.aliases.iter().any(|alias| {
+    plugin_command_slash_name(entry).is_some_and(|slash| slash.eq_ignore_ascii_case(name))
+        || entry.command.aliases.iter().any(|alias| {
             alias
                 .trim()
                 .trim_start_matches('/')
@@ -154,29 +154,33 @@ pub(crate) fn plugin_operation_matches_name(
         })
 }
 
-pub(crate) fn plugin_operation_matches_slash_query(
-    entry: &agena_plugin_host::PluginOperationCatalogItem,
+pub(crate) fn plugin_command_matches_slash_query(
+    entry: &agena_plugin_host::CommandCatalogItem,
     query: &str,
 ) -> bool {
     let query = query.trim().to_ascii_lowercase();
     if query.is_empty() {
         return true;
     }
-    plugin_operation_slash_name(entry).is_some_and(|name| {
+    plugin_command_slash_name(entry).is_some_and(|name| {
         let name = name.to_ascii_lowercase();
         name == query || name.starts_with(query.as_str())
-    }) || entry.operation.aliases.iter().any(|alias| {
+    }) || entry.command.aliases.iter().any(|alias| {
         let alias = alias.trim().trim_start_matches('/').to_ascii_lowercase();
         alias == query || alias.starts_with(query.as_str())
     })
 }
 
-pub(crate) fn plugin_operation_detail(
-    entry: &agena_plugin_host::PluginOperationCatalogItem,
-) -> String {
-    let description = entry.operation.description.trim();
+pub(crate) fn plugin_command_detail(entry: &agena_plugin_host::CommandCatalogItem) -> String {
+    let description = entry
+        .command
+        .docs
+        .summary
+        .as_deref()
+        .unwrap_or_default()
+        .trim();
     if description.is_empty() {
-        format!("{} | {}", entry.plugin_id, entry.operation.title)
+        format!("{} | {}", entry.plugin_id, entry.command.title)
     } else {
         format!("{} | {description}", entry.plugin_id)
     }
@@ -185,8 +189,8 @@ pub(crate) fn plugin_operation_detail(
 /// Whether an operation's shared SettingsContract can materialize and validate
 /// a no-argument invocation. Web and TUI therefore use the same rule as the
 /// server-owned operation resolver.
-pub(crate) fn plugin_operation_accepts_empty_arguments(
-    entry: &agena_plugin_host::PluginOperationCatalogItem,
+pub(crate) fn plugin_command_accepts_empty_arguments(
+    entry: &agena_plugin_host::CommandCatalogItem,
 ) -> bool {
     entry.accepts_empty_input
 }
@@ -257,37 +261,39 @@ use crate::{
 };
 
 #[cfg(test)]
-mod plugin_operation_tests {
+mod plugin_command_tests {
     use agena_plugin_host::sdk::{
-        OperationDiscoverability, PluginOperationDefinition, PluginOperationTarget,
-        SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind,
+        CommandDefinition, CommandDiscoverability, CommandDocs, CommandTarget, SettingsConstraints,
+        SettingsContract, SettingsNode, SettingsNodeKind,
     };
-    use agena_plugin_host::{PluginKey, PluginOperationCatalogItem};
+    use agena_plugin_host::{CommandCatalogItem, PluginKey};
 
     use super::{
-        plugin_operation_accepts_empty_arguments, plugin_operation_matches_name,
-        plugin_operation_matches_slash_query, plugin_operation_slash_name,
+        plugin_command_accepts_empty_arguments, plugin_command_matches_name,
+        plugin_command_matches_slash_query, plugin_command_slash_name,
     };
 
-    fn operation(slash: Option<&str>, aliases: &[&str]) -> PluginOperationCatalogItem {
-        PluginOperationCatalogItem {
-            plugin_id: "example.operations"
+    fn operation(slash: Option<&str>, aliases: &[&str]) -> CommandCatalogItem {
+        CommandCatalogItem {
+            plugin_id: "example.commands"
                 .parse::<PluginKey>()
                 .expect("valid plugin id"),
             accepts_empty_input: true,
             default_input: serde_json::json!({}),
-            operation: PluginOperationDefinition {
+            command: CommandDefinition {
                 id: "example.run".to_string(),
                 title: "Run example".to_string(),
-                description: "Run a human-visible plugin operation.".to_string(),
+                docs: CommandDocs {
+                    summary: Some("Run a human-visible plugin command.".to_string()),
+                    ..CommandDocs::default()
+                },
                 group: "Test".to_string(),
                 category: None,
                 slash: slash.map(str::to_string),
                 aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
-                usage: None,
                 input: SettingsContract::new(SettingsNode::root_object("Input", "")),
-                discoverability: OperationDiscoverability::default(),
-                target: PluginOperationTarget::Method {
+                discoverability: CommandDiscoverability::default(),
+                target: CommandTarget::Method {
                     handler: "example.run".to_string(),
                 },
             },
@@ -295,33 +301,33 @@ mod plugin_operation_tests {
     }
 
     #[test]
-    fn plugin_slash_operation_uses_only_explicit_metadata() {
+    fn plugin_slash_command_uses_only_explicit_metadata() {
         assert_eq!(
-            plugin_operation_slash_name(&operation(Some(" example "), &[])).as_deref(),
+            plugin_command_slash_name(&operation(Some(" example "), &[])).as_deref(),
             Some("example")
         );
-        assert_eq!(plugin_operation_slash_name(&operation(None, &[])), None);
+        assert_eq!(plugin_command_slash_name(&operation(None, &[])), None);
         assert_eq!(
-            plugin_operation_slash_name(&operation(Some("not an operation"), &[])),
+            plugin_command_slash_name(&operation(Some("not an operation"), &[])),
             None
         );
     }
 
     #[test]
-    fn plugin_slash_operation_matches_primary_name_and_aliases() {
+    fn plugin_slash_command_matches_primary_name_and_aliases() {
         let operation = operation(Some("example"), &["demo", "sample"]);
-        assert!(plugin_operation_matches_name(&operation, "example"));
-        assert!(plugin_operation_matches_name(&operation, "/DEMO"));
-        assert!(plugin_operation_matches_slash_query(&operation, "sam"));
-        assert!(!plugin_operation_matches_name(&operation, "unrelated-tool"));
+        assert!(plugin_command_matches_name(&operation, "example"));
+        assert!(plugin_command_matches_name(&operation, "/DEMO"));
+        assert!(plugin_command_matches_slash_query(&operation, "sam"));
+        assert!(!plugin_command_matches_name(&operation, "unrelated-tool"));
     }
 
     #[test]
     fn empty_argument_support_comes_from_shared_settings_contract() {
         let mut operation = operation(Some("example"), &[]);
-        assert!(plugin_operation_accepts_empty_arguments(&operation));
+        assert!(plugin_command_accepts_empty_arguments(&operation));
 
-        operation.operation.input = SettingsContract::new(SettingsNode {
+        operation.command.input = SettingsContract::new(SettingsNode {
             id: "root".to_string(),
             path: String::new(),
             title: "Input".to_string(),
@@ -349,11 +355,11 @@ mod plugin_operation_tests {
                 }],
             },
         });
-        operation.accepts_empty_input = operation.operation.input.default_value().is_ok();
-        assert!(!plugin_operation_accepts_empty_arguments(&operation));
+        operation.accepts_empty_input = operation.command.input.default_value().is_ok();
+        assert!(!plugin_command_accepts_empty_arguments(&operation));
         assert_eq!(
             operation
-                .operation
+                .command
                 .input
                 .parse_shorthand("release")
                 .expect("shared shorthand parser"),

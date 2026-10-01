@@ -5,43 +5,49 @@ import { RiCommandLine, RiFlashlightLine } from '@remixicon/vue'
 import { apiJson } from '@/lib/api'
 import { getComposerInput, type ComposerExpose } from './composerInput'
 import {
-  BUILT_IN_COMMANDS,
-  findBuiltInCommand,
+  clientCommandsFromCatalog,
   normalizeCommandPaletteQuery,
   parseSlashInvocation,
   shouldResetCommandPaletteSelection,
-  type BuiltInCommandSpec,
+  type ClientCommand,
 } from './chatCommandsCatalog'
 import {
-  executePluginSlashOperation,
-  type PluginOperationCatalogItem,
-  type PluginOperationResult,
+  executePluginSlashCommand,
+  type PluginCommandCatalogItem,
+  type PluginCommandResult,
 } from '@/lib/pluginOperations'
 
-export type BuiltInCommand = BuiltInCommandSpec & {
+/** A locally-run command, with the published description resolved for display. */
+export type BuiltInCommand = ClientCommand & {
   description: string
+  /** The declaration's usage line, under the name the palette renders. */
+  arguments: string
 }
 
-export type PluginOperation = {
+/**
+ * A command the server owns. Its published declaration travels with it, so the
+ * palette shows the same slash, usage and summary the catalog declared.
+ */
+export type PluginCommand = {
   kind: 'plugin'
   name: string
   description?: string
   scope?: string
   aliases: string[]
   pluginId: string
-  operationId: string
+  commandId: string
   slash: string
   acceptsEmptyInput: boolean
-  operation: PluginOperationCatalogItem
+  command: PluginCommandCatalogItem
   requiresArguments: boolean
   arguments: string
 }
 
-export type Command = BuiltInCommand | PluginOperation
+export type Command = BuiltInCommand | PluginCommand
 
 type PluginSurfaceCatalog = {
   catalog?: {
-    operations?: PluginOperationCatalogItem[]
+    commands?: PluginCommandCatalogItem[]
   }
 }
 
@@ -78,13 +84,18 @@ export function matchSlashCommand(commands: Command[], raw: string): { command: 
 export function matchPluginSlashCommand(
   commands: Command[],
   raw: string,
-): { command: PluginOperation; args: string } | null {
+): { command: PluginCommand; args: string } | null {
   const matched = matchSlashCommand(commands, raw)
-  return matched?.command.kind === 'plugin' ? (matched as { command: PluginOperation; args: string }) : null
+  return matched?.command.kind === 'plugin' ? (matched as { command: PluginCommand; args: string }) : null
 }
 
 export function commandNeedsArguments(command: Command): boolean {
   return command.requiresArguments
+}
+
+/** The argument label a command contributes to palette search. */
+function commandArguments(command: Command): string {
+  return command.arguments
 }
 
 export function useChatCommands(opts: {
@@ -104,13 +115,6 @@ export function useChatCommands(opts: {
   const commandFocusSearch = ref(true)
   let commandsLoadInFlight: Promise<void> | null = null
 
-  const builtInCommands = computed<BuiltInCommand[]>(() =>
-    BUILT_IN_COMMANDS.map((command) => ({
-      ...command,
-      description: String(t(command.descriptionKey)),
-    })),
-  )
-
   function closeCommandPalette() {
     commandOpen.value = false
     commandQuery.value = ''
@@ -129,58 +133,84 @@ export function useChatCommands(opts: {
     if (commands.value.length === 0) void loadCommands()
   }
 
-  function pluginOperationFromCatalog(operation: PluginOperationCatalogItem): PluginOperation | null {
-    const pluginId = text(operation.plugin_id)
-    const operationId = text(operation.id)
-    const slash = text(operation.slash)
+  /**
+   * The description a built-in row shows. Text lives in the client's message
+   * catalog, so the published declaration carries a key; the literal summary is
+   * the fallback and the declaration's id is the last resort, so a row is never
+   * blank.
+   */
+  function builtInDescription(command: ClientCommand): string {
+    const key = text(command.docs?.summary_key)
+    if (key) {
+      const translated = String(t(key))
+      // vue-i18n echoes the key back when no locale carries it.
+      if (translated && translated !== key) return translated
+    }
+    return text(command.docs?.summary) || command.id
+  }
+
+  function builtInFromCatalog(command: ClientCommand): BuiltInCommand | null {
+    if (!command.showInPalette) return null
+    return { ...command, arguments: command.usage, description: builtInDescription(command) }
+  }
+
+  /**
+   * A command the server runs. The catalog is the only declaration, so nothing
+   * is invented locally: no slash, no alias and no usage line exist here that
+   * the server did not publish.
+   */
+  function pluginCommandFromCatalog(command: PluginCommandCatalogItem): PluginCommand | null {
+    const pluginId = text(command.plugin_id)
+    const commandId = text(command.id)
+    const slash = text(command.slash)
     const name = slash.replace(/^\/+/, '').toLowerCase()
-    if (!pluginId || !operationId || !name || /\s/.test(name) || operation.discoverability?.slash === false) {
+    if (!pluginId || !commandId || !name || /\s/.test(name) || command.discoverability?.slash === false) {
       return null
     }
-    const requiresArguments = operation.accepts_empty_input !== true
+    const requiresArguments = command.accepts_empty_input !== true
     return {
       kind: 'plugin',
       name,
-      description: text(operation.description) || text(operation.title),
-      aliases: Array.isArray(operation.aliases)
-        ? operation.aliases.map((alias) => text(alias).replace(/^\/+/, '').toLowerCase()).filter(Boolean)
+      description: text(command.docs?.summary) || text(command.title),
+      aliases: Array.isArray(command.aliases)
+        ? command.aliases.map((alias) => text(alias).replace(/^\/+/, '').toLowerCase()).filter(Boolean)
         : [],
-      scope: text(operation.category) || text(operation.group) || 'plugin',
+      scope: text(command.category) || text(command.group) || 'plugin',
       pluginId,
-      operationId,
+      commandId,
       slash,
       acceptsEmptyInput: !requiresArguments,
-      operation,
+      command,
       requiresArguments,
-      arguments: requiresArguments ? '<args>' : '',
+      arguments: text(command.docs?.usage) || (requiresArguments ? '<args>' : ''),
     }
   }
 
   async function loadCommandsInternal() {
     commandsLoading.value = true
     try {
-      // Built-ins are local and are always available, even if the plugin
-      // catalog is temporarily unavailable.
-      const builtIns = builtInCommands.value
-      const next = new Map<string, Command>(builtIns.map((command) => [command.name, command]))
+      let catalogCommands: PluginCommandCatalogItem[] = []
       try {
         const pluginCatalog = await apiJson<PluginSurfaceCatalog>('/api/v1/plugins/surface')
-        for (const rawOperation of pluginCatalog?.catalog?.operations || []) {
-          const command = pluginOperationFromCatalog(rawOperation)
-          if (!command) continue
-          // TUI gives a built-in command precedence over a plugin primary
-          // name. Apply the same rule to aliases so the two clients never
-          // show two rows for the same slash invocation.
-          if (findBuiltInCommand(command.name)) continue
-          if (command.aliases.some((alias) => Boolean(findBuiltInCommand(alias)))) {
-            command.aliases = command.aliases.filter((alias) => !findBuiltInCommand(alias))
-          }
-          if (next.has(command.name)) continue
-          next.set(command.name, command)
-        }
+        catalogCommands = pluginCatalog?.catalog?.commands || []
       } catch {
-        // A missing plugin catalog must not make the built-in command palette
-        // disappear.
+        // An unreachable plugin catalog means there is nothing to offer yet;
+        // the next load picks it up.
+      }
+
+      const next = new Map<string, Command>()
+      for (const command of clientCommandsFromCatalog(catalogCommands)) {
+        const builtIn = builtInFromCatalog(command)
+        if (builtIn && !next.has(builtIn.name)) next.set(builtIn.name, builtIn)
+      }
+      for (const rawCommand of catalogCommands) {
+        const command = pluginCommandFromCatalog(rawCommand)
+        if (!command) continue
+        if (next.has(command.name)) continue
+        // A slash already taken by a locally-run command must not be offered
+        // twice; drop the alias rather than the row.
+        command.aliases = command.aliases.filter((alias) => !next.has(alias))
+        next.set(command.name, command)
       }
       commands.value = [...next.values()]
     } finally {
@@ -220,7 +250,7 @@ export function useChatCommands(opts: {
     if (!query) return commands.value
     return commands.value
       .map((command) => {
-        const candidate = `${command.name} ${command.description || ''} ${(command.aliases || []).join(' ')} ${command.arguments || ''}`
+        const candidate = `${command.name} ${command.description || ''} ${(command.aliases || []).join(' ')} ${commandArguments(command)}`
         const score = commandScore(query, candidate)
         return score == null ? null : { command, score }
       })
@@ -333,13 +363,13 @@ export function useChatCommands(opts: {
     }
   }
 
-  async function runPluginSlashOperation(raw: string, sessionId: string): Promise<PluginOperationResult | null> {
+  async function runPluginSlashCommand(raw: string, sessionId: string): Promise<PluginCommandResult | null> {
     if (commands.value.length === 0) await loadCommands()
     const matched = matchPluginSlashCommand(commands.value, raw)
     if (!matched) return null
     const numericSessionId = Number(sessionId)
-    return await executePluginSlashOperation({
-      operation: matched.command.operation,
+    return await executePluginSlashCommand({
+      command: matched.command.command,
       sessionId: Number.isSafeInteger(numericSessionId) && numericSessionId > 0 ? numericSessionId : null,
       rawArgs: matched.args,
     })
@@ -366,7 +396,7 @@ export function useChatCommands(opts: {
     handleCommandPaletteKeydown,
     moveCommandSelection,
     selectCommand,
-    runPluginSlashOperation,
+    runPluginSlashCommand,
     commandIcon,
   }
 }

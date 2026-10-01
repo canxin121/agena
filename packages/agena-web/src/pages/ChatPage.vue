@@ -29,6 +29,7 @@ import { useChatComposerLayout } from './chat/useChatComposerLayout'
 import { useChatModelSelection } from './chat/useChatModelSelection'
 import { useChatCommands, matchSlashCommand } from './chat/useChatCommands'
 import type { BuiltInCommand, Command } from './chat/useChatCommands'
+import { commandUsage } from './chat/chatCommandsCatalog'
 import { useChatSessionActions } from './chat/useChatSessionActions'
 import { useChatRunUi } from './chat/useChatRunUi'
 import { useChatTranscriptVim } from './chat/useChatTranscriptVim'
@@ -56,7 +57,7 @@ import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
-import type { PluginOperationResult } from '@/lib/pluginOperations'
+import type { PluginCommandResult } from '@/lib/pluginOperations'
 import {
   DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES,
   chatActivityKindIdForTranscriptPart,
@@ -1579,12 +1580,12 @@ function commandRequestId(): string {
   return typeof properties.id === 'string' ? properties.id.trim() : ''
 }
 
-function commandUsage(command: BuiltInCommand): string {
-  return `/${command.name}${command.arguments ? ` ${command.arguments}` : ''}`
-}
-
+/**
+ * A command that documents no usage takes no arguments, so anything typed
+ * after it is a mistake worth reporting rather than silently dropping.
+ */
 function commandHasUnexpectedArguments(command: BuiltInCommand, args: string): boolean {
-  return command.opensInteractiveSurface && Boolean(args.trim())
+  return !command.usage && Boolean(args.trim())
 }
 
 function parsePullRequestArguments(raw: string): {
@@ -1645,26 +1646,6 @@ async function submitPromptFromCommand(prompt: string) {
   await send()
 }
 
-async function runReviewCommand(sid: string, focus: string) {
-  const response = await apiJson<JsonValue>('/api/v1/plugins/tools/invoke', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      plugin_id: 'agena.skills',
-      tool: 'get',
-      input: { name: 'review' },
-      session_id: Number(sid),
-    }),
-  })
-  const record = asRecord(response)
-  const prompt =
-    typeof record.payload === 'object' && record.payload !== null
-      ? String((record.payload as JsonObject).body || '').trim()
-      : ''
-  if (!prompt) throw new Error('The review skill did not return instructions.')
-  await submitPromptFromCommand(focus ? `${prompt}\n\nReview focus:\n${focus}` : prompt)
-}
-
 async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Promise<void> {
   const args = String(rawArgs || '').trim()
   if (commandHasUnexpectedArguments(command, args)) {
@@ -1673,7 +1654,9 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
   }
 
   const sid = commandSessionId()
-  switch (command.id) {
+  // Dispatch on the action the catalog declared, not on the slash spelling:
+  // the server owns the spelling and may rename it without a client release.
+  switch (command.action) {
     case 'help':
       ui.toggleHelpDialog()
       return
@@ -1713,13 +1696,6 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       return
     case 'model':
       await modelSelection.toggleComposerPicker('model')
-      return
-    case 'review':
-      if (!sid) {
-        toasts.push('error', 'A session is required for /review.')
-        return
-      }
-      await runReviewCommand(sid, args)
       return
     case 'commit': {
       if (!args) {
@@ -1794,11 +1770,11 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       const requestId = commandRequestId()
       if (!requestId) throw new Error('The pending permission request has no id.')
       const reply =
-        command.id === 'allow'
+        command.action === 'allow'
           ? 'once'
-          : command.id === 'allow-always'
+          : command.action === 'allow-always'
             ? 'always'
-            : command.id === 'deny-always'
+            : command.action === 'deny-always'
               ? 'reject_always'
               : 'reject'
       await chat.replyPermission(sid, requestId, reply)
@@ -1808,11 +1784,13 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'image':
       openFilePicker()
       return
-    case 'skill':
-      await router.push('/settings/plugins-tools')
+    case 'paste':
+      toasts.push('info', 'Use your system paste shortcut to insert clipboard text.')
       return
-    case 'skill-manager':
-      await router.push('/settings/plugins-tools')
+    case 'favorite':
+    case 'hub':
+    case 'lineage':
+      toasts.push('info', `/${command.name} is available in the terminal client.`)
       return
     case 'download':
       if (!args) {
@@ -1821,7 +1799,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       }
       await downloadWorkspaceFile(args)
       return
-    case 'editor':
+    case 'edit':
       toggleEditorFullscreen()
       return
     case 'copy':
@@ -1893,7 +1871,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
   }
 }
 
-function showPluginOperationFeedback(result: PluginOperationResult) {
+function showPluginCommandFeedback(result: PluginCommandResult) {
   const message = [result.title, result.summary].filter((value) => String(value || '').trim()).join(': ')
   if (result.status === 'succeeded') {
     toasts.push('success', message || 'Plugin operation completed')
@@ -1909,11 +1887,11 @@ function showPluginOperationFeedback(result: PluginOperationResult) {
   }
 }
 
-async function applyPluginOperationResult(
-  result: PluginOperationResult,
+async function applyPluginCommandResult(
+  result: PluginCommandResult,
   promptMode: 'submit' | 'return',
 ): Promise<string | null> {
-  showPluginOperationFeedback(result)
+  showPluginCommandFeedback(result)
   let returnedPrompt: string | null = null
   for (const effect of result.effects || []) {
     if (effect.kind === 'insert_prompt') {
@@ -1945,8 +1923,8 @@ async function handleCommandSelected(command: Command) {
       await executeBuiltInCommand(command)
       return
     }
-    const result = await chatCommands.runPluginSlashOperation(`/${command.name}`, commandSessionId() || '')
-    if (result) await applyPluginOperationResult(result, 'submit')
+    const result = await chatCommands.runPluginSlashCommand(`/${command.name}`, commandSessionId() || '')
+    if (result) await applyPluginCommandResult(result, 'submit')
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   }
@@ -2011,9 +1989,9 @@ async function sendReady(sid: string | null) {
         await executeBuiltInCommand(matchedCommand.command, matchedCommand.args)
         return
       }
-      const result = await chatCommands.runPluginSlashOperation(text, sid || '')
+      const result = await chatCommands.runPluginSlashCommand(text, sid || '')
       if (result) {
-        const prompt = await applyPluginOperationResult(result, 'return')
+        const prompt = await applyPluginCommandResult(result, 'return')
         if (prompt) {
           text = prompt
           outgoingSegments = [{ type: 'text', text: prompt }]

@@ -90,8 +90,7 @@ impl ReportPlugin {
     #[tool(
         tags(mutate, discovery, read_only),
         name = "findings",
-        summary = "Publish structured file-and-line findings for UI and integrations.",
-        concurrency_safe
+        summary = "Publish structured file-and-line findings for UI and integrations."
     )]
     async fn invoke_findings(&self, input: &ReportFindingsInput) -> SdkResult<ToolInvokeOutput> {
         // An empty list is a valid "no findings" report. Validate members

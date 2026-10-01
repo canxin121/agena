@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -23,7 +24,8 @@ use crate::registry::{PluginToolRegistry, RegisteredTool};
 use crate::scoped_registry::{PluginScopeKey, ScopedRegistry};
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription,
-    HostCallbackContext, HostClient, HostConfigReloadRequestResponse,
+    HostCallbackContext, HostClient, HostCommandMutationResponse, HostCommandRegisterRequest,
+    HostCommandRemoveRequest, HostCommandUpdateRequest, HostConfigReloadRequestResponse,
     HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
     HostContextStatusResponse, HostDisplayContributeRequest, HostDisplayRemoveRequest,
     HostDisplayRemoveResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
@@ -32,20 +34,20 @@ use crate::sdk::host_api::{
     HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
     HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatus,
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSetSessionModelRequest, HostSnapshotListResponse, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
-    HostThemeRemoveRequest, HostThemeRemoveResponse, HostToolMutationResponse,
-    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest, LogLevel,
-    MessageSubtaskRequest, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, PluginNotifyAction,
-    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
-    RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor, ToolRegistryChangeKind,
-    ToolRegistryChangedEvent,
+    HostRegisteredCommandListResponse, HostRegisteredToolDescriptor,
+    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSetSessionModelRequest, HostSnapshotListResponse,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
+    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
+    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    PluginNotifyAction, PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse,
+    RunSubtaskRequest, RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor,
+    ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -53,15 +55,15 @@ use crate::sdk::{
     ChatHeadersPatch, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,
     ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
-    CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope,
-    EventFilter, HookSubscription, NotificationInput, PluginDisplayContribution, PluginError,
-    PluginErrorKind, PluginKey, PluginManifest, PluginOperationDefinition,
-    PluginOperationInvokeInput, PluginOperationResult, PluginServiceExport, PluginServiceImport,
-    PluginServiceInvokeInput, PluginServiceInvokeOutput, PostRunInput, PreRunInput,
-    ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch,
-    ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolKey, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
+    CommandBeforeOutcome, CommandBeforeResponse, CommandDefinition, CommandInvokeInput,
+    CommandResult, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
+    NotificationInput, PluginDisplayContribution, PluginError, PluginErrorKind, PluginKey,
+    PluginManifest, PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput,
+    PluginServiceInvokeOutput, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
+    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
+    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
+    ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::services::{PluginServiceBinding, PluginServiceBindingKey};
 use crate::transport::PluginTransport;
@@ -480,16 +482,16 @@ pub struct PluginArchitectureCatalog {
     #[serde(default)]
     pub tool_registrations: Vec<crate::scoped_registry::ScopedRegistryEntryDescriptor<ToolKey>>,
     #[serde(default)]
-    pub operation_registrations: Vec<crate::scoped_registry::ScopedRegistryEntryDescriptor<String>>,
+    pub command_registrations: Vec<crate::scoped_registry::ScopedRegistryEntryDescriptor<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Neutral plugin surface catalog. Executable operations and terminal-only
+/// Neutral plugin surface catalog. Executable commands and terminal-only
 /// presentation are deliberately separate from one another and from any
 /// particular renderer.
 pub struct PluginSurfaceCatalog {
     #[serde(default)]
-    pub operations: Vec<PluginOperationCatalogItem>,
+    pub commands: Vec<CommandCatalogItem>,
     #[serde(default)]
     pub terminal: PluginTerminalSurfaceCatalog,
 }
@@ -504,8 +506,8 @@ pub struct PluginTerminalSurfaceCatalog {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Catalog item of a plugin operation.
-pub struct PluginOperationCatalogItem {
+/// Catalog item of a plugin command.
+pub struct CommandCatalogItem {
     pub plugin_id: PluginKey,
     /// Host-derived fact used by every command palette. This is computed from
     /// the validated SettingsContract and cannot drift between clients.
@@ -513,21 +515,25 @@ pub struct PluginOperationCatalogItem {
     /// Deterministic editor/invocation seed produced by the shared contract.
     pub default_input: serde_json::Value,
     #[serde(flatten)]
-    pub operation: PluginOperationDefinition,
+    pub command: CommandDefinition,
 }
 
-fn operation_registry_name(plugin_id: &PluginKey, operation_id: &str) -> String {
-    format!("{plugin_id}/{operation_id}")
+fn command_registry_name(plugin_id: &PluginKey, command_id: &str) -> String {
+    format!("{plugin_id}/{command_id}")
 }
 
-fn sort_operation_catalog(operations: &mut [PluginOperationCatalogItem]) {
-    operations.sort_by(|a, b| {
-        a.operation
+/// The sort key is the order every client renders. `slash` sits above `id` so
+/// commands registered at runtime (bridged skills) interleave with declared
+/// commands by the name a user actually types.
+fn sort_command_catalog(commands: &mut [CommandCatalogItem]) {
+    commands.sort_by(|a, b| {
+        a.command
             .group
-            .cmp(&b.operation.group)
-            .then_with(|| a.operation.category.cmp(&b.operation.category))
-            .then_with(|| a.operation.id.cmp(&b.operation.id))
-            .then_with(|| a.operation.title.cmp(&b.operation.title))
+            .cmp(&b.command.group)
+            .then_with(|| a.command.category.cmp(&b.command.category))
+            .then_with(|| a.command.slash.cmp(&b.command.slash))
+            .then_with(|| a.command.id.cmp(&b.command.id))
+            .then_with(|| a.command.title.cmp(&b.command.title))
             .then_with(|| a.plugin_id.cmp(&b.plugin_id))
     });
 }
@@ -559,19 +565,19 @@ struct ToolAfterDispatch {
 }
 
 #[derive(Debug, Clone)]
-/// Immutable operation identity plus middleware-visible input/context.
-/// Middleware may transform only the JSON input; plugin and operation routing
+/// Immutable command identity plus middleware-visible input/context.
+/// Middleware may transform only the JSON input; plugin and command routing
 /// stay host-owned and cannot be redirected by an extension.
-pub struct PluginOperationDispatch {
+pub struct CommandDispatch {
     plugin_id: PluginKey,
-    operation_id: String,
-    input: PluginOperationInvokeInput,
+    command_id: String,
+    input: CommandInvokeInput,
 }
 
-impl PluginOperationDispatch {
-    fn new(plugin_id: PluginKey, input: PluginOperationInvokeInput) -> Self {
+impl CommandDispatch {
+    fn new(plugin_id: PluginKey, input: CommandInvokeInput) -> Self {
         Self {
-            operation_id: input.operation_id.clone(),
+            command_id: input.command_id.clone(),
             plugin_id,
             input,
         }
@@ -581,8 +587,8 @@ impl PluginOperationDispatch {
         &self.plugin_id
     }
 
-    pub fn operation_id(&self) -> &str {
-        self.operation_id.as_str()
+    pub fn command_id(&self) -> &str {
+        self.command_id.as_str()
     }
 
     pub fn input(&self) -> &serde_json::Value {
@@ -601,7 +607,7 @@ impl PluginOperationDispatch {
         self.input.workspace_root.as_deref()
     }
 
-    fn into_input(self) -> PluginOperationInvokeInput {
+    fn into_input(self) -> CommandInvokeInput {
         self.input
     }
 }
@@ -643,13 +649,9 @@ pub struct PluginHost {
     plugins: Vec<Arc<LoadedPlugin>>,
     plugins_by_id: HashMap<PluginKey, Arc<LoadedPlugin>>,
     tool_registry: Arc<RwLock<PluginToolRegistry>>,
-    operation_registry: Arc<ScopedRegistry<String, PluginOperationCatalogItem>>,
-    operation_pipeline: Arc<
-        crate::event_pipeline::PluginAroundPipeline<
-            PluginOperationDispatch,
-            PluginOperationResult,
-            PluginError,
-        >,
+    command_registry: Arc<ScopedRegistry<String, CommandCatalogItem>>,
+    command_pipeline: Arc<
+        crate::event_pipeline::PluginAroundPipeline<CommandDispatch, CommandResult, PluginError>,
     >,
     tool_before_pipeline:
         Arc<crate::event_pipeline::PluginTransformBailPipeline<ToolBeforeDispatch, ToolBeforeBail>>,
@@ -869,7 +871,11 @@ pub struct HostHandle {
     callback_base_url: Option<String>,
     tool_registry: Arc<RwLock<PluginToolRegistry>>,
     scoped_tools: Arc<ScopedRegistry<ToolKey, RegisteredTool>>,
-    operation_registry: Arc<ScopedRegistry<String, PluginOperationCatalogItem>>,
+    command_registry: Arc<ScopedRegistry<String, CommandCatalogItem>>,
+    /// Monotonic version of the command catalog. The command registry has no
+    /// generation of its own, so mutations bump this counter and every catalog
+    /// or registry response reports it; clients use it to detect a change.
+    command_generation: Arc<AtomicU64>,
     plugin_indices: Arc<RwLock<HashMap<PluginKey, usize>>>,
     plugin_names: Arc<RwLock<HashMap<PluginKey, String>>>,
     hook_catalog: contribution_registry::ContributionRegistry<HostHookRegistration>,
@@ -1080,6 +1086,27 @@ struct HostMonitorReadParams {
 #[derive(serde::Deserialize)]
 struct HostMonitorStopParams {
     request: MonitorStopRequest,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostCommandRegisterParams {
+    request: HostCommandRegisterRequest,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostCommandUpdateParams {
+    request: HostCommandUpdateRequest,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostCommandRemoveParams {
+    request: HostCommandRemoveRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }

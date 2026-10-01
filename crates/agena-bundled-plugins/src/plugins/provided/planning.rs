@@ -54,8 +54,7 @@ impl PlanPlugin {
 
     #[tool(
         tags(query, planning, read_only),
-        summary = "Inspect the current plan state.",
-        concurrency_safe
+        summary = "Inspect the current plan state."
     )]
     async fn get(&self, input: &PlanGetInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_plan_get(input).await

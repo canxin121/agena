@@ -4030,7 +4030,7 @@ mod tests {
             tool("schema_lab.inspect", false, Some("agena.schema_lab")),
             tool("agena.schema_lab.echo", false, None),
             tool("settings.set", false, Some("agena.settings")),
-            tool("skills.update", false, Some("agena.skills")),
+            tool("commands.install", false, Some("agena.commands")),
             tool("snapshot.enter", false, Some("agena.snapshot")),
             tool("tasks.list", false, Some("agena.tasks")),
             tool("tools.search", false, Some("agena.tools")),
@@ -4048,7 +4048,7 @@ mod tests {
             tool("mcp.servers.status", false, None),
             tool("memory.search", false, None),
             tool("settings.get", false, None),
-            tool("skills.list", false, None),
+            tool("commands.list", false, None),
             tool("report.findings", false, None),
         ] {
             assert!(

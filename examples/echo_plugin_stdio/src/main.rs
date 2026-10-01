@@ -18,7 +18,6 @@ impl EchoPlugin {
         name = "echo",
         summary = "Echo text over stdio transport.",
         stream = echo_stream,
-        concurrency_safe,
         tags(read_only)
     )]
     async fn echo(&self, #[arg(trim, non_empty)] text: String) -> String {

@@ -6,7 +6,7 @@ use syn::punctuated::Punctuated;
 use syn::{Field, FnArg, ImplItemFn, LitStr, Meta, PathArguments, Result, Token, Type};
 
 use crate::{
-    PluginGeneratedInputField, PluginInputFieldAliasSpec, PluginMethodInfo, PluginOperationPlan,
+    PluginCommandPlan, PluginGeneratedInputField, PluginInputFieldAliasSpec, PluginMethodInfo,
     PluginServicePlan, PluginServiceTargetPlan, PluginToolOutputPlan, PluginToolPlan,
     SerdeRenameRule, append_constraint_path_suffix, input_type_semantic_shape,
     parse_input_field_arg_attrs, prepare_input_field_names, type_first_generic_arg, type_is_unit,
@@ -375,17 +375,17 @@ pub fn reject_duplicate_tool_plans(tools: &[PluginToolPlan]) -> Result<()> {
     Ok(())
 }
 
-pub fn reject_duplicate_operation_plans(operations: &[PluginOperationPlan]) -> Result<()> {
-    for (index, operation) in operations.iter().enumerate() {
-        let id = &operation.id;
-        if operations
+pub fn reject_duplicate_command_plans(commands: &[PluginCommandPlan]) -> Result<()> {
+    for (index, command) in commands.iter().enumerate() {
+        let id = &command.id;
+        if commands
             .iter()
             .skip(index + 1)
             .any(|other| other.id.value() == id.value())
         {
             return Err(syn::Error::new_spanned(
-                &operation.id,
-                format!("duplicate #[operation] id '{}'", id.value()),
+                &command.id,
+                format!("duplicate #[command] id '{}'", id.value()),
             ));
         }
     }

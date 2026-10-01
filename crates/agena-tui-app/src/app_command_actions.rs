@@ -1,80 +1,90 @@
 impl App {
-    pub(crate) fn execute_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        if command_opens_interactive_surface_without_arguments(spec.id) && !args.trim().is_empty() {
+    /// Run a built-in command locally.
+    ///
+    /// `command` is the published declaration this client resolved the
+    /// invocation to, so the usage line and summary shown to the user come from
+    /// the same place the palette read them. The match on the command's action
+    /// stays exhaustive over [`ClientCommandAction`]: a declaration naming an
+    /// action this build does not implement never reaches here, because
+    /// resolving an invocation drops it.
+    pub(crate) fn execute_command(&mut self, command: &ClientCommand, args: &str) {
+        let action = command.action();
+        if !command.takes_arguments() && !args.trim().is_empty() {
             self.flash_warning(self.i18n.text_args(
                 "flash-command-usage",
-                &agena_tui::fl_args!("usage" => spec.invocation()),
+                &agena_tui::fl_args!("usage" => command.invocation()),
             ));
             return;
         }
-        match spec.id {
-            CommandId::Help => {
+        match action {
+            ClientCommandAction::Help => {
                 self.open_context_help();
             }
-            CommandId::Commands => self.open_command_palette(),
-            CommandId::New => self.create_session(None),
-            CommandId::Sessions => self.open_resume_session_picker(),
-            CommandId::Hub => self.open_hub(),
-            CommandId::Lineage => self.open_lineage_picker(),
-            CommandId::Rewind => self.open_rewind_messages_picker(),
-            CommandId::Rename => self.open_rename_session_overlay(),
-            CommandId::Favorite => {
+            ClientCommandAction::Commands => self.open_command_palette(),
+            ClientCommandAction::New => self.create_session(None),
+            ClientCommandAction::Sessions => self.open_resume_session_picker(),
+            ClientCommandAction::Hub => self.open_hub(),
+            ClientCommandAction::Lineage => self.open_lineage_picker(),
+            ClientCommandAction::Rewind => self.open_rewind_messages_picker(),
+            ClientCommandAction::Rename => self.open_rename_session_overlay(),
+            ClientCommandAction::Favorite => {
                 if !args.trim().is_empty() {
                     self.flash_warning(self.i18n.text_args(
                         "flash-command-usage",
-                        &agena_tui::fl_args!("usage" => spec.invocation()),
+                        &agena_tui::fl_args!("usage" => command.invocation()),
                     ));
                 } else {
                     self.toggle_current_session_favorite();
                 }
             }
-            CommandId::Timeline => self.open_timeline_overlay(TIMELINE_EVENT_LIMIT),
-            CommandId::Settings => self.open_settings_studio(),
-            CommandId::Model => self.open_session_model_chooser(),
-            CommandId::Review => self.handle_review_command(args),
-            CommandId::Commit => self.handle_commit_command(args),
-            CommandId::Pr => self.handle_pr_command(args),
-            CommandId::Export => self.handle_export_command(args),
-            CommandId::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
-            CommandId::Continue => self.continue_current_session(),
-            CommandId::Compact => self.compact_current_session(),
-            CommandId::UserInput => self.open_user_input_overlay(),
-            CommandId::Allow => self.reply_permission(PermissionReplyKind::AllowOnce),
-            CommandId::AllowAlways => self.reply_permission(PermissionReplyKind::AllowAlways),
-            CommandId::Deny => self.reply_permission(PermissionReplyKind::DenyOnce),
-            CommandId::DenyAlways => self.reply_permission(PermissionReplyKind::DenyAlways),
-            CommandId::Attach => {
+            ClientCommandAction::Timeline => self.open_timeline_overlay(TIMELINE_EVENT_LIMIT),
+            ClientCommandAction::Settings => self.open_settings_studio(),
+            ClientCommandAction::Model => self.open_session_model_chooser(),
+            ClientCommandAction::Commit => self.handle_commit_command(args),
+            ClientCommandAction::Pr => self.handle_pr_command(args),
+            ClientCommandAction::Export => self.handle_export_command(args),
+            ClientCommandAction::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
+            ClientCommandAction::Continue => self.continue_current_session(),
+            ClientCommandAction::Compact => self.compact_current_session(),
+            ClientCommandAction::UserInput => self.open_user_input_overlay(),
+            ClientCommandAction::Allow => self.reply_permission(PermissionReplyKind::AllowOnce),
+            ClientCommandAction::AllowAlways => {
+                self.reply_permission(PermissionReplyKind::AllowAlways)
+            }
+            ClientCommandAction::Deny => self.reply_permission(PermissionReplyKind::DenyOnce),
+            ClientCommandAction::DenyAlways => {
+                self.reply_permission(PermissionReplyKind::DenyAlways)
+            }
+            ClientCommandAction::Attach => {
                 self.focus = Focus::Composer;
                 self.request_file_attachment(false);
             }
-            CommandId::Skill => self.open_skill_picker(),
-            CommandId::SkillStudio => self.open_skill_studio(),
-            CommandId::Download => self.request_terminal_download(args),
-            CommandId::Editor => {
+            ClientCommandAction::Download => self.request_terminal_download(args),
+            ClientCommandAction::Editor => {
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
             }
-            CommandId::Image => {
+            ClientCommandAction::Image => {
                 self.request_file_attachment(true);
             }
-            CommandId::Paste => {
+            ClientCommandAction::Paste => {
                 self.focus = Focus::Composer;
                 self.pending_ui_action = Some(UiAction::PasteClipboard);
             }
-            CommandId::Copy => self.copy_loaded_transcript(),
-            CommandId::CopyMessage => self.copy_last_assistant_message(),
-            CommandId::CopyVisible => self.copy_visible_transcript(),
-            CommandId::Fork => self.handle_fork_command(args),
-            CommandId::Children => self.open_child_sessions_picker(),
-            CommandId::Parent => self.open_parent_session(),
-            CommandId::Diagnostics => {
+            ClientCommandAction::Copy => self.copy_loaded_transcript(),
+            ClientCommandAction::CopyMessage => self.copy_last_assistant_message(),
+            ClientCommandAction::CopyVisible => self.copy_visible_transcript(),
+            ClientCommandAction::Fork => self.handle_fork_command(args),
+            ClientCommandAction::Children => self.open_child_sessions_picker(),
+            ClientCommandAction::Parent => self.open_parent_session(),
+            ClientCommandAction::Diagnostics => {
                 self.open_terminal_diagnostics();
             }
-            CommandId::Status => {
+            ClientCommandAction::Status => {
                 self.flash_success(self.current_runtime_status_summary());
             }
-            CommandId::Usage => self.open_usage_dashboard(),
-            CommandId::Activities => self.open_activities_panel(),
-            CommandId::Background => {
+            ClientCommandAction::Usage => self.open_usage_dashboard(),
+            ClientCommandAction::Activities => self.open_activities_panel(),
+            ClientCommandAction::Background => {
                 // Return to the session hub and leave the TUI. The server owns
                 // the session independently of this client, so nothing is
                 // stopped: the session keeps running and can be re-attached
@@ -82,14 +92,14 @@ impl App {
                 self.open_hub();
                 self.should_quit = true;
             }
-            CommandId::Plan => self.open_plan_viewer(),
-            CommandId::Side => self.handle_side_command(args),
+            ClientCommandAction::Plan => self.open_plan_viewer(),
+            ClientCommandAction::Side => self.handle_side_command(args),
         }
     }
 
-    pub(crate) fn execute_plugin_slash_operation(
+    pub(crate) fn execute_plugin_slash_command(
         &mut self,
-        entry: agena_plugin_host::PluginOperationCatalogItem,
+        entry: agena_plugin_host::CommandCatalogItem,
         args: &str,
     ) {
         let session_id = self
@@ -99,7 +109,7 @@ impl App {
         let args = args.to_string();
         self.dispatch_backend_operation(
             move |application| async move {
-                crate::app_backend::plugin_effects::invoke_plugin_slash_operation(
+                crate::app_backend::plugin_effects::invoke_plugin_slash_command(
                     &application,
                     &entry,
                     session_id,
@@ -108,15 +118,15 @@ impl App {
                 .await
             },
             move |app, result| match result {
-                Ok(result) => app.apply_plugin_operation_result(result, session_id),
+                Ok(result) => app.apply_plugin_command_result(result, session_id),
                 Err(error) => app.flash_error(error),
             },
         );
     }
 
-    fn apply_plugin_operation_result(
+    fn apply_plugin_command_result(
         &mut self,
-        result: PluginOperationEffect,
+        result: PluginCommandEffect,
         session_id: Option<i64>,
     ) {
         let feedback = if result.summary.trim().is_empty() {
@@ -127,19 +137,17 @@ impl App {
             format!("{}: {}", result.title, result.summary)
         };
         match result.status {
-            agena_plugin_host::sdk::PluginOperationStatus::Succeeded => {
-                self.flash_success(feedback)
-            }
-            agena_plugin_host::sdk::PluginOperationStatus::Failed => self.flash_error(
+            agena_plugin_host::sdk::CommandStatus::Succeeded => self.flash_success(feedback),
+            agena_plugin_host::sdk::CommandStatus::Failed => self.flash_error(
                 result
                     .detail
                     .clone()
                     .filter(|detail| !detail.trim().is_empty())
                     .unwrap_or(feedback),
             ),
-            agena_plugin_host::sdk::PluginOperationStatus::Unavailable
-            | agena_plugin_host::sdk::PluginOperationStatus::PermissionRequired
-            | agena_plugin_host::sdk::PluginOperationStatus::Cancelled => self.flash_warning(
+            agena_plugin_host::sdk::CommandStatus::Unavailable
+            | agena_plugin_host::sdk::CommandStatus::PermissionRequired
+            | agena_plugin_host::sdk::CommandStatus::Cancelled => self.flash_warning(
                 result
                     .detail
                     .clone()
@@ -150,7 +158,7 @@ impl App {
 
         for effect in result.effects {
             match effect {
-                agena_plugin_host::sdk::PluginHostEffect::InsertPrompt { prompt } => {
+                agena_plugin_host::sdk::CommandHostEffect::InsertPrompt { prompt } => {
                     if prompt.trim().is_empty() {
                         self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
                         continue;
@@ -167,15 +175,15 @@ impl App {
                         None => self.create_session(Some(draft)),
                     }
                 }
-                agena_plugin_host::sdk::PluginHostEffect::Navigate { path } => {
+                agena_plugin_host::sdk::CommandHostEffect::Navigate { path } => {
                     if !self.apply_plugin_navigation(path.as_str()) {
                         self.flash_info(format!("Plugin navigation: {path}"));
                     }
                 }
-                agena_plugin_host::sdk::PluginHostEffect::OpenUrl { url } => {
+                agena_plugin_host::sdk::CommandHostEffect::OpenUrl { url } => {
                     self.flash_info(format!("Plugin operation URL: {url}"));
                 }
-                agena_plugin_host::sdk::PluginHostEffect::RefreshPluginSurface { .. } => {}
+                agena_plugin_host::sdk::CommandHostEffect::RefreshPluginSurface { .. } => {}
             }
         }
     }
@@ -287,61 +295,6 @@ impl App {
                 }
             }
         });
-    }
-
-    pub(crate) fn handle_review_command(&mut self, args: &str) {
-        let Some(session_id) = self
-            .transcript
-            .session_id
-            .or_else(|| self.sessions.current_selected_id())
-        else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return;
-        };
-        let review_focus = args.trim().to_string();
-        self.dispatch_backend_operation(
-            move |application| async move {
-                application
-                    .invoke_plugin_tool(
-                        "agena.skills",
-                        "get",
-                        serde_json::json!({ "name": "review" }),
-                        Some(session_id),
-                    )
-                    .await
-            },
-            move |app, result| {
-                let response = match result {
-                    Ok(response) => response,
-                    Err(error) => {
-                        app.notify_ui_failure(error, NoticeScope::Session(session_id));
-                        return;
-                    }
-                };
-                let Some(prompt) = response
-                    .payload
-                    .as_ref()
-                    .and_then(|payload| payload.get("body"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|body| !body.is_empty())
-                else {
-                    app.flash_error("review Skill did not return instructions");
-                    return;
-                };
-                let prompt = if review_focus.is_empty() {
-                    prompt.to_string()
-                } else {
-                    format!("{prompt}\n\nReview focus:\n{review_focus}")
-                };
-                let draft = ComposerDraft {
-                    document: agena_domain::ComposerDocument(vec![
-                        agena_domain::ComposerNode::Text { text: prompt },
-                    ]),
-                };
-                app.request_submit_message_with_pending(session_id, draft, None);
-            },
-        );
     }
 
     pub(crate) fn handle_commit_command(&mut self, args: &str) {
@@ -471,30 +424,11 @@ enum ForkKind {
     Side,
 }
 
-fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
-    matches!(
-        id,
-        CommandId::Sessions
-            | CommandId::Hub
-            | CommandId::Background
-            | CommandId::Rename
-            | CommandId::Timeline
-            | CommandId::Settings
-            | CommandId::Attach
-            | CommandId::Skill
-            | CommandId::SkillStudio
-            | CommandId::Image
-            | CommandId::Paste
-            | CommandId::Usage
-            | CommandId::Activities
-            | CommandId::Plan
-            | CommandId::Fork
-            | CommandId::Side
-    )
-}
-use crate::app_backend::PluginOperationEffect;
+use crate::app_backend::PluginCommandEffect;
+use crate::commands::ClientCommand;
 use crate::{
-    App, AppMessage, CommandId, CommandSpec, ComposerDraft, NoticeScope, Path, PermissionReplyKind,
-    TIMELINE_EVENT_LIMIT, UiAction, non_empty_owned, parse_pr_command_args, ui_text,
+    App, AppMessage, ComposerDraft, Path, PermissionReplyKind, TIMELINE_EVENT_LIMIT, UiAction,
+    non_empty_owned, parse_pr_command_args, ui_text,
 };
+use agena_api::client_command::ClientCommandAction;
 use agena_tui::main_focus::Focus;

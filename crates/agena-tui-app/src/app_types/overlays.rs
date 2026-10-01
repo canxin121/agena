@@ -358,9 +358,6 @@ pub(crate) enum ConfirmAction {
         adapter_id: String,
         model_id: String,
     },
-    SkillStudioDelete {
-        name: String,
-    },
 }
 
 #[derive(Debug, Clone)]

@@ -1,0 +1,5 @@
+error: unsupported inline tool argument 'concurrency_safe'
+  --> tests/ui/fail/bad_tool_removed_runtime_list.rs:13:57
+   |
+13 |     #[tool(summary = "List spelling.", tags(read_only), concurrency_safe = true)]
+   |                                                         ^^^^^^^^^^^^^^^^

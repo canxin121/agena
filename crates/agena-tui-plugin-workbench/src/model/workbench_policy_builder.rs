@@ -11,8 +11,8 @@ pub fn build_plugin_workbench_plugin(
     let tools = manifest
         .map(|manifest| manifest.tools.clone())
         .unwrap_or_default();
-    let operations = manifest
-        .map(|manifest| manifest.operations.clone())
+    let commands = manifest
+        .map(|manifest| manifest.commands.clone())
         .unwrap_or_default();
     let version = manifest
         .map(|manifest| manifest.version.clone())
@@ -72,7 +72,7 @@ pub fn build_plugin_workbench_plugin(
         version,
         transport: status.kind.clone(),
         tools,
-        operations,
+        commands,
         config_status: PluginConfigStatus {
             kind: PluginConfigStatusKind::Valid,
             label: "Valid".to_owned(),

@@ -107,6 +107,7 @@ pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)
     add!(crate::tool::new_chatgpt_plugin());
     add!(crate::tool::new_gemini_plugin());
     add!(crate::tool::new_claude_plugin());
+    add!(crate::tool::new_commands_plugin());
 
     add!(crate::tool::new_code_plugin());
     add!(crate::tool::new_cron_plugin());
@@ -127,7 +128,6 @@ pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)
     add!(crate::tool::new_session_plugin());
     add!(crate::tool::new_settings_plugin());
     add!(crate::tool::new_shell_plugin());
-    add!(crate::tool::new_skills_plugin());
     add!(crate::tool::new_snapshot_plugin());
     add!(crate::tool::new_tasks_plugin());
     add!(crate::tool::new_tool_api_plugin());
@@ -145,15 +145,14 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
         .collect::<Vec<_>>();
     plugins.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let mut skills = agena_skills::bundled::all()
+    let mut skills = crate::plugins::provided::commands::declared_skills()
         .into_iter()
         .map(|skill| {
-            let content_sha256 = skill.content_hash();
-            let frontmatter = skill.frontmatter;
+            let content_sha256 = skill.content_sha256;
             BundledSkillCapability {
-                name: frontmatter.name,
-                description: frontmatter.description,
-                aliases: frontmatter.aliases,
+                name: skill.name,
+                description: skill.description,
+                aliases: skill.aliases,
                 content_sha256,
                 bundled: true,
             }

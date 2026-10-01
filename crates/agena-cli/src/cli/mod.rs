@@ -181,7 +181,7 @@ pub enum AgenaCommand {
     McpServer(McpServerArgs),
     Permissions(PermissionsArgs),
     Provider(ProviderCommand),
-    Plugin(PluginOperation),
+    Plugin(PluginCommand),
     Resume(ResumeArgs),
     Review(ReviewArgs),
     Sessions(SessionsCommand),
@@ -568,7 +568,7 @@ pub struct MemoryCommand {
 
 #[derive(Debug, Clone, Args)]
 /// Plugin management command.
-pub struct PluginOperation {
+pub struct PluginCommand {
     #[command(subcommand)]
     pub command: PluginSubcommand,
 }

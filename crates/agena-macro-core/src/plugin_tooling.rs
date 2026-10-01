@@ -6,92 +6,132 @@ use syn::{Ident, LitStr, Result};
 use crate::plugin_impl_config::sanitize_generated_ident_label;
 
 use super::{
-    PluginGeneratedToolInput, PluginOperationHandlerPlan, PluginOperationInputPlan,
-    PluginOperationPlan, built_in_normalization_tokens, built_in_post_parse_normalization_tokens,
+    CommandHandlerPlan, CommandInputPlan, PluginCommandPlan, PluginGeneratedToolInput,
+    built_in_normalization_tokens, built_in_post_parse_normalization_tokens,
     built_in_validation_tokens, doc_summary, expand_flatten_shape_schema_normalize_expr,
     expand_generated_input_post_parse_tokens, expand_input_alias_normalize_tokens,
-    expand_nested_shape_schema_normalize_expr, expand_plugin_operation_usage_expr,
+    expand_nested_shape_schema_normalize_expr, expand_plugin_command_usage_expr,
     generated_input_alias_specs, generated_input_flatten_shape_types,
     generated_input_nested_shape_fields, lit_str_from_text, nested_input_shape_spec_from_type,
     tool_spec_schema_metadata_calls,
 };
 
-pub fn expand_plugin_operation_definition(
-    operation: &PluginOperationPlan,
+pub fn expand_plugin_command_definition(
+    command: &PluginCommandPlan,
 ) -> Result<proc_macro2::TokenStream> {
-    let id = &operation.id;
-    let title = &operation.title;
-    let description = &operation.description;
-    let group = &operation.group;
-    let category = &operation.category;
-    let slash = option_lit_str_expr(operation.slash.as_ref());
-    let aliases = &operation.aliases;
-    let usage = expand_plugin_operation_usage_expr(operation)?;
-    let slash_present = operation.slash.is_some();
-    let input = match &operation.handler {
-        PluginOperationHandlerPlan::Method { input, .. } => match input {
-            PluginOperationInputPlan::Typed { ty, .. } => {
+    let id = &command.id;
+    let title = &command.title;
+    let description = &command.description;
+    let group = &command.group;
+    let category = &command.category;
+    let slash = option_lit_str_expr(command.slash.as_ref());
+    let aliases = &command.aliases;
+    let usage = expand_plugin_command_usage_expr(command)?;
+    let examples = expand_plugin_command_examples_expr(command)?;
+    let slash_present = command.slash.is_some();
+    let input = match &command.handler {
+        CommandHandlerPlan::Method { input, .. } => match input {
+            CommandInputPlan::Typed { ty, .. } => {
                 quote! {
                     ::agena_plugin_sdk::macro_support::settings_contract_from_schema(
                         <#ty as ::agena_plugin_sdk::ToolInput>::input_schema(),
-                    ).expect("typed operation input must compile to the constrained settings contract")
+                    ).expect("typed command input must compile to the constrained settings contract")
                 }
             }
-            PluginOperationInputPlan::Generated { input_model, .. } => {
+            CommandInputPlan::Generated { input_model, .. } => {
                 let schema = expand_plugin_tool_input_schema(input_model)?;
                 quote! {
                     ::agena_plugin_sdk::macro_support::settings_contract_from_schema(
                         #schema,
-                    ).expect("generated operation input must compile to the constrained settings contract")
+                    ).expect("generated command input must compile to the constrained settings contract")
                 }
             }
-            PluginOperationInputPlan::None => {
+            CommandInputPlan::None => {
                 quote! { ::agena_plugin_sdk::macro_support::empty_settings_contract() }
             }
-            PluginOperationInputPlan::Raw { .. } => {
+            CommandInputPlan::Raw { .. } => {
                 quote! { ::agena_plugin_sdk::macro_support::json_settings_contract() }
             }
         },
-        PluginOperationHandlerPlan::InvokeTool { input_model, .. } => {
+        CommandHandlerPlan::InvokeTool { input_model, .. } => {
             let schema = expand_plugin_tool_input_schema(input_model)?;
             quote! {
                 ::agena_plugin_sdk::macro_support::settings_contract_from_schema(
                     #schema,
-                ).expect("tool-backed operation input must compile to the constrained settings contract")
+                ).expect("tool-backed command input must compile to the constrained settings contract")
             }
         }
     };
-    let target = match &operation.handler {
-        PluginOperationHandlerPlan::Method { method, .. } => quote! {
-            ::agena_plugin_sdk::manifest::PluginOperationTarget::Method {
+    let target = match &command.handler {
+        CommandHandlerPlan::Method { method, .. } => quote! {
+            ::agena_plugin_sdk::manifest::CommandTarget::Method {
                 handler: stringify!(#method).to_string(),
             }
         },
-        PluginOperationHandlerPlan::InvokeTool { tool, .. } => quote! {
-            ::agena_plugin_sdk::manifest::PluginOperationTarget::Tool {
+        CommandHandlerPlan::InvokeTool { tool, .. } => quote! {
+            ::agena_plugin_sdk::manifest::CommandTarget::Tool {
                 tool: #tool.to_string(),
             }
         },
     };
     Ok(quote! {
-        manifest.operations.push(::agena_plugin_sdk::PluginOperationDefinition {
+        manifest.commands.push(::agena_plugin_sdk::CommandDefinition {
             id: #id.to_string(),
             title: #title.to_string(),
-            description: #description.to_string(),
             group: #group.to_string(),
             category: Some(#category.to_string()),
             slash: #slash,
             aliases: vec![#(#aliases.to_string()),*],
-            usage: #usage,
+            docs: ::agena_plugin_sdk::CommandDocs {
+                summary: ::core::option::Option::Some(#description.to_string()),
+                summary_key: ::core::option::Option::None,
+                help: ::core::option::Option::None,
+                help_key: ::core::option::Option::None,
+                usage: #usage,
+                examples: #examples,
+            },
             input: #input,
-            discoverability: ::agena_plugin_sdk::OperationDiscoverability {
+            discoverability: ::agena_plugin_sdk::CommandDiscoverability {
                 catalog: true,
-                command_palette: true,
+                palette: true,
                 slash: #slash_present,
             },
             target: #target,
         });
     })
+}
+
+/// Schema-derived example invocations, in the same shape the tool side ships
+/// its examples: JSON Schema never leaves the SDK/macro boundary.
+fn expand_plugin_command_examples_expr(
+    command: &PluginCommandPlan,
+) -> Result<proc_macro2::TokenStream> {
+    let Some(schema) = command_input_schema_expr(command)? else {
+        return Ok(quote! { ::std::vec::Vec::new() });
+    };
+    Ok(quote! {
+        ::agena_plugin_sdk::macro_support::schema_example_texts(&#schema)
+    })
+}
+
+fn command_input_schema_expr(
+    command: &PluginCommandPlan,
+) -> Result<Option<proc_macro2::TokenStream>> {
+    let expr = match &command.handler {
+        CommandHandlerPlan::Method { input, .. } => match input {
+            CommandInputPlan::Typed { ty, .. } => quote! {
+                <#ty as ::agena_plugin_sdk::ToolInput>::input_schema()
+            },
+            CommandInputPlan::Generated { input_model, .. } => {
+                expand_plugin_tool_input_schema(input_model)?
+            }
+            CommandInputPlan::None | CommandInputPlan::Raw { .. } => return Ok(None),
+        },
+        CommandHandlerPlan::InvokeTool { input_model, .. } => {
+            expand_plugin_tool_input_schema(input_model)?
+        }
+    };
+    Ok(Some(expr))
 }
 
 pub fn expand_plugin_tool_definition(
@@ -115,7 +155,6 @@ pub fn expand_plugin_tool_definition(
                 "generated tool is missing summary metadata or doc comments",
             )
         })?;
-    let concurrency_safe = spec.concurrency_safe;
     let input_schema_expr = expand_plugin_tool_input_schema(model)?;
     let output_schema_expr = spec
         .output_ty
@@ -139,12 +178,6 @@ pub fn expand_plugin_tool_definition(
         .as_ref()
         .map(|value| quote! { Some(#value.to_string()) })
         .unwrap_or_else(|| quote! { None });
-    let examples_expr = if spec.examples.is_empty() {
-        quote! { ::std::vec::Vec::new() }
-    } else {
-        let examples = &spec.examples;
-        quote! { vec![#(#examples.to_string()),*] }
-    };
     // Tags are declaration-only: only the tags(...) explicitly declared on
     // the tool attribute are used. Nothing is inferred from an input spec.
     let tags_expr = if spec.tags.is_empty() {
@@ -166,9 +199,6 @@ pub fn expand_plugin_tool_definition(
                 input_schema,
                 output_schema: #output_schema_expr,
             },
-            model: ::agena_plugin_sdk::manifest::ToolModelSurface {
-                examples: #examples_expr,
-            },
             docs: ::agena_plugin_sdk::manifest::ToolDocs {
                 before_help: #before_help_expr,
                 after_help: #after_help_expr,
@@ -176,9 +206,7 @@ pub fn expand_plugin_tool_definition(
                 help: #help_expr,
             },
             runtime: ::agena_plugin_sdk::manifest::ToolRuntimePolicy {
-                concurrency_safe: #concurrency_safe,
                 streaming: #streaming_expr,
-                result_policy: ::agena_plugin_sdk::ToolResultPolicy::default(),
             },
             tags: #tags_expr,
         }

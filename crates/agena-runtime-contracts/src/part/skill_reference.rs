@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-/// A message-scoped reference to a Skill explicitly selected by the user.
+/// A message-scoped reference to a command explicitly selected by the user.
 ///
-/// Skill bodies are intentionally not copied into new messages. The model gets
-/// the stable catalog metadata below and can call `agena.skills.get` when it
-/// needs the current Skill body.
+/// Command bodies are intentionally not copied into new messages. The model
+/// gets the stable catalog metadata below and reads the instructions through
+/// the plugin that declared the command when it needs them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SkillReference {
@@ -19,14 +19,14 @@ pub struct SkillReference {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-/// A message part referencing skills.
+/// A message part referencing selected commands.
 pub struct SkillReferencePart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<SkillReference>,
 }
 
 impl SkillReferencePart {
-    /// Render a provider-safe lazy Skill reference block.
+    /// Render a provider-safe lazy reference block.
     pub fn model_context_text(&self) -> String {
         let skills = self
             .skills
@@ -42,30 +42,30 @@ impl SkillReferencePart {
             })
             .collect::<Vec<_>>();
         let payload = serde_json::json!({
-            "semantics": "message_scoped_user_selected_skill_reference",
+            "semantics": "message_scoped_user_selected_command_reference",
             "guidance": [
-                "The user explicitly selected these Skill references for this message.",
-                "Skill bodies are not embedded in this message. Before applying a selected Skill, call `agena.skills.get` with its `name` and use the returned body as task guidance.",
+                "The user explicitly selected these command references for this message.",
+                "Command instructions are not embedded in this message. Before applying a selected command, read its instructions through the plugin named in `source` (`list` then `read` for the `agena.commands` plugin) and use the result as task guidance.",
                 "The reference `content_hash` identifies the catalog version selected by the user; compare it with the tool result when consistency matters."
             ],
-            "skills": skills,
+            "commands": skills,
         });
         let encoded = serde_json::to_string_pretty(&payload)
             .expect("skill-reference payload is always JSON serializable")
             .replace('<', "\\u003c")
             .replace('>', "\\u003e");
         format!(
-            "<agena_skill_references>\n{}\n</agena_skill_references>",
+            "<agena_command_references>\n{}\n</agena_command_references>",
             encoded
         )
     }
 
     pub fn summary(&self) -> String {
         match self.skills.as_slice() {
-            [] => "0 Skill references".to_string(),
-            [skill] => format!("Skill: {}", skill.name),
+            [] => "0 command references".to_string(),
+            [skill] => format!("Command: {}", skill.name),
             skills => format!(
-                "{} Skills: {}",
+                "{} commands: {}",
                 skills.len(),
                 skills
                     .iter()
@@ -95,20 +95,20 @@ mod tests {
         };
 
         let rendered = part.model_context_text();
-        assert!(rendered.contains("message_scoped_user_selected_skill_reference"));
+        assert!(rendered.contains("message_scoped_user_selected_command_reference"));
         assert!(rendered.contains("user explicitly selected"));
-        assert!(rendered.contains("agena.skills.get"));
+        assert!(rendered.contains("read its instructions through the plugin"));
         assert!(rendered.contains("Review changes"));
         assert!(rendered.contains("sha256"));
-        assert_eq!(rendered.matches("</agena_skill_references>").count(), 1);
-        assert_eq!(part.summary(), "Skill: review");
+        assert_eq!(rendered.matches("</agena_command_references>").count(), 1);
+        assert_eq!(part.summary(), "Command: review");
         serde_json::from_value::<SkillReference>(serde_json::json!({
             "name": "review",
             "description": "Review changes",
             "content_hash": "sha256",
             "source": "bundled"
         }))
-        .expect("lazy Skill refs do not require instructions");
+        .expect("lazy command refs do not require instructions");
         assert!(
             serde_json::from_value::<SkillReference>(serde_json::json!({
                 "name": "obsolete-shape",

@@ -263,7 +263,7 @@ setting that filters these tools by their declared tags.
 
 The connector intentionally hides Agena's session/runtime and control-plane
 plugins: interaction, session, plan, tasks, cron, monitor, snapshot, report,
-settings, memory, skills, tools discovery, and the nested `agena.mcp` bridge.
+settings, memory, commands, tools discovery, and the nested `agena.mcp` bridge.
 Provider/developer adapters (ChatGPT/Gemini/Claude/OpenAI/schema-lab) and the
 managed `web.browser_*` lifecycle are hidden as well. These capabilities either
 depend on Agena session/UI semantics or would expose internal agent/control

@@ -15,6 +15,10 @@
 //! - `commands`: Side-effectful operations the client can invoke
 //!   (`Command::SubmitMessage`, `Command::CancelRun`, …). One enum, exhaustive,
 //!   `#[serde(tag = "method", content = "params")]`.
+//! - `client_command`: [`client_command::ClientCommandAction`] — the closed
+//!   vocabulary a rendering client draws its locally executed command actions
+//!   from. The declarations themselves are published by the server's command
+//!   catalog; this only names what a client can run.
 //! - `queries`: Read-only requests (list sessions, fetch message, etc.).
 //! - `notifications`: Server → client part patches and ephemeral runtime
 //!   signals plus subscription lifecycle notifications.
@@ -30,6 +34,7 @@
 //! - Breaking changes replace the current contract directly; no older
 //!   protocol generations or downgrade behavior are retained.
 
+pub mod client_command;
 pub mod commands;
 pub mod error;
 pub mod live;

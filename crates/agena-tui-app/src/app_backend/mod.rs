@@ -35,6 +35,6 @@ pub(crate) use self::transport::{
 pub(crate) use self::inspector::InspectorRow;
 pub(crate) use self::live_events::LiveEvent;
 pub(crate) use self::permission_studio::SessionPermissionStudioState;
-pub(crate) use self::plugin_effects::PluginOperationEffect;
+pub(crate) use self::plugin_effects::PluginCommandEffect;
 pub(crate) use self::session_refresh::SessionRefresh;
 pub(crate) use self::timeline::SessionTimelineEntry;

@@ -162,9 +162,8 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, execute, task),
-        summary = "Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach Skill names in `skills` so the child session applies them as task guidance.",
-        help = "Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.",
-        concurrency_safe
+        summary = "Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach command names in `skills` so the child session applies their instructions as task guidance.",
+        help = "Reach for this tool when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to command names, slash spellings or aliases (for example a read-only review command for a review task, or an explore command for an exploration task); the child session receives the instructions those commands name and should follow them. Unknown names are rejected before the subtask starts. Use the `agena.commands` plugin's `list` tool to discover what this workspace offers. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it."
     )]
     async fn run(
         &self,
@@ -244,8 +243,7 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, query, discovery, read_only, task),
-        summary = "List delegated background tasks.",
-        concurrency_safe
+        summary = "List delegated background tasks."
     )]
     async fn list(
         &self,
@@ -277,8 +275,7 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, query, read_only, task),
-        summary = "Get delegated task metadata and terminal result.",
-        concurrency_safe
+        summary = "Get delegated task metadata and terminal result."
     )]
     async fn get(
         &self,
@@ -298,8 +295,7 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, query, read_only, task),
-        summary = "Read incremental delegated-task transcript output after a cursor.",
-        concurrency_safe
+        summary = "Read incremental delegated-task transcript output after a cursor."
     )]
     async fn output(
         &self,
@@ -362,8 +358,7 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, mutate, task),
-        summary = "Cancel a running delegated task and its child execution.",
-        concurrency_safe
+        summary = "Cancel a running delegated task and its child execution."
     )]
     async fn cancel(
         &self,
@@ -422,8 +417,7 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, mutate, task),
-        summary = "Send additional guidance to a running delegated task.",
-        concurrency_safe
+        summary = "Send additional guidance to a running delegated task."
     )]
     async fn message(
         &self,
@@ -457,8 +451,7 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, mutate, task),
-        summary = "Resume a terminal delegated task with a follow-up prompt.",
-        concurrency_safe
+        summary = "Resume a terminal delegated task with a follow-up prompt."
     )]
     async fn followup(
         &self,
@@ -921,22 +914,6 @@ mod tests {
             assert!(
                 manifest.tools.iter().any(|tool| tool.name == name),
                 "missing task lifecycle tool `{name}`"
-            );
-        }
-        // Delegated task tools must be flagged concurrency-safe so the
-        // runtime fans out multiple tasks.run/followup calls from one
-        // turn instead of serializing them (one child session at a time).
-        for name in [
-            "run", "list", "get", "output", "cancel", "message", "followup",
-        ] {
-            let tool = manifest
-                .tools
-                .iter()
-                .find(|tool| tool.name == name)
-                .expect("task tool");
-            assert!(
-                tool.runtime.concurrency_safe,
-                "task tool `{name}` must be concurrency-safe so parallel delegation is not serialized"
             );
         }
     }

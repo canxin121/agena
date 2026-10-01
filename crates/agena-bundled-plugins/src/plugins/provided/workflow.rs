@@ -521,7 +521,6 @@ mod tests {
                 plugin_id: None,
                 summary: None,
                 help: None,
-                examples: Vec::new(),
                 input_schema: None,
             },
             ToolDescriptor {
@@ -529,7 +528,6 @@ mod tests {
                 plugin_id: None,
                 summary: None,
                 help: None,
-                examples: Vec::new(),
                 input_schema: None,
             },
         ];
@@ -565,7 +563,6 @@ mod tests {
             plugin_id: None,
             summary: None,
             help: None,
-            examples: Vec::new(),
             input_schema: None,
         }];
 
@@ -590,7 +587,6 @@ mod tests {
                 plugin_id: None,
                 summary: Some("Run one shell process.".to_string()),
                 help: None,
-                examples: Vec::new(),
                 input_schema: None,
             },
             ToolDescriptor {
@@ -598,7 +594,6 @@ mod tests {
                 plugin_id: None,
                 summary: Some("Read process logs.".to_string()),
                 help: None,
-                examples: Vec::new(),
                 input_schema: None,
             },
         ];
@@ -686,7 +681,6 @@ mod tests {
             plugin_id: None,
             summary: Some("Run one shell process.".to_string()),
             help: None,
-            examples: Vec::new(),
             input_schema: Some(run.input_schema()),
         };
 

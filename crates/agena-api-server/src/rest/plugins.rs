@@ -118,17 +118,17 @@ pub async fn update_plugin_settings(
     Ok(Json(response))
 }
 
-pub async fn run_plugin_operation(
+pub async fn run_plugin_command(
     State(state): State<AppState>,
-    Path((plugin_id, operation_id)): Path<(String, String)>,
-    Json(request): Json<PluginOperationRequestContext>,
+    Path((plugin_id, command_id)): Path<(String, String)>,
+    Json(request): Json<CommandRequestContext>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let workspace_root = operation_workspace_root(&state, request.session_id).await?;
+    let workspace_root = command_workspace_root(&state, request.session_id).await?;
     let result = state
         .application()
-        .invoke_plugin_operation(
+        .invoke_plugin_command(
             plugin_id.as_str(),
-            operation_id.as_str(),
+            command_id.as_str(),
             request.input,
             request.session_id,
             workspace_root,
@@ -139,12 +139,12 @@ pub async fn run_plugin_operation(
         .map_err(server_error_from_application)?;
     Ok(Json(serde_json::json!({
         "plugin_id": plugin_id,
-        "operation_id": operation_id,
+        "command_id": command_id,
         "result": result,
     })))
 }
 
-async fn operation_workspace_root(
+async fn command_workspace_root(
     state: &AppState,
     session_id: Option<i64>,
 ) -> Result<Option<String>, ServerError> {
@@ -203,8 +203,8 @@ pub async fn list_plugin_logs(
 }
 
 use super::{
-    AppState, AxumQuery, Deserialize, IntoResponse, Json, Path, PluginInspectResponse,
-    PluginLogListQuery, PluginLogListResponse, PluginOperationRequestContext,
-    PluginSettingsUpdateRequest, PluginSurfaceCatalogResponse, PluginToolInvokeRequest,
-    ServerError, State, items_json, server_error_from_application,
+    AppState, AxumQuery, CommandRequestContext, Deserialize, IntoResponse, Json, Path,
+    PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginSettingsUpdateRequest,
+    PluginSurfaceCatalogResponse, PluginToolInvokeRequest, ServerError, State, items_json,
+    server_error_from_application,
 };

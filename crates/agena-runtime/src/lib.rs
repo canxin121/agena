@@ -208,7 +208,7 @@ pub use agena_runtime_session::{
     SessionProjectedRun, SessionProjectedRunHeader, SessionQueryError, SessionQueryService,
 };
 pub use agena_runtime_session::{
-    SessionPluginOperationError, SessionPluginOperationRequest, SessionPluginOperationService,
+    SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
 };
 pub use agena_runtime_session::{
     SessionToolExecutionError, SessionToolExecutionOutcome, SessionToolExecutionService,
@@ -225,7 +225,6 @@ pub(crate) use agena_runtime_tools::list_managed_snapshots;
 pub(crate) use agena_runtime_tools::prune_stale_managed_snapshots;
 pub(crate) use agena_runtime_tools::snapshot_backend_capabilities;
 pub(crate) use agena_runtime_tools::snapshot_rift_binary;
-pub(crate) use agena_runtime_tools::truncate_tool_output_text;
 pub(crate) use agena_runtime_tools::{
     MonitorError, MonitorListener, MonitorRead, MonitorReadParams, MonitorRegistry, MonitorService,
     MonitorStart, MonitorStartParams, MonitorStopOutcome, default_monitor_registry,
@@ -341,8 +340,8 @@ pub use runtime_draft_authentication_service::{
     start_openai_draft_auth_device,
 };
 pub use runtime_status_service::{
-    RuntimeLspServerStatus, RuntimeLspStatus, RuntimeMcpCredentialConflict, RuntimeMcpOAuthHealth,
-    RuntimeMcpServerStatus, RuntimeMcpStatus, RuntimeSkillStatus, RuntimeSkillsStatus,
+    RuntimeCommandStatus, RuntimeCommandsStatus, RuntimeLspServerStatus, RuntimeLspStatus,
+    RuntimeMcpCredentialConflict, RuntimeMcpOAuthHealth, RuntimeMcpServerStatus, RuntimeMcpStatus,
     RuntimeStatusService, RuntimeStatusSnapshot,
 };
 pub use runtime_tool_execution_service::{

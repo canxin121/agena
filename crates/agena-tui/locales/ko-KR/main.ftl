@@ -455,9 +455,9 @@ settings-activity-kind-resource-label = 지원하다
 
 settings-activity-kind-resource-description = 첨부 파일 및 기타 리소스 내용.
 
-settings-activity-kind-skill_reference-label = 기술 참조
+settings-activity-kind-skill_reference-label = 명령 참조
 
-settings-activity-kind-skill_reference-description = 답변에 사용되는 기술에 대한 참조.
+settings-activity-kind-skill_reference-description = 답변에서 선택한 명령에 대한 참조.
 
 settings-activity-kind-interaction-label = 회사연혁
 
@@ -545,7 +545,6 @@ settings-field-parse-float = {$field}는 숫자값을 기대합니다.
 
 settings-choice-adapter-fallback = 어댑터
 
-
 settings-plugin-workbench-label = 플러그인 설정 워크벤치
 
 settings-mcp-server-label = Agena MCP 서버
@@ -579,9 +578,6 @@ settings-mcp-anonymous-access-read-only = permission-contract 읽기 전용 도�
 settings-mcp-registration-label = 이름 *
 
 settings-mcp-pkce-label = 사이트맵
-
-
-
 
 settings-mcp-public-url-label = 공개 MCP URL
 
@@ -848,7 +844,6 @@ overlay-provider-studio-catalog-loading = 카탈로그 일치 항목 찾는 중�
 
 overlay-provider-studio-catalog-no-match = 카탈로그 일치 없음 · 모델 설정에서 선택
 
-
 overlay-provider-studio-detail = 제품 정보
 
 overlay-provider-studio-adapter-models-empty = 어댑터를 선택한 다음 라이브 모델을 나열
@@ -1021,7 +1016,6 @@ settings-mcp-auth-mode-updated = Agena MCP 인증 모드 설정 {$mode}
 
 settings-mcp-anonymous-access-updated = Agena MCP 익명 도구 액세스 설정 {$policy}
 
-
 settings-mcp-oauth-password-cleared = 나이나 MCP OAuth 암호가 삭제됨
 
 permission-studio-command-pattern-title = {$tool_name} 명령 패턴
@@ -1188,7 +1182,7 @@ settings-field-tui-graphics-description = 지원되는 경우 Kitty, Sixel 또�
 settings-field-activity-default-expanded-description = 종류별 재정의가 없는 활동의 기본 확장 상태입니다. 추론의 종류가 명시적으로 설정되지 않는 한 추론은 확장된 상태로 유지됩니다.
 settings-activity-kind-reasoning-description = 모델의 전체 사고 흔적. 기본값은 확장이며 종류별로 축소할 수 있습니다.
 runtime-setting-choice-supported-model = 현재 모델에서 지원됨
-settings-plugin-workbench-detail = 런타임 상태, 구성, 도구, 작업, 로그 및 진단을 위한 구조화된 플러그인 워크벤치를 엽니다.
+settings-plugin-workbench-detail = 런타임 상태, 구성, 도구, 명령, 로그 및 진단을 위한 구조화된 플러그인 워크벤치를 엽니다.
 settings-mcp-server-detail = Agena의 라이브 HTTP MCP 표면을 전환합니다. 연결된 Agena 서버 프로세스는 실제 런타임으로 유지됩니다.
 settings-mcp-auth-detail = 인증 없음, 전체 OAuth 및 ChatGPT 혼합 인증을 순환합니다. 혼합 모드는 초기화 및 도구 검색을 공개로 유지합니다. 익명 액세스가 명시적으로 활성화되지 않는 한 도구 호출은 OAuth로 보호된 상태로 유지됩니다.
 settings-mcp-anonymous-access-none-detail = 안전한 기본값: 도구 호출은 익명이 아닙니다. ChatGPT는 로그인하기 전에 카탈로그를 초기화하고 검색할 수 있습니다.
@@ -1240,7 +1234,6 @@ value-open = 열다
 composer-prompt-history-title = 프롬프트 내역
 overlay-commands-title = 명령 팔레트
 overlay-commands-prompt = 검색 활동; 텍스트가 필요한 명령은 작성기에서 계속됩니다.
-overlay-skill-studio-title = 기술 관리
 overlay-lineage-title = 지점 연혁 [#{ $session }]
 overlay-lineage-prompt = 현재 분기 트리를 탐색하고 상위, 형제 또는 하위 세션으로 이동합니다.
 overlay-rewind-title = 세션 되감기 [#{ $session }]
@@ -1577,7 +1570,6 @@ terminal-diagnostics-confidence-strong = 강한
 terminal-diagnostics-confidence-compatibility = 호환성만
 terminal-diagnostics-confidence-unknown = 알 수 없음
 
-
 # Plugin Workbench i18n completion
 plugin-workbench-action-diff = 차이
 plugin-workbench-action-refresh = 새로 고침
@@ -1596,7 +1588,7 @@ plugin-workbench-column-arguments = 인수
 plugin-workbench-column-before = 변경 전
 plugin-workbench-column-category = 범주
 plugin-workbench-column-change = 변경
-plugin-workbench-column-operation = 작업
+plugin-workbench-column-command = 명령
 plugin-workbench-column-description = 설명
 plugin-workbench-column-field = 필드
 plugin-workbench-column-inputs = 입력
@@ -1609,7 +1601,7 @@ plugin-workbench-column-summary = 요약
 plugin-workbench-column-tool = 도구
 plugin-workbench-column-version = 버전
 plugin-workbench-column-visible-tool = 표시 도구
-plugin-workbench-operation-arguments = 인수: {$operation}
+plugin-workbench-command-arguments = 인수: {$command}
 plugin-workbench-config = 설정
 plugin-workbench-config-action = 작업
 plugin-workbench-config-choose-shape = 형태 선택
@@ -1635,7 +1627,7 @@ plugin-workbench-detail-footer = Tab/Shift+Tab 섹션 · 위/아래 스크롤 ·
 plugin-workbench-detail-tools-footer = Tab/Shift+Tab 섹션 · 위/아래 선택 · Enter 설정 및 실행 · Esc 뒤로
 plugin-workbench-filter-all = 전체
 plugin-workbench-filter-other = 기타
-plugin-workbench-header-summary = 도구: {$tools}        작업: {$operations}        설정: {$config}
+plugin-workbench-header-summary = 도구: {$tools}        명령: {$commands}        설정: {$config}
 plugin-workbench-input-preview = 입력 미리보기: {$tool}
 plugin-workbench-last-result-failed = 최근 결과 · {$tool} · 실패
 plugin-workbench-last-result-success = 최근 결과 · {$tool} · 성공
@@ -1644,7 +1636,7 @@ plugin-workbench-list-summary = 플러그인 검색… {$query}        전송: {
 plugin-workbench-loading-actions = 작업 불러오는 중…
 plugin-workbench-loading-choices = 선택 항목 불러오는 중…
 plugin-workbench-no-changes = 변경 없음
-plugin-workbench-no-operations = 작업이 없습니다.
+plugin-workbench-no-commands = 명령이 없습니다.
 plugin-workbench-no-config-section = 설정 섹션이 없습니다.
 plugin-workbench-no-editable-rows = 편집 가능한 행이 없습니다.
 plugin-workbench-no-filter-matches = 현재 필터와 일치하는 플러그인이 없습니다.
@@ -1674,7 +1666,7 @@ plugin-workbench-status-valid = 유효함
 plugin-workbench-status-warning = 경고
 plugin-workbench-summary = 검색: {$query} · 전송 {$transport} · 설정 {$config} · {$shown}/{$total} 표시
 plugin-workbench-tab-capabilities = 기능
-plugin-workbench-tab-operations = 작업
+plugin-workbench-tab-commands = 명령
 plugin-workbench-tab-config = 설정
 plugin-workbench-tab-diagnostics = 진단
 plugin-workbench-tab-logs = 로그
@@ -1686,7 +1678,6 @@ plugin-workbench-tools-help = 위/아래로 도구를 선택합니다. Enter로 
 plugin-workbench-transport = 전송
 plugin-workbench-trust-level = 신뢰 수준: {$level}
 plugin-workbench-unavailable = 사용할 수 없음
-
 
 # Plugin Workbench structured editor i18n completion
 plugin-workbench-editor-also-matches = 다음과도 일치: {$matches}

@@ -1,10 +1,10 @@
 use agena_plugin_sdk::prelude::*;
 
 mod plugin_macro_manifest_basic;
+mod plugin_macro_manifest_commands;
 mod plugin_macro_manifest_constraints;
 mod plugin_macro_manifest_dispatch;
 mod plugin_macro_manifest_impl;
-mod plugin_macro_manifest_operations;
 mod plugin_macro_manifest_shapes_a;
 mod plugin_macro_manifest_shapes_b;
 pub(crate) use plugin_macro_manifest_impl::*;
@@ -878,12 +878,12 @@ fn tool_by_name<'a>(manifest: &'a PluginManifest, name: &str) -> &'a ToolDefinit
         .unwrap_or_else(|| panic!("{name} tool should be generated"))
 }
 
-fn operation_by_id<'a>(manifest: &'a PluginManifest, id: &str) -> &'a PluginOperationDefinition {
+fn command_by_id<'a>(manifest: &'a PluginManifest, id: &str) -> &'a CommandDefinition {
     manifest
-        .operations
+        .commands
         .iter()
-        .find(|operation| operation.id == id)
-        .unwrap_or_else(|| panic!("{id} operation should be generated"))
+        .find(|command| command.id == id)
+        .unwrap_or_else(|| panic!("{id} command should be generated"))
 }
 
 fn schema_relation_labels(schema: &Value) -> Vec<String> {

@@ -136,8 +136,9 @@ pub struct SkillReferenceActivity {
 }
 
 impl SkillReferenceActivity {
-    /// Safe, message-scoped lazy reference projection. The Skill body is read
-    /// on demand through `agena.skills.get`, never embedded in this message.
+    /// Safe, message-scoped lazy reference projection. The command's
+    /// instructions are read on demand through the plugin named in `source`,
+    /// never embedded in this message.
     pub fn model_context_text(&self) -> String {
         let skill = serde_json::json!({
             "name": self.name,
@@ -147,19 +148,19 @@ impl SkillReferenceActivity {
             "aliases": self.aliases,
         });
         let payload = serde_json::json!({
-            "semantics": "turn_scoped_user_selected_skill_reference",
+            "semantics": "turn_scoped_user_selected_command_reference",
             "guidance": [
-                "The user explicitly selected this Skill for this turn.",
-                "The Skill body is not embedded. Call `agena.skills.get` with this Skill's `name` before applying it, then use the returned body as task guidance.",
+                "The user explicitly selected this command for this turn.",
+                "The instructions are not embedded. Read them through the plugin named in `source` before applying the command, then use the result as task guidance.",
                 "The reference does not grant permissions or select a model; `content_hash` records the selected catalog version."
             ],
-            "skill": skill,
+            "command": skill,
         });
         let encoded = serde_json::to_string_pretty(&payload)
-            .expect("Skill reference is always JSON serializable")
+            .expect("command reference is always JSON serializable")
             .replace('<', "\\u003c")
             .replace('>', "\\u003e");
-        format!("<agena_skill_reference>\n{encoded}\n</agena_skill_reference>")
+        format!("<agena_command_reference>\n{encoded}\n</agena_command_reference>")
     }
 }
 

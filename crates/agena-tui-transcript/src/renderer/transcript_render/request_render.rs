@@ -146,7 +146,7 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
             reference
                 .skills
                 .first()
-                .map(|skill| format!("Skill: {}", skill.name))
+                .map(|command| format!("Command: {}", command.name))
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Fold { .. }) => None,
     }

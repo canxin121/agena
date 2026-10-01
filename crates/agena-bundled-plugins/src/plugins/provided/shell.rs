@@ -109,8 +109,7 @@ impl ShellPlugin {
 
     #[tool(
         tags(query, discovery, shell, read_only),
-        summary = "List active background processes.",
-        concurrency_safe
+        summary = "List active background processes."
     )]
     async fn invoke_list(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
@@ -123,8 +122,7 @@ impl ShellPlugin {
 
     #[tool(
         tags(query, shell, read_only),
-        summary = "Read background process logs.",
-        concurrency_safe
+        summary = "Read background process logs."
     )]
     async fn invoke_logs(
         &self,

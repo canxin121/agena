@@ -11,12 +11,12 @@ pub use super::manifest_support::normalize_tool_tag_name;
 use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
 pub use agena_domain::{AccessKind, ActivityKind, PathKind};
 pub use agena_plugin_contracts::{
-    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, OperationDiscoverability, PathInputKind,
-    PluginHostEffect, PluginOperationDefinition, PluginOperationDiagnostic,
-    PluginOperationInvokeInput, PluginOperationResult, PluginOperationStatus,
-    PluginOperationTarget, PluginServiceDeclarations, PluginServiceExport, PluginServiceImport,
-    PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod, SettingsConstraints,
-    SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption, SettingsVariant,
+    CommandDefinition, CommandDiagnostic, CommandDiscoverability, CommandDocs, CommandHostEffect,
+    CommandInvokeInput, CommandResult, CommandStatus, CommandTarget, MAX_JSON_ESCAPE_BYTES,
+    MAX_JSON_ESCAPE_DEPTH, PathInputKind, PluginServiceDeclarations, PluginServiceExport,
+    PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
+    SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
+    SettingsVariant,
 };
 
 /// Explicit marker for plugins that intentionally expose an empty editable
@@ -50,7 +50,7 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub operations: Vec<PluginOperationDefinition>,
+    pub commands: Vec<CommandDefinition>,
     /// Declared service seams. The host resolves imports before initialization
     /// and is the only component allowed to bind a consumer to a provider.
     #[serde(default, skip_serializing_if = "PluginServiceDeclarations::is_empty")]
@@ -71,7 +71,7 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<PluginSkillDefinition>,
     /// Neutral plugin surface contributions. Operations are kept in the
-    /// manifest's `operations` collection; this field is terminal-only
+    /// manifest's `commands` collection; this field is terminal-only
     /// presentation and never defines configuration or executable behavior.
     #[serde(default, skip_serializing_if = "PluginSurfaceContributions::is_empty")]
     pub surface: PluginSurfaceContributions,
@@ -300,8 +300,6 @@ pub struct ToolDefinition {
     #[serde(default)]
     pub contract: ToolContract,
     #[serde(default)]
-    pub model: ToolModelSurface,
-    #[serde(default)]
     pub docs: ToolDocs,
     #[serde(default)]
     pub runtime: ToolRuntimePolicy,
@@ -331,13 +329,6 @@ pub struct ToolContract {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-/// Model-facing surface of a tool (examples).
-pub struct ToolModelSurface {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub examples: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 /// Documentation of a tool.
 pub struct ToolDocs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -352,13 +343,15 @@ pub struct ToolDocs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Runtime behavior policy of a tool.
+///
+/// Nothing about a tool's output belongs here. Concurrency is not declared:
+/// the host fans every actionable tool in a model batch out at once, and each
+/// tool is responsible for its own safety under concurrent execution. Output
+/// length is not declared either: the session bounds every model-facing tool
+/// result in one place.
 pub struct ToolRuntimePolicy {
     #[serde(default)]
-    pub concurrency_safe: bool,
-    #[serde(default)]
     pub streaming: ToolStreamingMode,
-    #[serde(default, skip_serializing_if = "ToolResultPolicy::is_default")]
-    pub result_policy: ToolResultPolicy,
 }
 
 impl Default for ToolContract {
@@ -373,9 +366,7 @@ impl Default for ToolContract {
 impl Default for ToolRuntimePolicy {
     fn default() -> Self {
         Self {
-            concurrency_safe: false,
             streaming: ToolStreamingMode::Buffered,
-            result_policy: ToolResultPolicy::default(),
         }
     }
 }
@@ -508,10 +499,6 @@ impl ToolDefinition {
             .filter(|value| !value.is_empty())
     }
 
-    pub fn example_texts(&self) -> &[String] {
-        self.model.examples.as_slice()
-    }
-
     pub fn input_schema(&self) -> serde_json::Value {
         let schema = normalize_schema_json(self.contract.input_schema.clone());
         if schema.is_null() {
@@ -552,43 +539,6 @@ pub enum ToolStreamingMode {
     #[default]
     Buffered,
     Streaming,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-/// Policy for rendering tool results.
-pub struct ToolResultPolicy {
-    /// Maximum text characters sent back to the model. The host truncates
-    /// `ToolInvokeOutput.output_text` after `tool.execute.after` hooks.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_model_chars: Option<usize>,
-    /// Maximum preview lines rendered in compact UI surfaces.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview_lines: Option<usize>,
-    /// Persist full text output to the workspace result store when the model
-    /// output is truncated by this policy.
-    #[serde(default)]
-    pub persist_large_output: bool,
-    #[serde(default)]
-    pub ui_render_kind: ToolResultRenderKind,
-}
-
-impl ToolResultPolicy {
-    pub fn is_default(&self) -> bool {
-        self == &Self::default()
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// How a tool result is rendered.
-pub enum ToolResultRenderKind {
-    #[default]
-    Text,
-    Markdown,
-    Json,
-    Log,
-    Diff,
-    Hidden,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -980,7 +930,7 @@ impl PluginManifest {
             transports: Vec::new(),
             hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
             tools: Vec::new(),
-            operations: Vec::new(),
+            commands: Vec::new(),
             services: PluginServiceDeclarations::default(),
             activity_kinds: Vec::new(),
             tags: Vec::new(),

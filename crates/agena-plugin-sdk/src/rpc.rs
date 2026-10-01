@@ -145,7 +145,7 @@ pub mod method {
     pub const HOOK_TOOL_RENDER: &str = "hooks/tool.render";
     pub const HOOK_TOOL_INVOKE: &str = "hooks/tool.invoke";
     pub const HOOK_TOOL_INVOKE_STREAM: &str = "hooks/tool.invoke.stream";
-    pub const OPERATION_INVOKE: &str = "operation/invoke";
+    pub const COMMAND_INVOKE: &str = "command/invoke";
     pub const SERVICE_INVOKE: &str = "service/invoke";
     /// Notification: plugin → host, one chunk in an open stream.
     pub const TOOL_STREAM_CHUNK: &str = "tool.stream.chunk";
@@ -202,6 +202,10 @@ pub mod method {
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
     pub const HOST_MONITOR_READ: &str = "host/monitor.read";
     pub const HOST_MONITOR_STOP: &str = "host/monitor.stop";
+    pub const HOST_COMMAND_REGISTRY_REGISTER: &str = "host/command.registry.register";
+    pub const HOST_COMMAND_REGISTRY_UPDATE: &str = "host/command.registry.update";
+    pub const HOST_COMMAND_REGISTRY_REMOVE: &str = "host/command.registry.remove";
+    pub const HOST_COMMAND_REGISTRY_LIST: &str = "host/command.registry.list";
     pub const HOST_TOOL_REGISTRY_REGISTER: &str = "host/tool.registry.register";
     pub const HOST_TOOL_REGISTRY_UPDATE: &str = "host/tool.registry.update";
     pub const HOST_TOOL_REGISTRY_REMOVE: &str = "host/tool.registry.remove";

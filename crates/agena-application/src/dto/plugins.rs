@@ -37,8 +37,8 @@ pub struct PermissionToolCatalogResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-/// Context of a user-driven plugin operation/tool request.
-pub struct PluginOperationRequestContext {
+/// Context of a user-driven plugin command/tool request.
+pub struct CommandRequestContext {
     #[serde(default = "empty_object")]
     pub input: serde_json::Value,
     #[serde(default)]
@@ -58,7 +58,7 @@ pub struct PluginToolInvokeRequest {
     #[serde(default)]
     pub plugin_id: Option<String>,
     #[serde(flatten)]
-    pub context: PluginOperationRequestContext,
+    pub context: CommandRequestContext,
 }
 
 #[derive(Debug, Clone, Serialize)]

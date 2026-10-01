@@ -80,10 +80,10 @@ pub(crate) fn activity_presentation(
             },
             None,
         ),
-        ActivityPayload::SkillReference(skill) => (
+        ActivityPayload::SkillReference(command) => (
             "skill_reference".to_owned(),
-            format!("Skill: {}", skill.name),
-            skill.description.clone(),
+            format!("Command: {}", command.name),
+            command.description.clone(),
             None,
         ),
         ActivityPayload::TextArtifact(artifact) => (

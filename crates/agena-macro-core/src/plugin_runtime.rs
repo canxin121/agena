@@ -8,9 +8,9 @@ use crate::plugin_impl_config::{PluginImplConfig, plugin_id_label};
 use crate::plugin_tooling::expand_plugin_tool_parse_input;
 
 use super::{
-    PluginCallInput, PluginContextArg, PluginOperationHandlerPlan, PluginOperationInputPlan,
-    PluginOperationPlan, PluginServiceInputPlan, PluginServicePlan, PluginServiceTargetPlan,
-    PluginToolOutputPlan, PluginToolPlan,
+    CommandHandlerPlan, CommandInputPlan, PluginCallInput, PluginCommandPlan, PluginContextArg,
+    PluginServiceInputPlan, PluginServicePlan, PluginServiceTargetPlan, PluginToolOutputPlan,
+    PluginToolPlan,
 };
 
 pub fn expand_plugin_layer_tool_invoke(
@@ -164,27 +164,27 @@ fn expand_plugin_layer_service_invoke_branch(
     }
 }
 
-pub fn expand_plugin_layer_operation_invoke(
+pub fn expand_plugin_layer_command_invoke(
     _self_ty: &Type,
-    operations: &[PluginOperationPlan],
+    commands: &[PluginCommandPlan],
 ) -> Result<proc_macro2::TokenStream> {
-    let branches = operations
+    let branches = commands
         .iter()
-        .map(expand_plugin_layer_operation_invoke_branch)
+        .map(expand_plugin_layer_command_invoke_branch)
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
-        async fn operation_invoke(
+        async fn command_invoke(
             &self,
-            input: ::agena_plugin_sdk::PluginOperationInvokeInput,
-        ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::PluginOperationResult> {
-            let __operation_id = input.operation_id.clone();
-            let __context = ::agena_plugin_sdk::PluginOperationContext::from_input(&input);
-            match __operation_id.as_str() {
+            input: ::agena_plugin_sdk::CommandInvokeInput,
+        ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::CommandResult> {
+            let __command_id = input.command_id.clone();
+            let __context = ::agena_plugin_sdk::PluginCommandContext::from_input(&input);
+            match __command_id.as_str() {
                 #(#branches,)*
                 _ => Err(::agena_plugin_sdk::PluginError::not_implemented(format!(
-                    "operation_invoke({})",
-                    __operation_id
+                    "command_invoke({})",
+                    __command_id
                 ))),
             }
         }
@@ -326,69 +326,69 @@ fn expand_plugin_layer_tool_invoke_branch(
     })
 }
 
-fn expand_plugin_layer_operation_invoke_branch(
-    operation: &PluginOperationPlan,
+fn expand_plugin_layer_command_invoke_branch(
+    command: &PluginCommandPlan,
 ) -> Result<proc_macro2::TokenStream> {
-    let id = &operation.id;
-    let body = match &operation.handler {
-        PluginOperationHandlerPlan::Method {
+    let id = &command.id;
+    let body = match &command.handler {
+        CommandHandlerPlan::Method {
             method,
-            input: operation_input,
+            input: command_input,
             context,
             is_async,
-        } => match operation_input {
-            PluginOperationInputPlan::None => {
-                let call_args = plugin_layer_operation_call_args(*context, Vec::new());
+        } => match command_input {
+            CommandInputPlan::None => {
+                let call_args = plugin_layer_command_call_args(*context, Vec::new());
                 let call = plugin_layer_method_call(method, *is_async, &call_args);
                 quote! {
-                    ::agena_plugin_sdk::into_plugin_operation_result(#call)
+                    ::agena_plugin_sdk::into_command_result(#call)
                 }
             }
-            PluginOperationInputPlan::Raw { by_ref, .. } => {
+            CommandInputPlan::Raw { by_ref, .. } => {
                 let arg = if *by_ref {
                     quote! { &input }
                 } else {
                     quote! { input.clone() }
                 };
-                let call_args = plugin_layer_operation_call_args(*context, vec![arg]);
+                let call_args = plugin_layer_command_call_args(*context, vec![arg]);
                 let call = plugin_layer_method_call(method, *is_async, &call_args);
                 quote! {
-                    ::agena_plugin_sdk::into_plugin_operation_result(#call)
+                    ::agena_plugin_sdk::into_command_result(#call)
                 }
             }
-            PluginOperationInputPlan::Typed { ty, by_ref } => {
-                let parse = expand_plugin_operation_parse_input(ty);
+            CommandInputPlan::Typed { ty, by_ref } => {
+                let parse = expand_plugin_command_parse_input(ty);
                 let arg = if *by_ref {
                     quote! { &__parsed }
                 } else {
                     quote! { __parsed }
                 };
-                let call_args = plugin_layer_operation_call_args(*context, vec![arg]);
+                let call_args = plugin_layer_command_call_args(*context, vec![arg]);
                 let call = plugin_layer_method_call(method, *is_async, &call_args);
                 quote! {
                     let __parsed = #parse;
-                    ::agena_plugin_sdk::into_plugin_operation_result(#call)
+                    ::agena_plugin_sdk::into_command_result(#call)
                 }
             }
-            PluginOperationInputPlan::Generated { input_model, input } => {
+            CommandInputPlan::Generated { input_model, input } => {
                 let parse = expand_plugin_tool_parse_input(
                     input_model,
                     quote! { input.input.clone() },
                     method,
                 )?;
                 let call_args =
-                    plugin_layer_operation_call_args(*context, plugin_call_input_args(input));
+                    plugin_layer_command_call_args(*context, plugin_call_input_args(input));
                 let call = plugin_layer_method_call(method, *is_async, &call_args);
                 quote! {
                     let __parsed = #parse;
-                    ::agena_plugin_sdk::into_plugin_operation_result(#call)
+                    ::agena_plugin_sdk::into_command_result(#call)
                 }
             }
         },
-        PluginOperationHandlerPlan::InvokeTool { .. } => {
+        CommandHandlerPlan::InvokeTool { .. } => {
             quote! {
-                Ok(::agena_plugin_sdk::PluginOperationResult::unavailable(
-                    "tool-backed operations are executed by the host runtime",
+                Ok(::agena_plugin_sdk::CommandResult::unavailable(
+                    "tool-backed commands are executed by the host runtime",
                 ))
             }
         }
@@ -400,7 +400,7 @@ fn expand_plugin_layer_operation_invoke_branch(
     })
 }
 
-fn expand_plugin_operation_parse_input(ty: &Type) -> proc_macro2::TokenStream {
+fn expand_plugin_command_parse_input(ty: &Type) -> proc_macro2::TokenStream {
     quote! {{
         <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(input.input.clone())?
     }}
@@ -484,7 +484,7 @@ fn plugin_layer_tool_call_args(
     }
 }
 
-fn plugin_layer_operation_call_args(
+fn plugin_layer_command_call_args(
     context: Option<PluginContextArg>,
     mut input_args: Vec<proc_macro2::TokenStream>,
 ) -> Vec<proc_macro2::TokenStream> {

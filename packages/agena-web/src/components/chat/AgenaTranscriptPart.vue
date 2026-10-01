@@ -12,7 +12,7 @@ import {
   errorPresentation,
   partStatusPresentation,
   prettyJson,
-  skillPresentations,
+  commandPresentations,
 } from '@/pages/chat/transcriptPartPresentation'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
@@ -37,7 +37,7 @@ const status = computed(() => partStatusPresentation(props.part.status))
 const body = computed(() => transcriptPartText(props.part.source))
 const content = computed(() => durablePartContent(props.part.source))
 const attachments = computed(() => attachmentPresentations(props.part))
-const skills = computed(() => skillPresentations(props.part))
+const commands = computed(() => commandPresentations(props.part))
 const failure = computed(() => errorPresentation(props.part))
 
 function toggle() {
@@ -153,15 +153,11 @@ function openAttachment(path: string, url: string) {
       </div>
 
       <div v-else-if="part.kind === 'skill'" class="divide-y divide-border/50 py-1">
-        <section v-for="skill in skills" :key="skill.name" class="py-2 first:pt-1 last:pb-1">
-          <div class="font-mono text-xs font-semibold">{{ skill.name }}</div>
-          <div v-if="skill.description" class="mt-1 text-xs text-muted-foreground">{{ skill.description }}</div>
-          <div v-if="skill.instructions" class="mt-2">
-            <div class="mb-1 text-xs font-semibold text-primary">› Instructions</div>
-            <MarkdownRenderer :content="skill.instructions" mode="markdown" :stream="false" />
-          </div>
-          <div v-if="skill.source || skill.contentHash" class="mt-2 font-mono text-[10px] text-muted-foreground">
-            {{ [skill.source, skill.contentHash].filter(Boolean).join(' · ') }}
+        <section v-for="entry in commands" :key="entry.name" class="py-2 first:pt-1 last:pb-1">
+          <div class="font-mono text-xs font-semibold">{{ entry.name }}</div>
+          <div v-if="entry.description" class="mt-1 text-xs text-muted-foreground">{{ entry.description }}</div>
+          <div v-if="entry.source || entry.contentHash" class="mt-2 font-mono text-[10px] text-muted-foreground">
+            {{ [entry.source, entry.contentHash].filter(Boolean).join(' · ') }}
           </div>
         </section>
       </div>

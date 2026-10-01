@@ -455,9 +455,9 @@ settings-activity-kind-resource-label = Ressourcen
 
 settings-activity-kind-resource-description = Anlagen und sonstige Ressourceninhalte.
 
-settings-activity-kind-skill_reference-label = Qualifikationsreferenzen
+settings-activity-kind-skill_reference-label = Befehlsreferenzen
 
-settings-activity-kind-skill_reference-description = Verweise auf die in der Antwort verwendeten Fähigkeiten.
+settings-activity-kind-skill_reference-description = Verweise auf die in der Antwort gewählten Befehle.
 
 settings-activity-kind-interaction-label = Wechselwirkungen
 
@@ -545,7 +545,6 @@ settings-field-parse-float = {$field} erwartet einen numerischen Wert
 
 settings-choice-adapter-fallback = Adapter
 
-
 settings-plugin-workbench-label = Plugin-Konfigurationsarbeitsbereich
 
 settings-mcp-server-label = Agena MCP-Server
@@ -579,9 +578,6 @@ settings-mcp-anonymous-access-read-only = Authority-Contract Read-Only-Tools
 settings-mcp-registration-label = Registrierung
 
 settings-mcp-pkce-label = PKCE
-
-
-
 
 settings-mcp-public-url-label = Öffentliche MCP-URL
 
@@ -848,7 +844,6 @@ overlay-provider-studio-catalog-loading = Katalogtreffer wird gesucht…
 
 overlay-provider-studio-catalog-no-match = Kein Katalogtreffer · in den Modelleinstellungen wählen
 
-
 overlay-provider-studio-detail = Einzelheiten
 
 overlay-provider-studio-adapter-models-empty = Wählen Sie Adapter aus und listen Sie dann ihre Live-Modelle auf
@@ -1021,7 +1016,6 @@ settings-mcp-auth-mode-updated = Agena MCP-Authentifizierungsmodus eingestellt a
 
 settings-mcp-anonymous-access-updated = Agena MCP anonymer Toolzugriff auf {$policy}
 
-
 settings-mcp-oauth-password-cleared = Alterna MCP OAuth Passwort gelöscht
 
 permission-studio-command-pattern-title = {$tool_name} Befehlsmuster
@@ -1188,7 +1182,7 @@ settings-field-tui-graphics-description = Zeigen Sie Bilder an und setzen Sie Fo
 settings-field-activity-default-expanded-description = Standarderweiterungsstatus für Aktivitäten ohne artspezifische Überschreibung. Die Argumentation bleibt erweitert, es sei denn, ihre Art wird explizit festgelegt.
 settings-activity-kind-reasoning-description = Der vollständige Gedankengang des Modells. Standardmäßig ist es erweitert und kann pro Art reduziert werden.
 runtime-setting-choice-supported-model = vom aktuellen Modell unterstützt
-settings-plugin-workbench-detail = Öffnen Sie die strukturierte Plugin-Workbench für Laufzeitstatus, Konfiguration, Tools, Operationen, Protokolle und Diagnosen.
+settings-plugin-workbench-detail = Öffnen Sie die strukturierte Plugin-Workbench für Laufzeitstatus, Konfiguration, Tools, Befehle, Protokolle und Diagnosen.
 settings-mcp-server-detail = Schalten Sie die Live-HTTP-MCP-Oberfläche von Agena um. Der angeschlossene Agena-Serverprozess bleibt die eigentliche Laufzeit.
 settings-mcp-auth-detail = Wechseln Sie zwischen No-Auth, Full OAuth und ChatGPT Mixed-Auth. Im gemischten Modus bleiben die Initialisierung und die Tool-Erkennung öffentlich; Toolaufrufe bleiben OAuth-geschützt, es sei denn, der anonyme Zugriff wird explizit aktiviert.
 settings-mcp-anonymous-access-none-detail = Sichere Standardeinstellung: Kein Werkzeugaufruf ist anonym. ChatGPT kann den Katalog weiterhin initialisieren und erkennen, bevor er sich anmeldet.
@@ -1240,7 +1234,6 @@ value-open = offen
 composer-prompt-history-title = Prompt-Geschichte
 overlay-commands-title = Befehlspalette
 overlay-commands-prompt = Suchaktionen; Befehle, die Text benötigen, werden im Composer fortgesetzt
-overlay-skill-studio-title = Fähigkeiten verwalten
 overlay-lineage-title = Filialverlauf [#{ $session }]
 overlay-lineage-prompt = Erkunden Sie den aktuellen Zweigbaum und springen Sie zu einer Vorfahren-, Geschwister- oder untergeordneten Sitzung
 overlay-rewind-title = Sitzung zurückspulen [#{ $session }]
@@ -1595,7 +1588,7 @@ plugin-workbench-column-arguments = Argumente
 plugin-workbench-column-before = Vorher
 plugin-workbench-column-category = Kategorie
 plugin-workbench-column-change = Änderung
-plugin-workbench-column-operation = Operation
+plugin-workbench-column-command = Befehl
 plugin-workbench-column-description = Beschreibung
 plugin-workbench-column-field = Feld
 plugin-workbench-column-inputs = Eingaben
@@ -1608,7 +1601,7 @@ plugin-workbench-column-summary = Zusammenfassung
 plugin-workbench-column-tool = Tool
 plugin-workbench-column-version = Version
 plugin-workbench-column-visible-tool = Sichtbares Tool
-plugin-workbench-operation-arguments = Argumente: {$operation}
+plugin-workbench-command-arguments = Argumente: {$command}
 plugin-workbench-config = Konfiguration
 plugin-workbench-config-action = Aktion
 plugin-workbench-config-choose-shape = Form auswählen
@@ -1634,7 +1627,7 @@ plugin-workbench-detail-footer = Tab/Shift+Tab Abschnitt · Oben/Unten scrollen 
 plugin-workbench-detail-tools-footer = Tab/Shift+Tab Abschnitt · Oben/Unten auswählen · Enter konfigurieren und ausführen · Esc zurück
 plugin-workbench-filter-all = Alle
 plugin-workbench-filter-other = andere
-plugin-workbench-header-summary = Tools: {$tools}        Operationen: {$operations}        Konfiguration: {$config}
+plugin-workbench-header-summary = Tools: {$tools}        Befehle: {$commands}        Konfiguration: {$config}
 plugin-workbench-input-preview = Eingabevorschau: {$tool}
 plugin-workbench-last-result-failed = Letztes Ergebnis · {$tool} · fehlgeschlagen
 plugin-workbench-last-result-success = Letztes Ergebnis · {$tool} · erfolgreich
@@ -1643,7 +1636,7 @@ plugin-workbench-list-summary = Plugins suchen… {$query}        Transport: {$t
 plugin-workbench-loading-actions = Aktionen werden geladen…
 plugin-workbench-loading-choices = Auswahl wird geladen…
 plugin-workbench-no-changes = Keine Änderungen
-plugin-workbench-no-operations = Keine Operationen.
+plugin-workbench-no-commands = Keine Befehle.
 plugin-workbench-no-config-section = Kein Konfigurationsabschnitt.
 plugin-workbench-no-editable-rows = Keine bearbeitbaren Zeilen.
 plugin-workbench-no-filter-matches = Keine Plugins entsprechen den aktuellen Filtern.
@@ -1673,7 +1666,7 @@ plugin-workbench-status-valid = Gültig
 plugin-workbench-status-warning = Warnung
 plugin-workbench-summary = Abfrage: {$query} · Transport {$transport} · Konfiguration {$config} · {$shown}/{$total} angezeigt
 plugin-workbench-tab-capabilities = Fähigkeiten
-plugin-workbench-tab-operations = Operationen
+plugin-workbench-tab-commands = Befehle
 plugin-workbench-tab-config = Konfiguration
 plugin-workbench-tab-diagnostics = Diagnose
 plugin-workbench-tab-logs = Protokolle
@@ -1685,7 +1678,6 @@ plugin-workbench-tools-help = Oben/Unten wählt ein Tool. Enter öffnet das vom 
 plugin-workbench-transport = Transport
 plugin-workbench-trust-level = Vertrauensstufe: {$level}
 plugin-workbench-unavailable = nicht verfügbar
-
 
 # Plugin Workbench structured editor i18n completion
 plugin-workbench-editor-also-matches = passt auch zu: {$matches}

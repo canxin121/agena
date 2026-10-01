@@ -401,8 +401,7 @@ impl SettingsPlugin {
             ToolTag::Filesystem,
             settings_tag(),
             settings_read_tag()
-        ),
-        concurrency_safe
+        )
     )]
     async fn get(&self, input: SettingsGetToolInput) -> SdkResult<ToolInvokeOutput> {
         let meta = self.config_meta().await?;
@@ -461,8 +460,7 @@ impl SettingsPlugin {
             ToolTag::Filesystem,
             settings_tag(),
             settings_read_tag()
-        ),
-        concurrency_safe
+        )
     )]
     async fn list(&self, input: SettingsListToolInput) -> SdkResult<ToolInvokeOutput> {
         let meta = self.config_meta().await?;
@@ -532,8 +530,7 @@ impl SettingsPlugin {
             ToolTag::Filesystem,
             settings_tag(),
             settings_read_tag()
-        ),
-        concurrency_safe
+        )
     )]
     async fn inspect(&self, input: SettingsInspectToolInput) -> SdkResult<ToolInvokeOutput> {
         let meta = self.config_meta().await?;
@@ -675,8 +672,7 @@ impl SettingsPlugin {
             ToolTag::Filesystem,
             settings_tag(),
             settings_read_tag()
-        ),
-        concurrency_safe
+        )
     )]
     async fn validate(&self, input: SettingsValidateToolInput) -> SdkResult<ToolInvokeOutput> {
         let layer = self.read_layer(input.layer)?;

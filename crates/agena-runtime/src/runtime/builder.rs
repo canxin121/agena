@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 
+use agena_plugin_sdk::CommandTarget;
 use agena_storage::MemoryStore;
 use tokio_util::sync::CancellationToken;
 
@@ -1158,8 +1159,8 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         self.current_snapshot().plugin_manager().theme_palettes()
     }
 
-    fn operation_catalog(&self) -> Vec<agena_plugin_host::PluginOperationCatalogItem> {
-        self.current_snapshot().plugin_manager().operation_catalog()
+    fn command_catalog(&self) -> Vec<agena_plugin_host::CommandCatalogItem> {
+        self.current_snapshot().plugin_manager().command_catalog()
     }
 
     fn tool_registry_generation(&self) -> u64 {
@@ -1212,13 +1213,13 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         })
     }
 
-    async fn invoke_plugin_operation(
+    async fn invoke_plugin_command(
         &self,
         plugin_id: &str,
-        input: agena_plugin_host::sdk::PluginOperationInvokeInput,
-    ) -> Result<agena_plugin_host::sdk::PluginOperationResult, String> {
+        input: agena_plugin_host::sdk::CommandInvokeInput,
+    ) -> Result<agena_plugin_host::sdk::CommandResult, String> {
         let host = self.current_snapshot().plugin_manager();
-        host.invoke_plugin_operation_async(plugin_id, input)
+        host.invoke_plugin_command_async(plugin_id, input)
             .await
             .map_err(|error| {
                 agena_failure::diagnostic::format_error_chain_with_context(
@@ -2025,69 +2026,32 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             agena_runtime::RuntimeLspStatus::default()
         };
 
-        let skills = {
-            let entries = snapshot
+        // One command surface: what the catalog publishes is what every client
+        // renders, so the status projection reads that catalog rather than
+        // re-deriving a second list from tool tags.
+        let commands = {
+            let mut commands = snapshot
                 .plugin_manager()
-                .registered_tools()
+                .command_catalog()
                 .into_iter()
-                .filter(|entry| entry.plugin_full_name() == "agena.skills")
-                .collect::<Vec<_>>();
-            let skill_key_for = |entry: &agena_plugin_host::registry::RegisteredTool| {
-                entry
-                    .effective_tags()
-                    .into_iter()
-                    .find_map(|tag| match tag {
-                        agena_plugin_host::sdk::ToolTag::Custom(value) => {
-                            value.strip_prefix("skill:").map(str::to_string)
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| entry.tool_name().to_string())
-            };
-            let has_custom_tag = |entry: &agena_plugin_host::registry::RegisteredTool,
-                                  expected: &str| {
-                entry.effective_tags().iter().any(|tag| match tag {
-                    agena_plugin_host::sdk::ToolTag::Custom(value) => value == expected,
-                    _ => false,
+                .map(|entry| agena_runtime::RuntimeCommandStatus {
+                    name: entry.command.id,
+                    slash: entry.command.slash,
+                    description: entry.command.docs.summary.unwrap_or_default(),
+                    aliases: entry.command.aliases,
+                    group: entry.command.group,
+                    category: entry.command.category,
+                    plugin_id: entry.plugin_id.to_string(),
+                    target: match entry.command.target {
+                        CommandTarget::Client { .. } => "client",
+                        CommandTarget::Method { .. } => "method",
+                        CommandTarget::Tool { .. } => "tool",
+                    }
+                    .to_string(),
                 })
-            };
-            let mut aliases_by_skill = HashMap::<String, Vec<String>>::new();
-            for entry in &entries {
-                if !has_custom_tag(entry, "alias") {
-                    continue;
-                }
-                aliases_by_skill
-                    .entry(skill_key_for(entry))
-                    .or_default()
-                    .push(entry.canonical_name());
-            }
-            let mut skills = Vec::new();
-            let mut commands = Vec::new();
-            for entry in entries {
-                if has_custom_tag(&entry, "alias") {
-                    continue;
-                }
-                let item = agena_runtime::RuntimeSkillStatus {
-                    name: entry.canonical_name(),
-                    description: entry
-                        .definition
-                        .summary_text()
-                        .unwrap_or_default()
-                        .to_owned(),
-                    aliases: aliases_by_skill
-                        .remove(&skill_key_for(&entry))
-                        .unwrap_or_default(),
-                    source_path: None,
-                };
-                if has_custom_tag(&entry, "command") {
-                    commands.push(item);
-                } else {
-                    skills.push(item);
-                }
-            }
-            skills.sort_by(|left, right| left.name.cmp(&right.name));
+                .collect::<Vec<_>>();
             commands.sort_by(|left, right| left.name.cmp(&right.name));
-            agena_runtime::RuntimeSkillsStatus { skills, commands }
+            agena_runtime::RuntimeCommandsStatus { commands }
         };
 
         let session_manager = snapshot.session_manager();
@@ -2121,7 +2085,7 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             scheduled_jobs,
             mcp,
             lsp,
-            skills,
+            commands,
             agent_id: agena_runtime_contracts::identity::AGENA_AGENT_ID.to_string(),
             plugin_surface_catalog: plugin_manager.surface_catalog(),
             tool_registry_generation: plugin_manager.tool_registry_generation(),
@@ -2330,9 +2294,9 @@ impl AgenaRuntime {
         let tool_execution = session_manager
             .as_ref()
             .map(|manager| manager.clone() as Arc<dyn agena_runtime::SessionToolExecutionService>);
-        let plugin_operations = session_manager.as_ref().map(|manager| {
-            manager.clone() as Arc<dyn agena_runtime::SessionPluginOperationService>
-        });
+        let plugin_commands = session_manager
+            .as_ref()
+            .map(|manager| manager.clone() as Arc<dyn agena_runtime::SessionPluginCommandService>);
         agena_runtime::compose_runtime_application_services(
             agena_runtime::RuntimeApplicationServiceCompositionInputs {
                 workspace_root: self.workspace_root().to_path_buf(),
@@ -2370,7 +2334,7 @@ impl AgenaRuntime {
                 execution_control,
                 execution_commands,
                 tool_execution,
-                plugin_operations,
+                plugin_commands,
             },
         )
     }

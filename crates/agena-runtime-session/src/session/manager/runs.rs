@@ -17,7 +17,7 @@ use agena_runtime_contracts::part_content::{
     TypedContent, operation_from_tool_call, skill_reference_from_skill_ref,
 };
 use agena_storage::store::{Part, PartRole, PartState};
-use std::path::Path;
+use sha2::{Digest, Sha256};
 
 /// The lossy visible text of one run group, derived from its decoded content
 /// parts: text and skill-reference parts render their content, tool-call parts
@@ -55,49 +55,94 @@ fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) 
         .map(ToOwned::to_owned)
 }
 
-/// Resolve requested Skill names/aliases into lazy Skill references for a
-/// delegated subtask. The body is deliberately omitted; the delegated model
-/// can call `agena.skills.get` when it needs to apply the selected Skill.
+/// Resolve requested command names into lazy references for a delegated
+/// subtask.
+///
+/// The catalog is the published command catalog — the same one every client
+/// renders — so a subtask can only be pointed at a command the workspace
+/// actually offers. The body is deliberately omitted; the delegated model
+/// reads it on demand through the owning plugin.
 fn resolve_subtask_skill_references(
-    workspace_root: &Path,
+    catalog: &[agena_plugin_host::CommandCatalogItem],
     requested: &[String],
 ) -> Result<Vec<SkillReference>, AppError> {
-    let mut catalog = std::collections::BTreeMap::new();
-    for skill in agena_skills::bundled::all() {
-        catalog.insert(skill.frontmatter.name.clone(), skill);
-    }
-    let roots = agena_skills::discovery::default_roots(Some(workspace_root));
-    let discovered = agena_skills::discovery::scan(&roots).map_err(|error| {
-        AppError::Internal(format!("failed to scan skills for subtask: {error}"))
-    })?;
-    for skill in discovered {
-        catalog.insert(skill.frontmatter.name.clone(), skill);
-    }
-
     requested
-            .iter()
-            .map(|name| {
-                let trimmed = name.trim();
-                let skill = catalog.values().find(|skill| skill.matches(trimmed)).ok_or_else(
-                    || {
-                        AppError::Config(format!(
-                            "unknown skill '{name}' for subtask; use `agena.skills.list` to see available skills"
-                        ))
-                    },
-                )?;
-                Ok(SkillReference {
-                    name: skill.frontmatter.name.clone(),
-                    description: skill.frontmatter.description.clone(),
-                    content_hash: skill.content_hash(),
-                    source: skill
-                        .source_path
-                        .as_ref()
-                        .map(|path| path.display().to_string())
-                        .unwrap_or_else(|| "bundled".to_string()),
-                    aliases: skill.frontmatter.aliases.clone(),
-                })
+        .iter()
+        .map(|name| {
+            let trimmed = name.trim();
+            let entry = catalog
+                .iter()
+                .find(|entry| command_matches(entry, trimmed))
+                .ok_or_else(|| {
+                    AppError::Config(format!(
+                        "unknown command '{name}' for subtask; the delegated session can list the available commands from the `agena.commands` plugin"
+                    ))
+                })?;
+            Ok(SkillReference {
+                name: entry.command.id.clone(),
+                description: entry.command.docs.summary.clone().unwrap_or_default(),
+                content_hash: command_declaration_hash(entry),
+                source: entry.plugin_id.to_string(),
+                aliases: entry.command.aliases.clone(),
             })
-                        .collect()
+        })
+        .collect()
+}
+
+/// Whether `query` names this command, by canonical id, slash spelling or
+/// alias — the same three spellings a composer accepts.
+fn command_matches(entry: &agena_plugin_host::CommandCatalogItem, query: &str) -> bool {
+    let query = query.trim().trim_start_matches('/').to_ascii_lowercase();
+    if query.is_empty() {
+        return false;
+    }
+    let slash = entry
+        .command
+        .slash
+        .as_deref()
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_ascii_lowercase();
+    entry.command.id.to_ascii_lowercase() == query
+        || slash == query
+        || entry
+            .command
+            .aliases
+            .iter()
+            .any(|alias| alias.to_ascii_lowercase() == query)
+}
+
+/// Stable identity of one catalog declaration. Commands carry no content hash
+/// of their own — their body lives behind a plugin — so the reference
+/// identifies the declaration the user selected, which is what a stale-catalog
+/// comparison needs.
+fn command_declaration_hash(entry: &agena_plugin_host::CommandCatalogItem) -> String {
+    let mut digest = Sha256::new();
+    digest.update(entry.plugin_id.to_string().as_bytes());
+    digest.update([0]);
+    for field in [
+        entry.command.id.as_str(),
+        entry.command.title.as_str(),
+        entry.command.slash.as_deref().unwrap_or_default(),
+    ] {
+        digest.update(field.as_bytes());
+        digest.update([0]);
+    }
+    for alias in &entry.command.aliases {
+        digest.update(alias.as_bytes());
+        digest.update([0]);
+    }
+    for text in [
+        entry.command.docs.summary.as_deref(),
+        entry.command.docs.usage.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        digest.update(text.as_bytes());
+        digest.update([0]);
+    }
+    hex::encode(digest.finalize())
 }
 
 impl SessionManager {
@@ -544,7 +589,7 @@ impl SessionManager {
             .filter(|skills| !skills.is_empty())
         {
             Some(skills) => Some(resolve_subtask_skill_references(
-                state.tool_executor.workspace_root(),
+                &state.tool_executor.plugin_manager().command_catalog(),
                 skills,
             )?),
             None => None,
@@ -916,8 +961,55 @@ pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
 
 #[cfg(test)]
 mod tests {
-    use super::{non_recursive_subtask_capability_denials, resolve_subtask_skill_references};
+    use super::{
+        command_declaration_hash, command_matches, non_recursive_subtask_capability_denials,
+        resolve_subtask_skill_references,
+    };
+    use agena_plugin_host::{CommandCatalogItem, PluginKey};
+    use agena_plugin_sdk::{CommandDefinition, CommandDocs, CommandTarget, SettingsContract};
     use agena_runtime_contracts::part::SkillReference;
+
+    fn catalog_entry(id: &str, slash: &str, aliases: &[&str], summary: &str) -> CommandCatalogItem {
+        CommandCatalogItem {
+            plugin_id: PluginKey::new("agena", "commands").expect("plugin key"),
+            accepts_empty_input: true,
+            default_input: serde_json::json!({}),
+            command: CommandDefinition {
+                id: id.to_string(),
+                title: id.to_string(),
+                group: "Skills".to_string(),
+                category: Some("Package".to_string()),
+                slash: Some(slash.to_string()),
+                aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
+                docs: CommandDocs {
+                    summary: Some(summary.to_string()),
+                    ..CommandDocs::default()
+                },
+                input: SettingsContract::empty_object("No input", ""),
+                discoverability: Default::default(),
+                target: CommandTarget::Method {
+                    handler: "run".to_string(),
+                },
+            },
+        }
+    }
+
+    fn catalog() -> Vec<CommandCatalogItem> {
+        vec![
+            catalog_entry(
+                "verify",
+                "/verify",
+                &["check"],
+                "Validate the current change",
+            ),
+            catalog_entry(
+                "security_review",
+                "/security_review",
+                &["security-review"],
+                "Audit for security regressions",
+            ),
+        ]
+    }
 
     #[test]
     fn delegated_instances_cannot_recursively_run_tasks() {
@@ -935,53 +1027,79 @@ mod tests {
     }
 
     #[test]
-    fn subtask_skills_resolve_bundled_names_and_aliases() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let requested = vec!["verify".to_string(), "security-review".to_string()];
-        let refs = resolve_subtask_skill_references(root.path(), &requested).expect("resolve");
-        assert_eq!(refs.len(), 2);
+    fn subtask_references_resolve_catalog_ids_slashes_and_aliases() {
+        let requested = vec![
+            "verify".to_string(),
+            "/security_review".to_string(),
+            "security-review".to_string(),
+        ];
+        let refs = resolve_subtask_skill_references(&catalog(), &requested).expect("resolve");
         let names = refs.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
-        assert_eq!(names, ["verify", "security_review"]);
+        assert_eq!(names, ["verify", "security_review", "security_review"]);
         for reference in &refs {
             assert!(!reference.content_hash.is_empty());
         }
     }
 
     #[test]
-    fn subtask_skills_discover_workspace_skills() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let skill_dir = root.path().join(".agena").join("skills").join("explore");
-        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: explore\ndescription: Explore a codebase\n---\nInvestigate the workspace.\n",
-        )
-        .expect("write skill");
+    fn subtask_references_carry_the_declared_summary_and_owner() {
+        let requested = vec!["/verify".to_string()];
+        let refs = resolve_subtask_skill_references(&catalog(), &requested).expect("resolve");
+        assert_eq!(refs[0].description, "Validate the current change");
+        assert_eq!(refs[0].source, "agena.commands");
+        assert_eq!(refs[0].aliases, ["check"]);
+    }
 
-        let requested = vec!["explore".to_string()];
-        let refs = resolve_subtask_skill_references(root.path(), &requested).expect("resolve");
-        assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0].name, "explore");
-        assert_eq!(refs[0].description, "Explore a codebase");
-        assert_eq!(
-            refs[0].source,
-            skill_dir.join("SKILL.md").display().to_string()
+    #[test]
+    fn subtask_references_reject_unknown_names() {
+        let requested = vec!["no-such-command".to_string()];
+        let error = resolve_subtask_skill_references(&catalog(), &requested).expect_err("reject");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown command 'no-such-command'")
         );
     }
 
     #[test]
-    fn subtask_skills_reject_unknown_names() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let requested = vec!["no-such-skill".to_string()];
-        let error = resolve_subtask_skill_references(root.path(), &requested).expect_err("reject");
-        assert!(error.to_string().contains("unknown skill 'no-such-skill'"));
+    fn reference_identity_tracks_the_declaration_not_the_body() {
+        let entry = catalog_entry(
+            "verify",
+            "/verify",
+            &["check"],
+            "Validate the current change",
+        );
+        let baseline = command_declaration_hash(&entry);
+
+        // Renaming the slash spelling changes the identity a user selected.
+        let mut renamed = entry.clone();
+        renamed.command.slash = Some("/check".to_string());
+        assert_ne!(command_declaration_hash(&renamed), baseline);
+
+        // An unrelated command with different copy does not collide.
+        let other = catalog_entry("explore", "/explore", &[], "Explore a codebase");
+        assert_ne!(command_declaration_hash(&other), baseline);
+    }
+
+    #[test]
+    fn command_matching_accepts_three_spellings_and_rejects_an_empty_query() {
+        let entry = catalog_entry(
+            "verify",
+            "/verify",
+            &["check"],
+            "Validate the current change",
+        );
+        for spelling in ["verify", "VERIFY", " /verify ", "/VERIFY", "check", "Check"] {
+            assert!(command_matches(&entry, spelling), "{spelling}");
+        }
+        assert!(!command_matches(&entry, ""));
+        assert!(!command_matches(&entry, "unrelated"));
     }
 
     #[test]
     fn skill_reference_carries_stable_identity_without_body() {
-        let root = tempfile::tempdir().expect("temp dir");
         let requested = vec!["verify".to_string()];
-        let refs = resolve_subtask_skill_references(root.path(), &requested).expect("resolve");
+        let refs = resolve_subtask_skill_references(&catalog(), &requested).expect("resolve");
         let first = &refs[0];
         let expected: SkillReference = serde_json::from_value(serde_json::json!({
             "name": first.name,

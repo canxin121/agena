@@ -157,12 +157,12 @@ pub struct RuntimeAutomationResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Runtime operator surface: MCP, LSP, agent, skills, and plugins.
+/// Runtime operator surface: MCP, LSP, agent, commands, and plugins.
 pub struct RuntimeOperatorResource {
     pub mcp: RuntimeMcpResource,
     pub lsp: RuntimeLspResource,
     pub agent_id: String,
-    pub skills: RuntimeSkillsResource,
+    pub commands: RuntimeCommandsResource,
     pub plugins: RuntimePluginSurfaceResource,
 }
 
@@ -177,10 +177,10 @@ pub struct RuntimePluginSurfaceResource {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// Presentation-neutral plugin operations plus terminal-only decoration.
+/// Presentation-neutral plugin commands plus terminal-only decoration.
 pub struct PluginSurfaceCatalogResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub operations: Vec<PluginOperationResource>,
+    pub commands: Vec<PluginCommandResource>,
     #[serde(default)]
     pub terminal: PluginTerminalSurfaceCatalogResource,
 }
@@ -195,13 +195,13 @@ pub struct PluginTerminalSurfaceCatalogResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// One server-owned plugin operation.
-pub struct PluginOperationResource {
+/// One server-owned plugin command.
+pub struct PluginCommandResource {
     pub plugin_id: String,
     pub accepts_empty_input: bool,
     pub default_input: serde_json::Value,
     #[serde(flatten)]
-    pub operation: agena_plugin_sdk::PluginOperationDefinition,
+    pub command: agena_plugin_sdk::CommandDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -250,28 +250,27 @@ pub struct PluginThemeColorsResource {
 
 #[cfg(test)]
 mod plugin_surface_catalog_contract_tests {
-    use super::{PluginOperationResource, PluginSurfaceCatalogResource};
+    use super::{PluginCommandResource, PluginSurfaceCatalogResource};
     use agena_plugin_sdk::{
-        OperationDiscoverability, PluginOperationDefinition, PluginOperationTarget,
-        SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind,
+        CommandDefinition, CommandDiscoverability, CommandTarget, SettingsConstraints,
+        SettingsContract, SettingsNode, SettingsNodeKind,
     };
 
     #[test]
-    fn plugin_surface_catalog_has_one_server_owned_operation_shape() {
+    fn plugin_surface_catalog_has_one_server_owned_command_shape() {
         let catalog = PluginSurfaceCatalogResource {
-            operations: vec![PluginOperationResource {
+            commands: vec![PluginCommandResource {
                 plugin_id: "example.tools".to_owned(),
                 accepts_empty_input: true,
                 default_input: serde_json::json!({}),
-                operation: PluginOperationDefinition {
+                command: CommandDefinition {
                     id: "summarize".to_owned(),
                     title: "Summarize".to_owned(),
-                    description: String::new(),
                     group: "Plugin".to_owned(),
                     category: None,
                     slash: Some("summarize".to_owned()),
                     aliases: Vec::new(),
-                    usage: None,
+                    docs: Default::default(),
                     input: SettingsContract::new(SettingsNode {
                         id: "input".to_owned(),
                         path: String::new(),
@@ -284,8 +283,8 @@ mod plugin_surface_catalog_contract_tests {
                         secret: false,
                         kind: SettingsNodeKind::Object { fields: Vec::new() },
                     }),
-                    discoverability: OperationDiscoverability::default(),
-                    target: PluginOperationTarget::Tool {
+                    discoverability: CommandDiscoverability::default(),
+                    target: CommandTarget::Tool {
                         tool: "summarize".to_owned(),
                     },
                 },
@@ -294,11 +293,11 @@ mod plugin_surface_catalog_contract_tests {
         };
 
         let wire = serde_json::to_value(catalog).expect("serialize plugin catalog");
-        assert_eq!(wire["operations"][0]["plugin_id"], "example.tools");
-        assert_eq!(wire["operations"][0]["accepts_empty_input"], true);
-        assert_eq!(wire["operations"][0]["id"], "summarize");
-        assert_eq!(wire["operations"][0]["target"]["kind"], "tool");
-        assert!(wire["operations"][0].get("action").is_none());
+        assert_eq!(wire["commands"][0]["plugin_id"], "example.tools");
+        assert_eq!(wire["commands"][0]["accepts_empty_input"], true);
+        assert_eq!(wire["commands"][0]["id"], "summarize");
+        assert_eq!(wire["commands"][0]["target"]["kind"], "tool");
+        assert!(wire["commands"][0].get("action").is_none());
         assert!(wire.get("studio").is_none());
     }
 }
@@ -337,22 +336,29 @@ pub struct RuntimeLspServerResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Loaded skills and skill commands.
-pub struct RuntimeSkillsResource {
-    pub skill_count: usize,
-    pub command_count: usize,
-    pub skills: Vec<RuntimeSkillResource>,
-    pub commands: Vec<RuntimeSkillResource>,
+/// The published command catalog, exactly as every client renders it.
+pub struct RuntimeCommandsResource {
+    /// Commands a client runs locally through its own action vocabulary.
+    pub client_count: usize,
+    /// Commands served by the plugin that declared them.
+    pub served_count: usize,
+    pub commands: Vec<RuntimeCommandResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// One loaded skill or skill command.
-pub struct RuntimeSkillResource {
+/// One published command.
+pub struct RuntimeCommandResource {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slash: Option<String>,
     pub description: String,
     pub aliases: Vec<String>,
+    pub group: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_path: Option<String>,
+    pub category: Option<String>,
+    pub plugin_id: String,
+    /// `client`, `method` or `tool` — how running the command reaches a handler.
+    pub target: String,
 }
 
 /// The one runtime-wide default execution selection exposed to clients.

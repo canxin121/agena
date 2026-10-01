@@ -22,16 +22,17 @@ pub const MAX_SETTINGS_TEXT_CHARS: usize = 8_192;
 pub const MAX_SETTINGS_DEFAULT_BYTES: usize = 1_048_576;
 pub const MAX_JSON_ESCAPE_BYTES: u32 = 1_048_576;
 pub const MAX_JSON_ESCAPE_DEPTH: u8 = 12;
-pub const MAX_OPERATION_ID_CHARS: usize = 128;
-pub const MAX_OPERATION_TEXT_CHARS: usize = 8_192;
-pub const MAX_OPERATION_ALIASES: usize = 16;
-pub const MAX_OPERATION_DIAGNOSTICS: usize = 32;
-pub const MAX_OPERATION_EFFECTS: usize = 8;
+pub const MAX_COMMAND_ID_CHARS: usize = 128;
+pub const MAX_COMMAND_TEXT_CHARS: usize = 8_192;
+pub const MAX_COMMAND_ALIASES: usize = 16;
+pub const MAX_COMMAND_EXAMPLES: usize = 16;
+pub const MAX_COMMAND_DIAGNOSTICS: usize = 32;
+pub const MAX_COMMAND_EFFECTS: usize = 8;
 pub const MAX_PLUGIN_SERVICES: usize = 128;
 
 /// Tool presentation titles are compact scan labels, not result dumps.
 pub const TOOL_TITLE_MAX_DISPLAY_WIDTH: usize = 96;
-/// Durable Operation summaries are compact result statements.
+/// Durable Command summaries are compact result statements.
 pub const TOOL_SUMMARY_MAX_DISPLAY_WIDTH: usize = 120;
 
 /// Normalize a tool/plugin title at the shared contract boundary. This lives
@@ -158,18 +159,18 @@ pub struct SettingsContract {
     pub root: SettingsNode,
 }
 
-fn validate_operation_slash(value: &str) -> Result<(), OperationDefinitionError> {
+fn validate_command_slash(value: &str) -> Result<(), CommandDefinitionError> {
     let Some(name) = value.strip_prefix('/') else {
-        return Err(OperationDefinitionError::new(
-            "operation slash must start with `/`",
+        return Err(CommandDefinitionError::new(
+            "command slash must start with `/`",
         ));
     };
     if name.contains('/') {
-        return Err(OperationDefinitionError::new(
-            "operation slash must contain exactly one leading `/`",
+        return Err(CommandDefinitionError::new(
+            "command slash must contain exactly one leading `/`",
         ));
     }
-    validate_identifier(name, "operation slash").map_err(OperationDefinitionError::from_contract)
+    validate_identifier(name, "command slash").map_err(CommandDefinitionError::from_contract)
 }
 
 impl SettingsContract {
@@ -180,9 +181,26 @@ impl SettingsContract {
         }
     }
 
-    /// Empty closed object contract for no-argument RPC methods and operations.
+    /// Empty closed object contract for no-argument RPC methods and commands.
     pub fn empty_object(title: impl Into<String>, description: impl Into<String>) -> Self {
         Self::new(SettingsNode::root_object(title, description))
+    }
+
+    /// Whether this contract accepts nothing at all: a closed object with no
+    /// fields and a default that supplies no keys. Semantics rather than
+    /// spelling, so a command declared by the SDK's `empty_settings_contract()`
+    /// and one built here are interchangeable.
+    pub fn accepts_only_empty_object(&self) -> bool {
+        let no_fields = matches!(
+            &self.root.kind,
+            SettingsNodeKind::Object { fields } if fields.is_empty()
+        );
+        let empty_default = match &self.root.default {
+            None | Some(Value::Null) => true,
+            Some(Value::Object(map)) => map.is_empty(),
+            Some(_) => false,
+        };
+        no_fields && empty_default
     }
 
     /// Explicit bounded JSON escape hatch for machine-to-machine contracts.
@@ -1130,120 +1148,191 @@ pub struct PluginServiceInvokeOutput {
     pub output: Value,
 }
 
-/// Server-owned executable target for an operation. A client can select an
-/// operation id, but it cannot supply a target or route one operation through
-/// another client effect.
+/// Server-owned executable target for a command.
+///
+/// `Client` is the one target the server never executes: the declaration is
+/// published by the host so every client sees the same command table, but the
+/// client that renders the palette runs the action itself. A client that does
+/// not implement an action must drop the whole command rather than forward it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum PluginOperationTarget {
+pub enum CommandTarget {
+    /// Run inside the client that renders the command palette. `action` is a
+    /// stable identifier in that client's own action vocabulary; the client
+    /// short-circuits locally and never sends the command to the server.
+    Client { action: String },
+    /// Run a handler on the owning plugin's transport.
     Method { handler: String },
+    /// Run one of the owning plugin's tools on the normal execution path.
     Tool { tool: String },
 }
 
+/// Human-facing description of a command, mirroring `ToolDocs`'s role for
+/// tools. `summary`/`help` carry literal strings for plugin authors;
+/// `summary_key`/`help_key` carry localization keys for commands whose text
+/// lives in a client's message catalog. Clients prefer the key and fall back
+/// to the literal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct CommandDocs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help_key: Option<String>,
+    /// Argument usage line. When absent the macro derives it from the input
+    /// contract, exactly as it does for tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<String>,
+    /// Example invocations derived from the input contract at build time.
+    /// JSON Schema itself never crosses the manifest boundary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<String>,
+}
+
+/// A command a host publishes to its clients: how to recognize it, what it
+/// documents itself as, and what running it actually does.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct PluginOperationDefinition {
+pub struct CommandDefinition {
     pub id: String,
     pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
     pub group: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// The `/<name>` spelling a composer recognizes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slash: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<String>,
+    #[serde(default)]
+    pub docs: CommandDocs,
     pub input: SettingsContract,
     #[serde(default)]
-    pub discoverability: OperationDiscoverability,
-    pub target: PluginOperationTarget,
+    pub discoverability: CommandDiscoverability,
+    pub target: CommandTarget,
 }
 
-impl PluginOperationDefinition {
-    /// Validate the server-owned operation definition before it is published
+impl CommandDefinition {
+    /// Validate the server-owned command definition before it is published
     /// in a manifest or catalog.
-    pub fn validate(&self) -> Result<(), OperationDefinitionError> {
-        validate_identifier(&self.id, "operation id")
-            .map_err(OperationDefinitionError::from_contract)?;
-        validate_text(&self.title, "operation title", MAX_OPERATION_TEXT_CHARS)
-            .map_err(OperationDefinitionError::from_contract)?;
-        validate_text(
-            &self.description,
-            "operation description",
-            MAX_OPERATION_TEXT_CHARS,
-        )
-        .map_err(OperationDefinitionError::from_contract)?;
-        validate_text(&self.group, "operation group", MAX_OPERATION_TEXT_CHARS)
-            .map_err(OperationDefinitionError::from_contract)?;
+    pub fn validate(&self) -> Result<(), CommandDefinitionError> {
+        validate_identifier(&self.id, "command id")
+            .map_err(CommandDefinitionError::from_contract)?;
+        validate_text(&self.title, "command title", MAX_COMMAND_TEXT_CHARS)
+            .map_err(CommandDefinitionError::from_contract)?;
+        if self.title.trim().is_empty() {
+            return Err(CommandDefinitionError::new(
+                "command title must not be empty",
+            ));
+        }
+        for (label, text) in [
+            ("command summary", self.docs.summary.as_ref()),
+            ("command help", self.docs.help.as_ref()),
+            ("command usage", self.docs.usage.as_ref()),
+        ] {
+            if let Some(text) = text {
+                validate_text(text, label, MAX_COMMAND_TEXT_CHARS)
+                    .map_err(CommandDefinitionError::from_contract)?;
+            }
+        }
+        validate_text(&self.group, "command group", MAX_COMMAND_TEXT_CHARS)
+            .map_err(CommandDefinitionError::from_contract)?;
         if self.group.trim().is_empty() {
-            return Err(OperationDefinitionError::new(
-                "operation group must not be empty",
+            return Err(CommandDefinitionError::new(
+                "command group must not be empty",
             ));
         }
         if let Some(category) = &self.category {
-            validate_text(category, "operation category", MAX_OPERATION_TEXT_CHARS)
-                .map_err(OperationDefinitionError::from_contract)?;
+            validate_text(category, "command category", MAX_COMMAND_TEXT_CHARS)
+                .map_err(CommandDefinitionError::from_contract)?;
         }
         if let Some(slash) = &self.slash {
-            validate_operation_slash(slash)?;
+            validate_command_slash(slash)?;
         }
-        if let Some(usage) = &self.usage {
-            validate_text(usage, "operation usage", MAX_OPERATION_TEXT_CHARS)
-                .map_err(OperationDefinitionError::from_contract)?;
+        for (label, key) in [
+            ("command summary key", self.docs.summary_key.as_ref()),
+            ("command help key", self.docs.help_key.as_ref()),
+        ] {
+            if let Some(key) = key {
+                validate_message_key(key, label).map_err(CommandDefinitionError::from_contract)?;
+            }
         }
-        if self.aliases.len() > MAX_OPERATION_ALIASES {
-            return Err(OperationDefinitionError::new(format!(
-                "operation has more than {MAX_OPERATION_ALIASES} aliases"
+        if self.docs.examples.len() > MAX_COMMAND_EXAMPLES {
+            return Err(CommandDefinitionError::new(format!(
+                "command has more than {MAX_COMMAND_EXAMPLES} examples"
+            )));
+        }
+        for example in &self.docs.examples {
+            validate_text(example, "command example", MAX_COMMAND_TEXT_CHARS)
+                .map_err(CommandDefinitionError::from_contract)?;
+        }
+        if self.aliases.len() > MAX_COMMAND_ALIASES {
+            return Err(CommandDefinitionError::new(format!(
+                "command has more than {MAX_COMMAND_ALIASES} aliases"
             )));
         }
         let mut aliases = std::collections::BTreeSet::new();
         for alias in &self.aliases {
-            validate_identifier(alias, "operation alias")
-                .map_err(OperationDefinitionError::from_contract)?;
+            validate_alias(alias, "command alias")
+                .map_err(CommandDefinitionError::from_contract)?;
             if !aliases.insert(alias) || alias == &self.id {
-                return Err(OperationDefinitionError::new(
-                    "operation aliases must be unique and must not equal the operation id",
+                return Err(CommandDefinitionError::new(
+                    "command aliases must be unique and must not equal the command id",
                 ));
             }
         }
         self.input.validate().map_err(|error| {
-            OperationDefinitionError::new(
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    "invalid plugin operation input contract",
-                    &error,
-                ),
-            )
+            CommandDefinitionError::new(agena_failure::diagnostic::format_error_chain_with_context(
+                "invalid plugin command input contract",
+                &error,
+            ))
         })?;
         match &self.target {
-            PluginOperationTarget::Method { handler }
-            | PluginOperationTarget::Tool { tool: handler } => {
-                validate_identifier(handler, "operation target")
-                    .map_err(OperationDefinitionError::from_contract)?;
+            CommandTarget::Client { action } => {
+                validate_identifier(action, "command client action")
+                    .map_err(CommandDefinitionError::from_contract)?;
+                // The server never executes a client target, so it must not
+                // carry an input contract it cannot honor.
+                if !self.input.accepts_only_empty_object() {
+                    return Err(CommandDefinitionError::new(
+                        "a client-targeted command must declare an empty input contract",
+                    ));
+                }
+            }
+            CommandTarget::Method { handler } | CommandTarget::Tool { tool: handler } => {
+                validate_identifier(handler, "command target")
+                    .map_err(CommandDefinitionError::from_contract)?;
             }
         }
         Ok(())
     }
 }
 
+/// Which surfaces publish a command. Every flag defaults to true; a plugin
+/// narrows them when a command is meaningful in only one place.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct OperationDiscoverability {
+pub struct CommandDiscoverability {
+    /// Include the command in the plugin surface catalog at all.
     #[serde(default = "default_true")]
     pub catalog: bool,
+    /// Offer the command in a client's command palette.
     #[serde(default = "default_true")]
-    pub command_palette: bool,
+    pub palette: bool,
+    /// Recognize `/<name>` typed in a composer.
     #[serde(default = "default_true")]
     pub slash: bool,
 }
 
-impl Default for OperationDiscoverability {
+impl Default for CommandDiscoverability {
     fn default() -> Self {
         Self {
             catalog: true,
-            command_palette: true,
+            palette: true,
             slash: true,
         }
     }
@@ -1255,8 +1344,8 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct PluginOperationInvokeInput {
-    pub operation_id: String,
+pub struct CommandInvokeInput {
+    pub command_id: String,
     #[serde(default)]
     pub input: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1273,7 +1362,7 @@ pub struct PluginOperationInvokeInput {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PluginOperationStatus {
+pub enum CommandStatus {
     Succeeded,
     Failed,
     Cancelled,
@@ -1283,7 +1372,7 @@ pub enum PluginOperationStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct PluginOperationDiagnostic {
+pub struct CommandDiagnostic {
     pub code: String,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1292,21 +1381,23 @@ pub struct PluginOperationDiagnostic {
     pub sensitive: bool,
 }
 
-/// The only effects an operation result may request from a host surface. None
-/// of these invoke a tool or another operation; execution stays server-side.
+/// The only effects a command result may request from a host surface. None
+/// of these invoke a tool or another command; execution stays server-side.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum PluginHostEffect {
+pub enum CommandHostEffect {
     Navigate { path: String },
     OpenUrl { url: String },
     InsertPrompt { prompt: String },
     RefreshPluginSurface { plugin_id: String },
 }
 
+/// Result of running a command.
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct PluginOperationResult {
-    pub status: PluginOperationStatus,
+pub struct CommandResult {
+    pub status: CommandStatus,
     pub title: String,
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1314,17 +1405,17 @@ pub struct PluginOperationResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<PluginOperationDiagnostic>,
+    pub diagnostics: Vec<CommandDiagnostic>,
     #[serde(default)]
     pub retryable: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub effects: Vec<PluginHostEffect>,
+    pub effects: Vec<CommandHostEffect>,
 }
 
-impl PluginOperationResult {
+impl CommandResult {
     pub fn succeeded(summary: impl Into<String>) -> Self {
         Self {
-            status: PluginOperationStatus::Succeeded,
+            status: CommandStatus::Succeeded,
             title: String::new(),
             summary: summary.into(),
             detail: None,
@@ -1337,19 +1428,19 @@ impl PluginOperationResult {
 
     pub fn failed(summary: impl Into<String>) -> Self {
         let mut result = Self::succeeded(summary);
-        result.status = PluginOperationStatus::Failed;
+        result.status = CommandStatus::Failed;
         result
     }
 
     pub fn unavailable(summary: impl Into<String>) -> Self {
         let mut result = Self::succeeded(summary);
-        result.status = PluginOperationStatus::Unavailable;
+        result.status = CommandStatus::Unavailable;
         result
     }
 
     pub fn permission_required(summary: impl Into<String>) -> Self {
         let mut result = Self::succeeded(summary);
-        result.status = PluginOperationStatus::PermissionRequired;
+        result.status = CommandStatus::PermissionRequired;
         result
     }
 
@@ -1368,33 +1459,31 @@ impl PluginOperationResult {
         self
     }
 
-    pub fn with_effect(mut self, effect: PluginHostEffect) -> Self {
+    pub fn with_effect(mut self, effect: CommandHostEffect) -> Self {
         self.effects.push(effect);
         self
     }
 
-    pub fn validate(&self) -> Result<(), OperationResultError> {
-        if self.title.chars().count() > MAX_OPERATION_TEXT_CHARS
-            || self.summary.chars().count() > MAX_OPERATION_TEXT_CHARS
+    pub fn validate(&self) -> Result<(), CommandResultError> {
+        if self.title.chars().count() > MAX_COMMAND_TEXT_CHARS
+            || self.summary.chars().count() > MAX_COMMAND_TEXT_CHARS
             || self
                 .detail
                 .as_ref()
-                .is_some_and(|v| v.chars().count() > MAX_OPERATION_TEXT_CHARS)
+                .is_some_and(|v| v.chars().count() > MAX_COMMAND_TEXT_CHARS)
         {
-            return Err(OperationResultError::new(
-                "operation result text is too long",
-            ));
+            return Err(CommandResultError::new("command result text is too long"));
         }
-        if self.diagnostics.len() > MAX_OPERATION_DIAGNOSTICS {
-            return Err(OperationResultError::new("too many operation diagnostics"));
+        if self.diagnostics.len() > MAX_COMMAND_DIAGNOSTICS {
+            return Err(CommandResultError::new("too many command diagnostics"));
         }
-        if self.effects.len() > MAX_OPERATION_EFFECTS {
-            return Err(OperationResultError::new("too many operation effects"));
+        if self.effects.len() > MAX_COMMAND_EFFECTS {
+            return Err(CommandResultError::new("too many command effects"));
         }
         for diagnostic in &self.diagnostics {
             if diagnostic.code.trim().is_empty() || diagnostic.message.trim().is_empty() {
-                return Err(OperationResultError::new(
-                    "operation diagnostics require code and message",
+                return Err(CommandResultError::new(
+                    "command diagnostics require code and message",
                 ));
             }
         }
@@ -1441,10 +1530,43 @@ fn validate_identifier(value: &str, label: &str) -> Result<(), SettingsContractE
     Ok(())
 }
 
+/// Slash-command aliases are typed by a user, not used as identifiers: the
+/// built-in help command has answered to `?` for as long as it has answered to
+/// `/help`. They still have to be a single bare token so a composer can match
+/// them without a parser.
+fn validate_alias(value: &str, label: &str) -> Result<(), SettingsContractError> {
+    if value.is_empty()
+        || value.chars().count() > MAX_SETTINGS_ID_CHARS
+        || value.trim() != value
+        || value.chars().any(char::is_whitespace)
+    {
+        return Err(SettingsContractError::new(format!(
+            "{label} `{value}` is not a single-word alias"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_text(value: &str, label: &str, limit: usize) -> Result<(), SettingsContractError> {
     if value.chars().count() > limit {
         return Err(SettingsContractError::new(format!(
             "{label} exceeds {limit} characters"
+        )));
+    }
+    Ok(())
+}
+
+/// Localization keys are looked up verbatim in the client's message catalog, so
+/// they share the identifier grammar the catalogs already use.
+fn validate_message_key(value: &str, label: &str) -> Result<(), SettingsContractError> {
+    if value.is_empty()
+        || value.chars().count() > MAX_SETTINGS_ID_CHARS
+        || value
+            .chars()
+            .any(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'))
+    {
+        return Err(SettingsContractError::new(format!(
+            "{label} `{value}` is not a message key"
         )));
     }
     Ok(())
@@ -1944,12 +2066,12 @@ impl fmt::Display for SettingsValueError {
 impl std::error::Error for SettingsValueError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationResultError {
+pub struct CommandResultError {
     pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationDefinitionError {
+pub struct CommandDefinitionError {
     pub message: String,
 }
 
@@ -1978,7 +2100,7 @@ impl fmt::Display for ServiceDefinitionError {
 
 impl std::error::Error for ServiceDefinitionError {}
 
-impl OperationDefinitionError {
+impl CommandDefinitionError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -1990,15 +2112,15 @@ impl OperationDefinitionError {
     }
 }
 
-impl fmt::Display for OperationDefinitionError {
+impl fmt::Display for CommandDefinitionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for OperationDefinitionError {}
+impl std::error::Error for CommandDefinitionError {}
 
-impl OperationResultError {
+impl CommandResultError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -2006,13 +2128,13 @@ impl OperationResultError {
     }
 }
 
-impl fmt::Display for OperationResultError {
+impl fmt::Display for CommandResultError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for OperationResultError {}
+impl std::error::Error for CommandResultError {}
 
 #[cfg(test)]
 mod tests {
@@ -2104,12 +2226,11 @@ mod tests {
     }
 
     #[test]
-    fn operation_result_has_no_client_invocation_effects() {
-        let result = PluginOperationResult::succeeded("done").with_effect(
-            PluginHostEffect::RefreshPluginSurface {
+    fn command_result_has_no_client_invocation_effects() {
+        let result =
+            CommandResult::succeeded("done").with_effect(CommandHostEffect::RefreshPluginSurface {
                 plugin_id: "example.plugin".to_string(),
-            },
-        );
+            });
         result.validate().expect("valid result");
         let json = serde_json::to_value(result).expect("serialize result");
         assert!(!json.to_string().contains("invoke_tool"));
@@ -2117,29 +2238,80 @@ mod tests {
     }
 
     #[test]
-    fn operation_slash_requires_one_leading_separator() {
-        let operation = |slash: &str| PluginOperationDefinition {
+    fn command_slash_requires_one_leading_separator() {
+        let command = |slash: &str| CommandDefinition {
             id: "example.run".to_string(),
             title: "Run".to_string(),
-            description: String::new(),
             group: "command_palette".to_string(),
             category: None,
             slash: Some(slash.to_string()),
             aliases: Vec::new(),
-            usage: None,
-            input: SettingsContract::new(SettingsNode::root_object("Input", "")),
-            discoverability: OperationDiscoverability::default(),
-            target: PluginOperationTarget::Method {
+            docs: CommandDocs::default(),
+            input: SettingsContract::empty_object("Input", ""),
+            discoverability: CommandDiscoverability::default(),
+            target: CommandTarget::Method {
                 handler: "run".to_string(),
             },
         };
 
-        operation("/example-run")
+        command("/example-run")
             .validate()
             .expect("one leading slash is valid");
-        assert!(operation("example-run").validate().is_err());
-        assert!(operation("//example-run").validate().is_err());
-        assert!(operation("/example/run").validate().is_err());
+        assert!(command("example-run").validate().is_err());
+        assert!(command("//example-run").validate().is_err());
+        assert!(command("/example/run").validate().is_err());
+    }
+
+    #[test]
+    fn client_command_must_declare_no_input() {
+        let mut command = CommandDefinition {
+            id: "example.new".to_string(),
+            title: "New".to_string(),
+            group: "client".to_string(),
+            category: None,
+            slash: Some("/new".to_string()),
+            aliases: Vec::new(),
+            docs: CommandDocs {
+                summary_key: Some("command-new-summary".to_string()),
+                ..CommandDocs::default()
+            },
+            input: SettingsContract::empty_object("Input", ""),
+            discoverability: CommandDiscoverability::default(),
+            target: CommandTarget::Client {
+                action: "new".to_string(),
+            },
+        };
+        command.validate().expect("empty client command is valid");
+
+        command.input = SettingsContract::new(SettingsNode {
+            id: "root".to_string(),
+            path: String::new(),
+            title: "Input".to_string(),
+            description: String::new(),
+            required: true,
+            default: Some(serde_json::json!({})),
+            constraints: SettingsConstraints::default(),
+            sensitive: false,
+            secret: false,
+            kind: SettingsNodeKind::Object { fields: Vec::new() },
+        });
+        command
+            .validate()
+            .expect("an empty object contract spelled by hand is still empty");
+
+        command.docs.summary_key = Some("Not A Key".to_string());
+        assert!(command.validate().is_err());
+        command.docs.summary_key = None;
+
+        command.input = SettingsContract::empty_object("Input", "");
+        command
+            .validate()
+            .expect("an action token is a stable identifier");
+
+        command.target = CommandTarget::Client {
+            action: "not a token".to_string(),
+        };
+        assert!(command.validate().is_err());
     }
 
     #[test]

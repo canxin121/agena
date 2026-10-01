@@ -996,8 +996,6 @@ pub(super) enum Route {
     SessionSearch(SessionSearchOverlay),
     Hub(HubState),
     CommandPalette(CommandPaletteOverlay),
-    SkillPicker(SkillPickerOverlay),
-    SkillStudio(SkillStudioOverlay),
     SessionNavigation(SessionNavigationOverlay),
     SelectionPicker(SelectionPickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),

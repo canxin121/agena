@@ -44,8 +44,7 @@ impl InteractionPlugin {
 
     #[tool(
         tags(interactive),
-        summary = "Show a non-blocking Markdown notification to the user.",
-        concurrency_safe
+        summary = "Show a non-blocking Markdown notification to the user."
     )]
     fn notify(&self, input: &InteractionNotifyToolInput) -> SdkResult<ToolInvokeOutput> {
         let input = InteractionNotifyToolInput::parse_input(
@@ -101,7 +100,8 @@ mod tests {
         assert_eq!(manifest.namespace, "agena");
         assert_eq!(manifest.name, "interaction");
         assert_eq!(tool_names, ["ask", "notify"]);
-        assert!(manifest.tools[1].runtime.concurrency_safe);
+        // Both tools are interactive: the batch fan-out must not special-case
+        // them, so nothing here asserts anything about host-side ordering.
     }
 
     #[test]

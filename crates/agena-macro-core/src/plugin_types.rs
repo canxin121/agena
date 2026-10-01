@@ -10,7 +10,7 @@ pub struct PluginToolPlan {
     pub input_model: PluginGeneratedToolInput,
     pub invoke: PluginToolInvokeHandler,
     pub stream: Option<PluginToolStreamHandler>,
-    pub operation: Option<PluginToolOperationConfig>,
+    pub command: Option<PluginToolCommandConfig>,
 }
 
 #[derive(Clone)]
@@ -86,8 +86,8 @@ pub struct PluginGeneratedInputField {
 }
 
 #[derive(Clone)]
-/// Plan of a plugin operation.
-pub struct PluginOperationPlan {
+/// Plan of a plugin command.
+pub struct PluginCommandPlan {
     pub id: LitStr,
     pub title: LitStr,
     pub description: LitStr,
@@ -96,15 +96,15 @@ pub struct PluginOperationPlan {
     pub slash: Option<LitStr>,
     pub aliases: Vec<LitStr>,
     pub usage: Option<LitStr>,
-    pub handler: PluginOperationHandlerPlan,
+    pub handler: CommandHandlerPlan,
 }
 
 #[derive(Clone)]
-/// Handler plan of a plugin operation.
-pub enum PluginOperationHandlerPlan {
+/// Handler plan of a plugin command.
+pub enum CommandHandlerPlan {
     Method {
         method: Ident,
-        input: PluginOperationInputPlan,
+        input: CommandInputPlan,
         context: Option<PluginContextArg>,
         is_async: bool,
     },
@@ -115,8 +115,8 @@ pub enum PluginOperationHandlerPlan {
 }
 
 #[derive(Clone)]
-/// Input plan of a plugin operation.
-pub enum PluginOperationInputPlan {
+/// Input plan of a plugin command.
+pub enum CommandInputPlan {
     None,
     Raw {
         by_ref: bool,
@@ -132,9 +132,9 @@ pub enum PluginOperationInputPlan {
 }
 
 #[derive(Clone)]
-/// Shape of a plugin operation method.
-pub struct PluginOperationMethodShape {
-    pub input: PluginOperationInputPlan,
+/// Shape of a plugin command method.
+pub struct CommandMethodShape {
+    pub input: CommandInputPlan,
     pub context: Option<PluginContextArg>,
 }
 
@@ -168,8 +168,8 @@ pub enum PluginServiceInputPlan {
 }
 
 #[derive(Clone, Default)]
-/// Config of a tool-backed plugin operation.
-pub struct PluginToolOperationConfig {
+/// Config of a tool-backed plugin command.
+pub struct PluginToolCommandConfig {
     pub id: Option<LitStr>,
     pub title: Option<LitStr>,
     pub description: Option<LitStr>,
@@ -184,7 +184,7 @@ pub struct PluginToolOperationConfig {
 pub struct PluginInherentMethodAttrs {
     pub tools: Vec<PluginToolPlan>,
     pub hooks: Vec<crate::plugin_hooks::PluginHookPlan>,
-    pub operations: Vec<PluginOperationPlan>,
+    pub commands: Vec<PluginCommandPlan>,
     pub services: Vec<PluginServicePlan>,
 }
 
@@ -227,12 +227,12 @@ impl Parse for PluginServiceAttrArgs {
 }
 
 /// Attribute arguments of a plugin command.
-pub struct PluginOperationAttrArgs {
+pub struct CommandAttrArgs {
     pub slash: Option<LitStr>,
     pub metas: Vec<Meta>,
 }
 
-impl Parse for PluginOperationAttrArgs {
+impl Parse for CommandAttrArgs {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let mut slash = None;
         if input.peek(LitStr) {
@@ -240,7 +240,7 @@ impl Parse for PluginOperationAttrArgs {
             if input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
             } else if !input.is_empty() {
-                return Err(input.error("expected `,` after operation slash shorthand"));
+                return Err(input.error("expected `,` after command slash shorthand"));
             }
         }
 
@@ -250,7 +250,7 @@ impl Parse for PluginOperationAttrArgs {
             if input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
             } else if !input.is_empty() {
-                return Err(input.error("expected `,` between operation arguments"));
+                return Err(input.error("expected `,` between command arguments"));
             }
         }
 
@@ -270,7 +270,7 @@ pub fn plugin_attr_has_explicit_args(attr: &Attribute) -> bool {
 pub struct PluginToolAttrConfig {
     pub spec: crate::tool_spec_support::ToolSpecConfig,
     pub stream_method: Option<Ident>,
-    pub operation: Option<PluginToolOperationConfig>,
+    pub command: Option<PluginToolCommandConfig>,
 }
 
 /// Shape of a plugin tool method.

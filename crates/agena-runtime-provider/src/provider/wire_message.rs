@@ -1878,7 +1878,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_skill_reference_enters_provider_history_as_lazy_tool_read_reference() {
+    fn selected_command_reference_enters_provider_history_as_lazy_tool_read_reference() {
         let skill = part(
             "skill_ref",
             PartRole::User,
@@ -1903,12 +1903,12 @@ mod tests {
         let projected = project_persisted(&[skill, text]);
         assert_eq!(projected.len(), 2);
         let WirePart::Text { text: skill } = &projected[0] else {
-            panic!("expected Skill reference text")
+            panic!("expected command reference text")
         };
-        assert!(skill.contains("message_scoped_user_selected_skill_reference"));
+        assert!(skill.contains("message_scoped_user_selected_command_reference"));
         assert!(skill.contains("Review the current branch"));
         assert!(skill.contains("abc123"));
-        assert!(skill.contains("agena.skills.get"));
+        assert!(skill.contains("read its instructions through the plugin"));
         assert!(skill.contains("user explicitly selected"));
         assert!(matches!(
             &projected[1],

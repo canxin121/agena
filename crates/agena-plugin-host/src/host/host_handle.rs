@@ -101,7 +101,8 @@ impl HostHandle {
             callback_base_url,
             tool_registry,
             scoped_tools: Arc::new(ScopedRegistry::new()),
-            operation_registry: Arc::new(ScopedRegistry::new()),
+            command_registry: Arc::new(ScopedRegistry::new()),
+            command_generation: Arc::new(AtomicU64::new(0)),
             plugin_indices,
             plugin_names,
             hook_catalog: super::contribution_registry::ContributionRegistry::new(
@@ -142,27 +143,30 @@ impl HostHandle {
             manifest,
             &mut recover_write(&self.tool_registry, "plugin tool registry"),
         )?;
-        for operation in &manifest.operations {
-            let registry_name = operation_registry_name(plugin_id, operation.id.as_str());
-            let item = PluginOperationCatalogItem {
+        for command in &manifest.commands {
+            let registry_name = command_registry_name(plugin_id, command.id.as_str());
+            let item = CommandCatalogItem {
                 plugin_id: plugin_id.clone(),
-                accepts_empty_input: operation.input.default_value().is_ok(),
-                default_input: operation
+                accepts_empty_input: command.input.default_value().is_ok(),
+                default_input: command
                     .input
                     .default_value()
                     .unwrap_or(serde_json::Value::Null),
-                operation: operation.clone(),
+                command: command.clone(),
             };
-            self.operation_registry
+            self.command_registry
                 .register_with_effect_kind(
                     &effect_scope,
                     None,
                     registry_name,
                     item,
-                    "host.operation",
-                    operation.id.clone(),
+                    "host.command",
+                    command.id.clone(),
                 )
-                .map_err(|error| host_unavailable_error("register a manifest operation", &error))?;
+                .map_err(|error| host_unavailable_error("register a manifest command", &error))?;
+        }
+        if !manifest.commands.is_empty() {
+            self.bump_command_generation();
         }
         for export in &manifest.services.exports {
             self.replace_effect_sync(
@@ -203,8 +207,8 @@ impl HostHandle {
         Arc::clone(&self.quotas)
     }
 
-    pub fn operation_registry(&self) -> Arc<ScopedRegistry<String, PluginOperationCatalogItem>> {
-        Arc::clone(&self.operation_registry)
+    pub fn command_registry(&self) -> Arc<ScopedRegistry<String, CommandCatalogItem>> {
+        Arc::clone(&self.command_registry)
     }
 
     pub fn scoped_tool_registry(&self) -> Arc<ScopedRegistry<ToolKey, RegisteredTool>> {
@@ -1170,6 +1174,40 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
                     }
+                    method::HOST_COMMAND_REGISTRY_REGISTER => {
+                        let p: HostCommandRegisterParams = parse(params)?;
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("command.registry.register requires plugin id")
+                        })?;
+                        let response =
+                            self.command_upsert_for_plugin(&plugin_id, p.request.command)?;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_COMMAND_REGISTRY_UPDATE => {
+                        let p: HostCommandUpdateParams = parse(params)?;
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("command.registry.update requires plugin id")
+                        })?;
+                        let response =
+                            self.command_upsert_for_plugin(&plugin_id, p.request.command)?;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_COMMAND_REGISTRY_REMOVE => {
+                        let p: HostCommandRemoveParams = parse(params)?;
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("command.registry.remove requires plugin id")
+                        })?;
+                        let response = self.command_remove_for_plugin(&plugin_id, &p.request.id)?;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_COMMAND_REGISTRY_LIST => {
+                        let response = self.registered_command_list_response()?;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
                     method::HOST_TOOL_REGISTRY_REGISTER => {
                         let p: HostToolRegisterParams = parse(params)?;
                         let plugin_id = plugin_id.ok_or_else(|| {
@@ -1479,6 +1517,110 @@ impl HostHandle {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn command_upsert_for_plugin(
+        &self,
+        plugin_id: &str,
+        definition: crate::sdk::CommandDefinition,
+    ) -> Result<HostCommandMutationResponse, PluginError> {
+        let plugin_key: PluginKey = plugin_id.parse()?;
+        let registered =
+            recover_read(&self.plugin_indices, "plugin index registry").contains_key(&plugin_key);
+        if !registered {
+            return Err(host_unavailable(format!(
+                "plugin `{plugin_id}` is not registered"
+            )));
+        }
+        definition.validate().map_err(PluginError::invalid_params)?;
+        let owner = self.ensure_effect_scope(&plugin_key);
+        let _lease = owner
+            .lease()
+            .map_err(|error| host_unavailable_error("register a plugin command", &error))?;
+        let registry_name = command_registry_name(&plugin_key, definition.id.as_str());
+        let item = CommandCatalogItem {
+            plugin_id: plugin_key.clone(),
+            accepts_empty_input: definition.input.default_value().is_ok(),
+            default_input: definition
+                .input
+                .default_value()
+                .unwrap_or(serde_json::Value::Null),
+            command: definition.clone(),
+        };
+        let scope = current_tool_scope();
+        self.command_registry
+            .register_with_effect_kind(
+                &owner,
+                scope,
+                registry_name,
+                item,
+                "host.command",
+                definition.id.clone(),
+            )
+            .map_err(|error| host_unavailable_error("register a plugin command", &error))?;
+        Ok(HostCommandMutationResponse {
+            generation: self.bump_command_generation(),
+            command: Some(definition),
+        })
+    }
+
+    pub(super) fn command_remove_for_plugin(
+        &self,
+        plugin_id: &str,
+        command_id: &str,
+    ) -> Result<HostCommandMutationResponse, PluginError> {
+        let plugin_key: PluginKey = plugin_id.parse()?;
+        let owner = self.effect_scope(&plugin_key).ok_or_else(|| {
+            host_unavailable(format!("plugin `{plugin_id}` has no active effect scope"))
+        })?;
+        let registry_name = command_registry_name(&plugin_key, command_id);
+        let commands = self.command_registry();
+        let mut removed = None;
+        if let Some(scope) = current_tool_scope() {
+            removed = commands
+                .remove_owned(&owner, Some(&scope), &registry_name)
+                .map(|entry| entry.value.command);
+        }
+        if removed.is_none() {
+            removed = commands
+                .remove_owned(&owner, None, &registry_name)
+                .map(|entry| entry.value.command);
+        }
+        let generation = if removed.is_some() {
+            self.bump_command_generation()
+        } else {
+            self.command_generation()
+        };
+        Ok(HostCommandMutationResponse {
+            generation,
+            command: removed,
+        })
+    }
+
+    fn command_generation(&self) -> u64 {
+        self.command_generation.load(Relaxed)
+    }
+
+    fn bump_command_generation(&self) -> u64 {
+        self.command_generation.fetch_add(1, Relaxed) + 1
+    }
+
+    pub(super) fn registered_command_list_response(
+        &self,
+    ) -> Result<HostRegisteredCommandListResponse, PluginError> {
+        let scope = current_tool_scope();
+        let registry = self.command_registry();
+        let mut items = registry
+            .visible(scope.as_ref())
+            .into_values()
+            .map(|entry| entry.value)
+            .collect::<Vec<_>>();
+        sort_command_catalog(&mut items);
+        let commands = items.into_iter().map(|item| item.command).collect();
+        Ok(HostRegisteredCommandListResponse {
+            generation: self.command_generation(),
+            commands,
+        })
     }
 
     pub(super) fn tool_upsert_for_plugin(
@@ -1871,10 +2013,13 @@ impl HostHandle {
         HostThemeListResponse { themes }
     }
 }
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
 use super::{
-    Arc, BTreeMap, CallbackAuthorityRecord, EventEnvelope, EventSubscription, HashMap,
-    HostAskUserParams, HostCallbackContext, HostCancelSubtaskParams, HostClient,
-    HostConfigReadParams, HostConfigReloadParams, HostContextStatusParams,
+    Arc, BTreeMap, CallbackAuthorityRecord, CommandCatalogItem, EventEnvelope, EventSubscription,
+    HashMap, HostAskUserParams, HostCallbackContext, HostCancelSubtaskParams, HostClient,
+    HostCommandMutationResponse, HostCommandRegisterParams, HostCommandRemoveParams,
+    HostCommandUpdateParams, HostConfigReadParams, HostConfigReloadParams, HostContextStatusParams,
     HostDisplayContributeParams, HostDisplayContributeRequest, HostDisplayContribution,
     HostDisplayRemoveParams, HostDisplayRemoveResponse, HostEnterSnapshotParams,
     HostExitSnapshotParams, HostHandle, HostHookListResponse, HostHookRegistration,
@@ -1884,24 +2029,23 @@ use super::{
     HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
     HostNotification, HostNotifyParams, HostPermissionCheckNetworkParams,
     HostPermissionCheckPathParams, HostPluginStatusGetParams, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostReadSubtaskOutputParams, HostRegisteredToolDescriptor,
-    HostRegisteredToolListResponse, HostRunSubtaskParams, HostSchedulerCreateParams,
-    HostSchedulerDeleteParams, HostSchedulerListParams, HostSecretDeleteParams,
-    HostSecretGetParams, HostSecretListParams, HostSecretSetParams, HostSetSessionModelParams,
-    HostSnapshotListParams, HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams,
-    HostStorageSetParams, HostSubscribeParams, HostThemeListResponse, HostThemePalette,
-    HostThemeRegisterParams, HostThemeRegisterRequest, HostThemeRemoveParams,
-    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterParams,
-    HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams, Mutex, PluginEffectScope,
-    PluginEffectScopeInspect, PluginError, PluginErrorKind, PluginKey, PluginLogRecord,
-    PluginLogStore, PluginNotifyRequest, PluginOperationCatalogItem, PluginScopeKey,
-    PluginServiceBinding, PluginServiceBindingKey, PluginServiceInvokeInput,
-    PluginServiceInvokeOutput, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock,
-    ScopedHostClient, ScopedRegistry, ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent,
-    ToolRegistryEventListener, VecDeque, callback_context_from_params, current_tool_scope,
-    host_api, host_status_from, host_unavailable, method, operation_registry_name, parse,
-    scoped_context, tool_registry_event_visible_in_scope, transport_to_plugin_error,
-    unix_timestamp_ms,
+    HostPluginStatusListResponse, HostReadSubtaskOutputParams, HostRegisteredCommandListResponse,
+    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,
+    HostSchedulerCreateParams, HostSchedulerDeleteParams, HostSchedulerListParams,
+    HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams, HostSecretSetParams,
+    HostSetSessionModelParams, HostSnapshotListParams, HostStorageDeleteParams,
+    HostStorageGetParams, HostStorageListParams, HostStorageSetParams, HostSubscribeParams,
+    HostThemeListResponse, HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest,
+    HostThemeRemoveParams, HostThemeRemoveResponse, HostToolMutationResponse,
+    HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams,
+    Mutex, PluginEffectScope, PluginEffectScopeInspect, PluginError, PluginErrorKind, PluginKey,
+    PluginLogRecord, PluginLogStore, PluginNotifyRequest, PluginScopeKey, PluginServiceBinding,
+    PluginServiceBindingKey, PluginServiceInvokeInput, PluginServiceInvokeOutput,
+    PluginToolRegistry, PluginTransport, RegisteredTool, RwLock, ScopedHostClient, ScopedRegistry,
+    ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque,
+    callback_context_from_params, command_registry_name, current_tool_scope, host_api,
+    host_status_from, host_unavailable, method, parse, scoped_context, sort_command_catalog,
+    tool_registry_event_visible_in_scope, transport_to_plugin_error, unix_timestamp_ms,
 };
 
 #[cfg(test)]
@@ -1945,7 +2089,6 @@ mod effect_ownership_tests {
                 }),
                 ..Default::default()
             },
-            model: Default::default(),
             docs: crate::sdk::ToolDocs {
                 summary: Some("Dynamic effect-owned tool.".to_string()),
                 ..Default::default()
@@ -2341,46 +2484,48 @@ mod effect_ownership_tests {
     }
 
     #[tokio::test]
-    async fn manifest_operations_are_exact_effect_owned_registry_entries() {
+    async fn manifest_commands_are_exact_effect_owned_registry_entries() {
         use crate::sdk::{
-            OperationDiscoverability, PluginManifest, PluginOperationDefinition,
-            PluginOperationTarget, SettingsContract, SettingsNode,
+            CommandDefinition, CommandDiscoverability, CommandTarget, PluginManifest,
+            SettingsContract, SettingsNode,
         };
 
-        let plugin_id: PluginKey = "example.operations".parse().expect("plugin key");
+        let plugin_id: PluginKey = "example.commands".parse().expect("plugin key");
         let (handle, _tools, _indices) = test_handle(&plugin_id);
-        let mut manifest = PluginManifest::new("example", "operations", "0.1.0");
-        manifest.operations.push(PluginOperationDefinition {
+        let mut manifest = PluginManifest::new("example", "commands", "0.1.0");
+        manifest.commands.push(CommandDefinition {
             id: "open".to_string(),
             title: "Open".to_string(),
-            description: "Open the plugin workbench.".to_string(),
             group: "Plugin".to_string(),
             category: None,
             slash: Some("open".to_string()),
             aliases: Vec::new(),
-            usage: None,
+            docs: agena_plugin_sdk::CommandDocs {
+                summary: Some("Open the plugin workbench.".to_string()),
+                ..Default::default()
+            },
             input: SettingsContract::new(SettingsNode::root_object("Input", "")),
-            discoverability: OperationDiscoverability::default(),
-            target: PluginOperationTarget::Method {
+            discoverability: CommandDiscoverability::default(),
+            target: CommandTarget::Method {
                 handler: "open".to_string(),
             },
         });
 
         handle
             .own_manifest_resources(&plugin_id, &manifest)
-            .expect("own manifest operation");
-        let registry = handle.operation_registry();
-        let name = operation_registry_name(&plugin_id, "open");
+            .expect("own manifest command");
+        let registry = handle.command_registry();
+        let name = command_registry_name(&plugin_id, "open");
         {
-            let entry = registry.resolve(None, &name).expect("registered operation");
+            let entry = registry.resolve(None, &name).expect("registered command");
             assert_eq!(entry.owner, plugin_id);
-            assert_eq!(entry.value.operation.id, "open");
+            assert_eq!(entry.value.command.id, "open");
         }
         let inspect = handle
             .effect_scope_inspect(&plugin_id)
             .expect("effect scope inspect");
         assert!(inspect.effects.iter().any(|effect| {
-            effect.kind == "host.operation"
+            effect.kind == "host.command"
                 && effect.label == "open"
                 && effect.state == crate::effect_scope::PluginEffectState::Active
         }));
@@ -2392,10 +2537,124 @@ mod effect_ownership_tests {
             .effect_scope_inspect(&plugin_id)
             .expect("disposed scope");
         assert!(disposed.effects.iter().any(|effect| {
-            effect.kind == "host.operation"
+            effect.kind == "host.command"
                 && effect.label == "open"
                 && effect.state == crate::effect_scope::PluginEffectState::Disposed
         }));
+    }
+
+    #[tokio::test]
+    async fn dynamic_commands_are_registered_scoped_and_removable() {
+        use crate::sdk::{
+            CommandDefinition, CommandDiscoverability, CommandDocs, CommandTarget,
+            SettingsContract, SettingsNode,
+        };
+
+        let plugin_id: PluginKey = "example.dynamic-commands".parse().expect("plugin key");
+        let (handle, _tools, _indices) = test_handle(&plugin_id);
+        handle.begin_plugin_instance(plugin_id.clone());
+
+        let definition = CommandDefinition {
+            id: "note".to_string(),
+            title: "Note".to_string(),
+            group: "Skills".to_string(),
+            category: None,
+            slash: Some("/note".to_string()),
+            aliases: Vec::new(),
+            docs: CommandDocs {
+                summary: Some("Inject one bridged skill.".to_string()),
+                ..Default::default()
+            },
+            input: SettingsContract::new(SettingsNode::root_object("Input", "")),
+            discoverability: CommandDiscoverability::default(),
+            target: CommandTarget::Method {
+                handler: "run".to_string(),
+            },
+        };
+
+        let before = handle.command_generation();
+        let registered = handle
+            .run_in_authorized_callback_context(
+                &plugin_id,
+                HostCallbackContext {
+                    session_id: Some(41),
+                    ..Default::default()
+                },
+                async {
+                    handle.command_upsert_for_plugin(plugin_id.to_string().as_str(), definition)
+                },
+            )
+            .await
+            .expect("dynamic command registration");
+        assert_eq!(
+            registered.command.as_ref().map(|c| c.id.as_str()),
+            Some("note")
+        );
+        assert!(
+            registered.generation > before,
+            "mutation must bump generation"
+        );
+
+        let visible = handle
+            .run_in_authorized_callback_context(
+                &plugin_id,
+                HostCallbackContext {
+                    session_id: Some(41),
+                    ..Default::default()
+                },
+                async { handle.registered_command_list_response() },
+            )
+            .await
+            .expect("session command list");
+        assert_eq!(visible.generation, registered.generation);
+        assert_eq!(visible.commands.len(), 1);
+        assert_eq!(visible.commands[0].slash.as_deref(), Some("/note"));
+
+        let other = handle
+            .run_in_authorized_callback_context(
+                &plugin_id,
+                HostCallbackContext {
+                    session_id: Some(42),
+                    ..Default::default()
+                },
+                async { handle.registered_command_list_response() },
+            )
+            .await
+            .expect("other session command list");
+        assert!(
+            other.commands.is_empty(),
+            "another session must not see the session-scoped command"
+        );
+
+        let removed = handle
+            .run_in_authorized_callback_context(
+                &plugin_id,
+                HostCallbackContext {
+                    session_id: Some(41),
+                    ..Default::default()
+                },
+                async { handle.command_remove_for_plugin(plugin_id.to_string().as_str(), "note") },
+            )
+            .await
+            .expect("dynamic command removal");
+        assert_eq!(
+            removed.command.as_ref().map(|c| c.id.as_str()),
+            Some("note")
+        );
+        assert!(removed.generation > registered.generation);
+
+        let after = handle
+            .run_in_authorized_callback_context(
+                &plugin_id,
+                HostCallbackContext {
+                    session_id: Some(41),
+                    ..Default::default()
+                },
+                async { handle.registered_command_list_response() },
+            )
+            .await
+            .expect("command list after removal");
+        assert!(after.commands.is_empty());
     }
 
     #[tokio::test]

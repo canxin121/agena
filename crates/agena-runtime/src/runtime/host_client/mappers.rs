@@ -63,7 +63,6 @@ pub(super) fn render_tool_descriptor(
         plugin_id: Some(tool.plugin_key().to_string()),
         summary,
         help,
-        examples: tool.definition.model.examples.clone(),
         input_schema,
     }
 }

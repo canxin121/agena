@@ -4,8 +4,8 @@
 //! helper).
 
 use agena_plugin_host::sdk::{
-    PluginHostEffect, PluginOperationDiagnostic, PluginOperationInvokeInput, PluginOperationResult,
-    PluginOperationStatus, PluginOperationTarget,
+    CommandDiagnostic, CommandHostEffect, CommandInvokeInput, CommandResult, CommandStatus,
+    CommandTarget,
 };
 use agena_plugin_host::{PluginToolInvokeResponse, PluginToolInvokeStatus};
 
@@ -240,38 +240,38 @@ impl Application {
     /// Resolve, validate and execute one user-facing plugin operation. Tool
     /// targets stay on the normal session/permission execution path; method
     /// targets cross the plugin transport. No client follows an action chain.
-    pub async fn invoke_plugin_operation(
+    pub async fn invoke_plugin_command(
         &self,
         plugin_id: &str,
-        operation_id: &str,
+        command_id: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
         workspace_root: Option<String>,
         slash: Option<String>,
         raw: String,
-    ) -> Result<PluginOperationResult, ApplicationError> {
+    ) -> Result<CommandResult, ApplicationError> {
         let entry = self
             .plugin_runtime()
-            .operation_catalog()
+            .command_catalog()
             .into_iter()
             .find(|entry| {
-                entry.plugin_id.to_string() == plugin_id && entry.operation.id == operation_id
+                entry.plugin_id.to_string() == plugin_id && entry.command.id == command_id
             })
             .ok_or_else(|| {
                 ApplicationError::not_found_with_diagnostic(
                     "The plugin operation was not found.",
-                    format!("plugin operation not found: {plugin_id}/{operation_id}"),
+                    format!("plugin operation not found: {plugin_id}/{command_id}"),
                 )
             })?;
 
         let input_is_empty =
             input.is_null() || input.as_object().is_some_and(serde_json::Map::is_empty);
         let input = if input_is_empty && !raw.trim().is_empty() {
-            entry.operation.input.parse_shorthand(raw.as_str())
+            entry.command.input.parse_shorthand(raw.as_str())
         } else if input_is_empty {
-            entry.operation.input.default_value()
+            entry.command.input.default_value()
         } else {
-            entry.operation.input.validate_value(&input).map(|()| input)
+            entry.command.input.validate_value(&input).map(|()| input)
         }
         .map_err(|error| {
             ApplicationError::bad_request_with_diagnostic(
@@ -280,13 +280,20 @@ impl Application {
             )
         })?;
 
-        let mut result = match &entry.operation.target {
-            PluginOperationTarget::Method { .. } => self
+        let mut result = match &entry.command.target {
+            // A client target is executed by the client that renders the
+            // palette, never here. Reaching this branch means a client sent a
+            // command it should have short-circuited locally.
+            CommandTarget::Client { action } => CommandResult::unavailable(format!(
+                "`{}` runs in the client as `{action}` and cannot be invoked on the server.",
+                entry.command.id
+            )),
+            CommandTarget::Method { .. } => self
                 .plugin_runtime()
-                .invoke_plugin_operation(
+                .invoke_plugin_command(
                     plugin_id,
-                    PluginOperationInvokeInput {
-                        operation_id: operation_id.to_owned(),
+                    CommandInvokeInput {
+                        command_id: command_id.to_owned(),
                         input,
                         session_id,
                         call_id: None,
@@ -297,33 +304,33 @@ impl Application {
                 )
                 .await
                 .map_err(ApplicationError::internal)?,
-            PluginOperationTarget::Tool { tool } => {
+            CommandTarget::Tool { tool } => {
                 let tool_result = self
                     .invoke_plugin_tool(plugin_id, tool.as_str(), input, session_id)
                     .await?;
-                plugin_operation_result_from_tool(plugin_id, tool_result)
+                plugin_command_result_from_tool(plugin_id, tool_result)
             }
         };
         if result.title.trim().is_empty() {
-            result.title = entry.operation.title;
+            result.title = entry.command.title;
         }
         result.validate().map_err(|error| {
             ApplicationError::internal(format!(
-                "plugin operation `{plugin_id}/{operation_id}` returned an invalid result: {error}"
+                "plugin operation `{plugin_id}/{command_id}` returned an invalid result: {error}"
             ))
         })?;
         Ok(result)
     }
 }
 
-fn plugin_operation_result_from_tool(
+fn plugin_command_result_from_tool(
     plugin_id: &str,
     tool: PluginToolInvokeResponse,
-) -> PluginOperationResult {
+) -> CommandResult {
     let status = match tool.status {
-        PluginToolInvokeStatus::Completed => PluginOperationStatus::Succeeded,
+        PluginToolInvokeStatus::Completed => CommandStatus::Succeeded,
         PluginToolInvokeStatus::CapabilityUnavailable | PluginToolInvokeStatus::ToolUnavailable => {
-            PluginOperationStatus::Unavailable
+            CommandStatus::Unavailable
         }
     };
     let retryable = tool
@@ -332,10 +339,10 @@ fn plugin_operation_result_from_tool(
         .and_then(|payload| payload.get("retryable"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let diagnostics = if status == PluginOperationStatus::Succeeded {
+    let diagnostics = if status == CommandStatus::Succeeded {
         Vec::new()
     } else {
-        vec![PluginOperationDiagnostic {
+        vec![CommandDiagnostic {
             code: tool
                 .payload
                 .as_ref()
@@ -348,7 +355,7 @@ fn plugin_operation_result_from_tool(
             sensitive: false,
         }]
     };
-    PluginOperationResult {
+    CommandResult {
         status,
         title: tool.title,
         summary: tool
@@ -364,7 +371,7 @@ fn plugin_operation_result_from_tool(
         output: tool.payload,
         diagnostics,
         retryable,
-        effects: vec![PluginHostEffect::RefreshPluginSurface {
+        effects: vec![CommandHostEffect::RefreshPluginSurface {
             plugin_id: plugin_id.to_owned(),
         }],
     }

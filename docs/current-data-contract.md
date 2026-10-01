@@ -122,12 +122,12 @@ Plugin marketplace 只使用当前 plugin id：
 
 Plugin SDK 的通用参数 alias DSL 是当前插件开发能力，不是 Agena 旧版本迁移；Agena 自己的生产插件不依赖旧字段 alias。
 
-## Skills 与项目指导
+## Commands 与项目指导
 
-Skill / command discovery 只使用 Agena 自己的当前 roots，例如：
+Command discovery 只使用 Agena 自己的当前 roots，例如：
 
-- Agena home 的 skills/commands；
-- workspace `.agena/skills`；
+- Agena home 的 commands；
+- workspace `.agena/skills`（其他 agent 的 skill 目录，经 `agena.commands` 桥接）；
 - workspace `.agena/commands`。
 
 不扫描跨-agent `.agents/*` 兼容目录。

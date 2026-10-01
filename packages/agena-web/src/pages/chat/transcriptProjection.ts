@@ -267,7 +267,7 @@ export function optimisticUserParts(args: {
   return parts
 }
 
-function skillLabels(part: MessagePartLike): string[] {
+function commandLabels(part: MessagePartLike): string[] {
   const content = durablePartContent(part)
   const skills = Array.isArray(content.skills) ? content.skills : []
   const labels = skills.map((value) => firstText(record(value), ['name'])).filter(Boolean)
@@ -373,9 +373,9 @@ function displayFields(
     }
   }
   if (kind === 'skill') {
-    const labels = skillLabels(part)
+    const labels = commandLabels(part)
     return {
-      title: presentedTitle || 'Skill',
+      title: presentedTitle || 'Command',
       summary: presentedSummary || labels.join(', '),
       copyText: labels.join('\n'),
     }

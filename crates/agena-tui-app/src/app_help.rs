@@ -115,21 +115,6 @@ impl App {
             Route::CommandPalette(dialog) => {
                 self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
             }
-            Route::SkillPicker(dialog) => {
-                self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
-            }
-            Route::SkillStudio(dialog) => {
-                if let Some(editor) = dialog.editor.as_ref() {
-                    self.help_for_editor(editor.title.clone(), editor.multiline)
-                } else if dialog.detail.is_some() {
-                    self.help_for(
-                        HelpPreset::ReadOnlyDetails,
-                        ui_text::t(&self.i18n, "overlay-skill-studio-title"),
-                    )
-                } else {
-                    self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
-                }
-            }
             Route::SessionNavigation(dialog) => {
                 self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
             }

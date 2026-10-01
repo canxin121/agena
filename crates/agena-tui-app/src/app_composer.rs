@@ -33,22 +33,13 @@ impl App {
             ui_text::t(&self.i18n, "overlay-insert-content-title"),
             ui_text::t(&self.i18n, "overlay-insert-content-prompt"),
             None,
-            vec![
-                ChoiceItem {
-                    label: ui_text::t(&self.i18n, "insert-content-skill-label"),
-                    detail: ui_text::t(&self.i18n, "insert-content-skill-detail"),
-                    value: "skill".to_owned(),
-                    search_text: "skill instructions".to_owned(),
-                    current: false,
-                },
-                ChoiceItem {
-                    label: ui_text::t(&self.i18n, "insert-content-file-label"),
-                    detail: ui_text::t(&self.i18n, "insert-content-file-detail"),
-                    value: "file".to_owned(),
-                    search_text: "file folder path attachment document image".to_owned(),
-                    current: false,
-                },
-            ],
+            vec![ChoiceItem {
+                label: ui_text::t(&self.i18n, "insert-content-file-label"),
+                detail: ui_text::t(&self.i18n, "insert-content-file-detail"),
+                value: "file".to_owned(),
+                search_text: "file folder path attachment document image".to_owned(),
+                current: false,
+            }],
             ChoiceOverlayAction::InsertContent,
             false,
             agena_tui::choice::ChoicePresentationStyle::SelectOnly,
@@ -409,7 +400,7 @@ impl App {
                 self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));
             }
             agena_domain::ActivityPayload::SkillReference(_) => {
-                self.flash_info(ui_text::t(&self.i18n, "flash-skill-no-file-view"));
+                self.flash_info(ui_text::t(&self.i18n, "flash-command-no-file-view"));
             }
             _ => self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view")),
         }
@@ -797,47 +788,48 @@ impl App {
         let query = query.trim().to_ascii_lowercase();
         let mut items = Vec::new();
         let mut actions = BTreeMap::new();
-        for spec in commands::command_suggestions_for_prefix(query.as_str()) {
-            let key = format!("command:{}", spec.name);
+        for command in commands::client_command_suggestions(
+            self.application.plugin_catalog().as_ref(),
+            query.as_str(),
+        ) {
+            let name = command.name();
+            let key = format!("command:{}", command.id());
             actions.insert(
                 key.clone(),
                 SlashCommandSuggestionAction {
-                    slash_name: spec.name.to_owned(),
-                    can_submit_without_arguments: !spec.requires_arguments(),
+                    slash_name: name.clone(),
+                    can_submit_without_arguments: !command.requires_arguments(),
                 },
             );
             items.push(SlashCommandSuggestionItem {
                 key,
-                label: format!("/{}", spec.name),
-                detail: ui_text::t(&self.i18n, spec.summary_key),
+                label: format!("/{name}"),
+                detail: commands::docs_summary(&self.i18n, command.docs(), command.id()),
             });
         }
         for entry in self
-            .plugin_slash_operations()
+            .plugin_slash_commands()
             .into_iter()
-            .filter(|entry| plugin_operation_matches_slash_query(entry, &query))
+            .filter(|entry| plugin_command_matches_slash_query(entry, &query))
         {
-            let Some(slash_name) = plugin_operation_slash_name(&entry) else {
+            let Some(slash_name) = plugin_command_slash_name(&entry) else {
                 // A plugin may legally declare a command without a slash
                 // name; skip rather than assume the suggestion source
                 // pre-filtered it out.
                 continue;
             };
-            let key = format!(
-                "plugin-operation:{}:{}",
-                entry.plugin_id, entry.operation.id
-            );
+            let key = format!("plugin-operation:{}:{}", entry.plugin_id, entry.command.id);
             actions.insert(
                 key.clone(),
                 SlashCommandSuggestionAction {
                     slash_name: slash_name.clone(),
-                    can_submit_without_arguments: plugin_operation_accepts_empty_arguments(&entry),
+                    can_submit_without_arguments: plugin_command_accepts_empty_arguments(&entry),
                 },
             );
             items.push(SlashCommandSuggestionItem {
                 key,
                 label: format!("/{slash_name}"),
-                detail: plugin_operation_detail(&entry),
+                detail: plugin_command_detail(&entry),
             });
         }
         (items, actions)
@@ -875,8 +867,8 @@ use crate::{
     PromptHistorySearchState, SlashCommandSuggestionAction, SlashCommandSuggestionContext,
     SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState, UiAction,
     commands, current_spinner_millis, file_mention_suggestion_context_for_text,
-    plugin_operation_accepts_empty_arguments, plugin_operation_detail,
-    plugin_operation_matches_slash_query, plugin_operation_slash_name,
+    plugin_command_accepts_empty_arguments, plugin_command_detail,
+    plugin_command_matches_slash_query, plugin_command_slash_name,
     slash_command_suggestion_context_for_text, spinner_frame, transcript_node_kind_label,
     transcript_spinner_placeholder, ui_text,
 };

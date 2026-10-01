@@ -10,13 +10,12 @@ use syn::{
 };
 
 use crate::{
-    PluginArgConfig, PluginCallInput, PluginContextArg, PluginGeneratedInputField,
-    PluginGeneratedToolInput, PluginOperationInputPlan, PluginOperationMethodShape,
-    PluginPickerKind, PluginToolAttrConfig, PluginToolMethodShape, apply_arg_config_to_spec,
-    empty_tool_spec_config, expr_array_lit_strs, expr_array_values, expr_lit_str, expr_lit_usize,
-    input_type_semantic_shape, normalize_array_value_constraints, type_is_plugin_command_context,
-    type_is_reference, type_is_tool_invoke_context, type_last_segment_is, validate_format_lit,
-    validate_pattern_lit,
+    CommandInputPlan, CommandMethodShape, PluginArgConfig, PluginCallInput, PluginContextArg,
+    PluginGeneratedInputField, PluginGeneratedToolInput, PluginPickerKind, PluginToolAttrConfig,
+    PluginToolMethodShape, apply_arg_config_to_spec, empty_tool_spec_config, expr_array_lit_strs,
+    expr_array_values, expr_lit_str, expr_lit_usize, input_type_semantic_shape,
+    normalize_array_value_constraints, type_is_plugin_command_context, type_is_reference,
+    type_is_tool_invoke_context, type_last_segment_is, validate_format_lit, validate_pattern_lit,
 };
 
 pub fn build_plugin_tool_method_shape(
@@ -140,22 +139,18 @@ pub fn build_plugin_tool_method_shape(
     })
 }
 
-pub fn build_plugin_operation_input_plan(
+pub fn build_plugin_command_input_plan(
     method: &mut ImplItemFn,
     method_ident: &Ident,
     self_label: &str,
     docs: Option<String>,
-) -> Result<PluginOperationMethodShape> {
-    let input_ident = format_ident!(
-        "__AgenaPluginOperationInput_{}_{}",
-        self_label,
-        method_ident
-    );
+) -> Result<CommandMethodShape> {
+    let input_ident = format_ident!("__AgenaPluginCommandInput_{}_{}", self_label, method_ident);
     let args = plugin_method_value_args(method)?;
     if let Some(context_arg) = args.iter().find(|arg| arg.is_context) {
         return Err(syn::Error::new_spanned(
             &context_arg.ty,
-            "#[operation] methods do not support ToolInvokeContext; use PluginOperationInvokeInput for raw operation context",
+            "#[command] methods do not support ToolInvokeContext; use CommandInvokeInput for raw command context",
         ));
     }
     let context = plugin_command_context_arg(&args)?;
@@ -164,20 +159,20 @@ pub fn build_plugin_operation_input_plan(
         .filter(|arg| !type_is_plugin_command_context(&arg.ty))
         .collect::<Vec<_>>();
     let input = match input_args.as_slice() {
-        [] => PluginOperationInputPlan::None,
+        [] => CommandInputPlan::None,
         [arg] if !arg.has_arg_config => {
             let by_ref = arg.by_ref;
             let owned_ty = arg.inner_ty.clone();
-            if type_last_segment_is(&owned_ty, "PluginOperationInvokeInput") {
+            if type_last_segment_is(&owned_ty, "CommandInvokeInput") {
                 if context.is_some() {
                     return Err(syn::Error::new_spanned(
                         &arg.ty,
-                        "PluginOperationInvokeInput already exposes raw command metadata; do not combine it with PluginOperationContext",
+                        "CommandInvokeInput already exposes raw command metadata; do not combine it with PluginCommandContext",
                     ));
                 }
-                PluginOperationInputPlan::Raw { by_ref }
+                CommandInputPlan::Raw { by_ref }
             } else {
-                PluginOperationInputPlan::Typed {
+                CommandInputPlan::Typed {
                     ty: Box::new(owned_ty),
                     by_ref,
                 }
@@ -197,16 +192,16 @@ pub fn build_plugin_operation_input_plan(
             for prepared in prepared_args {
                 let arg = prepared.arg;
                 validate_inline_shape_wrapper_arg(arg)?;
-                if type_last_segment_is(&arg.inner_ty, "PluginOperationInvokeInput") {
+                if type_last_segment_is(&arg.inner_ty, "CommandInvokeInput") {
                     return Err(syn::Error::new_spanned(
                         &arg.ty,
-                        "PluginOperationInvokeInput is only supported as the sole #[operation] argument; use a typed input struct or inline #[arg(...)] fields for structured operation inputs",
+                        "CommandInvokeInput is only supported as the sole #[command] argument; use a typed input struct or inline #[arg(...)] fields for structured command inputs",
                     ));
                 }
                 if arg.by_ref {
                     return Err(syn::Error::new_spanned(
                         &arg.ty,
-                        "field-style #[operation] arguments must be owned values; use a single input struct argument if the handler wants a reference",
+                        "field-style #[command] arguments must be owned values; use a single input struct argument if the handler wants a reference",
                     ));
                 }
                 let field_name = prepared.field_name;
@@ -251,7 +246,7 @@ pub fn build_plugin_operation_input_plan(
                 &field_path_lookup,
                 &array_field_paths,
             );
-            PluginOperationInputPlan::Generated {
+            CommandInputPlan::Generated {
                 input_model: Box::new(PluginGeneratedToolInput {
                     input_ident: Some(input_ident.clone()),
                     input_fields: fields,
@@ -263,7 +258,7 @@ pub fn build_plugin_operation_input_plan(
             }
         }
     };
-    Ok(PluginOperationMethodShape { input, context })
+    Ok(CommandMethodShape { input, context })
 }
 
 struct PluginMethodValueArg {
@@ -346,7 +341,7 @@ fn plugin_command_context_arg(args: &[PluginMethodValueArg]) -> Result<Option<Pl
     if context_positions.len() > 1 {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "method-level #[operation] generation supports at most one PluginOperationContext argument",
+            "method-level #[command] generation supports at most one PluginCommandContext argument",
         ));
     }
     let Some((index, context_arg)) = context_positions.pop() else {

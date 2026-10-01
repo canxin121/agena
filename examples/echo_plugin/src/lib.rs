@@ -36,7 +36,6 @@ impl EchoPlugin {
     #[tool(
         name = "echo",
         summary = "Echo text back to the caller.",
-        concurrency_safe,
         tags(read_only)
     )]
     async fn echo(&self, #[arg(trim, non_empty)] text: String) -> Result<ToolInvokeOutput> {

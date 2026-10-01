@@ -114,8 +114,6 @@ impl App {
             self.current_route,
             Route::SessionSearch(_)
                 | Route::CommandPalette(_)
-                | Route::SkillPicker(_)
-                | Route::SkillStudio(_)
                 | Route::SessionNavigation(_)
                 | Route::SelectionPicker(_)
                 | Route::SessionModelChooser(_)
@@ -214,8 +212,6 @@ impl App {
             &self.current_route,
             Route::SessionSearch(_)
                 | Route::CommandPalette(_)
-                | Route::SkillPicker(_)
-                | Route::SkillStudio(_)
                 | Route::SessionNavigation(_)
                 | Route::SelectionPicker(_)
                 | Route::SessionModelChooser(_)

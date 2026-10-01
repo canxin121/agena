@@ -402,7 +402,13 @@ impl MemoryPlugin {
         let description = input.description.clone();
         let memory_type = input.memory_type;
         let expected = input.expected_sha256.clone();
+        // The search path rebuilds the whole index from a `list()` snapshot, so
+        // a write landing between that snapshot and the rebuild would publish a
+        // search index that has already forgotten the new record. Take the same
+        // gate the search path holds for the whole read-modify-write.
+        let guard = Arc::clone(&self.sync_lock).lock_owned().await;
         run_memory_blocking(move || {
+            let _guard = guard;
             let store = MemoryStore::for_workspace(&workspace_root);
             let entry = store
                 .save_checked(
@@ -445,7 +451,11 @@ impl MemoryPlugin {
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
         let name = input.name.clone();
+        // Same gate as `invoke_write`: a delete must not land between the
+        // search path's `list()` snapshot and its index rebuild.
+        let guard = Arc::clone(&self.sync_lock).lock_owned().await;
         run_memory_blocking(move || {
+            let _guard = guard;
             let store = MemoryStore::for_workspace(&workspace_root);
             let repository: &dyn MemoryRepository = &store;
             repository
@@ -722,9 +732,9 @@ mod tests {
         assert!(fields.iter().any(|field| field.id == "retrieval"));
         assert!(
             !manifest
-                .operations
+                .commands
                 .iter()
-                .any(|operation| operation.id == "memory.open")
+                .any(|command| command.id == "memory.open")
         );
     }
 }

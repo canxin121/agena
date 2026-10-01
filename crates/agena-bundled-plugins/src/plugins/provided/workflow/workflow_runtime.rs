@@ -1098,30 +1098,15 @@ impl WorkflowPlugin {
         } else {
             lines.push("- No input arguments.".to_string());
         }
-        let declared_examples = descriptor.examples.clone();
         let generated_examples = descriptor
             .input_schema
             .as_ref()
             .map(agena_runtime_tools::tool::definition::schema_example_texts)
             .unwrap_or_default();
-        if !declared_examples.is_empty() || !generated_examples.is_empty() {
+        if !generated_examples.is_empty() {
             lines.push("Examples:".to_string());
-            let mut seen_examples = HashSet::new();
-            if !declared_examples.is_empty() {
-                lines.push("Declared examples:".to_string());
-                for example in &declared_examples {
-                    if seen_examples.insert(example.clone()) {
-                        lines.push(format!("- {example}"));
-                    }
-                }
-            }
-            if !generated_examples.is_empty() {
-                lines.push("Generated examples:".to_string());
-                for example in &generated_examples {
-                    if seen_examples.insert(example.clone()) {
-                        lines.push(format!("- {example}"));
-                    }
-                }
+            for example in &generated_examples {
+                lines.push(format!("- {example}"));
             }
         }
         if let Some(help) = descriptor.help.as_deref().filter(|value| !value.is_empty()) {
@@ -1130,7 +1115,6 @@ impl WorkflowPlugin {
         }
         let routing_input_example = generated_examples
             .iter()
-            .chain(declared_examples.iter())
             .find_map(|example| {
                 serde_json::from_str::<serde_json::Value>(example)
                     .ok()
@@ -1159,7 +1143,7 @@ impl WorkflowPlugin {
                 .to_string(),
         );
         lines.push(format!(
-            "This help is reusable. Call Tool API function `{}` any number of times for execution tool `{}` with complete inputs; parallel calls are allowed when the tool is concurrency-safe.",
+            "This help is reusable. Call Tool API function `{}` any number of times for execution tool `{}` with complete inputs; parallel calls in one turn are allowed.",
             agena_runtime_tools::tool::tools_call_function_name(),
             descriptor.name,
         ));
@@ -1218,7 +1202,7 @@ impl WorkflowPlugin {
 }
 use super::{
     AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
-    CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
+    CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap,
     HostEnterSnapshotRequest, HostExitSnapshotRequest, PlanEditInput, PlanEditTarget, PlanGetInput,
     PlanPhaseInput, PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError,
     RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskToolInput,

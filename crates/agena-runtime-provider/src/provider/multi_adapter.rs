@@ -981,7 +981,6 @@ mod tests {
                 }),
                 output_schema: serde_json::Value::Null,
             },
-            model: Default::default(),
             docs: Default::default(),
             runtime: Default::default(),
             tags: Vec::new(),

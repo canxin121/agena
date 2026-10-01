@@ -59,12 +59,6 @@ fn sample_payload(tool: &str) -> Value {
     });
 
     match tool {
-        "fs.output_read" => {
-            json!({"output_id":"out_fixture","text":"captured text","captured_bytes":13,"original_bytes":13,"capture_truncated":false})
-        }
-        "fs.output_search" => {
-            json!({"output_id":"out_fixture","matches":[{"offset":0,"preview":"captured text"}],"capture_truncated":false})
-        }
         "fs.read" => json!({
             "preview": "fn main() {}",
             "loaded_paths": ["src/main.rs"],
@@ -324,20 +318,20 @@ fn sample_payload(tool: &str) -> Value {
         "shell.stop" => {
             json!({"action": "stop", "process_id": "p-1", "status": "stopped", "exit_code": 143})
         }
-        "skills.list" => {
-            json!({"tools": [{"name": "review", "kind": "skill", "summary": "Review changes", "source": "workspace", "editable": true}], "returned": 1, "total": 1, "offset": 0})
+        "commands.list" => {
+            json!({"packages": [{"name": "review", "summary": "Review changes", "source": "workspace", "editable": true}], "returned": 1, "total": 1, "offset": 0})
         }
-        "skills.get" => {
-            json!({"name": "review", "kind": "skill", "source": "workspace", "body": "Review changes.", "content_hash": "hash-1", "editable": true})
+        "commands.get" => {
+            json!({"name": "review", "source": "workspace", "body": "Review changes.", "content_hash": "hash-1", "editable": true, "revision": "rev-1"})
         }
-        "skills.create" | "skills.update" | "skills.delete" => {
-            json!({"operation": if tool.ends_with("delete") { "deleted" } else { "updated" }, "name": "review", "path": "skills/review.md", "catalog_generation": 3, "catalog_changed": true, "editable": true})
+        "commands.install" | "commands.remove" => {
+            json!({"operation": if tool.ends_with("remove") { "removed" } else { "installed" }, "name": "review", "path": ".agena/skills/review/SKILL.md", "catalog_generation": 3, "catalog_changed": true, "editable": true})
         }
-        "skills.read_resource" => {
-            json!({"name": "review", "path": "references/checklist.md", "source": "workspace", "bytes": 42, "content_hash": "hash-2", "body": "Checklist"})
+        "commands.read_resource" => {
+            json!({"name": "review", "path": "references/checklist.md", "source": "workspace", "bytes": 42, "content_hash": "hash-2", "content": "Checklist"})
         }
-        "skills.refresh" => {
-            json!({"changed": true, "generation": 3, "tools": [{"name": "review"}]})
+        "commands.refresh" => {
+            json!({"changed": true, "generation": 3, "declared": 14, "external": 0})
         }
         "snapshot.enter" => {
             json!({"path": "/tmp/snapshot", "branch": "snapshot/main", "backend": "git", "note": "before release"})
@@ -402,12 +396,6 @@ fn sample_payload(tool: &str) -> Value {
 
 fn sample_input(tool: &str) -> Value {
     match tool {
-        "fs.output_read" => {
-            json!({"output_id":"out_fixture","text":"captured text","captured_bytes":13,"original_bytes":13,"capture_truncated":false})
-        }
-        "fs.output_search" => {
-            json!({"output_id":"out_fixture","matches":[{"offset":0,"preview":"captured text"}],"capture_truncated":false})
-        }
         "fs.read" => json!({"file_path": "src/main.rs"}),
         "fs.read_many" => json!({"paths": ["src/lib.rs", "src/main.rs"]}),
         "fs.write" | "fs.replace" | "fs.stat" => {
@@ -446,11 +434,11 @@ fn sample_input(tool: &str) -> Value {
         value if value.starts_with("plan.") => json!({}),
         "tasks.run" => json!({"description": "Run release checks"}),
         value if value.starts_with("tasks.") => json!({"task_id": "task-1"}),
-        "skills.create" | "skills.update" | "skills.delete" | "skills.get" => {
+        "commands.install" | "commands.remove" | "commands.get" => {
             json!({"name": "review"})
         }
-        "skills.read_resource" => json!({"name": "review", "path": "references/checklist.md"}),
-        value if value.starts_with("skills.") => json!({}),
+        "commands.read_resource" => json!({"name": "review", "path": "references/checklist.md"}),
+        value if value.starts_with("commands.") => json!({}),
         value if value.starts_with("settings.") => json!({"path": "providers.openai.model"}),
         "session.rename" => json!({"title": "Release"}),
         value if value.starts_with("session.") => json!({}),
@@ -683,7 +671,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
         }
     }
 
-    assert_eq!(checked, 134);
+    assert_eq!(checked, 131);
 }
 
 #[test]
@@ -724,7 +712,7 @@ fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
         }
     }
 
-    assert_eq!(checked, 134);
+    assert_eq!(checked, 131);
 }
 
 #[test]
@@ -759,7 +747,7 @@ fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
         }
     }
 
-    assert_eq!(checked, 134);
+    assert_eq!(checked, 131);
 }
 
 #[test]
@@ -860,7 +848,7 @@ fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
         }
     }
 
-    assert_eq!(checked, 134);
+    assert_eq!(checked, 131);
 }
 
 #[test]
@@ -1212,19 +1200,18 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
             false,
         ),
         (
-            "skills.list",
+            "commands.list",
             RawOutput {
-                text: "- renderer-notes [skill]: Rendering conventions\n- review [command]: Review a change".into(),
+                text: "- renderer-notes: Rendering conventions\n- review: Review a change".into(),
                 payload: Some(json!({
-                    "tools": [
-                        {"name": "renderer-notes", "kind": "skill", "summary": "Rendering conventions", "source": "workspace", "content_hash": "skillhash1", "editable": true},
-                        {"name": "review", "kind": "command", "summary": "Review a change", "source": "builtin", "content_hash": "skillhash2", "editable": false}
+                    "packages": [
+                        {"name": "renderer-notes", "summary": "Rendering conventions", "source": "workspace", "content_hash": "skillhash1", "editable": true},
+                        {"name": "review", "summary": "Review a change", "source": "builtin", "content_hash": "skillhash2", "editable": false}
                     ],
                     "diagnostics": [],
                     "total": 2,
                     "offset": 0,
-                    "returned": 2,
-                    "kind": null
+                    "returned": 2
                 })),
                 ..RawOutput::default()
             },
@@ -1232,12 +1219,11 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
             true,
         ),
         (
-            "skills.get",
+            "commands.get",
             RawOutput {
-                text: "Name: renderer-notes\nKind: skill\nSummary: Rendering conventions\n\nBody:\nKeep human output concise.".into(),
+                text: "Name: renderer-notes\nRevision: rev-1\nSummary: Rendering conventions\n\nBody:\nKeep human output concise.".into(),
                 payload: Some(json!({
                     "name": "renderer-notes",
-                    "kind": "skill",
                     "summary": "Rendering conventions",
                     "body": "Keep human output concise.",
                     "aliases": ["rendering"],
@@ -1245,6 +1231,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                     "source": "workspace",
                     "content_hash": "skillhash1",
                     "document": "---\nname: renderer-notes\n---\nKeep human output concise.",
+                    "revision": "rev-1",
                     "editable": true
                 })),
                 ..RawOutput::default()
@@ -1839,88 +1826,6 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 "{tool} should expose its returned artifact as media: {blocks:?}"
             );
         }
-    }
-}
-
-#[test]
-fn captured_output_views_keep_paging_loss_and_untrusted_text_visible() {
-    let text = "retained text\n````\n# untrusted heading\n";
-    let raw = RawOutput {
-        payload: Some(json!({
-            "output_id": "out_fixture", "text": text,
-            "captured_bytes": 2048, "original_bytes": 4096,
-            "next_offset": 80, "capture_truncated": true
-        })),
-        ..RawOutput::default()
-    };
-    let blocks = BuiltinHumanRenderer::new("fs.output_read")
-        .render_human(&render_context(), &raw)
-        .unwrap();
-    let has = |id: &str, needle: &str| {
-        blocks.iter().any(|block| matches!(block,
-        ViewBlock::Markdown { id: Some(block_id), text } if block_id == id && text.contains(needle)
-    ))
-    };
-    assert!(has("captured-output-meta", "80"));
-    assert!(has(
-        "captured-output-warning",
-        "Missing content was not searched"
-    ));
-    assert!(has("captured-output-text", "`````"));
-    assert!(has("captured-output-text", text));
-    let invocation = ToolInvocation::new(
-        "agena.fs.output_read",
-        StructuredObject::try_from(json!({"output_id":"out_fixture"})).unwrap(),
-    );
-    let initial = initial_tool_title(&invocation);
-    let completed = completed_tool_title(&invocation, &raw);
-    assert!(initial.starts_with("Read captured output"));
-    assert!(completed.starts_with(&initial));
-    assert!(completed.contains("more available"));
-    assert!(completed.contains("capture truncated"));
-}
-
-#[test]
-fn captured_output_search_has_match_locations_and_truthful_empty_state() {
-    for matches in [
-        json!([]),
-        json!([{"offset": 501, "preview":"MIDDLE_ERROR"}]),
-    ] {
-        let empty = matches.as_array().unwrap().is_empty();
-        let raw = RawOutput {
-            payload: Some(json!({
-                "output_id":"out_fixture", "matches": matches, "capture_truncated":true
-            })),
-            ..RawOutput::default()
-        };
-        let blocks = BuiltinHumanRenderer::new("fs.output_search")
-            .render_human(&render_context(), &raw)
-            .unwrap();
-        let expected = if empty {
-            "captured-output-empty"
-        } else {
-            "captured-output-matches"
-        };
-        assert!(
-            blocks
-                .iter()
-                .any(|block| block.block_id() == Some(expected))
-        );
-        assert!(
-            blocks
-                .iter()
-                .any(|block| block.block_id() == Some("captured-output-warning"))
-        );
-        let invocation = ToolInvocation::new(
-            "fs.output_search",
-            StructuredObject::try_from(json!({"output_id":"out_fixture","pattern":"MIDDLE_ERROR"}))
-                .unwrap(),
-        );
-        let initial = initial_tool_title(&invocation);
-        let completed = completed_tool_title(&invocation, &raw);
-        assert!(completed.starts_with(&initial));
-        assert_ne!(initial, completed);
-        assert!(completed.contains("capture truncated"));
     }
 }
 

@@ -26,15 +26,15 @@ export function pluginJsonRecord(value: JsonValue): JsonRecord | null {
   return value as JsonRecord
 }
 
-export function pluginOperationInvocationBody(input: {
-  operation: Pick<PluginOperationCatalogItem, 'slash'>
+export function pluginCommandInvocationBody(input: {
+  command: Pick<PluginCommandCatalogItem, 'slash'>
   sessionId: number | null
   rawArgs: string
 }) {
   return {
     input: {},
     session_id: input.sessionId,
-    slash: input.operation.slash || null,
+    slash: input.command.slash || null,
     raw: String(input.rawArgs || '').trim(),
   }
 }
@@ -112,30 +112,41 @@ export type PluginSettingsUpdateResponse = {
   reload_required: boolean
 }
 
-export type PluginOperationCatalogItem = {
+export type PluginCommandDocs = {
+  summary?: string | null
+  summary_key?: string | null
+  help?: string | null
+  help_key?: string | null
+  usage?: string | null
+  examples?: string[]
+}
+
+export type PluginCommandCatalogItem = {
   plugin_id: string
   accepts_empty_input: boolean
   default_input: JsonValue
   id: string
   title: string
-  description?: string
   group: string
   category?: string | null
   slash?: string | null
   aliases?: string[]
-  usage?: string | null
+  docs?: PluginCommandDocs
   input: PluginSettingsContract
   discoverability?: {
-    command_palette?: boolean
+    catalog?: boolean
+    palette?: boolean
     slash?: boolean
-    plugin_workbench?: boolean
   }
-  target: { kind: 'method'; handler: string } | { kind: 'tool'; tool: string }
+  target:
+    | { kind: 'client'; action: string }
+    | { kind: 'method'; handler: string }
+    | { kind: 'tool'; tool: string }
 }
 
-export type PluginOperationStatus = 'succeeded' | 'failed' | 'cancelled' | 'unavailable' | 'permission_required'
+export type PluginCommandStatus = 'succeeded' | 'failed' | 'cancelled' | 'unavailable' | 'permission_required'
 
-export type PluginOperationDiagnostic = {
+export type PluginCommandDiagnostic = {
   code: string
   message: string
   path?: string | null
@@ -148,30 +159,30 @@ export type PluginHostEffect =
   | { kind: 'insert_prompt'; prompt: string }
   | { kind: 'refresh_plugin_surface'; plugin_id: string }
 
-export type PluginOperationResult = {
-  status: PluginOperationStatus
+export type PluginCommandResult = {
+  status: PluginCommandStatus
   title: string
   summary: string
   detail?: string | null
   output?: JsonValue
-  diagnostics?: PluginOperationDiagnostic[]
+  diagnostics?: PluginCommandDiagnostic[]
   retryable?: boolean
   effects?: PluginHostEffect[]
 }
 
-export async function executePluginSlashOperation(input: {
-  operation: Pick<PluginOperationCatalogItem, 'plugin_id' | 'id' | 'slash'>
+export async function executePluginSlashCommand(input: {
+  command: Pick<PluginCommandCatalogItem, 'plugin_id' | 'id' | 'slash'>
   sessionId: number | null
   rawArgs: string
-}): Promise<PluginOperationResult> {
-  const response = await apiJson<{ result: PluginOperationResult }>(
-    `/api/v1/plugins/${encodeURIComponent(input.operation.plugin_id)}/operations/${encodeURIComponent(input.operation.id)}/invoke`,
+}): Promise<PluginCommandResult> {
+  const response = await apiJson<{ result: PluginCommandResult }>(
+    `/api/v1/plugins/${encodeURIComponent(input.command.plugin_id)}/commands/${encodeURIComponent(input.command.id)}/invoke`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(pluginOperationInvocationBody(input)),
+      body: JSON.stringify(pluginCommandInvocationBody(input)),
     },
   )
-  if (!response?.result) throw new Error('The server omitted the plugin operation result.')
+  if (!response?.result) throw new Error('The server omitted the plugin command result.')
   return response.result
 }

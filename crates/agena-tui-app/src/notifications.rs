@@ -247,7 +247,7 @@ fn command_input_to_args(input: Option<&serde_json::Value>) -> String {
 
 /// Dispatches `NotificationAction` targets to the owning system:
 /// Recovery -> command registry, Command -> command, Navigate -> route,
-/// Copy -> clipboard. Reuses the existing `commands::CommandId` registry.
+/// Copy -> clipboard. Built-in commands resolve through the published catalog.
 pub struct TuiActionDispatcher;
 
 #[allow(dead_code)]
@@ -279,8 +279,8 @@ impl TuiActionDispatcher {
     }
 
     fn run_command(app: &mut crate::App, command: &str, args: &str) {
-        if let Some(spec) = crate::commands::find_command(command) {
-            app.execute_command(spec, args);
+        if let Some(command) = app.find_client_command(command) {
+            app.execute_command(&command, args);
         }
     }
 }

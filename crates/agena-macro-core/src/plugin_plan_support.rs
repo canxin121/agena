@@ -4,18 +4,18 @@ use quote::quote;
 use syn::{Attribute, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Result, Type};
 
 use crate::{
-    PluginGeneratedToolInput, PluginInherentMethodAttrs, PluginMethodInfo, PluginOperationAttrArgs,
-    PluginOperationHandlerPlan, PluginOperationInputPlan, PluginOperationPlan,
-    PluginServiceAttrArgs, PluginServiceAttrTarget, PluginServiceInputPlan, PluginServicePlan,
-    PluginServiceTargetPlan, PluginToolInvokeHandler, PluginToolPlan, PluginToolStreamHandler,
-    PluginToolStreamSignature, build_plugin_hook_plan, build_plugin_operation_input_plan,
-    build_plugin_tool_method_shape, default_operation_id, doc_summary, doc_text,
+    CommandAttrArgs, CommandHandlerPlan, CommandInputPlan, PluginCommandPlan,
+    PluginGeneratedToolInput, PluginInherentMethodAttrs, PluginMethodInfo, PluginServiceAttrArgs,
+    PluginServiceAttrTarget, PluginServiceInputPlan, PluginServicePlan, PluginServiceTargetPlan,
+    PluginToolInvokeHandler, PluginToolPlan, PluginToolStreamHandler, PluginToolStreamSignature,
+    build_plugin_command_input_plan, build_plugin_hook_plan, build_plugin_tool_method_shape,
+    command_title_from_id, default_command_id, doc_summary, doc_text,
     ensure_plugin_method_shared_receiver, expand_plugin_tool_input_schema, expr_lit_str,
-    expr_lit_usize, lit_str_from_text, operation_title_from_id, parse_lit_str_list,
-    parse_plugin_tool_method_attr, plugin_attr_has_explicit_args,
-    plugin_method_has_shared_receiver, plugin_method_return_value_type, plugin_method_tool_output,
-    stream_sink_is_edge_info, type_display, type_is_reference, type_is_unit,
-    type_without_reference, typed_arg_types_from_inputs, types_equivalent,
+    expr_lit_usize, lit_str_from_text, parse_lit_str_list, parse_plugin_tool_method_attr,
+    plugin_attr_has_explicit_args, plugin_method_has_shared_receiver,
+    plugin_method_return_value_type, plugin_method_tool_output, stream_sink_is_edge_info,
+    type_display, type_is_reference, type_is_unit, type_without_reference,
+    typed_arg_types_from_inputs, types_equivalent,
 };
 
 pub fn plugin_impl_method_infos(item: &ItemImpl) -> Vec<PluginMethodInfo> {
@@ -131,7 +131,7 @@ pub fn parse_plugin_inherent_method_attrs(
 ) -> Result<PluginInherentMethodAttrs> {
     let mut tools = Vec::new();
     let mut hooks = Vec::new();
-    let mut operations = Vec::new();
+    let mut commands = Vec::new();
     let mut services = Vec::new();
     let mut kept_attrs = Vec::new();
     let method_ident = method.sig.ident.clone();
@@ -157,9 +157,9 @@ pub fn parse_plugin_inherent_method_attrs(
                 is_async,
                 &attr,
             )?);
-        } else if attr.path().is_ident("operation") {
+        } else if attr.path().is_ident("command") {
             let method_docs = doc_text(&kept_attrs);
-            operations.push(build_plugin_operation_plan(
+            commands.push(build_plugin_command_plan(
                 method,
                 &method_ident,
                 self_label,
@@ -182,7 +182,7 @@ pub fn parse_plugin_inherent_method_attrs(
     Ok(PluginInherentMethodAttrs {
         tools,
         hooks,
-        operations,
+        commands,
         services,
     })
 }
@@ -351,20 +351,20 @@ pub fn build_plugin_tool_plan(
             input: shape.call_input.clone(),
         },
         stream,
-        operation: spec.operation,
+        command: spec.command,
     })
 }
 
-pub fn build_plugin_operation_plan(
+pub fn build_plugin_command_plan(
     method: &mut ImplItemFn,
     method_ident: &Ident,
     self_label: &str,
     is_async: bool,
     docs: Option<String>,
     attr: &Attribute,
-) -> Result<PluginOperationPlan> {
-    ensure_plugin_method_shared_receiver(method, "#[operation] methods")?;
-    let mut id = LitStr::new(&default_operation_id(method_ident), method_ident.span());
+) -> Result<PluginCommandPlan> {
+    ensure_plugin_method_shared_receiver(method, "#[command] methods")?;
+    let mut id = LitStr::new(&default_command_id(method_ident), method_ident.span());
     let mut title = None;
     let mut description = lit_str_from_text(docs.as_deref());
     let mut category = LitStr::new("Plugin", method_ident.span());
@@ -374,7 +374,7 @@ pub fn build_plugin_operation_plan(
     let mut group = LitStr::new("command_palette", method_ident.span());
 
     if plugin_attr_has_explicit_args(attr) {
-        let args = attr.parse_args::<PluginOperationAttrArgs>()?;
+        let args = attr.parse_args::<CommandAttrArgs>()?;
         slash = args.slash;
         for meta in args.metas {
             match meta {
@@ -402,7 +402,7 @@ pub fn build_plugin_operation_plan(
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported operation argument '{other}'"),
+                                format!("unsupported command argument '{other}'"),
                             ));
                         }
                     }
@@ -416,7 +416,7 @@ pub fn build_plugin_operation_plan(
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported operation list '{other}'"),
+                                format!("unsupported command list '{other}'"),
                             ));
                         }
                     }
@@ -424,7 +424,7 @@ pub fn build_plugin_operation_plan(
                 Meta::Path(path) => {
                     return Err(syn::Error::new_spanned(
                         path,
-                        "unsupported bare operation flag",
+                        "unsupported bare command flag",
                     ));
                 }
             }
@@ -436,16 +436,16 @@ pub fn build_plugin_operation_plan(
     {
         return Err(syn::Error::new_spanned(
             slash,
-            "operation slash value must start with `/`",
+            "command slash value must start with `/`",
         ));
     }
 
     let method_shape =
-        build_plugin_operation_input_plan(method, method_ident, self_label, docs.clone())?;
+        build_plugin_command_input_plan(method, method_ident, self_label, docs.clone())?;
 
-    Ok(PluginOperationPlan {
+    Ok(PluginCommandPlan {
         title: title.unwrap_or_else(|| {
-            LitStr::new(&operation_title_from_id(&id.value()), method_ident.span())
+            LitStr::new(&command_title_from_id(&id.value()), method_ident.span())
         }),
         description: description.unwrap_or_else(|| LitStr::new("", method_ident.span())),
         group,
@@ -453,7 +453,7 @@ pub fn build_plugin_operation_plan(
         slash,
         aliases,
         usage,
-        handler: PluginOperationHandlerPlan::Method {
+        handler: CommandHandlerPlan::Method {
             method: method_ident.clone(),
             input: method_shape.input,
             context: method_shape.context,
@@ -463,13 +463,13 @@ pub fn build_plugin_operation_plan(
     })
 }
 
-pub fn build_tool_operation_plan(tool: &PluginToolPlan) -> Option<Result<PluginOperationPlan>> {
-    let config = tool.operation.as_ref()?;
+pub fn build_tool_command_plan(tool: &PluginToolPlan) -> Option<Result<PluginCommandPlan>> {
+    let config = tool.command.as_ref()?;
     let id = config.id.clone().unwrap_or_else(|| tool.tool.clone());
     let title = config
         .title
         .clone()
-        .unwrap_or_else(|| LitStr::new(&operation_title_from_id(&id.value()), id.span()));
+        .unwrap_or_else(|| LitStr::new(&command_title_from_id(&id.value()), id.span()));
     let description = config
         .description
         .clone()
@@ -482,10 +482,10 @@ pub fn build_tool_operation_plan(tool: &PluginToolPlan) -> Option<Result<PluginO
     {
         return Some(Err(syn::Error::new_spanned(
             slash,
-            "tool operation slash value must start with `/`",
+            "tool command slash value must start with `/`",
         )));
     }
-    Some(Ok(PluginOperationPlan {
+    Some(Ok(PluginCommandPlan {
         id,
         title,
         description,
@@ -500,41 +500,40 @@ pub fn build_tool_operation_plan(tool: &PluginToolPlan) -> Option<Result<PluginO
             .group
             .clone()
             .unwrap_or_else(|| LitStr::new("command_palette", tool.tool.span())),
-        handler: PluginOperationHandlerPlan::InvokeTool {
+        handler: CommandHandlerPlan::InvokeTool {
             tool: tool.tool.clone(),
             input_model: Box::new(tool.input_model.clone()),
         },
     }))
 }
 
-pub fn operation_generated_input_model(
-    operation: &PluginOperationPlan,
+pub fn command_generated_input_model(
+    command: &PluginCommandPlan,
 ) -> Option<&PluginGeneratedToolInput> {
-    match &operation.handler {
-        PluginOperationHandlerPlan::Method {
-            input: PluginOperationInputPlan::Generated { input_model, .. },
+    match &command.handler {
+        CommandHandlerPlan::Method {
+            input: CommandInputPlan::Generated { input_model, .. },
             ..
         } => Some(input_model),
-        PluginOperationHandlerPlan::Method { .. }
-        | PluginOperationHandlerPlan::InvokeTool { .. } => None,
+        CommandHandlerPlan::Method { .. } | CommandHandlerPlan::InvokeTool { .. } => None,
     }
 }
 
-pub fn expand_plugin_operation_usage_expr(
-    operation: &PluginOperationPlan,
+pub fn expand_plugin_command_usage_expr(
+    command: &PluginCommandPlan,
 ) -> Result<proc_macro2::TokenStream> {
-    if let Some(usage) = operation.usage.as_ref() {
+    if let Some(usage) = command.usage.as_ref() {
         return Ok(quote! { Some(#usage.to_string()) });
     }
-    let Some(slash) = operation.slash.as_ref() else {
+    let Some(slash) = command.slash.as_ref() else {
         return Ok(quote! { None });
     };
-    let input_usage = match &operation.handler {
-        PluginOperationHandlerPlan::Method { input, .. } => match input {
-            PluginOperationInputPlan::Typed { ty, .. } => quote! {
+    let input_usage = match &command.handler {
+        CommandHandlerPlan::Method { input, .. } => match input {
+            CommandInputPlan::Typed { ty, .. } => quote! {
                 <#ty as ::agena_plugin_sdk::ToolInput>::input_usage()
             },
-            PluginOperationInputPlan::Generated { input_model, .. } => {
+            CommandInputPlan::Generated { input_model, .. } => {
                 let spec = &input_model.spec;
                 if let Some(input_shape_ty) = spec.input_shape.as_ref() {
                     quote! { <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_usage() }
@@ -547,11 +546,11 @@ pub fn expand_plugin_operation_usage_expr(
                     }
                 }
             }
-            PluginOperationInputPlan::None | PluginOperationInputPlan::Raw { .. } => {
+            CommandInputPlan::None | CommandInputPlan::Raw { .. } => {
                 quote! { None }
             }
         },
-        PluginOperationHandlerPlan::InvokeTool { input_model, .. } => {
+        CommandHandlerPlan::InvokeTool { input_model, .. } => {
             let spec = &input_model.spec;
             if let Some(input_shape_ty) = spec.input_shape.as_ref() {
                 quote! { <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_usage() }

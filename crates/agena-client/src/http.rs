@@ -950,11 +950,11 @@ impl AgenaClient {
         .await
     }
 
-    /// Invoke one server-owned plugin operation.
-    pub async fn invoke_plugin_operation(
+    /// Invoke one server-owned plugin command.
+    pub async fn invoke_plugin_command(
         &self,
         plugin_id: &str,
-        operation_id: &str,
+        command_id: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
         slash: Option<&str>,
@@ -964,8 +964,8 @@ impl AgenaClient {
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(plugin_id)
-            .push("operations")
-            .push(operation_id)
+            .push("commands")
+            .push(command_id)
             .push("invoke");
         let body = serde_json::json!({
             "input": input,
@@ -2453,14 +2453,14 @@ mod sse_contract_tests {
             "effects": [],
             "pipelines": [{
                 "definition": {
-                    "id": "operation.invoke",
+                    "id": "command.invoke",
                     "mode": "around",
                     "durable": false,
                     "scoped": true
                 },
                 "handlers": []
             }],
-            "operation_registrations": [],
+            "command_registrations": [],
             "tool_registrations": []
         }))
     }
@@ -2507,22 +2507,22 @@ mod sse_contract_tests {
         )
     }
 
-    async fn fixture_plugin_operation(
+    async fn fixture_plugin_command(
         State(state): State<ThinClientFixture>,
-        AxumPath((plugin_id, operation_id)): AxumPath<(String, String)>,
+        AxumPath((plugin_id, command_id)): AxumPath<(String, String)>,
         Json(body): Json<serde_json::Value>,
     ) -> Json<serde_json::Value> {
         state.requests.lock().expect("fixture lock").push((
-            "plugin_operation".to_owned(),
+            "plugin_command".to_owned(),
             serde_json::json!({
                 "plugin_id": plugin_id,
-                "operation_id": operation_id,
+                "command_id": command_id,
                 "body": body
             }),
         ));
         Json(serde_json::json!({
             "plugin_id": plugin_id,
-            "operation_id": operation_id,
+            "command_id": command_id,
             "result": {
                 "status": "succeeded",
                 "title": "Continue",
@@ -2624,8 +2624,8 @@ mod sse_contract_tests {
                 get(fixture_session_media_download),
             )
             .route(
-                "/api/v1/plugins/{plugin_id}/operations/{operation_id}/invoke",
-                post(fixture_plugin_operation),
+                "/api/v1/plugins/{plugin_id}/commands/{command_id}/invoke",
+                post(fixture_plugin_command),
             )
             .route(
                 "/api/v1/plugins/architecture",
@@ -2671,7 +2671,7 @@ mod sse_contract_tests {
         assert_eq!(filename, "result.txt");
         assert_eq!(bytes, b"server bytes");
         let operation = client
-            .invoke_plugin_operation(
+            .invoke_plugin_command(
                 "example.plugin",
                 "continue",
                 serde_json::json!({ "step": 2 }),
@@ -2731,7 +2731,7 @@ mod sse_contract_tests {
         assert_eq!(requests[0].1["query"]["respect_ignores"], "true");
         assert_eq!(requests[1].1["query"]["path"], "src/result.txt");
         assert_eq!(requests[2].1["plugin_id"], "example.plugin");
-        assert_eq!(requests[2].1["operation_id"], "continue");
+        assert_eq!(requests[2].1["command_id"], "continue");
         assert_eq!(requests[2].1["body"]["session_id"], 9);
         assert_eq!(requests[2].1["body"]["slash"], "/example");
         assert_eq!(requests[2].1["body"]["input"]["step"], 2);

@@ -3162,8 +3162,8 @@ mod pending_message_tests {
         let activity_line = rendered
             .lines
             .iter()
-            .position(|line| line.text.contains("Skill: batch"))
-            .expect("full optimistic Skill Activity");
+            .position(|line| line.text.contains("Command: batch"))
+            .expect("full optimistic Command Activity");
         assert!(
             rendered.lines.iter().any(|line| line.text.contains("use")),
             "optimistic text must render as its own text part"

@@ -35,7 +35,7 @@ pub enum PluginWorkbenchMode {
 pub enum PluginDetailTab {
     Config,
     Tools,
-    Operations,
+    Commands,
     Capabilities,
     Logs,
     Diagnostics,
@@ -534,7 +534,7 @@ impl PluginDetailTab {
     pub const ALL: [Self; 6] = [
         Self::Config,
         Self::Tools,
-        Self::Operations,
+        Self::Commands,
         Self::Capabilities,
         Self::Logs,
         Self::Diagnostics,
@@ -544,7 +544,7 @@ impl PluginDetailTab {
         match self {
             Self::Config => i18n.text("plugin-workbench-tab-config"),
             Self::Tools => i18n.text("plugin-workbench-tab-tools"),
-            Self::Operations => i18n.text("plugin-workbench-tab-operations"),
+            Self::Commands => i18n.text("plugin-workbench-tab-commands"),
             Self::Capabilities => i18n.text("plugin-workbench-tab-capabilities"),
             Self::Logs => i18n.text("plugin-workbench-tab-logs"),
             Self::Diagnostics => i18n.text("plugin-workbench-tab-diagnostics"),
@@ -564,7 +564,7 @@ impl PluginDetailTab {
         match value.trim().to_ascii_lowercase().as_str() {
             "config" => Some(Self::Config),
             "tools" => Some(Self::Tools),
-            "operations" => Some(Self::Operations),
+            "commands" => Some(Self::Commands),
             "capabilities" => Some(Self::Capabilities),
             "logs" => Some(Self::Logs),
             "diagnostics" => Some(Self::Diagnostics),
@@ -739,7 +739,7 @@ mod tests {
             ),
             PluginWorkbenchNavigationEffect::KeepOpen,
         );
-        assert_eq!(navigation.detail_tab, PluginDetailTab::Operations);
+        assert_eq!(navigation.detail_tab, PluginDetailTab::Commands);
         assert_eq!(
             handle_key(
                 &mut navigation,
@@ -755,7 +755,7 @@ mod tests {
         for (id, expected) in [
             ("config", PluginDetailTab::Config),
             ("tools", PluginDetailTab::Tools),
-            ("operations", PluginDetailTab::Operations),
+            ("commands", PluginDetailTab::Commands),
             ("capabilities", PluginDetailTab::Capabilities),
             ("logs", PluginDetailTab::Logs),
             ("diagnostics", PluginDetailTab::Diagnostics),

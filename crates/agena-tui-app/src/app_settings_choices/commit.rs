@@ -7,10 +7,6 @@ impl App {
         match dialog.action.clone() {
             ChoiceOverlayAction::InsertContent => match choice_selection_value(&selection).as_str()
             {
-                "skill" => {
-                    self.open_skill_picker();
-                    true
-                }
                 "file" => {
                     self.request_file_attachment(false);
                     true

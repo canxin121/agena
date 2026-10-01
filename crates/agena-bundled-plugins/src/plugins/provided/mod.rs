@@ -1,5 +1,6 @@
 mod cloud_media;
 pub mod code;
+pub mod commands;
 pub mod cron;
 pub mod fs;
 pub mod interaction;
@@ -13,7 +14,6 @@ pub mod report;
 pub mod session;
 pub mod settings;
 pub mod shell;
-pub mod skills;
 pub mod tasks;
 pub mod terminal;
 pub mod tool_api;

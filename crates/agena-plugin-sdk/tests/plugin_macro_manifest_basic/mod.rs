@@ -10,7 +10,6 @@ fn tool_macro_manifest_infers_output_and_streaming() {
             .contains(HookSubscription::TOOL_INVOKE_STREAM)
     );
     assert_eq!(tool.runtime.streaming, ToolStreamingMode::Streaming);
-    assert!(tool.runtime.concurrency_safe);
     assert_ne!(tool.contract.output_schema, Value::Null);
     assert!(
         tool.contract

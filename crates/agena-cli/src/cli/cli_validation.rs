@@ -340,7 +340,7 @@ pub(super) fn validate_plugin_manifest_value(
             "transports",
             "hooks",
             "tools",
-            "operations",
+            "commands",
             "services",
             "activity_kinds",
             "tags",
@@ -467,9 +467,7 @@ pub(super) fn validate_tool_manifest_value(
     check_object_keys(
         value,
         path,
-        &[
-            "name", "aliases", "contract", "model", "docs", "runtime", "tags",
-        ],
+        &["name", "aliases", "contract", "docs", "runtime", "tags"],
         "tool.unknown_field",
         output,
     );
@@ -479,15 +477,6 @@ pub(super) fn validate_tool_manifest_value(
             &format!("{path}.contract"),
             &["input_schema", "output_schema"],
             "tool.contract.unknown_field",
-            output,
-        );
-    }
-    if let Some(model) = value.get("model") {
-        check_object_keys(
-            model,
-            &format!("{path}.model"),
-            &["description", "examples"],
-            "tool.model.unknown_field",
             output,
         );
     }
@@ -504,22 +493,8 @@ pub(super) fn validate_tool_manifest_value(
         check_object_keys(
             runtime,
             &format!("{path}.runtime"),
-            &["concurrency_safe", "streaming", "result_policy"],
+            &["streaming"],
             "tool.runtime.unknown_field",
-            output,
-        );
-    }
-    if let Some(policy) = value.pointer("/runtime/result_policy") {
-        check_object_keys(
-            policy,
-            &format!("{path}.runtime.result_policy"),
-            &[
-                "max_model_chars",
-                "preview_lines",
-                "persist_large_output",
-                "ui_render_kind",
-            ],
-            "tool.result_policy.unknown_field",
             output,
         );
     }
@@ -576,7 +551,7 @@ pub(super) fn validate_manifest_operations(
     path: &str,
     output: &mut PluginValidationMessages,
 ) {
-    use agena_plugin_host::sdk::PluginOperationTarget;
+    use agena_plugin_host::sdk::CommandTarget;
 
     let known_tools = manifest
         .tools
@@ -584,32 +559,32 @@ pub(super) fn validate_manifest_operations(
         .map(|tool| tool.name.as_str())
         .collect::<HashSet<_>>();
     let mut ids = HashSet::new();
-    for (idx, operation) in manifest.operations.iter().enumerate() {
-        let operation_path = format!("{path}.operations[{idx}]");
-        if !ids.insert(operation.id.as_str()) {
+    for (idx, command) in manifest.commands.iter().enumerate() {
+        let command_path = format!("{path}.commands[{idx}]");
+        if !ids.insert(command.id.as_str()) {
             push_error(
                 output,
-                "operation.id.duplicate",
-                format!("duplicate operation id `{}`", operation.id),
-                Some(format!("{operation_path}.id")),
+                "command.id.duplicate",
+                format!("duplicate command id `{}`", command.id),
+                Some(format!("{command_path}.id")),
             );
         }
-        if let Err(error) = operation.validate() {
+        if let Err(error) = command.validate() {
             push_error(
                 output,
-                "operation.invalid",
+                "command.invalid",
                 error.to_string(),
-                Some(operation_path.clone()),
+                Some(command_path.clone()),
             );
         }
-        if let PluginOperationTarget::Tool { tool } = &operation.target
+        if let CommandTarget::Tool { tool } = &command.target
             && !known_tools.contains(tool.as_str())
         {
             push_error(
                 output,
-                "operation.target.tool.unknown",
-                format!("operation references unknown local tool `{tool}`"),
-                Some(format!("{operation_path}.target.tool")),
+                "command.target.tool.unknown",
+                format!("command references unknown local tool `{tool}`"),
+                Some(format!("{command_path}.target.tool")),
             );
         }
     }
@@ -1038,7 +1013,45 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::validate_plugin_target;
+    use super::{validate_plugin_target, validate_tool_manifest_value};
+
+    #[test]
+    fn removed_concurrency_field_is_an_unknown_runtime_field() {
+        let value = serde_json::json!({
+            "name": "legacy_tool",
+            "summary": "A tool whose runtime still carries the removed field.",
+            "contract": {"input_schema": {"type": "object"}},
+            "runtime": {"streaming": "none", "concurrency_safe": true},
+        });
+        let mut output = (Vec::new(), Vec::new());
+        validate_tool_manifest_value("demo", "legacy", &None, &value, "tool", &mut output);
+        let (errors, _) = output;
+        assert!(
+            errors
+                .iter()
+                .any(|message| message.code == "tool.runtime.unknown_field"),
+            "a manifest still declaring concurrency must be rejected: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn removed_result_policy_is_an_unknown_runtime_field() {
+        let value = serde_json::json!({
+            "name": "legacy_tool",
+            "summary": "A tool whose runtime still carries the removed output policy.",
+            "contract": {"input_schema": {"type": "object"}},
+            "runtime": {"streaming": "none", "result_policy": {"preview_lines": 3}},
+        });
+        let mut output = (Vec::new(), Vec::new());
+        validate_tool_manifest_value("demo", "legacy", &None, &value, "tool", &mut output);
+        let (errors, _) = output;
+        assert!(
+            errors
+                .iter()
+                .any(|message| message.code == "tool.runtime.unknown_field"),
+            "a manifest still declaring an output policy must be rejected: {errors:#?}"
+        );
+    }
 
     static VALIDATION_FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -1060,6 +1073,38 @@ mod tests {
         let output = validate_plugin_target(&path, false).expect("validate fixture");
         let _ = std::fs::remove_file(path);
         output
+    }
+
+    #[test]
+    fn manifest_accepts_the_commands_collection() {
+        let output = validate_config(serde_json::json!({
+            "schema_version": 1,
+            "namespace": "example",
+            "name": "example",
+            "version": "1.0.0",
+            "commands": [],
+        }));
+
+        assert!(
+            output.ok,
+            "`commands` is the manifest's command collection: {output:#?}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_the_retired_operations_collection() {
+        let output = validate_config(serde_json::json!({
+            "schema_version": 1,
+            "namespace": "example",
+            "name": "example",
+            "version": "1.0.0",
+            "operations": [],
+        }));
+
+        assert!(!output.ok, "the retired spelling must not be accepted");
+        assert!(output.errors.iter().any(|message| {
+            message.code == "manifest.unknown_field" && message.message.contains("operations")
+        }));
     }
 
     #[test]

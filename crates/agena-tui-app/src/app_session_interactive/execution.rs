@@ -86,15 +86,15 @@ impl App {
     }
 
     pub(crate) fn is_local_command(&self, input: &str) -> bool {
-        if commands::parse_command(input).is_some() {
-            return true;
-        }
         let Some((name, _)) = commands::parse_invocation(input) else {
             return false;
         };
-        self.plugin_slash_operations()
+        if self.find_client_command(name).is_some() {
+            return true;
+        }
+        self.plugin_slash_commands()
             .iter()
-            .any(|entry| plugin_operation_matches_name(entry, name))
+            .any(|entry| plugin_command_matches_name(entry, name))
     }
 
     /// Submit the composer's document as ONE request. Both composer submit
@@ -201,36 +201,32 @@ impl App {
         self.reset_prompt_history_recall();
 
         let draft_text = draft.text();
-        if let Some(parsed) = commands::parse_command(draft_text.as_str()) {
-            if draft.activities().next().is_some() {
-                self.restore_composer_draft(draft);
-                self.flash_warning(ui_text::t(
-                    &self.i18n,
-                    "flash-command-does-not-support-attachments",
-                ));
-                return;
-            }
-            self.execute_command(parsed.spec, parsed.args.as_str());
-            return;
-        }
-
-        if let Some((name, args)) = commands::parse_invocation(draft_text.as_str()) {
-            if draft.activities().next().is_some() {
-                self.restore_composer_draft(draft);
-                self.flash_warning(ui_text::t(
-                    &self.i18n,
-                    "flash-command-does-not-support-attachments",
-                ));
-                return;
-            }
-            if let Some(entry) = self
-                .plugin_slash_operations()
+        let parsed = commands::parse_invocation(draft_text.as_str());
+        let client_command = parsed.and_then(|(name, _)| self.find_client_command(name));
+        let plugin_command = parsed.and_then(|(name, args)| {
+            self.plugin_slash_commands()
                 .into_iter()
-                .find(|entry| plugin_operation_matches_name(entry, name))
-            {
-                self.execute_plugin_slash_operation(entry, args);
+                .find(|entry| plugin_command_matches_name(entry, name))
+                .map(|entry| (entry, args.to_string()))
+        });
+        if client_command.is_some() || plugin_command.is_some() {
+            if draft.activities().next().is_some() {
+                self.restore_composer_draft(draft);
+                self.flash_warning(ui_text::t(
+                    &self.i18n,
+                    "flash-command-does-not-support-attachments",
+                ));
                 return;
             }
+            let args = parsed.map(|(_, args)| args.to_string()).unwrap_or_default();
+            if let Some(command) = client_command {
+                // A `Client` target is this client's own command; it never
+                // reaches the server.
+                self.execute_command(&command, args.as_str());
+            } else if let Some((entry, args)) = plugin_command {
+                self.execute_plugin_slash_command(entry, args.as_str());
+            }
+            return;
         }
 
         self.send_captured_draft(draft);
@@ -325,5 +321,5 @@ use crate::{
     App, AppMessage, ComposerDraft, DraftSlot, Instant, PendingComposerSubmit, PermissionReplyKind,
     PermissionRequest, PermissionScope, RunActivityTarget, RunOperation, commands,
     composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
-    plugin_operation_matches_name, run_status_line_command, ui_text,
+    plugin_command_matches_name, run_status_line_command, ui_text,
 };

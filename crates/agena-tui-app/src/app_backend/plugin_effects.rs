@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 /// The TUI consumes the exact final result returned by the server-owned
 /// operation resolver; it never follows plugin actions recursively.
-pub type PluginOperationEffect = agena_plugin_host::PluginOperationResult;
+pub type PluginCommandEffect = agena_plugin_host::CommandResult;
 
 pub(crate) fn plugin_display_contributions(
     application: &super::TuiBackend,
@@ -89,19 +89,28 @@ pub(crate) fn plugin_logs(
     application.plugin_logs(plugin_id, after_seq, limit)
 }
 
-pub(crate) fn plugin_slash_operations(
+/// The catalog commands this client does not run itself.
+///
+/// A `Client` target is the rendering client's own command: the TUI runs it
+/// locally from [`crate::commands::client_commands`], so listing it here would
+/// both duplicate the palette row and offer a round trip the server refuses.
+pub(crate) fn plugin_slash_commands(
     application: &super::TuiBackend,
-) -> Vec<agena_plugin_host::PluginOperationCatalogItem> {
+) -> Vec<agena_plugin_host::CommandCatalogItem> {
     application
         .plugin_catalog()
         .map(|catalog| {
             catalog
-                .operations
+                .commands
                 .into_iter()
                 .filter(|entry| {
-                    entry.operation.discoverability.slash
+                    entry.command.discoverability.slash
+                        && !matches!(
+                            entry.command.target,
+                            agena_plugin_host::sdk::CommandTarget::Client { .. }
+                        )
                         && entry
-                            .operation
+                            .command
                             .slash
                             .as_deref()
                             .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
@@ -111,35 +120,35 @@ pub(crate) fn plugin_slash_operations(
         .unwrap_or_default()
 }
 
-pub(crate) async fn invoke_plugin_slash_operation(
+pub(crate) async fn invoke_plugin_slash_command(
     application: &super::TuiBackend,
-    entry: &agena_plugin_host::PluginOperationCatalogItem,
+    entry: &agena_plugin_host::CommandCatalogItem,
     session_id: Option<i64>,
     raw: &str,
-) -> Result<PluginOperationEffect> {
+) -> Result<PluginCommandEffect> {
     let plugin_id = entry.plugin_id.to_string();
     let response = application
         .client()
-        .invoke_plugin_operation(
+        .invoke_plugin_command(
             plugin_id.as_str(),
-            entry.operation.id.as_str(),
+            entry.command.id.as_str(),
             serde_json::json!({}),
             session_id,
-            entry.operation.slash.as_deref(),
+            entry.command.slash.as_deref(),
             raw,
         )
         .await
-        .context("failed to invoke plugin operation through the server")?;
+        .context("failed to invoke plugin command through the server")?;
     let result = response
         .get("result")
         .cloned()
-        .ok_or_else(|| anyhow!("server response omitted plugin operation result"))?;
-    let result = serde_json::from_value::<agena_plugin_host::PluginOperationResult>(result)
-        .context("the server returned an undecodable plugin operation result")?;
+        .ok_or_else(|| anyhow!("server response omitted plugin command result"))?;
+    let result = serde_json::from_value::<agena_plugin_host::CommandResult>(result)
+        .context("the server returned an undecodable plugin command result")?;
     if let Err(error) = application.refresh_plugin_presentation_snapshot().await {
         tracing::warn!(
             diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
-            "plugin operation succeeded, but refreshing the TUI plugin presentation snapshot failed"
+            "plugin command succeeded, but refreshing the TUI plugin presentation snapshot failed"
         );
     }
     Ok(result)

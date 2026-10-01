@@ -616,12 +616,12 @@ fn validate_manifest(
         }
     }
 
-    let mut operation_ids = BTreeSet::new();
-    for operation in &manifest.operations {
-        validate_id(operation.id.as_str(), "operation", &mut operation_ids)?;
-        operation
+    let mut command_ids = BTreeSet::new();
+    for command in &manifest.commands {
+        validate_id(command.id.as_str(), "command", &mut command_ids)?;
+        command
             .validate()
-            .map_err(|error| fail(format!("operation `{}` is invalid: {error}", operation.id)))?;
+            .map_err(|error| fail(format!("command `{}` is invalid: {error}", command.id)))?;
     }
 
     manifest
@@ -917,9 +917,9 @@ mod manifest_tests {
     use super::{dispatch_transport_with_timeout, validate_json_schema_value, validate_manifest};
     use crate::error::TransportError;
     use crate::sdk::{
-        OperationDiscoverability, PluginKey, PluginManifest, PluginOperationDefinition,
-        PluginOperationTarget, PluginSkillDefinition, SettingsConstraints, SettingsContract,
-        SettingsNode, SettingsNodeKind, ToolDefinition,
+        CommandDefinition, CommandDiscoverability, CommandTarget, PluginKey, PluginManifest,
+        PluginSkillDefinition, SettingsConstraints, SettingsContract, SettingsNode,
+        SettingsNodeKind, ToolDefinition,
     };
     use crate::transport::PluginTransport;
 
@@ -961,16 +961,15 @@ mod manifest_tests {
         manifest
     }
 
-    fn operation(id: &str, handler: &str) -> PluginOperationDefinition {
-        PluginOperationDefinition {
+    fn command(id: &str, handler: &str) -> CommandDefinition {
+        CommandDefinition {
             id: id.to_string(),
             title: id.to_string(),
-            description: String::new(),
+            docs: agena_plugin_sdk::CommandDocs::default(),
             group: "Test".to_string(),
             category: None,
             slash: None,
             aliases: Vec::new(),
-            usage: None,
             input: SettingsContract::new(SettingsNode {
                 id: "input".to_string(),
                 path: String::new(),
@@ -983,8 +982,8 @@ mod manifest_tests {
                 secret: false,
                 kind: SettingsNodeKind::Object { fields: Vec::new() },
             }),
-            discoverability: OperationDiscoverability::default(),
-            target: PluginOperationTarget::Method {
+            discoverability: CommandDiscoverability::default(),
+            target: CommandTarget::Method {
                 handler: handler.to_string(),
             },
         }
@@ -1060,22 +1059,20 @@ mod manifest_tests {
     }
 
     #[test]
-    fn manifest_validation_rejects_duplicate_operation_ids() {
+    fn manifest_validation_rejects_duplicate_command_ids() {
         let mut manifest = manifest_with_tools(&[]);
-        manifest.operations.push(operation("refresh", "refresh"));
-        manifest
-            .operations
-            .push(operation("refresh", "refresh_again"));
+        manifest.commands.push(command("refresh", "refresh"));
+        manifest.commands.push(command("refresh", "refresh_again"));
 
-        assert!(validation_error(&manifest).contains("duplicate operation id"));
+        assert!(validation_error(&manifest).contains("duplicate command id"));
     }
 
     #[test]
-    fn manifest_validation_rejects_invalid_operation_targets() {
+    fn manifest_validation_rejects_invalid_command_targets() {
         let mut manifest = manifest_with_tools(&[]);
-        manifest.operations.push(operation("open", " "));
+        manifest.commands.push(command("open", " "));
 
-        assert!(validation_error(&manifest).contains("operation target"));
+        assert!(validation_error(&manifest).contains("command target"));
     }
 
     #[test]

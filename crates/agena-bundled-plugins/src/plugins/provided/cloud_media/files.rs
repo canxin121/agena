@@ -130,6 +130,13 @@ impl Service<'_> {
             .join(".agena/artifacts/provider-tools/media")
             .join(format!("{handle}.json")))
     }
+    /// Exclusive gate over this provider's record store for the workspace.
+    ///
+    /// Handles embed the *call id*, so two concurrent `analyze`/`delete` calls
+    /// never name the same record; the gate instead makes the store's
+    /// read-modify-write of the record directory atomic, and gives a
+    /// directory-wide sequential point that [`Service::save`] and
+    /// [`Service::send`] both rely on.
     async fn gate(&self) -> SdkResult<tokio::sync::OwnedMutexGuard<()>> {
         let root = self
             .root

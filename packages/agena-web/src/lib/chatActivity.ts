@@ -14,7 +14,7 @@ export const BUILTIN_CHAT_ACTIVITY_KINDS: ChatActivityKindCatalogItem[] = [
   { id: 'reasoning', category: 'builtin', label: 'Reasoning' },
   { id: 'operation', category: 'builtin', label: 'Operation' },
   { id: 'resource', category: 'builtin', label: 'Resource' },
-  { id: 'skill_reference', category: 'builtin', label: 'Skill reference' },
+  { id: 'skill_reference', category: 'builtin', label: 'Command reference' },
   { id: 'interaction', category: 'builtin', label: 'Interaction' },
   { id: 'hook', category: 'builtin', label: 'Hook' },
   { id: 'error', category: 'builtin', label: 'Error' },
@@ -102,7 +102,7 @@ export type KnownChatToolActivityType =
   | 'webfetch'
   | 'websearch'
   | 'codesearch'
-  | 'skill'
+  | 'command'
   | 'lsp'
   | 'todowrite'
   | 'todoread'
@@ -128,7 +128,7 @@ const KNOWN_CHAT_TOOL_ACTIVITY_TYPES: KnownChatToolActivityType[] = [
   'webfetch',
   'websearch',
   'codesearch',
-  'skill',
+  'command',
   'lsp',
   'todowrite',
   'todoread',
@@ -171,7 +171,7 @@ export function normalizeChatToolActivityId(value: unknown): string {
   if (namespace === 'code') return 'codesearch'
   if (namespace === 'interaction' && name === 'ask') return 'question'
   if (namespace === 'tasks') return 'task'
-  if (namespace === 'skills') return 'skill'
+  if (namespace === 'commands') return 'command'
   if (namespace === 'lsp') return 'lsp'
 
   if (['chatgpt', 'claude', 'gemini'].includes(namespace)) {

@@ -1,65 +1,91 @@
 /**
- * The web command catalog follows crates/agena-tui-app/src/commands.rs where
- * the command is supported by the web client. The TUI-only session hub and
- * lineage commands are intentionally not exposed here.
+ * The web command catalog.
+ *
+ * Commands are declared once, by the server: the `agena.commands` plugin
+ * declares the built-ins, and any plugin may declare its own through the
+ * manifest. The host publishes them through `/api/v1/plugins/surface`, already
+ * sorted, so this module's job is only to read that list — recognizing a
+ * `Client` target as a command the browser runs itself and everything else as
+ * a server-owned command.
+ *
+ * Nothing here is a second declaration: names, aliases, usage lines and
+ * descriptions all come from the catalog. `CLIENT_COMMAND_ACTIONS` is only the
+ * vocabulary of local actions this client knows how to run, mirroring
+ * `agena_api::client_command::ClientCommandAction`; a `Client` command naming
+ * an action absent here belongs to another client and is dropped.
  *
  * Keep this file free of Vue and i18n state so command parsing and the
- * catalog can be tested without mounting a page.  Descriptions are resolved
- * by useChatCommands through the `descriptionKey` field.
+ * catalog can be tested without mounting a page.
  */
 
-export type BuiltInCommandId =
-  | 'help'
-  | 'commands'
-  | 'new'
-  | 'sessions'
-  | 'rewind'
-  | 'rename'
-  | 'timeline'
-  | 'settings'
-  | 'model'
-  | 'review'
-  | 'commit'
-  | 'pr'
-  | 'export'
-  | 'pager'
-  | 'continue'
-  | 'compact'
-  | 'user-input'
-  | 'allow'
-  | 'allow-always'
-  | 'deny'
-  | 'deny-always'
-  | 'attach'
-  | 'skill'
-  | 'skill-manager'
-  | 'download'
-  | 'editor'
-  | 'image'
-  | 'copy'
-  | 'copy-message'
-  | 'copy-visible'
-  | 'fork'
-  | 'children'
-  | 'parent'
-  | 'diagnostics'
-  | 'status'
-  | 'usage'
-  | 'activities'
-  | 'background'
-  | 'plan'
-  | 'side'
+import type { PluginCommandCatalogItem, PluginCommandDocs } from '@/lib/pluginOperations'
 
-export type BuiltInCommandSpec = {
+/** The local actions this client implements, mirroring `ClientCommandAction`. */
+export const CLIENT_COMMAND_ACTIONS = [
+  'help',
+  'commands',
+  'new',
+  'sessions',
+  'hub',
+  'lineage',
+  'rewind',
+  'rename',
+  'favorite',
+  'timeline',
+  'settings',
+  'model',
+  'commit',
+  'pr',
+  'export',
+  'pager',
+  'continue',
+  'compact',
+  'user-input',
+  'allow',
+  'allow-always',
+  'deny',
+  'deny-always',
+  'attach',
+  'download',
+  'editor',
+  'image',
+  'paste',
+  'copy',
+  'copy-message',
+  'copy-visible',
+  'fork',
+  'children',
+  'parent',
+  'diagnostics',
+  'status',
+  'usage',
+  'activities',
+  'background',
+  'plan',
+  'side',
+] as const
+
+export type ClientCommandAction = (typeof CLIENT_COMMAND_ACTIONS)[number]
+
+export type ClientCommand = {
   kind: 'builtin'
-  id: BuiltInCommandId
-  name: BuiltInCommandId
+  /** The declaration's stable identifier. */
+  id: string
+  /** The `/name` spelling a user types. */
+  name: string
+  /** The local action to dispatch on. */
+  action: ClientCommandAction
   aliases: string[]
-  arguments: string
+  /** The declaration's argument usage line; empty when it takes none. */
+  usage: string
+  /** A required argument (`<name>`) gates execution; an optional one does not. */
   requiresArguments: boolean
-  descriptionKey: string
-  /** Some commands have an optional argument but open a UI by default. */
-  opensInteractiveSurface: boolean
+  /** Whether the command can run with no arguments at all. */
+  acceptsEmptyInput: boolean
+  docs: PluginCommandDocs
+  showInPalette: boolean
+  matchesSlash: boolean
+  command: PluginCommandCatalogItem
 }
 
 export function normalizeCommandPaletteQuery(value: unknown): string {
@@ -78,102 +104,65 @@ export function shouldResetCommandPaletteSelection(open: boolean, currentQuery: 
   return !open || currentQuery !== nextQuery
 }
 
-type CommandSeed = [BuiltInCommandId, string[], string, boolean?]
-
-// Keep the order identical to the TUI catalog.  The palette can sort the
-// result for searching, but a blank palette should still feel familiar in
-// both clients.
-const COMMAND_SEEDS: CommandSeed[] = [
-  ['help', ['?'], ''],
-  ['commands', ['palette'], ''],
-  ['new', ['clear'], ''],
-  ['sessions', [], ''],
-  ['rewind', ['backtrack'], ''],
-  ['rename', ['title'], ''],
-  ['timeline', ['events'], ''],
-  ['settings', ['config'], ''],
-  ['model', [], ''],
-  ['review', [], '[focus]'],
-  ['commit', [], '<message>'],
-  ['pr', [], '<title> [--body <text>] [--base <branch>] [--head <branch>]'],
-  ['export', ['save'], '[path]'],
-  ['pager', ['view', 'less'], ''],
-  ['continue', ['resume-run'], ''],
-  ['compact', ['compress', 'summarize'], ''],
-  ['user-input', ['reply'], ''],
-  ['allow', [], ''],
-  ['allow-always', [], ''],
-  ['deny', [], ''],
-  ['deny-always', [], ''],
-  ['attach', ['file'], ''],
-  ['skill', ['skills'], ''],
-  ['skill-manager', ['manage-skills'], ''],
-  ['download', ['dl'], '<workspace-path>'],
-  ['editor', ['edit'], ''],
-  ['image', [], ''],
-  ['copy', ['yank'], ''],
-  ['copy-message', ['copy-last', 'copy-assistant'], ''],
-  ['copy-visible', [], ''],
-  ['fork', ['branch'], ''],
-  ['children', ['child'], ''],
-  ['parent', [], ''],
-  ['diagnostics', ['feedback'], ''],
-  ['status', [], ''],
-  ['usage', ['stats', 'analytics'], ''],
-  ['activities', ['tasks'], ''],
-  ['background', [], ''],
-  ['plan', ['plan-view', 'show-plan'], ''],
-  ['side', ['btw', 'aside'], ''],
-]
-
-export const BUILT_IN_COMMANDS: BuiltInCommandSpec[] = COMMAND_SEEDS.map(([name, aliases, argumentsLabel]) => ({
-  kind: 'builtin',
-  id: name,
-  name,
-  aliases,
-  arguments: argumentsLabel,
-  requiresArguments: argumentsLabel.trimStart().startsWith('<'),
-  descriptionKey: `chat.commandPalette.builtIns.${name}`,
-  opensInteractiveSurface: [
-    'sessions',
-    'background',
-    'rename',
-    'timeline',
-    'settings',
-    'attach',
-    'skill',
-    'skill-manager',
-    'image',
-    'usage',
-    'activities',
-    'plan',
-    'fork',
-    'side',
-  ].includes(name),
-}))
-
-const BUILT_IN_BY_NAME = new Map<string, BuiltInCommandSpec>()
-for (const command of BUILT_IN_COMMANDS) {
-  BUILT_IN_BY_NAME.set(command.name, command)
-  for (const alias of command.aliases) BUILT_IN_BY_NAME.set(alias, command)
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
-export function findBuiltInCommand(name: string): BuiltInCommandSpec | null {
-  return (
-    BUILT_IN_BY_NAME.get(
-      String(name || '')
-        .replace(/^\/+/, '')
-        .trim()
-        .toLowerCase(),
-    ) || null
-  )
+function slashName(slash: unknown): string {
+  return text(slash).replace(/^\/+/, '')
 }
 
-export function paletteInvocation(
-  command: Pick<BuiltInCommandSpec, 'arguments' | 'requiresArguments'> & { name: string },
-): string {
+/**
+ * Read one catalog entry as a command this client runs locally, or `null` when
+ * it is not one: another client's `Client` command, a server-owned target, or
+ * a declaration hidden from every catalog.
+ */
+export function clientCommandFromCatalog(command: PluginCommandCatalogItem): ClientCommand | null {
+  if (!command || command.target?.kind !== 'client') return null
+  if (command.discoverability?.catalog === false) return null
+  const action = text(command.target.action)
+  if (!(CLIENT_COMMAND_ACTIONS as readonly string[]).includes(action)) return null
+  const name = slashName(command.slash)
+  if (!name || /\s/.test(name)) return null
+
+  const usage = text(command.docs?.usage)
+  return {
+    kind: 'builtin',
+    id: text(command.id) || action,
+    name: name.toLowerCase(),
+    action: action as ClientCommandAction,
+    aliases: Array.isArray(command.aliases)
+      ? command.aliases.map((alias) => slashName(alias).toLowerCase()).filter(Boolean)
+      : [],
+    usage,
+    requiresArguments: usage.trimStart().startsWith('<'),
+    acceptsEmptyInput: command.accepts_empty_input === true,
+    docs: command.docs || {},
+    showInPalette: command.discoverability?.palette !== false,
+    matchesSlash: command.discoverability?.slash !== false,
+    command,
+  }
+}
+
+/** Every locally-run command the catalog declares, in catalog order. */
+export function clientCommandsFromCatalog(commands: PluginCommandCatalogItem[] | undefined | null): ClientCommand[] {
+  const collected: ClientCommand[] = []
+  for (const command of commands || []) {
+    const builtin = clientCommandFromCatalog(command)
+    if (builtin) collected.push(builtin)
+  }
+  return collected
+}
+
+/** `/name <usage>` as a user would type it, for usage warnings. */
+export function commandUsage(command: Pick<ClientCommand, 'name' | 'usage'>): string {
+  return `/${command.name}${command.usage ? ` ${command.usage}` : ''}`
+}
+
+/** Compact label for the action-oriented command palette. */
+export function paletteInvocation(command: Pick<ClientCommand, 'name' | 'usage' | 'requiresArguments'>): string {
   if (!command.requiresArguments) return `/${command.name}`
-  const required = command.arguments.split(' [', 1)[0] || command.arguments
+  const required = command.usage.split(' [', 1)[0] || command.usage
   return `/${command.name} ${required}`
 }
 
@@ -186,38 +175,4 @@ export function parseSlashInvocation(raw: string): { name: string; args: string 
   const name = (separator < 0 ? content : content.slice(0, separator)).trim().toLowerCase()
   if (!name) return null
   return { name, args: separator < 0 ? '' : content.slice(separator + 1).trim() }
-}
-
-export function schemaRequiresArguments(schema: unknown): boolean {
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return false
-  const value = schema as { required?: unknown }
-  return Array.isArray(value.required) && value.required.some((item) => typeof item === 'string' && item.trim())
-}
-
-/**
- * Matches the TUI's `plugin_command_accepts_empty_arguments` decision for
- * command-backed/plugin-tool-backed entries. A JSON schema with a scalar
- * input (or an object with required fields) cannot be invoked from a palette
- * selection without first giving the user a composer draft.
- */
-export function schemaNeedsPluginInput(schema: unknown): boolean {
-  // This is intentionally the same projection as the TUI's
-  // `plugin_command_accepts_empty_arguments`. Static actions are handled by
-  // the caller; this helper answers whether an empty slash invocation must
-  // first collect arguments from the composer.
-  if (schema == null) return false
-  if (typeof schema !== 'object' || Array.isArray(schema)) {
-    // JSON-schema booleans are the only non-object schemas the TUI accepts as
-    // metadata. `true` accepts an empty input; `false` does not.
-    return schema !== true
-  }
-  const value = schema as { type?: unknown; required?: unknown; minProperties?: unknown }
-  const type = value.type
-  const acceptsObject =
-    type === undefined
-      ? Object.keys(value).length === 0
-      : type === 'object' || (Array.isArray(type) && type.some((kind) => kind === 'object'))
-  if (!acceptsObject) return true
-  if (schemaRequiresArguments(schema)) return true
-  return typeof value.minProperties === 'number' && Number.isFinite(value.minProperties) && value.minProperties > 0
 }

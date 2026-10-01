@@ -4,8 +4,7 @@
 //! reference from the real plugin manifests. The output is committed at
 //! `generated/tools-reference.md` (in this crate) and embedded into rustdoc through
 //! `include_str!`, so `cargo doc` shows every tool definition together with its
-//! detailed help text, examples, tags, runtime flags, and JSON Schema
-//! contracts.
+//! detailed help text, tags, runtime flags, and JSON Schema contracts.
 //!
 //! Regenerate with `agena inspect --tools-reference` (see the generated file's
 //! header for the exact command); a CI drift test compares the committed file
@@ -60,7 +59,7 @@ fn render_header(out: &mut String, plugin_count: usize, tool_count: usize) {
     )
     .unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "- Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming runtime flags, examples, an input parameter table, and the full input / output JSON Schema.").unwrap();
+    writeln!(out, "- Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.").unwrap();
     writeln!(out, "- The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.").unwrap();
     writeln!(out, "- Tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.").unwrap();
     writeln!(out).unwrap();
@@ -148,16 +147,11 @@ fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
     }
 
     writeln!(out).unwrap();
-    let concurrency = if tool.runtime.concurrency_safe {
-        "✓ concurrency-safe"
-    } else {
-        "✗ not concurrency-safe"
-    };
     let streaming = serde_json::to_string(&tool.runtime.streaming)
         .unwrap_or_else(|_| "\"buffered\"".to_string())
         .trim_matches('"')
         .to_string();
-    writeln!(out, "**Runtime**: {concurrency} · streaming `{streaming}`").unwrap();
+    writeln!(out, "**Runtime**: streaming `{streaming}`").unwrap();
 
     if let Some(before) = nonempty(tool.before_help_text()) {
         writeln!(out).unwrap();
@@ -173,26 +167,6 @@ fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
         writeln!(out).unwrap();
         writeln!(out, "**After help**:").unwrap();
         writeln!(out, "{}", blockquote(after)).unwrap();
-    }
-
-    let examples = tool.example_texts();
-    if !examples.is_empty() {
-        writeln!(out).unwrap();
-        writeln!(out, "**Examples**:").unwrap();
-        for example in examples {
-            match serde_json::from_str::<Value>(example) {
-                Ok(value) => {
-                    writeln!(out, "```json").unwrap();
-                    writeln!(out, "{}", pretty_json(&value)).unwrap();
-                    writeln!(out, "```").unwrap();
-                }
-                Err(..) => {
-                    writeln!(out, "```text").unwrap();
-                    writeln!(out, "{example}").unwrap();
-                    writeln!(out, "```").unwrap();
-                }
-            }
-        }
     }
 
     let input_schema = tool.input_schema();

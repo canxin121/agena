@@ -48,7 +48,7 @@ struct UiPlugin;
     summary = "UI macro test plugin."
 )]
 impl UiPlugin {
-    #[tool(summary = "Resolve a hover position.", concurrency_safe, tags(read_only))]
+    #[tool(summary = "Resolve a hover position.", tags(read_only))]
     async fn hover(&self, input: &HoverInput) -> Result<Vec<HoverOutput>> {
         Ok(vec![HoverOutput {
             file: input.file.clone(),
@@ -57,7 +57,7 @@ impl UiPlugin {
         }])
     }
 
-    #[tool(summary = "Echo text.", concurrency_safe, tags(read_only))]
+    #[tool(summary = "Echo text.", tags(read_only))]
     fn echo(&self, #[arg(trim, non_empty)] text: String) -> EchoOutput {
         EchoOutput { text }
     }

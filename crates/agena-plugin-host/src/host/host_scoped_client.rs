@@ -401,6 +401,39 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn register_command(
+        &self,
+        req: HostCommandRegisterRequest,
+    ) -> crate::sdk::Result<HostCommandMutationResponse> {
+        self.run_callback(async {
+            self.handle
+                .command_upsert_for_plugin(&self.plugin_id, req.command)
+        })
+        .await
+    }
+
+    async fn update_command(
+        &self,
+        req: HostCommandUpdateRequest,
+    ) -> crate::sdk::Result<HostCommandMutationResponse> {
+        self.run_callback(async {
+            self.handle
+                .command_upsert_for_plugin(&self.plugin_id, req.command)
+        })
+        .await
+    }
+
+    async fn remove_command(
+        &self,
+        req: HostCommandRemoveRequest,
+    ) -> crate::sdk::Result<HostCommandMutationResponse> {
+        self.run_callback(async {
+            self.handle
+                .command_remove_for_plugin(&self.plugin_id, &req.id)
+        })
+        .await
+    }
+
     async fn register_tool(
         &self,
         req: HostToolRegisterRequest,
@@ -432,6 +465,13 @@ impl HostClient for ScopedHostClient {
                 .tool_remove_for_plugin(&self.plugin_id, &req.name, req.by_model_name)
         })
         .await
+    }
+
+    async fn list_registered_commands(
+        &self,
+    ) -> crate::sdk::Result<HostRegisteredCommandListResponse> {
+        self.run_callback(async { self.handle.registered_command_list_response() })
+            .await
     }
 
     async fn list_registered_tools(&self) -> crate::sdk::Result<HostRegisteredToolListResponse> {
@@ -675,25 +715,26 @@ impl HostClient for ScopedHostClient {
 }
 use super::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventEnvelope, EventFilter,
-    EventSubscription, HostCallbackContext, HostClient, HostConfigReloadRequestResponse,
-    HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
-    HostContextStatusResponse, HostDisplayContributeRequest, HostDisplayRemoveRequest,
-    HostDisplayRemoveResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
-    HostHookListResponse, HostImageExecuteRequest, HostImageExecuteResponse,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSnapshotListResponse,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginError, PluginNotifyRequest,
-    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput,
+    EventSubscription, HostCallbackContext, HostClient, HostCommandMutationResponse,
+    HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandUpdateRequest,
+    HostConfigReloadRequestResponse, HostConfigReloadStatusRequest, HostConfigReloadStatusResponse,
+    HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
+    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostEnterSnapshotRequest,
+    HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
+    HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredCommandListResponse,
+    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSnapshotListResponse, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginError,
+    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
+    RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput,
     host_api::{self, BackgroundActivity, BackgroundActivityKind},
 };

@@ -11,12 +11,11 @@ pub use super::manifest_support::normalize_tool_tag_name;
 use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
 pub use agena_domain::{AccessKind, ActivityKind, PathKind};
 pub use agena_plugin_contracts::{
-    CommandDefinition, CommandDiagnostic, CommandDiscoverability, CommandDocs, CommandHostEffect,
-    CommandInvokeInput, CommandResult, CommandStatus, CommandTarget, MAX_JSON_ESCAPE_BYTES,
-    MAX_JSON_ESCAPE_DEPTH, PathInputKind, PluginServiceDeclarations, PluginServiceExport,
-    PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
-    SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
-    SettingsVariant,
+    CommandDefinition, CommandDiagnostic, CommandDocs, CommandHostEffect, CommandInvokeInput,
+    CommandResult, CommandStatus, CommandTarget, MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH,
+    PathInputKind, PluginServiceDeclarations, PluginServiceExport, PluginServiceImport,
+    PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod, SettingsConstraints,
+    SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption, SettingsVariant,
 };
 
 /// Explicit marker for plugins that intentionally expose an empty editable

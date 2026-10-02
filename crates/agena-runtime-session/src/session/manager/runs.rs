@@ -986,7 +986,6 @@ mod tests {
                     ..CommandDocs::default()
                 },
                 input: SettingsContract::empty_object("No input", ""),
-                discoverability: Default::default(),
                 target: CommandTarget::Method {
                     handler: "run".to_string(),
                 },

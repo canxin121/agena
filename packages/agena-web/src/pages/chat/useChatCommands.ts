@@ -150,7 +150,6 @@ export function useChatCommands(opts: {
   }
 
   function builtInFromCatalog(command: ClientCommand): BuiltInCommand | null {
-    if (!command.showInPalette) return null
     return { ...command, arguments: command.usage, description: builtInDescription(command) }
   }
 
@@ -164,7 +163,7 @@ export function useChatCommands(opts: {
     const commandId = text(command.id)
     const slash = text(command.slash)
     const name = slash.replace(/^\/+/, '').toLowerCase()
-    if (!pluginId || !commandId || !name || /\s/.test(name) || command.discoverability?.slash === false) {
+    if (!pluginId || !commandId || !name || /\s/.test(name)) {
       return null
     }
     const requiresArguments = command.accepts_empty_input !== true

@@ -252,8 +252,8 @@ pub struct PluginThemeColorsResource {
 mod plugin_surface_catalog_contract_tests {
     use super::{PluginCommandResource, PluginSurfaceCatalogResource};
     use agena_plugin_sdk::{
-        CommandDefinition, CommandDiscoverability, CommandTarget, SettingsConstraints,
-        SettingsContract, SettingsNode, SettingsNodeKind,
+        CommandDefinition, CommandTarget, SettingsConstraints, SettingsContract, SettingsNode,
+        SettingsNodeKind,
     };
 
     #[test]
@@ -283,7 +283,6 @@ mod plugin_surface_catalog_contract_tests {
                         secret: false,
                         kind: SettingsNodeKind::Object { fields: Vec::new() },
                     }),
-                    discoverability: CommandDiscoverability::default(),
                     target: CommandTarget::Tool {
                         tool: "summarize".to_owned(),
                     },

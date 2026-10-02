@@ -77,12 +77,12 @@ pub use host_api::{
 pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text, service_method_for};
 pub use manifest::{
-    CommandDefinition, CommandDiagnostic, CommandDiscoverability, CommandDocs, CommandHostEffect,
-    CommandInvokeInput, CommandResult, CommandStatus, CommandTarget, ContributionKind,
-    EmptyPluginSettings, HookSubscription, MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathKind,
-    PluginDisplayContent, PluginDisplayContribution, PluginManifest, PluginServiceDeclarations,
-    PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput,
-    PluginServiceMethod, PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
+    CommandDefinition, CommandDiagnostic, CommandDocs, CommandHostEffect, CommandInvokeInput,
+    CommandResult, CommandStatus, CommandTarget, ContributionKind, EmptyPluginSettings,
+    HookSubscription, MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathKind, PluginDisplayContent,
+    PluginDisplayContribution, PluginManifest, PluginServiceDeclarations, PluginServiceExport,
+    PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
+    PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
     PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
     SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
     SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolRuntimePolicy,

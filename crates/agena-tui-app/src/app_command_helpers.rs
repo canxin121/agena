@@ -263,8 +263,8 @@ use crate::{
 #[cfg(test)]
 mod plugin_command_tests {
     use agena_plugin_host::sdk::{
-        CommandDefinition, CommandDiscoverability, CommandDocs, CommandTarget, SettingsConstraints,
-        SettingsContract, SettingsNode, SettingsNodeKind,
+        CommandDefinition, CommandDocs, CommandTarget, SettingsConstraints, SettingsContract,
+        SettingsNode, SettingsNodeKind,
     };
     use agena_plugin_host::{CommandCatalogItem, PluginKey};
 
@@ -292,7 +292,6 @@ mod plugin_command_tests {
                 slash: slash.map(str::to_string),
                 aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
                 input: SettingsContract::new(SettingsNode::root_object("Input", "")),
-                discoverability: CommandDiscoverability::default(),
                 target: CommandTarget::Method {
                     handler: "example.run".to_string(),
                 },

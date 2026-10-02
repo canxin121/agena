@@ -2173,7 +2173,6 @@ mod tests {
                 input: agena_plugin_sdk::SettingsContract::new(
                     agena_plugin_sdk::SettingsNode::root_object("Input", ""),
                 ),
-                discoverability: Default::default(),
                 target: agena_plugin_sdk::CommandTarget::Method {
                     handler: "run".to_string(),
                 },

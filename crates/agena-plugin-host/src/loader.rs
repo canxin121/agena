@@ -917,9 +917,8 @@ mod manifest_tests {
     use super::{dispatch_transport_with_timeout, validate_json_schema_value, validate_manifest};
     use crate::error::TransportError;
     use crate::sdk::{
-        CommandDefinition, CommandDiscoverability, CommandTarget, PluginKey, PluginManifest,
-        PluginSkillDefinition, SettingsConstraints, SettingsContract, SettingsNode,
-        SettingsNodeKind, ToolDefinition,
+        CommandDefinition, CommandTarget, PluginKey, PluginManifest, PluginSkillDefinition,
+        SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, ToolDefinition,
     };
     use crate::transport::PluginTransport;
 
@@ -982,7 +981,6 @@ mod manifest_tests {
                 secret: false,
                 kind: SettingsNodeKind::Object { fields: Vec::new() },
             }),
-            discoverability: CommandDiscoverability::default(),
             target: CommandTarget::Method {
                 handler: handler.to_string(),
             },

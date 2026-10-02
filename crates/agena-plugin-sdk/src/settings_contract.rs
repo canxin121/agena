@@ -5,9 +5,8 @@
 use std::collections::BTreeSet;
 
 use agena_plugin_contracts::{
-    CommandDiscoverability, MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathInputKind,
-    SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
-    SettingsVariant,
+    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathInputKind, SettingsConstraints,
+    SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption, SettingsVariant,
 };
 use schemars::{JsonSchema, schema_for};
 use serde::Serialize;
@@ -905,9 +904,6 @@ impl NodeMetadata {
         }
     }
 }
-
-#[allow(dead_code)]
-fn _keep_contract_types_linked(_: CommandDiscoverability) {}
 
 #[cfg(test)]
 mod tests {

@@ -104,16 +104,14 @@ pub(crate) fn plugin_slash_commands(
                 .commands
                 .into_iter()
                 .filter(|entry| {
-                    entry.command.discoverability.slash
-                        && !matches!(
-                            entry.command.target,
-                            agena_plugin_host::sdk::CommandTarget::Client { .. }
-                        )
-                        && entry
-                            .command
-                            .slash
-                            .as_deref()
-                            .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
+                    !matches!(
+                        entry.command.target,
+                        agena_plugin_host::sdk::CommandTarget::Client { .. }
+                    ) && entry
+                        .command
+                        .slash
+                        .as_deref()
+                        .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
                 })
                 .collect()
         })

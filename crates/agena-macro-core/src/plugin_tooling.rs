@@ -28,7 +28,6 @@ pub fn expand_plugin_command_definition(
     let aliases = &command.aliases;
     let usage = expand_plugin_command_usage_expr(command)?;
     let examples = expand_plugin_command_examples_expr(command)?;
-    let slash_present = command.slash.is_some();
     let input = match &command.handler {
         CommandHandlerPlan::Method { input, .. } => match input {
             CommandInputPlan::Typed { ty, .. } => {
@@ -91,11 +90,6 @@ pub fn expand_plugin_command_definition(
                 examples: #examples,
             },
             input: #input,
-            discoverability: ::agena_plugin_sdk::CommandDiscoverability {
-                catalog: true,
-                palette: true,
-                slash: #slash_present,
-            },
             target: #target,
         });
     })

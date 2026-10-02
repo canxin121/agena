@@ -53,12 +53,12 @@ use sha2::{Digest, Sha256};
 
 use agena_plugin_host::sdk::host_api::{HostCommandRegisterRequest, HostCommandRemoveRequest};
 use agena_plugin_host::sdk::{
-    CommandDefinition, CommandDiscoverability, CommandDocs, CommandHostEffect, CommandInvokeInput,
-    CommandResult, CommandTarget, HookSubscription, HostClient, InitContext, InitOutcome, Plugin,
-    PluginError, PluginKey, PluginManifest, PluginSkillDefinition, Result as SdkResult,
-    SettingsContract, SettingsNode, SettingsNodeKind, ToolContract, ToolDefinition,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolDocs, ToolInvokeInput, ToolInvokeOutput,
-    ToolRuntimePolicy, ToolStreamingMode, ToolTag, macro_support,
+    CommandDefinition, CommandDocs, CommandHostEffect, CommandInvokeInput, CommandResult,
+    CommandTarget, HookSubscription, HostClient, InitContext, InitOutcome, Plugin, PluginError,
+    PluginKey, PluginManifest, PluginSkillDefinition, Result as SdkResult, SettingsContract,
+    SettingsNode, SettingsNodeKind, ToolContract, ToolDefinition, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolDocs, ToolInvokeInput, ToolInvokeOutput, ToolRuntimePolicy,
+    ToolStreamingMode, ToolTag, macro_support,
 };
 
 use discovery::{
@@ -408,7 +408,6 @@ fn built_in_commands() -> Vec<CommandDefinition> {
                 ..CommandDocs::default()
             },
             input: SettingsContract::empty_object("No input", ""),
-            discoverability: CommandDiscoverability::default(),
             target: CommandTarget::Client {
                 action: built_in.action.to_string(),
             },
@@ -1837,7 +1836,6 @@ fn package_command_definition(name: &str, entry: &PackageEntry) -> CommandDefini
             ..CommandDocs::default()
         },
         input: package_contract(),
-        discoverability: CommandDiscoverability::default(),
         target: CommandTarget::Method {
             handler: HANDLER_RUN.to_string(),
         },

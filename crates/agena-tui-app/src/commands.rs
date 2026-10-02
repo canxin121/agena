@@ -123,18 +123,6 @@ impl ClientCommand {
         format!("/{} {required}", self.name())
     }
 
-    /// Whether the command is offered in a client's command palette.
-    fn shows_in_palette(&self) -> bool {
-        let discoverability = &self.entry.command.discoverability;
-        discoverability.catalog && discoverability.palette
-    }
-
-    /// Whether the command is recognized when typed as `/name` in a composer.
-    fn recognizes_slash(&self) -> bool {
-        let discoverability = &self.entry.command.discoverability;
-        discoverability.catalog && discoverability.slash
-    }
-
     fn matches_name(&self, name: &str) -> bool {
         self.name().eq_ignore_ascii_case(name)
             || self
@@ -163,16 +151,6 @@ pub(crate) fn client_commands(catalog: Option<&PluginSurfaceCatalog>) -> Vec<Cli
     catalog.commands.iter().filter_map(client_command).collect()
 }
 
-/// The commands a palette offers, in catalog order.
-pub(crate) fn client_palette_commands(
-    catalog: Option<&PluginSurfaceCatalog>,
-) -> Vec<ClientCommand> {
-    client_commands(catalog)
-        .into_iter()
-        .filter(ClientCommand::shows_in_palette)
-        .collect()
-}
-
 /// Resolve the command that `/name` names, if this client declares one.
 pub(crate) fn find_client_command(
     catalog: Option<&PluginSurfaceCatalog>,
@@ -184,7 +162,7 @@ pub(crate) fn find_client_command(
     }
     client_commands(catalog)
         .into_iter()
-        .find(|command| command.recognizes_slash() && command.matches_name(name))
+        .find(|command| command.matches_name(name))
 }
 
 /// Composer suggestions for a partial name: exact matches first, then prefixes.
@@ -193,10 +171,7 @@ pub(crate) fn client_command_suggestions(
     query: &str,
 ) -> Vec<ClientCommand> {
     let query = query.trim().to_ascii_lowercase();
-    let commands = client_commands(catalog)
-        .into_iter()
-        .filter(ClientCommand::recognizes_slash)
-        .collect::<Vec<_>>();
+    let commands = client_commands(catalog);
     if query.is_empty() {
         return commands;
     }
@@ -238,9 +213,6 @@ pub(crate) fn docs_summary(i18n: &I18n, docs: &CommandDocs, fallback: &str) -> S
 }
 
 fn client_command(entry: &CommandCatalogItem) -> Option<ClientCommand> {
-    if !entry.command.discoverability.catalog {
-        return None;
-    }
     let CommandTarget::Client { action } = &entry.command.target else {
         return None;
     };
@@ -256,12 +228,10 @@ fn client_command(entry: &CommandCatalogItem) -> Option<ClientCommand> {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_command_suggestions, client_commands, client_palette_commands, docs_summary,
-        find_client_command, parse_invocation,
+        client_command_suggestions, client_commands, docs_summary, find_client_command,
+        parse_invocation,
     };
-    use agena_plugin_host::sdk::{
-        CommandDefinition, CommandDiscoverability, CommandDocs, CommandTarget, SettingsContract,
-    };
+    use agena_plugin_host::sdk::{CommandDefinition, CommandDocs, CommandTarget, SettingsContract};
     use agena_plugin_host::{CommandCatalogItem, PluginKey, PluginSurfaceCatalog};
     use agena_tui::i18n::I18n;
 
@@ -270,7 +240,6 @@ mod tests {
         slash: Option<&str>,
         aliases: &[&str],
         usage: Option<&str>,
-        discoverability: CommandDiscoverability,
         target: CommandTarget,
     ) -> CommandCatalogItem {
         CommandCatalogItem {
@@ -292,7 +261,6 @@ mod tests {
                     ..CommandDocs::default()
                 },
                 input: SettingsContract::empty_object("No input", ""),
-                discoverability,
                 target,
             },
         }
@@ -336,21 +304,13 @@ mod tests {
     #[test]
     fn only_client_targeted_commands_the_client_can_spell_are_rendered() {
         let catalog = catalog(vec![
-            catalog_item(
-                "help",
-                Some("/help"),
-                &["?"],
-                None,
-                CommandDiscoverability::default(),
-                client_target("help"),
-            ),
+            catalog_item("help", Some("/help"), &["?"], None, client_target("help")),
             // Declared for another client: this build has no such action.
             catalog_item(
                 "not-ours",
                 Some("/not-ours"),
                 &[],
                 None,
-                CommandDiscoverability::default(),
                 client_target("an-action-only-the-web-client-has"),
             ),
             // Server-owned targets are not client commands at all.
@@ -359,7 +319,6 @@ mod tests {
                 Some("/remote"),
                 &[],
                 None,
-                CommandDiscoverability::default(),
                 CommandTarget::Method {
                     handler: "remote.run".to_string(),
                 },
@@ -376,47 +335,6 @@ mod tests {
     }
 
     #[test]
-    fn palette_and_slash_discoverability_are_read_separately() {
-        let slash_only = CommandDiscoverability {
-            palette: false,
-            ..CommandDiscoverability::default()
-        };
-        let palette_only = CommandDiscoverability {
-            slash: false,
-            ..CommandDiscoverability::default()
-        };
-        let catalog = catalog(vec![
-            catalog_item(
-                "slash-only",
-                Some("/slash-only"),
-                &[],
-                None,
-                slash_only,
-                client_target("help"),
-            ),
-            catalog_item(
-                "palette-only",
-                Some("/palette-only"),
-                &[],
-                None,
-                palette_only,
-                client_target("commands"),
-            ),
-        ]);
-
-        let palette = client_palette_commands(Some(&catalog));
-        assert_eq!(
-            palette
-                .iter()
-                .map(|command| command.id())
-                .collect::<Vec<_>>(),
-            vec!["palette-only"]
-        );
-        assert!(find_client_command(Some(&catalog), "slash-only").is_some());
-        assert!(find_client_command(Some(&catalog), "palette-only").is_none());
-    }
-
-    #[test]
     fn usage_drives_argument_requirements_and_palette_labels() {
         let catalog = catalog(vec![
             catalog_item(
@@ -424,7 +342,6 @@ mod tests {
                 Some("/pr"),
                 &[],
                 Some("<title> [--body <text>] [--base <branch>]"),
-                CommandDiscoverability::default(),
                 client_target("pr"),
             ),
             catalog_item(
@@ -432,7 +349,6 @@ mod tests {
                 Some("/export"),
                 &[],
                 Some("[path]"),
-                CommandDiscoverability::default(),
                 client_target("export"),
             ),
             catalog_item(
@@ -440,7 +356,6 @@ mod tests {
                 Some("/sessions"),
                 &[],
                 None,
-                CommandDiscoverability::default(),
                 client_target("sessions"),
             ),
         ]);
@@ -476,23 +391,14 @@ mod tests {
                 Some("/sessions"),
                 &[],
                 None,
-                CommandDiscoverability::default(),
                 client_target("sessions"),
             ),
-            catalog_item(
-                "side",
-                Some("/side"),
-                &["btw"],
-                None,
-                CommandDiscoverability::default(),
-                client_target("side"),
-            ),
+            catalog_item("side", Some("/side"), &["btw"], None, client_target("side")),
             catalog_item(
                 "settings",
                 Some("/settings"),
                 &["config"],
                 None,
-                CommandDiscoverability::default(),
                 client_target("settings"),
             ),
         ]);
@@ -541,7 +447,6 @@ mod tests {
     #[test]
     fn an_empty_catalog_offers_nothing_rather_than_a_local_fallback() {
         assert!(client_commands(None).is_empty());
-        assert!(client_palette_commands(None).is_empty());
         assert!(find_client_command(None, "help").is_none());
         assert!(client_command_suggestions(None, "").is_empty());
     }

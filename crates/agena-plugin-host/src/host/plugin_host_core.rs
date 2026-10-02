@@ -2574,8 +2574,7 @@ mod tests {
     async fn scoped_command_catalog_uses_the_same_nearest_visibility_resolver_as_lookup() {
         use crate::PluginScopeKey;
         use crate::sdk::{
-            CommandDefinition, CommandDiscoverability, CommandDocs, CommandTarget,
-            SettingsContract, SettingsNode,
+            CommandDefinition, CommandDocs, CommandTarget, SettingsContract, SettingsNode,
         };
 
         fn item(plugin_id: &PluginKey, title: &str) -> CommandCatalogItem {
@@ -2592,7 +2591,6 @@ mod tests {
                     slash: Some("open".to_string()),
                     aliases: Vec::new(),
                     input: SettingsContract::new(SettingsNode::root_object("Input", "")),
-                    discoverability: CommandDiscoverability::default(),
                     target: CommandTarget::Method {
                         handler: "open".to_string(),
                     },

@@ -331,7 +331,6 @@ fn tool_declared_command_targets_the_normal_tool_execution_path() {
         })
         .expect("path_choice tool command");
 
-    assert!(command.discoverability.catalog);
     command
         .input
         .validate_value(&json!({"mode":"fast"}))

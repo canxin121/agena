@@ -133,11 +133,6 @@ export type PluginCommandCatalogItem = {
   aliases?: string[]
   docs?: PluginCommandDocs
   input: PluginSettingsContract
-  discoverability?: {
-    catalog?: boolean
-    palette?: boolean
-    slash?: boolean
-  }
   target:
     | { kind: 'client'; action: string }
     | { kind: 'method'; handler: string }

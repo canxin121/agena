@@ -46,7 +46,7 @@ pub(crate) struct CommandPaletteOverlay {
 #[derive(Debug, Clone)]
 pub(crate) enum CommandPaletteCommand {
     /// A built-in this client runs locally. Boxed because the declaration
-    /// (docs, input contract, discoverability) dwarfs the plugin variant.
+    /// (docs, input contract) dwarfs the plugin variant.
     BuiltIn(Box<crate::commands::ClientCommand>),
     Plugin(Box<agena_plugin_host::CommandCatalogItem>),
 }

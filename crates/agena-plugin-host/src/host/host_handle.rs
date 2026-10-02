@@ -2486,8 +2486,7 @@ mod effect_ownership_tests {
     #[tokio::test]
     async fn manifest_commands_are_exact_effect_owned_registry_entries() {
         use crate::sdk::{
-            CommandDefinition, CommandDiscoverability, CommandTarget, PluginManifest,
-            SettingsContract, SettingsNode,
+            CommandDefinition, CommandTarget, PluginManifest, SettingsContract, SettingsNode,
         };
 
         let plugin_id: PluginKey = "example.commands".parse().expect("plugin key");
@@ -2505,7 +2504,6 @@ mod effect_ownership_tests {
                 ..Default::default()
             },
             input: SettingsContract::new(SettingsNode::root_object("Input", "")),
-            discoverability: CommandDiscoverability::default(),
             target: CommandTarget::Method {
                 handler: "open".to_string(),
             },
@@ -2546,8 +2544,7 @@ mod effect_ownership_tests {
     #[tokio::test]
     async fn dynamic_commands_are_registered_scoped_and_removable() {
         use crate::sdk::{
-            CommandDefinition, CommandDiscoverability, CommandDocs, CommandTarget,
-            SettingsContract, SettingsNode,
+            CommandDefinition, CommandDocs, CommandTarget, SettingsContract, SettingsNode,
         };
 
         let plugin_id: PluginKey = "example.dynamic-commands".parse().expect("plugin key");
@@ -2566,7 +2563,6 @@ mod effect_ownership_tests {
                 ..Default::default()
             },
             input: SettingsContract::new(SettingsNode::root_object("Input", "")),
-            discoverability: CommandDiscoverability::default(),
             target: CommandTarget::Method {
                 handler: "run".to_string(),
             },

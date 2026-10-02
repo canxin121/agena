@@ -1211,8 +1211,6 @@ pub struct CommandDefinition {
     #[serde(default)]
     pub docs: CommandDocs,
     pub input: SettingsContract,
-    #[serde(default)]
-    pub discoverability: CommandDiscoverability,
     pub target: CommandTarget,
 }
 
@@ -1310,36 +1308,6 @@ impl CommandDefinition {
         }
         Ok(())
     }
-}
-
-/// Which surfaces publish a command. Every flag defaults to true; a plugin
-/// narrows them when a command is meaningful in only one place.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct CommandDiscoverability {
-    /// Include the command in the plugin surface catalog at all.
-    #[serde(default = "default_true")]
-    pub catalog: bool,
-    /// Offer the command in a client's command palette.
-    #[serde(default = "default_true")]
-    pub palette: bool,
-    /// Recognize `/<name>` typed in a composer.
-    #[serde(default = "default_true")]
-    pub slash: bool,
-}
-
-impl Default for CommandDiscoverability {
-    fn default() -> Self {
-        Self {
-            catalog: true,
-            palette: true,
-            slash: true,
-        }
-    }
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2248,7 +2216,6 @@ mod tests {
             aliases: Vec::new(),
             docs: CommandDocs::default(),
             input: SettingsContract::empty_object("Input", ""),
-            discoverability: CommandDiscoverability::default(),
             target: CommandTarget::Method {
                 handler: "run".to_string(),
             },
@@ -2276,7 +2243,6 @@ mod tests {
                 ..CommandDocs::default()
             },
             input: SettingsContract::empty_object("Input", ""),
-            discoverability: CommandDiscoverability::default(),
             target: CommandTarget::Client {
                 action: "new".to_string(),
             },

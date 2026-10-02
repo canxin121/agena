@@ -37,7 +37,7 @@ impl App {
     pub(crate) fn open_command_palette(&mut self) {
         let mut actions = BTreeMap::new();
         let mut items = Vec::new();
-        for command in self.client_palette_commands() {
+        for command in self.client_commands() {
             let key = format!("command:{}", command.id());
             let label = command.palette_invocation();
             let detail = commands::docs_summary(&self.i18n, command.docs(), command.id());
@@ -81,13 +81,13 @@ impl App {
         });
     }
 
-    /// The built-in commands a palette offers, in catalog order.
+    /// The built-in commands this client runs, in catalog order.
     ///
     /// The published catalog is the only source: before the first plugin
     /// surface snapshot arrives the list is empty rather than a hand-written
     /// fallback.
-    pub(crate) fn client_palette_commands(&self) -> Vec<commands::ClientCommand> {
-        commands::client_palette_commands(self.application.plugin_catalog().as_ref())
+    pub(crate) fn client_commands(&self) -> Vec<commands::ClientCommand> {
+        commands::client_commands(self.application.plugin_catalog().as_ref())
     }
 
     /// Resolve `/name` to a built-in command this client can run.

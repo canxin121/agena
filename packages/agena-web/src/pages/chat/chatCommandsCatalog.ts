@@ -83,8 +83,6 @@ export type ClientCommand = {
   /** Whether the command can run with no arguments at all. */
   acceptsEmptyInput: boolean
   docs: PluginCommandDocs
-  showInPalette: boolean
-  matchesSlash: boolean
   command: PluginCommandCatalogItem
 }
 
@@ -114,12 +112,10 @@ function slashName(slash: unknown): string {
 
 /**
  * Read one catalog entry as a command this client runs locally, or `null` when
- * it is not one: another client's `Client` command, a server-owned target, or
- * a declaration hidden from every catalog.
+ * it is not one: another client's `Client` command or a server-owned target.
  */
 export function clientCommandFromCatalog(command: PluginCommandCatalogItem): ClientCommand | null {
   if (!command || command.target?.kind !== 'client') return null
-  if (command.discoverability?.catalog === false) return null
   const action = text(command.target.action)
   if (!(CLIENT_COMMAND_ACTIONS as readonly string[]).includes(action)) return null
   const name = slashName(command.slash)
@@ -138,8 +134,6 @@ export function clientCommandFromCatalog(command: PluginCommandCatalogItem): Cli
     requiresArguments: usage.trimStart().startsWith('<'),
     acceptsEmptyInput: command.accepts_empty_input === true,
     docs: command.docs || {},
-    showInPalette: command.discoverability?.palette !== false,
-    matchesSlash: command.discoverability?.slash !== false,
     command,
   }
 }

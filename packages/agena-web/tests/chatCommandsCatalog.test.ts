@@ -68,14 +68,13 @@ function catalogItem(
     aliases: [],
     docs: {},
     input: { version: 1, root: {} as PluginCommandCatalogItem['input']['root'] },
-    discoverability: {},
     ...overrides,
   }
 }
 
 function clientItem(
   id: string,
-  options: { action?: string; slash?: string; aliases?: string[]; usage?: string; palette?: boolean } = {},
+  options: { action?: string; slash?: string; aliases?: string[]; usage?: string } = {},
 ): PluginCommandCatalogItem {
   return catalogItem({
     id,
@@ -83,7 +82,6 @@ function clientItem(
     slash: options.slash || `/${id}`,
     aliases: options.aliases || [],
     docs: options.usage ? { usage: options.usage } : {},
-    discoverability: options.palette === false ? { palette: false } : {},
   })
 }
 
@@ -108,33 +106,10 @@ describe('web command catalog', () => {
       // Server-owned targets are not the client's to run.
       catalogItem({ id: 'remote', target: { kind: 'method', handler: 'remote.run' } }),
       catalogItem({ id: 'tool-backed', target: { kind: 'tool', tool: 'remote.tool' } }),
-      // Hidden from every catalog.
-      catalogItem({
-        id: 'hidden',
-        target: { kind: 'client', action: 'help' },
-        discoverability: { catalog: false },
-      }),
     ])
 
     expect(commands.map((command) => command.id)).toEqual(['help'])
     expect(commands[0]!.aliases).toEqual(['?'])
-  })
-
-  test('palette visibility is a separate declaration from slash recognition', () => {
-    const palette = clientCommandsFromCatalog([clientItem('side', { palette: false })])
-    expect(palette[0]!.showInPalette).toBe(false)
-    expect(palette[0]!.matchesSlash).toBe(true)
-
-    const slashless = clientCommandsFromCatalog([
-      catalogItem({
-        id: 'menu-only',
-        target: { kind: 'client', action: 'help' },
-        slash: '/menu-only',
-        discoverability: { slash: false },
-      }),
-    ])
-    expect(slashless[0]!.matchesSlash).toBe(false)
-    expect(slashless[0]!.showInPalette).toBe(true)
   })
 
   test('usage drives argument requirements and palette labels', () => {

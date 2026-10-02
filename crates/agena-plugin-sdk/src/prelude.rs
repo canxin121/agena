@@ -37,17 +37,16 @@ pub use crate::host_api::{
 };
 pub use crate::macro_support::{schema_example_texts, schema_usage_text, service_method_for};
 pub use crate::manifest::{
-    CommandDefinition, CommandDiagnostic, CommandDiscoverability, CommandHostEffect,
-    CommandInvokeInput, CommandResult, CommandStatus, CommandTarget, ContributionKind,
-    EmptyPluginSettings, HookSubscription, MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH,
-    PathInputKind, PathKind, PluginDisplayContent, PluginDisplayContribution, PluginManifest,
-    PluginServiceDeclarations, PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput,
-    PluginServiceInvokeOutput, PluginServiceMethod, PluginSkillDefinition,
-    PluginSurfaceContributions, PluginTerminalColor, PluginTerminalContributions,
-    PluginTerminalThemeColors, PluginTerminalThemePalette, SettingsConstraints, SettingsContract,
-    SettingsNode, SettingsNodeKind, SettingsOption, SettingsVariant, ToolContract, ToolDefinition,
-    ToolDocs, ToolInput, ToolRuntimePolicy, ToolStreamingMode, ToolTag, TransportKind,
-    normalize_tool_tag_name,
+    CommandDefinition, CommandDiagnostic, CommandHostEffect, CommandInvokeInput, CommandResult,
+    CommandStatus, CommandTarget, ContributionKind, EmptyPluginSettings, HookSubscription,
+    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathInputKind, PathKind, PluginDisplayContent,
+    PluginDisplayContribution, PluginManifest, PluginServiceDeclarations, PluginServiceExport,
+    PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
+    PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
+    PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
+    SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
+    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolRuntimePolicy,
+    ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use crate::service_client::{

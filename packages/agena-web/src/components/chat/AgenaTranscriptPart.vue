@@ -152,7 +152,7 @@ function openAttachment(path: string, url: string) {
         />
       </div>
 
-      <div v-else-if="part.kind === 'skill'" class="divide-y divide-border/50 py-1">
+      <div v-else-if="part.kind === 'command'" class="divide-y divide-border/50 py-1">
         <section v-for="entry in commands" :key="entry.name" class="py-2 first:pt-1 last:pb-1">
           <div class="font-mono text-xs font-semibold">{{ entry.name }}</div>
           <div v-if="entry.description" class="mt-1 text-xs text-muted-foreground">{{ entry.description }}</div>

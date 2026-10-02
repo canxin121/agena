@@ -3121,8 +3121,8 @@ mod pending_message_tests {
     use super::super::{PendingUserMessage, TranscriptState};
     use super::parts_fixtures;
     use agena_domain::{
-        ActivityId, ActivityPayload, ActivityProvenance, ComposerActivity, ComposerDocument,
-        ComposerNode, SkillReferenceActivity,
+        ActivityId, ActivityPayload, ActivityProvenance, CommandReferenceActivity,
+        ComposerActivity, ComposerDocument, ComposerNode,
     };
 
     #[test]
@@ -3141,7 +3141,7 @@ mod pending_message_tests {
                 ComposerNode::Activity {
                     activity: Box::new(ComposerActivity {
                         id: activity_id,
-                        payload: ActivityPayload::SkillReference(SkillReferenceActivity {
+                        payload: ActivityPayload::CommandReference(CommandReferenceActivity {
                             name: "batch".to_owned(),
                             description: "Run independent work".to_owned(),
                             content_hash: "sha256:test".to_owned(),

@@ -78,7 +78,7 @@ export function chatActivityKindIdForTranscriptPart(partKind: unknown, durablePa
   if (presentation === 'reasoning') return 'reasoning'
   if (presentation === 'operation') return 'operation'
   if (presentation === 'resource') return 'resource'
-  if (presentation === 'skill') return 'skill_reference'
+  if (presentation === 'command') return 'skill_reference'
   if (presentation === 'interaction') return 'interaction'
   if (presentation === 'error') return 'error'
   if (presentation === 'text_segment') return 'text'

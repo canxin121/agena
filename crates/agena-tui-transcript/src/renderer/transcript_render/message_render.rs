@@ -172,8 +172,8 @@ pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
 fn activity_kind_id_for_payload(payload: &agena_domain::ActivityPayload) -> Option<&'static str> {
     match payload {
         agena_domain::ActivityPayload::Resource(_) => Some(agena_domain::ACTIVITY_KIND_RESOURCE),
-        agena_domain::ActivityPayload::SkillReference(_) => {
-            Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE)
+        agena_domain::ActivityPayload::CommandReference(_) => {
+            Some(agena_domain::ACTIVITY_KIND_COMMAND_REFERENCE)
         }
         agena_domain::ActivityPayload::TextArtifact(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
         agena_domain::ActivityPayload::Reasoning(_) => Some(agena_domain::ACTIVITY_KIND_REASONING),
@@ -289,10 +289,10 @@ fn canonical_activity_details(
     _summary: &str,
 ) -> Vec<CanonicalActivityDetail> {
     match payload {
-        agena_domain::ActivityPayload::SkillReference(skill) => {
+        agena_domain::ActivityPayload::CommandReference(command) => {
             vec![CanonicalActivityDetail::section(
                 "Source",
-                format!("{} · {}", skill.source, skill.content_hash),
+                format!("{} · {}", command.source, command.content_hash),
                 CanonicalActivityDetailFormat::Plain,
             )]
         }
@@ -1627,17 +1627,17 @@ pub(crate) fn render_part_node(
                 children: Vec::new(),
             }
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(reference)) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::CommandReference(reference)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
                 content_id: part.id,
             };
             let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
-                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE))
+                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_COMMAND_REFERENCE))
             });
             let mut labels = Vec::new();
-            for skill in &reference.skills {
-                labels.push(skill.name.clone());
+            for command in &reference.commands {
+                labels.push(command.name.clone());
             }
             push_activity_headline(
                 out,
@@ -1649,12 +1649,12 @@ pub(crate) fn render_part_node(
                 width,
             );
             if expanded {
-                for skill in &reference.skills {
+                for command in &reference.commands {
                     render_canonical_activity_detail(
                         out,
                         &CanonicalActivityDetail::section(
-                            skill.name.as_str(),
-                            skill.description.as_str(),
+                            command.name.as_str(),
+                            command.description.as_str(),
                             CanonicalActivityDetailFormat::Auto,
                         ),
                         width,
@@ -1665,7 +1665,7 @@ pub(crate) fn render_part_node(
                         out,
                         &CanonicalActivityDetail::section(
                             "Source",
-                            format!("{} · {}", skill.source, skill.content_hash),
+                            format!("{} · {}", command.source, command.content_hash),
                             CanonicalActivityDetailFormat::Plain,
                         ),
                         width,
@@ -2460,7 +2460,7 @@ fn render_user_document(
                         crate::TranscriptUserActivityStyle::Resource => Style::default()
                             .fg(agena_tui_components::theme::info_color())
                             .add_modifier(Modifier::BOLD),
-                        crate::TranscriptUserActivityStyle::Skill => Style::default()
+                        crate::TranscriptUserActivityStyle::Command => Style::default()
                             .fg(agena_tui_components::theme::accent_color())
                             .add_modifier(Modifier::BOLD),
                         crate::TranscriptUserActivityStyle::TextArtifact => Style::default()

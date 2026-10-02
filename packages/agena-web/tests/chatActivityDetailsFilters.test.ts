@@ -81,7 +81,7 @@ test('transcript presentation kinds resolve to server activity kind ids', () => 
   assert.equal(chatActivityKindIdForTranscriptPart('reasoning', 'think'), 'reasoning')
   assert.equal(chatActivityKindIdForTranscriptPart('operation', 'tool_call'), 'operation')
   assert.equal(chatActivityKindIdForTranscriptPart('resource', 'file_ref'), 'resource')
-  assert.equal(chatActivityKindIdForTranscriptPart('skill', 'skill_ref'), 'skill_reference')
+  assert.equal(chatActivityKindIdForTranscriptPart('command', 'skill_ref'), 'skill_reference')
   assert.equal(chatActivityKindIdForTranscriptPart('text_segment', 'text'), 'text')
   assert.equal(chatActivityKindIdForTranscriptPart('notice', 'hook'), 'hook')
   assert.equal(chatActivityKindIdForTranscriptPart('notice', 'system_notification'), 'notice')

@@ -192,7 +192,7 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
         ));
     }
     let mut resources = 0usize;
-    let mut skills = 0usize;
+    let mut commands = 0usize;
     for node in &document.0 {
         let ComposerNode::Activity { activity } = node else {
             continue;
@@ -246,14 +246,14 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
                     _ => {}
                 }
             }
-            ActivityPayload::SkillReference(skill) => {
-                skills = skills.saturating_add(1);
-                if skill.name.trim().is_empty()
-                    || skill.content_hash.trim().is_empty()
-                    || skill.source.trim().is_empty()
+            ActivityPayload::CommandReference(command) => {
+                commands = commands.saturating_add(1);
+                if command.name.trim().is_empty()
+                    || command.content_hash.trim().is_empty()
+                    || command.source.trim().is_empty()
                 {
                     return Err(ApplicationError::bad_request(
-                        "The skill reference is incomplete.",
+                        "The command reference is incomplete.",
                     ));
                 }
             }
@@ -276,9 +276,9 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
             "A message cannot contain more than 8 attachments.",
         ));
     }
-    if skills > 8 {
+    if commands > 8 {
         return Err(ApplicationError::bad_request(
-            "The skill references exceed the per-message limit.",
+            "The command references exceed the per-message limit.",
         ));
     }
     Ok(())

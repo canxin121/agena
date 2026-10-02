@@ -58,7 +58,7 @@ export type TranscriptPartKind =
   | 'reasoning'
   | 'operation'
   | 'resource'
-  | 'skill'
+  | 'command'
   | 'notice'
   | 'compaction'
   | 'lifecycle'

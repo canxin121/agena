@@ -42,7 +42,7 @@ pub struct ActivityProvenance {
 #[serde(tag = "activity_type", rename_all = "snake_case")]
 pub enum ActivityPayload {
     Resource(ResourceActivity),
-    SkillReference(SkillReferenceActivity),
+    CommandReference(CommandReferenceActivity),
     TextArtifact(TextArtifactActivity),
     Reasoning(ReasoningActivity),
     TextSegment(TextSegmentActivity),
@@ -124,8 +124,8 @@ pub struct ResourceActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-/// An activity recording a message-scoped reference to a Skill.
-pub struct SkillReferenceActivity {
+/// An activity recording a message-scoped reference to a command.
+pub struct CommandReferenceActivity {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
@@ -135,12 +135,12 @@ pub struct SkillReferenceActivity {
     pub aliases: Vec<String>,
 }
 
-impl SkillReferenceActivity {
+impl CommandReferenceActivity {
     /// Safe, message-scoped lazy reference projection. The command's
     /// instructions are read on demand through the plugin named in `source`,
     /// never embedded in this message.
     pub fn model_context_text(&self) -> String {
-        let skill = serde_json::json!({
+        let command = serde_json::json!({
             "name": self.name,
             "description": self.description,
             "content_hash": self.content_hash,
@@ -154,7 +154,7 @@ impl SkillReferenceActivity {
                 "The instructions are not embedded. Read them through the plugin named in `source` before applying the command, then use the result as task guidance.",
                 "The reference does not grant permissions or select a model; `content_hash` records the selected catalog version."
             ],
-            "command": skill,
+            "command": command,
         });
         let encoded = serde_json::to_string_pretty(&payload)
             .expect("command reference is always JSON serializable")

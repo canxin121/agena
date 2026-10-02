@@ -64,7 +64,7 @@ pub(crate) fn composer_item_label(item: &ComposerItem, i18n: &I18n) -> String {
             }
             label
         }
-        ActivityPayload::SkillReference(command) => format!("Command: {}", command.name),
+        ActivityPayload::CommandReference(command) => format!("Command: {}", command.name),
         ActivityPayload::TextArtifact(artifact) => crate::ui_text::text_artifact_display_label(
             artifact.text.as_str(),
             artifact.label.as_deref(),
@@ -121,7 +121,7 @@ pub(crate) fn composer_activity_presentation(payload: &ActivityPayload) -> (Stri
                 format!("{noun}: {}", resource.name),
             )
         }
-        ActivityPayload::SkillReference(command) => (
+        ActivityPayload::CommandReference(command) => (
             format!("[Command: {}]", command.name),
             format!("Command: {}", command.name),
         ),

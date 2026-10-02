@@ -15,11 +15,11 @@
 use agena_api::live::SessionTranscriptFoldResource;
 use agena_api::{
     part::{
-        AttachmentPartResource, ErrorPartResource, PartExecutionStatusResource,
-        ReasoningPartResource, SkillReferencePartResource, TextPartResource,
+        AttachmentPartResource, CommandReferencePartResource, ErrorPartResource,
+        PartExecutionStatusResource, ReasoningPartResource, TextPartResource,
     },
     resource::{
-        PartAttachment, PartAttachmentKind, PartAttachmentSource, PartSkillReference, RunRole,
+        PartAttachment, PartAttachmentKind, PartAttachmentSource, PartCommandReference, RunRole,
         RunStatus, SessionTranscriptPart, UserInputOption, UserInputQuestion, UserInputReply,
         UserInputReplyKind, UserInputRequest,
     },
@@ -27,8 +27,8 @@ use agena_api::{
 use agena_domain::AssistantReplyId;
 use agena_domain::TextSegmentActivity;
 use agena_runtime_contracts::part_content::{
-    CompactionContent, FileRefContent, HookContent, NoticeContent, PasteRefContent,
-    SkillRefContent, SystemNotificationContent, TextContent, ThinkContent, ToolCallContent,
+    CommandRefContent, CompactionContent, FileRefContent, HookContent, NoticeContent,
+    PasteRefContent, SystemNotificationContent, TextContent, ThinkContent, ToolCallContent,
     operation_from_tool_call,
 };
 use serde_json::Value;
@@ -415,13 +415,13 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             })
         }
         "skill_ref" => {
-            let Some(content) = decode_part_content::<SkillRefContent>(part) else {
+            let Some(content) = decode_part_content::<CommandRefContent>(part) else {
                 return fallback_text_part(part);
             };
-            TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(
-                SkillReferencePartResource {
-                    skills: vec![PartSkillReference {
-                        name: content.skill.unwrap_or_default(),
+            TranscriptPartContent::Activity(TranscriptActivityContent::CommandReference(
+                CommandReferencePartResource {
+                    commands: vec![PartCommandReference {
+                        name: content.command.unwrap_or_default(),
                         description: string_field(&part.content, "description").unwrap_or_default(),
                         content_hash: string_field(&part.content, "content_hash")
                             .unwrap_or_default(),

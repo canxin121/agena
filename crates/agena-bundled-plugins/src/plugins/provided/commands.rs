@@ -10,14 +10,14 @@
 //!    the web client render the same names, aliases, usage lines and
 //!    descriptions without either one keeping its own hand-copied table.
 //!
-//! 2. **Skill packages, projected as commands.** Agena has no skills: skill is
-//!    a vocabulary other agents use. A skill package on disk — a `SKILL.md`
-//!    under a skill root, or a plain `.md` under a command root, or a
-//!    `PluginSkillDefinition` another plugin declared in its manifest — is read
-//!    by this plugin and registered as an ordinary command whose handler is
-//!    [`HANDLER_RUN`]. Running it resolves the package's instructions and
-//!    returns them as an [`CommandHostEffect::InsertPrompt`], so the composer
-//!    receives the text the same way for every skill and command alike.
+//! 2. **Skill packages, projected as commands.** Agena has no skills of its
+//!    own: `skill` is a vocabulary other agents use, and this is the one place
+//!    it is read. A skill package on disk — a `SKILL.md` under a skill root, or
+//!    a plain `.md` under a command root, or a `PluginSkillDefinition` another
+//!    plugin declared in its manifest — is registered as an ordinary command
+//!    whose handler is [`HANDLER_RUN`]. Running it resolves the package's
+//!    instructions and returns them as an [`CommandHostEffect::InsertPrompt`],
+//!    so the composer receives the text the same way for every command alike.
 //!
 //! The declaration is the contract. A `Client` target names an action rather
 //! than a handler, because the client that renders the command palette is the
@@ -74,7 +74,7 @@ const HANDLER_RUN: &str = "run";
 /// Group and category every discovered package is published with, so a
 /// composer can tell external packages apart from the built-ins it implements
 /// itself without knowing their names.
-const DISCOVERED_GROUP: &str = "Skills";
+const DISCOVERED_GROUP: &str = "Commands";
 const DISCOVERED_CATEGORY: &str = "Package";
 
 /// One built-in command, in palette order.
@@ -430,10 +430,10 @@ fn built_in_summary_key_title(summary_key: &str) -> String {
 const GROUP: &str = "Built-in";
 const CATEGORY: &str = "Client";
 
-// ── declared skill packages ────────────────────────────────────────────────
+// ── declared command packages ──────────────────────────────────────────────
 
-/// One skill package compiled into the executable.
-struct BundledSkill {
+/// One command package compiled into the executable.
+struct BundledCommand {
     name: &'static str,
     description: &'static str,
     aliases: &'static [&'static str],
@@ -443,101 +443,101 @@ struct BundledSkill {
 /// The packages every Agena install ships with. The instructions live in
 /// markdown so the text stays readable and diffable instead of being buried in
 /// a Rust string literal.
-const BUNDLED_SKILLS: &[BundledSkill] = &[
-    BundledSkill {
+const BUNDLED_COMMANDS: &[BundledCommand] = &[
+    BundledCommand {
         name: "batch",
         description: "Execute independent repository tasks with isolated snapshots and delegated agents",
         aliases: &[],
-        instructions: include_str!("../../../assets/skills/batch.md"),
+        instructions: include_str!("../../../assets/commands/batch.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "debug",
         description: "Diagnose a reproducible failure from logs, state and source evidence",
         aliases: &[],
-        instructions: include_str!("../../../assets/skills/debug.md"),
+        instructions: include_str!("../../../assets/commands/debug.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "doctor",
         description: "Diagnose Agena runtime, provider, plugin, Skill, MCP and project tooling health",
         aliases: &[],
-        instructions: include_str!("../../../assets/skills/doctor.md"),
+        instructions: include_str!("../../../assets/commands/doctor.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "imagegen",
         description: "Generate or edit images with ordinary ChatGPT and Gemini execution tools",
         aliases: &["image-generate", "image-edit"],
-        instructions: include_str!("../../../assets/skills/imagegen.md"),
+        instructions: include_str!("../../../assets/commands/imagegen.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "init",
         description: "Initialise an AGENA.md describing the codebase",
         aliases: &["bootstrap"],
-        instructions: include_str!("../../../assets/skills/init.md"),
+        instructions: include_str!("../../../assets/commands/init.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "plugin_creator",
         description: "Scaffold and verify an Agena plugin using the repository SDK",
         aliases: &["create-plugin"],
-        instructions: include_str!("../../../assets/skills/plugin_creator.md"),
+        instructions: include_str!("../../../assets/commands/plugin_creator.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "review",
         description: "Review the current branch as a senior code reviewer",
         aliases: &[],
-        instructions: include_str!("../../../assets/skills/review.md"),
+        instructions: include_str!("../../../assets/commands/review.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "run",
         description: "Identify and start the current project with a reusable shell process",
         aliases: &["start"],
-        instructions: include_str!("../../../assets/skills/run.md"),
+        instructions: include_str!("../../../assets/commands/run.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "run_skill_generator",
         description: "Turn a proven one-off workflow into a reusable validated Skill package",
         aliases: &["skill-from-run"],
-        instructions: include_str!("../../../assets/skills/run_skill_generator.md"),
+        instructions: include_str!("../../../assets/commands/run_skill_generator.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "security_review",
         description: "Audit the current branch for security regressions",
         aliases: &["security-review"],
-        instructions: include_str!("../../../assets/skills/security_review.md"),
+        instructions: include_str!("../../../assets/commands/security_review.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "simplify",
         description: "Reduce unnecessary complexity without changing behavior",
         aliases: &[],
-        instructions: include_str!("../../../assets/skills/simplify.md"),
+        instructions: include_str!("../../../assets/commands/simplify.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "skill_creator",
         description: "Create or update a validated Agena Skill package",
         aliases: &["create-skill"],
-        instructions: include_str!("../../../assets/skills/skill_creator.md"),
+        instructions: include_str!("../../../assets/commands/skill_creator.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "skill_installer",
         description: "Install Skills from a trusted local or Git repository source",
         aliases: &["install-skill"],
-        instructions: include_str!("../../../assets/skills/skill_installer.md"),
+        instructions: include_str!("../../../assets/commands/skill_installer.md"),
     },
-    BundledSkill {
+    BundledCommand {
         name: "verify",
         description: "Run the smallest sufficient validation for the current change",
         aliases: &["check"],
-        instructions: include_str!("../../../assets/skills/verify.md"),
+        instructions: include_str!("../../../assets/commands/verify.md"),
     },
 ];
 
-fn bundled_skill_definitions() -> Vec<PluginSkillDefinition> {
-    BUNDLED_SKILLS
+fn bundled_command_definitions() -> Vec<PluginSkillDefinition> {
+    BUNDLED_COMMANDS
         .iter()
-        .map(|skill| PluginSkillDefinition {
-            name: skill.name.to_string(),
-            description: skill.description.to_string(),
-            instructions: skill.instructions.trim().to_string(),
-            aliases: skill
+        .map(|command| PluginSkillDefinition {
+            name: command.name.to_string(),
+            description: command.description.to_string(),
+            instructions: command.instructions.trim().to_string(),
+            aliases: command
                 .aliases
                 .iter()
                 .map(|alias| (*alias).to_string())
@@ -551,7 +551,7 @@ fn bundled_skill_definitions() -> Vec<PluginSkillDefinition> {
 /// The identity is the same `content_hash` the catalog uses, so a package's
 /// entry in the shipped capability inventory and its entry in the live command
 /// catalog can never disagree.
-pub(crate) struct DeclaredSkill {
+pub(crate) struct DeclaredCommand {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) aliases: Vec<String>,
@@ -560,8 +560,8 @@ pub(crate) struct DeclaredSkill {
 
 /// The declared packages, read from the same declarations the plugin ships in
 /// its manifest rather than from a second hand-maintained list.
-pub(crate) fn declared_skills() -> Vec<DeclaredSkill> {
-    bundled_skill_definitions()
+pub(crate) fn declared_commands() -> Vec<DeclaredCommand> {
+    bundled_command_definitions()
         .into_iter()
         .map(|definition| {
             let command = DiscoveredCommand::bundled(
@@ -572,7 +572,7 @@ pub(crate) fn declared_skills() -> Vec<DeclaredSkill> {
                 },
                 definition.instructions,
             );
-            DeclaredSkill {
+            DeclaredCommand {
                 name: command.frontmatter.name.clone(),
                 description: command.frontmatter.description.clone(),
                 aliases: command.frontmatter.aliases.clone(),
@@ -1060,12 +1060,12 @@ impl CommandsPlugin {
     fn manifest_for(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("agena", "commands", env!("CARGO_PKG_VERSION"));
         manifest.summary = Some(
-            "Declare the built-in commands every Agena client renders locally, and project skill packages as commands."
+            "Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface."
                 .to_string(),
         );
         // Discovered packages are registered dynamically, but the packages
         // compiled into this executable are part of the declaration.
-        manifest.skills = bundled_skill_definitions();
+        manifest.skills = bundled_command_definitions();
         manifest.tools = command_tool_definitions();
         manifest.settings = Some(commands_settings_contract());
         let mut hooks = HookSubscription::TOOL_DEFINITION | HookSubscription::TOOL_INVOKE;
@@ -1347,7 +1347,7 @@ impl CommandsPlugin {
         let package_report = scan_packages_with_diagnostics(&roots);
         let command_report = scan_commands_with_diagnostics(&command_roots);
 
-        let mut packages: BTreeMap<String, PackageEntry> = bundled_skill_definitions()
+        let mut packages: BTreeMap<String, PackageEntry> = bundled_command_definitions()
             .into_iter()
             .map(|definition| {
                 let name = definition.name.clone();
@@ -1425,8 +1425,8 @@ impl CommandsPlugin {
         manifests: impl IntoIterator<Item = (String, String, Vec<PluginSkillDefinition>)>,
     ) -> BTreeMap<String, PackageEntry> {
         let mut packages = BTreeMap::new();
-        for (plugin_id, plugin_version, skills) in manifests {
-            for definition in skills {
+        for (plugin_id, plugin_version, commands) in manifests {
+            for definition in commands {
                 let name = definition.name.clone();
                 let command = DiscoveredCommand::bundled(
                     discovery::CommandFrontmatter {
@@ -2785,7 +2785,7 @@ mod tests {
     #[test]
     fn watcher_uses_recursive_roots_and_nonrecursive_existing_parents() {
         let workspace = tempfile::tempdir().expect("workspace");
-        let existing = workspace.path().join("skills");
+        let existing = workspace.path().join("commands");
         std::fs::create_dir_all(&existing).expect("existing root");
         let (recursive, recursive_mode) = watcher_target(existing.as_path());
         assert_eq!(recursive, existing);

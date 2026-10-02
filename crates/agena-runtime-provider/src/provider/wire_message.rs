@@ -27,8 +27,8 @@ use agena_runtime_contracts::part::{
     AttachmentItem, AttachmentKind, AttachmentSource, OperationPart,
 };
 use agena_runtime_contracts::part_content::{
-    ThinkContent, TypedContent, attachment_from_file_ref, decode, operation_from_tool_call,
-    skill_reference_from_skill_ref,
+    ThinkContent, TypedContent, attachment_from_file_ref, command_reference_from_command_ref,
+    decode, operation_from_tool_call,
 };
 use agena_runtime_contracts::provider_state::PartProviderState;
 use agena_storage::store::{Part, PartRole};
@@ -132,7 +132,7 @@ fn project_operation_call_id(exec: &OperationPart) -> String {
 // Provider projection uses the runtime-facing values recovered through the
 // public extractor helpers in `agena_runtime_contracts::part_content`
 // (`operation_from_tool_call`, `attachment_from_file_ref`,
-// `skill_reference_from_skill_ref`, …).
+// `command_reference_from_command_ref`, …).
 
 /// Derive the reasoning text providers prefer from the canonical `think`
 /// shape (summary wins, raw content otherwise).
@@ -217,11 +217,11 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                     }
                 }
             }
-            TypedContent::SkillRef(skill_ref) => {
-                let skill_reference = skill_reference_from_skill_ref(&skill_ref);
-                if !skill_reference.skills.is_empty() {
+            TypedContent::CommandRef(command_ref) => {
+                let command_reference = command_reference_from_command_ref(&command_ref);
+                if !command_reference.commands.is_empty() {
                     wire.push(WirePart::Text {
-                        text: skill_reference.model_context_text(),
+                        text: command_reference.model_context_text(),
                     });
                 }
             }
@@ -776,8 +776,8 @@ fn parts_as_text_lossy(parts: &[Part]) -> String {
                 let text = reasoning_preferred_text(&think);
                 (!text.is_empty()).then_some(text)
             }
-            TypedContent::SkillRef(skill_ref) => {
-                Some(skill_reference_from_skill_ref(&skill_ref).model_context_text())
+            TypedContent::CommandRef(command_ref) => {
+                Some(command_reference_from_command_ref(&command_ref).model_context_text())
             }
             TypedContent::ToolCall(tool_call) => {
                 operation_text_lossy(&operation_from_tool_call(&tool_call))
@@ -1879,7 +1879,7 @@ mod tests {
 
     #[test]
     fn selected_command_reference_enters_provider_history_as_lazy_tool_read_reference() {
-        let skill = part(
+        let command = part(
             "skill_ref",
             PartRole::User,
             PartState::Completed,
@@ -1900,16 +1900,16 @@ mod tests {
             serde_json::json!({ "text": "Review my current change." }),
         );
 
-        let projected = project_persisted(&[skill, text]);
+        let projected = project_persisted(&[command, text]);
         assert_eq!(projected.len(), 2);
-        let WirePart::Text { text: skill } = &projected[0] else {
+        let WirePart::Text { text: command } = &projected[0] else {
             panic!("expected command reference text")
         };
-        assert!(skill.contains("message_scoped_user_selected_command_reference"));
-        assert!(skill.contains("Review the current branch"));
-        assert!(skill.contains("abc123"));
-        assert!(skill.contains("read its instructions through the plugin"));
-        assert!(skill.contains("user explicitly selected"));
+        assert!(command.contains("message_scoped_user_selected_command_reference"));
+        assert!(command.contains("Review the current branch"));
+        assert!(command.contains("abc123"));
+        assert!(command.contains("read its instructions through the plugin"));
+        assert!(command.contains("user explicitly selected"));
         assert!(matches!(
             &projected[1],
             WirePart::Text { text } if text == "Review my current change."

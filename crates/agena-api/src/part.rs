@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::resource::{PartAttachment, PartSkillReference};
+use crate::resource::{PartAttachment, PartCommandReference};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -67,7 +67,7 @@ pub enum PartDetailResource {
     Text(TextPartResource),
     Reasoning(ReasoningPartResource),
     Attachment(AttachmentPartResource),
-    SkillReference(SkillReferencePartResource),
+    CommandReference(CommandReferencePartResource),
     Error(ErrorPartResource),
     ToolCall(Box<ToolCallPartResource>),
     Hook(HookPartResource),
@@ -116,9 +116,9 @@ pub struct AttachmentPartResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A message part that references skills used by the run.
-pub struct SkillReferencePartResource {
-    pub skills: Vec<PartSkillReference>,
+/// A message part that references the commands selected for the run.
+pub struct CommandReferencePartResource {
+    pub commands: Vec<PartCommandReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

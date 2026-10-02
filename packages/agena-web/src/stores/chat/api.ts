@@ -567,10 +567,10 @@ export function normalizeAgenaPart(
     }
     case 'skill_ref': {
       const contentRecord = asObject(content)
-      const skills = Array.isArray(contentRecord.skills) ? contentRecord.skills : []
-      const firstSkill = skills.length > 0 ? asObject(skills[0]) : {}
-      const name = stringField(content, ['skill', 'name']) || stringField(firstSkill, ['name']) || 'command'
-      const description = stringField(content, ['description']) || stringField(firstSkill, ['description'])
+      const references = [contentRecord.commands, contentRecord.skills].find(Array.isArray) ?? []
+      const firstReference = references.length > 0 ? asObject(references[0]) : {}
+      const name = stringField(content, ['command', 'skill', 'name']) || stringField(firstReference, ['name']) || 'command'
+      const description = stringField(content, ['description']) || stringField(firstReference, ['description'])
       return {
         ...base,
         type: 'tool',

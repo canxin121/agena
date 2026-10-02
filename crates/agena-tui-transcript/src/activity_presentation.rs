@@ -80,7 +80,7 @@ pub(crate) fn activity_presentation(
             },
             None,
         ),
-        ActivityPayload::SkillReference(command) => (
+        ActivityPayload::CommandReference(command) => (
             "skill_reference".to_owned(),
             format!("Command: {}", command.name),
             command.description.clone(),

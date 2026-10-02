@@ -1935,7 +1935,7 @@ async fn opening_a_new_subtask_at_running_publication_cannot_be_reconciled_as_ab
             parent_session_id: parent.id,
             description: "race fixture".to_owned(),
             prompt: "finish the fixture".to_owned(),
-            skills: None,
+            commands: None,
             task_id: Some("task_reconcile_race".to_owned()),
             requested_model_selection: agena_domain::ModelSelectionConfig {
                 provider: Some("fake".to_owned()),
@@ -1980,7 +1980,7 @@ async fn subtask_timeout_persists_a_complete_timeout_failure_even_when_cleanup_i
             parent_session_id: parent.id,
             description: "BG child timeout fixture".to_owned(),
             prompt: "wait forever".to_owned(),
-            skills: None,
+            commands: None,
             task_id: Some("task_timeout_fixture".to_owned()),
             requested_model_selection: agena_domain::ModelSelectionConfig {
                 provider: Some("hanging".to_owned()),
@@ -2044,7 +2044,6 @@ impl ToolSearchFixture {
     #[tool(
         name = "search",
         summary = "Search live tools.",
-        concurrency_safe,
         tags(discovery, read_only)
     )]
     async fn search(
@@ -2060,7 +2059,6 @@ impl ToolSearchFixture {
     #[tool(
         name = "help",
         summary = "Inspect one live tool contract.",
-        concurrency_safe,
         tags(discovery, read_only)
     )]
     async fn help(

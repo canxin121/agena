@@ -34,8 +34,8 @@ use agena_failure::{
 };
 
 use crate::part::{
-    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource, NoticePart, OperationPart,
-    SkillReference, SkillReferencePart,
+    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource, CommandReference,
+    CommandReferencePart, NoticePart, OperationPart,
 };
 
 fn is_false(value: &bool) -> bool {
@@ -266,30 +266,31 @@ impl TryFrom<&Value> for PasteRefContent {
     }
 }
 
-/// `skill_ref` — skill name/args reference plus message-scoped reference
-/// metadata under `extra["skills"]` (name/description/content_hash/source/
-/// aliases).
+/// `skill_ref` — the persisted kind of a command reference: the first command
+/// name as the named key, plus the message-scoped reference metadata under
+/// `extra["skills"]` (name/description/content_hash/source/aliases). Both
+/// spellings are the stored contract, not the internal vocabulary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct SkillRefContent {
+pub struct CommandRefContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skill: Option<String>,
+    pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
-impl SkillRefContent {
+impl CommandRefContent {
     pub const fn kind() -> &'static str {
         "skill_ref"
     }
 
     pub fn as_value(&self) -> Value {
-        serde_json::to_value(self).expect("skill ref content is always JSON serializable")
+        serde_json::to_value(self).expect("command ref content is always JSON serializable")
     }
 }
 
-impl TryFrom<&Value> for SkillRefContent {
+impl TryFrom<&Value> for CommandRefContent {
     type Error = String;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
@@ -498,7 +499,7 @@ pub enum TypedContent {
     ToolCall(Box<ToolCallContent>),
     FileRef(FileRefContent),
     PasteRef(PasteRefContent),
-    SkillRef(SkillRefContent),
+    CommandRef(CommandRefContent),
     Notice(NoticeContent),
     Hook(HookContent),
     SystemNotification(SystemNotificationContent),
@@ -518,7 +519,7 @@ impl TypedContent {
             Self::ToolCall(_) => ToolCallContent::kind(),
             Self::FileRef(_) => FileRefContent::kind(),
             Self::PasteRef(_) => PasteRefContent::kind(),
-            Self::SkillRef(_) => SkillRefContent::kind(),
+            Self::CommandRef(_) => CommandRefContent::kind(),
             Self::Notice(_) => NoticeContent::kind(),
             Self::Hook(_) => HookContent::kind(),
             Self::SystemNotification(_) => SystemNotificationContent::kind(),
@@ -585,7 +586,7 @@ pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
         // as empty text silently dropped the attachment from every model request
         // and rendered the part as an empty row in both clients.
         "text" if !is_body_text(value) && value.get("skills").is_some_and(Value::is_array) => {
-            TypedContent::SkillRef(SkillRefContent::try_from(value)?)
+            TypedContent::CommandRef(CommandRefContent::try_from(value)?)
         }
         "text" if !is_body_text(value) && is_file_reference(value) => {
             TypedContent::FileRef(FileRefContent::try_from(value)?)
@@ -595,7 +596,7 @@ pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
         "tool_call" => TypedContent::ToolCall(Box::new(ToolCallContent::try_from(value)?)),
         "file_ref" => TypedContent::FileRef(FileRefContent::try_from(value)?),
         "paste_ref" => TypedContent::PasteRef(PasteRefContent::try_from(value)?),
-        "skill_ref" => TypedContent::SkillRef(SkillRefContent::try_from(value)?),
+        "skill_ref" => TypedContent::CommandRef(CommandRefContent::try_from(value)?),
         "notice" => TypedContent::Notice(NoticeContent::try_from(value)?),
         "hook" => TypedContent::Hook(HookContent::try_from(value)?),
         "system_notification" => {
@@ -769,26 +770,26 @@ pub fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSourc
     }
 }
 
-/// Project Skill reference metadata from `extra["skills"]` into a
-/// [`SkillReferencePart`]. A missing or malformed reference list yields no skills.
-pub fn skill_reference_from_skill_ref(part: &SkillRefContent) -> SkillReferencePart {
-    let skills = match part.extra.get("skills") {
-        Some(value) => match serde_json::from_value::<Vec<SkillReference>>(value.clone()) {
-            Ok(skills) => skills,
+/// Project command reference metadata from `extra["skills"]` into a
+/// [`CommandReferencePart`]. A missing or malformed reference list yields none.
+pub fn command_reference_from_command_ref(part: &CommandRefContent) -> CommandReferencePart {
+    let commands = match part.extra.get("skills") {
+        Some(value) => match serde_json::from_value::<Vec<CommandReference>>(value.clone()) {
+            Ok(commands) => commands,
             Err(error) => {
                 tracing::warn!(
                     diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "decode persisted skill reference snapshot",
+                        "decode persisted command reference snapshot",
                         &error,
                     ),
-                    "persisted skill reference snapshot is malformed; projecting an empty snapshot"
+                    "persisted command reference snapshot is malformed; projecting an empty snapshot"
                 );
                 Vec::new()
             }
         },
         None => Vec::new(),
     };
-    SkillReferencePart { skills }
+    CommandReferencePart { commands }
 }
 
 /// Project the canonical `error` shape into an [`agena_failure::UserProblem`],
@@ -1089,8 +1090,8 @@ mod tests {
         let multi_file = serde_json::json!({ "attachments": [{ "path": "a.txt" }] });
         assert_eq!(canonical_kind("text", &multi_file), "file_ref");
 
-        let skill = serde_json::json!({ "skills": [{ "name": "doctor" }] });
-        assert_eq!(canonical_kind("text", &skill), "skill_ref");
+        let command = serde_json::json!({ "skills": [{ "name": "doctor" }] });
+        assert_eq!(canonical_kind("text", &command), "skill_ref");
     }
 
     #[test]

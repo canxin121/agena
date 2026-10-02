@@ -96,16 +96,16 @@ pub mod activity_view;
 pub use access::{AccessKind, AccessSelector, PathKind};
 pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
-    ComposerActivity, ComposerDocument, ComposerNode, ErrorActivity, ExecutionTarget,
-    InteractionActivity, NoticeActivity, OperationAuthorization, OperationPermission,
-    ReasoningActivity, ResourceActivity, ResourceDelivery, ResourceKind, ResourceReference,
-    SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
+    CommandReferenceActivity, ComposerActivity, ComposerDocument, ComposerNode, ErrorActivity,
+    ExecutionTarget, InteractionActivity, NoticeActivity, OperationAuthorization,
+    OperationPermission, ReasoningActivity, ResourceActivity, ResourceDelivery, ResourceKind,
+    ResourceReference, TextArtifactActivity, TextSegmentActivity,
 };
 pub use activity_kind::{
-    ACTIVITY_KIND_ERROR, ACTIVITY_KIND_HOOK, ACTIVITY_KIND_INTERACTION, ACTIVITY_KIND_NOTICE,
-    ACTIVITY_KIND_OPERATION, ACTIVITY_KIND_REASONING, ACTIVITY_KIND_RESOURCE,
-    ACTIVITY_KIND_SKILL_REFERENCE, ACTIVITY_KIND_TEXT, ActivityKind, ActivityKindCategory,
-    ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
+    ACTIVITY_KIND_COMMAND_REFERENCE, ACTIVITY_KIND_ERROR, ACTIVITY_KIND_HOOK,
+    ACTIVITY_KIND_INTERACTION, ACTIVITY_KIND_NOTICE, ACTIVITY_KIND_OPERATION,
+    ACTIVITY_KIND_REASONING, ACTIVITY_KIND_RESOURCE, ACTIVITY_KIND_TEXT, ActivityKind,
+    ActivityKindCategory, ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
 };
 pub use activity_view::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};

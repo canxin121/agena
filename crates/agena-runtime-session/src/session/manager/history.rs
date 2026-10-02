@@ -17,8 +17,8 @@ use agena_domain::{
 use agena_plugin_host::AgentCancelInput;
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_runtime_contracts::part_content::{
-    TypedContent, attachment_from_file_ref, operation_from_tool_call,
-    skill_reference_from_skill_ref, user_problem_from_error,
+    TypedContent, attachment_from_file_ref, command_reference_from_command_ref,
+    operation_from_tool_call, user_problem_from_error,
 };
 use agena_storage::store::{Part, PartRole};
 
@@ -996,7 +996,7 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
         TypedContent::Think(_)
             | TypedContent::ToolCall(_)
             | TypedContent::FileRef(_)
-            | TypedContent::SkillRef(_)
+            | TypedContent::CommandRef(_)
             | TypedContent::Notice(_)
             | TypedContent::Hook(_)
             | TypedContent::Error(_)
@@ -1030,7 +1030,7 @@ fn part_name_from_content(content: &TypedContent) -> Option<String> {
             let operation = operation_from_tool_call(tool_call);
             Some(operation.invocation.name)
         }
-        TypedContent::SkillRef(_) => Some("skill_reference".to_string()),
+        TypedContent::CommandRef(_) => Some("skill_reference".to_string()),
         TypedContent::Error(error) => Some(user_problem_from_error(error).code.to_string()),
         TypedContent::FileRef(_) => Some("resource".to_string()),
         TypedContent::Hook(hook) => Some(format!("hook:{}", hook.hook)),
@@ -1092,9 +1092,11 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
         TypedContent::FileRef(value) => {
             agena_runtime::SessionProjectedPartDetail::Attachment(attachment_from_file_ref(value))
         }
-        TypedContent::SkillRef(value) => agena_runtime::SessionProjectedPartDetail::SkillReference(
-            skill_reference_from_skill_ref(value),
-        ),
+        TypedContent::CommandRef(value) => {
+            agena_runtime::SessionProjectedPartDetail::CommandReference(
+                command_reference_from_command_ref(value),
+            )
+        }
         TypedContent::ToolCall(value) => {
             agena_runtime::SessionProjectedPartDetail::ToolCall(Box::new((**value).clone()))
         }

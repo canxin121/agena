@@ -126,9 +126,11 @@ Plugin SDK 的通用参数 alias DSL 是当前插件开发能力，不是 Agena 
 
 Command discovery 只使用 Agena 自己的当前 roots，例如：
 
-- Agena home 的 commands；
-- workspace `.agena/skills`（其他 agent 的 skill 目录，经 `agena.commands` 桥接）；
-- workspace `.agena/commands`。
+- Agena home 的 `commands`（纯 `.md` command 文档）与 `skills`（其他 agent 的 `SKILL.md` package，经 `agena.commands` 桥接）；
+- workspace `.agena/commands`；
+- workspace `.agena/skills`（同样经 `agena.commands` 桥接）。
+
+Agena 自己的词汇是 command；`skill` 只作为其他 agent 生态的词汇出现在桥接层和磁盘目录名上，两者都注册进同一个 command catalog。
 
 不扫描跨-agent `.agents/*` 兼容目录。
 

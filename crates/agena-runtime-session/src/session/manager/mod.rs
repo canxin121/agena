@@ -183,9 +183,9 @@ pub struct SessionSubtaskRequest {
     pub parent_session_id: i64,
     pub description: String,
     pub prompt: String,
-    /// Optional Skill names or aliases to resolve and attach to the child
-    /// session's first user message as lazy Skill references.
-    pub skills: Option<Vec<String>>,
+    /// Optional command names or aliases to resolve and attach to the child
+    /// session's first user message as lazy command references.
+    pub commands: Option<Vec<String>>,
     pub task_id: Option<String>,
     pub requested_model_selection: agena_domain::ModelSelectionConfig,
     pub timeout_ms: Option<u64>,
@@ -935,14 +935,14 @@ fn part_contents_from_composer_document(
                     }
                     Ok(TypedContent::FileRef(reference))
                 }
-                ActivityPayload::SkillReference(skill) => Ok(TypedContent::SkillRef(
-                    super::store::skill_ref_from_reference(&crate::part::SkillReferencePart {
-                        skills: vec![crate::part::SkillReference {
-                            name: skill.name,
-                            description: skill.description,
-                            content_hash: skill.content_hash,
-                            source: skill.source,
-                            aliases: skill.aliases,
+                ActivityPayload::CommandReference(command) => Ok(TypedContent::CommandRef(
+                    super::store::command_ref_from_reference(&crate::part::CommandReferencePart {
+                        commands: vec![crate::part::CommandReference {
+                            name: command.name,
+                            description: command.description,
+                            content_hash: command.content_hash,
+                            source: command.source,
+                            aliases: command.aliases,
                         }],
                     }),
                 )),

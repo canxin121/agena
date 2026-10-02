@@ -1,6 +1,6 @@
 //! The single, non-configurable Agena identity.
 //!
-//! Runtime capabilities, permissions, model selection, skills, and execution
+//! Runtime capabilities, permissions, model selection, commands, and execution
 //! modes are intentionally owned by their respective layers. They must never
 //! be encoded as alternative agent profiles.
 //!

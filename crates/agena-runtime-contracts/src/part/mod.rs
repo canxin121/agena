@@ -1,15 +1,15 @@
 //! The retained "everything is a part" model, at contracts top level.
 
 mod attachment;
+mod command_reference;
 mod hook;
 mod notice;
-mod skill_reference;
 mod tool;
 
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
+pub use command_reference::{CommandReference, CommandReferencePart};
 pub use hook::HookPart;
 pub use notice::NoticePart;
-pub use skill_reference::{SkillReference, SkillReferencePart};
 pub use tool::{
     ApplyPatchToolInput, AskUserToolInput, BackgroundOperation, CronCreateToolInput,
     CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,

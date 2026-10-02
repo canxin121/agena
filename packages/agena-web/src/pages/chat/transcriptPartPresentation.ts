@@ -541,12 +541,12 @@ export function attachmentPresentations(part: TranscriptDisplayPart): Attachment
 
 export function commandPresentations(part: TranscriptDisplayPart): CommandPresentation[] {
   const content = jsonRecord(part.source.agenaContent)
-  const values = jsonArray(content.skills)
+  const values = jsonArray(content.commands).length ? jsonArray(content.commands) : jsonArray(content.skills)
   const sourceValues = values.length ? values : [content]
   return sourceValues
     .map((value) => {
       const command = jsonRecord(value)
-      const name = firstString(command, ['name', 'skill'])
+      const name = firstString(command, ['name', 'command', 'skill'])
       if (!name) return null
       return {
         name,

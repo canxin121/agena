@@ -3,8 +3,9 @@
 use agena_api::{
     live::HumanPresentationResource,
     part::{
-        AttachmentPartResource, ErrorPartResource, PartDetailResource, PartExecutionStatusResource,
-        ReasoningPartResource, SkillReferencePartResource, TextPartResource, ToolCallPartResource,
+        AttachmentPartResource, CommandReferencePartResource, ErrorPartResource,
+        PartDetailResource, PartExecutionStatusResource, ReasoningPartResource, TextPartResource,
+        ToolCallPartResource,
     },
     resource::{RunResource, RunRole, RunStatus},
 };
@@ -246,7 +247,7 @@ pub enum TranscriptActivityContent<'a> {
     Answer(Box<TextSegmentActivity>),
     Reasoning(ReasoningPartResource),
     Attachment(AttachmentPartResource),
-    SkillReference(SkillReferencePartResource),
+    CommandReference(CommandReferencePartResource),
     Error(ErrorPartResource),
     Operation(Box<ToolCallView>),
     /// A system notice: hook bookkeeping, workflow notices, session notices.
@@ -315,7 +316,7 @@ pub enum TranscriptUserDocumentNode {
 /// Style of a user activity in the transcript.
 pub enum TranscriptUserActivityStyle {
     Resource,
-    Skill,
+    Command,
     TextArtifact,
     Other,
 }
@@ -345,8 +346,8 @@ pub fn transcript_part_content(
         PartDetailResource::Attachment(value) => {
             TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(value))
         }
-        PartDetailResource::SkillReference(value) => {
-            TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(value))
+        PartDetailResource::CommandReference(value) => {
+            TranscriptPartContent::Activity(TranscriptActivityContent::CommandReference(value))
         }
         PartDetailResource::Error(value) => {
             TranscriptPartContent::Activity(TranscriptActivityContent::Error(value))

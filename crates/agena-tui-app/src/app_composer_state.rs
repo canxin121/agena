@@ -1383,8 +1383,8 @@ fn unique_composer_placeholder_text(
 #[cfg(test)]
 mod tests {
     use agena_domain::{
-        ActivityId, ActivityPayload, ComposerActivity, ComposerDocument, ComposerNode,
-        ResourceActivity, ResourceKind, ResourceReference, SkillReferenceActivity,
+        ActivityId, ActivityPayload, CommandReferenceActivity, ComposerActivity, ComposerDocument,
+        ComposerNode, ResourceActivity, ResourceKind, ResourceReference,
     };
     use agena_tui::i18n::I18n;
     use agena_tui_components::Editor;
@@ -1417,7 +1417,7 @@ mod tests {
                     recovery_text: None,
                     activity: ComposerActivity {
                         id: command_id,
-                        payload: ActivityPayload::SkillReference(SkillReferenceActivity {
+                        payload: ActivityPayload::CommandReference(CommandReferenceActivity {
                             name: "doctor".to_owned(),
                             description: String::new(),
                             content_hash: "hash".to_owned(),

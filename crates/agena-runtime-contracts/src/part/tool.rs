@@ -299,7 +299,7 @@ pub struct TaskToolInput {
     /// exploration task can attach an explore command. Unknown names are
     /// rejected before the subtask starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<String>>,
+    pub commands: Option<Vec<String>>,
     /// Resume an existing subtask session instead of creating a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,

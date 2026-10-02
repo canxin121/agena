@@ -2554,12 +2554,12 @@ mod effect_ownership_tests {
         let definition = CommandDefinition {
             id: "note".to_string(),
             title: "Note".to_string(),
-            group: "Skills".to_string(),
+            group: "Commands".to_string(),
             category: None,
             slash: Some("/note".to_string()),
             aliases: Vec::new(),
             docs: CommandDocs {
-                summary: Some("Inject one bridged skill.".to_string()),
+                summary: Some("Inject one bridged command.".to_string()),
                 ..Default::default()
             },
             input: SettingsContract::new(SettingsNode::root_object("Input", "")),

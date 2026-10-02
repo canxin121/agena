@@ -269,9 +269,10 @@ export function optimisticUserParts(args: {
 
 function commandLabels(part: MessagePartLike): string[] {
   const content = durablePartContent(part)
-  const skills = Array.isArray(content.skills) ? content.skills : []
-  const labels = skills.map((value) => firstText(record(value), ['name'])).filter(Boolean)
-  const own = firstText(content, ['skill', 'name'])
+  const raw = Array.isArray(content.commands) ? content.commands : content.skills
+  const commands = Array.isArray(raw) ? raw : []
+  const labels = commands.map((value) => firstText(record(value), ['name'])).filter(Boolean)
+  const own = firstText(content, ['command', 'skill', 'name'])
   if (own && !labels.includes(own)) labels.unshift(own)
   return labels
 }
@@ -318,7 +319,7 @@ function classifyPart(part: MessagePartLike, answerPartId: string | null, assist
   if (kind === 'think') return 'reasoning'
   if (kind === 'tool_call') return 'operation'
   if (kind === 'file_ref') return 'resource'
-  if (kind === 'skill_ref') return 'skill'
+  if (kind === 'skill_ref') return 'command'
   if (kind === 'notice' || kind === 'hook' || kind === 'system_notification') return 'notice'
   if (kind === 'compaction') return 'compaction'
   if (kind === 'assistant_reply_lifecycle') return 'lifecycle'
@@ -372,7 +373,7 @@ function displayFields(
       copyText: labels.join('\n'),
     }
   }
-  if (kind === 'skill') {
+  if (kind === 'command') {
     const labels = commandLabels(part)
     return {
       title: presentedTitle || 'Command',

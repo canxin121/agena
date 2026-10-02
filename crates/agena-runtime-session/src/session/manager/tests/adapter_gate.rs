@@ -15,7 +15,6 @@ impl CloudFixture {
     #[tool(
         name = "cloud_web_search",
         summary = "Synthetic cloud search",
-        concurrency_safe,
         tags(read_only)
     )]
     async fn search(&self) -> String {
@@ -25,7 +24,6 @@ impl CloudFixture {
     #[tool(
         name = "cloud_code_execution",
         summary = "Synthetic cloud compute",
-        concurrency_safe,
         tags(read_only)
     )]
     async fn compute(&self) -> String {
@@ -46,7 +44,6 @@ impl OpenAiCloudFixture {
     #[tool(
         name = "cloud_web_search",
         summary = "Synthetic OpenAI search",
-        concurrency_safe,
         tags(read_only)
     )]
     async fn search(&self) -> String {
@@ -56,7 +53,6 @@ impl OpenAiCloudFixture {
     #[tool(
         name = "cloud_shell",
         summary = "Synthetic OpenAI hosted shell",
-        concurrency_safe,
         tags(read_only)
     )]
     async fn shell(&self) -> String {

@@ -36,7 +36,7 @@ pub const ACTIVITY_KIND_OPERATION: &str = "operation";
 /// Built-in resource kind id.
 pub const ACTIVITY_KIND_RESOURCE: &str = "resource";
 /// Built-in command reference kind id.
-pub const ACTIVITY_KIND_SKILL_REFERENCE: &str = "skill_reference";
+pub const ACTIVITY_KIND_COMMAND_REFERENCE: &str = "skill_reference";
 /// Built-in interaction kind id.
 pub const ACTIVITY_KIND_INTERACTION: &str = "interaction";
 /// Built-in hook kind id.
@@ -67,7 +67,7 @@ pub fn builtin_activity_kinds() -> Vec<ActivityKind> {
             label: "Resource".to_owned(),
         },
         ActivityKind {
-            id: ACTIVITY_KIND_SKILL_REFERENCE.to_owned(),
+            id: ACTIVITY_KIND_COMMAND_REFERENCE.to_owned(),
             category: ActivityKindCategory::Builtin,
             label: "Command reference".to_owned(),
         },

@@ -37,7 +37,7 @@ pub struct CapabilityCounts {
     /// Every non-gateway tool. All of these share the same discovery,
     /// authorization, and tools_call execution path.
     pub execution_tools: usize,
-    pub bundled_skills: usize,
+    pub bundled_commands: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -47,7 +47,7 @@ pub struct BundledCapabilityManifest {
     pub snapshot_date: &'static str,
     pub counts: CapabilityCounts,
     pub plugins: Vec<BundledPluginCapability>,
-    pub skills: Vec<BundledSkillCapability>,
+    pub commands: Vec<BundledCommandCapability>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -81,8 +81,8 @@ pub struct BundledToolCapability {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-/// Skill capability of a bundled plugin.
-pub struct BundledSkillCapability {
+/// Command capability of a bundled plugin.
+pub struct BundledCommandCapability {
     pub name: String,
     pub description: String,
     pub aliases: Vec<String>,
@@ -145,20 +145,20 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
         .collect::<Vec<_>>();
     plugins.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let mut skills = crate::plugins::provided::commands::declared_skills()
+    let mut commands = crate::plugins::provided::commands::declared_commands()
         .into_iter()
-        .map(|skill| {
-            let content_sha256 = skill.content_sha256;
-            BundledSkillCapability {
-                name: skill.name,
-                description: skill.description,
-                aliases: skill.aliases,
+        .map(|command| {
+            let content_sha256 = command.content_sha256;
+            BundledCommandCapability {
+                name: command.name,
+                description: command.description,
+                aliases: command.aliases,
                 content_sha256,
                 bundled: true,
             }
         })
         .collect::<Vec<_>>();
-    skills.sort_by(|left, right| left.name.cmp(&right.name));
+    commands.sort_by(|left, right| left.name.cmp(&right.name));
 
     let tools = plugins
         .iter()
@@ -170,7 +170,7 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
         tools: tools.len(),
         gateway_tools,
         execution_tools: tools.len().saturating_sub(gateway_tools),
-        bundled_skills: skills.len(),
+        bundled_commands: commands.len(),
     };
 
     BundledCapabilityManifest {
@@ -178,7 +178,7 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
         snapshot_date: "2026-07-27",
         counts,
         plugins,
-        skills,
+        commands,
     }
 }
 
@@ -219,16 +219,16 @@ pub fn bundled_capability_identity_snapshot_json() -> String {
             }
         }
     }
-    if let Some(skills) = value
-        .get_mut("skills")
+    if let Some(commands) = value
+        .get_mut("commands")
         .and_then(serde_json::Value::as_array_mut)
     {
-        for skill in skills {
-            let Some(skill) = skill.as_object_mut() else {
+        for command in commands {
+            let Some(command) = command.as_object_mut() else {
                 continue;
             };
-            skill.remove("description");
-            skill.remove("bundled");
+            command.remove("description");
+            command.remove("bundled");
         }
     }
     let mut output =

@@ -142,9 +142,9 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
                     .unwrap_or_else(|| item.mime.clone())
             })
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(reference)) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::CommandReference(reference)) => {
             reference
-                .skills
+                .commands
                 .first()
                 .map(|command| format!("Command: {}", command.name))
         }

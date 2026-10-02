@@ -523,7 +523,7 @@ fn command_registry_name(plugin_id: &PluginKey, command_id: &str) -> String {
 }
 
 /// The sort key is the order every client renders. `slash` sits above `id` so
-/// commands registered at runtime (bridged skills) interleave with declared
+/// commands registered at runtime (bridged package commands) interleave with declared
 /// commands by the name a user actually types.
 fn sort_command_catalog(commands: &mut [CommandCatalogItem]) {
     commands.sort_by(|a, b| {

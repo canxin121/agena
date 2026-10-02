@@ -124,7 +124,7 @@ impl ComposerKeyBindings {
 
     /// In terminals without an enhanced keyboard protocol, Ctrl+A can arrive
     /// as the raw SOH control byte. Preserve the configured Ctrl+A binding so
-    /// the unified Skill/file insertion picker works in both encodings.
+    /// the unified command/file insertion picker works in both encodings.
     fn matches_legacy_ctrl_a(&self, event: &KeyEvent) -> bool {
         event.code == KeyCode::Char('\u{0001}')
             && event.modifiers.is_empty()

@@ -5,22 +5,22 @@ use super::{
 };
 use crate::session::Session;
 use crate::session::store::{
-    new_part_from_content, skill_ref_from_reference, text_content, typed_content_from_value,
+    command_ref_from_reference, new_part_from_content, text_content, typed_content_from_value,
     typed_text,
 };
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
-use agena_runtime_contracts::part::{SkillReference, SkillReferencePart};
+use agena_runtime_contracts::part::{CommandReference, CommandReferencePart};
 use agena_runtime_contracts::part_content::{
-    TypedContent, operation_from_tool_call, skill_reference_from_skill_ref,
+    TypedContent, command_reference_from_command_ref, operation_from_tool_call,
 };
 use agena_storage::store::{Part, PartRole, PartState};
 use sha2::{Digest, Sha256};
 
 /// The lossy visible text of one run group, derived from its decoded content
-/// parts: text and skill-reference parts render their content, tool-call parts
+/// parts: text and command-reference parts render their content, tool-call parts
 /// their best-effort output, and the remaining part kinds fall back to their
 /// summary.
 pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
@@ -29,8 +29,8 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
         .filter_map(
             |part| match typed_content_from_value(&part.kind, &part.content) {
                 Ok(TypedContent::Text(text)) => Some(text.text.clone()),
-                Ok(TypedContent::SkillRef(skill)) => {
-                    Some(skill_reference_from_skill_ref(&skill).summary())
+                Ok(TypedContent::CommandRef(command)) => {
+                    Some(command_reference_from_command_ref(&command).summary())
                 }
                 Ok(TypedContent::ToolCall(tool)) => {
                     tool_visible_text_lossy(&operation_from_tool_call(&tool))
@@ -62,10 +62,10 @@ fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) 
 /// renders — so a subtask can only be pointed at a command the workspace
 /// actually offers. The body is deliberately omitted; the delegated model
 /// reads it on demand through the owning plugin.
-fn resolve_subtask_skill_references(
+fn resolve_subtask_command_references(
     catalog: &[agena_plugin_host::CommandCatalogItem],
     requested: &[String],
-) -> Result<Vec<SkillReference>, AppError> {
+) -> Result<Vec<CommandReference>, AppError> {
     requested
         .iter()
         .map(|name| {
@@ -78,7 +78,7 @@ fn resolve_subtask_skill_references(
                         "unknown command '{name}' for subtask; the delegated session can list the available commands from the `agena.commands` plugin"
                     ))
                 })?;
-            Ok(SkillReference {
+            Ok(CommandReference {
                 name: entry.command.id.clone(),
                 description: entry.command.docs.summary.clone().unwrap_or_default(),
                 content_hash: command_declaration_hash(entry),
@@ -584,13 +584,13 @@ impl SessionManager {
             ));
         }
         let subtask_skill_references = match request
-            .skills
+            .commands
             .as_deref()
-            .filter(|skills| !skills.is_empty())
+            .filter(|commands| !commands.is_empty())
         {
-            Some(skills) => Some(resolve_subtask_skill_references(
+            Some(commands) => Some(resolve_subtask_command_references(
                 &state.tool_executor.plugin_manager().command_catalog(),
-                skills,
+                commands,
             )?),
             None => None,
         };
@@ -739,9 +739,9 @@ impl SessionManager {
         let mut run = Box::pin(async move {
             let mut parts = vec![TypedContent::Text(text_content(prompt))];
             if let Some(skill_references) = skill_references {
-                parts.push(TypedContent::SkillRef(skill_ref_from_reference(
-                    &SkillReferencePart {
-                        skills: skill_references,
+                parts.push(TypedContent::CommandRef(command_ref_from_reference(
+                    &CommandReferencePart {
+                        commands: skill_references,
                     },
                 )));
             }
@@ -963,11 +963,11 @@ pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
 mod tests {
     use super::{
         command_declaration_hash, command_matches, non_recursive_subtask_capability_denials,
-        resolve_subtask_skill_references,
+        resolve_subtask_command_references,
     };
     use agena_plugin_host::{CommandCatalogItem, PluginKey};
     use agena_plugin_sdk::{CommandDefinition, CommandDocs, CommandTarget, SettingsContract};
-    use agena_runtime_contracts::part::SkillReference;
+    use agena_runtime_contracts::part::CommandReference;
 
     fn catalog_entry(id: &str, slash: &str, aliases: &[&str], summary: &str) -> CommandCatalogItem {
         CommandCatalogItem {
@@ -977,7 +977,7 @@ mod tests {
             command: CommandDefinition {
                 id: id.to_string(),
                 title: id.to_string(),
-                group: "Skills".to_string(),
+                group: "Commands".to_string(),
                 category: Some("Package".to_string()),
                 slash: Some(slash.to_string()),
                 aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
@@ -1032,7 +1032,7 @@ mod tests {
             "/security_review".to_string(),
             "security-review".to_string(),
         ];
-        let refs = resolve_subtask_skill_references(&catalog(), &requested).expect("resolve");
+        let refs = resolve_subtask_command_references(&catalog(), &requested).expect("resolve");
         let names = refs.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
         assert_eq!(names, ["verify", "security_review", "security_review"]);
         for reference in &refs {
@@ -1043,7 +1043,7 @@ mod tests {
     #[test]
     fn subtask_references_carry_the_declared_summary_and_owner() {
         let requested = vec!["/verify".to_string()];
-        let refs = resolve_subtask_skill_references(&catalog(), &requested).expect("resolve");
+        let refs = resolve_subtask_command_references(&catalog(), &requested).expect("resolve");
         assert_eq!(refs[0].description, "Validate the current change");
         assert_eq!(refs[0].source, "agena.commands");
         assert_eq!(refs[0].aliases, ["check"]);
@@ -1052,7 +1052,7 @@ mod tests {
     #[test]
     fn subtask_references_reject_unknown_names() {
         let requested = vec!["no-such-command".to_string()];
-        let error = resolve_subtask_skill_references(&catalog(), &requested).expect_err("reject");
+        let error = resolve_subtask_command_references(&catalog(), &requested).expect_err("reject");
         assert!(
             error
                 .to_string()
@@ -1098,9 +1098,9 @@ mod tests {
     #[test]
     fn skill_reference_carries_stable_identity_without_body() {
         let requested = vec!["verify".to_string()];
-        let refs = resolve_subtask_skill_references(&catalog(), &requested).expect("resolve");
+        let refs = resolve_subtask_command_references(&catalog(), &requested).expect("resolve");
         let first = &refs[0];
-        let expected: SkillReference = serde_json::from_value(serde_json::json!({
+        let expected: CommandReference = serde_json::from_value(serde_json::json!({
             "name": first.name,
             "description": first.description,
             "content_hash": first.content_hash,

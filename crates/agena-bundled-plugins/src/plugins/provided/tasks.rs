@@ -162,8 +162,8 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, execute, task),
-        summary = "Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach command names in `skills` so the child session applies their instructions as task guidance.",
-        help = "Reach for this tool when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to command names, slash spellings or aliases (for example a read-only review command for a review task, or an explore command for an exploration task); the child session receives the instructions those commands name and should follow them. Unknown names are rejected before the subtask starts. Use the `agena.commands` plugin's `list` tool to discover what this workspace offers. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it."
+        summary = "Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach command names in `commands` so the child session applies their instructions as task guidance.",
+        help = "Reach for this tool when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `commands` to command names, slash spellings or aliases (for example a read-only review command for a review task, or an explore command for an exploration task); the child session receives the instructions those commands name and should follow them. Unknown names are rejected before the subtask starts. Use the `agena.commands` plugin's `list` tool to discover what this workspace offers. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it."
     )]
     async fn run(
         &self,
@@ -215,7 +215,7 @@ impl TasksPlugin {
             parent_session_id: Some(context.session_id),
             description: input.description.clone(),
             prompt: input.prompt.clone(),
-            skills: input.skills.clone(),
+            commands: input.commands.clone(),
             task_id: Some(task_id.clone()),
             selection,
             timeout_ms: input.timeout_ms,
@@ -485,7 +485,7 @@ impl TasksPlugin {
             parent_session_id: Some(state.parent_session_id),
             description: state.description.clone(),
             prompt: state.prompt.clone(),
-            skills: None,
+            commands: None,
             task_id: Some(state.task_id.clone()),
             selection: state.selection.clone(),
             timeout_ms: state.timeout_ms,
@@ -884,7 +884,7 @@ mod tests {
         let schema = &tool.contract.input_schema;
         assert!(schema.pointer("/properties/profile").is_none());
         assert!(schema.pointer("/properties/selection").is_some());
-        assert!(schema.pointer("/properties/skills").is_some());
+        assert!(schema.pointer("/properties/commands").is_some());
         assert!(schema.pointer("/properties/subagent_type").is_none());
         assert!(schema.pointer("/properties/command").is_none());
         assert_eq!(
@@ -923,7 +923,7 @@ mod tests {
         let valid = serde_json::json!({
             "description": "verify",
             "prompt": "run the checks",
-            "skills": ["verify", "security-review"],
+            "commands": ["verify", "security-review"],
             "timeout_ms": 1
         });
         assert!(TaskToolInput::parse_input(valid).is_ok());

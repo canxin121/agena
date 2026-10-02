@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::AppError;
-use crate::part::{OperationPart, SkillReferencePart};
+use crate::part::{CommandReferencePart, OperationPart};
 use crate::session::Session;
 
 /// The facade-backed store adapter used by [`crate::SessionManager`].
@@ -954,7 +954,7 @@ pub(crate) fn typed_content_to_value(content: &TypedContent) -> Result<Value, Ap
         TypedContent::PasteRef(part) => {
             serde_json::to_value(part).expect("paste ref content is always JSON serializable")
         }
-        TypedContent::SkillRef(part) => part.as_value(),
+        TypedContent::CommandRef(part) => part.as_value(),
         TypedContent::Notice(part) => part.as_value(),
         TypedContent::Hook(part) => part.as_value(),
         TypedContent::SystemNotification(part) => part.as_value(),
@@ -999,8 +999,8 @@ fn part_summary(content: &TypedContent) -> Option<String> {
         TypedContent::Error(error) => {
             truncate(&part_content::user_problem_from_error(error).user.fallback)
         }
-        TypedContent::SkillRef(reference) => {
-            truncate(&part_content::skill_reference_from_skill_ref(reference).summary())
+        TypedContent::CommandRef(reference) => {
+            truncate(&part_content::command_reference_from_command_ref(reference).summary())
         }
         TypedContent::Hook(hook) => truncate(&hook.summary),
         TypedContent::Notice(notice) => truncate(&notice.summary),
@@ -1114,32 +1114,35 @@ pub(crate) fn file_ref_from_attachment(part: &AttachmentPart) -> part_content::F
     }
 }
 
-/// Project a [`SkillReferencePart`] onto the canonical `skill_ref` shape: the
-/// first skill name as the named key, and only its message-scoped reference
-/// metadata under `extra["skills"]`.
-pub(crate) fn skill_ref_from_reference(part: &SkillReferencePart) -> part_content::SkillRefContent {
+/// Project a [`CommandReferencePart`] onto the canonical `skill_ref` shape: the
+/// first command name as the named key, and only its message-scoped reference
+/// metadata under `extra["skills"]`. The kind and the `skills` key are the
+/// stored contract, not the internal vocabulary.
+pub(crate) fn command_ref_from_reference(
+    part: &CommandReferencePart,
+) -> part_content::CommandRefContent {
     let mut extra = BTreeMap::new();
-    if !part.skills.is_empty() {
-        let skills = part
-            .skills
+    if !part.commands.is_empty() {
+        let commands = part
+            .commands
             .iter()
-            .map(|skill| {
+            .map(|command| {
                 serde_json::json!({
-                    "name": skill.name,
-                    "description": skill.description,
-                    "content_hash": skill.content_hash,
-                    "source": skill.source,
-                    "aliases": skill.aliases,
+                    "name": command.name,
+                    "description": command.description,
+                    "content_hash": command.content_hash,
+                    "source": command.source,
+                    "aliases": command.aliases,
                 })
             })
             .collect::<Vec<_>>();
         extra.insert(
             "skills".to_owned(),
-            serde_json::to_value(skills).expect("skill reference is always JSON serializable"),
+            serde_json::to_value(commands).expect("command reference is always JSON serializable"),
         );
     }
-    part_content::SkillRefContent {
-        skill: part.skills.first().map(|skill| skill.name.clone()),
+    part_content::CommandRefContent {
+        command: part.commands.first().map(|command| command.name.clone()),
         args: None,
         extra,
     }
@@ -1167,7 +1170,7 @@ pub(crate) fn typed_text(content: &TypedContent) -> Option<&str> {
 // ─── Typed-content projections ───────────────────────────────────────────────
 //
 // Runtime-facing domain values (`OperationPart`, `AttachmentPart`,
-// `SkillReferencePart`, `ReasoningPart`, `UserProblem`) are reconstructed from
+// `CommandReferencePart`, `ReasoningPart`, `UserProblem`) are reconstructed from
 // canonical typed content through the extractor helpers in
 // `agena_runtime_contracts::part_content`.
 
@@ -1726,9 +1729,9 @@ mod tests {
     }
 
     #[test]
-    fn skill_ref_persistence_round_trips_reference_metadata() {
-        let content = skill_ref_from_reference(&SkillReferencePart {
-            skills: vec![crate::part::SkillReference {
+    fn command_ref_persistence_round_trips_reference_metadata() {
+        let content = command_ref_from_reference(&CommandReferencePart {
+            commands: vec![crate::part::CommandReference {
                 name: "review".to_owned(),
                 description: "Review changes".to_owned(),
                 content_hash: "abc123".to_owned(),
@@ -1740,19 +1743,19 @@ mod tests {
             .extra
             .get("skills")
             .and_then(Value::as_array)
-            .and_then(|skills| skills.first())
+            .and_then(|commands| commands.first())
             .and_then(Value::as_object)
-            .expect("stored Skill reference metadata");
+            .expect("stored command reference metadata");
         assert_eq!(stored.get("name").and_then(Value::as_str), Some("review"));
         assert_eq!(
             stored.get("content_hash").and_then(Value::as_str),
             Some("abc123")
         );
 
-        let restored = part_content::skill_reference_from_skill_ref(&content);
-        assert_eq!(restored.skills.len(), 1);
-        assert_eq!(restored.skills[0].name, "review");
-        assert_eq!(restored.skills[0].description, "Review changes");
+        let restored = part_content::command_reference_from_command_ref(&content);
+        assert_eq!(restored.commands.len(), 1);
+        assert_eq!(restored.commands[0].name, "review");
+        assert_eq!(restored.commands[0].description, "Review changes");
     }
 
     /// Canonical `text` payload helper used by the storage fixtures below.

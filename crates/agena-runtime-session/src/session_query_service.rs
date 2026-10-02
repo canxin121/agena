@@ -111,7 +111,7 @@ pub enum SessionProjectedPartDetail {
         problem: agena_failure::UserProblem,
     },
     Attachment(agena_plugin_host::sdk::attachment::AttachmentPart),
-    SkillReference(crate::part::SkillReferencePart),
+    CommandReference(crate::part::CommandReferencePart),
     UserInputRequest {
         request: agena_domain::UserInputRequest,
         reply: Option<agena_domain::UserInputReply>,

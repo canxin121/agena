@@ -623,7 +623,7 @@ impl HostClient for RuntimeHostClient {
                         parent_session_id,
                         description: req.description,
                         prompt: req.prompt,
-                        skills: req.skills,
+                        commands: req.commands,
                         task_id: req.task_id,
                         requested_model_selection: agena_domain::ModelSelectionConfig {
                             provider: selection.provider,

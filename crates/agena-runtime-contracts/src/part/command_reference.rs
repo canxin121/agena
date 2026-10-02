@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// the plugin that declared the command when it needs them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct SkillReference {
+pub struct CommandReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
@@ -20,24 +20,24 @@ pub struct SkillReference {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 /// A message part referencing selected commands.
-pub struct SkillReferencePart {
+pub struct CommandReferencePart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<SkillReference>,
+    pub commands: Vec<CommandReference>,
 }
 
-impl SkillReferencePart {
+impl CommandReferencePart {
     /// Render a provider-safe lazy reference block.
     pub fn model_context_text(&self) -> String {
-        let skills = self
-            .skills
+        let commands = self
+            .commands
             .iter()
-            .map(|skill| {
+            .map(|command| {
                 serde_json::json!({
-                    "name": skill.name,
-                    "description": skill.description,
-                    "content_hash": skill.content_hash,
-                    "source": skill.source,
-                    "aliases": skill.aliases,
+                    "name": command.name,
+                    "description": command.description,
+                    "content_hash": command.content_hash,
+                    "source": command.source,
+                    "aliases": command.aliases,
                 })
             })
             .collect::<Vec<_>>();
@@ -48,10 +48,10 @@ impl SkillReferencePart {
                 "Command instructions are not embedded in this message. Before applying a selected command, read its instructions through the plugin named in `source` (`list` then `read` for the `agena.commands` plugin) and use the result as task guidance.",
                 "The reference `content_hash` identifies the catalog version selected by the user; compare it with the tool result when consistency matters."
             ],
-            "commands": skills,
+            "commands": commands,
         });
         let encoded = serde_json::to_string_pretty(&payload)
-            .expect("skill-reference payload is always JSON serializable")
+            .expect("command-reference payload is always JSON serializable")
             .replace('<', "\\u003c")
             .replace('>', "\\u003e");
         format!(
@@ -61,16 +61,16 @@ impl SkillReferencePart {
     }
 
     pub fn summary(&self) -> String {
-        match self.skills.as_slice() {
+        match self.commands.as_slice() {
             [] => "0 command references".to_string(),
-            [skill] => format!("Command: {}", skill.name),
-            skills => format!(
+            [command] => format!("Command: {}", command.name),
+            commands => format!(
                 "{} commands: {}",
-                skills.len(),
-                skills
+                commands.len(),
+                commands
                     .iter()
                     .take(3)
-                    .map(|skill| skill.name.as_str())
+                    .map(|command| command.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -80,12 +80,12 @@ impl SkillReferencePart {
 
 #[cfg(test)]
 mod tests {
-    use super::{SkillReference, SkillReferencePart};
+    use super::{CommandReference, CommandReferencePart};
 
     #[test]
     fn model_context_is_message_scoped_lazy_reference() {
-        let part = SkillReferencePart {
-            skills: vec![SkillReference {
+        let part = CommandReferencePart {
+            commands: vec![CommandReference {
                 name: "review".to_string(),
                 description: "Review changes".to_string(),
                 content_hash: "sha256".to_string(),
@@ -102,7 +102,7 @@ mod tests {
         assert!(rendered.contains("sha256"));
         assert_eq!(rendered.matches("</agena_command_references>").count(), 1);
         assert_eq!(part.summary(), "Command: review");
-        serde_json::from_value::<SkillReference>(serde_json::json!({
+        serde_json::from_value::<CommandReference>(serde_json::json!({
             "name": "review",
             "description": "Review changes",
             "content_hash": "sha256",
@@ -110,7 +110,7 @@ mod tests {
         }))
         .expect("lazy command refs do not require instructions");
         assert!(
-            serde_json::from_value::<SkillReference>(serde_json::json!({
+            serde_json::from_value::<CommandReference>(serde_json::json!({
                 "name": "obsolete-shape",
                 "instructions": "Unexpected instructions.",
                 "content_hash": "sha256",

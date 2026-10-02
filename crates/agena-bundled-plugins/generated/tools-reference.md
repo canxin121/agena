@@ -17,7 +17,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.chatgpt`](#agenachatgpt) — OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (11 tools)
 - [`agena.claude`](#agenaclaude) — Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback. (9 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (2 tools)
-- [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skill packages as commands. (6 tools)
+- [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (8 tools)
 - [`agena.gemini`](#agenagemini) — Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (12 tools)
@@ -1987,7 +1987,7 @@ Structured code search and syntax inspection tools.
 
 **Version** `0.1.0` · **Tools** 6
 
-Declare the built-in commands every Agena client renders locally, and project skill packages as commands.
+Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface.
 
 ### get
 
@@ -7330,25 +7330,25 @@ Delegated subtask orchestration tools.
 
 ### run
 
-`agena.tasks.run` · **Summary**: Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach command names in `skills` so the child session applies their instructions as task guidance.
+`agena.tasks.run` · **Summary**: Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach command names in `commands` so the child session applies their instructions as task guidance.
 
 **Tags**: `subtask` `execute` `task`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Reach for this tool when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to command names, slash spellings or aliases (for example a read-only review command for a review task, or an explore command for an exploration task); the child session receives the instructions those commands name and should follow them. Unknown names are rejected before the subtask starts. Use the `agena.commands` plugin's `list` tool to discover what this workspace offers. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.
+> Reach for this tool when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `commands` to command names, slash spellings or aliases (for example a read-only review command for a review task, or an explore command for an exploration task); the child session receives the instructions those commands name and should follow them. Unknown names are rejected before the subtask starts. Use the `agena.commands` plugin's `list` tool to discover what this workspace offers. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `commands` | `array<string>` | — | — | Optional command names, slash spellings or aliases to attach to the<br>delegated subtask's first user message as lazy references. The child<br>model receives catalog metadata and reads the instructions through the<br>plugin that declared the command. Use commands appropriate to the task:<br>for example a read-only review task can attach a review command, an<br>exploration task can attach an explore command. Unknown names are<br>rejected before the subtask starts. |
 | `description` | `string` | ✓ | — | Short label for the subtask session. |
 | `max_cost_microusd` | `integer / null` | — | — | Cumulative child-completion cost ceiling in USD micro-units (one<br>millionth of a USD). Integer micro-units avoid a floating-point value<br>becoming a durable budget boundary; for example, 250000 means $0.25. |
 | `max_tokens` | `integer / null` | — | — | Cumulative child-completion token budget. This includes prompt,<br>output, reasoning and cache token accounting reported by the route. |
 | `prompt` | `string` | ✓ | — | Full instruction payload for the delegated subtask. |
 | `run_in_background` | `boolean` | — | `false` | Run the subtask in the background (default false). When false (default)<br>the subtask runs inline and this call returns its final result before<br>the tool call returns. When true, the tool returns immediately with a<br>task id and the result is delivered as a `system_notification` when the<br>subtask settles — do not poll tasks.get/tasks.output waiting for it. |
 | `selection` | `TaskModelSelection / null` | — | — | Optional model and mode overrides. Explicit values take precedence over<br>the parent session. |
-| `skills` | `array<string>` | — | — | Optional command names, slash spellings or aliases to attach to the<br>delegated subtask's first user message as lazy references. The child<br>model receives catalog metadata and reads the instructions through the<br>plugin that declared the command. Use commands appropriate to the task:<br>for example a read-only review task can attach a review command, an<br>exploration task can attach an explore command. Unknown names are<br>rejected before the subtask starts. |
 | `task_id` | `string / null` | — | — | Resume an existing subtask session instead of creating a new one. |
 | `timeout_ms` | `integer / null` | — | — | Overall task timeout. A timeout cancels the child execution and returns<br>a structured `timed_out` task result. |
 
@@ -7409,6 +7409,17 @@ Delegated subtask orchestration tools.
   "additionalProperties": false,
   "description": "Input of the task tool.",
   "properties": {
+    "commands": {
+      "description": "Optional command names, slash spellings or aliases to attach to the\ndelegated subtask's first user message as lazy references. The child\nmodel receives catalog metadata and reads the instructions through the\nplugin that declared the command. Use commands appropriate to the task:\nfor example a read-only review task can attach a review command, an\nexploration task can attach an explore command. Unknown names are\nrejected before the subtask starts.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
     "description": {
       "description": "Short label for the subtask session.",
       "minLength": 1,
@@ -7458,17 +7469,6 @@ Delegated subtask orchestration tools.
       ],
       "description": "Optional model and mode overrides. Explicit values take precedence over\nthe parent session.",
       "x-agena-order": "000005"
-    },
-    "skills": {
-      "description": "Optional command names, slash spellings or aliases to attach to the\ndelegated subtask's first user message as lazy references. The child\nmodel receives catalog metadata and reads the instructions through the\nplugin that declared the command. Use commands appropriate to the task:\nfor example a read-only review task can attach a review command, an\nexploration task can attach an explore command. Unknown names are\nrejected before the subtask starts.",
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array",
-        "null"
-      ],
-      "x-agena-order": "000003"
     },
     "task_id": {
       "description": "Resume an existing subtask session instead of creating a new one.",

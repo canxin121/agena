@@ -399,7 +399,7 @@ impl App {
             agena_domain::ActivityPayload::TextArtifact(_) => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));
             }
-            agena_domain::ActivityPayload::SkillReference(_) => {
+            agena_domain::ActivityPayload::CommandReference(_) => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-command-no-file-view"));
             }
             _ => self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view")),

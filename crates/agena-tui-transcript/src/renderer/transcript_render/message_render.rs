@@ -1190,17 +1190,8 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-            // Reasoning must never be truncated: it is the model's full
-            // thought trail, for both the provider and the human reading the
-            // transcript. It defaults to expanded (so the full trail is
-            // immediately visible) but the user may still collapse it via the
-            // normal toggle or a per-kind expansion setting.
             let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
-                defaults
-                    .kind_defaults
-                    .get(agena_domain::ACTIVITY_KIND_REASONING)
-                    .copied()
-                    .unwrap_or(true)
+                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_REASONING))
             });
             let summary = reasoning.preferred_text();
             let headline = summary
@@ -2225,15 +2216,8 @@ fn render_activity_canonical(
         entry_id: message.id,
         content_id: part.id,
     };
-    // Interstitial body segments are the working notes of a reply: they stay
-    // collapsed until the user opens them, regardless of the global activity
-    // default, so a multi-step tool run reads as a stack of blocks with one
-    // visible answer at the end.
     let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
-    let default_expanded = match payload {
-        agena_domain::ActivityPayload::TextSegment(_) => false,
-        _ => defaults.default_expanded(activity_kind_id_for_payload(payload)),
-    };
+    let default_expanded = defaults.default_expanded(activity_kind_id_for_payload(payload));
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
     let (_, canonical_title, summary, error) = activity_presentation(payload);
     let title = title_override.unwrap_or(canonical_title.as_str());

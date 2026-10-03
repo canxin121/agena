@@ -19,5 +19,5 @@ test('attachment rows use the UI vocabulary instead of a hardcoded English title
 
   const projection = read('../src/pages/chat/transcriptProjection.ts')
   assert.ok(projection.includes('export type TranscriptProjectionLabels'))
-  assert.ok(projection.includes("role === 'user' && kind === 'resource'"))
+  assert.ok(projection.includes("defaultExpanded: kind === 'answer' || kind === 'text'"))
 })

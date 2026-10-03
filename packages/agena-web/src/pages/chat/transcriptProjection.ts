@@ -260,8 +260,8 @@ export function optimisticUserParts(args: {
       title: text(args.attachmentTitle) || 'Attachment',
       summary: label,
       copyText: label,
-      toggleable: false,
-      defaultExpanded: true,
+      toggleable: true,
+      defaultExpanded: false,
     })
   }
   return parts
@@ -433,7 +433,6 @@ function projectPart(
   const kind = classifyPart(part, answerPartId, role === 'assistant')
   const fields = displayFields(part, kind, labels)
   const toggleable = !['text', 'lifecycle'].includes(kind)
-  const pendingInteraction = kind === 'operation' && partHasPendingInteraction(part)
   return {
     key: `part:${id || compactJson(part).slice(0, 48)}`,
     id,
@@ -443,11 +442,7 @@ function projectPart(
     source: part,
     ...fields,
     toggleable,
-    // A user attachment is part of the message itself. Keep its preview open
-    // like the assistant's attachment rows instead of collapsing it into a
-    // label the moment the server acknowledges the send.
-    defaultExpanded:
-      kind === 'answer' || kind === 'text' || pendingInteraction || (role === 'user' && kind === 'resource'),
+    defaultExpanded: kind === 'answer' || kind === 'text',
   }
 }
 

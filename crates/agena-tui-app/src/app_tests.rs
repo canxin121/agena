@@ -1335,16 +1335,15 @@ mod interaction_part_routing_tests {
         );
         app.sync_interaction_documents();
 
-        // Not expanded yet: the reveal is what forces expansion + focus,
-        // regardless of the configured default.
+        // Revealing the part moves focus without changing the folded default.
         assert!(!app.transcript.node_expansions.contains_key(&node_key()));
 
         app.reveal_pending_user_input_interaction(REQUEST_ID);
 
         assert_eq!(
             app.transcript.node_expansions.get(&node_key()),
-            Some(&true),
-            "a pending interaction part always auto-expands on arrival"
+            None,
+            "revealing a pending interaction must preserve the configured folded default"
         );
         assert!(app.revealed_user_input_request_ids.contains(REQUEST_ID));
         let start_line = interaction_node_start(&mut app);
@@ -1432,8 +1431,8 @@ mod interaction_part_routing_tests {
         app.reveal_pending_user_input_interaction(REQUEST_ID);
         assert_eq!(
             app.transcript.node_expansions.get(&key),
-            Some(&true),
-            "a pending ask auto-expands the operation activity on arrival"
+            None,
+            "revealing a pending ask must not open the operation by default"
         );
         assert!(
             app.transcript.navigation_cursor_line().is_some_and(|line| {
@@ -1478,8 +1477,8 @@ mod interaction_part_routing_tests {
         assert!(app.revealed_user_input_request_ids.contains(REQUEST_ID));
         assert_eq!(
             app.transcript.node_expansions.get(&node_key()),
-            Some(&true),
-            "the deferred reveal expands the part"
+            None,
+            "the deferred reveal must leave the part folded"
         );
     }
 
@@ -3939,6 +3938,10 @@ mod transcript_paging_tests {
             ..TranscriptState::default()
         };
 
+        transcript
+            .node_expansions
+            .insert(activity_key.clone(), true);
+        transcript.invalidate_render();
         let (node_start, node_end, expanded) = {
             let node = transcript
                 .rendered(40)
@@ -4162,9 +4165,7 @@ mod transcript_activity_copy_tests {
             ),
         };
 
-        // Reasoning defaults to expanded, so the visible tail (parts 54..58)
-        // is expanded content and belongs in the copy. The older activities
-        // (51..53) are folded away behind the marker and must never leak.
+        // Neither default-folded bodies nor the hidden prefix belong in the copy.
         let entry = entry_node(&mut transcript, 19);
         assert!(
             !entry.copy_text.contains("deep thought 51")
@@ -4174,8 +4175,8 @@ mod transcript_activity_copy_tests {
             entry.copy_text
         );
         assert!(
-            entry.copy_text.contains("deep thought 54"),
-            "default-expanded reasoning belongs in the message copy: {}",
+            !entry.copy_text.contains("deep thought 54"),
+            "default-folded reasoning must not leak into the message copy: {}",
             entry.copy_text
         );
         assert!(
@@ -4548,7 +4549,7 @@ mod transcript_expansion_tests {
     }
 
     #[test]
-    fn reasoning_renders_the_full_body_verbatim_and_expands_by_default() {
+    fn reasoning_defaults_to_folded_and_renders_the_full_body_when_opened() {
         let now = Utc::now();
         let message_id = 25;
         // A long, multi-line reasoning body that must never be ellipsized.
@@ -4596,8 +4597,16 @@ mod transcript_expansion_tests {
             .iter()
             .find(|node| node.key == key)
             .expect("reasoning node");
-        // Reasoning defaults to expanded so the full trail is immediately visible.
-        assert!(node.expanded, "reasoning must default to expanded");
+        assert!(!node.expanded, "reasoning must default to collapsed");
+        assert!(
+            !rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("deep thought line 39"))
+        );
+        transcript.node_expansions.insert(key.clone(), true);
+        transcript.invalidate_render();
+        let rendered = transcript.rendered(120);
         // The full multi-line body is present verbatim, including the last line.
         assert!(
             rendered
@@ -5858,10 +5867,7 @@ mod live_transcript_tests {
 
     #[test]
     fn reasoning_part_renders_the_full_trail_expanded() {
-        // A long, multi-line reasoning body (the exact shape the runtime
-        // persists as a `think` part). It must render through the dedicated
-        // full-trail variant: expanded by default and never truncated to the
-        // first line.
+        // Opening a folded think part must reveal the full stored trail.
         let body = (0..40)
             .map(|line| format!("live thought line {line}"))
             .collect::<Vec<_>>();
@@ -5874,6 +5880,29 @@ mod live_transcript_tests {
             ..TranscriptState::default()
         };
 
+        let key = {
+            let rendered = transcript.rendered(120);
+            let node = rendered
+                .nodes
+                .iter()
+                .find(|node| {
+                    matches!(
+                        node.key,
+                        agena_tui_transcript::TranscriptNodeKey::Activity { .. }
+                    )
+                })
+                .expect("reasoning activity node");
+            assert!(!node.expanded, "reasoning must default to collapsed");
+            assert!(
+                !rendered
+                    .lines
+                    .iter()
+                    .any(|line| line.text.contains("live thought line 39"))
+            );
+            node.key.clone()
+        };
+        transcript.node_expansions.insert(key, true);
+        transcript.invalidate_render();
         let rendered = transcript.rendered(120);
         let text = rendered
             .lines
@@ -5894,7 +5923,7 @@ mod live_transcript_tests {
                 )
             })
             .expect("reasoning activity node");
-        assert!(node.expanded, "reasoning must default to expanded");
+        assert!(node.expanded, "manually opened reasoning must be expanded");
         assert!(
             node.copy_text.contains("live thought line 39"),
             "expanded copy text must carry the full trail"

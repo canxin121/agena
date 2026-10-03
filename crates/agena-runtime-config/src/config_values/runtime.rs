@@ -75,13 +75,22 @@ pub struct TuiUiConfig {
     pub transcript: TuiUiTranscriptConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 /// Resolved transcript configuration of the TUI.
 pub struct TuiUiTranscriptConfig {
     /// Default expansion for activities without a kind-specific override.
     pub activity_default_expanded: bool,
     /// Per-kind expansion overrides keyed by activity kind id.
     pub activity_kinds: BTreeMap<String, bool>,
+}
+
+impl Default for TuiUiTranscriptConfig {
+    fn default() -> Self {
+        Self {
+            activity_default_expanded: false,
+            activity_kinds: BTreeMap::from([(agena_domain::ACTIVITY_KIND_TEXT.to_owned(), true)]),
+        }
+    }
 }
 
 /// Runtime identity settings that affect provider request headers.

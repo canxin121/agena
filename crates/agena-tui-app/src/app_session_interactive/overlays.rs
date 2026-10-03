@@ -120,27 +120,17 @@ impl App {
         }
     }
 
-    /// Move the transcript cursor onto the pending interaction part for
-    /// `request_id` and force it expanded, so the expanded part is the
-    /// interaction surface ("everything is a part"). The part always
-    /// auto-expands on arrival regardless of the configured default, then
-    /// falls back to that default once the interaction completes. No-op when
-    /// the part has not been rendered yet (for example the execution snapshot
-    /// arrived before the transcript was populated); the outstanding retry
-    /// covers that case.
+    /// Move the transcript cursor onto a pending interaction without changing
+    /// its expansion state. Retry when the part has not been rendered yet.
     pub(crate) fn reveal_pending_user_input_interaction(&mut self, request_id: &str) {
         let Some(key) = self.pending_interaction_part_node_key(request_id) else {
             return;
         };
         self.revealed_user_input_request_ids
             .insert(request_id.to_string());
-        self.transcript.node_expansions.insert(key.clone(), true);
-        self.transcript.invalidate_render();
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
-        // Fit-scroll so the ENTIRE expanded interaction part is visible (the
-        // whole ask-user question page with its footer keys, not just the
-        // headline) and land the cursor on the part.
+        // Reveal the part at its current expansion state and land on its headline.
         self.transcript.reveal_node_fully(&key, width, height);
     }
 

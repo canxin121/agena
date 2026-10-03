@@ -122,6 +122,10 @@ Plugin marketplace 只使用当前 plugin id：
 
 Plugin SDK 的通用参数 alias DSL 是当前插件开发能力，不是 Agena 旧版本迁移；Agena 自己的生产插件不依赖旧字段 alias。
 
+每个 part 的正文只有一份持久化事实源，不把正文或派生摘要复制到通用 `summary` 列。工具的 `output.payload` 保存工具定义的完整原始结果，纯文本结果也放在这个 payload 中；退出码、耗时、分页与文件内容等结果属性属于同一个结果对象，不另设 `output.text` 预览副本或 `output.metadata`。AI 序列化和人类展示在读取时分别交给插件/工具处理，模型文本、人类摘要与视图块不落盘。客户端的 Output 详情展示完整原始输出，Presentation 展示工具提供的人类视图。调用层 `metadata` 仅保存调用身份、provider 协议上下文与运行控制信息。
+
+provider 回放状态只保存在 run 的对应 round 中，不同时复制到 run 的独立 provider-state 列；其中与 think 正文或 encrypted content 重复的文本保存为 part 内容引用，在发送请求前恢复原始协议值，签名、顺序和不同的 opaque 事实保留。Web 与 TUI 的默认策略仅展开 answer 和 text，think、工具、附件及待答交互默认折叠；用户显式配置和手动展开优先。
+
 ## Commands 与项目指导
 
 Command discovery 只使用 Agena 自己的当前 roots，例如：

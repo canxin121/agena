@@ -596,12 +596,13 @@ pub struct TranscriptDetailDefaults {
 }
 
 impl TranscriptDetailDefaults {
-    /// Effective default expansion for an activity kind. Kind-specific
-    /// settings win; otherwise the global default applies.
+    /// Kind-specific settings win; text is expanded unless explicitly folded.
     pub fn default_expanded(&self, kind: Option<&str>) -> bool {
         kind.and_then(|kind| self.kind_defaults.get(kind))
             .copied()
-            .unwrap_or(self.activity_default_expanded)
+            .unwrap_or_else(|| {
+                kind == Some(agena_domain::ACTIVITY_KIND_TEXT) || self.activity_default_expanded
+            })
     }
 }
 

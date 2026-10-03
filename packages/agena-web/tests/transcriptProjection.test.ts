@@ -51,7 +51,7 @@ describe('TUI-parity transcript projection', () => {
     expect(`${resource?.title} ${resource?.summary}`).toContain('report.pdf')
   })
 
-  test('a user attachment row is expanded by default', () => {
+  test('a user attachment row is collapsed by default', () => {
     const filePart: MessagePartLike = {
       id: '2',
       type: 'file',
@@ -66,7 +66,7 @@ describe('TUI-parity transcript projection', () => {
     const resource = (blocks[0]?.kind === 'message' ? blocks[0].displayParts : []).find(
       (entry) => entry.kind === 'resource',
     )
-    expect(resource?.defaultExpanded).toBe(true)
+    expect(resource?.defaultExpanded).toBe(false)
     expect(resource?.toggleable).toBe(true)
   })
 
@@ -130,7 +130,7 @@ describe('TUI-parity transcript projection', () => {
     })
     const optimisticFile = optimistic.find((entry) => entry.kind === 'resource')
     expect(optimisticFile?.title).toBe('附件')
-    expect(optimisticFile?.defaultExpanded).toBe(true)
+    expect(optimisticFile?.defaultExpanded).toBe(false)
 
     const durable = projectTranscriptBlocks(
       [
@@ -274,7 +274,7 @@ describe('TUI-parity transcript projection', () => {
     expect(projected).toEqual([])
   })
 
-  test('keeps pending operation interactions visible and expanded', () => {
+  test('keeps pending operation interactions visible without expanding them', () => {
     const blocks = projectTranscriptBlocks(
       [
         message(
@@ -299,6 +299,6 @@ describe('TUI-parity transcript projection', () => {
     )
     const projected = blocks[0]?.kind === 'message' ? blocks[0].displayParts[0] : null
     expect(projected?.kind).toBe('operation')
-    expect(projected?.defaultExpanded).toBe(true)
+    expect(projected?.defaultExpanded).toBe(false)
   })
 })

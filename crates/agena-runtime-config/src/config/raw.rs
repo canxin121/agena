@@ -379,7 +379,7 @@ impl RawConfig {
                         .transcript
                         .as_ref()
                         .and_then(|transcript| transcript.activity_kinds.clone())
-                        .unwrap_or_default(),
+                        .unwrap_or_else(|| TuiUiTranscriptConfig::default().activity_kinds),
                 },
             },
         };

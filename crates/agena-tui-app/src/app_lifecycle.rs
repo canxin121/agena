@@ -107,6 +107,8 @@ impl App {
             slash_command_suggestion_actions: BTreeMap::new(),
             dismissed_slash_command_suggestions_for: None,
             file_mention_suggestions: None,
+            file_index_refresh_in_flight: false,
+            file_index_refreshed_at: None,
             file_mention_suggestion_actions: BTreeMap::new(),
             dismissed_file_mention_suggestions_for: None,
             prompt_history_search: None,
@@ -144,6 +146,7 @@ impl App {
             next_usage_request_id: 0,
             next_hub_request_id: 0,
             active_subscription: None,
+            subscription_generation: 0,
             queue: ComposerQueue::new(),
             status_line,
             plugin_theme,
@@ -371,24 +374,14 @@ impl App {
         // the list at stale rows. Recover it alongside the transcript.
         self.session_load
             .recover_stalled_request(Duration::from_millis(REFRESH_STALL_TIMEOUT_MS));
+        if self.session_load.refresh_queued && !self.session_load.loading {
+            self.request_sessions(false);
+        }
 
-        // An event-driven refresh request (a streaming `PartUpdated` arrived)
-        // is merged into the same interval gate: flushing once per event
-        // would spawn a full-snapshot refresh for every coalesced stream
-        // flush, saturating the TUI with ~100+ refreshes/s and keeping the
-        // transcript permanently behind a running reply. The periodic path
-        // below repaints streamed parts at most every `REFRESH_INTERVAL_MS`,
-        // which is what makes reasoning/tool-call deltas appear live. A
-        // parked force refresh (bus lag, terminal safety net) rides the same
-        // gate — the terminal state converges a fraction of a second later.
-        let streaming_live = self.transcript.execution.as_ref().is_some_and(|execution| {
-            execution.session.state.is_running()
-                || matches!(
-                    execution.session.state,
-                    agena_api::resource::SessionState::Creating
-                )
-        });
-        let refresh_interval = if streaming_live || self.pending_refresh.is_some() {
+        // Known text/reasoning parts merge directly from throttled patches.
+        // Only semantic invalidations need a fast read; the five-second
+        // fallback heals lost delivery without polling per token.
+        let refresh_interval = if self.pending_refresh.is_some() {
             REFRESH_INTERVAL_MS
         } else {
             5_000
@@ -406,19 +399,12 @@ impl App {
         {
             self.last_refresh_at = Instant::now();
             let force = self.pending_refresh.take().is_some();
-            // While a run is executing, storage commits streamed parts only
-            // at part completion (end-only flush), so the in-memory overlay
-            // advances without bumping the durable watermark. A changed-gated
-            // reload would see "no new events" and never repaint; force the
-            // reload so reasoning/tool deltas stream live into the transcript.
-            let streaming_live = self
-                .transcript
-                .execution
-                .as_ref()
-                .is_some_and(|execution| execution.session.state.active_execution().is_some());
-            self.request_refresh(session_id, force || streaming_live);
+            self.request_refresh(session_id, force);
         }
 
+        if self.file_mention_suggestions.is_some() {
+            self.sync_file_mention_suggestions();
+        }
         self.sync_current_draft_slot();
         self.persist_draft_store_with_feedback(false);
     }

@@ -67,8 +67,10 @@ fn preserve_loaded_tool_sections(
         agena_api::live::ToolDetailSection::Input,
         agena_api::live::ToolDetailSection::Output,
     ] {
-        if (section == agena_api::live::ToolDetailSection::Input
-            || previous.state == incoming.state)
+        if previous.revision == incoming.revision
+            && previous.updated_at_ms == incoming.updated_at_ms
+            && (section == agena_api::live::ToolDetailSection::Input
+                || previous.state == incoming.state)
             && !incoming_content.contains_key(section.as_str())
             && tool_detail_section_loaded(previous, section)
             && let Some(value) = previous_content.get(section.as_str())
@@ -122,6 +124,8 @@ mod tool_detail_tests {
             .unwrap()
             .extend(fields.as_object().unwrap().clone());
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id: 1,
             kind: "tool_call".to_owned(),
             role: "assistant".to_owned(),
@@ -287,6 +291,8 @@ impl TranscriptState {
             reply_failures: BTreeMap::new(),
             pending_user_messages: Vec::new(),
             refreshing: false,
+            reconcile_loaded_parts: true,
+            removed_part_ids: BTreeSet::new(),
             state_loading: false,
             refresh_in_flight_since: None,
             state_load_in_flight_since: None,
@@ -334,7 +340,9 @@ impl TranscriptState {
         self.reply_failures.clear();
         self.pending_user_messages.clear();
         self.refreshing = false;
+        self.refresh_in_flight_since = None;
         self.state_loading = false;
+        self.state_load_in_flight_since = None;
         self.transcript_next_cursor = None;
         self.transcript_has_more = false;
         self.transcript_older_loading = false;
@@ -353,6 +361,8 @@ impl TranscriptState {
         self.interaction = TranscriptInteraction::default();
         self.execution = None;
         self.last_event_seq = None;
+        self.reconcile_loaded_parts = true;
+        self.removed_part_ids.clear();
         self.search_query.clear();
         self.search_match_index = None;
         self.jump_history.clear();
@@ -405,6 +415,8 @@ impl TranscriptState {
         self.transcript_older_in_flight_since = None;
         self.execution = None;
         self.last_event_seq = None;
+        self.reconcile_loaded_parts = true;
+        self.removed_part_ids.clear();
         self.viewport.reduce(TranscriptAction::Reset);
         self.interaction = TranscriptInteraction::default();
         self.invalidate_render();
@@ -477,6 +489,7 @@ impl TranscriptState {
 
     pub(crate) fn merge_parts(&mut self, parts: Vec<agena_api::resource::SessionTranscriptPart>) {
         let mut parts = parts;
+        parts.retain(|part| !self.removed_part_ids.contains(&part.part_id));
         let previous = self
             .parts
             .iter()
@@ -484,7 +497,12 @@ impl TranscriptState {
             .collect::<BTreeMap<_, _>>();
         for part in &mut parts {
             if let Some(previous) = previous.get(&part.part_id) {
-                preserve_loaded_tool_sections(previous, part);
+                if (part.revision, part.updated_at_ms) < (previous.revision, previous.updated_at_ms)
+                {
+                    *part = (*previous).clone();
+                } else {
+                    preserve_loaded_tool_sections(previous, part);
+                }
             }
         }
         self.apply_parts_change(|current| *current = parts);
@@ -507,13 +525,20 @@ impl TranscriptState {
             || self
                 .tool_detail_loads
                 .get(&(part_id, section))
-                .is_some_and(|(_, state)| *state == part.state)
+                .is_some_and(|(_, stamp)| {
+                    *stamp == (part.state.clone(), part.revision, part.updated_at_ms)
+                })
         {
             return None;
         }
         let requested_at = Instant::now();
-        self.tool_detail_loads
-            .insert((part_id, section), (requested_at, part.state.clone()));
+        self.tool_detail_loads.insert(
+            (part_id, section),
+            (
+                requested_at,
+                (part.state.clone(), part.revision, part.updated_at_ms),
+            ),
+        );
         Some(requested_at)
     }
 
@@ -530,10 +555,10 @@ impl TranscriptState {
         if *since != requested_at {
             return false;
         }
-        let current = self
-            .parts
-            .iter()
-            .any(|part| part.part_id == part_id && part.state == *state);
+        let current = self.parts.iter().any(|part| {
+            part.part_id == part_id
+                && (part.state.clone(), part.revision, part.updated_at_ms) == *state
+        });
         self.tool_detail_loads.remove(&key);
         current
     }
@@ -549,6 +574,9 @@ impl TranscriptState {
         else {
             return false;
         };
+        if (resource.revision, resource.updated_at_ms) < (part.revision, part.updated_at_ms) {
+            return false;
+        }
         let changed = apply_tool_detail_value(part, resource.section, resource.value);
         if changed {
             self.invalidate_render();
@@ -730,7 +758,15 @@ impl TranscriptState {
             .extend(parts.iter().map(|part| part.part_id));
         for part in &parts {
             let mut incoming = part.clone();
+            if self.removed_part_ids.contains(&part.part_id) {
+                continue;
+            }
             if let Some(previous) = by_id.get(&part.part_id) {
+                if (incoming.revision, incoming.updated_at_ms)
+                    < (previous.revision, previous.updated_at_ms)
+                {
+                    continue;
+                }
                 preserve_loaded_tool_sections(previous, &mut incoming);
             }
             by_id.insert(part.part_id, incoming);
@@ -4197,6 +4233,8 @@ mod stall_recovery_tests {
 
     fn text_part(part_id: i64, text: &str) -> agena_api::resource::SessionTranscriptPart {
         agena_api::resource::SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "text".to_owned(),
             role: "assistant".to_owned(),
@@ -4212,6 +4250,8 @@ mod stall_recovery_tests {
 
     fn run_part(part_id: i64, role: &str) -> agena_api::resource::SessionTranscriptPart {
         agena_api::resource::SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "run".to_owned(),
             role: role.to_owned(),
@@ -4227,6 +4267,8 @@ mod stall_recovery_tests {
 
     fn assistant_activity(part_id: i64, run_id: i64) -> agena_api::resource::SessionTranscriptPart {
         agena_api::resource::SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "think".to_owned(),
             role: "assistant".to_owned(),
@@ -4339,6 +4381,8 @@ mod stall_recovery_tests {
         state
             .parts
             .push(agena_api::resource::SessionTranscriptPart {
+                revision: 0,
+                updated_at_ms: 0,
                 part_id: 1,
                 kind: "run".to_owned(),
                 role: "assistant".to_owned(),

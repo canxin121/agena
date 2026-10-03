@@ -93,7 +93,7 @@ pub async fn list_session_transcript(
     let user_message_count = store
         .user_message_count(session_id)
         .await
-        .map_err(|error| ServerError::internal_error(&error))?;
+        .map_err(crate::rest::server_error_from_store)?;
     let limit = query
         .limit
         .unwrap_or(DEFAULT_MESSAGE_ROLE_GROUPS as u64)
@@ -140,7 +140,7 @@ pub async fn list_session_transcript_run_parts(
     let page = store
         .load_run_page(session_id, run_id, cursor, limit as i64)
         .await
-        .map_err(|error| ServerError::internal_error(&error))?;
+        .map_err(crate::rest::server_error_from_store)?;
     let next_cursor = page
         .parts
         .last()
@@ -199,7 +199,7 @@ pub async fn list_session_transcript_fold_parts(
         let page = store
             .load_run_page(session_id, *run_id, before, limit as i64)
             .await
-            .map_err(|error| ServerError::internal_error(&error))?;
+            .map_err(crate::rest::server_error_from_store)?;
         has_more |= page.has_more;
         candidates.extend(page.parts);
     }
@@ -228,7 +228,7 @@ pub async fn list_session_transcript_fold_parts(
         version: store
             .load_page(session_id, None, 1)
             .await
-            .map_err(|error| ServerError::internal_error(&error))?
+            .map_err(crate::rest::server_error_from_store)?
             .meta
             .version,
         parts: projected,
@@ -271,7 +271,7 @@ async fn load_visible_page(
         let page = store
             .load_page(session_id, raw_before, RAW_SCAN_PAGE_SIZE)
             .await
-            .map_err(|error| ServerError::internal_error(&error))?;
+            .map_err(crate::rest::server_error_from_store)?;
         version = page.meta.version;
         raw_has_more = page.has_more;
         let oldest = page.parts.last().map(|part| PartCursor {
@@ -346,7 +346,7 @@ async fn load_all_run_parts(
         let page = store
             .load_run_page(session_id, run_id, before, RAW_SCAN_PAGE_SIZE)
             .await
-            .map_err(|error| ServerError::internal_error(&error))?;
+            .map_err(crate::rest::server_error_from_store)?;
         let next_before = page.parts.last().map(|part| PartCursor {
             created_at_ms: part.created_at_ms,
             part_id: part.part_id,

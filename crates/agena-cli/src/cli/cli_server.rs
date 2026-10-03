@@ -2746,6 +2746,8 @@ mod tests {
     fn cli_text_projection_uses_the_latest_assistant_run() {
         let part =
             |part_id, kind: &str, role: &str, run_id, text: Option<&str>| SessionTranscriptPart {
+                revision: 0,
+                updated_at_ms: 0,
                 part_id,
                 kind: kind.to_owned(),
                 role: role.to_owned(),

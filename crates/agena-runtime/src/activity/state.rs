@@ -362,6 +362,7 @@ impl BackgroundCompletionBridge {
             agena_storage::store::SessionChange::PartAdded { .. }
             | agena_storage::store::SessionChange::PartUpdated { .. }
             | agena_storage::store::SessionChange::PartRemoved { .. } => {}
+            agena_storage::store::SessionChange::SessionDeleted { .. } => {}
         })
     }
 

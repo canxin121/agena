@@ -490,6 +490,8 @@ pub struct App {
     pub(super) slash_command_suggestion_actions: BTreeMap<String, SlashCommandSuggestionAction>,
     pub(super) dismissed_slash_command_suggestions_for: Option<String>,
     pub(super) file_mention_suggestions: Option<FileMentionSuggestionState>,
+    pub(super) file_index_refresh_in_flight: bool,
+    pub(super) file_index_refreshed_at: Option<Instant>,
     pub(super) file_mention_suggestion_actions: BTreeMap<String, FileMentionSuggestionAction>,
     pub(super) dismissed_file_mention_suggestions_for: Option<String>,
     pub(super) prompt_history_search: Option<PromptHistorySearchState>,
@@ -541,6 +543,7 @@ pub struct App {
     /// Forwarder task that pumps `app_backend::live_events::subscribe_session_events` into
     /// [`AppMessage::SessionEventArrived`]. Aborted whenever the active
     /// session changes so we don't accumulate stale subscriptions.
+    pub(super) subscription_generation: u64,
     pub(super) active_subscription: Option<tokio::task::JoinHandle<()>>,
     /// Pending messages typed by the user while the AI was working. Drained
     /// Single pending message delivered once the active run finishes. See
@@ -648,6 +651,7 @@ pub(super) enum AppMessage {
         result: UiResult<crate::app_backend::session_hub::HubCatalog>,
     },
     SessionsLoaded {
+        requested_at: Instant,
         scope: SessionLoadScope,
         subtree_root_id: Option<i64>,
         result: UiResult<Vec<SessionResource>>,
@@ -665,6 +669,7 @@ pub(super) enum AppMessage {
     },
     SessionStateLoaded {
         session_id: i64,
+        requested_at: Instant,
         result: UiResult<SessionStateWithTranscriptPage>,
     },
     TranscriptPartsLoaded {
@@ -689,6 +694,7 @@ pub(super) enum AppMessage {
     },
     SessionRefreshed {
         session_id: i64,
+        requested_at: Instant,
         result: UiResult<SessionRefresh>,
     },
     SessionMessageSubmitted {
@@ -799,8 +805,10 @@ pub(super) enum AppMessage {
     /// Pushed by the unified event bus (`app_backend::live_events::subscribe_session_events`).
     /// Callers receive each domain event in real time, with a hint about
     /// whether a refresh is needed.
+    CatalogInvalidated,
     SessionEventArrived {
         session_id: i64,
+        generation: u64,
         live: LiveEvent,
     },
     /// Result of a `request_cancel_run` call. We always treat the in-flight
@@ -1014,6 +1022,7 @@ pub(super) enum Route {
 
 #[derive(Debug, Clone)]
 pub(super) struct HubState {
+    pub(super) dirty: bool,
     pub(super) pages: BTreeMap<agena_tui_session::session_hub::HubPageTarget, usize>,
     pub(super) search_changed_at: Option<Instant>,
     pub(super) request_task: Option<tokio::task::AbortHandle>,
@@ -1034,6 +1043,7 @@ pub(super) struct HubState {
 impl HubState {
     pub(super) fn new() -> Self {
         Self {
+            dirty: false,
             presentation: SessionHubPresentation::empty(),
             pages: BTreeMap::new(),
             search_changed_at: None,

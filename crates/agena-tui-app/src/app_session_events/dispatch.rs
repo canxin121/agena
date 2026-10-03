@@ -44,18 +44,29 @@ impl App {
                 self.handle_hub_catalog_loaded(request_id, result)
             }
             AppMessage::SessionsLoaded {
+                requested_at,
                 scope,
                 subtree_root_id,
                 result,
-            } => self.handle_sessions_loaded(scope, subtree_root_id, result),
+            } => {
+                if self.session_load.requested_at == Some(requested_at) {
+                    self.handle_sessions_loaded(scope, subtree_root_id, result);
+                }
+            }
             AppMessage::SessionCreated {
                 submit_draft,
                 pending_message_id,
                 model_stack,
                 result,
             } => self.handle_session_created(submit_draft, pending_message_id, model_stack, result),
-            AppMessage::SessionStateLoaded { session_id, result } => {
-                self.handle_session_state_loaded(session_id, result)
+            AppMessage::SessionStateLoaded {
+                session_id,
+                requested_at,
+                result,
+            } => {
+                if self.transcript.state_load_in_flight_since == Some(requested_at) {
+                    self.handle_session_state_loaded(session_id, result);
+                }
             }
             AppMessage::TranscriptPartsLoaded {
                 session_id,
@@ -96,8 +107,14 @@ impl App {
                 requested_at,
                 result,
             } => self.handle_tool_detail_loaded(session_id, part_id, section, requested_at, result),
-            AppMessage::SessionRefreshed { session_id, result } => {
-                self.handle_session_refreshed(session_id, result)
+            AppMessage::SessionRefreshed {
+                session_id,
+                requested_at,
+                result,
+            } => {
+                if self.transcript.refresh_in_flight_since == Some(requested_at) {
+                    self.handle_session_refreshed(session_id, result);
+                }
             }
             AppMessage::SessionMessageSubmitted {
                 session_id,
@@ -201,8 +218,19 @@ impl App {
                 target,
                 result,
             } => self.handle_session_rewound(session_id, message_document, target, result),
-            AppMessage::SessionEventArrived { session_id, live } => {
-                self.handle_session_event_arrived(session_id, live)
+            AppMessage::CatalogInvalidated => {
+                if let crate::Route::Hub(state) = &mut self.current_route {
+                    state.dirty = true;
+                }
+            }
+            AppMessage::SessionEventArrived {
+                session_id,
+                generation,
+                live,
+            } => {
+                if generation == self.subscription_generation {
+                    self.handle_session_event_arrived(session_id, live);
+                }
             }
             AppMessage::RunCancelled { session_id, result } => {
                 self.handle_turn_cancelled(session_id, result)
@@ -411,12 +439,9 @@ impl App {
                 if self.apply_transcript_snapshot(load) {
                     self.sync_pending_interactive_after_execution(session_id);
                     self.sync_session_list_selection_to_current_execution();
-                }
-                // A session (re)open can deliver the terminal state of a run
-                // that finished while the user was elsewhere. Drain a parked
-                // message so it is not stranded in the pending slot.
-                if execution_is_terminal {
-                    self.try_send_pending();
+                    if execution_is_terminal {
+                        self.try_send_pending();
+                    }
                 }
             }
             Err(error) => self.flash_error(error),
@@ -597,56 +622,33 @@ impl App {
         match result {
             Ok(refresh) => {
                 self.transcript.refresh_failures = 0;
+                if let Some((requested, current)) = refresh.reconciled_parts {
+                    let present = current
+                        .iter()
+                        .map(|part| part.part_id)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    for id in requested {
+                        if !present.contains(&id) {
+                            self.transcript.removed_part_ids.insert(id);
+                        }
+                    }
+                    let mut merged = self
+                        .transcript
+                        .parts
+                        .iter()
+                        .filter(|part| !present.contains(&part.part_id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    merged.extend(current);
+                    merged.sort_by_key(|part| (part.created_at_ms, part.part_id));
+                    self.transcript.merge_parts(merged);
+                }
                 if execution_update_is_stale(
                     self.transcript.last_event_seq,
                     refresh.latest_event_seq,
                 ) {
-                    // The server's durable watermark is authoritative over
-                    // the local high-water mark. Non-durable transport updates
-                    // can consume sequence numbers without entering persisted
-                    // history, so clamp back to the durable max before the
-                    // next refresh.
-                    let mut clamped = false;
-                    if let Some(server_latest) = refresh.latest_event_seq
-                        && self
-                            .transcript
-                            .last_event_seq
-                            .is_some_and(|local| local > server_latest)
-                    {
-                        self.transcript.last_event_seq = Some(server_latest);
-                        clamped = true;
-                    }
-                    // A terminal execution is the final durable state for
-                    // its reply identity: never drop it merely because the
-                    // seq looks stale. Apply it even now (the terminal-aware
-                    // staleness check inside `apply_transcript_execution`
-                    // still protects a running execution), then drain any
-                    // parked message.
-                    if let Some(snapshot) = refresh.snapshot {
-                        let session_id = snapshot.execution.session.id;
-                        let execution_is_terminal = snapshot
-                            .execution
-                            .session
-                            .state
-                            .active_execution()
-                            .is_none();
-                        if self.apply_transcript_snapshot(snapshot) {
-                            self.sync_pending_interactive_after_execution(session_id);
-                            self.sync_session_list_selection_to_current_execution();
-                            if execution_is_terminal {
-                                self.try_send_pending();
-                            }
-                        }
-                    } else if clamped {
-                        // The stale response was an empty "no change"
-                        // reply: the durable log had no new events because
-                        // live-only events inflated the local watermark.
-                        // With the watermark clamped, force one refresh so
-                        // the full execution (terminal state + completed
-                        // reply) is re-delivered instead of being skipped
-                        // forever.
-                        self.pending_refresh_for(session_id);
-                    }
+                    // A late read cannot lower the durable watermark. The
+                    // session has no separate live-event sequence to clamp.
                     return;
                 }
                 if let Some(snapshot) = refresh.snapshot {
@@ -660,23 +662,17 @@ impl App {
                     if self.apply_transcript_snapshot(snapshot) {
                         self.sync_pending_interactive_after_execution(session_id);
                         self.sync_session_list_selection_to_current_execution();
-                    }
-                    // A parked message is delivered when the run completes.
-                    // The terminal state usually arrives through this refresh
-                    // (the live event only schedules the refresh), so drain
-                    // here as well as in the direct execution response path.
-                    if execution_is_terminal {
-                        self.try_send_pending();
+                        if execution_is_terminal {
+                            self.try_send_pending();
+                        }
                     }
                 }
                 if refresh.event_count > 0 {
                     self.sync_session_list_selection_to_current_execution();
                 }
-                if refresh.latest_event_seq.is_some() {
-                    self.transcript.last_event_seq = refresh.latest_event_seq;
-                }
             }
             Err(error) => {
+                self.transcript.reconcile_loaded_parts = true;
                 self.transcript.refresh_failures =
                     self.transcript.refresh_failures.saturating_add(1).min(7);
                 self.flash_error(error);
@@ -845,14 +841,14 @@ impl App {
         if transcript_is_target && self.apply_transcript_execution(execution) {
             self.sync_pending_interactive_after_execution(session_id);
             self.sync_session_list_selection_to_current_execution();
+            if execution_is_terminal {
+                self.try_send_pending();
+            }
         }
         if refresh && transcript_is_target {
             self.request_refresh(session_id, true);
         }
         self.request_sessions(false);
-        if transcript_is_target && execution_is_terminal {
-            self.try_send_pending();
-        }
     }
 
     pub(crate) fn handle_session_continued(

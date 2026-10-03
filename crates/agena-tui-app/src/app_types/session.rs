@@ -134,6 +134,7 @@ pub(crate) use agena_notification::{
 /// tracks an in-flight concrete Runtime request.
 #[derive(Default)]
 pub(crate) struct SessionListLoadState {
+    pub(crate) refresh_queued: bool,
     pub(crate) pending_scope: Option<SessionLoadScope>,
     pub(crate) loading: bool,
     /// When the current session-list request was issued. A request whose
@@ -154,6 +155,7 @@ impl SessionListLoadState {
                 .is_some_and(|requested_at| requested_at.elapsed() >= timeout)
         {
             self.loading = false;
+            self.refresh_queued = true;
             self.pending_scope = None;
             self.requested_at = None;
             return true;
@@ -194,6 +196,8 @@ pub(crate) struct TranscriptState {
     pub(crate) reply_failures: BTreeMap<i64, agena_failure::UserProblem>,
     pub(crate) pending_user_messages: Vec<PendingUserMessage>,
     pub(crate) refreshing: bool,
+    pub(crate) reconcile_loaded_parts: bool,
+    pub(crate) removed_part_ids: BTreeSet<i64>,
     pub(crate) state_loading: bool,
     /// When the current session refresh was issued; `None` while idle. A
     /// refresh whose response never arrives leaves `refreshing` set and
@@ -222,7 +226,7 @@ pub(crate) struct TranscriptState {
     pub(crate) transcript_fold_errors: BTreeMap<i64, String>,
     /// One request per detail, tied to both the request and tool state.
     pub(crate) tool_detail_loads:
-        BTreeMap<(i64, agena_api::live::ToolDetailSection), (Instant, String)>,
+        BTreeMap<(i64, agena_api::live::ToolDetailSection), (Instant, (String, i64, i64))>,
     pub(crate) transcript_fold_seen_cursors: BTreeMap<i64, BTreeSet<String>>,
     pub(crate) refresh_failures: u32,
     pub(crate) last_history_load_at: Option<Instant>,

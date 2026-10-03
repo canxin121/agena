@@ -591,6 +591,34 @@ impl App {
             return;
         }
 
+        // The remote file index can change while this client stays open.
+        // Refresh only while suggestions are used, coalescing keystrokes and
+        // bounding tree reads to one per ten seconds (also on failures).
+        if !self.file_index_refresh_in_flight
+            && self
+                .file_index_refreshed_at
+                .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(10))
+        {
+            self.file_index_refresh_in_flight = true;
+            self.file_index_refreshed_at = Some(std::time::Instant::now());
+            let application = self.application.clone();
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                let refreshed = application.refresh_workspace_file_tree().await.is_ok();
+                let _ = tx
+                    .send(crate::AppMessage::AsyncOperationCompleted(Box::new(
+                        move |app| {
+                            app.file_index_refresh_in_flight = false;
+                            if refreshed {
+                                app.file_mention_suggestions = None;
+                                app.sync_file_mention_suggestions();
+                            }
+                        },
+                    )))
+                    .await;
+            });
+        }
+
         if self
             .file_mention_suggestions
             .as_ref()

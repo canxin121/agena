@@ -436,6 +436,8 @@ async fn reconnect_keeps_the_fold_and_rejects_stale_fold_metadata() {
     app.handle_session_event_arrived(
         SESSION_ID,
         crate::LiveEvent {
+            part_update: None,
+            session_deleted: false,
             snapshot: Some(snapshot(12, 17, 3)),
             force_refresh: false,
         },
@@ -446,6 +448,8 @@ async fn reconnect_keeps_the_fold_and_rejects_stale_fold_metadata() {
     app.handle_session_event_arrived(
         99,
         crate::LiveEvent {
+            part_update: None,
+            session_deleted: false,
             snapshot: Some(snapshot(9, 14, 4)),
             force_refresh: false,
         },
@@ -659,6 +663,8 @@ async fn normal_live_events_schedule_a_coalesced_refresh() {
     app.handle_session_event_arrived(
         SESSION_ID,
         crate::LiveEvent {
+            part_update: None,
+            session_deleted: false,
             snapshot: None,
             force_refresh: false,
         },
@@ -677,6 +683,7 @@ async fn completed_refreshes_wait_for_the_tick_gate_and_failures_back_off() {
     app.handle_session_refreshed(
         SESSION_ID,
         Ok(crate::app_backend::SessionRefresh {
+            reconciled_parts: None,
             snapshot: None,
             latest_event_seq: Some(1),
             event_count: 0,
@@ -824,4 +831,147 @@ async fn prepend_includes_fold_controls_when_preserving_the_reading_position() {
     app.transcript.ensure_visual_focus(WIDTH, 8);
     let top = app.transcript.viewport_top();
     assert_eq!(app.transcript.rendered(WIDTH).lines[top].text, reading_line);
+}
+
+#[tokio::test]
+async fn obsolete_state_refresh_and_subscription_tokens_cannot_change_a_reopened_session() {
+    let mut app = app(TuiBackend::remote_mock());
+    assert!(app.apply_transcript_snapshot(snapshot(10, 15, 8)));
+    let old = std::time::Instant::now();
+    let current = old + std::time::Duration::from_millis(1);
+    app.transcript.state_loading = true;
+    app.transcript.state_load_in_flight_since = Some(current);
+    app.transcript.refreshing = true;
+    app.transcript.refresh_in_flight_since = Some(current);
+    app.handle_message(crate::AppMessage::SessionStateLoaded {
+        session_id: SESSION_ID,
+        requested_at: old,
+        result: Ok(snapshot(10, 12, 2)),
+    });
+    app.handle_message(crate::AppMessage::SessionRefreshed {
+        session_id: SESSION_ID,
+        requested_at: old,
+        result: Ok(crate::app_backend::SessionRefresh {
+            snapshot: Some(snapshot(10, 12, 2)),
+            reconciled_parts: None,
+            latest_event_seq: Some(2),
+            event_count: 0,
+        }),
+    });
+    assert_eq!(app.transcript.state_load_in_flight_since, Some(current));
+    assert_eq!(app.transcript.refresh_in_flight_since, Some(current));
+    let scope = crate::SessionLoadScope {
+        mode: agena_tui_session::session_view::SessionViewMode::All,
+        anchor_session_id: None,
+    };
+    app.session_load.loading = true;
+    app.session_load.pending_scope = Some(scope.clone());
+    app.session_load.requested_at = Some(current);
+    app.handle_message(crate::AppMessage::SessionsLoaded {
+        requested_at: old,
+        scope,
+        subtree_root_id: None,
+        result: Ok(Vec::new()),
+    });
+    assert_eq!(app.session_load.requested_at, Some(current));
+    assert!(app.session_load.loading);
+    app.request_sessions(false);
+    assert!(
+        app.session_load.refresh_queued,
+        "invalidation during a list read must survive coalescing"
+    );
+    app.subscription_generation = 2;
+    app.handle_message(crate::AppMessage::SessionEventArrived {
+        session_id: SESSION_ID,
+        generation: 1,
+        live: crate::LiveEvent {
+            part_update: None,
+            session_deleted: true,
+            snapshot: None,
+            force_refresh: false,
+        },
+    });
+    assert_eq!(app.transcript.session_id, Some(SESSION_ID));
+    app.handle_session_refreshed(
+        SESSION_ID,
+        Ok(crate::app_backend::SessionRefresh {
+            snapshot: Some(snapshot(10, 12, 2)),
+            reconciled_parts: None,
+            latest_event_seq: Some(2),
+            event_count: 0,
+        }),
+    );
+    assert_eq!(app.transcript.last_event_seq, Some(8));
+    let mut other = execution(Vec::new(), 100);
+    other.session.id = 99;
+    assert!(!app.apply_transcript_execution(other));
+    assert_eq!(
+        app.transcript.execution.as_ref().unwrap().session.id,
+        SESSION_ID
+    );
+}
+
+#[tokio::test]
+async fn shared_streaming_part_updates_are_ordered_without_snapshot_polls() {
+    let mut app = app(TuiBackend::remote_mock());
+    let mut text = parts_fixtures::text(3, 4, "assistant", "latest");
+    text.revision = 4;
+    text.updated_at_ms = 10;
+    app.transcript.merge_parts(vec![
+        parts_fixtures::run(3, "assistant", "in_progress"),
+        text.clone(),
+    ]);
+    let patch = |part| crate::LiveEvent {
+        part_update: Some((99, part)),
+        session_deleted: false,
+        snapshot: None,
+        force_refresh: false,
+    };
+    let mut old = text.clone();
+    old.updated_at_ms = 9;
+    old.content = json!({"text": "stale"});
+    app.handle_session_event_arrived(SESSION_ID, patch(old));
+    assert_eq!(app.transcript.parts[1].content["text"], "latest");
+    text.updated_at_ms = 11;
+    text.content = json!({"text": ""});
+    app.handle_session_event_arrived(SESSION_ID, patch(text));
+    assert_eq!(app.transcript.parts[1].content["text"], "");
+    assert!(
+        app.pending_refresh.is_none(),
+        "known text must not refetch state per checkpoint"
+    );
+}
+
+#[tokio::test]
+async fn reconnect_removes_missed_memberships_without_resurrecting_them_from_old_pages() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.apply_transcript_snapshot(snapshot(10, 15, 8));
+    let removed = app
+        .transcript
+        .parts
+        .iter()
+        .find(|part| part.part_id == 12)
+        .unwrap()
+        .clone();
+    let current = app
+        .transcript
+        .parts
+        .iter()
+        .filter(|part| part.part_id != 12)
+        .cloned()
+        .collect();
+    app.handle_session_refreshed(
+        SESSION_ID,
+        Ok(crate::app_backend::SessionRefresh {
+            snapshot: None,
+            reconciled_parts: Some((vec![12, 13], current)),
+            latest_event_seq: Some(8),
+            event_count: 0,
+        }),
+    );
+    assert!(!app.transcript.parts.iter().any(|part| part.part_id == 12));
+    let mut old_page = app.transcript.parts.clone();
+    old_page.push(removed);
+    app.transcript.merge_parts(old_page);
+    assert!(!app.transcript.parts.iter().any(|part| part.part_id == 12));
 }

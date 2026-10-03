@@ -102,6 +102,7 @@ fn subscribe_with_queue_capacity(
     let projection_task = tokio::spawn(async move {
         loop {
             let item = tokio::select! {
+                _ = tx.closed() => break,
                 change = raw_change_rx.recv() => match change {
                     Some(change) => project_change(&projection_state, change)
                         .await
@@ -142,7 +143,9 @@ fn change_visible_to_user(change: &SessionChange) -> bool {
         }
         // Removals carry no visibility. Sending the id lets a client discard
         // a previously visible row; meta changes are session-level state.
-        SessionChange::PartRemoved { .. } | SessionChange::SessionMetaUpdated { .. } => true,
+        SessionChange::PartRemoved { .. }
+        | SessionChange::SessionMetaUpdated { .. }
+        | SessionChange::SessionDeleted { .. } => true,
     }
 }
 
@@ -154,6 +157,15 @@ pub(crate) async fn matches_scope(
 ) -> bool {
     if matches!(scope, Scope::Global) {
         return true;
+    }
+    if let (
+        LiveItem::SessionChanged(SessionChangeResource::SessionDeleted { workspace_id, .. }),
+        Scope::Workspace {
+            workspace_id: expected,
+        },
+    ) = (item, scope)
+    {
+        return workspace_id == expected;
     }
     let session_id = match item {
         LiveItem::SessionChanged(change) => Some(change.session_id()),
@@ -290,6 +302,8 @@ pub(crate) async fn project_tool_detail(
     };
     Some(ToolDetailResource {
         part_id: part.part_id,
+        revision: part.revision,
+        updated_at_ms: part.updated_at_ms,
         section,
         value,
     })
@@ -452,6 +466,13 @@ async fn project_tool_presentation(
 
 async fn project_change(state: &AppState, change: SessionChange) -> Option<SessionChangeResource> {
     Some(match change {
+        SessionChange::SessionDeleted {
+            session_id,
+            workspace_id,
+        } => SessionChangeResource::SessionDeleted {
+            session_id,
+            workspace_id,
+        },
         SessionChange::PartAdded { session_id, part } if part.visibility.visible_to_user() => {
             SessionChangeResource::PartAdded {
                 session_id,

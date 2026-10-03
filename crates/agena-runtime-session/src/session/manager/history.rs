@@ -879,6 +879,8 @@ pub(crate) fn projected_runs_from_parts(
         }
         if marker.visibility.visible_to_user() || !projected_parts.is_empty() {
             projected.push(crate::session_query_service::SessionProjectedRun {
+                revision: marker.revision,
+                updated_at_ms: marker.updated_at_ms,
                 id: marker.part_id,
                 role: role_from_part_role(marker.role),
                 state: execution_status_from_part_state(marker.state),
@@ -994,6 +996,8 @@ fn project_storage_part(
 ) -> Result<agena_runtime::SessionProjectedPart, AppError> {
     let decoded = decode_part(part, part_index)?;
     Ok(agena_runtime::SessionProjectedPart {
+        revision: part.revision,
+        updated_at_ms: part.updated_at_ms,
         id: decoded.id,
         run_id,
         part_index: decoded.part_index,

@@ -546,6 +546,7 @@ mod background_task_tests;
 
 #[cfg(all(test, feature = "http"))]
 mod router_contract_tests {
+    mod realtime_consistency;
     use std::collections::{BTreeMap, VecDeque};
 
     use agena_api::{

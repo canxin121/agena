@@ -389,6 +389,8 @@ mod tests {
 
     fn part(part_id: i64, kind: &str, run_id: Option<i64>) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: kind.to_owned(),
             role: "assistant".to_owned(),

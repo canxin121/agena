@@ -5,7 +5,7 @@
 //! patches and ephemeral runtime signals. Many subscriptions share one socket.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use agena_api::{
     live::{RuntimeSignalResource, SessionChangeResource},
@@ -14,8 +14,9 @@ use agena_api::{
     ws::{ClientMessage, ServerMessage},
 };
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_util::sync::CancellationToken;
 
 use crate::error::ClientError;
 
@@ -32,7 +33,9 @@ pub enum SubscriptionEvent {
 /// Handle to an active websocket subscription.
 pub struct Subscription {
     id: SubscriptionId,
-    rx: mpsc::Receiver<SubscriptionEvent>,
+    rx: broadcast::Receiver<SubscriptionEvent>,
+    subscribers: Arc<Mutex<Subscribers>>,
+    out_tx: mpsc::Sender<ClientMessage>,
 }
 
 impl Subscription {
@@ -41,13 +44,38 @@ impl Subscription {
     }
 
     pub async fn recv(&mut self) -> Option<SubscriptionEvent> {
-        self.rx.recv().await
+        match self.rx.recv().await {
+            Ok(event) => Some(event),
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                Some(SubscriptionEvent::Lagged(skipped))
+            }
+            Err(broadcast::error::RecvError::Closed) => None,
+        }
     }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        self.subscribers
+            .lock()
+            .expect("subscription lock")
+            .inner
+            .remove(&self.id);
+        let _ = self.out_tx.try_send(ClientMessage::Unsubscribe {
+            id: self.id.clone(),
+        });
+    }
+}
+
+struct Subscriber {
+    events: broadcast::Sender<SubscriptionEvent>,
+    ready: Option<oneshot::Sender<Result<(), String>>>,
 }
 
 #[derive(Default)]
 struct Subscribers {
-    inner: HashMap<SubscriptionId, mpsc::Sender<SubscriptionEvent>>,
+    inner: HashMap<SubscriptionId, Subscriber>,
+    closed: bool,
 }
 
 #[derive(Clone)]
@@ -66,9 +94,16 @@ impl WsClient {
         let (out_tx, mut out_rx) = mpsc::channel::<ClientMessage>(256);
         let subscribers = Arc::new(Mutex::new(Subscribers::default()));
 
-        // Writer
+        let cancellation = CancellationToken::new();
+        // Reader and writer share one lifecycle: either transport failure
+        // closes every subscriber, even when the other half is idle.
+        let writer_cancel = cancellation.clone();
+        let subs_for_writer = Arc::clone(&subscribers);
         tokio::spawn(async move {
-            while let Some(msg) = out_rx.recv().await {
+            while let Some(msg) = tokio::select! {
+                _ = writer_cancel.cancelled() => None,
+                message = out_rx.recv() => message,
+            } {
                 let payload = match serde_json::to_string(&msg) {
                     Ok(p) => p,
                     Err(error) => {
@@ -82,7 +117,12 @@ impl WsClient {
                         continue;
                     }
                 };
-                if let Err(error) = sink.send(Message::Text(payload.into())).await {
+                let result = tokio::select! {
+                    _ = writer_cancel.cancelled() => break,
+                    result = tokio::time::timeout(std::time::Duration::from_secs(10), sink.send(Message::Text(payload.into()))) => result,
+                };
+                if !matches!(result, Ok(Ok(()))) {
+                    let error = std::io::Error::other(format!("WebSocket send failed: {result:?}"));
                     tracing::warn!(
                         diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
                             "failed to send an Agena WebSocket client message",
@@ -93,12 +133,19 @@ impl WsClient {
                     break;
                 }
             }
+            writer_cancel.cancel();
+            let mut guard = subs_for_writer.lock().expect("subscription lock");
+            guard.closed = true;
+            guard.inner.clear();
         });
 
         // Reader
         let subs_for_reader = Arc::clone(&subscribers);
         tokio::spawn(async move {
-            while let Some(message) = stream.next().await {
+            while let Some(message) = tokio::select! {
+                _ = cancellation.cancelled() => None,
+                message = stream.next() => message,
+            } {
                 let message = match message {
                     Ok(message) => message,
                     Err(error) => {
@@ -126,11 +173,36 @@ impl WsClient {
                                 "failed to decode an Agena WebSocket server message",
                                 &error,
                             ),
-                            "invalid Agena WebSocket server message was ignored"
+                            "invalid Agena WebSocket server message; reconnect required"
                         );
-                        continue;
+                        break;
                     }
                 };
+                match &server_msg {
+                    ServerMessage::Subscribed { id } => {
+                        if let Some(subscriber) = subs_for_reader
+                            .lock()
+                            .expect("subscription lock")
+                            .inner
+                            .get_mut(id)
+                            && let Some(ready) = subscriber.ready.take()
+                        {
+                            let _ = ready.send(Ok(()));
+                        }
+                    }
+                    ServerMessage::Error { id: Some(id), .. } => {
+                        if let Some(mut subscriber) = subs_for_reader
+                            .lock()
+                            .expect("subscription lock")
+                            .inner
+                            .remove(id)
+                            && let Some(ready) = subscriber.ready.take()
+                        {
+                            let _ = ready.send(Err("WebSocket subscription was rejected".into()));
+                        }
+                    }
+                    _ => {}
+                }
                 if let ServerMessage::Notification(notification) = server_msg {
                     let (id, item) = match notification {
                         Notification::SessionChanged {
@@ -145,23 +217,25 @@ impl WsClient {
                             subscription,
                             skipped,
                         } => (subscription, SubscriptionEvent::Lagged(skipped)),
-                        Notification::SubscriptionClosed { .. } => continue,
+                        Notification::SubscriptionClosed { subscription, .. } => {
+                            subs_for_reader
+                                .lock()
+                                .expect("subscription lock")
+                                .inner
+                                .remove(&subscription);
+                            continue;
+                        }
                     };
-                    let subscriber = {
-                        let guard = subs_for_reader.lock().await;
-                        guard.inner.get(&id).cloned()
-                    };
-                    if let Some(subscriber) = subscriber
-                        && let Err(error) = subscriber.try_send(item)
-                    {
-                        tracing::warn!(
-                            subscription = %id,
-                            error = %error,
-                            "dropping a subscription event because its consumer is closed or full"
-                        );
+                    let guard = subs_for_reader.lock().expect("subscription lock");
+                    if let Some(subscriber) = guard.inner.get(&id) {
+                        let _ = subscriber.events.send(item);
                     }
                 }
             }
+            cancellation.cancel();
+            let mut guard = subs_for_reader.lock().expect("subscription lock");
+            guard.closed = true;
+            guard.inner.clear();
         });
 
         Ok(Self {
@@ -172,24 +246,52 @@ impl WsClient {
 
     pub async fn subscribe(&self, request: SubscribeRequest) -> Result<Subscription, ClientError> {
         let id: SubscriptionId = uuid::Uuid::new_v4().simple().to_string().into();
-        let (tx, rx) = mpsc::channel(256);
+        let (events, rx) = broadcast::channel(256);
+        let (ready, acknowledgement) = oneshot::channel();
         {
-            let mut guard = self.subscribers.lock().await;
-            guard.inner.insert(id.clone(), tx);
+            let mut guard = self.subscribers.lock().expect("subscription lock");
+            if guard.closed {
+                return Err(ClientError::Transport("ws reader closed".into()));
+            }
+            guard.inner.insert(
+                id.clone(),
+                Subscriber {
+                    events,
+                    ready: Some(ready),
+                },
+            );
         }
-        self.out_tx
-            .send(ClientMessage::Subscribe {
-                id: id.clone(),
-                request,
-            })
-            .await
-            .map_err(|_| ClientError::Transport("ws writer dropped".into()))?;
-        Ok(Subscription { id, rx })
+        let subscription = Subscription {
+            id: id.clone(),
+            rx,
+            subscribers: self.subscribers.clone(),
+            out_tx: self.out_tx.clone(),
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            self.out_tx
+                .send(ClientMessage::Subscribe { id, request })
+                .await
+                .map_err(|_| ClientError::Transport("ws writer dropped".into()))?;
+            acknowledgement
+                .await
+                .map_err(|_| {
+                    ClientError::Transport("ws reader closed before acknowledgement".into())
+                })?
+                .map_err(ClientError::Transport)
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => Ok(subscription),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(ClientError::Transport(
+                "ws subscription acknowledgement timed out".into(),
+            )),
+        }
     }
 
     pub async fn unsubscribe(&self, id: SubscriptionId) -> Result<(), ClientError> {
         {
-            let mut guard = self.subscribers.lock().await;
+            let mut guard = self.subscribers.lock().expect("subscription lock");
             guard.inner.remove(&id);
         }
         self.out_tx
@@ -210,6 +312,126 @@ impl WsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn subscription_waits_for_ack_reports_overflow_and_terminates_on_socket_close() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (received, received_rx) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let message = socket.next().await.unwrap().unwrap().into_text().unwrap();
+            let ClientMessage::Subscribe { id, .. } = serde_json::from_str(&message).unwrap()
+            else {
+                panic!("subscribe")
+            };
+            let _ = received.send(());
+            released.await.unwrap();
+            socket
+                .send(Message::Text(
+                    serde_json::to_string(&ServerMessage::Subscribed { id: id.clone() })
+                        .unwrap()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            for n in 0..600 {
+                let message = ServerMessage::Notification(Notification::RuntimeSignal {
+                    subscription: id.clone(),
+                    signal: Box::new(RuntimeSignalResource {
+                        kind: "test".into(),
+                        session_id: None,
+                        payload: serde_json::json!(n),
+                    }),
+                });
+                socket
+                    .send(Message::Text(
+                        serde_json::to_string(&message).unwrap().into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            socket.close(None).await.unwrap();
+        });
+        let client = WsClient::connect(format!("ws://{address}")).await.unwrap();
+        let subscribing = tokio::spawn({
+            let client = client.clone();
+            async move {
+                client
+                    .subscribe(SubscribeRequest {
+                        scope: agena_api::Scope::Global,
+                    })
+                    .await
+            }
+        });
+        received_rx.await.unwrap();
+        assert!(
+            !subscribing.is_finished(),
+            "the snapshot may start only after acknowledgement"
+        );
+        release.send(()).unwrap();
+        let mut subscription = subscribing.await.unwrap().unwrap();
+        server.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if client.subscribers.lock().unwrap().closed {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            matches!(subscription.recv().await, Some(SubscriptionEvent::Lagged(skipped)) if skipped > 0)
+        );
+        let mut remaining = 0;
+        while subscription.recv().await.is_some() {
+            remaining += 1;
+        }
+        assert_eq!(remaining, 256);
+    }
+
+    #[tokio::test]
+    async fn malformed_frames_close_the_subscription_instead_of_silently_losing_an_event() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let frame = socket.next().await.unwrap().unwrap().into_text().unwrap();
+            let ClientMessage::Subscribe { id, .. } = serde_json::from_str(&frame).unwrap() else {
+                panic!("subscribe")
+            };
+            socket
+                .send(Message::Text(
+                    serde_json::to_string(&ServerMessage::Subscribed { id })
+                        .unwrap()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            socket.send(Message::Text("{broken".into())).await.unwrap();
+            while socket.next().await.is_some() {}
+        });
+        let client = WsClient::connect(format!("ws://{address}")).await.unwrap();
+        let mut subscription = client
+            .subscribe(SubscribeRequest {
+                scope: agena_api::Scope::Global,
+            })
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), subscription.recv())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(client.subscribers.lock().unwrap().closed);
+        server.abort();
+    }
 
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(

@@ -57,6 +57,15 @@ pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerEr
     ServerError::from(error)
 }
 
+pub(crate) fn server_error_from_store(error: agena_storage::store::StoreError) -> ServerError {
+    match error {
+        agena_storage::store::StoreError::NotFound(_) => {
+            ServerError::not_found("The session was not found.")
+        }
+        other => ServerError::internal_error(&other),
+    }
+}
+
 mod activities;
 mod auth;
 mod git;
@@ -117,6 +126,9 @@ pub(crate) fn take_test_session_stream_subscription(probe: &str) -> bool {
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for the ordered session-parts snapshot.
 pub struct SessionPartListQuery {
+    /// Comma-separated loaded part identities. This exact-membership read
+    /// is bounded to 256 ids and cannot be combined with pagination.
+    pub ids: Option<String>,
     #[serde(default)]
     pub limit: Option<u64>,
     #[serde(default)]

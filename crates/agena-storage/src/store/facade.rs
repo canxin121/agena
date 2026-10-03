@@ -10,9 +10,10 @@
 //! ## The only live-update mechanism
 //!
 //! [`SessionChange`](super::SessionChange) notifications are derived from an
-//! operation, emitted **after commit**, and never persisted or replayed (14.3).
-//! The facade emits them through an in-process [`NotificationBus`] (15.5) so
-//! same-process subscribers see every committed change. Cross-process
+//! operation and never persisted or replayed (14.3). Semantic mutations are
+//! emitted after commit; streaming text also publishes throttled in-memory
+//! checkpoints with the same durable revision and a monotonic update time.
+//! The facade emits both through an in-process [`NotificationBus`] (15.5). Cross-process
 //! reconnect is an explicit snapshot read validated by session version and
 //! member cursor; this store does not claim database-backed push delivery.
 //!
@@ -92,6 +93,9 @@ pub trait SessionStore: Send + Sync {
     /// Load a session's metadata plus parts ordered by
     /// `(created_at_ms, part_id)` — cache first, then one membership JOIN.
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError>;
+
+    /// A bounded membership read, including in-memory stream checkpoints.
+    async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError>;
 
     /// Count durable user-send run markers without loading transcript parts.
     async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError>;
@@ -543,6 +547,7 @@ struct CacheEntry {
 struct StreamingBuffer {
     part: Part,
     pending_deltas: usize,
+    notification_pending: bool,
 }
 
 /// The internal memory layer (15.3): a per-session LRU cache of
@@ -695,10 +700,10 @@ impl MemoryLayer {
 
     /// Overlay same-process, not-yet-flushed text deltas on a persisted/cache
     /// view. Other processes intentionally see only bounded checkpoints.
-    fn overlay_streaming(&self, session_id: i64, view: &mut SessionView) {
+    fn overlay_streaming(&self, _session_id: i64, view: &mut SessionView) {
         let streaming = self.streaming.lock().expect("streaming lock");
         for part in &mut view.parts {
-            if let Some(buffer) = streaming.get(&(session_id, part.part_id)) {
+            if let Some(buffer) = streaming.get(&(part.origin_session_id, part.part_id)) {
                 *part = buffer.part.clone();
             }
         }
@@ -810,6 +815,7 @@ impl SessionChange {
             Self::PartAdded { session_id, .. }
             | Self::PartUpdated { session_id, .. }
             | Self::PartRemoved { session_id, .. }
+            | Self::SessionDeleted { session_id, .. }
             | Self::SessionMetaUpdated { session_id, .. } => *session_id,
         }
     }
@@ -956,6 +962,7 @@ where
             let buffer = streaming.entry(key).or_insert_with(|| StreamingBuffer {
                 part: persisted_base.expect("missing stream buffer has a persisted base"),
                 pending_deltas: 0,
+                notification_pending: false,
             });
             if buffer.part.origin_session_id != session_id {
                 return Err(StoreError::InvalidState(format!(
@@ -1014,6 +1021,44 @@ where
                 self.now(),
             )
             .await
+    }
+
+    /// Publish the current in-memory checkpoint at most once per 100 ms.
+    /// A trailing notification is essential: a provider may pause after any
+    /// token. Persistence remains end-only; live reads and patches observe
+    /// the same buffer without writing SQLite for every token.
+    fn schedule_streaming_notification(&self, session_id: i64, part_id: i64) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        {
+            let mut buffers = self.memory.streaming.lock().expect("streaming lock");
+            let Some(buffer) = buffers.get_mut(&(session_id, part_id)) else {
+                return;
+            };
+            if buffer.notification_pending {
+                return;
+            }
+            buffer.notification_pending = true;
+        }
+        let memory = Arc::downgrade(&self.memory);
+        let bus = Arc::downgrade(&self.bus);
+        runtime.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let (Some(memory), Some(bus)) = (memory.upgrade(), bus.upgrade()) else {
+                return;
+            };
+            let part = {
+                let mut buffers = memory.streaming.lock().expect("streaming lock");
+                let Some(buffer) = buffers.get_mut(&(session_id, part_id)) else {
+                    // Completion/removal already published the committed state.
+                    return;
+                };
+                buffer.notification_pending = false;
+                buffer.part.clone()
+            };
+            bus.emit(SessionChange::PartUpdated { session_id, part });
+        });
     }
 
     /// Flush every buffered member of a run before its marker becomes
@@ -1100,6 +1145,12 @@ where
 {
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError> {
         self.load_cached(session_id).await
+    }
+
+    async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError> {
+        let mut view = self.engine.load_part_ids(session_id, ids).await?;
+        self.memory.overlay_streaming(session_id, &mut view);
+        Ok(view)
     }
 
     async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
@@ -1584,9 +1635,9 @@ where
                 });
                 return Ok(updated);
             }
-            // Still buffered: return the in-memory overlay (authoritative for
-            // this process) without a notification and without touching the
-            // persisted cache.
+            // The buffer is authoritative for live reads and throttled
+            // patches, while its durable revision advances only on commit.
+            self.schedule_streaming_notification(session_id, part_id);
             let buffered = self
                 .memory
                 .streaming
@@ -1909,6 +1960,7 @@ where
             let view = self.engine.load_session(*deleted_id).await?;
             removed_memberships.push((
                 *deleted_id,
+                view.meta.workspace_id,
                 view.parts
                     .into_iter()
                     .map(|part| part.part_id)
@@ -1916,8 +1968,8 @@ where
             ));
         }
         self.engine.delete_session(session_id).await?;
-        removed_memberships.sort_by_key(|(deleted_id, _)| *deleted_id);
-        for (deleted_id, part_ids) in removed_memberships {
+        removed_memberships.sort_by_key(|(deleted_id, _, _)| *deleted_id);
+        for (deleted_id, workspace_id, part_ids) in removed_memberships {
             self.memory.clear_streaming_session(deleted_id);
             self.memory.invalidate(deleted_id);
             for part_id in part_ids {
@@ -1926,6 +1978,10 @@ where
                     part_id,
                 });
             }
+            self.bus.emit(SessionChange::SessionDeleted {
+                session_id: deleted_id,
+                workspace_id,
+            });
         }
         Ok(())
     }
@@ -1996,6 +2052,7 @@ fn apply_buffered_delta(
     delta: PartDelta,
     now_ms: i64,
 ) -> Result<bool, StoreError> {
+    let now_ms = now_ms.max(part.updated_at_ms.saturating_add(1));
     let state_changed = delta.state.is_some_and(|state| state != part.state);
     if let Some(state) = delta.state {
         apply_part_transition(part, state, now_ms, true)?;
@@ -2732,6 +2789,96 @@ mod tests {
         assert!(!second.created, "replay is not a re-creation");
         let view = facade.load(session_id).await.expect("load");
         assert_eq!(view.parts.len(), 2, "no duplicate parts");
+    }
+
+    #[tokio::test]
+    async fn buffered_stream_publishes_a_bounded_trailing_snapshot_without_durable_writes() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "live buffer").await;
+        let run = facade
+            .submit_user_run(
+                session_id,
+                vec![NewPart {
+                    state: PartState::InProgress,
+                    ..NewPart::pending("text", PartRole::Assistant, json!({"text": ""}))
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+        let part_id = run
+            .parts
+            .iter()
+            .find(|part| part.kind == "text")
+            .unwrap()
+            .part_id;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe(session_id, {
+            let seen = seen.clone();
+            Arc::new(move |change| seen.lock().unwrap().push(change))
+        });
+        for _ in 0..20 {
+            facade
+                .update_part(
+                    session_id,
+                    part_id,
+                    PartDelta {
+                        content_text_delta: Some("x".into()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        assert!(seen.lock().unwrap().is_empty());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while seen.lock().unwrap().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        {
+            let changes = seen.lock().unwrap();
+            assert_eq!(
+                changes.len(),
+                1,
+                "a token burst produces one trailing patch"
+            );
+            let SessionChange::PartUpdated { part, .. } = &changes[0] else {
+                panic!("part patch expected")
+            };
+            assert_eq!(part.content["text"], "x".repeat(20));
+        }
+        let persisted = facade.engine().load_session(session_id).await.unwrap();
+        assert_eq!(
+            persisted
+                .parts
+                .iter()
+                .find(|part| part.part_id == part_id)
+                .unwrap()
+                .content["text"],
+            ""
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_an_empty_session_notifies_global_subscribers() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "empty").await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe_all({
+            let seen = seen.clone();
+            Arc::new(move |change| seen.lock().unwrap().push(change))
+        });
+        facade.delete(session_id).await.unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![SessionChange::SessionDeleted {
+                session_id,
+                workspace_id: 1
+            }]
+        );
     }
 
     #[tokio::test]

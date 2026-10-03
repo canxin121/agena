@@ -281,13 +281,19 @@ impl ApplicationService {
         // before projecting workflow and transcript state. Run it before the
         // direct storage resource read so one response cannot combine a
         // reconciled transcript with a pre-reconcile session row.
-        let context = session_queries
-            .execution_context(session_id)
-            .await
-            .map_err(session_query_error)?;
-        let session_resource = self.get_session(session_id).await?.ok_or_else(|| {
-            ApplicationError::internal("session disappeared while loading execution state")
-        })?;
+        let context = match session_queries.execution_context(session_id).await {
+            Ok(context) => context,
+            Err(error) => {
+                // Runtime lookup failures include deletion. Preserve a typed
+                // 404 so clients discard the missing session and stop retrying.
+                self.ensure_session_exists(session_id).await?;
+                return Err(session_query_error(error));
+            }
+        };
+        let session_resource = self
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| ApplicationError::not_found("The session was not found."))?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await?;
         let transcript = if include_parts {
@@ -321,12 +327,11 @@ impl ApplicationService {
             pending_interactive_requests,
         );
 
+        let snapshot_version = session_resource.version;
         Ok(SessionExecutionResource {
             session: session_resource,
             parts: transcript,
-            latest_event_seq: self
-                .latest_session_event_seq(session_queries, session_id)
-                .await?,
+            latest_event_seq: Some(snapshot_version),
             automation: session_automation_resource(&scheduler_jobs, session_id),
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {

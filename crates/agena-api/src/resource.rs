@@ -1279,6 +1279,8 @@ pub struct SessionUsageResource {
 /// does not carry). `kind`/`role`/`state` are stable strings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionTranscriptPart {
+    pub revision: i64,
+    pub updated_at_ms: i64,
     pub part_id: i64,
     pub kind: String,
     pub role: String,
@@ -1299,6 +1301,8 @@ impl From<crate::live::PartResource> for SessionTranscriptPart {
     fn from(value: crate::live::PartResource) -> Self {
         Self {
             part_id: value.part_id,
+            revision: value.revision,
+            updated_at_ms: value.updated_at_ms,
             kind: value.kind,
             role: value.role,
             state: value.state,

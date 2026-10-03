@@ -771,6 +771,8 @@ mod tests {
 
     fn run(part_id: i64, role: &str, state: &str) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "run".to_owned(),
             role: role.to_owned(),
@@ -801,6 +803,8 @@ mod tests {
         content: serde_json::Value,
     ) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: kind.to_owned(),
             role: role.to_owned(),
@@ -1394,6 +1398,8 @@ mod tests {
         // Each content part backlinks its enclosing run marker, matching the
         // durable projection's `run_id` contract.
         let content = |run_id: i64, part_id: i64, role: &str, text: &str| SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "text".to_owned(),
             role: role.to_owned(),

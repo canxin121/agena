@@ -878,6 +878,25 @@ impl PersistenceEngine for SqliteEngine {
         Ok(SessionView { meta, parts })
     }
 
+    async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let mut parts = Vec::new();
+        for chunk in ids.chunks(256) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let values = std::iter::once(Value::from(session_id))
+                .chain(chunk.iter().copied().map(Value::from))
+                .collect::<Vec<_>>();
+            parts.extend(self.db().query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.part_id IN ({placeholders})"),
+                values,
+            )).await.map_err(map_db_err)?.into_iter().map(part_from_row).collect::<Result<Vec<_>, _>>().map_err(map_db_err)?);
+        }
+        parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
+        parts.dedup_by_key(|part| part.part_id);
+        Ok(SessionView { meta, parts })
+    }
+
     async fn load_session_page(
         &self,
         session_id: i64,

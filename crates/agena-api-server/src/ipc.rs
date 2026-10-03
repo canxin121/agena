@@ -295,7 +295,10 @@ mod unix {
         let id_for_task = id.clone();
         let tx_clone = tx.clone();
         let handle = tokio::spawn(async move {
-            while let Some(item) = subscription.recv().await {
+            while let Some(item) = tokio::select! {
+                _ = tx_clone.closed() => None,
+                item = subscription.recv() => item,
+            } {
                 if !live::matches_scope(&item, &scope, store.as_ref()).await {
                     continue;
                 }

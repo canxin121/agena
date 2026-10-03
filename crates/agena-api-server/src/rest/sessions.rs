@@ -145,6 +145,49 @@ pub async fn list_session_parts(
     AxumQuery(query): AxumQuery<SessionPartListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     let store = state.session_store()?;
+    if let Some(ids) = query.ids.as_deref() {
+        if query.cursor.is_some() || query.limit.is_some() {
+            return Err(ServerError::bad_request(
+                "ids cannot be combined with pagination",
+            ));
+        }
+        let ids = ids
+            .split(',')
+            .map(str::parse::<i64>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| ServerError::bad_request("ids must contain positive part ids"))?;
+        if ids.len() > 256 || ids.iter().any(|id| *id <= 0) {
+            return Err(ServerError::bad_request(
+                "ids must contain at most 256 positive part ids",
+            ));
+        }
+        let view = store
+            .load_part_ids(session_id, &ids)
+            .await
+            .map_err(crate::rest::server_error_from_store)?;
+        let mut parts = crate::live::project_parts_for_user(&state, &view.parts).await;
+        // Requested ids need not be contiguous, so rank markers individually.
+        for part in &mut parts {
+            if part.kind == "run" && part.role == "user" {
+                part.user_message_ordinal = store
+                    .user_message_ordinal(session_id, part.part_id)
+                    .await
+                    .map_err(crate::rest::server_error_from_store)?;
+            }
+        }
+        return Ok(Json(agena_api::live::SessionPartsResource {
+            session_id,
+            version: view.meta.version,
+            page: agena_api::pagination::PageInfo {
+                returned: parts.len() as u64,
+                has_more: false,
+                next_cursor: None,
+            },
+            parts,
+            folds: Vec::new(),
+            user_message_count: None,
+        }));
+    }
     let limit = agena_application::pagination::normalize_limit(query.limit);
     let decoded = query
         .cursor
@@ -170,7 +213,7 @@ pub async fn list_session_parts(
     let page = store
         .load_page(session_id, before, i64::try_from(limit).unwrap_or(i64::MAX))
         .await
-        .map_err(|error| ServerError::internal_error(&error))?;
+        .map_err(crate::rest::server_error_from_store)?;
     let (parts, next_cursor) = select_user_visible_part_page(session_id, page.parts)?;
     let mut projected = crate::live::project_parts_for_user(&state, &parts).await;
     crate::live::assign_user_message_ordinals(store.as_ref(), session_id, &mut projected).await?;
@@ -202,9 +245,9 @@ pub async fn get_session_tool_detail(
         })?;
     let store = state.session_store()?;
     let view = store
-        .load(session_id)
+        .load_part_ids(session_id, &[part_id])
         .await
-        .map_err(|error| ServerError::internal_error(&error))?;
+        .map_err(crate::rest::server_error_from_store)?;
     let part = view
         .parts
         .into_iter()

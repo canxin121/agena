@@ -58,6 +58,8 @@ pub fn project_session_transcript(
     for run in runs {
         let run_id = run.id;
         parts.push(agena_api::resource::SessionTranscriptPart {
+            revision: run.revision,
+            updated_at_ms: run.updated_at_ms,
             part_id: run_id,
             kind: "run".to_owned(),
             role: run.role.to_string(),
@@ -76,6 +78,8 @@ pub fn project_session_transcript(
         for part in &run.parts {
             let content = part.content.clone().unwrap_or(serde_json::Value::Null);
             parts.push(agena_api::resource::SessionTranscriptPart {
+                revision: part.revision,
+                updated_at_ms: part.updated_at_ms,
                 part_id: part.id,
                 // Clients render by kind, and a user message stores every
                 // payload under `text`; publish the canonical kind.

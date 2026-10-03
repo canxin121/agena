@@ -21,6 +21,39 @@ impl App {
     /// Opens the session hub as the current route and kicks off the overview
     /// load. Used as the bootstrap landing view and from the hub itself.
     pub(crate) fn open_hub(&mut self) {
+        if let Some(task) = self.active_subscription.take() {
+            task.abort();
+        }
+        self.subscription_generation = self.subscription_generation.wrapping_add(1);
+        let client = self.application.client().clone();
+        let tx = self.tx.clone();
+        self.active_subscription = Some(tokio::spawn(async move {
+            loop {
+                if let Ok(mut stream) = client.stream_changes(agena_api::Scope::Global).await {
+                    if tx.send(AppMessage::CatalogInvalidated).await.is_err() {
+                        return;
+                    }
+                    while let Some(event) = tokio::select! {
+                        _ = tx.closed() => None,
+                        event = stream.recv() => event,
+                    } {
+                        use agena_api::live::SessionChangeResource as Change;
+                        use agena_client::SubscriptionEvent as Event;
+                        let relevant = !matches!(&event, Ok(Event::SessionChanged(Change::PartUpdated { part, .. })) if part.kind != "run");
+                        if relevant && tx.send(AppMessage::CatalogInvalidated).await.is_err() {
+                            return;
+                        }
+                        if event.is_err() {
+                            break;
+                        }
+                    }
+                }
+                tokio::select! {
+                    _ = tx.closed() => return,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+                }
+            }
+        }));
         let mut state = HubState::new();
         state.presentation.set_sections(vec![SessionHubSection::new(
             SessionHubSectionKind::New,
@@ -36,6 +69,7 @@ impl App {
             task.abort();
         }
         state.search_changed_at = None;
+        state.dirty = false;
         self.next_hub_request_id = self.next_hub_request_id.saturating_add(1);
         state.request_id = self.next_hub_request_id;
         state.loading = true;
@@ -70,7 +104,9 @@ impl App {
 
     pub(crate) fn refresh_hub_if_due(&mut self) {
         let due = matches!(&self.current_route, Route::Hub(state)
-            if state.search_changed_at.is_some_and(|at| at.elapsed().as_millis() >= 250) || (state.search_changed_at.is_none() && state.refreshed_at.elapsed().as_secs() >= if state.loading { 30 } else { 10 }));
+            if state.search_changed_at.is_some_and(|at| at.elapsed().as_millis() >= 250)
+                || (!state.loading && state.dirty && state.refreshed_at.elapsed().as_millis() >= 500)
+                || (state.search_changed_at.is_none() && state.refreshed_at.elapsed().as_secs() >= if state.loading { 30 } else { 10 }));
         if !due {
             return;
         }

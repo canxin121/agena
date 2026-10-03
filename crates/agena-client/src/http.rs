@@ -301,7 +301,14 @@ impl AgenaClient {
         body: Option<&serde_json::Value>,
         accept: Option<&str>,
     ) -> reqwest::RequestBuilder {
+        let bounded_read = method == reqwest::Method::GET && accept != Some("text/event-stream");
         let mut request = self.http.request(method, url);
+        // Ordinary snapshots must release in-flight UI guards even if a peer
+        // stops sending. Streaming/long-running mutation requests have their
+        // own lifecycle instead of this total timeout.
+        if bounded_read {
+            request = request.timeout(std::time::Duration::from_secs(30));
+        }
         if let Some(body) = body {
             request = request.json(body);
         }
@@ -1654,6 +1661,24 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
+    /// Reconcile a bounded set of already-loaded memberships. A requested id
+    /// absent from the response has been removed or is no longer user-visible.
+    pub async fn session_parts_by_ids(
+        &self,
+        session_id: i64,
+        ids: &[i64],
+    ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
+        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/parts"));
+        url.query_pairs_mut().append_pair(
+            "ids",
+            &ids.iter().map(i64::to_string).collect::<Vec<_>>().join(","),
+        );
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
     /// Fetch the complete visible part history through the current bounded
     /// cursor-paged parts API. Pages are returned newest-first by cursor but
     /// each page is chronological, so page order is reversed before flattening.
@@ -1837,9 +1862,12 @@ impl AgenaClient {
         scope: agena_api::Scope,
     ) -> Result<NotificationSubscription, ClientError> {
         let url = self.changes_stream_url(&scope);
-        let response = self
-            .send_request(reqwest::Method::GET, url, None, Some("text/event-stream"))
-            .await?;
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            self.send_request(reqwest::Method::GET, url, None, Some("text/event-stream")),
+        )
+        .await
+        .map_err(|_| ClientError::Transport("live subscription handshake timed out".into()))??;
         let status = response.status();
         if !status.is_success() {
             let body = read_response_text_bounded(
@@ -1864,7 +1892,18 @@ impl AgenaClient {
             SseDecoder::<String>::with_max_size(MAX_SSE_EVENT_BYTES),
         );
         let task = tokio::spawn(async move {
-            while let Some(frame) = frames.next().await {
+            while let Some(frame) = tokio::select! {
+                _ = tx.closed() => None,
+                frame = tokio::time::timeout(std::time::Duration::from_secs(60), frames.next()) => {
+                    match frame {
+                        Ok(frame) => frame,
+                        Err(_) => {
+                            let _ = tx.send(Err(ClientError::Transport("notification stream stalled".into()))).await;
+                            None
+                        }
+                    }
+                },
+            } {
                 let event = match frame {
                     Ok(SseFrame::Event(event)) => event,
                     Ok(SseFrame::Comment(_) | SseFrame::Retry(_)) => continue,

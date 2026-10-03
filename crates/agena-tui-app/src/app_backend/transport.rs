@@ -50,6 +50,8 @@ pub(crate) fn transcript_part_from_resource(
     part: agena_api::live::PartResource,
 ) -> SessionTranscriptPart {
     SessionTranscriptPart {
+        revision: part.revision,
+        updated_at_ms: part.updated_at_ms,
         part_id: part.part_id,
         kind: part.kind,
         role: part.role,
@@ -1880,11 +1882,24 @@ impl TuiBackend {
         // `/state` is an execution shell. Load only the newest bounded
         // collapsed transcript page separately; the server skips raw folded
         // activity before it crosses this transport boundary.
-        let (mut execution, page_resource) = tokio::try_join!(
-            self.client().get_session_state(session_id),
-            self.client()
-                .session_transcript_page(session_id, SESSION_TRANSCRIPT_PAGE_SIZE, None,),
-        )?;
+        let mut attempts = 0;
+        let (mut execution, page_resource) = loop {
+            let (execution, page) = tokio::try_join!(
+                self.client().get_session_state(session_id),
+                self.client().session_transcript_page(
+                    session_id,
+                    SESSION_TRANSCRIPT_PAGE_SIZE,
+                    None
+                ),
+            )?;
+            if execution.session.version == page.version {
+                break (execution, page);
+            }
+            attempts += 1;
+            if attempts >= 3 {
+                bail!("session changed while loading the transcript snapshot");
+            }
+        };
         let mut page = SessionTranscriptPage {
             parts: page_resource
                 .parts
@@ -1994,6 +2009,7 @@ impl TuiBackend {
             .map(|(after, current)| current.saturating_sub(after).clamp(0, 256) as usize)
             .unwrap_or(0);
         Ok(SessionRefresh {
+            reconciled_parts: None,
             latest_event_seq,
             event_count,
             snapshot: Some(snapshot),
@@ -2373,7 +2389,10 @@ impl TuiBackend {
                 // Subscribe before reading the snapshot. Global scope is
                 // required for session-less runtime signals such as dynamic
                 // tool-registry changes; session mutations are filtered below.
-                let mut subscription = match client.stream_changes(agena_api::Scope::Global).await {
+                let mut subscription = match tokio::select! {
+                    _ = tx.closed() => return,
+                    result = client.stream_changes(agena_api::Scope::Global) => result,
+                } {
                     Ok(subscription) => subscription,
                     Err(error) => {
                         tracing::warn!(
@@ -2386,6 +2405,8 @@ impl TuiBackend {
                         );
                         if tx
                             .send(LiveEvent {
+                                part_update: None,
+                                session_deleted: false,
                                 snapshot: None,
                                 force_refresh: true,
                             })
@@ -2401,12 +2422,29 @@ impl TuiBackend {
                         continue;
                     }
                 };
-                let snapshot = match backend
-                    .get_session_state_with_transcript_page(session_id)
-                    .await
-                {
+                let snapshot = match tokio::select! {
+                    _ = tx.closed() => return,
+                    result = backend.get_session_state_with_transcript_page(session_id) => result,
+                } {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
+                        if error
+                            .downcast_ref::<agena_client::ClientError>()
+                            .and_then(|error| error.problem())
+                            .is_some_and(|problem| {
+                                problem.category == agena_failure::FailureCategory::NotFound
+                            })
+                        {
+                            let _ = tx
+                                .send(LiveEvent {
+                                    part_update: None,
+                                    session_deleted: true,
+                                    snapshot: None,
+                                    force_refresh: false,
+                                })
+                                .await;
+                            return;
+                        }
                         tracing::warn!(
                             session_id,
                             diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
@@ -2418,6 +2456,8 @@ impl TuiBackend {
                         drop(subscription);
                         if tx
                             .send(LiveEvent {
+                                part_update: None,
+                                session_deleted: false,
                                 snapshot: None,
                                 force_refresh: true,
                             })
@@ -2435,6 +2475,8 @@ impl TuiBackend {
                 };
                 if tx
                     .send(LiveEvent {
+                        part_update: None,
+                        session_deleted: false,
                         snapshot: Some(snapshot),
                         force_refresh: false,
                     })
@@ -2443,7 +2485,50 @@ impl TuiBackend {
                 {
                     return;
                 }
-                while let Some(item) = subscription.recv().await {
+                while let Some(item) = tokio::select! {
+                    _ = tx.closed() => None,
+                    item = subscription.recv() => item,
+                } {
+                    let reconnect = item
+                        .as_ref()
+                        .map_or(true, |event| matches!(event, SubscriptionEvent::Lagged(_)));
+                    if matches!(&item, Ok(SubscriptionEvent::SessionChanged(agena_api::live::SessionChangeResource::SessionDeleted { session_id: deleted_id, .. })) if *deleted_id == session_id)
+                    {
+                        let _ = tx
+                            .send(LiveEvent {
+                                part_update: None,
+                                session_deleted: true,
+                                snapshot: None,
+                                force_refresh: false,
+                            })
+                            .await;
+                        return;
+                    }
+                    if let Ok(SubscriptionEvent::SessionChanged(
+                        agena_api::live::SessionChangeResource::PartUpdated {
+                            session_id: origin,
+                            part,
+                        },
+                    )) = &item
+                        && (part.kind != "run" || *origin != session_id)
+                    {
+                        if tx
+                            .send(LiveEvent {
+                                part_update: Some((
+                                    *origin,
+                                    agena_api::resource::SessionTranscriptPart::from(*part.clone()),
+                                )),
+                                session_deleted: false,
+                                snapshot: None,
+                                force_refresh: false,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        continue;
+                    }
                     let (force_refresh, refresh_plugin_presentation) = match item.as_ref() {
                         Err(error) => {
                             tracing::warn!(
@@ -2468,7 +2553,13 @@ impl TuiBackend {
                             SessionSubscriptionDispatch::Emit {
                                 refresh_plugin_presentation,
                             } => (
-                                matches!(event, SubscriptionEvent::Lagged(_)),
+                                matches!(
+                                    event,
+                                    SubscriptionEvent::Lagged(_)
+                                        | SubscriptionEvent::SessionChanged(
+                                            agena_api::live::SessionChangeResource::PartRemoved { .. }
+                                        )
+                                ),
                                 refresh_plugin_presentation,
                             ),
                         },
@@ -2483,6 +2574,8 @@ impl TuiBackend {
                     }
                     if tx
                         .send(LiveEvent {
+                            part_update: None,
+                            session_deleted: false,
                             snapshot: None,
                             force_refresh,
                         })
@@ -2491,7 +2584,7 @@ impl TuiBackend {
                     {
                         return;
                     }
-                    if force_refresh {
+                    if reconnect {
                         break;
                     }
                 }
@@ -2499,6 +2592,8 @@ impl TuiBackend {
                 // then establish a fresh subscribe-before-snapshot pair.
                 if tx
                     .send(LiveEvent {
+                        part_update: None,
+                        session_deleted: false,
                         snapshot: None,
                         force_refresh: true,
                     })

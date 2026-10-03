@@ -6,8 +6,10 @@ impl App {
             return;
         }
         if self.session_load.loading {
+            self.session_load.refresh_queued = true;
             return;
         }
+        self.session_load.refresh_queued = false;
         self.session_load.loading = true;
 
         let application = self.application.clone();
@@ -26,7 +28,8 @@ impl App {
             return;
         }
         self.session_load.pending_scope = Some(scope.clone());
-        self.session_load.requested_at = Some(Instant::now());
+        let requested_at = Instant::now();
+        self.session_load.requested_at = Some(requested_at);
 
         tokio::spawn(async move {
             let (result, subtree_root_id) = match scope.mode {
@@ -63,6 +66,7 @@ impl App {
             };
             let _ = tx
                 .send(AppMessage::SessionsLoaded {
+                    requested_at,
                     scope,
                     subtree_root_id,
                     result,
@@ -258,7 +262,8 @@ impl App {
         }
 
         self.transcript.state_loading = true;
-        self.transcript.state_load_in_flight_since = Some(Instant::now());
+        let requested_at = Instant::now();
+        self.transcript.state_load_in_flight_since = Some(requested_at);
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -269,7 +274,11 @@ impl App {
             .await
             .map_err(crate::UiFailure::from_backend);
             let _ = tx
-                .send(AppMessage::SessionStateLoaded { session_id, result })
+                .send(AppMessage::SessionStateLoaded {
+                    session_id,
+                    requested_at,
+                    result,
+                })
                 .await;
         });
     }
@@ -416,6 +425,9 @@ impl App {
     }
 
     pub(crate) fn request_refresh(&mut self, session_id: i64, force: bool) {
+        if self.transcript.session_id != Some(session_id) {
+            return;
+        }
         if self.transcript.refreshing {
             // A refresh is already in flight. Remember the request instead of
             // dropping it: the transcript may have advanced past the snapshot
@@ -430,23 +442,56 @@ impl App {
             return;
         }
         self.transcript.refreshing = true;
-        self.transcript.refresh_in_flight_since = Some(Instant::now());
+        let requested_at = Instant::now();
+        self.transcript.refresh_in_flight_since = Some(requested_at);
         self.last_refresh_at = Instant::now();
 
         let application = self.application.clone();
         let tx = self.tx.clone();
         let after_seq = self.transcript.last_event_seq;
+        let known_ids = if std::mem::take(&mut self.transcript.reconcile_loaded_parts) {
+            self.transcript
+                .parts
+                .iter()
+                .map(|part| part.part_id)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         tokio::spawn(async move {
-            let result = crate::app_backend::session_refresh::refresh_session(
-                &application,
-                session_id,
-                after_seq,
-                force,
-            )
+            let result = async {
+                let mut refresh = crate::app_backend::session_refresh::refresh_session(
+                    &application,
+                    session_id,
+                    after_seq,
+                    force,
+                )
+                .await?;
+                if !known_ids.is_empty() {
+                    let mut parts = Vec::new();
+                    for ids in known_ids.chunks(256) {
+                        parts.extend(
+                            application
+                                .client()
+                                .session_parts_by_ids(session_id, ids)
+                                .await?
+                                .parts
+                                .into_iter()
+                                .map(agena_api::resource::SessionTranscriptPart::from),
+                        );
+                    }
+                    refresh.reconciled_parts = Some((known_ids, parts));
+                }
+                Ok::<_, anyhow::Error>(refresh)
+            }
             .await
             .map_err(crate::UiFailure::from_backend);
             let _ = tx
-                .send(AppMessage::SessionRefreshed { session_id, result })
+                .send(AppMessage::SessionRefreshed {
+                    session_id,
+                    requested_at,
+                    result,
+                })
                 .await;
         });
     }
@@ -921,6 +966,8 @@ mod rewind_tests {
         content: serde_json::Value,
     ) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id: id,
             kind: kind.to_owned(),
             role: role.to_owned(),

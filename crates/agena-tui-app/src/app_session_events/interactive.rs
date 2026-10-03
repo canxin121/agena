@@ -21,6 +21,7 @@ impl App {
         self.session_controller.sequence = None;
         self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
+        self.subscription_generation = self.subscription_generation.wrapping_add(1);
         if let Some(cache) = self.transcript_cache.get(&session_id).cloned() {
             self.transcript
                 .restore_cache(cache, session_id, self.transcript.session_title.clone());
@@ -65,10 +66,15 @@ impl App {
             return;
         };
         let tx = self.tx.clone();
+        let generation = self.subscription_generation;
         let handle = tokio::spawn(async move {
             while let Some(live) = rx.recv().await {
                 if tx
-                    .send(AppMessage::SessionEventArrived { session_id, live })
+                    .send(AppMessage::SessionEventArrived {
+                        session_id,
+                        generation,
+                        live,
+                    })
                     .await
                     .is_err()
                 {
@@ -94,7 +100,10 @@ impl App {
                         .parts
                         .iter()
                         .find(|old| old.part_id == part.part_id)
-                        .is_some_and(|old| old.state != part.state)
+                        .is_some_and(|old| {
+                            (old.state.as_str(), old.revision, old.updated_at_ms)
+                                != (part.state.as_str(), part.revision, part.updated_at_ms)
+                        })
             })
             .map(|part| part.part_id)
             .collect::<Vec<_>>();
@@ -114,6 +123,9 @@ impl App {
         &mut self,
         execution: SessionExecutionResource,
     ) -> bool {
+        if self.transcript.session_id != Some(execution.session.id) {
+            return false;
+        }
         if self.transcript.execution.as_ref().is_some_and(|current| {
             current.session.id == execution.session.id
                 && current.session.version > execution.session.version
@@ -287,6 +299,14 @@ impl App {
     }
 
     pub(crate) fn handle_session_event_arrived(&mut self, session_id: i64, live: LiveEvent) {
+        if live.session_deleted && self.transcript.session_id == Some(session_id) {
+            self.transcript_cache.remove(&session_id);
+            self.transcript.reset(session_id, String::new());
+            self.transcript.session_id = None;
+            self.pending_refresh = None;
+            self.open_hub();
+            return;
+        }
         let changed = live.snapshot.is_none();
         if let Some(snapshot) = live.snapshot
             && self.transcript.session_id == Some(session_id)
@@ -298,6 +318,27 @@ impl App {
         // in-flight messages may still land.
         if self.transcript.session_id != Some(session_id) {
             return;
+        }
+        if let Some((origin, part)) = live.part_update {
+            let id = part.part_id;
+            let known = self.transcript.parts.iter().any(|old| old.part_id == id);
+            if known {
+                let content_only = matches!(part.kind.as_str(), "text" | "reasoning");
+                let mut parts = self.transcript.parts.clone();
+                if let Some(old) = parts.iter_mut().find(|old| old.part_id == id) {
+                    *old = part;
+                }
+                self.transcript.merge_parts(parts);
+                self.request_expanded_tool_details(&[id]);
+                if content_only || origin != session_id {
+                    return;
+                }
+            } else if origin != session_id {
+                return;
+            }
+        }
+        if live.force_refresh {
+            self.transcript.reconcile_loaded_parts = true;
         }
         if live.force_refresh || changed {
             self.pending_refresh_for(session_id);

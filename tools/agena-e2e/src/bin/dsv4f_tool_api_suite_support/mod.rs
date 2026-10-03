@@ -820,7 +820,9 @@ pub(super) async fn assert_outer_tool_api_stream_update(
                 }
                 return Ok(());
             }
-            SessionChange::PartRemoved { .. } | SessionChange::SessionMetaUpdated { .. } => {}
+            SessionChange::PartRemoved { .. }
+            | SessionChange::SessionMetaUpdated { .. }
+            | SessionChange::SessionDeleted { .. } => {}
         }
     }
 }

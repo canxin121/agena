@@ -26,6 +26,8 @@ mod parts_fixtures {
 
     pub(super) fn run(part_id: i64, role: &str, state: &str) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "run".to_owned(),
             role: role.to_owned(),
@@ -41,6 +43,8 @@ mod parts_fixtures {
 
     pub(super) fn text(run_id: i64, part_id: i64, role: &str, text: &str) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "text".to_owned(),
             role: role.to_owned(),
@@ -61,6 +65,8 @@ mod parts_fixtures {
         problem: agena_failure::UserProblem,
     ) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "error".to_owned(),
             role: role.to_owned(),
@@ -82,6 +88,8 @@ mod parts_fixtures {
         summary: Vec<String>,
     ) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "think".to_owned(),
             role: role.to_owned(),
@@ -103,6 +111,8 @@ mod parts_fixtures {
         detail: &str,
     ) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "hook".to_owned(),
             role: role.to_owned(),
@@ -127,6 +137,8 @@ mod parts_fixtures {
         text: &str,
     ) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "paste_ref".to_owned(),
             role: role.to_owned(),
@@ -147,6 +159,8 @@ mod parts_fixtures {
         path: &str,
     ) -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id,
             kind: "file_ref".to_owned(),
             role: role.to_owned(),
@@ -667,6 +681,8 @@ mod interaction_part_routing_tests {
 
     fn run_marker() -> SessionTranscriptPart {
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id: 3,
             kind: "run".to_owned(),
             role: "assistant".to_owned(),
@@ -688,6 +704,8 @@ mod interaction_part_routing_tests {
     ) -> SessionTranscriptPart {
         let request = serde_json::to_value(request).expect("request serializes");
         SessionTranscriptPart {
+            revision: 0,
+            updated_at_ms: 0,
             part_id: 5,
             kind: "tool_call".to_owned(),
             role: "assistant".to_owned(),

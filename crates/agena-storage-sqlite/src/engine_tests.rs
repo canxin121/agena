@@ -2597,3 +2597,60 @@ async fn session_bucket_pagination_counts_and_workspace_stats_match_without_scan
         .unwrap();
     assert!(running.is_empty());
 }
+
+#[tokio::test]
+async fn bounded_part_ids_respect_memberships_and_do_not_scan_other_parts() {
+    let (engine, source) = setup(in_memory_db().await).await;
+    let (run, view) = submit_hello(&engine, source).await;
+    let child = engine
+        .fork_session(
+            source,
+            view.parts[0].part_id,
+            "prefix".into(),
+            false,
+            1_000_000,
+        )
+        .await
+        .unwrap();
+    let ids = vec![view.parts[1].part_id, run, run, i64::MAX];
+    let scoped = engine.load_part_ids(child.id, &ids).await.unwrap();
+    assert_eq!(
+        scoped
+            .parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        vec![run]
+    );
+    assert_eq!(
+        engine
+            .load_part_ids(source, &ids)
+            .await
+            .unwrap()
+            .parts
+            .len(),
+        2
+    );
+    assert!(
+        engine
+            .load_part_ids(source, &[])
+            .await
+            .unwrap()
+            .parts
+            .is_empty()
+    );
+    let repeated = vec![run; 600];
+    assert_eq!(
+        engine
+            .load_part_ids(source, &repeated)
+            .await
+            .unwrap()
+            .parts
+            .len(),
+        1
+    );
+    assert!(matches!(
+        engine.load_part_ids(i64::MAX, &ids).await,
+        Err(agena_storage::store::StoreError::NotFound(_))
+    ));
+}

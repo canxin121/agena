@@ -58,6 +58,8 @@ impl std::str::FromStr for ToolDetailSection {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolDetailResource {
     pub part_id: i64,
+    pub revision: i64,
+    pub updated_at_ms: i64,
     pub section: ToolDetailSection,
     pub value: Value,
 }
@@ -338,8 +340,8 @@ mod tests {
     }
 }
 
-/// A committed session mutation. This is observer notification only: it is
-/// never persisted, replayed, or assigned a global sequence.
+/// A committed mutation or throttled in-memory part checkpoint. This observer
+/// notification is never persisted, replayed, or assigned a global sequence.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionChangeResource {
@@ -363,6 +365,10 @@ pub enum SessionChangeResource {
         pinned: bool,
         updated_at_ms: i64,
     },
+    SessionDeleted {
+        session_id: i64,
+        workspace_id: i64,
+    },
 }
 
 impl SessionChangeResource {
@@ -371,6 +377,7 @@ impl SessionChangeResource {
             Self::PartAdded { session_id, .. }
             | Self::PartUpdated { session_id, .. }
             | Self::PartRemoved { session_id, .. }
+            | Self::SessionDeleted { session_id, .. }
             | Self::SessionMetaUpdated { session_id, .. } => *session_id,
         }
     }

@@ -44,9 +44,13 @@ pub async fn handler(
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
     let subscription_id: smol_str::SmolStr = "sse".into();
     let mut subscription = live::subscribe(&state)?;
+    let _ = tx.try_send(Ok(Event::default().comment("subscribed")));
 
     tokio::spawn(async move {
-        while let Some(item) = subscription.recv().await {
+        while let Some(item) = tokio::select! {
+            _ = tx.closed() => None,
+            item = subscription.recv() => item,
+        } {
             if !live::matches_scope(&item, &scope, store.as_ref()).await {
                 continue;
             }
@@ -183,7 +187,13 @@ pub async fn notifications_stream(
     let mut filter = query.into_filter()?;
     filter.limit = Some(1000);
 
-    let replayed = store.list(filter).await.map_err(notification_error)?;
+    // Subscribe before reading: changes committed while the list is loading
+    // must remain queued, including updates to an already replayed notice.
+    let mut events = store.subscribe_events();
+    let replayed = store
+        .list(filter.clone())
+        .await
+        .map_err(notification_error)?;
     let mut watermark = since_ms;
     for notification in replayed.iter() {
         if notification.created_at_ms > since_ms {
@@ -214,10 +224,33 @@ pub async fn notifications_stream(
             return;
         }
 
-        let mut events = store.subscribe_events();
-        while let Ok(item) = events.recv().await {
+        loop {
+            let item = tokio::select! {
+                _ = tx.closed() => break,
+                item = events.recv() => item,
+            };
+            let item = match item {
+                Ok(item) => item,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    SubscriptionEvent::Lagged(skipped)
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             let message = match item {
                 SubscriptionEvent::Notification(notification) => {
+                    // An inactive update still has to remove a previously
+                    // active row in this scope. Only the initial list uses
+                    // active_only; live lifecycle changes use the same scope.
+                    let live_filter = agena_notification::service::NotificationFilter {
+                        active_only: false,
+                        ..filter.clone()
+                    };
+                    if !agena_runtime_notifications::store::filter_matches(
+                        &live_filter,
+                        &notification,
+                    ) {
+                        continue;
+                    }
                     NotificationStreamEvent::Notification(Box::new(NotificationResource::from(
                         &*notification,
                     )))

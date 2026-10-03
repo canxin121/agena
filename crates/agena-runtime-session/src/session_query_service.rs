@@ -46,6 +46,8 @@ pub struct SessionProjectedRunHeader {
 #[derive(Debug, Clone)]
 /// A projected session run.
 pub struct SessionProjectedRun {
+    pub revision: i64,
+    pub updated_at_ms: i64,
     pub id: i64,
     pub role: agena_domain::Role,
     pub state: agena_domain::ExecutionStatus,
@@ -58,6 +60,8 @@ pub struct SessionProjectedRun {
 #[derive(Debug, Clone)]
 /// A projected run part.
 pub struct SessionProjectedPart {
+    pub revision: i64,
+    pub updated_at_ms: i64,
     pub id: i64,
     pub run_id: i64,
     pub part_index: i32,

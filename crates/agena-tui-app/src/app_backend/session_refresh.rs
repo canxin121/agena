@@ -10,6 +10,8 @@ use super::SessionStateWithTranscriptPage;
 pub struct SessionRefresh {
     pub latest_event_seq: Option<i64>,
     pub event_count: usize,
+    pub(crate) reconciled_parts:
+        Option<(Vec<i64>, Vec<agena_api::resource::SessionTranscriptPart>)>,
     /// Keep the transcript's folds and history cursor beside its parts.
     pub(crate) snapshot: Option<SessionStateWithTranscriptPage>,
 }

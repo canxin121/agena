@@ -42,6 +42,12 @@ pub enum SessionChange {
         session_id: i64,
         meta: SessionMeta,
     },
+    /// The session and its membership were deleted. The workspace identity
+    /// survives the deletion so scoped subscribers can still receive it.
+    SessionDeleted {
+        session_id: i64,
+        workspace_id: i64,
+    },
 }
 
 /// Outcome of the maintenance loop: orphan parts GC'd.
@@ -85,6 +91,13 @@ pub trait PersistenceEngine: Send + Sync {
     /// Load a session's metadata plus all parts ordered by
     /// `(created_at_ms, part_id)` — one membership JOIN.
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError>;
+
+    /// Read only client-loaded memberships for reconnect reconciliation.
+    async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError> {
+        let mut view = self.load_session(session_id).await?;
+        view.parts.retain(|part| ids.contains(&part.part_id));
+        Ok(view)
+    }
 
     /// Load one newest-first keyset page of session parts. `before` excludes
     /// that position and is interpreted against the canonical

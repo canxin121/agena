@@ -269,6 +269,7 @@ impl App {
     }
 
     pub(crate) fn handle_session_event_arrived(&mut self, session_id: i64, live: LiveEvent) {
+        let changed = live.snapshot.is_none();
         if let Some(snapshot) = live.snapshot
             && self.transcript.session_id == Some(session_id)
         {
@@ -280,7 +281,7 @@ impl App {
         if self.transcript.session_id != Some(session_id) {
             return;
         }
-        if live.force_refresh {
+        if live.force_refresh || changed {
             self.pending_refresh_for(session_id);
         }
     }

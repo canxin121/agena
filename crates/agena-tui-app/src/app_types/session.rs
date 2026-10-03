@@ -209,6 +209,7 @@ pub(crate) struct TranscriptState {
     pub(crate) transcript_next_cursor: Option<String>,
     pub(crate) transcript_has_more: bool,
     pub(crate) transcript_older_loading: bool,
+    pub(crate) transcript_older_error: Option<String>,
     pub(crate) transcript_older_in_flight_since: Option<Instant>,
     /// Once an older page has been prepended, subsequent recent snapshots must
     /// update only their newest window so they do not discard loaded history.
@@ -218,6 +219,7 @@ pub(crate) struct TranscriptState {
     /// visible tail and run markers. Bounded recent snapshots must retain them.
     pub(crate) transcript_revealed_part_ids: BTreeSet<i64>,
     pub(crate) transcript_fold_loads: BTreeMap<(i64, i64), Instant>,
+    pub(crate) transcript_fold_errors: BTreeMap<i64, String>,
     pub(crate) viewport: TranscriptViewport,
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,

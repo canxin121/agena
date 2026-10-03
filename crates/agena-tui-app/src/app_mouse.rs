@@ -29,6 +29,7 @@ impl App {
                 self.cancel_active_pointer_gesture();
                 self.cancel_surface_selection();
                 self.move_transcript_cursor_by_wheel(-TRANSCRIPT_WHEEL_LINES);
+                self.request_older_transcript_parts_if_needed();
             }
             MouseEventKind::ScrollDown => {
                 self.cancel_active_pointer_gesture();
@@ -46,6 +47,14 @@ impl App {
                 self.update_surface_selection(mouse.column, mouse.row);
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                if mouse.row == transcript.y.saturating_sub(1)
+                    && mouse.column >= transcript.x
+                    && mouse.column < transcript.right()
+                    && self.transcript.viewport_top() <= 3
+                {
+                    self.request_older_transcript_parts_if_needed();
+                    return;
+                }
                 // Any new left-click cancels the previous surface selection.
                 self.cancel_surface_selection();
                 if let Some(kind) = self.surface_layout.kind_at(mouse.column, mouse.row) {
@@ -94,7 +103,6 @@ impl App {
             }
             _ => {}
         }
-        self.request_older_transcript_parts_if_needed();
     }
 
     pub(crate) fn cancel_surface_selection(&mut self) {

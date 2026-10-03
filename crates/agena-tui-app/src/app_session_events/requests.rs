@@ -298,7 +298,7 @@ impl App {
     }
 
     pub(crate) fn request_older_transcript_parts_if_needed(&mut self) {
-        if self.transcript.viewport_top() != 0
+        if self.transcript.viewport_top() > 3
             || self.transcript.transcript_older_loading
             || !self.transcript.transcript_has_more
         {
@@ -311,7 +311,9 @@ impl App {
             return;
         };
         self.transcript.transcript_older_loading = true;
-        self.transcript.transcript_older_in_flight_since = Some(Instant::now());
+        self.transcript.transcript_older_error = None;
+        let requested_at = Instant::now();
+        self.transcript.transcript_older_in_flight_since = Some(requested_at);
 
         let application = self.application.clone();
         let tx = self.tx.clone();
@@ -319,13 +321,17 @@ impl App {
             let result = application
                 .list_session_transcript_page(
                     session_id,
-                    crate::app_backend::SESSION_TRANSCRIPT_PAGE_SIZE,
+                    crate::app_backend::OLDER_TRANSCRIPT_PAGE_SIZE,
                     cursor.as_str(),
                 )
                 .await
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx
-                .send(AppMessage::TranscriptPartsLoaded { session_id, result })
+                .send(AppMessage::TranscriptPartsLoaded {
+                    session_id,
+                    requested_at,
+                    result,
+                })
                 .await;
         });
     }
@@ -346,13 +352,16 @@ impl App {
             .transcript
             .transcript_fold_loads
             .keys()
-            .any(|(run_id, _)| *run_id == fold.run_id)
+            .any(|(run_id, _)| *run_id == fold.run_id || fold.run_ids.contains(run_id))
         {
             return;
         }
+        let requested_at = Instant::now();
         self.transcript
             .transcript_fold_loads
-            .insert((fold.run_id, fold.anchor_part_id), Instant::now());
+            .insert((fold.run_id, fold.anchor_part_id), requested_at);
+        self.transcript.transcript_fold_errors.remove(&fold.run_id);
+        self.transcript.invalidate_render();
         let application = self.application.clone();
         let tx = self.tx.clone();
         let reveal_count = reveal_count.clamp(1, 50) as u64;
@@ -364,6 +373,7 @@ impl App {
             let _ = tx
                 .send(AppMessage::TranscriptFoldPartsLoaded {
                     session_id,
+                    requested_at,
                     run_id: fold.run_id,
                     anchor_part_id: fold.anchor_part_id,
                     expand_all,

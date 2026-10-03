@@ -378,10 +378,22 @@ impl App {
         // which is what makes reasoning/tool-call deltas appear live. A
         // parked force refresh (bus lag, terminal safety net) rides the same
         // gate — the terminal state converges a fraction of a second later.
+        let streaming_live = self.transcript.execution.as_ref().is_some_and(|execution| {
+            execution.session.state.is_running()
+                || matches!(
+                    execution.session.state,
+                    agena_api::resource::SessionState::Creating
+                )
+        });
+        let refresh_interval = if streaming_live || self.pending_refresh.is_some() {
+            REFRESH_INTERVAL_MS
+        } else {
+            5_000
+        };
         if let Some(session_id) = self.transcript.session_id
             && !self.transcript.refreshing
             && !self.transcript.state_loading
-            && self.last_refresh_at.elapsed() >= Duration::from_millis(REFRESH_INTERVAL_MS)
+            && self.last_refresh_at.elapsed() >= Duration::from_millis(refresh_interval)
         {
             self.last_refresh_at = Instant::now();
             let force = self.pending_refresh.take().is_some();

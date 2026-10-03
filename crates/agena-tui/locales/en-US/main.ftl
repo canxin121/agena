@@ -2171,3 +2171,11 @@ plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = string
 plugin-workbench-kind-value = value
 permission-studio-page-tool-defaults = Tool Access / Defaults
+
+transcript-history-more = ↑ Load earlier messages · scroll up or click here
+transcript-history-loading = … Loading earlier messages
+transcript-history-start = Beginning of conversation
+transcript-history-error = ↑ Retry loading history · { $error }
+transcript-history-stalled = The history cursor did not advance. Retry loading.
+transcript-fold-loading = … Loading earlier reply parts
+transcript-fold-error = Load failed · Enter to retry · { $error }

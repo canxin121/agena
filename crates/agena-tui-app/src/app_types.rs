@@ -669,10 +669,12 @@ pub(super) enum AppMessage {
     },
     TranscriptPartsLoaded {
         session_id: i64,
+        requested_at: Instant,
         result: UiResult<SessionTranscriptPage>,
     },
     TranscriptFoldPartsLoaded {
         session_id: i64,
+        requested_at: Instant,
         run_id: i64,
         anchor_part_id: i64,
         expand_all: bool,

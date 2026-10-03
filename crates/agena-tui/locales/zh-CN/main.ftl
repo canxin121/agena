@@ -2171,3 +2171,11 @@ plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = 字符串
 plugin-workbench-kind-value = 值
 permission-studio-page-tool-defaults = 工具权限 / 默认值
+
+transcript-history-more = ↑ 加载更早消息 · 向上滚动或点击这里
+transcript-history-loading = … 正在加载更早消息
+transcript-history-start = 已到会话开头
+transcript-history-error = ↑ 重试加载历史 · { $error }
+transcript-history-stalled = 历史游标未前进，请重试加载。
+transcript-fold-loading = … 正在加载回复片段
+transcript-fold-error = 加载失败 · Enter 重试 · { $error }

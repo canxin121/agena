@@ -89,6 +89,7 @@ fn assert_fold_visible(transcript: &mut TranscriptState, anchor: i64, hidden: u6
         .transcript_fold_for_node(&key)
         .expect("load-more cursor");
     assert_eq!(fold.hidden_count, hidden);
+    let failed = transcript.transcript_fold_errors.contains_key(&fold.run_id);
     let rendered = transcript.rendered(WIDTH);
     let node = rendered
         .nodes
@@ -96,11 +97,11 @@ fn assert_fold_visible(transcript: &mut TranscriptState, anchor: i64, hidden: u6
         .find(|node| node.key == key)
         .expect("load-more control must render");
     assert!(node.toggleable);
-    assert!(
-        rendered.lines[node.start_line]
-            .text
-            .contains("Enter: show 5")
-    );
+    assert!(rendered.lines[node.start_line].text.contains(if failed {
+        "Enter to retry"
+    } else {
+        "Enter: show 5"
+    }));
 }
 
 fn assert_parts_visible(transcript: &mut TranscriptState, range: std::ops::Range<i64>) {
@@ -185,7 +186,7 @@ async fn refresh_preserves_the_remote_part_loading_control_through_http() {
                     _ => panic!("unexpected fold request: {path}"),
                 }
             } else {
-                assert_eq!(path, "/api/v1/sessions/7/transcript?limit=3");
+                assert_eq!(path, "/api/v1/sessions/7/transcript?limit=2");
                 transcript.to_string()
             };
             paths.push(path.to_owned());
@@ -591,4 +592,154 @@ async fn failed_and_timed_out_fold_requests_can_be_retried() {
     assert!(app.transcript.transcript_fold_loads.is_empty());
     app.request_transcript_fold_parts(fold, false, 5);
     assert_eq!(app.transcript.transcript_fold_loads.len(), 1);
+}
+
+#[tokio::test]
+async fn history_prefetch_requires_upward_intent_and_preserves_retry_cursor() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 1)));
+    app.focus = agena_tui::main_focus::Focus::Transcript;
+    app.transcript.scroll_to_top(WIDTH, HEIGHT);
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+    assert!(
+        !app.transcript.transcript_older_loading,
+        "ordinary keys must not page history"
+    );
+    app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert!(app.transcript.transcript_older_loading);
+    app.handle_transcript_parts_loaded(
+        SESSION_ID,
+        Ok(SessionTranscriptPage {
+            parts: vec![],
+            folds: vec![],
+            next_cursor: Some("older-messages".into()),
+            has_more: true,
+        }),
+    );
+    assert!(app.transcript.transcript_older_error.is_some());
+    assert!(app.transcript.transcript_has_more);
+    assert!(!app.transcript.transcript_older_loading);
+    app.handle_transcript_parts_loaded(
+        SESSION_ID,
+        Ok(SessionTranscriptPage {
+            parts: vec![],
+            folds: vec![],
+            next_cursor: Some("older-next".into()),
+            has_more: true,
+        }),
+    );
+    assert_eq!(
+        app.transcript.transcript_next_cursor.as_deref(),
+        Some("older-next")
+    );
+}
+
+#[tokio::test]
+async fn a_streaming_gap_during_a_fold_request_keeps_new_cursor_and_old_parts() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(14, 19, 1)));
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(24, 29, 2)));
+    assert!(app.transcript.merge_fold_parts(
+        3,
+        14,
+        activities(9..14),
+        Some("before-9".into()),
+        true
+    ));
+    assert_eq!(
+        app.transcript.transcript_folds[0].next_cursor.as_deref(),
+        Some("before-24")
+    );
+    assert!(app.transcript.parts.iter().any(|part| part.part_id == 9));
+}
+
+#[tokio::test]
+async fn normal_live_events_schedule_a_coalesced_refresh() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_event_arrived(
+        SESSION_ID,
+        crate::LiveEvent {
+            snapshot: None,
+            force_refresh: false,
+        },
+    );
+    assert!(app.pending_refresh.is_some());
+}
+
+#[tokio::test]
+async fn old_page_responses_cannot_finish_a_new_request_after_reopening_the_same_session() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 1)));
+    let old = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    let current = std::time::Instant::now();
+    app.transcript.transcript_older_loading = true;
+    app.transcript.transcript_older_in_flight_since = Some(current);
+    app.transcript
+        .transcript_fold_loads
+        .insert((3, 12), current);
+    let page = || SessionTranscriptPage {
+        parts: activities(4..12),
+        folds: vec![],
+        next_cursor: None,
+        has_more: false,
+    };
+    app.handle_message(crate::AppMessage::TranscriptPartsLoaded {
+        session_id: SESSION_ID,
+        requested_at: old,
+        result: Ok(page()),
+    });
+    app.handle_message(crate::AppMessage::TranscriptFoldPartsLoaded {
+        session_id: SESSION_ID,
+        requested_at: old,
+        run_id: 3,
+        anchor_part_id: 12,
+        expand_all: false,
+        result: Ok(page()),
+    });
+    assert!(app.transcript.transcript_older_loading);
+    assert_eq!(
+        app.transcript.transcript_fold_loads.get(&(3, 12)),
+        Some(&current)
+    );
+    assert_eq!(app.transcript.transcript_folds[0].hidden_count, 8);
+    assert!(!app.transcript.parts.iter().any(|part| part.part_id == 4));
+}
+
+#[tokio::test]
+async fn prepend_includes_fold_controls_when_preserving_the_reading_position() {
+    let mut app = app(TuiBackend::remote_mock());
+    let initial = vec![
+        parts_fixtures::run(100, "user", "completed"),
+        parts_fixtures::text(
+            100,
+            101,
+            "user",
+            &(0..50)
+                .map(|i| format!("Reading line {i}\n"))
+                .collect::<String>(),
+        ),
+    ];
+    app.transcript.merge_parts(initial);
+    app.transcript.set_cursor_line(WIDTH, 8, 10);
+    app.transcript.ensure_visual_focus(WIDTH, 8);
+    let old_top = app.transcript.viewport_top();
+    let reading_line = app.transcript.rendered(WIDTH).lines[old_top].text.clone();
+    let older = std::iter::once(parts_fixtures::run(3, "assistant", "completed"))
+        .chain(activities(90..95))
+        .collect();
+    app.transcript.prepend_transcript_parts(
+        older,
+        vec![SessionTranscriptFoldResource {
+            run_id: 3,
+            run_ids: vec![3],
+            anchor_part_id: 90,
+            hidden_count: 50,
+            next_cursor: Some("before-90".into()),
+        }],
+        WIDTH,
+        8,
+    );
+    app.transcript.ensure_visual_focus(WIDTH, 8);
+    let top = app.transcript.viewport_top();
+    assert_eq!(app.transcript.rendered(WIDTH).lines[top].text, reading_line);
 }

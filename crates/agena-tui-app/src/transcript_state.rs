@@ -230,11 +230,13 @@ impl TranscriptState {
             transcript_next_cursor: None,
             transcript_has_more: false,
             transcript_older_loading: false,
+            transcript_older_error: None,
             transcript_older_in_flight_since: None,
             transcript_older_pages_loaded: false,
             transcript_folds: Vec::new(),
             transcript_revealed_part_ids: BTreeSet::new(),
             transcript_fold_loads: BTreeMap::new(),
+            transcript_fold_errors: BTreeMap::new(),
             viewport: TranscriptViewport::default(),
             interaction: TranscriptInteraction::default(),
             search_query: String::new(),
@@ -269,11 +271,13 @@ impl TranscriptState {
         self.transcript_next_cursor = None;
         self.transcript_has_more = false;
         self.transcript_older_loading = false;
+        self.transcript_older_error = None;
         self.transcript_older_in_flight_since = None;
         self.transcript_older_pages_loaded = false;
         self.transcript_folds.clear();
         self.transcript_revealed_part_ids.clear();
         self.transcript_fold_loads.clear();
+        self.transcript_fold_errors.clear();
         self.viewport.reduce(TranscriptAction::Reset);
         self.interaction = TranscriptInteraction::default();
         self.execution = None;
@@ -318,9 +322,11 @@ impl TranscriptState {
         self.transcript_folds = cache.transcript_folds;
         self.transcript_revealed_part_ids = cache.transcript_revealed_part_ids;
         self.transcript_fold_loads.clear();
+        self.transcript_fold_errors.clear();
         self.node_expansions = cache.node_expansions;
         self.activity_summary_visible_counts = cache.activity_summary_visible_counts;
         self.transcript_older_loading = false;
+        self.transcript_older_error = None;
         self.transcript_older_in_flight_since = None;
         self.execution = None;
         self.last_event_seq = None;
@@ -376,7 +382,10 @@ impl TranscriptState {
         let previous_fold_loads = self.transcript_fold_loads.len();
         self.transcript_fold_loads
             .retain(|_, since| since.elapsed() < timeout);
-        recovered |= previous_fold_loads != self.transcript_fold_loads.len();
+        if previous_fold_loads != self.transcript_fold_loads.len() {
+            recovered = true;
+            self.invalidate_render();
+        }
         recovered
     }
 
@@ -568,12 +577,17 @@ impl TranscriptState {
         let Some(fold_index) = self
             .transcript_folds
             .iter()
-            .position(|fold| fold.run_id == run_id && fold.anchor_part_id == anchor_part_id)
+            .position(|fold| fold.run_id == run_id || fold.run_ids.contains(&run_id))
         else {
             // A repeated response must not decrease the hidden count twice.
             return false;
         };
-        if has_more && next_cursor == self.transcript_folds[fold_index].next_cursor {
+        let changed_anchor = self.transcript_folds[fold_index].anchor_part_id != anchor_part_id;
+        if !changed_anchor
+            && has_more
+            && (next_cursor.is_none()
+                || next_cursor == self.transcript_folds[fold_index].next_cursor)
+        {
             // An unchanging cursor must not spin a show-all fetch forever.
             return false;
         }
@@ -597,6 +611,9 @@ impl TranscriptState {
             .iter()
             .filter(|part| part.kind != "run" && !by_id.contains_key(&part.part_id))
             .count();
+        if changed_anchor && newly_loaded == 0 {
+            return false;
+        }
         self.transcript_revealed_part_ids
             .extend(parts.iter().map(|part| part.part_id));
         for part in &parts {
@@ -618,13 +635,43 @@ impl TranscriptState {
             .unwrap_or(anchor_part_id);
         let fold = &mut self.transcript_folds[fold_index];
         fold.hidden_count = fold.hidden_count.saturating_sub(newly_loaded as u64);
-        fold.anchor_part_id = next_anchor;
-        fold.next_cursor = next_cursor;
-        let remove_fold = !has_more || fold.hidden_count == 0 || fold.next_cursor.is_none();
+        if !changed_anchor {
+            fold.anchor_part_id = next_anchor;
+            fold.next_cursor = next_cursor;
+        }
+        let remove_fold =
+            (!changed_anchor && !has_more) || fold.hidden_count == 0 || fold.next_cursor.is_none();
         if remove_fold {
             self.transcript_folds.remove(fold_index);
         }
+        let focus_content = if remove_fold {
+            TranscriptContentId::StoredPart(next_anchor)
+        } else {
+            let fold = &self.transcript_folds[fold_index];
+            TranscriptContentId::TranscriptFold {
+                run_id: fold.run_id,
+                anchor_part_id: fold.anchor_part_id,
+            }
+        };
         self.reveal_loaded_fold_activities();
+        // The fold's cursor changes as older content is revealed. Keep the
+        // navigation cursor on its control, or the first revealed part once
+        // the control disappears.
+        if let Some(cursor) = &mut self.interaction.cursor {
+            let retarget = |key: &mut TranscriptNodeKey| {
+                if let TranscriptNodeKey::Activity { content_id, .. } = key
+                    && matches!(content_id, TranscriptContentId::TranscriptFold { run_id: id, .. } if *id == run_id)
+                {
+                    *content_id = focus_content;
+                }
+            };
+            if let Some(anchor) = &mut cursor.anchor {
+                retarget(&mut anchor.key);
+            }
+            if let Some(block) = &mut cursor.block_cursor {
+                retarget(&mut block.key);
+            }
+        }
         self.invalidate_render();
         true
     }
@@ -680,6 +727,7 @@ impl TranscriptState {
     pub(crate) fn prepend_transcript_parts(
         &mut self,
         older: Vec<agena_api::resource::SessionTranscriptPart>,
+        folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
         width: u16,
         height: u16,
     ) -> bool {
@@ -692,6 +740,7 @@ impl TranscriptState {
         combined.extend(self.parts.clone());
         self.merge_parts(combined);
         self.transcript_older_pages_loaded = true;
+        self.merge_transcript_folds(folds);
 
         let next_lines = self.rendered(width).lines.len();
         let added_lines = next_lines.saturating_sub(previous_lines);
@@ -1494,15 +1543,47 @@ impl TranscriptState {
         }
 
         for entry in &entries {
-            let rendered = agena_tui_transcript::render_entry_detailed_with_progressive_expansion(
-                entry,
-                width,
-                &self.i18n,
-                &self.detail_expanded_by_default,
-                &self.node_expansions,
-                &self.activity_summary_visible_counts,
-                &self.interaction_views,
-            );
+            let mut rendered =
+                agena_tui_transcript::render_entry_detailed_with_progressive_expansion(
+                    entry,
+                    width,
+                    &self.i18n,
+                    &self.detail_expanded_by_default,
+                    &self.node_expansions,
+                    &self.activity_summary_visible_counts,
+                    &self.interaction_views,
+                );
+            for node in &rendered.nodes {
+                if let TranscriptNodeKey::Activity {
+                    content_id: TranscriptContentId::TranscriptFold { run_id, .. },
+                    ..
+                } = &node.key
+                {
+                    let fold = self
+                        .transcript_folds
+                        .iter()
+                        .find(|fold| fold.run_id == *run_id);
+                    let owns_run = |id: &i64| {
+                        id == run_id || fold.is_some_and(|fold| fold.run_ids.contains(id))
+                    };
+                    let label = if self
+                        .transcript_fold_loads
+                        .keys()
+                        .any(|(id, _)| owns_run(id))
+                    {
+                        Some(self.i18n.text("transcript-fold-loading"))
+                    } else {
+                        self.transcript_fold_errors.iter().find(|(id, _)| owns_run(id)).map(|(_, error)| self.i18n.text_args(
+                            "transcript-fold-error", &agena_tui::fl_args!("error" => agena_tui::sanitize_picker_text(error)),
+                        ))
+                    };
+                    if let Some(label) = label
+                        && let Some(line) = rendered.lines.get_mut(node.start_line)
+                    {
+                        *line = RenderedLine::dim(label).with_copy_projection(String::new(), 0);
+                    }
+                }
+            }
             let base_line = lines.len();
             let base_node = nodes.len();
             lines.extend(rendered.lines);
@@ -4097,7 +4178,7 @@ mod stall_recovery_tests {
         state.move_cursor_by_wheel(80, 4, -2);
         let reading_top = state.viewport_top();
 
-        assert!(state.prepend_transcript_parts(vec![text_part(1, "older page")], 80, 4,));
+        assert!(state.prepend_transcript_parts(vec![text_part(1, "older page")], vec![], 80, 4,));
         assert_eq!(
             state
                 .parts

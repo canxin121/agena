@@ -29,7 +29,8 @@ use tokio::sync::mpsc;
 
 use super::{LiveEvent, SessionRefresh};
 
-pub(crate) const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 3;
+pub(crate) const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 2;
+pub(crate) const OLDER_TRANSCRIPT_PAGE_SIZE: u64 = 6;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionTranscriptPage {

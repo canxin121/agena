@@ -111,7 +111,9 @@ impl App {
                 let count = self.transcript_motion_count();
                 self.transcript
                     .move_cursor_by_visual_lines(width, height, direction, count);
-                if direction == TranscriptMoveDirection::Up {}
+                if direction == TranscriptMoveDirection::Up {
+                    self.request_older_transcript_parts_if_needed();
+                }
             }
             Some(action @ (KeyAction::PreviousMessage | KeyAction::NextMessage)) => {
                 self.cancel_pointer_selection_if_not_visual(width, height);
@@ -123,7 +125,9 @@ impl App {
                 let count = self.transcript_motion_count();
                 self.transcript
                     .move_cursor_by_messages(width, height, direction, count);
-                if direction == TranscriptMoveDirection::Up {}
+                if direction == TranscriptMoveDirection::Up {
+                    self.request_older_transcript_parts_if_needed();
+                }
             }
             Some(KeyAction::LineStart) => {
                 self.cancel_pointer_selection_if_not_visual(width, height);
@@ -240,6 +244,7 @@ impl App {
             Some(KeyAction::PageUp) => {
                 self.clear_transcript_pending_command();
                 self.transcript.move_cursor_by_page(width, height, false);
+                self.request_older_transcript_parts_if_needed();
             }
             Some(KeyAction::PageDown) => {
                 self.clear_transcript_pending_command();
@@ -249,6 +254,7 @@ impl App {
                 self.clear_transcript_pending_command();
                 self.transcript
                     .move_cursor_by_half_page(width, height, false);
+                self.request_older_transcript_parts_if_needed();
             }
             Some(KeyAction::HalfPageDown) => {
                 self.clear_transcript_pending_command();
@@ -260,6 +266,7 @@ impl App {
                 let count = self.transcript_motion_count();
                 self.transcript
                     .scroll_viewport_by_lines(width, height, false, count);
+                self.request_older_transcript_parts_if_needed();
             }
             Some(KeyAction::ScrollLineDown) => {
                 self.clear_transcript_pending_command();
@@ -312,6 +319,7 @@ impl App {
                         );
                     } else {
                         self.transcript.scroll_to_top(width, height);
+                        self.request_older_transcript_parts_if_needed();
                     }
                 }
                 Some(KeyAction::ToggleVisualCharacter) => {

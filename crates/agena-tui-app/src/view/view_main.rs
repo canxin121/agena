@@ -379,6 +379,34 @@ impl App {
                 right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
+        if self.transcript.session_id.is_some()
+            && layout.header.height > 0
+            && (scroll <= 3 || self.transcript.transcript_older_loading)
+        {
+            let label = if self.transcript.transcript_older_loading || self.transcript.state_loading
+            {
+                self.i18n.text("transcript-history-loading")
+            } else if let Some(error) = &self.transcript.transcript_older_error {
+                self.i18n.text_args(
+                    "transcript-history-error",
+                    &agena_tui::fl_args!("error" => agena_tui::sanitize_picker_text(error)),
+                )
+            } else if self.transcript.transcript_has_more {
+                self.i18n.text("transcript-history-more")
+            } else {
+                self.i18n.text("transcript-history-start")
+            };
+            frame.render_widget(
+                Paragraph::new(label)
+                    .style(Style::default().fg(agena_tui_components::theme::accent_color())),
+                Rect::new(
+                    layout.body.x,
+                    layout.body.y.saturating_sub(1),
+                    layout.body.width,
+                    1,
+                ),
+            );
+        }
         self.render_surface_selection_highlight(frame, crate::SurfaceSelectionKind::HeaderTitle);
         self.render_surface_selection_highlight(frame, crate::SurfaceSelectionKind::HeaderSubtitle);
         let scrollbar_area = agena_tui_transcript::scrollbar_area(area, layout.body);

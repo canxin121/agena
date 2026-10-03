@@ -55,22 +55,38 @@ impl App {
             AppMessage::SessionStateLoaded { session_id, result } => {
                 self.handle_session_state_loaded(session_id, result)
             }
-            AppMessage::TranscriptPartsLoaded { session_id, result } => {
-                self.handle_transcript_parts_loaded(session_id, result)
+            AppMessage::TranscriptPartsLoaded {
+                session_id,
+                requested_at,
+                result,
+            } => {
+                if self.transcript.transcript_older_in_flight_since == Some(requested_at) {
+                    self.handle_transcript_parts_loaded(session_id, result)
+                }
             }
             AppMessage::TranscriptFoldPartsLoaded {
                 session_id,
+                requested_at,
                 run_id,
                 anchor_part_id,
                 expand_all,
                 result,
-            } => self.handle_transcript_fold_parts_loaded(
-                session_id,
-                run_id,
-                anchor_part_id,
-                expand_all,
-                result,
-            ),
+            } => {
+                if self
+                    .transcript
+                    .transcript_fold_loads
+                    .get(&(run_id, anchor_part_id))
+                    == Some(&requested_at)
+                {
+                    self.handle_transcript_fold_parts_loaded(
+                        session_id,
+                        run_id,
+                        anchor_part_id,
+                        expand_all,
+                        result,
+                    );
+                }
+            }
             AppMessage::ToolDetailLoaded {
                 session_id,
                 part_id,
@@ -401,27 +417,30 @@ impl App {
         self.transcript.transcript_older_in_flight_since = None;
         match result {
             Ok(page) => {
+                self.transcript.transcript_older_error = None;
                 let previous_cursor = self.transcript.transcript_next_cursor.clone();
-                let cursor_progressed = page.next_cursor != previous_cursor;
-                let loaded = self.transcript.prepend_transcript_parts(
+                if page.has_more
+                    && (page.next_cursor.is_none() || page.next_cursor == previous_cursor)
+                {
+                    self.transcript.transcript_older_error =
+                        Some(self.i18n.text("transcript-history-stalled"));
+                    return;
+                }
+                self.transcript.prepend_transcript_parts(
                     page.parts,
+                    page.folds,
                     self.layout.transcript_body.width,
                     self.layout.transcript_body.height,
                 );
-                if loaded && cursor_progressed {
-                    self.transcript
-                        .set_transcript_page(page.next_cursor, page.has_more);
-                    self.transcript.merge_transcript_folds(page.folds);
-                    if let Some(execution) = self.transcript.execution.as_mut() {
-                        execution.parts = self.transcript.parts.clone();
-                    }
-                } else {
-                    // A repeated cursor or an empty page must not leave the
-                    // top trigger in a retry loop forever.
-                    self.transcript.set_transcript_page(None, false);
+                self.transcript
+                    .set_transcript_page(page.next_cursor, page.has_more);
+                self.transcript.transcript_older_pages_loaded = true;
+                if let Some(execution) = self.transcript.execution.as_mut() {
+                    execution.parts = self.transcript.parts.clone();
                 }
             }
             Err(error) => {
+                self.transcript.transcript_older_error = Some(error.to_string());
                 self.flash_error(error);
             }
         }
@@ -441,10 +460,24 @@ impl App {
         self.transcript
             .transcript_fold_loads
             .remove(&(run_id, anchor_part_id));
+        self.transcript.invalidate_render();
         match result {
             Ok(page) => {
                 let next_cursor = page.next_cursor.clone();
                 let has_more = page.has_more;
+                let empty = page.parts.iter().all(|part| part.kind == "run");
+                if has_more
+                    && self.transcript.transcript_folds.iter().any(|fold| {
+                        fold.run_id == run_id
+                            && fold.anchor_part_id == anchor_part_id
+                            && (next_cursor.is_none() || next_cursor == fold.next_cursor)
+                    })
+                {
+                    self.transcript
+                        .transcript_fold_errors
+                        .insert(run_id, self.i18n.text("transcript-history-stalled"));
+                    return;
+                }
                 let loaded = self.transcript.merge_fold_parts(
                     run_id,
                     anchor_part_id,
@@ -456,7 +489,7 @@ impl App {
                     if let Some(execution) = self.transcript.execution.as_mut() {
                         execution.parts = self.transcript.parts.clone();
                     }
-                    if expand_all
+                    if (expand_all || empty)
                         && page.has_more
                         && let Some(next_fold) = self
                             .transcript
@@ -465,11 +498,20 @@ impl App {
                             .find(|fold| fold.run_id == run_id || fold.run_ids.contains(&run_id))
                             .cloned()
                     {
-                        self.request_transcript_fold_parts(next_fold, true, 50);
+                        self.request_transcript_fold_parts(
+                            next_fold,
+                            expand_all,
+                            if expand_all { 50 } else { 5 },
+                        );
                     }
                 }
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                self.transcript
+                    .transcript_fold_errors
+                    .insert(run_id, error.to_string());
+                self.flash_error(error);
+            }
         }
     }
 

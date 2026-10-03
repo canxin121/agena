@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { RiArrowGoBackLine, RiCheckLine, RiClipboardLine, RiGitBranchLine, RiLoader4Line } from '@remixicon/vue'
 
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
@@ -9,11 +9,17 @@ import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import type { MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
 import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
-import { foldTranscriptActivityRun, transcriptActivityRunKey } from '@/pages/chat/transcriptActivityFolding'
+import {
+  foldTranscriptReply,
+  preserveActivityVisibility,
+  transcriptActivityRunKey,
+  type ActivityVisibility,
+} from '@/pages/chat/transcriptActivityFolding'
 import { transcriptPartNavigationText } from '@/pages/chat/transcriptNavigation'
 import { partStatusPresentation } from '@/pages/chat/transcriptPartPresentation'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, normalizeTranscriptPartPageSize } from '@/pages/chat/transcriptPartPaging'
 import { useI18n } from 'vue-i18n'
+import { transcriptFoldKey } from '@/stores/chat/transcriptFolds'
 
 const props = defineProps<{
   message: MessageLike
@@ -25,6 +31,9 @@ const props = defineProps<{
   isStreaming: boolean
   collapseSignal: number
   activityPageSize: number
+  activityVisibility?: ActivityVisibility
+  foldLoadingByKey?: Record<string, boolean>
+  foldErrorByKey?: Record<string, string>
   isCompactTouch: boolean
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
   isNodeSelected?: (key: string) => boolean
@@ -40,6 +49,7 @@ const emit = defineEmits<{
   (event: 'foldExpand', fold: MessageFold, all: boolean): void
   (event: 'nodeSelect', key: string): void
   (event: 'setActivityPageSize', size: number): void
+  (event: 'revealParts'): void
 }>()
 
 const { t } = useI18n()
@@ -64,52 +74,55 @@ const fallbackError = computed(() => {
   if (hasErrorPart.value || !assistantError.value || assistantError.value.interrupted) return ''
   return assistantError.value.message || ''
 })
-const activityRunVisibleCount = ref<Record<string, number>>({})
+const localVisibility = reactive<ActivityVisibility>({ ids: [] })
+const visibility = computed(() => props.activityVisibility ?? localVisibility)
 const activityPageSize = computed(() => normalizeTranscriptPartPageSize(props.activityPageSize))
+const summaryKey = computed(() => transcriptActivityRunKey(messageId.value, [], 0))
+
+// Explicitly revealed rows remain visible when a live reply appends content.
+watch(
+  () => props.displayParts.filter((part) => part.kind !== 'lifecycle').map((part) => part.id),
+  (next) => {
+    const state = visibility.value
+    if (state.count !== undefined) state.count = preserveActivityVisibility(next, state.ids, state.count)
+    state.ids = next
+  },
+  { flush: 'sync', immediate: true },
+)
+watch(
+  () => props.collapseSignal,
+  () => {
+    visibility.value.count = undefined
+  },
+)
 
 type TranscriptRow =
   | { kind: 'part'; key: string; part: TranscriptDisplayPart }
   | { kind: 'summary'; key: string; hiddenCount: number; fold: MessageFold | null }
 
 const transcriptRows = computed<TranscriptRow[]>(() => {
-  if (role.value === 'user') {
+  if (role.value !== 'assistant') {
     return props.displayParts.map((part) => ({ kind: 'part' as const, key: part.key, part }))
   }
   const rows: TranscriptRow[] = []
-  let index = 0
-  while (index < props.displayParts.length) {
-    const current = props.displayParts[index]
-    if (!current) break
-    if (current.kind === 'text') {
-      rows.push({ kind: 'part', key: current.key, part: current })
-      index += 1
-      continue
-    }
-    const run: TranscriptDisplayPart[] = []
-    while (index < props.displayParts.length && props.displayParts[index]?.kind !== 'text') {
-      const part = props.displayParts[index]
-      if (part) run.push(part)
-      index += 1
-    }
-    const remoteFold = props.message.folds?.find((fold) =>
-      run.some((part) => String(part.id) === String(fold.anchorPartId)),
-    )
-    // The newest part id is stable while older pages are prepended. Using the
-    // server fold anchor here would recreate this key after every fetch and
-    // immediately hide the parts that were just revealed.
-    const summaryKey = transcriptActivityRunKey(messageId.value, run, index)
-    const visibleCount = activityRunVisibleCount.value[summaryKey] ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
-    const folded = foldTranscriptActivityRun(run, visibleCount)
-    const hiddenCount = (remoteFold?.hiddenCount || 0) + folded.hiddenCount
-    if (hiddenCount) {
-      rows.push({ kind: 'summary', key: summaryKey, hiddenCount, fold: remoteFold || null })
-    }
-    for (const part of folded.visibleParts) {
-      rows.push({ kind: 'part', key: part.key, part })
-    }
-  }
+  const key = summaryKey.value
+  // The remote prefix belongs to the reply, even when its first visible part
+  // is filtered out by the reasoning preference. Keep its control independent
+  // of individual presentation rows.
+  const visibleCount = visibility.value.count ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
+  const folded = foldTranscriptReply(props.displayParts, props.message.folds || [], visibleCount)
+  if (folded.hiddenCount) rows.push({ kind: 'summary', key, hiddenCount: folded.hiddenCount, fold: folded.fold })
+  for (const part of folded.visibleParts) rows.push({ kind: 'part', key: part.key, part })
   return rows
 })
+
+function foldLoading(fold: MessageFold | null): boolean {
+  return Boolean(fold && props.foldLoadingByKey?.[transcriptFoldKey(props.sessionId || '', fold)])
+}
+
+function foldError(fold: MessageFold | null): string {
+  return fold ? props.foldErrorByKey?.[transcriptFoldKey(props.sessionId || '', fold)] || '' : ''
+}
 
 function selected(key: string): boolean {
   return props.isNodeSelected?.(key) === true
@@ -136,10 +149,13 @@ function togglePart(part: TranscriptDisplayPart) {
 }
 
 function revealActivitySummary(row: Extract<TranscriptRow, { kind: 'summary' }>, all = false, requestRemote = true) {
-  const current = activityRunVisibleCount.value[row.key] ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
+  if (foldLoading(row.fold)) return
+  emit('revealParts')
+  const current = visibility.value.count ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
   const next = all ? Number.MAX_SAFE_INTEGER : current + Math.max(1, Math.min(activityPageSize.value, row.hiddenCount))
-  activityRunVisibleCount.value = { ...activityRunVisibleCount.value, [row.key]: next }
-  if (row.fold && requestRemote) emit('foldExpand', row.fold, all)
+  visibility.value.count = next
+  const cachedCount = props.displayParts.filter((part) => part.kind !== 'lifecycle').length
+  if (row.fold && requestRemote && (all || next > cachedCount)) emit('foldExpand', row.fold, all)
   emit('nodeSelect', row.key)
 }
 
@@ -319,18 +335,23 @@ function partNavigationText(part: TranscriptDisplayPart): string {
               :tooltip="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
               :title="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
               :is-compact-touch="isCompactTouch"
-              :disabled="row.hiddenCount <= 0"
+              :disabled="row.hiddenCount <= 0 || foldLoading(row.fold)"
               data-transcript-toggle="true"
               data-part-expand-next="true"
               @click.stop="revealSummary(row)"
             >
-              {{ t('chat.messages.controls.expandNextCount', { count: activityPageSize }) }}
+              <RiLoader4Line v-if="foldLoading(row.fold)" class="h-3 w-3 animate-spin" />
+              {{
+                foldLoading(row.fold)
+                  ? t('common.loading')
+                  : t('chat.messages.controls.expandNextCount', { count: activityPageSize })
+              }}
             </ToolbarChipButton>
             <ToolbarChipButton
               :tooltip="t('chat.messages.controls.collectAll')"
               :title="t('chat.messages.controls.collectAll')"
               :is-compact-touch="isCompactTouch"
-              :disabled="row.hiddenCount <= 0"
+              :disabled="row.hiddenCount <= 0 || foldLoading(row.fold)"
               data-part-collect-all="true"
               @click.stop="revealSummary(row, true)"
             >
@@ -339,6 +360,9 @@ function partNavigationText(part: TranscriptDisplayPart): string {
           </div>
           <span class="min-w-0 px-1 font-mono text-[11px] text-muted-foreground">
             {{ t('chat.messages.activity.moreCount', { count: row.hiddenCount }) }}
+          </span>
+          <span v-if="foldError(row.fold)" role="alert" class="basis-full text-xs text-destructive">
+            {{ foldError(row.fold) }}
           </span>
         </div>
         <AgenaTranscriptPart

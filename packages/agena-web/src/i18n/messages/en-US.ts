@@ -1367,6 +1367,8 @@ export default {
         desktopDescription: 'Use the left panel to pick or create one.',
       },
       loadingOlder: 'Loading older messages...',
+      loadOlder: 'Load earlier messages',
+      historyStart: 'Beginning of conversation',
       activity: {
         moreCount: '+{count} more...',
         toolInvocation: {

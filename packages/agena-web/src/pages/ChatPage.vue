@@ -738,6 +738,7 @@ const {
   scrollToBottomOnceAfterLoad,
   handleScroll,
   handleWheel,
+  loadOlderAndPreserveViewport,
   navigableMessageIds,
   navIndex,
   navBottomOffset,
@@ -2173,8 +2174,6 @@ watch(
   () => lastMessageKey.value,
   () => {
     // Preserve user scroll position if they intentionally scrolled up.
-    // `scheduleScrollToBottom()` has an additional near-bottom guard to recover
-    // from stale bottom flags after background resume.
     if (pendingInitialScrollSessionId.value) return
     scheduleScrollToBottom()
   },
@@ -2434,6 +2433,10 @@ const viewCtx = {
   // Scroll + nav.
   handleScroll,
   handleWheel,
+  loadOlderHistory: loadOlderAndPreserveViewport,
+  preparePartReveal: () => {
+    isAtBottom.value = false
+  },
   isAtBottom,
   navigableMessageIds,
   navBottomOffset,

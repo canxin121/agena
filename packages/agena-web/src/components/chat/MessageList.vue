@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, reactive } from 'vue'
 import { RiCheckLine, RiLoader4Line, RiSparkling2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -20,6 +20,7 @@ import { formatTimeHMS } from '@/i18n/intl'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import { partInteractionRequestIds, pendingInteractionPartSource } from '@/pages/chat/transcriptPartPresentation'
 import { optimisticUserParts, projectLocalPart } from '@/pages/chat/transcriptProjection'
+import type { ActivityVisibility } from '@/pages/chat/transcriptActivityFolding'
 
 const props = defineProps<{
   isCompactLayout: boolean
@@ -32,6 +33,8 @@ const props = defineProps<{
   pendingInitialScrollSessionId: string | null
   loadingOlder: boolean
   activityPageSize: number
+  foldLoadingByKey?: Record<string, boolean>
+  foldErrorByKey?: Record<string, string>
   showTimestamps: boolean
   formatTime: (ms?: number) => string
   copiedMessageId: string
@@ -62,9 +65,16 @@ const emit = defineEmits<{
   (event: 'copySessionError'): void
   (event: 'clearSessionError'): void
   (event: 'setActivityPageSize', size: number): void
+  (event: 'revealParts'): void
 }>()
 
 const { t } = useI18n()
+// Keep deliberate expansion when a session's keyed message subtree remounts.
+const activityVisibility = reactive<Record<string, ActivityVisibility>>({})
+function replyVisibility(id: string): ActivityVisibility {
+  const key = `${props.selectedSessionId}:${id}`
+  return (activityVisibility[key] ??= { ids: [] })
+}
 
 const durableInteractionRequestIds = computed(() => {
   const ids = new Set<string>()
@@ -225,15 +235,8 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
   </div>
 
   <template v-else>
-    <div v-if="loadingOlder" class="mb-2 flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
-      <RiLoader4Line class="h-3.5 w-3.5 animate-spin" />
-      {{ t('chat.messages.loadingOlder') }}
-    </div>
-
-    <TransitionGroup
+    <div
       :key="selectedSessionId || 'none'"
-      :name="pendingInitialScrollSessionId ? '' : 'chatlist'"
-      tag="div"
       class="space-y-1 transition-opacity duration-150 ease-out"
       :class="pendingInitialScrollSessionId ? 'pointer-events-none opacity-0' : ''"
       data-transcript-root="true"
@@ -250,6 +253,9 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           :is-streaming="isStreamingAssistantMessage(block.message)"
           :collapse-signal="activityCollapseSignal"
           :activity-page-size="activityPageSize"
+          :activity-visibility="replyVisibility(String(block.message.info.id))"
+          :fold-loading-by-key="foldLoadingByKey"
+          :fold-error-by-key="foldErrorByKey"
           :is-compact-touch="isCompactTouch"
           :is-part-expanded="isPartExpanded"
           :is-node-selected="isNodeSelected"
@@ -262,6 +268,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           @fold-expand="forwardFoldExpand"
           @node-select="$emit('nodeSelect', $event)"
           @set-activity-page-size="$emit('setActivityPageSize', $event)"
+          @reveal-parts="$emit('revealParts')"
         />
       </template>
 
@@ -326,7 +333,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           :session-id="selectedSessionId"
         />
       </article>
-    </TransitionGroup>
+    </div>
 
     <article v-if="sessionError" class="mt-3 py-2">
       <header class="flex min-h-6 items-center gap-2 px-1 text-[11px] text-muted-foreground">

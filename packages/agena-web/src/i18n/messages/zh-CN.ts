@@ -1360,6 +1360,8 @@ export default {
         desktopDescription: '使用左侧面板选择或创建会话。',
       },
       loadingOlder: '正在加载更早的消息...',
+      loadOlder: '加载更早的消息',
+      historyStart: '已到会话开头',
       activity: {
         moreCount: '+{count} 条更多...',
         toolInvocation: {

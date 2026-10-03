@@ -140,6 +140,8 @@ export type ChatPageViewContext = {
 
   handleScroll: (event?: Event) => void
   handleWheel: (event: WheelEvent) => void
+  loadOlderHistory: () => Promise<boolean>
+  preparePartReveal: () => void
   isAtBottom: MaybeRef<boolean>
   navigableMessageIds: MaybeRef<string[]>
   navBottomOffset: MaybeRef<string>

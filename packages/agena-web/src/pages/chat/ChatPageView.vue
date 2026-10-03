@@ -447,12 +447,33 @@ void sessionActionsMenuRef
 
           <div
             ref="scrollEl"
-            class="min-h-0 chat-scroll flex-1 overflow-y-auto"
+            class="min-h-0 chat-scroll flex-1 overflow-y-auto [overflow-anchor:none]"
             data-scrollbar="chat"
             @scroll="handleScroll"
             @wheel="handleWheel"
           >
             <div ref="contentEl" class="chat-message-column py-3">
+              <div v-if="chat.messages.length" class="min-h-8 px-2 pb-2" data-transcript-chrome="true">
+                <button
+                  v-if="!chat.selectedHistory.exhausted || loadingOlder"
+                  type="button"
+                  class="flex min-h-7 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-wait"
+                  :disabled="loadingOlder"
+                  @click="ctx.loadOlderHistory"
+                >
+                  <RiLoader4Line v-if="loadingOlder" class="h-3.5 w-3.5 animate-spin" />
+                  <RiArrowUpLine v-else class="h-3.5 w-3.5" />
+                  {{ t(loadingOlder ? 'chat.messages.loadingOlder' : 'chat.messages.loadOlder') }}
+                </button>
+                <span v-else class="px-2 text-[11px] text-muted-foreground">{{ t('chat.messages.historyStart') }}</span>
+                <p
+                  v-if="chat.historyErrorBySession[chat.selectedSessionId || '']"
+                  role="alert"
+                  class="px-2 text-xs text-destructive"
+                >
+                  {{ chat.historyErrorBySession[chat.selectedSessionId || ''] }}
+                </p>
+              </div>
               <MessageList
                 :is-compact-layout="ui.isCompactLayout"
                 :is-compact-touch="ui.isCompactTouch"
@@ -464,6 +485,8 @@ void sessionActionsMenuRef
                 :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
                 :loading-older="loadingOlder"
                 :activity-page-size="chat.transcriptPartPageSize"
+                :fold-loading-by-key="chat.foldLoadingByKey"
+                :fold-error-by-key="chat.foldErrorByKey"
                 :show-timestamps="showTimestamps"
                 :format-time="formatTime"
                 :copied-message-id="copiedMessageId"
@@ -487,6 +510,7 @@ void sessionActionsMenuRef
                 @copy="handleCopyMessage"
                 @part-toggle="setTranscriptPartExpanded"
                 @fold-expand="loadFoldedActivity"
+                @reveal-parts="ctx.preparePartReveal"
                 @node-select="selectTranscriptNode"
                 @copySessionError="handleCopySessionError"
                 @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"

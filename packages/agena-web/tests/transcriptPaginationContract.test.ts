@@ -37,5 +37,5 @@ test('chat opens with one recent page and delegates older loading to user scroll
   assert.doesNotMatch(chatPage, /function expandNextTranscriptParts/)
   assert.doesNotMatch(chatPage, /function collectAllTranscriptParts/)
   assert.match(store, /listMessages\(sid, limit, undefined, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE\)/)
-  assert.match(store, /listMessages\(sid, MESSAGE_PAGE_SIZE, cursor, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE\)/)
+  assert.match(store, /listMessages\(sid, OLDER_MESSAGE_PAGE_SIZE, cursor, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE\)/)
 })

@@ -31,6 +31,7 @@ import type { JsonObject, JsonValue } from '../types/json'
 import { readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, normalizeTranscriptPartPageSize } from '@/pages/chat/transcriptPartPaging'
+import { reconcileTranscriptFolds, transcriptFoldKey } from './chat/transcriptFolds'
 
 // ─── constants ──────────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ const SESSION_PAGE_SIZE = 30
 // group. The server keeps consecutive runs of one role together so a burst of
 // user sends or assistant continuations is never split at a page boundary.
 const MESSAGE_PAGE_SIZE = 2
+const OLDER_MESSAGE_PAGE_SIZE = 6
 const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id'
 
 function isRecord(value: JsonValue): value is JsonObject {
@@ -104,6 +106,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const historyLimitBySession = ref<Record<string, number>>({})
   const historyUserMessageCountBySession = ref<Record<string, number | null>>({})
   const historyLoadingBySession = ref<Record<string, boolean>>({})
+  const foldLoadingByKey = ref<Record<string, boolean>>({})
+  const foldErrorByKey = ref<Record<string, string>>({})
+  const historyErrorBySession = ref<Record<string, string>>({})
   const historyExhaustedBySession = ref<Record<string, boolean>>({})
   const historyCursorBySession = ref<Record<string, string | null>>({})
   // Do not infer this from the number of MessageEntry objects: an older raw
@@ -532,9 +537,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const nextMessages =
         shouldReplace || (!currentMessages.length && !hasLoadedOlder)
           ? ordered
-          : mergeMessageLists(currentMessages, ordered, {
-              authoritativeFolds: opts?.authoritativeFolds,
-            })
+          : reconcileTranscriptFolds(
+              mergeMessageLists(currentMessages, ordered, { authoritativeFolds: opts?.authoritativeFolds }),
+              ordered,
+              currentMessages,
+            )
       setSessionMessages(sid, nextMessages)
       markMessagesHydrated(sid)
       historyUserMessageCountBySession.value = {
@@ -641,10 +648,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const generation = transcriptCacheGeneration
 
     historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
+    historyErrorBySession.value = { ...historyErrorBySession.value, [sid]: '' }
     try {
       const cursor = historyCursorBySession.value[sid] ?? null
-      const page = await chatApi.listMessages(sid, MESSAGE_PAGE_SIZE, cursor, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE)
+      const page = await chatApi.listMessages(sid, OLDER_MESSAGE_PAGE_SIZE, cursor, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE)
       if (generation !== transcriptCacheGeneration) return false
+      if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor)) {
+        throw new Error('Session history pagination did not advance')
+      }
       const normalized = normalizeMessageList(page.entries)
       const merged = mergeMessageLists(normalized, ensureSessionMessages(sid))
       setSessionMessages(sid, merged)
@@ -657,6 +668,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
       historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
       historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
       return normalized.length > 0
+    } catch (error) {
+      if (generation === transcriptCacheGeneration) {
+        historyErrorBySession.value = {
+          ...historyErrorBySession.value,
+          [sid]: error instanceof Error ? error.message : String(error),
+        }
+      }
+      return false
     } finally {
       if (generation === transcriptCacheGeneration) {
         historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: false }
@@ -672,55 +691,76 @@ const useChatStoreDefinition = defineStore('chat', () => {
   ): Promise<boolean> {
     const sid = (sessionId || '').trim()
     if (!sid || !fold.nextCursor || !Number.isFinite(fold.runId)) return false
-    if (historyLoadingBySession.value[sid]) return false
+    const key = transcriptFoldKey(sid, fold)
+    if (foldLoadingByKey.value[key]) return false
     const generation = transcriptCacheGeneration
-    historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
+    foldLoadingByKey.value = { ...foldLoadingByKey.value, [key]: true }
+    foldErrorByKey.value = { ...foldErrorByKey.value, [key]: '' }
     try {
       let cursor: string | null = fold.nextCursor
       let loadedAny = false
       let activeFold = { ...fold }
-      let remaining = Math.max(0, Math.floor(Number(activeFold.hiddenCount)))
-      const requestedPageSize = normalizeTranscriptPartPageSize(pageSize)
+      const requestedPageSize = all ? 50 : normalizeTranscriptPartPageSize(pageSize)
       do {
         const page = await chatApi.listTranscriptFoldParts(sid, activeFold.runIds, requestedPageSize, cursor)
         if (generation !== transcriptCacheGeneration) return false
+        if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor)) {
+          throw new Error('Reply pagination did not advance')
+        }
         const normalized = normalizeMessageList(page.entries)
-        if (!normalized.length) break
+        const loadedIds = new Set(ensureSessionMessages(sid).flatMap((entry) => entry.parts.map((part) => part.id)))
         const merged = mergeMessageLists(normalized, ensureSessionMessages(sid))
         setSessionMessages(sid, merged)
         loadedAny = true
-        const fetchedNonText = normalized.reduce(
+        const fetchedContent = normalized.reduce(
           (total, entry) =>
             total +
             entry.parts.filter((part) => {
               const kind = String(part.agenaKind || '').toLowerCase()
-              return kind !== 'run'
+              return kind !== 'run' && !loadedIds.has(part.id)
             }).length,
           0,
         )
-        remaining = Math.max(0, remaining - fetchedNonText)
-        cursor = page.nextCursor ?? null
+        // A recent snapshot can advance the reply tail while this older page
+        // is in flight. Merge its content but retain that newer gap's cursor.
+        const currentFold = merged
+          .flatMap((entry) => entry.folds || [])
+          .find((item) =>
+            [item.runId, ...item.runIds].some((id) => [activeFold.runId, ...activeFold.runIds].includes(id)),
+          )
+        if (!currentFold) break
+        const changedCursor: boolean = currentFold.nextCursor !== cursor
+        const remaining = Math.max(0, currentFold.hiddenCount - fetchedContent)
+        cursor = changedCursor ? currentFold.nextCursor : (page.nextCursor ?? null)
         const nextAnchor =
           normalized
             .flatMap((entry) => entry.parts)
             .find((part) => {
               const kind = String(part.agenaKind || '').toLowerCase()
               return kind !== 'run'
-            })?.id || fold.anchorPartId
+            })?.id || currentFold.anchorPartId
         const nextFold: MessageFold = {
-          ...activeFold,
-          anchorPartId: String(nextAnchor),
-          hiddenCount: remaining,
+          ...currentFold,
+          anchorPartId: changedCursor ? currentFold.anchorPartId : String(nextAnchor),
+          hiddenCount: changedCursor || page.hasMore ? remaining : 0,
           nextCursor: cursor,
         }
-        replaceMessageFold(sid, activeFold, nextFold)
+        replaceMessageFold(sid, currentFold, nextFold)
         activeFold = nextFold
-        if (!all || !page.hasMore || !cursor || remaining <= 0) break
-      } while (all)
+        if (!cursor || nextFold.hiddenCount <= 0 || (!all && fetchedContent > 0)) break
+      } while (cursor)
       return loadedAny
+    } catch (error) {
+      if (generation === transcriptCacheGeneration) {
+        foldErrorByKey.value = {
+          ...foldErrorByKey.value,
+          [key]: error instanceof Error ? error.message : String(error),
+        }
+      }
+      return false
     } finally {
       if (generation === transcriptCacheGeneration) {
-        historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: false }
+        foldLoadingByKey.value = { ...foldLoadingByKey.value, [key]: false }
       }
     }
   }
@@ -764,6 +804,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     historyLimitBySession.value = {}
     historyUserMessageCountBySession.value = {}
     historyLoadingBySession.value = {}
+    foldLoadingByKey.value = {}
+    foldErrorByKey.value = {}
+    historyErrorBySession.value = {}
     historyExhaustedBySession.value = {}
     historyCursorBySession.value = {}
     historyOlderLoadedBySession.value = {}
@@ -1775,6 +1818,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     messagesLoading,
     messagesError,
     transcriptPartPageSize,
+    foldLoadingByKey,
+    foldErrorByKey,
+    historyErrorBySession,
     selectedAttention,
     selectedSessionError,
     selectedSessionRunConfig,

@@ -1,3 +1,7 @@
+import type { MessageFold } from '../../types/chat'
+
+export type ActivityVisibility = { count?: number; ids: string[] }
+
 export type TranscriptActivityFold<T> = {
   hiddenCount: number
   visibleParts: T[]
@@ -17,15 +21,37 @@ export function foldTranscriptActivityRun<T>(parts: readonly T[], visibleCount =
   }
 }
 
+export function foldTranscriptReply<T extends { kind: string }>(
+  parts: readonly T[],
+  folds: readonly MessageFold[],
+  visibleCount = 5,
+): TranscriptActivityFold<T> & { fold: MessageFold | null } {
+  const fold = folds.find((item) => item.hiddenCount > 0 && item.nextCursor) || null
+  const content = foldTranscriptActivityRun(
+    parts.filter((part) => part.kind !== 'lifecycle'),
+    visibleCount,
+  )
+  return {
+    fold,
+    hiddenCount: (fold?.hiddenCount || 0) + content.hiddenCount,
+    visibleParts: [...content.visibleParts, ...parts.filter((part) => part.kind === 'lifecycle')],
+  }
+}
+
+export function preserveActivityVisibility(next: string[], previous: string[], count: number): number {
+  if (!previous.length) return count
+  const tail = next.indexOf(previous[previous.length - 1]!)
+  return tail < 0 ? count : count + next.length - tail - 1
+}
+
 /**
- * Older expansion pages are prepended, so the newest id is the stable run
- * anchor. A server fold's oldest-visible anchor changes after every request
- * and must never be used as local visibility state.
+ * The reply identity survives both prepending history and streaming new
+ * parts. Neither end of its changing part window owns expansion state.
  */
 export function transcriptActivityRunKey(
   messageId: string,
-  parts: readonly { id?: unknown }[],
-  fallback: string | number,
+  _parts: readonly { id?: unknown }[],
+  _fallback: string | number,
 ): string {
-  return `activity-summary:${messageId}:${String(parts.at(-1)?.id || fallback)}`
+  return `activity-summary:${messageId}`
 }

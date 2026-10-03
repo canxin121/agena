@@ -1,4 +1,5 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { captureTranscriptScrollAnchor, restoreTranscriptScrollAnchor } from './transcriptScrollAnchor'
 
 // ChatPage scroll management:
 // - "Pinned" bottom-following behavior while user is at bottom
@@ -16,7 +17,7 @@ export function shouldAutoLoadOlder(opts: {
   if (opts.suppressed) return false
   if (!opts.autoLoadUnlocked) return false
   if (opts.atBottom) return false
-  return opts.scrollTop <= 120
+  return opts.scrollTop <= 240
 }
 
 export function isScrollableY(el: Pick<HTMLElement, 'scrollHeight' | 'clientHeight'> | null | undefined): boolean {
@@ -57,6 +58,8 @@ export function usePinnedScroll(opts: {
 
   // Throttle load-older and suppress auto-load during programmatic navigation.
   let lastLoadOlderAt = 0
+  let historyLoadInFlight = false
+  let historyLoadGeneration = 0
   const suppressAutoLoadOlderUntil = ref(0)
   const autoLoadOlderUnlocked = ref(false)
 
@@ -70,6 +73,9 @@ export function usePinnedScroll(opts: {
   let followResizeLocked = false
 
   function requestInitialScroll(sessionId: string | null | undefined) {
+    historyLoadGeneration += 1
+    historyLoadInFlight = false
+    lastLoadOlderAt = 0
     const sid = typeof sessionId === 'string' ? sessionId.trim() : ''
     pendingInitialScrollSessionId.value = sid || null
     if (!sid) return
@@ -96,10 +102,7 @@ export function usePinnedScroll(opts: {
     if (scrollRaf) return
     scrollRaf = window.requestAnimationFrame(async () => {
       scrollRaf = null
-      // Preserve follow behavior when browser restores from background with a
-      // stale scroll flag but the viewport is still effectively at bottom.
-      if (!isAtBottom.value && !isNearBottomNow(48)) return
-      isAtBottom.value = true
+      if (!isAtBottom.value) return
       await nextTick()
       scrollToBottom('auto')
     })
@@ -142,21 +145,23 @@ export function usePinnedScroll(opts: {
     if (!opts.canLoadOlder?.()) return false
 
     const now = Date.now()
-    if (now - lastLoadOlderAt < 900) return false
+    if (historyLoadInFlight || now - lastLoadOlderAt < 250) return false
     lastLoadOlderAt = now
-    suppressAutoLoadOlderUntil.value = now + 1400
-
-    const prevHeight = el.scrollHeight
-    const prevTop = el.scrollTop
-
-    const ok = await opts.loadOlder()
-    if (!ok) return false
-
-    await nextTick()
-    const nextHeight = el.scrollHeight
-    // Preserve viewport position after prepending older messages.
-    el.scrollTop = prevTop + (nextHeight - prevHeight)
-    return true
+    suppressAutoLoadOlderUntil.value = now + 300
+    const generation = historyLoadGeneration
+    const anchor = captureTranscriptScrollAnchor(el)
+    historyLoadInFlight = true
+    isAtBottom.value = false
+    try {
+      const ok = await opts.loadOlder()
+      if (!ok || generation !== historyLoadGeneration || scrollEl.value !== el) return false
+      await nextTick()
+      if (generation !== historyLoadGeneration || scrollEl.value !== el) return false
+      restoreTranscriptScrollAnchor(el, anchor)
+      return true
+    } finally {
+      if (generation === historyLoadGeneration) historyLoadInFlight = false
+    }
   }
 
   async function maybeLoadOlder() {
@@ -183,7 +188,7 @@ export function usePinnedScroll(opts: {
     autoLoadOlderUnlocked.value = true
     const el = scrollEl.value
     if (!el || !opts.canLoadOlder?.()) return
-    if (el.scrollTop > 120 && isScrollableY(el)) return
+    if (el.scrollTop > 240 && isScrollableY(el)) return
     void loadOlderAndPreserveViewport()
   }
 

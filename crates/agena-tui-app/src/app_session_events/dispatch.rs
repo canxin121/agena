@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 impl App {
     pub(crate) fn handle_message(&mut self, message: AppMessage) {
         match message {
@@ -91,8 +93,9 @@ impl App {
                 session_id,
                 part_id,
                 section,
+                requested_at,
                 result,
-            } => self.handle_tool_detail_loaded(session_id, part_id, section, result),
+            } => self.handle_tool_detail_loaded(session_id, part_id, section, requested_at, result),
             AppMessage::SessionRefreshed { session_id, result } => {
                 self.handle_session_refreshed(session_id, result)
             }
@@ -482,12 +485,24 @@ impl App {
                 let next_cursor = page.next_cursor.clone();
                 let has_more = page.has_more;
                 let empty = page.parts.iter().all(|part| part.kind == "run");
+                let seen = self
+                    .transcript
+                    .transcript_fold_seen_cursors
+                    .entry(run_id)
+                    .or_default();
+                if let Some(cursor) = self
+                    .transcript
+                    .transcript_folds
+                    .iter()
+                    .find(|fold| fold.run_id == run_id && fold.anchor_part_id == anchor_part_id)
+                    .and_then(|fold| fold.next_cursor.clone())
+                {
+                    seen.insert(cursor);
+                }
                 if has_more
-                    && self.transcript.transcript_folds.iter().any(|fold| {
-                        fold.run_id == run_id
-                            && fold.anchor_part_id == anchor_part_id
-                            && (next_cursor.is_none() || next_cursor == fold.next_cursor)
-                    })
+                    && next_cursor
+                        .as_ref()
+                        .is_none_or(|cursor| seen.contains(cursor))
                 {
                     self.transcript
                         .transcript_fold_errors
@@ -534,15 +549,23 @@ impl App {
     pub(crate) fn handle_tool_detail_loaded(
         &mut self,
         session_id: i64,
-        _part_id: i64,
-        _section: agena_api::live::ToolDetailSection,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+        requested_at: Instant,
         result: UiResult<agena_api::live::ToolDetailResource>,
     ) {
-        if self.transcript.session_id != Some(session_id) {
+        if self.transcript.session_id != Some(session_id)
+            || !self
+                .transcript
+                .accept_tool_detail_load(part_id, section, requested_at)
+        {
             return;
         }
         match result {
             Ok(resource) => {
+                if resource.part_id != part_id || resource.section != section {
+                    return;
+                }
                 self.transcript.finish_tool_detail_load(resource);
                 if let Some(execution) = self.transcript.execution.as_mut() {
                     execution.parts = self.transcript.parts.clone();
@@ -570,10 +593,10 @@ impl App {
 
         self.transcript.refreshing = false;
         self.transcript.refresh_in_flight_since = None;
-        let pending = self.pending_refresh.take();
 
         match result {
             Ok(refresh) => {
+                self.transcript.refresh_failures = 0;
                 if execution_update_is_stale(
                     self.transcript.last_event_seq,
                     refresh.latest_event_seq,
@@ -622,10 +645,7 @@ impl App {
                         // the full execution (terminal state + completed
                         // reply) is re-delivered instead of being skipped
                         // forever.
-                        self.request_refresh(session_id, true);
-                    }
-                    if let Some((pending_session_id, force)) = pending {
-                        self.request_refresh(pending_session_id, force);
+                        self.pending_refresh_for(session_id);
                     }
                     return;
                 }
@@ -656,14 +676,15 @@ impl App {
                     self.transcript.last_event_seq = refresh.latest_event_seq;
                 }
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                self.transcript.refresh_failures =
+                    self.transcript.refresh_failures.saturating_add(1).min(7);
+                self.flash_error(error);
+            }
         }
 
-        // Re-issue a refresh that arrived while this one was in flight so no
-        // event that landed during the refresh window is ever lost.
-        if let Some((pending_session_id, force)) = pending {
-            self.request_refresh(pending_session_id, force);
-        }
+        // Keep a coalesced refresh for on_tick. Completing a fast request
+        // must not bypass the interval gate during a stream of updates.
     }
 
     pub(crate) fn handle_session_turn_submitted(

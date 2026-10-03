@@ -172,6 +172,15 @@ pub(super) fn generation() -> u64 {
     REMOTE_IMAGE_GENERATION.load(Ordering::Acquire)
 }
 
+pub(super) fn cached(url: &Url) -> Result<Arc<Vec<u8>>, String> {
+    let url = canonical_remote_image_url(url)?;
+    REMOTE_IMAGES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(url.as_str())
+        .unwrap_or_else(|| Err("remote image is outside the visible viewport".into()))
+}
+
 pub(super) fn load(url: &Url) -> Result<Arc<Vec<u8>>, String> {
     let url = canonical_remote_image_url(url)?;
     let key = url.as_str().to_string();

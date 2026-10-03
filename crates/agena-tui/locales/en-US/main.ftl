@@ -2191,3 +2191,7 @@ tool-presentation-data = Presentation data
 tool-detail-input = Input
 tool-detail-output = Output
 tool-detail-metadata = Metadata
+
+hub-section-search = Search results
+hub-page-next = → Next page ({ $page })
+hub-page-previous = ← Previous page ({ $page })

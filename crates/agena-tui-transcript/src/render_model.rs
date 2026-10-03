@@ -443,6 +443,8 @@ pub struct RenderedTranscript {
 #[derive(Debug, Clone)]
 /// A rendered line of the transcript.
 pub struct RenderedLine {
+    /// Network images that become eligible for loading when this row is visible.
+    pub remote_image_sources: Vec<String>,
     pub text: String,
     /// Clipboard-facing text for this rendered row. This deliberately omits
     /// layout-only prefixes such as transcript indentation, quote rails, and
@@ -508,6 +510,7 @@ impl RenderedLine {
             pointer_selection: TranscriptPointerSelection::Character,
             style,
             math: Vec::new(),
+            remote_image_sources: Vec::new(),
         }
     }
 
@@ -529,6 +532,7 @@ impl RenderedLine {
             style,
             rich_line: Some(line),
             math: Vec::new(),
+            remote_image_sources: Vec::new(),
         }
     }
 

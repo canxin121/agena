@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TranscriptRevealPolicy {
     /// Keep the current viewport while the cursor remains visible; otherwise
@@ -65,7 +67,7 @@ fn preserve_loaded_tool_sections(
         agena_api::live::ToolDetailSection::Input,
         agena_api::live::ToolDetailSection::Output,
     ] {
-        if (section != agena_api::live::ToolDetailSection::Output
+        if (section == agena_api::live::ToolDetailSection::Input
             || previous.state == incoming.state)
             && !incoming_content.contains_key(section.as_str())
             && tool_detail_section_loaded(previous, section)
@@ -131,6 +133,67 @@ mod tool_detail_tests {
             parent_part_id: None,
             run_id: Some(2),
         }
+    }
+
+    #[test]
+    fn tool_details_deduplicate_and_reject_old_request_and_state_results() {
+        let mut transcript = super::TranscriptState {
+            parts: vec![tool_part("in_progress", json!({}))],
+            ..Default::default()
+        };
+        assert!(
+            transcript
+                .begin_tool_detail_load(99, ToolDetailSection::Output)
+                .is_none()
+        );
+        let first = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Output)
+            .unwrap();
+        assert!(
+            transcript
+                .begin_tool_detail_load(1, ToolDetailSection::Output)
+                .is_none()
+        );
+        transcript.parts[0].state = "completed".into();
+        let current = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Output)
+            .unwrap();
+        assert!(!transcript.accept_tool_detail_load(1, ToolDetailSection::Output, first));
+        assert!(
+            transcript
+                .begin_tool_detail_load(1, ToolDetailSection::Output)
+                .is_none()
+        );
+        assert!(transcript.accept_tool_detail_load(1, ToolDetailSection::Output, current));
+        // Completion (including a failed HTTP request) releases the in-flight slot.
+        let retry = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Output)
+            .unwrap();
+        transcript.parts[0].state = "cancelled".into();
+        assert!(!transcript.accept_tool_detail_load(1, ToolDetailSection::Output, retry));
+        assert!(
+            transcript
+                .begin_tool_detail_load(1, ToolDetailSection::Output)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn reopening_the_same_session_rejects_an_old_detail_response() {
+        let mut transcript = super::TranscriptState {
+            parts: vec![tool_part("completed", json!({}))],
+            ..Default::default()
+        };
+        let old = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Input)
+            .unwrap();
+        transcript.reset(7, "Reopened".into());
+        transcript.parts = vec![tool_part("completed", json!({}))];
+        let current = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Input)
+            .unwrap();
+        assert!(!transcript.accept_tool_detail_load(1, ToolDetailSection::Input, old));
+        assert!(transcript.accept_tool_detail_load(1, ToolDetailSection::Input, current));
     }
 
     #[test]
@@ -237,6 +300,10 @@ impl TranscriptState {
             transcript_revealed_part_ids: BTreeSet::new(),
             transcript_fold_loads: BTreeMap::new(),
             transcript_fold_errors: BTreeMap::new(),
+            tool_detail_loads: BTreeMap::new(),
+            last_history_load_at: None,
+            transcript_fold_seen_cursors: BTreeMap::new(),
+            refresh_failures: 0,
             viewport: TranscriptViewport::default(),
             interaction: TranscriptInteraction::default(),
             search_query: String::new(),
@@ -278,6 +345,10 @@ impl TranscriptState {
         self.transcript_revealed_part_ids.clear();
         self.transcript_fold_loads.clear();
         self.transcript_fold_errors.clear();
+        self.tool_detail_loads.clear();
+        self.last_history_load_at = None;
+        self.transcript_fold_seen_cursors.clear();
+        self.refresh_failures = 0;
         self.viewport.reduce(TranscriptAction::Reset);
         self.interaction = TranscriptInteraction::default();
         self.execution = None;
@@ -323,6 +394,10 @@ impl TranscriptState {
         self.transcript_revealed_part_ids = cache.transcript_revealed_part_ids;
         self.transcript_fold_loads.clear();
         self.transcript_fold_errors.clear();
+        self.tool_detail_loads.clear();
+        self.last_history_load_at = None;
+        self.transcript_fold_seen_cursors.clear();
+        self.refresh_failures = 0;
         self.node_expansions = cache.node_expansions;
         self.activity_summary_visible_counts = cache.activity_summary_visible_counts;
         self.transcript_older_loading = false;
@@ -386,6 +461,10 @@ impl TranscriptState {
             recovered = true;
             self.invalidate_render();
         }
+        let previous_detail_loads = self.tool_detail_loads.len();
+        self.tool_detail_loads
+            .retain(|_, (since, _)| since.elapsed() < timeout);
+        recovered |= previous_detail_loads != self.tool_detail_loads.len();
         recovered
     }
 
@@ -416,14 +495,47 @@ impl TranscriptState {
     /// merged canonical part so refreshes can preserve it without maintaining
     /// a second transcript cache.
     pub(crate) fn begin_tool_detail_load(
-        &self,
+        &mut self,
         part_id: i64,
         section: agena_api::live::ToolDetailSection,
-    ) -> bool {
-        self.parts
+    ) -> Option<Instant> {
+        let part = self
+            .parts
             .iter()
-            .find(|part| part.part_id == part_id)
-            .is_none_or(|part| !tool_detail_section_loaded(part, section))
+            .find(|part| part.part_id == part_id && part.kind == "tool_call")?;
+        if tool_detail_section_loaded(part, section)
+            || self
+                .tool_detail_loads
+                .get(&(part_id, section))
+                .is_some_and(|(_, state)| *state == part.state)
+        {
+            return None;
+        }
+        let requested_at = Instant::now();
+        self.tool_detail_loads
+            .insert((part_id, section), (requested_at, part.state.clone()));
+        Some(requested_at)
+    }
+
+    pub(crate) fn accept_tool_detail_load(
+        &mut self,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+        requested_at: Instant,
+    ) -> bool {
+        let key = (part_id, section);
+        let Some((since, state)) = self.tool_detail_loads.get(&key) else {
+            return false;
+        };
+        if *since != requested_at {
+            return false;
+        }
+        let current = self
+            .parts
+            .iter()
+            .any(|part| part.part_id == part_id && part.state == *state);
+        self.tool_detail_loads.remove(&key);
+        current
     }
 
     pub(crate) fn finish_tool_detail_load(
@@ -1488,7 +1600,9 @@ impl TranscriptState {
 
     pub(crate) fn rendered(&mut self, width: u16) -> &RenderedTranscript {
         let context = self.math_render_context.clone();
-        agena_tui_media::with_math_render_context(&context, || self.rendered_inner(width))
+        agena_tui_media::with_math_render_context(&context, || {
+            agena_tui_media::with_deferred_remote_images(|| self.rendered_inner(width))
+        })
     }
 
     fn rendered_inner(&mut self, width: u16) -> &RenderedTranscript {

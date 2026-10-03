@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet};
 
 use agena_tui::i18n::I18n;
 use agena_tui_components::theme::{accent_color, danger_color, muted_style, selection_style};
@@ -41,10 +42,11 @@ pub struct SessionHubItem {
 
 /// Identity of a hub section. Ordering of the sections is fixed by the App:
 /// new session, directories, running, attention, pins, favorites, then recent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SessionHubSectionKind {
     New,
     Directories,
+    Search,
     Pinned,
     Favorites,
     Running,
@@ -55,6 +57,7 @@ pub enum SessionHubSectionKind {
 impl SessionHubSectionKind {
     pub fn localization_key(self) -> &'static str {
         match self {
+            Self::Search => "hub-section-search",
             Self::New => "hub-section-new",
             Self::Directories => "hub-section-directories",
             Self::Pinned => "hub-section-pinned",
@@ -64,6 +67,39 @@ impl SessionHubSectionKind {
             Self::Recent => "hub-section-recent",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HubPageTarget {
+    Workspaces,
+    Directory(i64),
+    Section(SessionHubSectionKind),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HubPagination {
+    pub page: usize,
+    pub has_more: bool,
+    pub total: Option<usize>,
+}
+
+fn page_rows(target: HubPageTarget, page: &HubPagination) -> Vec<HubRow> {
+    let mut rows = Vec::new();
+    if page.page > 0 {
+        rows.push(HubRow::Page {
+            target,
+            page: page.page - 1,
+            forward: false,
+        });
+    }
+    if page.has_more {
+        rows.push(HubRow::Page {
+            target,
+            page: page.page + 1,
+            forward: true,
+        });
+    }
+    rows
 }
 
 /// A section of the hub. Items are display-only projections built by the App.
@@ -83,6 +119,11 @@ impl SessionHubSection {
 /// or a session row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubRow {
+    Page {
+        target: HubPageTarget,
+        page: usize,
+        forward: bool,
+    },
     /// Section label line drawn inside the single hub box. Never selectable.
     Header(SessionHubSectionKind),
     /// A selectable session row (including the "+ new session" action row).
@@ -102,6 +143,17 @@ pub enum HubRow {
 impl HubRow {
     fn identity(&self) -> Option<(u8, i64, i64)> {
         match self {
+            Self::Page {
+                target, forward, ..
+            } => Some((
+                if *forward { 3 } else { 4 },
+                match target {
+                    HubPageTarget::Workspaces => 0,
+                    HubPageTarget::Directory(id) => *id,
+                    HubPageTarget::Section(kind) => -(*kind as i64) - 1,
+                },
+                0,
+            )),
             Self::Header(_) => None,
             Self::Item(item) => Some((0, item.session_id, item.workspace_id)),
             Self::Directory { workspace_id, .. } => Some((1, *workspace_id, 0)),
@@ -146,6 +198,7 @@ pub struct SessionHubPresentation {
     /// Current client-side filter (trimmed, lowercased). Empty lists all rows.
     query: String,
     directories: Vec<SessionHubDirectory>,
+    pagination: BTreeMap<HubPageTarget, HubPagination>,
     directory_offset: Cell<usize>,
     quick_offset: Cell<usize>,
 }
@@ -160,6 +213,7 @@ impl SessionHubPresentation {
             selection: 0,
             query: String::new(),
             directories: Vec::new(),
+            pagination: BTreeMap::new(),
             directory_offset: Cell::new(0),
             quick_offset: Cell::new(0),
         }
@@ -212,12 +266,29 @@ impl SessionHubPresentation {
         self.rebuild_rows();
     }
 
+    pub fn set_pagination(&mut self, pagination: BTreeMap<HubPageTarget, HubPagination>) {
+        self.pagination = pagination;
+        self.rebuild_rows();
+    }
+
+    pub fn expanded_directories(&self) -> BTreeSet<i64> {
+        self.directories
+            .iter()
+            .filter(|directory| directory.expanded)
+            .map(|directory| directory.workspace_id)
+            .collect()
+    }
+
     pub fn selected_row(&self) -> Option<&HubRow> {
         self.rows.get(self.selection)
     }
 
     pub fn selected_workspace(&self) -> Option<i64> {
         match self.selected_row()? {
+            HubRow::Page {
+                target: HubPageTarget::Directory(id),
+                ..
+            } => Some(*id),
             HubRow::Item(item) => Some(item.workspace_id),
             HubRow::Directory { workspace_id, .. } | HubRow::More { workspace_id, .. } => {
                 Some(*workspace_id)
@@ -505,6 +576,34 @@ impl SessionHubPresentation {
             })
             .collect::<Vec<_>>();
         self.rows = build_rows(filtered);
+        // Insert bounded server pages after their quick-access section.
+        for (target, page) in self.pagination.iter().rev() {
+            let HubPageTarget::Section(kind) = target else {
+                continue;
+            };
+            let controls = page_rows(*target, page);
+            if controls.is_empty() {
+                continue;
+            }
+            if let Some(start) = self
+                .rows
+                .iter()
+                .position(|row| matches!(row, HubRow::Header(value) if value == kind))
+            {
+                let end = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .skip(start + 1)
+                    .find(|(_, row)| matches!(row, HubRow::Header(_)))
+                    .map(|(index, _)| index)
+                    .unwrap_or(self.rows.len());
+                self.rows.splice(end..end, controls);
+            } else {
+                self.rows.push(HubRow::Header(*kind));
+                self.rows.extend(controls);
+            }
+        }
         let insertion = self
             .rows
             .iter()
@@ -528,7 +627,11 @@ impl SessionHubPresentation {
                 workspace_id: directory.workspace_id,
                 path: directory.path.clone(),
                 expanded,
-                count: items.len(),
+                count: self
+                    .pagination
+                    .get(&HubPageTarget::Directory(directory.workspace_id))
+                    .and_then(|page| page.total)
+                    .unwrap_or(items.len()),
             });
             if !expanded {
                 continue;
@@ -552,12 +655,23 @@ impl SessionHubPresentation {
                     .take(directory.visible_limit)
                     .map(HubRow::Item),
             );
-            if remaining > 0 {
+            if let Some(page) = self
+                .pagination
+                .get(&HubPageTarget::Directory(directory.workspace_id))
+            {
+                directory_rows.extend(page_rows(
+                    HubPageTarget::Directory(directory.workspace_id),
+                    page,
+                ));
+            } else if remaining > 0 {
                 directory_rows.push(HubRow::More {
                     workspace_id: directory.workspace_id,
                     remaining,
                 });
             }
+        }
+        if let Some(page) = self.pagination.get(&HubPageTarget::Workspaces) {
+            directory_rows.extend(page_rows(HubPageTarget::Workspaces, page));
         }
         self.rows.splice(insertion..insertion, directory_rows);
         self.selection = previous
@@ -580,7 +694,10 @@ impl SessionHubPresentation {
             .iter()
             .enumerate()
             .filter_map(|(index, row)| match row {
-                HubRow::Item(_) | HubRow::Directory { .. } | HubRow::More { .. } => Some(index),
+                HubRow::Item(_)
+                | HubRow::Directory { .. }
+                | HubRow::More { .. }
+                | HubRow::Page { .. } => Some(index),
                 HubRow::Header(_) => None,
             })
             .collect()
@@ -597,10 +714,12 @@ impl SessionHubPresentation {
                 HubRow::Directory { .. } => {
                     spans.push((SessionHubSectionKind::Directories, index, 1))
                 }
-                HubRow::Item(_) | HubRow::More { .. } => match spans.last_mut() {
-                    Some(span) => span.2 += 1,
-                    None => spans.push((SessionHubSectionKind::New, index, 1)),
-                },
+                HubRow::Item(_) | HubRow::More { .. } | HubRow::Page { .. } => {
+                    match spans.last_mut() {
+                        Some(span) => span.2 += 1,
+                        None => spans.push((SessionHubSectionKind::New, index, 1)),
+                    }
+                }
             }
         }
         spans
@@ -997,6 +1116,14 @@ fn render_rows(
                     Some(Cow::Owned(path)),
                 )
             }
+            HubRow::Page { page, forward, .. } => ListItem::new(i18n.text_args(
+                if *forward {
+                    "hub-page-next"
+                } else {
+                    "hub-page-previous"
+                },
+                &agena_tui::fl_args!("page" => (*page + 1) as i64),
+            )),
             HubRow::More { remaining, .. } => ListItem::new(i18n.text_args(
                 "hub-directory-more",
                 &agena_tui::fl_args!("count" => *remaining as i64),
@@ -1291,6 +1418,74 @@ mod tests {
                 .unwrap_or(false)
         );
         assert_eq!(presentation.total_count(), 3);
+    }
+
+    #[test]
+    fn server_page_controls_are_keyboard_selectable_and_clickable_on_the_left() {
+        use super::{HubPageTarget, HubPagination};
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+        let mut state = SessionHubPresentation::empty();
+        state.set_catalog(
+            vec![directory(1, 1, true)],
+            vec![section(SessionHubSectionKind::Recent, &[900])],
+        );
+        state.set_pagination(
+            [
+                (
+                    HubPageTarget::Directory(1),
+                    HubPagination {
+                        page: 1,
+                        has_more: true,
+                        total: Some(1000),
+                    },
+                ),
+                (
+                    HubPageTarget::Workspaces,
+                    HubPagination {
+                        page: 0,
+                        has_more: true,
+                        total: None,
+                    },
+                ),
+                (
+                    HubPageTarget::Section(SessionHubSectionKind::Recent),
+                    HubPagination {
+                        page: 0,
+                        has_more: true,
+                        total: Some(500),
+                    },
+                ),
+            ]
+            .into(),
+        );
+        let controls = state
+            .rows()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| matches!(row, HubRow::Page { .. }).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(controls.len(), 4);
+        let area = Rect::new(0, 0, 100, 30);
+        let i18n = agena_tui::i18n::I18n::english();
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        for index in controls {
+            state.select_row(index);
+            assert!(matches!(state.selected_row(), Some(HubRow::Page { .. })));
+            terminal
+                .draw(|frame| {
+                    super::render_session_hub(frame, area, &state, false, None, false, "", &i18n)
+                })
+                .unwrap();
+            let regions = super::hub_row_regions(Rect::new(1, 3, 98, 25), &state).0;
+            let (_, rect) = regions
+                .iter()
+                .find(|(row, _)| *row == index)
+                .expect("selected page control is visible");
+            let hit = super::hub_hit_test(area, &state, false, rect.x, rect.y, &i18n)
+                .expect("left edge is clickable");
+            assert_eq!(hit.row, index);
+            assert!(hit.activate);
+        }
     }
 
     #[test]

@@ -393,6 +393,12 @@ impl App {
         } else {
             5_000
         };
+        let refresh_interval = if self.transcript.refresh_failures > 0 {
+            refresh_interval
+                .max((500_u64 << self.transcript.refresh_failures.saturating_sub(1)).min(30_000))
+        } else {
+            refresh_interval
+        };
         if let Some(session_id) = self.transcript.session_id
             && !self.transcript.refreshing
             && !self.transcript.state_loading

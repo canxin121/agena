@@ -297,6 +297,13 @@ impl App {
             let visible = transcript_visible_range(rendered.lines.len(), scroll, viewport_height);
             let visible_start = visible.start;
             let visible_end = visible.end;
+            for source in rendered.lines[visible_start.saturating_sub(8)
+                ..visible_end.saturating_add(8).min(rendered.lines.len())]
+                .iter()
+                .flat_map(|line| &line.remote_image_sources)
+            {
+                agena_tui_media::request_remote_image(source);
+            }
             math = rendered
                 .math
                 .iter()

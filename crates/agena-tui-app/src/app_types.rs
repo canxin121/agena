@@ -684,6 +684,7 @@ pub(super) enum AppMessage {
         session_id: i64,
         part_id: i64,
         section: agena_api::live::ToolDetailSection,
+        requested_at: Instant,
         result: UiResult<agena_api::live::ToolDetailResource>,
     },
     SessionRefreshed {
@@ -1013,6 +1014,9 @@ pub(super) enum Route {
 
 #[derive(Debug, Clone)]
 pub(super) struct HubState {
+    pub(super) pages: BTreeMap<agena_tui_session::session_hub::HubPageTarget, usize>,
+    pub(super) search_changed_at: Option<Instant>,
+    pub(super) request_task: Option<tokio::task::AbortHandle>,
     pub(super) presentation: SessionHubPresentation,
     pub(super) loading: bool,
     pub(super) request_id: u64,
@@ -1031,6 +1035,9 @@ impl HubState {
     pub(super) fn new() -> Self {
         Self {
             presentation: SessionHubPresentation::empty(),
+            pages: BTreeMap::new(),
+            search_changed_at: None,
+            request_task: None,
             loading: true,
             request_id: 0,
             error: None,

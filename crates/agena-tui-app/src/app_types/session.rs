@@ -220,6 +220,12 @@ pub(crate) struct TranscriptState {
     pub(crate) transcript_revealed_part_ids: BTreeSet<i64>,
     pub(crate) transcript_fold_loads: BTreeMap<(i64, i64), Instant>,
     pub(crate) transcript_fold_errors: BTreeMap<i64, String>,
+    /// One request per detail, tied to both the request and tool state.
+    pub(crate) tool_detail_loads:
+        BTreeMap<(i64, agena_api::live::ToolDetailSection), (Instant, String)>,
+    pub(crate) transcript_fold_seen_cursors: BTreeMap<i64, BTreeSet<String>>,
+    pub(crate) refresh_failures: u32,
+    pub(crate) last_history_load_at: Option<Instant>,
     pub(crate) viewport: TranscriptViewport,
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,

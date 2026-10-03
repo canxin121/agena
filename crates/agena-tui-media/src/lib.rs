@@ -92,6 +92,7 @@ impl Default for MathLayoutConfig {
 }
 
 thread_local! {
+    static DEFER_REMOTE_IMAGES: Cell<bool> = const { Cell::new(false) };
     static RENDER_CONTEXT_STACK: RefCell<Vec<MathRenderContext>> = const { RefCell::new(Vec::new()) };
     /// Export and pager rendering cannot serialize terminal image placements.
     /// Keep that decision local to the rendering thread so generating a text
@@ -621,6 +622,27 @@ fn align_formula_raster_to_cells(
     Ok((canvas, Size::new(width as u16, height as u16)))
 }
 
+/// Layout offscreen transcript rows without starting network downloads.
+/// The viewport requests only the sources it actually displays.
+pub fn with_deferred_remote_images<T>(render: impl FnOnce() -> T) -> T {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            DEFER_REMOTE_IMAGES.set(self.0);
+        }
+    }
+    let _guard = Guard(DEFER_REMOTE_IMAGES.replace(true));
+    render()
+}
+
+pub fn request_remote_image(source: &str) {
+    if let Ok(url) = url::Url::parse(source)
+        && matches!(url.scheme(), "http" | "https")
+    {
+        let _ = remote_image::load(&url);
+    }
+}
+
 /// Decodes a Markdown image. Relative and `file:` URLs are confined to the
 /// active workspace; `data:image/*;base64` and asynchronously cached public
 /// HTTP(S) URLs use the same byte, dimension, and decoded-pixel limits.
@@ -634,7 +656,11 @@ pub fn render_markdown_image(source: &str) -> Result<Arc<MathArtifact>, String> 
     } else if let Ok(url) = url::Url::parse(source)
         && matches!(url.scheme(), "http" | "https")
     {
-        remote_image::load(&url)?
+        if DEFER_REMOTE_IMAGES.get() {
+            remote_image::cached(&url)?
+        } else {
+            remote_image::load(&url)?
+        }
     } else {
         Arc::new(read_workspace_image(source)?)
     };
@@ -691,6 +717,18 @@ mod tests {
             .copied()
             .max_by_key(|pixel| pixel[3])
             .unwrap_or(Rgba([0, 0, 0, 0]))
+    }
+
+    #[test]
+    fn offscreen_remote_images_do_not_start_network_work_or_require_a_runtime() {
+        let result = with_deferred_remote_images(|| {
+            render_markdown_image("https://example.com/offscreen-lazy-test.png")
+        });
+        assert!(result.unwrap_err().contains("outside the visible viewport"));
+        assert!(
+            !DEFER_REMOTE_IMAGES.get(),
+            "the deferred scope must restore its caller's policy"
+        );
     }
 
     #[test]

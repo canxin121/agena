@@ -667,6 +667,88 @@ async fn normal_live_events_schedule_a_coalesced_refresh() {
 }
 
 #[tokio::test]
+async fn completed_refreshes_wait_for_the_tick_gate_and_failures_back_off() {
+    use std::time::{Duration, Instant};
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 1)));
+    app.transcript.refreshing = true;
+    app.pending_refresh_for(SESSION_ID);
+    app.last_refresh_at = Instant::now();
+    app.handle_session_refreshed(
+        SESSION_ID,
+        Ok(crate::app_backend::SessionRefresh {
+            snapshot: None,
+            latest_event_seq: Some(1),
+            event_count: 0,
+        }),
+    );
+    assert!(
+        !app.transcript.refreshing,
+        "completion must not chain another request"
+    );
+    assert!(app.pending_refresh.is_some());
+    app.on_tick();
+    assert!(!app.transcript.refreshing);
+    app.last_refresh_at = Instant::now() - Duration::from_millis(300);
+    app.on_tick();
+    assert!(app.transcript.refreshing);
+    assert!(app.pending_refresh.is_none());
+
+    app.handle_session_refreshed(SESSION_ID, Err(crate::UiFailure::internal("offline")));
+    app.pending_refresh_for(SESSION_ID);
+    app.last_refresh_at = Instant::now() - Duration::from_millis(300);
+    app.on_tick();
+    assert!(
+        !app.transcript.refreshing,
+        "failed requests must back off past the streaming interval"
+    );
+    app.last_refresh_at = Instant::now() - Duration::from_millis(600);
+    app.on_tick();
+    assert!(app.transcript.refreshing);
+}
+
+#[tokio::test]
+async fn fold_loading_stops_a_multi_page_cursor_cycle_and_keeps_the_retry() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 1)));
+    app.handle_transcript_fold_parts_loaded(
+        SESSION_ID,
+        3,
+        12,
+        true,
+        Ok(SessionTranscriptPage {
+            parts: activities(10..12),
+            folds: vec![],
+            next_cursor: Some("before-10".into()),
+            has_more: true,
+        }),
+    );
+    assert!(app.transcript.transcript_fold_errors.is_empty());
+    let anchor = app.transcript.transcript_folds[0].anchor_part_id;
+    app.handle_transcript_fold_parts_loaded(
+        SESSION_ID,
+        3,
+        anchor,
+        true,
+        Ok(SessionTranscriptPage {
+            parts: activities(8..10),
+            folds: vec![],
+            next_cursor: Some("before-12".into()),
+            has_more: true,
+        }),
+    );
+    assert!(app.transcript.transcript_fold_loads.is_empty());
+    assert!(app.transcript.transcript_fold_errors.contains_key(&3));
+    assert_eq!(
+        app.transcript.transcript_folds[0].next_cursor.as_deref(),
+        Some("before-10")
+    );
+    let fold = app.transcript.transcript_folds[0].clone();
+    app.request_transcript_fold_parts(fold, false, 5);
+    assert_eq!(app.transcript.transcript_fold_loads.len(), 1);
+}
+
+#[tokio::test]
 async fn old_page_responses_cannot_finish_a_new_request_after_reopening_the_same_session() {
     let mut app = app(TuiBackend::remote_mock());
     app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 1)));

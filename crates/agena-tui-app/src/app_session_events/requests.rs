@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 impl App {
     pub(crate) fn request_sessions(&mut self, append: bool) {
         if append {
@@ -107,41 +109,16 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let is_default_overview = mode == SessionViewMode::All
-                && query.trim().is_empty()
-                && page_index == 0
-                && cursor.is_none();
-            let result = if is_default_overview {
-                application
-                    .session_overview(None, 50)
-                    .await
-                    .map(|overview| {
-                        let mut items = overview.attention;
-                        items.extend(overview.running);
-                        items.extend(overview.recent);
-                        let returned = items.len() as u64;
-                        agena_api::pagination::PaginatedResponse {
-                            items,
-                            page: agena_api::pagination::PageInfo {
-                                next_cursor: None,
-                                has_more: false,
-                                returned,
-                            },
-                        }
-                    })
-                    .map_err(crate::UiFailure::internal)
-            } else {
-                crate::app_backend::operations::list_workspace_sessions_page(
-                    &application,
-                    mode == SessionViewMode::Roots,
-                    mode == SessionViewMode::All,
-                    (!query.trim().is_empty()).then_some(query.as_str()),
-                    cursor,
-                    50,
-                )
-                .await
-                .map_err(crate::UiFailure::internal)
-            };
+            let result = crate::app_backend::operations::list_workspace_sessions_page(
+                &application,
+                mode == SessionViewMode::Roots,
+                mode == SessionViewMode::All,
+                (!query.trim().is_empty()).then_some(query.as_str()),
+                cursor,
+                50,
+            )
+            .await
+            .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::SessionSearchPageLoaded {
                     mode,
@@ -301,6 +278,14 @@ impl App {
         if self.transcript.viewport_top() > 3
             || self.transcript.transcript_older_loading
             || !self.transcript.transcript_has_more
+            || self.transcript.last_history_load_at.is_some_and(|at| {
+                at.elapsed()
+                    < Duration::from_millis(if self.transcript.transcript_older_error.is_some() {
+                        2_000
+                    } else {
+                        250
+                    })
+            })
         {
             return;
         }
@@ -314,6 +299,7 @@ impl App {
         self.transcript.transcript_older_error = None;
         let requested_at = Instant::now();
         self.transcript.transcript_older_in_flight_since = Some(requested_at);
+        self.transcript.last_history_load_at = Some(requested_at);
 
         let application = self.application.clone();
         let tx = self.tx.clone();
@@ -391,25 +377,30 @@ impl App {
         let Some(session_id) = self.transcript.session_id else {
             return;
         };
-        if !self.transcript.begin_tool_detail_load(part_id, section) {
+        let Some(requested_at) = self.transcript.begin_tool_detail_load(part_id, section) else {
             return;
-        }
+        };
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::get_tool_detail(
-                &application,
-                session_id,
-                part_id,
-                section,
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                crate::app_backend::operations::get_tool_detail(
+                    &application,
+                    session_id,
+                    part_id,
+                    section,
+                ),
             )
             .await
-            .map_err(crate::UiFailure::from_backend);
+            .map_err(|_| crate::UiFailure::internal("Tool detail request timed out"))
+            .and_then(|result| result.map_err(crate::UiFailure::from_backend));
             let _ = tx
                 .send(AppMessage::ToolDetailLoaded {
                     session_id,
                     part_id,
                     section,
+                    requested_at,
                     result,
                 })
                 .await;
@@ -419,7 +410,7 @@ impl App {
     /// Park a forced refresh for the periodic tick to consume. `on_tick`
     /// runs one refresh per `REFRESH_INTERVAL_MS`, so a burst of streaming
     /// `PartUpdated` events collapses into a bounded refresh rate; the tick
-    /// (or the in-flight refresh completion) re-issues it as a force.
+    /// re-issues it as a force after the current request has completed.
     pub(crate) fn pending_refresh_for(&mut self, session_id: i64) {
         self.pending_refresh = Some((session_id, true));
     }

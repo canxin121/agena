@@ -83,12 +83,30 @@ impl App {
         &mut self,
         snapshot: crate::app_backend::SessionStateWithTranscriptPage,
     ) -> bool {
+        let changed_tool_parts = snapshot
+            .page
+            .parts
+            .iter()
+            .filter(|part| {
+                part.kind == "tool_call"
+                    && self
+                        .transcript
+                        .parts
+                        .iter()
+                        .find(|old| old.part_id == part.part_id)
+                        .is_some_and(|old| old.state != part.state)
+            })
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
         if self.transcript.session_id != Some(snapshot.execution.session.id)
             || !self.apply_transcript_execution(snapshot.execution)
         {
             return false;
         }
         self.transcript.apply_recent_transcript_page(snapshot.page);
+        if !changed_tool_parts.is_empty() {
+            self.request_expanded_tool_details(&changed_tool_parts);
+        }
         true
     }
 
@@ -134,7 +152,7 @@ impl App {
             // reply status and inline body rendering catch up. Guarded by
             // `was_running` so repeated terminal refreshes cannot loop.
             if was_running && self.transcript.has_non_terminal_replies() {
-                self.request_refresh(session_id, true);
+                self.pending_refresh_for(session_id);
             }
         }
         self.session_controller

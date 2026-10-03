@@ -6056,6 +6056,7 @@ mod new_session_model_stack_tests {
             Ok(crate::app_backend::session_hub::HubCatalog {
                 workspaces: Vec::new(),
                 sessions: vec![favorite],
+                ..Default::default()
             }),
         );
 
@@ -6094,6 +6095,7 @@ mod new_session_model_stack_tests {
             Ok(crate::app_backend::session_hub::HubCatalog {
                 workspaces: Vec::new(),
                 sessions: Vec::new(),
+                ..Default::default()
             }),
         );
 

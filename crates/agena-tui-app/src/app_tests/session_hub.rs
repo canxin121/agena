@@ -36,6 +36,7 @@ fn catalog() -> HubCatalog {
     HubCatalog {
         workspaces: vec![workspace(1), workspace(2)],
         sessions: vec![session(7, 1, false), session(8, 2, true)],
+        ..Default::default()
     }
 }
 
@@ -96,7 +97,7 @@ async fn hub_catalog_groups_all_directories_and_has_independent_pins() {
 }
 
 #[tokio::test]
-async fn hub_search_is_local_and_errors_release_loading_without_discarding_rows() {
+async fn hub_search_debounces_server_work_and_errors_preserve_existing_rows() {
     let mut app = app(TuiBackend::remote_mock());
     app.handle_hub_catalog_loaded(0, Ok(catalog()));
     app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
@@ -106,10 +107,12 @@ async fn hub_search_is_local_and_errors_release_loading_without_discarding_rows(
     let Route::Hub(state) = &app.current_route else {
         panic!()
     };
-    assert_eq!(
-        state.request_id, 0,
-        "typing must not spawn metadata requests"
+    assert!(state.search_changed_at.is_some());
+    assert!(
+        state.request_task.is_none(),
+        "typing waits for the debounce tick"
     );
+    let request_id = state.request_id;
     assert!(
         state
             .presentation
@@ -125,7 +128,7 @@ async fn hub_search_is_local_and_errors_release_loading_without_discarding_rows(
             .any(|row| matches!(row, HubRow::Item(item) if item.session_id == 7))
     );
     app.handle_hub_catalog_loaded(99, Err(UiFailure::internal("stale")));
-    app.handle_hub_catalog_loaded(0, Err(UiFailure::internal("unavailable")));
+    app.handle_hub_catalog_loaded(request_id, Err(UiFailure::internal("unavailable")));
     let Route::Hub(state) = &app.current_route else {
         panic!()
     };
@@ -135,12 +138,12 @@ async fn hub_search_is_local_and_errors_release_loading_without_discarding_rows(
 }
 
 #[tokio::test]
-async fn hub_fetches_all_metadata_pages_and_creates_in_the_selected_workspace_over_http() {
+async fn hub_fetches_only_requested_pages_and_creates_in_the_selected_workspace_over_http() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let backend = TuiBackend::remote_mock_at(&format!("http://{}", listener.local_addr().unwrap()));
     let server = tokio::spawn(async move {
         let mut paths = Vec::new();
-        for _ in 0..6 {
+        for _ in 0..8 {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut buffer = vec![0; 16384];
             let count = socket.read(&mut buffer).await.unwrap();
@@ -161,19 +164,27 @@ async fn hub_fetches_all_metadata_pages_and_creates_in_the_selected_workspace_ov
                 assert!(request.contains("\"workspace_id\":2"));
                 serde_json::to_value(session(9, 2, false)).unwrap()
             } else {
-                assert!(!path.contains("workspace_id="), "the hub spans workspaces");
-                let second = path.contains("cursor=");
+                assert!(
+                    !path.contains("workspace_id="),
+                    "collapsed directories must not load sessions"
+                );
+                assert!(path.contains("limit=20"));
+                assert!(!path.contains("cursor="), "the next page is demand driven");
                 let items = if path.starts_with("/api/v1/workspaces") {
-                    json!([workspace(if second { 2 } else { 1 })])
+                    assert!(path.contains("offset=40"));
+                    json!([workspace(1)])
                 } else {
                     assert!(path.contains("exclude_subagents=true"));
-                    json!([session(
-                        if second { 8 } else { 7 },
-                        if second { 2 } else { 1 },
-                        second
-                    )])
+                    assert!(path.contains("include_total=true"));
+                    assert!(path.contains("bucket="));
+                    if path.contains("bucket=pinned") {
+                        assert!(path.contains("offset=60"));
+                        json!([session(8, 2, true)])
+                    } else {
+                        json!([session(7, 1, false)])
+                    }
                 };
-                json!({"items": items, "page": {"has_more": !second, "next_cursor": if second { None } else { Some("page-2") }, "returned": 1}})
+                json!({"items": items, "total": 1000, "page": {"has_more": true, "next_cursor": "page-2", "returned": 1}})
             };
             let body = body.to_string();
             paths.push(path);
@@ -182,13 +193,29 @@ async fn hub_fetches_all_metadata_pages_and_creates_in_the_selected_workspace_ov
         assert_eq!(
             paths
                 .iter()
-                .filter(|path| path.contains("cursor=page-2"))
+                .filter(|path| path.starts_with("/api/v1/sessions?"))
                 .count(),
-            2
+            5
         );
+        assert!(!paths.iter().any(|path| path.contains("cursor=page-2")));
     });
-    let catalog = backend.session_hub_catalog().await.unwrap();
-    assert_eq!(catalog.workspaces.len(), 2);
+    let catalog = backend
+        .session_hub_catalog(crate::app_backend::session_hub::HubCatalogQuery {
+            pages: [
+                (agena_tui_session::session_hub::HubPageTarget::Workspaces, 2),
+                (
+                    agena_tui_session::session_hub::HubPageTarget::Section(
+                        crate::SessionHubSectionKind::Pinned,
+                    ),
+                    3,
+                ),
+            ]
+            .into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(catalog.workspaces.len(), 1);
     assert_eq!(catalog.sessions.len(), 2);
     let mut app = app(backend);
     app.handle_hub_catalog_loaded(0, Ok(catalog));

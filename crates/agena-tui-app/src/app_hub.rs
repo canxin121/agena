@@ -7,7 +7,7 @@
 //! / create / session-list effects that only the App can perform.
 
 use agena_api::resource::SessionOverviewResource;
-use agena_tui_session::session_hub::{HubRow, SessionHubDirectory};
+use agena_tui_session::session_hub::{HubPageTarget, HubRow, SessionHubDirectory};
 
 use super::{App, AppMessage, HubState, KeyEvent, Route};
 use crate::{SessionHubItem, SessionHubSection, SessionHubSectionKind, SessionResource, ui_text};
@@ -32,6 +32,10 @@ impl App {
     }
 
     pub(crate) fn spawn_hub_overview_request(&mut self, state: &mut HubState) {
+        if let Some(task) = state.request_task.take() {
+            task.abort();
+        }
+        state.search_changed_at = None;
         self.next_hub_request_id = self.next_hub_request_id.saturating_add(1);
         state.request_id = self.next_hub_request_id;
         state.loading = true;
@@ -40,20 +44,33 @@ impl App {
         let request_id = state.request_id;
         let application = self.application.clone();
         let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = application
-                .session_hub_catalog()
-                .await
-                .map_err(crate::UiFailure::from_backend);
+        let mut expanded = state.presentation.expanded_directories();
+        if state.pages.is_empty() {
+            expanded.insert(self.application.workspace_id());
+        }
+        let query = crate::app_backend::session_hub::HubCatalogQuery {
+            pages: state.pages.clone(),
+            expanded,
+            search: state.query.clone(),
+        };
+        let task = tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                application.session_hub_catalog(query),
+            )
+            .await
+            .map_err(|_| crate::UiFailure::internal("Session center request timed out"))
+            .and_then(|result| result.map_err(crate::UiFailure::from_backend));
             let _ = tx
                 .send(AppMessage::HubCatalogLoaded { request_id, result })
                 .await;
         });
+        state.request_task = Some(task.abort_handle());
     }
 
     pub(crate) fn refresh_hub_if_due(&mut self) {
         let due = matches!(&self.current_route, Route::Hub(state)
-            if state.refreshed_at.elapsed().as_secs() >= if state.loading { 30 } else { 10 });
+            if state.search_changed_at.is_some_and(|at| at.elapsed().as_millis() >= 250) || (state.search_changed_at.is_none() && state.refreshed_at.elapsed().as_secs() >= if state.loading { 30 } else { 10 }));
         if !due {
             return;
         }
@@ -74,6 +91,17 @@ impl App {
         };
         self.spawn_hub_overview_request(&mut state);
         self.current_route = Route::Hub(state);
+    }
+
+    fn schedule_hub_search(&mut self, state: &mut HubState) {
+        if let Some(task) = state.request_task.take() {
+            task.abort();
+        }
+        self.next_hub_request_id = self.next_hub_request_id.saturating_add(1);
+        state.request_id = self.next_hub_request_id;
+        state.search_changed_at = Some(std::time::Instant::now());
+        state.pages.clear();
+        state.loading = false;
     }
 
     fn hub_sections(
@@ -165,8 +193,35 @@ impl App {
                 overview.recent.push(session.clone());
             }
         }
-        overview.recent.truncate(HUB_RECENT_LIMIT as usize);
+        if catalog.pages.is_empty() {
+            overview.recent.truncate(HUB_RECENT_LIMIT as usize);
+        }
         let mut sections = self.hub_sections(overview, pinned);
+        if !catalog.members.is_empty() {
+            for section in &mut sections {
+                if section.kind == SessionHubSectionKind::New {
+                    continue;
+                }
+                let members = catalog.members.get(&HubPageTarget::Section(section.kind));
+                section
+                    .items
+                    .retain(|item| members.is_some_and(|ids| ids.contains(&item.session_id)));
+            }
+            if let Some(ids) = catalog
+                .members
+                .get(&HubPageTarget::Section(SessionHubSectionKind::Search))
+            {
+                sections.push(SessionHubSection::new(
+                    SessionHubSectionKind::Search,
+                    catalog
+                        .sessions
+                        .iter()
+                        .filter(|session| ids.contains(&session.id))
+                        .map(|session| self.hub_session_item(session))
+                        .collect(),
+                ));
+            }
+        }
         let mut directories = catalog
             .workspaces
             .iter()
@@ -176,7 +231,14 @@ impl App {
                 items: catalog
                     .sessions
                     .iter()
-                    .filter(|session| session.workspace_id == workspace.id)
+                    .filter(|session| {
+                        session.workspace_id == workspace.id
+                            && (catalog.pages.is_empty()
+                                || catalog
+                                    .members
+                                    .get(&HubPageTarget::Directory(workspace.id))
+                                    .is_some_and(|ids| ids.contains(&session.id)))
+                    })
                     .map(|session| self.hub_session_item(session))
                     .collect(),
                 expanded: workspace.id == self.application.workspace_id(),
@@ -202,7 +264,14 @@ impl App {
         if let Route::Hub(state) = &mut self.current_route {
             state.loading = false;
             state.error = None;
+            state.pages = catalog
+                .pages
+                .iter()
+                .map(|(target, page)| (*target, page.page))
+                .collect();
             state.presentation.set_catalog(directories, sections);
+            state.presentation.set_pagination(catalog.pages);
+            state.request_task = None;
         }
     }
 
@@ -243,10 +312,26 @@ impl App {
     fn activate_hub_row(&mut self, state: &mut HubState) -> bool {
         match state.presentation.selected_row().cloned() {
             Some(HubRow::Directory { workspace_id, .. }) => {
-                state.presentation.toggle_directory(workspace_id, None)
+                state.presentation.toggle_directory(workspace_id, None);
+                if state
+                    .presentation
+                    .expanded_directories()
+                    .contains(&workspace_id)
+                {
+                    self.spawn_hub_overview_request(state);
+                }
+            }
+            Some(HubRow::Page { target, page, .. }) => {
+                if !state.loading {
+                    state.pages.insert(target, page);
+                    self.spawn_hub_overview_request(state);
+                }
             }
             Some(HubRow::More { workspace_id, .. }) => state.presentation.show_more(workspace_id),
             Some(HubRow::Item(item)) => {
+                if let Some(task) = state.request_task.take() {
+                    task.abort();
+                }
                 if item.is_new_session {
                     self.create_hub_session(item.workspace_id);
                 } else {
@@ -273,11 +358,13 @@ impl App {
                 KeyCode::Char(c) => {
                     state.query.push(c);
                     state.presentation.set_query(&state.query);
+                    self.schedule_hub_search(state);
                     return false;
                 }
                 KeyCode::Backspace => {
                     state.query.pop();
                     state.presentation.set_query(&state.query);
+                    self.schedule_hub_search(state);
                     return false;
                 }
                 _ => {}
@@ -293,6 +380,9 @@ impl App {
                     state
                         .presentation
                         .toggle_directory(id, Some(action == KeyAction::MoveRight));
+                    if action == KeyAction::MoveRight && !state.loading {
+                        self.spawn_hub_overview_request(state);
+                    }
                 }
             }
             Some(KeyAction::HubTogglePinned) => {
@@ -309,7 +399,11 @@ impl App {
                     state.search_active = false;
                     state.query.clear();
                     state.presentation.set_query("");
+                    self.schedule_hub_search(state);
                 } else {
+                    if let Some(task) = state.request_task.take() {
+                        task.abort();
+                    }
                     return true;
                 }
             }
@@ -362,6 +456,7 @@ impl App {
                     state.search_active = true;
                     state.query.push(c);
                     state.presentation.set_query(&state.query);
+                    self.schedule_hub_search(state);
                 }
             }
         }

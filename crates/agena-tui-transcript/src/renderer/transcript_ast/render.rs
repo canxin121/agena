@@ -219,6 +219,23 @@ fn render_inline_flow(
     width: u16,
 ) {
     let rich_start = out.len();
+    let sources = if layout_config().native_graphics && inlines_contain_rich_graphics(inlines) {
+        let mut atoms = Vec::new();
+        append_rich_inline_atoms(&mut atoms, inlines, style);
+        atoms
+            .into_iter()
+            .filter_map(|atom| match atom {
+                RichInlineAtom::Image { url, .. }
+                    if url.starts_with("http://") || url.starts_with("https://") =>
+                {
+                    Some(url)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     if inlines_contain_rich_graphics(inlines)
         && push_rich_inline_graphics(
             out,
@@ -230,6 +247,9 @@ fn render_inline_flow(
         )
     {
         mark_rendered_semantic_unit(out, rich_start, inline_plain_text(inlines));
+        if let Some(line) = out.get_mut(rich_start) {
+            line.remote_image_sources = sources;
+        }
         return;
     }
     let mut first = true;
@@ -241,6 +261,9 @@ fn render_inline_flow(
         };
         push_wrapped_rich_line(out, line_prefix, continuation_prefix, line, width);
         first = false;
+    }
+    if let Some(line) = out.get_mut(rich_start) {
+        line.remote_image_sources = sources;
     }
 }
 
@@ -1182,6 +1205,7 @@ pub(crate) fn render_image_block(
     // Remote images use an asynchronous bounded cache. Until a download
     // completes—or when no native image protocol exists—retain an accessible
     // source preview without blocking terminal input.
+    let image_line = out.len();
     push_wrapped_rich_line(
         out,
         prefix,
@@ -1198,6 +1222,12 @@ pub(crate) fn render_image_block(
     push_image_source_line(out, prefix, "↳", markdown_image_source_label(url), width);
     if let Some(link_url) = link_url {
         push_image_source_line(out, prefix, "↗", link_url, width);
+    }
+    if layout_config().native_graphics
+        && (url.starts_with("http://") || url.starts_with("https://"))
+        && let Some(line) = out.get_mut(image_line)
+    {
+        line.remote_image_sources.push(url.to_owned());
     }
 }
 

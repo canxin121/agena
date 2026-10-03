@@ -19,6 +19,34 @@ fn tool_detail_api_section(
 }
 
 impl App {
+    pub(crate) fn request_expanded_tool_details(&mut self, changed_parts: &[i64]) {
+        let width = self.layout.transcript_body.width;
+        let sections = self
+            .transcript
+            .rendered(width)
+            .nodes
+            .iter()
+            .filter(|node| node.expanded)
+            .filter_map(|node| {
+                let agena_tui_transcript::TranscriptNodeKey::ActivitySection {
+                    content_id: agena_tui_transcript::TranscriptContentId::StoredPart(part_id),
+                    section,
+                    ..
+                } = node.key
+                else {
+                    return None;
+                };
+                if !changed_parts.is_empty() && !changed_parts.contains(&part_id) {
+                    return None;
+                }
+                tool_detail_api_section(section).map(|section| (part_id, section))
+            })
+            .collect::<Vec<_>>();
+        for (part_id, section) in sections {
+            self.request_tool_detail(part_id, section);
+        }
+    }
+
     pub(crate) fn enter_insert_mode(&mut self) {
         self.focus = Focus::Composer;
     }
@@ -97,6 +125,9 @@ impl App {
             && let Some(section) = tool_detail_api_section(section)
         {
             self.request_tool_detail(part_id, section);
+        }
+        if expanded {
+            self.request_expanded_tool_details(&[]);
         }
         if expanded && let Some(fold) = server_fold {
             self.request_transcript_fold_parts(

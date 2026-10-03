@@ -10,6 +10,7 @@ use super::{
     transcript_node_highlight_range, transcript_selection_scroll_position,
 };
 
+mod transcript_paging;
 mod ui;
 
 /// Shared parts fixtures for app tests. The wire transcript is an ordered

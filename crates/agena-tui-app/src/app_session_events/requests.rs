@@ -342,6 +342,17 @@ impl App {
         let Some(cursor) = fold.next_cursor else {
             return;
         };
+        if self
+            .transcript
+            .transcript_fold_loads
+            .keys()
+            .any(|(run_id, _)| *run_id == fold.run_id)
+        {
+            return;
+        }
+        self.transcript
+            .transcript_fold_loads
+            .insert((fold.run_id, fold.anchor_part_id), Instant::now());
         let application = self.application.clone();
         let tx = self.tx.clone();
         let reveal_count = reveal_count.clamp(1, 50) as u64;

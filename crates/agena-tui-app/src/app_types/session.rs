@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use super::{
@@ -214,6 +214,10 @@ pub(crate) struct TranscriptState {
     /// update only their newest window so they do not discard loaded history.
     pub(crate) transcript_older_pages_loaded: bool,
     pub(crate) transcript_folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+    /// Parts explicitly revealed from a folded reply, including its already
+    /// visible tail and run markers. Bounded recent snapshots must retain them.
+    pub(crate) transcript_revealed_part_ids: BTreeSet<i64>,
+    pub(crate) transcript_fold_loads: BTreeMap<(i64, i64), Instant>,
     pub(crate) viewport: TranscriptViewport,
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,
@@ -252,6 +256,7 @@ pub(crate) struct TranscriptCache {
     pub(crate) transcript_has_more: bool,
     pub(crate) transcript_older_pages_loaded: bool,
     pub(crate) transcript_folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+    pub(crate) transcript_revealed_part_ids: BTreeSet<i64>,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
 }

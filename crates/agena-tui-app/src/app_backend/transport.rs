@@ -1984,8 +1984,10 @@ impl TuiBackend {
         // correctness path. Reading on every refresh also converges
         // after SSE lag or reconnect without depending on replay.
         let _ = force;
-        let execution = self.get_session_state(session_id).await?;
-        let latest_event_seq = execution.latest_event_seq;
+        let snapshot = self
+            .get_session_state_with_transcript_page(session_id)
+            .await?;
+        let latest_event_seq = snapshot.execution.latest_event_seq;
         let event_count = after_seq
             .zip(latest_event_seq)
             .map(|(after, current)| current.saturating_sub(after).clamp(0, 256) as usize)
@@ -1993,7 +1995,7 @@ impl TuiBackend {
         Ok(SessionRefresh {
             latest_event_seq,
             event_count,
-            execution: Some(execution),
+            snapshot: Some(snapshot),
         })
     }
 
@@ -2398,7 +2400,10 @@ impl TuiBackend {
                         continue;
                     }
                 };
-                let snapshot = match backend.get_session_state(session_id).await {
+                let snapshot = match backend
+                    .get_session_state_with_transcript_page(session_id)
+                    .await
+                {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
                         tracing::warn!(
@@ -2537,9 +2542,14 @@ impl TuiBackend {
     /// fail immediately and are surfaced as flashes).
     #[cfg(test)]
     pub(crate) fn remote_mock() -> Self {
+        Self::remote_mock_at("http://127.0.0.1:9")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_mock_at(server_url: &str) -> Self {
         Self {
             inner: Arc::new(RemoteBackend {
-                client: AgenaClient::new("http://127.0.0.1:9").expect("mock client"),
+                client: AgenaClient::new(server_url).expect("mock client"),
                 workspace_id: 1,
                 providers: Default::default(),
                 models: Default::default(),

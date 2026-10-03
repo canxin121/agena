@@ -370,18 +370,12 @@ impl App {
         self.transcript.state_load_in_flight_since = None;
         match result {
             Ok(load) => {
-                let page = load.page;
-                let execution = load.execution;
-                let session_id = execution.session.id;
-                let execution_is_terminal = execution.session.state.active_execution().is_none();
-                if self.apply_transcript_execution(execution) {
+                let session_id = load.execution.session.id;
+                let execution_is_terminal =
+                    load.execution.session.state.active_execution().is_none();
+                if self.apply_transcript_snapshot(load) {
                     self.sync_pending_interactive_after_execution(session_id);
                     self.sync_session_list_selection_to_current_execution();
-                }
-                if !self.transcript.transcript_older_pages_loaded {
-                    self.transcript
-                        .set_transcript_page(page.next_cursor, page.has_more);
-                    self.transcript.set_transcript_folds(page.folds);
                 }
                 // A session (re)open can deliver the terminal state of a run
                 // that finished while the user was elsewhere. Drain a parked
@@ -444,6 +438,9 @@ impl App {
         if self.transcript.session_id != Some(session_id) {
             return;
         }
+        self.transcript
+            .transcript_fold_loads
+            .remove(&(run_id, anchor_part_id));
         match result {
             Ok(page) => {
                 let next_cursor = page.next_cursor.clone();
@@ -465,7 +462,7 @@ impl App {
                             .transcript
                             .transcript_folds
                             .iter()
-                            .find(|fold| fold.run_ids.contains(&run_id))
+                            .find(|fold| fold.run_id == run_id || fold.run_ids.contains(&run_id))
                             .cloned()
                     {
                         self.request_transcript_fold_parts(next_fold, true, 50);
@@ -544,11 +541,15 @@ impl App {
                     // staleness check inside `apply_transcript_execution`
                     // still protects a running execution), then drain any
                     // parked message.
-                    if let Some(execution) = refresh.execution {
-                        let session_id = execution.session.id;
-                        let execution_is_terminal =
-                            execution.session.state.active_execution().is_none();
-                        if self.apply_transcript_execution(execution) {
+                    if let Some(snapshot) = refresh.snapshot {
+                        let session_id = snapshot.execution.session.id;
+                        let execution_is_terminal = snapshot
+                            .execution
+                            .session
+                            .state
+                            .active_execution()
+                            .is_none();
+                        if self.apply_transcript_snapshot(snapshot) {
                             self.sync_pending_interactive_after_execution(session_id);
                             self.sync_session_list_selection_to_current_execution();
                             if execution_is_terminal {
@@ -570,11 +571,15 @@ impl App {
                     }
                     return;
                 }
-                if let Some(execution) = refresh.execution {
-                    let session_id = execution.session.id;
-                    let execution_is_terminal =
-                        execution.session.state.active_execution().is_none();
-                    if self.apply_transcript_execution(execution) {
+                if let Some(snapshot) = refresh.snapshot {
+                    let session_id = snapshot.execution.session.id;
+                    let execution_is_terminal = snapshot
+                        .execution
+                        .session
+                        .state
+                        .active_execution()
+                        .is_none();
+                    if self.apply_transcript_snapshot(snapshot) {
                         self.sync_pending_interactive_after_execution(session_id);
                         self.sync_session_list_selection_to_current_execution();
                     }

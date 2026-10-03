@@ -79,6 +79,19 @@ impl App {
         self.active_subscription = Some(handle);
     }
 
+    pub(crate) fn apply_transcript_snapshot(
+        &mut self,
+        snapshot: crate::app_backend::SessionStateWithTranscriptPage,
+    ) -> bool {
+        if self.transcript.session_id != Some(snapshot.execution.session.id)
+            || !self.apply_transcript_execution(snapshot.execution)
+        {
+            return false;
+        }
+        self.transcript.apply_recent_transcript_page(snapshot.page);
+        true
+    }
+
     pub(crate) fn apply_transcript_execution(
         &mut self,
         execution: SessionExecutionResource,
@@ -259,7 +272,7 @@ impl App {
         if let Some(snapshot) = live.snapshot
             && self.transcript.session_id == Some(session_id)
         {
-            let _ = self.apply_transcript_execution(snapshot);
+            let _ = self.apply_transcript_snapshot(snapshot);
         }
         // Ignore events for sessions the user has already navigated away
         // from. The forwarder is normally aborted in that case but a few

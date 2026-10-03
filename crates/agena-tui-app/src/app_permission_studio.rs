@@ -347,11 +347,15 @@ impl App {
         };
         self.dispatch_backend_operation(
             move |application| async move {
-                crate::app_backend::operations::get_session_state(&application, session_id).await
+                crate::app_backend::operations::get_session_state_with_transcript_page(
+                    &application,
+                    session_id,
+                )
+                .await
             },
             |app, result| match result {
-                Ok(execution) => {
-                    let _ = app.apply_transcript_execution(execution);
+                Ok(snapshot) => {
+                    let _ = app.apply_transcript_snapshot(snapshot);
                 }
                 Err(error) => app.flash_error(error),
             },

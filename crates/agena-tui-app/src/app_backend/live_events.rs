@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 pub struct LiveEvent {
     /// Snapshot captured after a live subscription was established. Remote
     /// reconnect uses this to close the subscribe/read race.
-    pub snapshot: Option<agena_api::resource::SessionExecutionResource>,
+    pub(crate) snapshot: Option<super::SessionStateWithTranscriptPage>,
     /// True when the UI should ignore incremental assumptions and force a
     /// replay from persisted state (for example after bus lag).
     pub force_refresh: bool,

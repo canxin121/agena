@@ -2,6 +2,7 @@
 target/
 .agena/
 examples/*/target/
+artifacts/agena/
 artifacts/agena-studio/
 artifacts/t/
 ._*

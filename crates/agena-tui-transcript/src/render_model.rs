@@ -176,10 +176,10 @@ impl ToolCallView {
                                 ),
                                 "transcript model text is using the raw tool output fallback"
                             );
-                            raw.text.clone()
+                            raw.text_content().to_owned()
                         })
                     }),
-                None => raw.text.clone(),
+                None => raw.text_content().to_owned(),
             })
             .unwrap_or_default()
     }
@@ -205,7 +205,8 @@ impl ToolCallView {
 
     pub fn metadata_value(&self, key: &str) -> Option<&serde_json::Value> {
         self.raw_output()
-            .and_then(|raw| raw.metadata.get(key))
+            .and_then(|raw| raw.payload.as_ref())
+            .and_then(|payload| payload.get(key))
             .or_else(|| self.operation.metadata.get(key))
     }
 

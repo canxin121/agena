@@ -45,7 +45,6 @@ pub fn render_entry_export(
                 TranscriptActivitySection::Metadata,
                 TranscriptActivitySection::Input,
                 TranscriptActivitySection::Output,
-                TranscriptActivitySection::OutputMetadata,
                 TranscriptActivitySection::Presentation,
             ][..],
             _ => &[],
@@ -1276,11 +1275,6 @@ pub(crate) fn render_part_node(
                 content_id: part.id,
                 section: TranscriptActivitySection::Output,
             };
-            let output_metadata_key = TranscriptNodeKey::ActivitySection {
-                entry_id: message.id,
-                content_id: part.id,
-                section: TranscriptActivitySection::OutputMetadata,
-            };
             let presentation_key = TranscriptNodeKey::ActivitySection {
                 entry_id: message.id,
                 content_id: part.id,
@@ -1289,10 +1283,6 @@ pub(crate) fn render_part_node(
             let metadata_expanded = expansions.get(&metadata_key).copied().unwrap_or(false);
             let input_expanded = expansions.get(&input_key).copied().unwrap_or(false);
             let output_expanded = expansions.get(&output_key).copied().unwrap_or(false);
-            let output_metadata_expanded = expansions
-                .get(&output_metadata_key)
-                .copied()
-                .unwrap_or(false);
             let presentation_expanded = expansions.get(&presentation_key).copied().unwrap_or(true);
             let execution = if user_input_rendered {
                 render_tool_detail_sections_with_sections(
@@ -1300,7 +1290,6 @@ pub(crate) fn render_part_node(
                     metadata_expanded,
                     input_expanded,
                     output_expanded,
-                    output_metadata_expanded,
                     presentation_expanded,
                     tool,
                     out,
@@ -1314,7 +1303,6 @@ pub(crate) fn render_part_node(
                     metadata_expanded,
                     input_expanded,
                     output_expanded,
-                    output_metadata_expanded,
                     presentation_expanded,
                     tool,
                     out,
@@ -1353,19 +1341,6 @@ pub(crate) fn render_part_node(
             if let Some(section) = execution.output
                 && let Some(child) = rendered_activity_section_node(
                     output_key,
-                    section.start_line,
-                    section.end_line,
-                    section.copy_text,
-                    true,
-                    section.expanded,
-                    out,
-                )
-            {
-                children.push(child);
-            }
-            if let Some(section) = execution.output_metadata
-                && let Some(child) = rendered_activity_section_node(
-                    output_metadata_key,
                     section.start_line,
                     section.end_line,
                     section.copy_text,

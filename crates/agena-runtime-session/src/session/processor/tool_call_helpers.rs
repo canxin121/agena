@@ -290,7 +290,6 @@ mod tests {
                 ToolDefinition {
                     name: "help".to_owned(),
                     contract: Default::default(),
-                    model: Default::default(),
                     docs: Default::default(),
                     runtime: Default::default(),
                     tags: Vec::new(),

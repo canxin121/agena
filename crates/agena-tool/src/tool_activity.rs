@@ -197,11 +197,13 @@ mod tests {
         let result = ToolActivityResult {
             title: Some("t".into()),
             summary: Some("s".into()),
-            raw_output: RawOutput {
-                payload: Some(json!({ "exit_code": 0 })),
-                text: "ok".into(),
-                ..RawOutput::default()
-            },
+            raw_output: RawOutput::from_parts(
+                Some(json!({ "exit_code": 0 })),
+                "ok",
+                Vec::new(),
+                Vec::new(),
+                false,
+            ),
         };
         let encoded = serde_json::to_string(&result).unwrap();
         let decoded: ToolActivityResult = serde_json::from_str(&encoded).unwrap();

@@ -10,29 +10,15 @@ pub(super) fn canonicalize_path_for_execution(path: &Path) -> PathBuf {
     crate::canonicalize_mutation_path(path)
 }
 
-pub(super) fn truncate_to_char_count(value: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let Some((idx, _)) = value.char_indices().nth(max_chars) else {
-        return value.to_string();
-    };
-    value[..idx].to_string()
-}
-
-pub(super) fn model_output_exceeds_boundary(
-    value: &str,
-    max_lines: usize,
-    max_bytes: usize,
-) -> bool {
+pub fn model_output_exceeds_boundary(value: &str, max_lines: usize, max_bytes: usize) -> bool {
     line_count(value) > max_lines || value.len() > max_bytes
 }
 
-pub(super) fn line_count(value: &str) -> usize {
+pub fn line_count(value: &str) -> usize {
     value.bytes().filter(|byte| *byte == b'\n').count() + usize::from(!value.is_empty())
 }
 
-pub(super) fn bounded_model_output_preview(
+pub fn bounded_model_output_preview(
     value: &str,
     marker: &str,
     max_lines: usize,
@@ -176,13 +162,6 @@ pub(super) fn invocation_effective_tags(
     _invocation: &ToolInvocation,
 ) -> Vec<agena_plugin_host::sdk::ToolTag> {
     definition.effective_tags()
-}
-
-pub(super) fn is_concurrency_safe_tool_invocation(
-    registered_tool: &RegisteredTool,
-    _invocation: &PluginInvocation,
-) -> bool {
-    registered_tool.definition.runtime.concurrency_safe
 }
 
 pub(super) fn apply_patch_execution_from_tool_output(

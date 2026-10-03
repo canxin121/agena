@@ -206,9 +206,6 @@ impl From<ToolError> for PendingToolPreparationError {
 /// Outcome of the shared preflight chain for one pending tool.
 struct PreparedToolPreflight {
     resolved: ResolvedPendingTool,
-    /// Shell-prepared invocation used for the concurrency-safety check and
-    /// invocation-changed detection.
-    prepared_invocation: agena_domain::ToolInvocation,
     permission_checks: Vec<ToolPermissionCheck>,
     session_changed: bool,
 }
@@ -1422,6 +1419,11 @@ impl SessionManager {
                 &state.tool_executor,
             )
             .await;
+            crate::session::prompt::bound_model_tool_outputs(
+                &mut prepared.turns,
+                Some(state.tool_executor.workspace_root()),
+                session.id,
+            );
             let (replayed_tool_calls, replayed_tool_results, unanswered_tool_call) =
                 prompt_window::prompt_tool_call_status(&prepared.turns);
             if unanswered_tool_call {
@@ -1945,7 +1947,7 @@ impl SessionManager {
             }
         }
 
-        // A non-concurrency-safe invocation still executes in transcript
+        // A tool kept on the sequential path still executes in transcript
         // order. It is reached only after all Ask outcomes above are already
         // visible, so it can never hide a later permission behind a slow
         // earlier call.
@@ -2049,7 +2051,6 @@ impl SessionManager {
         }
         Ok(PreparedToolPreflight {
             resolved,
-            prepared_invocation,
             permission_checks,
             session_changed,
         })
@@ -2071,7 +2072,6 @@ impl SessionManager {
         let scoped_executor = batch_executor.clone().with_cancellation_token(cancellation);
         let PreparedToolPreflight {
             resolved,
-            prepared_invocation,
             permission_checks,
             session_changed: _,
         } = match self
@@ -2095,7 +2095,6 @@ impl SessionManager {
             }
             Err(PendingToolPreflightError::Session(error)) => return Err(error),
         };
-        let concurrency_safe = scoped_executor.is_concurrency_safe_invocation(&prepared_invocation);
 
         let request_id = permission_request_id(session_id, &resolved);
         let approved_actions = operation_permission_approved_actions(
@@ -2130,11 +2129,6 @@ impl SessionManager {
         // canonical sequential path so no parallel executor can bypass that
         // durable handoff.
         if requested_background_kind(&resolved.invocation).is_some() {
-            *session = before_prepare;
-            return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
-        }
-
-        if !concurrency_safe {
             *session = before_prepare;
             return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
         }
@@ -2232,7 +2226,6 @@ impl SessionManager {
             .with_cancellation_token(cancellation);
         let PreparedToolPreflight {
             resolved,
-            prepared_invocation: _,
             permission_checks,
             session_changed,
         } = self
@@ -3068,11 +3061,7 @@ impl SessionManager {
             if !matches!(tool_part.state, PartState::InProgress) {
                 tool_part.state = PartState::Pending;
             }
-            tool_part.summary = Some(match request.questions.len() {
-                0 => "Ask user".to_string(),
-                1 => "Waiting for answer".to_string(),
-                count => format!("Waiting for {count} answers"),
-            });
+            tool_part.summary = None;
             Ok(())
         })?;
         self.persist_session_changes(
@@ -3138,12 +3127,7 @@ impl SessionManager {
             }
         }
         session = self
-            .apply_streaming_terminal_output(
-                session.id,
-                pending_tool,
-                streamed_output.as_str(),
-                state.clone(),
-            )
+            .apply_streaming_terminal_output(session.id, state.clone())
             .await?;
 
         let stream_end = match cancellation.as_ref() {
@@ -3232,7 +3216,7 @@ impl SessionManager {
             operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
             part.content = operation_content_value(&operation)?;
             part.state = PartState::Cancelled;
-            part.summary = Some("Execution cancelled".to_string());
+            part.summary = None;
             Ok(())
         })?;
 
@@ -3271,26 +3255,16 @@ impl SessionManager {
             .await
     }
 
-    /// Persist a bounded preview of the streamed output into the Operation at
-    /// stream end. The text was buffered in memory during the stream; this
-    /// bounds the model preview (truncated for context economy) and writes a
-    /// single checkpoint instead of re-persisting cumulative text. The final
-    /// `apply_tool_success` replaces this preview with the tool's own truncated
-    /// result, so this is only a crash-recovery / TUI intermediate view.
+    /// Reload the session at stream end. The single-source payload is written
+    /// once at completion, so no stream checkpoint is persisted: the live
+    /// broadcast carries streaming detail and the terminal frame replaces the
+    /// payload. Nothing here bounds the streamed text, because nothing here
+    /// keeps it.
     pub(in crate::session::manager) async fn apply_streaming_terminal_output(
         &self,
         session_id: i64,
-        _pending_tool: &SessionPendingTool,
-        streamed_output: &str,
         _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        if streamed_output.is_empty() {
-            return self.load_session_with_workspace_root(session_id).await;
-        }
-        // The single-source payload is written once at completion; a stream
-        // checkpoint is no longer persisted (the live broadcast carries
-        // streaming detail, and the terminal frame replaces the payload).
-        let _ = streamed_output;
         self.load_session_with_workspace_root(session_id).await
     }
 
@@ -3351,31 +3325,12 @@ impl SessionManager {
         // previously required a fake guard result and made control metadata
         // vulnerable to the streaming buffer.
         let background = background_operation_from_execution(&resolved.invocation, &tool_output);
-        // Single source of truth: when a tool produced no structured payload
-        // but did produce visible output text (plugin adapters, text-only
-        // results), fold that text into the payload so the model text and the
-        // human view can be projected from one stored value.
-        let payload = tool_output.to_json_payload().or_else(|| {
-            let text = execution.view.output_text.trim();
-            (!text.is_empty()).then(|| serde_json::json!({ "text": text }))
-        });
+        let output = execution.view.raw_output(&tool_output);
         update_resolved_tool_message(&mut session, &resolved, |tool_part| {
             let mut operation = OperationPart::completed(
                 resolved.call_id,
                 resolved.invocation.clone(),
-                agena_domain::RawOutput::from_parts(
-                    payload,
-                    execution.view.output_text.clone(),
-                    execution.view.attachments.clone(),
-                    tool_output.managed_outputs.clone(),
-                    execution
-                        .view
-                        .metadata
-                        .iter()
-                        .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
-                        .collect(),
-                    tool_output.truncated,
-                ),
+                output,
                 lifecycle.clone(),
             );
             operation.authorization = authorization.clone();
@@ -3388,9 +3343,7 @@ impl SessionManager {
                 inherit_operation_context(&mut operation, existing);
             }
             tool_part.content = operation_content_value(&operation)?;
-            if !execution.view.summary.trim().is_empty() {
-                tool_part.summary = Some(execution.view.summary.clone());
-            }
+            tool_part.summary = None;
             tool_part.state = PartState::Completed;
             Ok(())
         })?;

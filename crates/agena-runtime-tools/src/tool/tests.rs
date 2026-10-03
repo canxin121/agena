@@ -33,6 +33,7 @@ struct ToolApiFixture;
 #[derive(Debug, Clone, Copy)]
 enum RenderBehavior {
     Project,
+    ProjectFullOutput,
     Delegate,
     Fail,
     EmptyHuman,
@@ -58,7 +59,7 @@ impl agena_plugin_host::sdk::Plugin for RenderingFixture {
     ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::sdk::ToolRenderOutput>> {
         assert_eq!(input.tool_name, "render");
         assert_eq!(input.input, serde_json::json!({"source": "raw"}));
-        assert_eq!(input.output.text, "raw result");
+        assert!(input.output.payload.is_some());
         match self.behavior {
             RenderBehavior::Project => Ok(Some(agena_plugin_host::sdk::ToolRenderOutput {
                 model: Some("plugin model projection".to_owned()),
@@ -71,6 +72,25 @@ impl agena_plugin_host::sdk::Plugin for RenderingFixture {
                     }],
                 }),
             })),
+            RenderBehavior::ProjectFullOutput => {
+                let payload = input.output.payload.as_ref().expect("complete tool output");
+                let summary = format!(
+                    "Exit {} in {} ms",
+                    payload["exit_code"],
+                    payload["duration_ms"].as_str().expect("duration field")
+                );
+                Ok(Some(agena_plugin_host::sdk::ToolRenderOutput {
+                    model: Some(serde_json::to_string(payload).expect("serialize tool output")),
+                    human: Some(agena_plugin_host::sdk::ToolHumanPresentation {
+                        title: "Plugin title".to_owned(),
+                        summary: summary.clone(),
+                        blocks: vec![agena_domain::ViewBlock::Markdown {
+                            id: None,
+                            text: format!("**{summary}**"),
+                        }],
+                    }),
+                }))
+            }
             RenderBehavior::Delegate => Ok(None),
             RenderBehavior::Fail => Err(agena_plugin_host::sdk::PluginError::internal(
                 "renderer failed",
@@ -125,7 +145,6 @@ fn scoped_dynamic_tool_definition(name: &str) -> agena_plugin_host::sdk::ToolDef
             }),
             ..Default::default()
         },
-        model: Default::default(),
         docs: agena_plugin_host::sdk::ToolDocs {
             summary: Some(format!("Scoped fixture tool {name}.")),
             ..Default::default()
@@ -290,6 +309,45 @@ async fn owning_plugin_controls_both_runtime_tool_result_projections() {
 }
 
 #[tokio::test]
+async fn owning_plugin_serializes_and_renders_the_complete_result() {
+    let executor = rendering_executor(RenderBehavior::ProjectFullOutput).await;
+    let mut view = super::ToolExecutionView::simple("Render", "Completed", "raw result");
+    view.metadata
+        .insert("duration_ms".to_owned(), "42".to_owned());
+    let output = agena_domain::ToolOutput::from_json_payload(Some(&serde_json::json!({
+        "stdout": "ok",
+        "exit_code": 0,
+        "metadata": {"tool_owned": true}
+    })))
+    .expect("structured tool output");
+    let raw = view.raw_output(&output);
+    let original = raw.clone();
+
+    let projected = executor
+        .render_tool_result(&rendering_invocation(), &raw)
+        .await;
+
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(projected.model.as_deref().unwrap()).unwrap(),
+        raw.payload.clone().unwrap()
+    );
+    assert_eq!(
+        projected.human.unwrap().blocks,
+        vec![agena_domain::ViewBlock::Markdown {
+            id: None,
+            text: "**Exit 0 in 42 ms**".to_owned(),
+        }]
+    );
+    assert_eq!(raw, original);
+    assert!(
+        serde_json::to_value(&raw)
+            .unwrap()
+            .get("metadata")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn delegated_or_failed_plugin_render_uses_runtime_fallback() {
     for behavior in [RenderBehavior::Delegate, RenderBehavior::Fail] {
         let executor = rendering_executor(behavior).await;
@@ -325,13 +383,15 @@ async fn empty_or_json_only_plugin_human_render_uses_readable_fallback() {
         let projected = executor
             .render_tool_result(
                 &rendering_invocation(),
-                &agena_domain::RawOutput {
-                    text: "raw result".to_owned(),
-                    payload: Some(serde_json::json!({
+                &agena_domain::RawOutput::from_parts(
+                    Some(serde_json::json!({
                         "items": [{"name": "visible", "status": "ready"}]
                     })),
-                    ..Default::default()
-                },
+                    "raw result".to_owned(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                ),
             )
             .await;
 

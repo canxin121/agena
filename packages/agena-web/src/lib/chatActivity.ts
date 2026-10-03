@@ -22,7 +22,7 @@ export const BUILTIN_CHAT_ACTIVITY_KINDS: ChatActivityKindCatalogItem[] = [
   { id: 'text', category: 'builtin', label: 'Text' },
 ]
 
-export const DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED = ['reasoning']
+export const DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED = ['text']
 
 function normalizedStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
@@ -139,12 +139,7 @@ const KNOWN_CHAT_TOOL_ACTIVITY_TYPES: KnownChatToolActivityType[] = [
   'unknown',
 ]
 
-export const DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES = [
-  'edit',
-  'write',
-  'apply_patch',
-  'multiedit',
-]
+export const DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES: string[] = []
 
 const CHAT_TOOL_ACTIVITY_SET = new Set(KNOWN_CHAT_TOOL_ACTIVITY_TYPES)
 

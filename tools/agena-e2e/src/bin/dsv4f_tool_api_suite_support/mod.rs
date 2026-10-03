@@ -57,8 +57,8 @@ impl SuiteOperation {
     }
     pub(super) fn output_text(&self) -> Option<&str> {
         let output = self.value.output.as_ref()?;
-        if !output.text.is_empty() {
-            return Some(output.text.as_str());
+        if !output.text_content().is_empty() {
+            return Some(output.text_content());
         }
         output.payload.as_ref().and_then(|payload| {
             payload
@@ -504,8 +504,8 @@ pub(super) fn transcript_since(session: &SuiteTranscript, start_message_count: u
             }
             Some(agena_runtime::SessionProjectedPartDetail::ToolCall(value)) => {
                 value.output.as_ref().and_then(|output| {
-                    if !output.text.is_empty() {
-                        Some(output.text.as_str())
+                    if !output.text_content().is_empty() {
+                        Some(output.text_content())
                     } else {
                         output.payload.as_ref().and_then(|payload| {
                             payload
@@ -786,8 +786,8 @@ pub(super) async fn assert_outer_tool_api_stream_update(
                     .output
                     .as_ref()
                     .map(|output| {
-                        if !output.text.is_empty() {
-                            output.text.as_str()
+                        if !output.text_content().is_empty() {
+                            output.text_content()
                         } else {
                             output
                                 .payload

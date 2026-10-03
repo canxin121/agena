@@ -29,17 +29,7 @@ fn tool_detail_section_loaded(
     match section {
         agena_api::live::ToolDetailSection::Metadata => content.contains_key("metadata"),
         agena_api::live::ToolDetailSection::Input => content.contains_key("input"),
-        agena_api::live::ToolDetailSection::Output => {
-            content.get("output").is_some_and(|value| match value {
-                serde_json::Value::Null => true,
-                serde_json::Value::Object(output) => output.keys().any(|key| key != "metadata"),
-                _ => true,
-            })
-        }
-        agena_api::live::ToolDetailSection::OutputMetadata => content
-            .get("output")
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(|output| output.contains_key("metadata")),
+        agena_api::live::ToolDetailSection::Output => content.contains_key("output"),
         agena_api::live::ToolDetailSection::Presentation => part.presentation.is_some(),
     }
 }
@@ -61,40 +51,14 @@ fn preserve_loaded_tool_sections(
         agena_api::live::ToolDetailSection::Metadata,
         agena_api::live::ToolDetailSection::Input,
         agena_api::live::ToolDetailSection::Output,
-        agena_api::live::ToolDetailSection::OutputMetadata,
     ] {
-        if tool_detail_section_loaded(previous, section) {
-            match section {
-                agena_api::live::ToolDetailSection::Metadata
-                | agena_api::live::ToolDetailSection::Input => {
-                    if let Some(value) = previous_content.get(section.as_str()) {
-                        incoming_content.insert(section.as_str().to_owned(), value.clone());
-                    }
-                }
-                agena_api::live::ToolDetailSection::Output => {
-                    if let Some(value) = previous_content.get("output") {
-                        incoming_content.insert("output".to_owned(), value.clone());
-                    }
-                }
-                agena_api::live::ToolDetailSection::OutputMetadata => {
-                    if let Some(value) = previous_content
-                        .get("output")
-                        .and_then(serde_json::Value::as_object)
-                        .and_then(|output| output.get("metadata"))
-                    {
-                        let output = incoming_content
-                            .entry("output".to_owned())
-                            .or_insert_with(|| serde_json::json!({}));
-                        if output.is_null() {
-                            *output = serde_json::json!({});
-                        }
-                        if let Some(output) = output.as_object_mut() {
-                            output.insert("metadata".to_owned(), value.clone());
-                        }
-                    }
-                }
-                agena_api::live::ToolDetailSection::Presentation => {}
-            }
+        if (section != agena_api::live::ToolDetailSection::Output
+            || previous.state == incoming.state)
+            && !incoming_content.contains_key(section.as_str())
+            && tool_detail_section_loaded(previous, section)
+            && let Some(value) = previous_content.get(section.as_str())
+        {
+            incoming_content.insert(section.as_str().to_owned(), value.clone());
         }
     }
 }
@@ -108,56 +72,118 @@ fn apply_tool_detail_value(
         return false;
     }
     match section {
-        agena_api::live::ToolDetailSection::Metadata => {
+        agena_api::live::ToolDetailSection::Metadata
+        | agena_api::live::ToolDetailSection::Input
+        | agena_api::live::ToolDetailSection::Output => {
             let Some(content) = part.content.as_object_mut() else {
                 return false;
             };
-            content.insert("metadata".to_owned(), value);
-        }
-        agena_api::live::ToolDetailSection::Input => {
-            let Some(content) = part.content.as_object_mut() else {
-                return false;
-            };
-            content.insert("input".to_owned(), value);
-        }
-        agena_api::live::ToolDetailSection::Output => {
-            let Some(content) = part.content.as_object_mut() else {
-                return false;
-            };
-            let loaded_metadata = content
-                .get("output")
-                .and_then(serde_json::Value::as_object)
-                .and_then(|output| output.get("metadata"))
-                .cloned();
-            content.insert("output".to_owned(), value);
-            if let Some(metadata) = loaded_metadata
-                && let Some(output) = content
-                    .get_mut("output")
-                    .and_then(serde_json::Value::as_object_mut)
-            {
-                output.insert("metadata".to_owned(), metadata);
-            }
-        }
-        agena_api::live::ToolDetailSection::OutputMetadata => {
-            let Some(content) = part.content.as_object_mut() else {
-                return false;
-            };
-            let output = content
-                .entry("output".to_owned())
-                .or_insert_with(|| serde_json::json!({}));
-            if output.is_null() {
-                *output = serde_json::json!({});
-            }
-            let Some(output) = output.as_object_mut() else {
-                return false;
-            };
-            output.insert("metadata".to_owned(), value);
+            content.insert(section.as_str().to_owned(), value);
         }
         agena_api::live::ToolDetailSection::Presentation => {
             part.presentation = serde_json::from_value(value).ok();
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tool_detail_tests {
+    use super::{
+        apply_tool_detail_value, preserve_loaded_tool_sections, tool_detail_section_loaded,
+    };
+    use agena_api::{live::ToolDetailSection, resource::SessionTranscriptPart};
+    use serde_json::{Value, json};
+
+    fn tool_part(state: &str, fields: Value) -> SessionTranscriptPart {
+        let mut content = json!({
+            "name": "shell.run",
+            "call_id": 1,
+            "state": state,
+            "lifecycle": {"start_ms": 1, "end_ms": (state == "completed").then_some(2)}
+        });
+        content
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        SessionTranscriptPart {
+            part_id: 1,
+            kind: "tool_call".to_owned(),
+            role: "assistant".to_owned(),
+            state: state.to_owned(),
+            content,
+            presentation: None,
+            summary: None,
+            created_at_ms: 1,
+            parent_part_id: None,
+            run_id: Some(2),
+        }
+    }
+
+    #[test]
+    fn output_details_are_loaded_and_replaced_as_one_complete_value() {
+        let mut part = tool_part("completed", json!({"metadata": {"scope": "call"}}));
+        for output in [
+            Value::Null,
+            json!({}),
+            json!({"payload": {"exit_code": 0, "metadata": {"tool_owned": true}}}),
+        ] {
+            assert!(apply_tool_detail_value(
+                &mut part,
+                ToolDetailSection::Output,
+                output.clone()
+            ));
+            assert!(tool_detail_section_loaded(&part, ToolDetailSection::Output));
+            assert_eq!(part.content["output"], output);
+            assert_eq!(part.content["metadata"], json!({"scope": "call"}));
+        }
+    }
+
+    #[test]
+    fn incoming_complete_output_wins_without_merging_cached_result_fields() {
+        let previous = tool_part(
+            "completed",
+            json!({
+                "input": {"command": "cached input"},
+                "metadata": {"scope": "cached"},
+                "output": {"payload": {"exit_code": 0, "cached_only": true}}
+            }),
+        );
+        let output = json!({"payload": {"exit_code": 1, "metadata": {"tool_owned": true}}});
+        let mut incoming = tool_part(
+            "completed",
+            json!({
+                "metadata": {"scope": "current"},
+                "output": output
+            }),
+        );
+
+        preserve_loaded_tool_sections(&previous, &mut incoming);
+
+        assert_eq!(incoming.content["output"], output);
+        assert_eq!(incoming.content["metadata"], json!({"scope": "current"}));
+        assert_eq!(incoming.content["input"], previous.content["input"]);
+    }
+
+    #[test]
+    fn a_new_execution_state_invalidates_cached_empty_output() {
+        let previous = tool_part(
+            "running",
+            json!({
+                "input": {"command": "printf ok"},
+                "output": null
+            }),
+        );
+        let mut incoming = tool_part("completed", json!({}));
+
+        preserve_loaded_tool_sections(&previous, &mut incoming);
+
+        assert!(!tool_detail_section_loaded(
+            &incoming,
+            ToolDetailSection::Output
+        ));
+        assert_eq!(incoming.content["input"], previous.content["input"]);
+    }
 }
 
 impl Default for TranscriptState {

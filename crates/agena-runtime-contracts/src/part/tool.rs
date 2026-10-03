@@ -780,8 +780,8 @@ pub struct OperationPart {
     pub state: ToolResultState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<OperationError>,
-    /// Invocation and runtime-control metadata. Raw result metadata belongs
-    /// inside `output.metadata` so result facts have one storage location.
+    /// Invocation and runtime-control metadata. Result facts belong inside
+    /// `output.payload` so the tool owns one complete result object.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
@@ -1060,27 +1060,19 @@ impl OperationPart {
     }
 
     pub fn set_provider_raw(&mut self, raw: Option<serde_json::Value>) {
-        let output = self.raw_output_mut();
         match raw {
             Some(raw) => {
-                output
-                    .metadata
+                self.metadata
                     .insert(PROVIDER_RAW_METADATA_KEY.to_owned(), raw);
             }
             None => {
-                output.metadata.remove(PROVIDER_RAW_METADATA_KEY);
+                self.metadata.remove(PROVIDER_RAW_METADATA_KEY);
             }
-        }
-        if output.is_empty() {
-            self.output = None;
         }
     }
 
     pub fn provider_raw(&self) -> Option<&serde_json::Value> {
-        self.output
-            .as_ref()?
-            .metadata
-            .get(PROVIDER_RAW_METADATA_KEY)
+        self.metadata.get(PROVIDER_RAW_METADATA_KEY)
     }
 
     /// Best-effort model-visible text carved from the single payload. The
@@ -1089,9 +1081,6 @@ impl OperationPart {
     /// transcripts).
     pub fn output_text(&self) -> Option<&str> {
         let output = self.output.as_ref()?;
-        if !output.text.is_empty() {
-            return Some(output.text.as_str());
-        }
         output.payload.as_ref().and_then(|payload| {
             payload
                 .as_str()
@@ -1219,6 +1208,32 @@ mod operation_part_tests {
             op.provider_raw().and_then(|raw| raw["id"].as_str()),
             Some("provider-1")
         );
+        assert!(op.output.is_none());
+        assert_eq!(
+            op.metadata[super::PROVIDER_RAW_METADATA_KEY]["id"],
+            "provider-1"
+        );
+        op.set_provider_raw(None);
+        assert!(op.provider_raw().is_none());
+    }
+
+    #[test]
+    fn provider_protocol_context_does_not_change_tool_result_facts() {
+        let mut op = operation();
+        let output = agena_domain::RawOutput {
+            payload: Some(serde_json::json!({"exit_code": 0, "stdout": "ok"})),
+            ..Default::default()
+        };
+        op.output = Some(output.clone());
+        op.set_provider_raw(Some(serde_json::json!({"id": "provider-1"})));
+        assert_eq!(op.output.as_ref(), Some(&output));
+
+        let encoded = serde_json::to_value(&op).unwrap();
+        let decoded: OperationPart = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.provider_raw(), op.provider_raw());
+        assert_eq!(decoded.output.as_ref(), Some(&output));
+        op.set_provider_raw(None);
+        assert_eq!(op.output.as_ref(), Some(&output));
     }
 }
 

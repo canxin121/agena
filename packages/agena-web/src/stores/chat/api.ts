@@ -64,7 +64,7 @@ export type AgenaPart = {
   [k: string]: JsonValue
 }
 
-export type ToolDetailSection = 'metadata' | 'input' | 'output' | 'output_metadata' | 'presentation'
+export type ToolDetailSection = 'metadata' | 'input' | 'output' | 'presentation'
 
 export type ToolDetailResource = {
   part_id: number
@@ -569,7 +569,8 @@ export function normalizeAgenaPart(
       const contentRecord = asObject(content)
       const references = [contentRecord.commands, contentRecord.skills].find(Array.isArray) ?? []
       const firstReference = references.length > 0 ? asObject(references[0]) : {}
-      const name = stringField(content, ['command', 'skill', 'name']) || stringField(firstReference, ['name']) || 'command'
+      const name =
+        stringField(content, ['command', 'skill', 'name']) || stringField(firstReference, ['name']) || 'command'
       const description = stringField(content, ['description']) || stringField(firstReference, ['description'])
       return {
         ...base,

@@ -1,7 +1,7 @@
 //! Activity rendering and model/human projection domain core.
 //!
 //! 本模块承载重构的三大支柱：
-//! - [`RawOutput`]：**单一事实源**。activity 唯一持久化的内容（payload/text/attachments/metadata）。
+//! - [`RawOutput`]：**单一事实源**。activity 唯一持久化的内容（payload/text/attachments/managed_outputs）。
 //!   给 AI 看与给人看都是它的即时投影/渲染，视图永不落盘。
 //! - [`ViewBlock`]：**统一渲染契约**。工具渲染函数与实时渲染增量的输出，TUI/Web 共享同一类型。
 //! - [`RenderDelta`]/[`DeltaMode`]：**实时渲染增量**。流式期间“给人看的实时更新”的最小单元。
@@ -198,9 +198,8 @@ impl RenderDelta {
 
 /// 单一事实源：activity 唯一持久化的内容（07 §4.2 / 08 §2）。
 ///
-/// - `payload`：机器可读事实（模型投影主源；也是渲染函数输入）；
-/// - `text`：文本事实（模型 fallback；也是渲染函数输入）；
-/// - `attachments`/`metadata`：附随事实。
+/// - `payload`：工具定义的唯一原始结果，包括正文、退出码、分页等结果信息；
+/// - `attachments`/`managed_outputs`：结果资源。
 ///
 /// 不存在“人类副本 / 模型副本”：`for_model`/`render_human` 都是它的即时投影。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,62 +207,55 @@ impl RenderDelta {
 pub struct RawOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<crate::AttachmentItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub managed_outputs: Vec<crate::ToolManagedOutput>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub truncated: bool,
 }
 
 impl RawOutput {
     pub fn text(text: impl Into<String>) -> Self {
+        let text = text.into();
         Self {
-            text: text.into(),
+            payload: (!text.is_empty()).then(|| serde_json::json!({"text": text})),
             ..Self::default()
         }
     }
 
+    pub fn text_content(&self) -> &str {
+        self.payload
+            .as_ref()
+            .and_then(|payload| {
+                payload
+                    .as_str()
+                    .or_else(|| payload.get("text").and_then(serde_json::Value::as_str))
+            })
+            .unwrap_or_default()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.payload.is_none()
-            && self.text.is_empty()
             && self.attachments.is_empty()
             && self.managed_outputs.is_empty()
-            && self.metadata.is_empty()
             && !self.truncated
     }
 
-    /// Build one canonical raw result while avoiding a duplicate text copy
-    /// when the structured payload already contains the exact same fact.
+    /// A structured tool result is authoritative; formatted previews are not
+    /// another durable result. Text-only tools keep their text in the payload.
     pub fn from_parts(
         payload: Option<serde_json::Value>,
         text: impl Into<String>,
         attachments: Vec<crate::AttachmentItem>,
         managed_outputs: Vec<crate::ToolManagedOutput>,
-        metadata: BTreeMap<String, serde_json::Value>,
         truncated: bool,
     ) -> Self {
-        let text = text.into();
-        let payload_text = payload.as_ref().and_then(|payload| {
-            payload
-                .as_str()
-                .or_else(|| payload.get("text").and_then(serde_json::Value::as_str))
-        });
-        let text = if payload_text == Some(text.as_str()) {
-            String::new()
-        } else {
-            text
-        };
+        let payload = payload.or_else(|| Self::text(text).payload);
         Self {
             payload,
-            text,
             attachments,
             managed_outputs,
-            metadata,
             truncated,
         }
     }
@@ -406,38 +398,67 @@ mod tests {
     #[test]
     fn raw_output_serde_round_trips_the_current_shape() {
         let output = RawOutput {
-            payload: Some(json!({ "exit_code": 0 })),
-            text: "ok".into(),
+            payload: Some(
+                json!({ "text": "ok", "exit_code": 0, "metadata": {"tool_owned": true} }),
+            ),
             ..RawOutput::default()
         };
         let encoded = serde_json::to_string(&output).unwrap();
         let decoded: RawOutput = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, output);
+        let value = serde_json::to_value(&output).unwrap();
+        assert!(value.get("metadata").is_none());
+        assert_eq!(value["payload"]["metadata"]["tool_owned"], true);
     }
 
     #[test]
-    fn raw_output_stores_identical_text_once_but_preserves_distinct_facts() {
-        let duplicate = RawOutput::from_parts(
-            Some(json!({"text": "same"})),
-            "same",
-            Vec::new(),
-            Vec::new(),
-            BTreeMap::new(),
-            false,
-        );
-        assert!(duplicate.text.is_empty());
-        assert_eq!(duplicate.payload, Some(json!({"text": "same"})));
+    fn raw_output_stores_only_the_authoritative_body() {
+        for payload in [
+            json!({"text": "single body"}),
+            json!({"preview": "single body"}),
+            json!({"stdout": "single body"}),
+            json!({"result": {"body": "single body"}}),
+        ] {
+            let output = RawOutput::from_parts(
+                Some(payload.clone()),
+                "single body",
+                Vec::new(),
+                Vec::new(),
+                false,
+            );
+            assert_eq!(output.payload, Some(payload));
+            let stored = serde_json::to_value(&output).unwrap();
+            assert!(stored.get("text").is_none());
+            assert_eq!(stored.to_string().matches("single body").count(), 1);
+        }
 
-        let distinct = RawOutput::from_parts(
-            Some(json!({"text": "structured"})),
-            "raw stream",
+        let output = RawOutput::from_parts(
+            Some(json!({"text": "raw fact"})),
+            "formatted preview",
             Vec::new(),
             Vec::new(),
-            BTreeMap::new(),
             false,
         );
-        assert_eq!(distinct.text, "raw stream");
-        assert_eq!(distinct.payload, Some(json!({"text": "structured"})));
+        assert_eq!(output.text_content(), "raw fact");
+        assert!(
+            !serde_json::to_string(&output)
+                .unwrap()
+                .contains("formatted preview")
+        );
+    }
+
+    #[test]
+    fn text_only_results_keep_their_body_in_the_single_payload() {
+        let output = RawOutput::from_parts(None, "single body", Vec::new(), Vec::new(), false);
+        assert_eq!(output.payload, Some(json!({"text": "single body"})));
+        assert_eq!(output.text_content(), "single body");
+        assert_eq!(
+            serde_json::to_string(&output)
+                .unwrap()
+                .matches("single body")
+                .count(),
+            1
+        );
     }
 
     #[test]

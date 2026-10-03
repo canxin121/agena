@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 
 import type { TranscriptDisplayPart } from '../src/components/chat/messageList.types'
 import {
+  attachmentPresentations,
   decodeStructuredValue,
   interactionPresentationFromAttention,
   operationPresentation,
@@ -80,13 +81,13 @@ describe('TUI-parity part presentation', () => {
       ),
     )
     expect(projected.title).toBe('fs.read · README.md')
-    expect(projected.structured).toEqual({ preview: 'raw value' })
+    expect(projected.rawOutput).toEqual({ payload: { preview: 'raw value' } })
     expect(projected.blocks).toEqual([{ type: 'json', value: { preview: '**README**' } }])
     expect(projected.metadata).toEqual({ cache: true })
     expect(projected.durationMs).toBe(25)
   })
 
-  test('projects operation attachments without losing source-specific media facts', () => {
+  test('preserves raw attachment facts without interpreting their source or presentation', () => {
     const projected = operationPresentation(
       operationPart({
         name: 'image.generate',
@@ -118,20 +119,25 @@ describe('TUI-parity part presentation', () => {
         },
       }),
     )
-    expect(projected.attachments).toHaveLength(3)
-    expect(projected.attachments[0]).toMatchObject({
-      label: 'chart.png',
-      path: 'artifacts/chart.png',
-      url: 'artifacts/chart.png',
-      width: 640,
-      height: 480,
+    expect(projected.rawOutput).toMatchObject({
+      attachments: [
+        {
+          filename: 'chart.png',
+          source: { source: 'local_path', path: 'artifacts/chart.png' },
+          width: 640,
+          height: 480,
+        },
+        {
+          title: 'Audio preview',
+          source: { source: 'url', url: 'https://example.test/audio.mp3' },
+          duration_ms: 2500,
+        },
+        {
+          filename: 'inline.png',
+          source: { source: 'base64', data: 'aGVsbG8=' },
+        },
+      ],
     })
-    expect(projected.attachments[1]).toMatchObject({
-      label: 'Audio preview',
-      url: 'https://example.test/audio.mp3',
-      durationMs: 2500,
-    })
-    expect(projected.attachments[2]?.url).toBe('data:image/png;base64,aGVsbG8=')
   })
 
   test('keeps completed permission decisions and their reply reason in the part projection', () => {
@@ -290,7 +296,7 @@ describe('TUI-parity part presentation', () => {
       },
     )
     const projected = operationPresentation(part)
-    expect(projected.structured).toEqual(structured)
+    expect(projected.rawOutput).toEqual({ payload: structured })
     expect(projected.blocks).toEqual([
       {
         type: 'search_results',
@@ -382,7 +388,7 @@ describe('TUI-parity part presentation', () => {
     })
   })
 
-  test('auto-expands a pending interaction operation as one transcript Part', () => {
+  test('keeps a pending interaction operation collapsed by default', () => {
     const [block] = projectTranscriptBlocks(
       [
         {
@@ -407,79 +413,56 @@ describe('TUI-parity part presentation', () => {
       { showReasoning: true },
     )
     expect(block?.kind).toBe('message')
-    if (block?.kind === 'message') expect(block.displayParts[0]?.defaultExpanded).toBe(true)
+    if (block?.kind === 'message') expect(block.displayParts[0]?.defaultExpanded).toBe(false)
   })
 
-  test('extracts explicit stdout logs and removes duplicate primary output', () => {
+  test('keeps the raw output and plugin-owned stdout logs independent', () => {
+    const output = { payload: { text: 'raw text' } }
+    const block = { type: 'log', stream: 'stdout', text: '## Complete\n\n- one' }
     const projected = operationPresentation(
-      operationPart(
-        { output: { payload: { text: 'raw text' } } },
-        {
-          title: 'Complete',
-          summary: 'Done',
-          blocks: [{ type: 'log', stream: 'stdout', text: '## Complete\n\n- one' }],
-        },
-      ),
+      operationPart({ output }, { title: 'Complete', summary: 'Done', blocks: [block] }),
     )
-    expect(projected.stdout).toBe('## Complete\n\n- one')
-    expect(projected.structured).toBeNull()
-    expect(projected.blocks).toEqual([])
+    expect(projected.rawOutput).toEqual(output)
+    expect(projected.presentationBlocks).toEqual([block])
   })
 
-  test('extracts command stdout while retaining command diagnostics in Output', () => {
+  test('preserves the complete command presentation including stdout and diagnostics', () => {
+    const output = { payload: { raw: true } }
+    const block = {
+      type: 'command',
+      command: 'cargo test',
+      cwd: '/workspace',
+      stdout: '**2 passed**',
+      stderr: 'warning',
+      exit_code: 0,
+    }
     const projected = operationPresentation(
-      operationPart(
-        { output: { payload: { raw: true } } },
-        {
-          title: 'cargo test',
-          summary: '2 passed',
-          blocks: [
-            {
-              type: 'command',
-              command: 'cargo test',
-              cwd: '/workspace',
-              stdout: '**2 passed**',
-              stderr: 'warning',
-              exit_code: 0,
-            },
-          ],
-        },
-      ),
+      operationPart({ output }, { title: 'cargo test', summary: '2 passed', blocks: [block] }),
     )
-    expect(projected.stdout).toBe('**2 passed**')
-    expect(projected.blocks).toEqual([
-      {
-        type: 'command',
-        command: 'cargo test',
-        cwd: '/workspace',
-        stderr: 'warning',
-        exit_code: 0,
-      },
-    ])
+    expect(projected.rawOutput).toEqual(output)
+    expect(projected.presentationBlocks).toEqual([block])
   })
 
-  test('deduplicates direct stdout sources and leaves stdout-only Output empty', () => {
+  test('does not remove raw result fields based on a plugin presentation', () => {
+    const output = { payload: { text: 'raw result', returned_lines: 42 } }
+    const block = { type: 'log', stream: 'stdout', text: '# Result' }
     const projected = operationPresentation(
-      operationPart(
-        { output: { payload: { text: 'raw result' } } },
-        { title: 'Result', summary: 'Complete', blocks: [{ type: 'log', stream: 'stdout', text: '# Result' }] },
-      ),
+      operationPart({ output }, { title: 'Result', summary: 'Complete', blocks: [block] }),
     )
-    expect(projected.stdout).toBe('# Result')
-    expect(projected.structured).toBeNull()
-    expect(projected.blocks).toEqual([])
-    expect(projected.attachments).toEqual([])
+    expect(projected.rawOutput).toEqual(output)
+    expect(projected.presentationBlocks).toEqual([block])
   })
 
-  test('keeps non-presentation sections folded and presents the five tool sections in order', () => {
+  test('keeps raw detail sections folded and presents the four tool sections in order', () => {
     const source = readFileSync(new URL('../src/components/chat/AgenaOperationPart.vue', import.meta.url), 'utf8')
     expect(source).toContain('const metadataExpanded = ref(false)')
     expect(source).toContain('const inputExpanded = ref(false)')
     expect(source).toContain('const outputExpanded = ref(false)')
-    expect(source).toContain('const outputMetadataExpanded = ref(false)')
     expect(source).toContain('const presentationExpanded = ref(true)')
+    expect(source).not.toContain('output_metadata')
+    expect(source).toContain('prettyJson(operation.rawOutput)')
     expect(source).toContain(
-      "const toolDetailSections: ToolDetailSection[] = ['metadata', 'input', 'output', 'output_metadata', 'presentation']",
+      "const toolDetailSections: ToolDetailSection[] = ['metadata', 'input', 'output', 'presentation']",
     )
     expect(source).toContain('getToolPartDetail')
     expect(source).toContain('data-tool-detail-section')
@@ -537,7 +520,13 @@ describe('TUI-parity part presentation', () => {
     expect(headerSource).not.toContain('AttentionPanel')
   })
 
-  test('keeps raw output and output metadata independent in section projections', () => {
+  test('loads the whole output without interpreting tool-defined fields or changing presentation', () => {
+    const output = {
+      text: 'done',
+      payload: { exit_code: 0, duration_ms: 42, metadata: { tool_owned: true } },
+      managed_outputs: [{ path: 'result.txt' }],
+      truncated: true,
+    }
     const projected = operationPresentation(
       operationPart(
         {
@@ -552,26 +541,31 @@ describe('TUI-parity part presentation', () => {
           blocks: [{ type: 'text', text: 'Human summary' }],
         },
       ),
-      {
-        input: { script: 'private input' },
-        output: { text: 'done', payload: { exit_code: 0 }, metadata: { exit_code: 0 } },
-        output_metadata: { exit_code: 0 },
-      },
+      { input: { script: 'private input' }, output },
     )
 
     expect(projected.input).toEqual({ script: 'private input' })
     expect(projected.metadata).toEqual({ source: 'test' })
-    expect(projected.outputText).toBe('done')
-    expect(projected.rawOutput).toEqual({ text: 'done', payload: { exit_code: 0 } })
-    expect(projected.outputMetadata).toEqual({ exit_code: 0 })
+    expect(projected.rawOutput).toEqual(output)
     expect(projected.presentationBlocks).toEqual([{ type: 'text', text: 'Human summary' }])
+    expect(output.payload.metadata).toEqual({ tool_owned: true })
   })
 })
 
-test('provider-bound media snapshots remain previewable without exposing route in the URL',()=>{
-  const projected=operationPresentation(operationPart({name:'media.result',output:{attachments:[{
-    kind:'image',mime:'image/png',filename:'input.png',source:{source:'provider_data',route:'media-route:opaque',data:'Zml4ZWQ='},
-  }]}}))
-  expect(projected.attachments[0]?.url).toBe('data:image/png;base64,Zml4ZWQ=')
-  expect(projected.attachments[0]?.url).not.toContain('media-route')
+test('provider-bound media resources remain previewable without exposing route in the URL', () => {
+  const part = operationPart({
+    attachments: [
+      {
+        kind: 'image',
+        mime: 'image/png',
+        filename: 'input.png',
+        source: { source: 'provider_data', route: 'media-route:opaque', data: 'Zml4ZWQ=' },
+      },
+    ],
+  })
+  part.kind = 'resource'
+  part.source.agenaKind = 'file_ref'
+  const projected = attachmentPresentations(part)
+  expect(projected[0]?.url).toBe('data:image/png;base64,Zml4ZWQ=')
+  expect(projected[0]?.url).not.toContain('media-route')
 })

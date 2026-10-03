@@ -1395,10 +1395,13 @@ mod tests {
                 ),
                 authorization: Default::default(),
                 user_input: Default::default(),
-                output: Some(RawOutput {
-                    text: "**Deployment finished**".to_owned(),
-                    ..Default::default()
-                }),
+                output: Some(RawOutput::from_parts(
+                    None,
+                    "**Deployment finished**".to_owned(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )),
                 state: ToolResultState::Completed,
                 error: None,
                 metadata: std::collections::BTreeMap::from([(
@@ -1660,11 +1663,6 @@ mod tests {
             content_id: TranscriptContentId::StoredPart(9),
             section: crate::TranscriptActivitySection::Output,
         };
-        let output_metadata_key = TranscriptNodeKey::ActivitySection {
-            entry_id: TranscriptEntryId::StoredMessage(3),
-            content_id: TranscriptContentId::StoredPart(9),
-            section: crate::TranscriptActivitySection::OutputMetadata,
-        };
         let presentation_key = TranscriptNodeKey::ActivitySection {
             entry_id: TranscriptEntryId::StoredMessage(3),
             content_id: TranscriptContentId::StoredPart(9),
@@ -1690,7 +1688,7 @@ mod tests {
             .join("\n");
         assert!(folded_text.contains("▸ Input"), "{folded_text}");
         assert!(folded_text.contains("▸ Output"), "{folded_text}");
-        assert!(folded_text.contains("▸ Output metadata"), "{folded_text}");
+        assert!(!folded_text.contains("Output metadata"), "{folded_text}");
         assert!(folded_text.contains("▾ Presentation"), "{folded_text}");
         assert!(
             !folded_text.contains("private input sentinel"),
@@ -1701,7 +1699,7 @@ mod tests {
             "{folded_text}"
         );
         assert!(folded_text.contains("stdout sentinel"), "{folded_text}");
-        for key in [&input_key, &output_key, &output_metadata_key] {
+        for key in [&input_key, &output_key] {
             let node = folded
                 .nodes
                 .iter()
@@ -1721,18 +1719,7 @@ mod tests {
             .nodes
             .iter()
             .filter_map(|node| match &node.key {
-                TranscriptNodeKey::ActivitySection { section, .. }
-                    if matches!(
-                        section,
-                        crate::TranscriptActivitySection::Metadata
-                            | crate::TranscriptActivitySection::Input
-                            | crate::TranscriptActivitySection::Output
-                            | crate::TranscriptActivitySection::OutputMetadata
-                            | crate::TranscriptActivitySection::Presentation
-                    ) =>
-                {
-                    Some(*section)
-                }
+                TranscriptNodeKey::ActivitySection { section, .. } => Some(*section),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -1742,7 +1729,6 @@ mod tests {
                 crate::TranscriptActivitySection::Metadata,
                 crate::TranscriptActivitySection::Input,
                 crate::TranscriptActivitySection::Output,
-                crate::TranscriptActivitySection::OutputMetadata,
                 crate::TranscriptActivitySection::Presentation,
             ]
         );
@@ -1969,7 +1955,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_image_attachments_render_once_through_the_rich_content_pipeline() {
+    fn tool_owned_image_presentation_renders_once_without_opening_raw_output() {
         let png = concat!(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",
             "+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -1994,46 +1980,61 @@ mod tests {
                 invocation: ToolInvocation::new("agena.image", StructuredObject::default()),
                 authorization: Default::default(),
                 user_input: Default::default(),
-                output: Some(RawOutput {
-                    text: "created an image".to_owned(),
-                    attachments: vec![attachment],
-                    ..Default::default()
-                }),
+                output: Some(RawOutput::from_parts(
+                    None,
+                    "created an image".to_owned(),
+                    vec![attachment],
+                    Vec::new(),
+                    false,
+                )),
                 state: ToolResultState::Completed,
                 error: None,
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            None,
+            Some(HumanPresentationResource {
+                title: "Image".to_owned(),
+                summary: "Created an image".to_owned(),
+                blocks: vec![ViewBlock::Markdown {
+                    id: None,
+                    text: format!("### Attachments\n\n![pixel.png](data:image/png;base64,{png})"),
+                }],
+            }),
         );
-        let part = TranscriptFixture::operation_part(
-            9,
+        let now = Utc::now();
+        let part =
+            TranscriptFixture::operation_part(9, 3, now, ExecutionStatus::Completed, operation);
+        let message = entry(
             3,
-            Utc::now(),
-            ExecutionStatus::Completed,
-            operation,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
+            now,
+            vec![part],
         );
-        let mut rendered = Vec::new();
-        render_tool_execution(
-            &part,
-            tool_view(&part),
-            &mut rendered,
+        let rendered = render_entry_detailed(
+            &message,
             80,
             &I18n::english(),
-            true,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: true,
+                kind_defaults: Default::default(),
+            },
+            &Default::default(),
         );
         let text = rendered
+            .lines
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("attachments"), "{text}");
+        assert!(text.to_lowercase().contains("attachments"), "{text}");
         assert_eq!(text.matches("pixel.png").count(), 1, "{text}");
-        assert!(text.contains("embedded image"));
+        assert!(text.contains("embedded image"), "{text}");
+        assert!(!text.contains("iVBORw0"), "{text}");
     }
 
     #[test]
-    fn tool_image_attachment_without_a_block_keeps_its_attachment_section() {
+    fn raw_output_keeps_attachment_facts_without_inventing_presentation_blocks() {
         let attachment = AttachmentItem {
             kind: AttachmentKind::Image,
             mime: "image/png".to_owned(),
@@ -2055,11 +2056,13 @@ mod tests {
                 invocation: ToolInvocation::new("agena.image", StructuredObject::default()),
                 authorization: Default::default(),
                 user_input: Default::default(),
-                output: Some(RawOutput {
-                    text: "created an image".to_owned(),
-                    attachments: vec![attachment],
-                    ..Default::default()
-                }),
+                output: Some(RawOutput::from_parts(
+                    None,
+                    "created an image".to_owned(),
+                    vec![attachment],
+                    Vec::new(),
+                    false,
+                )),
                 state: ToolResultState::Completed,
                 error: None,
                 metadata: Default::default(),
@@ -2091,6 +2094,53 @@ mod tests {
         assert!(text.contains("attachments"), "{text}");
         assert_eq!(text.matches("pixel.png").count(), 2, "{text}");
         assert!(text.contains("https://example.com/pixel.png"), "{text}");
+        assert!(!text.contains("embedded image"), "{text}");
+    }
+
+    #[test]
+    fn raw_output_json_is_not_interpreted_as_markdown() {
+        let operation = OperationPart::completed(
+            7,
+            ToolInvocation::new("plugin.inspect", StructuredObject::default()),
+            RawOutput {
+                payload: Some(serde_json::json!({
+                    "text": "**raw value**",
+                    "url": "https://example.test/data",
+                    "metadata": {"tool_owned": true}
+                })),
+                ..Default::default()
+            },
+            TimeRange::default(),
+        );
+        let tool = ToolCallView::from_operation(operation, None);
+        let part =
+            TranscriptFixture::operation_part(9, 3, Utc::now(), ExecutionStatus::Completed, tool);
+        let mut rendered = Vec::new();
+        render_tool_execution(
+            &part,
+            tool_view(&part),
+            &mut rendered,
+            100,
+            &I18n::english(),
+            true,
+        );
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("\"text\": \"**raw value**\""), "{text}");
+        assert!(
+            text.contains("\"url\": \"https://example.test/data\""),
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("https://example.test/data").count(),
+            1,
+            "{text}"
+        );
+        assert!(text.contains("\"tool_owned\": true"), "{text}");
     }
 
     #[test]

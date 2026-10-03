@@ -297,8 +297,10 @@ async fn audit_read_many_keeps_successes_and_reports_every_requested_path() {
     let entries = result["files"].as_array().unwrap();
     assert_eq!(entries.len(), 4);
     assert!(entries[0]["error"].is_null());
+    assert_eq!(entries[0]["content"], "hello");
     assert!(entries[1]["error"].is_string());
     assert!(entries[2]["error"].is_null());
+    assert_eq!(entries[2]["content"], "world");
     assert!(entries[3]["error"].is_string());
     let limited = f
         .call(
@@ -515,70 +517,6 @@ async fn audit_large_file_small_page_is_streamed() {
     assert_eq!(output["read_info"]["next_offset"], 2);
     assert!(output["read_info"]["scanned_bytes"].as_u64().unwrap() < 100);
 }
-#[tokio::test]
-async fn audit_long_tool_result_is_recoverable_only_by_its_owner() {
-    let f = Fixture::new().await;
-    let text = (0..1000)
-        .map(|i| {
-            if i == 501 {
-                "UNIQUE_MIDDLE_FAILURE".to_owned()
-            } else {
-                format!("line {i}: fixture output")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    f.write("log.txt", &text);
-    let call = ToolInvocation::new(
-        "fs.read",
-        StructuredObject::try_from(json!({"file_path":"log.txt","mode":"text"})).unwrap(),
-    );
-    let prepared = f.executor.prepare_invocation(&call, 41, 81).await.unwrap();
-    let result = f
-        .executor
-        .execute_invocation_detailed(&prepared.invocation, 41, 81)
-        .await
-        .unwrap();
-    let id = result.view.metadata.get("output_resource_id").unwrap();
-    assert!(result.view.output_text.contains(id));
-    let hits = f
-        .call(
-            "fs.output_search",
-            json!({"output_id":id,"pattern":"UNIQUE_MIDDLE_FAILURE"}),
-        )
-        .await
-        .unwrap();
-    let offset = hits["matches"][0]["offset"].as_u64().unwrap();
-    let page = f
-        .call(
-            "fs.output_read",
-            json!({"output_id":id,"offset":offset,"limit":100}),
-        )
-        .await
-        .unwrap();
-    assert!(
-        page["text"]
-            .as_str()
-            .unwrap()
-            .starts_with("UNIQUE_MIDDLE_FAILURE")
-    );
-    let foreign = ToolInvocation::new(
-        "fs.output_read",
-        StructuredObject::try_from(json!({"output_id":id})).unwrap(),
-    );
-    let foreign = f
-        .executor
-        .prepare_invocation(&foreign, 42, 82)
-        .await
-        .unwrap();
-    assert!(
-        f.executor
-            .execute_invocation_detailed(&foreign.invocation, 42, 82)
-            .await
-            .is_err()
-    );
-}
-
 #[tokio::test]
 async fn audit_nested_project_guidance_reaches_the_file_read_result() {
     let f = Fixture::new().await;

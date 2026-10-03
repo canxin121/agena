@@ -1424,7 +1424,6 @@ mod tool_result_render_tests {
                     }),
                     ..Default::default()
                 },
-                model: Default::default(),
                 docs: agena_plugin_host::sdk::ToolDocs {
                     summary: Some("Render a prompt fixture.".to_owned()),
                     ..Default::default()
@@ -1441,7 +1440,7 @@ mod tool_result_render_tests {
         ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::sdk::ToolRenderOutput>>
         {
             assert_eq!(input.tool_name, "render");
-            let model = match input.output.text.as_str() {
+            let model = match input.output.text_content() {
                 "durable raw output" => "plugin-only model projection",
                 "second durable output" => "second model projection",
                 other => panic!("unexpected tool output: {other}"),

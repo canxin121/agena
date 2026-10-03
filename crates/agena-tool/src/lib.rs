@@ -206,21 +206,7 @@ pub fn result_title_fragment(output: &RawOutput) -> String {
         candidates.push(fragment);
     }
 
-    // Some plugin/execution adapters expose the same compact facts as string
-    // metadata rather than putting them in the structured payload. Metadata
-    // is still part of RawOutput, so it must participate in the final title.
-    if !output.metadata.is_empty() {
-        let metadata = output
-            .metadata
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect::<serde_json::Map<_, _>>();
-        if let Some(fragment) = result_title_fragment_from_object(&metadata) {
-            candidates.push(fragment);
-        }
-    }
-
-    if let Some(object) = serde_json::from_str::<serde_json::Value>(output.text.trim())
+    if let Some(object) = serde_json::from_str::<serde_json::Value>(output.text_content().trim())
         .ok()
         .and_then(|value| value.as_object().cloned())
         && let Some(fragment) = result_title_fragment_from_object(&object)
@@ -232,8 +218,8 @@ pub fn result_title_fragment(output: &RawOutput) -> String {
         return finalize_result_fragment(fragment, output);
     }
 
-    if !output.text.trim().is_empty()
-        && let Some(value) = compact_result_text(output.text.as_str())
+    if !output.text_content().trim().is_empty()
+        && let Some(value) = compact_result_text(output.text_content())
     {
         return finalize_result_fragment(value, output);
     }
@@ -277,27 +263,17 @@ pub fn result_title_fragment_for_tool(tool_name: &str, output: &RawOutput) -> St
         candidates.push(fragment);
     }
 
-    if !output.metadata.is_empty() {
-        let metadata = output
-            .metadata
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect::<serde_json::Map<_, _>>();
-        if let Some(fragment) = tool_result_fragment(key.as_str(), &metadata) {
-            candidates.push(fragment);
-        }
-    }
-    if let Some(object) = serde_json::from_str::<serde_json::Value>(output.text.trim())
+    if let Some(object) = serde_json::from_str::<serde_json::Value>(output.text_content().trim())
         .ok()
         .and_then(|value| value.as_object().cloned())
         && let Some(fragment) = tool_result_fragment(key.as_str(), &object)
     {
         candidates.push(fragment);
     }
-    if let Some(fragment) = tool_result_fragment_from_text(key.as_str(), output.text.as_str()) {
+    if let Some(fragment) = tool_result_fragment_from_text(key.as_str(), output.text_content()) {
         candidates.push(fragment);
     }
-    if is_provider_tool_identity(key.as_str()) && !output.text.trim().is_empty() {
+    if is_provider_tool_identity(key.as_str()) && !output.text_content().trim().is_empty() {
         candidates.push("response received".to_owned());
     }
     if let Some(fragment) = choose_result_fragment(candidates) {
@@ -306,8 +282,8 @@ pub fn result_title_fragment_for_tool(tool_name: &str, output: &RawOutput) -> St
     finalize_result_fragment(result_title_fragment(output), output)
 }
 
-/// Pick the most useful result fact when an adapter split it across the
-/// structured payload, metadata, and text channels. A bare lifecycle marker
+/// Pick the most useful result fact from the structured payload and text.
+/// A bare lifecycle marker
 /// such as `completed` must not beat a concrete fact such as `passed`, `HTTP
 /// 200`, or `2 matches`; an explicit failure remains authoritative over any
 /// partial success marker.
@@ -373,11 +349,7 @@ fn result_output_is_truncated(output: &RawOutput) -> bool {
             == Some(true)
     };
     output.payload.as_ref().is_some_and(reports_truncated)
-        || output
-            .metadata
-            .get("truncated")
-            .is_some_and(|value| value.as_bool() == Some(true))
-        || serde_json::from_str::<serde_json::Value>(output.text.trim())
+        || serde_json::from_str::<serde_json::Value>(output.text_content().trim())
             .ok()
             .is_some_and(|value| reports_truncated(&value))
 }
@@ -3394,13 +3366,11 @@ mod tool_title_tests {
         };
         assert_eq!(result_title_fragment(&grep_output), "2 matches");
 
-        let mut metadata = std::collections::BTreeMap::new();
-        metadata.insert("exit_code".to_owned(), json!("1"));
-        let metadata_output = RawOutput {
-            metadata,
+        let output = RawOutput {
+            payload: Some(json!({"exit_code": "1"})),
             ..RawOutput::default()
         };
-        assert_eq!(result_title_fragment(&metadata_output), "failed · exit 1");
+        assert_eq!(result_title_fragment(&output), "failed · exit 1");
     }
 
     #[test]
@@ -3517,17 +3487,19 @@ mod tool_title_tests {
         assert_eq!(
             completed_tool_title(
                 &provider,
-                &RawOutput {
-                    payload: Some(json!({
+                &RawOutput::from_parts(
+                    Some(json!({
                         "provider": "chatgpt",
                         "tool": "web_search",
                         "response_id": "resp-1",
                         "assistant_content": [{"type": "output_text", "text": "A long answer"}],
                         "sources": []
                     })),
-                    text: "A long answer that should not become the collapsed title.".into(),
-                    ..RawOutput::default()
-                }
+                    "A long answer that should not become the collapsed title.",
+                    Vec::new(),
+                    Vec::new(),
+                    false
+                )
             ),
             "Search web in OpenAI cloud · Agena · response received"
         );
@@ -3892,16 +3864,15 @@ mod tool_title_tests {
     }
 
     #[test]
-    fn completed_titles_use_metadata_only_facts_and_terminal_states() {
+    fn completed_titles_use_result_fields_and_terminal_states() {
         let invocation = ToolInvocation::new(
             "agena.shell.run",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("structured input"),
         );
-        let metadata = std::collections::BTreeMap::from([("exit_code".to_owned(), json!(0))]);
         let title = completed_tool_title(
             &invocation,
             &RawOutput {
-                metadata,
+                payload: Some(json!({"exit_code": 0})),
                 ..RawOutput::default()
             },
         );
@@ -3930,21 +3901,16 @@ mod tool_title_tests {
     }
 
     #[test]
-    fn completed_titles_merge_payload_metadata_and_truncation_facts() {
+    fn completed_titles_use_complete_payload_and_truncation_facts() {
         let invocation = ToolInvocation::new(
             "agena.shell.run",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("input"),
         );
 
-        let metadata = std::collections::BTreeMap::from([
-            ("exit_code".to_owned(), json!(1)),
-            ("truncated".to_owned(), json!(true)),
-        ]);
         let title = completed_tool_title(
             &invocation,
             &RawOutput {
-                payload: Some(json!({"status": "completed"})),
-                metadata,
+                payload: Some(json!({"status": "completed", "exit_code": 1, "truncated": true})),
                 ..RawOutput::default()
             },
         );
@@ -3954,8 +3920,7 @@ mod tool_title_tests {
         );
 
         let generic = result_title_fragment(&RawOutput {
-            payload: Some(json!({"status": "completed"})),
-            metadata: std::collections::BTreeMap::from([("exit_code".to_owned(), json!(1))]),
+            payload: Some(json!({"status": "completed", "exit_code": 1})),
             ..RawOutput::default()
         });
         assert_eq!(generic, "failed · exit 1");
@@ -3971,10 +3936,13 @@ mod tool_title_tests {
             super::completed_tool_title_for_state(
                 &shell,
                 ToolResultState::Failed,
-                &RawOutput {
-                    text: "process stopped before an exit code was recorded".into(),
-                    ..RawOutput::default()
-                },
+                &RawOutput::from_parts(
+                    None,
+                    "process stopped before an exit code was recorded",
+                    Vec::new(),
+                    Vec::new(),
+                    false
+                ),
             ),
             "Run process · cargo test · process stopped before an exit code was recorded · failed"
         );

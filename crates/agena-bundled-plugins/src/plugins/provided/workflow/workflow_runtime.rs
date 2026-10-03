@@ -282,7 +282,7 @@ impl WorkflowPlugin {
         input: &PlanEditInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let Some(mut plan) = self.load_active_plan().await? else {
-            return Err(PluginError::invalid_params("no active plan to edit"));
+            return Err(PluginError::invalid_params("no plan exists in this session; create one with plan.set first"));
         };
         Self::require_expected_plan(Some(&plan), input.expected_revision.as_deref())?;
         let target = Self::validate_plan_edit_input(input)?;
@@ -353,7 +353,7 @@ impl WorkflowPlugin {
         input: &PlanPhaseInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let Some(mut plan) = self.load_active_plan().await? else {
-            return Err(PluginError::invalid_params("no active plan to update"));
+            return Err(PluginError::invalid_params("no plan exists in this session; create one with plan.set first"));
         };
         self.require_activation_grant(input.request_approval)?;
         Self::require_expected_plan(Some(&plan), input.expected_revision.as_deref())?;
@@ -401,7 +401,7 @@ impl WorkflowPlugin {
         _input: &PlanReviewInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let Some(plan) = self.load_active_plan().await? else {
-            return Err(PluginError::invalid_params("no active plan to review"));
+            return Err(PluginError::invalid_params("no plan exists in this session; create one with plan.set, then call plan.review"));
         };
         // `plan.review` requests user approval to move the current saved plan
         // from `planning` to `active` (creation review). The plan's own state

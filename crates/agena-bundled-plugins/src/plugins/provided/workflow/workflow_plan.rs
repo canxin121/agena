@@ -1001,7 +1001,7 @@ impl WorkflowPlugin {
     ) -> SdkResult<()> {
         if let Some(blocker) = Self::plan_completion_blocker(plan) {
             return Err(PluginError::invalid_params(format!(
-                "cannot complete plan: {blocker}"
+                "cannot complete the plan: {blocker}; mark the step or check completed or skipped with plan.edit, then retry"
             )));
         }
         Ok(())
@@ -1125,7 +1125,7 @@ impl WorkflowPlugin {
             WorkflowPlanPhase::Active | WorkflowPlanPhase::Blocked => {
                 if Self::plan_completion_blocker(plan).is_none() {
                     return Err(PluginError::invalid_params(format!(
-                        "cannot set plan status to {}: all steps and checks are already complete; reopen a step or check first",
+                        "cannot move the plan to {}: every step and check is already complete. Reopen one with plan.edit, or move the plan to completed instead.",
                         Self::plan_phase_label(phase)
                     )));
                 }

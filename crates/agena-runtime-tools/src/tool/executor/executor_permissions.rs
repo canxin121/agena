@@ -1,16 +1,4 @@
 impl ToolExecutor {
-    pub fn is_concurrency_safe_invocation(&self, invocation: &ToolInvocation) -> bool {
-        let Some(entry) = self.invocation_definition(invocation) else {
-            return false;
-        };
-        entry.definition.runtime.concurrency_safe
-            && !entry.has_tag(agena_plugin_host::sdk::ToolTag::Interactive)
-            && is_concurrency_safe_tool_invocation(
-                &entry,
-                &PluginInvocation::from_tool_invocation(invocation),
-            )
-    }
-
     pub(crate) fn invocation_definition(
         &self,
         invocation: &ToolInvocation,
@@ -331,7 +319,6 @@ impl ToolExecutor {
 use super::{
     AccessKind, PermissionDecision, RegisteredTool, SdkToolStreamingMode, ToolError, ToolExecutor,
     ToolInvocation, ToolPayloadInput, ToolPermissionCheck, invocation_name,
-    is_concurrency_safe_tool_invocation, shell_command_from_invocation,
-    unique_registered_tool_match,
+    shell_command_from_invocation, unique_registered_tool_match,
 };
 use agena_domain::PluginInvocation;

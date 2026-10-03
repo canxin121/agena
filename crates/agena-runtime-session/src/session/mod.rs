@@ -5,6 +5,7 @@ mod doom_loop;
 mod manager;
 pub use agena_runtime_session_core::model;
 mod processor;
+mod prompt;
 mod prompt_window;
 mod store;
 mod transcript;

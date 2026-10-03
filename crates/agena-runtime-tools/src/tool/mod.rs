@@ -50,27 +50,22 @@ use agena_plugin_host::{
     ToolDefinitionInput as PluginToolDefinitionInput, ToolFailureInput as PluginToolFailureInput,
     ToolInvokeInput as PluginToolInvokeInput,
     registry::RegisteredTool,
-    sdk::{
-        ShellEnvInput as PluginShellEnvInput, ToolResultPolicy as SdkToolResultPolicy,
-        ToolStreamingMode as SdkToolStreamingMode,
-    },
+    sdk::{ShellEnvInput as PluginShellEnvInput, ToolStreamingMode as SdkToolStreamingMode},
 };
 use agena_tool::{
     PreparedShellCommand, PreparedToolInvocation, ShellError, ShellOutput, ShellRequest,
     ToolPermissionCheck,
 };
 
-// Model-facing tool results must be small enough that a sequence of noisy
-// commands cannot consume the whole context window. The complete raw result
-// remains unchanged in the tool part; this read-time projection keeps the
-// beginning and end, which normally contain setup and final diagnostics.
-const TOOL_MODEL_OUTPUT_MAX_LINES: usize = 400;
-const TOOL_MODEL_OUTPUT_MAX_BYTES: usize = 16 * 1024;
+// Model-facing tool results are bounded in one place, at the session layer
+// that builds a request's runs (`agena-runtime-session`'s
+// `bound_model_tool_outputs`). A tool never declares its own output budget.
 use self::output_helpers::*;
 pub use self::tool_registry::*;
 
 pub use crate::{MonitorError, MonitorRead, MonitorReadParams, MonitorService, MonitorStartParams};
 pub use builtin_tools::BuiltinToolSet;
+pub use output_helpers::{bounded_model_output_preview, line_count, model_output_exceeds_boundary};
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use snapshot::registry_for_executor as snapshot_registry_for_executor;

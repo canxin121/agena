@@ -4,15 +4,6 @@ pub(crate) struct ApplyPatchDisplay {
     pub(super) diff: String,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct DiffStats {
-    pub(super) file_count: usize,
-    pub(super) additions: usize,
-    pub(super) deletions: usize,
-    pub(super) renames: usize,
-    pub(super) line_count: usize,
-}
-
 pub(crate) fn apply_patch_details(details: &agena_domain::ToolOutput) -> Option<ApplyPatchDisplay> {
     let changes: Vec<agena_domain::FileChangeRecord> = match details.payload.get("changes") {
         Some(value) => match serde_json::from_value(serde_json::Value::from(value.clone())) {
@@ -43,45 +34,6 @@ pub(crate) fn apply_patch_details(details: &agena_domain::ToolOutput) -> Option<
     }
 
     Some(ApplyPatchDisplay { changes, diff })
-}
-
-pub(crate) fn diff_stats(
-    diff: &str,
-    changes: Option<&[agena_domain::FileChangeRecord]>,
-) -> DiffStats {
-    let mut file_count = diff
-        .lines()
-        .filter(|line| line.starts_with("diff --git "))
-        .count();
-    let line_count = diff.lines().count();
-    let mut additions = 0usize;
-    let mut deletions = 0usize;
-    for line in diff.lines() {
-        if line.starts_with("+++ ") || line.starts_with("--- ") {
-            continue;
-        }
-        if line.starts_with('+') {
-            additions += 1;
-        } else if line.starts_with('-') {
-            deletions += 1;
-        }
-    }
-    let renames = if let Some(changes) = changes {
-        file_count = file_count.max(changes.len());
-        changes
-            .iter()
-            .filter(|change| change.kind == agena_domain::FileChangeKind::Moved)
-            .count()
-    } else {
-        0
-    };
-    DiffStats {
-        file_count,
-        additions,
-        deletions,
-        renames,
-        line_count,
-    }
 }
 
 pub(crate) fn file_change_display_path(change: &agena_domain::FileChangeRecord) -> String {

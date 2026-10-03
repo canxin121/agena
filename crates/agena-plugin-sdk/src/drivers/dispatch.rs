@@ -392,7 +392,7 @@ mod tests {
         ) -> crate::Result<Option<ToolRenderOutput>> {
             assert_eq!(input.tool_name, "fs.read");
             assert_eq!(input.input, serde_json::json!({"file_path": "README.md"}));
-            assert_eq!(input.output.text, "raw result");
+            assert_eq!(input.output.text_content(), "raw result");
             Ok(Some(ToolRenderOutput {
                 model: Some("plugin model projection".to_owned()),
                 human: Some(ToolHumanPresentation {

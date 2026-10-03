@@ -59,7 +59,6 @@ pub enum TranscriptActivitySection {
     Metadata,
     Input,
     Output,
-    OutputMetadata,
     Presentation,
     StructuredResult,
     ManagedOutputs,

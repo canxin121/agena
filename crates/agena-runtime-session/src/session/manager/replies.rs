@@ -404,9 +404,7 @@ pub(super) fn cancel_unanswered_request_parts_for_operation(
         cleared = before != operation.user_input.requests.len();
     });
     if cleared {
-        part.summary = Some(
-            "Cancelled because the associated tool already reached a terminal result.".to_owned(),
-        );
+        part.summary = None;
         return Ok(vec![part_ref.part_id]);
     }
     Ok(Vec::new())

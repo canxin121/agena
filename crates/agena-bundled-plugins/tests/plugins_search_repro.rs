@@ -57,7 +57,6 @@ impl HostClient for CatalogHostClient {
                 plugin_id: Some("agena.monitor".to_owned()),
                 summary: Some("Start a continuous background monitor.".to_owned()),
                 help: Some("Start monitoring a command or WebSocket endpoint.".to_owned()),
-                examples: Vec::new(),
                 input_schema: Some(serde_json::json!({
                     "type": "object",
                     "properties": { "command": { "type": "string" } }
@@ -68,7 +67,6 @@ impl HostClient for CatalogHostClient {
                 plugin_id: Some("agena.monitor".to_owned()),
                 summary: Some("Stop one background monitor.".to_owned()),
                 help: None,
-                examples: Vec::new(),
                 input_schema: Some(serde_json::json!({
                     "type": "object",
                     "required": ["monitor_id"],

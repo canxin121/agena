@@ -1461,7 +1461,7 @@ async fn projection_preserves_precise_part_kind() {
                         "input": {"query": "x"},
                         "call_id": 1,
                         "state": "completed",
-                        "output": {"text": "search complete", "truncated": false},
+                        "output": {"payload": {"text": "search complete"}, "truncated": false},
                         "lifecycle": {"start_ms": 1, "end_ms": 2}
                     }),
                     summary: None,

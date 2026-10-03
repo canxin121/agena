@@ -65,7 +65,7 @@ impl BuiltinHumanRenderer {
     /// JSON serialization of the payload, which is useful to the model but is
     /// not a useful transcript headline.
     pub fn human_summary(raw: &RawOutput) -> String {
-        let text = raw.text.trim();
+        let text = raw.text_content().trim();
         let text_json = Self::json_document(text);
         let payload = raw.payload.as_ref().or(text_json.as_ref());
 
@@ -266,11 +266,11 @@ impl BuiltinHumanRenderer {
     /// still the last resort for a genuinely opaque value.
     fn fallback(raw: &RawOutput) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
-        let text_json = Self::json_document(raw.text.as_str());
-        if !raw.text.trim().is_empty() && text_json.is_none() {
+        let text_json = Self::json_document(raw.text_content());
+        if !raw.text_content().trim().is_empty() && text_json.is_none() {
             blocks.push(ViewBlock::Markdown {
                 id: Some("text".into()),
-                text: Self::bounded_human_text(raw.text.as_str()),
+                text: Self::bounded_human_text(raw.text_content()),
             });
         }
 
@@ -302,17 +302,16 @@ impl BuiltinHumanRenderer {
                     id: Some("payload".into()),
                     value: Self::redacted_setting_value(&value, None),
                 });
-            } else if !raw.text.trim().is_empty() {
+            } else if !raw.text_content().trim().is_empty() {
                 // Keep an unusual but readable text result visible even if a
                 // future generic projection decides it cannot classify it.
                 blocks.push(ViewBlock::Markdown {
                     id: Some("text".into()),
-                    text: Self::bounded_human_text(raw.text.as_str()),
+                    text: Self::bounded_human_text(raw.text_content()),
                 });
             }
         }
 
-        Self::raw_metadata_blocks(&mut blocks, raw);
         Self::raw_media_blocks(&mut blocks, raw);
         Self::raw_attachment_blocks(&mut blocks, raw);
         if blocks.is_empty() {
@@ -758,16 +757,6 @@ impl BuiltinHumanRenderer {
 
     fn generic_payload_blocks(payload: &Value, id: &str) -> Vec<ViewBlock> {
         Self::generic_value_blocks(id, "Details", payload, 0)
-    }
-
-    fn raw_metadata_blocks(blocks: &mut Vec<ViewBlock>, raw: &RawOutput) {
-        if raw.metadata.is_empty() {
-            return;
-        }
-        let metadata = Value::Object(raw.metadata.clone().into_iter().collect());
-        blocks.extend(Self::generic_value_blocks(
-            "metadata", "Metadata", &metadata, 0,
-        ));
     }
 
     fn attachment_artifact(attachment: &agena_domain::AttachmentItem) -> ArtifactRef {
@@ -1264,12 +1253,9 @@ impl BuiltinHumanRenderer {
         blocks.push(Self::details_block("output-meta", "Output status", &fields));
     }
 
-    /// Typed payload renderers should not accidentally discard a plugin's
-    /// human text channel. Most built-ins put the same preview in both
-    /// places, so suppress an exact/containing duplicate; a distinct rich
-    /// result summary or transcript is still shown as its own Markdown block.
-    fn append_distinct_raw_text(blocks: &mut Vec<ViewBlock>, raw: &RawOutput) {
-        let text = raw.text.trim();
+    /// A tool result's text field may not be covered by its other view blocks.
+    fn append_unrendered_payload_text(blocks: &mut Vec<ViewBlock>, raw: &RawOutput) {
+        let text = raw.text_content().trim();
         if text.is_empty() || Self::json_document(text).is_some() {
             return;
         }
@@ -1287,7 +1273,7 @@ impl BuiltinHumanRenderer {
         }
         blocks.push(Self::markdown_block(
             "output-text",
-            Self::bounded_human_text(raw.text.as_str()),
+            Self::bounded_human_text(raw.text_content()),
         ));
     }
 
@@ -3661,74 +3647,9 @@ impl BuiltinHumanRenderer {
     fn specific_filesystem_blocks(
         key: &str,
         object: &serde_json::Map<String, Value>,
-        raw: &RawOutput,
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         match key {
-            "fs.output_read" | "fs.output_search" => {
-                let fields = [
-                    ("Output ID", Self::object_text(object, "output_id")),
-                    ("Next byte offset", Self::object_text(object, "next_offset")),
-                    (
-                        "Captured bytes",
-                        Self::object_text(object, "captured_bytes"),
-                    ),
-                    (
-                        "Original bytes",
-                        Self::object_text(object, "original_bytes"),
-                    ),
-                    (
-                        "Capture truncated",
-                        Self::object_text(object, "capture_truncated"),
-                    ),
-                ];
-                if let Some(block) = Self::details_block_if_nonempty(
-                    "captured-output-meta",
-                    "Captured output",
-                    &fields,
-                ) {
-                    blocks.push(block);
-                }
-                if object.get("capture_truncated").and_then(Value::as_bool) == Some(true) {
-                    blocks.push(Self::markdown_block(
-                        "captured-output-warning",
-                        "Only retained bytes are available. Missing content was not searched or recovered.",
-                    ));
-                }
-                if key == "fs.output_read" {
-                    match object.get("text").and_then(Value::as_str) {
-                        Some(text) if !text.is_empty() => blocks.push(Self::markdown_code_block(
-                            "captured-output-text",
-                            "Captured text",
-                            text,
-                            None,
-                        )),
-                        _ => blocks.push(Self::markdown_block(
-                            "captured-output-empty",
-                            "### Captured text\nNo text returned for this range.",
-                        )),
-                    }
-                } else if let Some(matches) = Self::object_array(object, "matches") {
-                    if let Some(table) = Self::scalar_table(
-                        "captured-output-matches",
-                        "Matches in captured output",
-                        matches,
-                        &[("offset", "Byte offset"), ("preview", "Preview")],
-                    ) {
-                        blocks.push(table);
-                    } else {
-                        blocks.push(Self::markdown_block(
-                            "captured-output-empty",
-                            "### Captured output search\nNo matches in the retained content.",
-                        ));
-                    }
-                } else {
-                    blocks.push(Self::markdown_block(
-                        "captured-output-empty",
-                        "### Captured output search\nNo search result returned.",
-                    ));
-                }
-            }
             "fs.write" => {
                 let fields = [
                     ("Path", Self::object_text(object, "path")),
@@ -3789,13 +3710,21 @@ impl BuiltinHumanRenderer {
                 {
                     blocks.push(block);
                 }
-                if !raw.text.trim().is_empty() {
+                let previews = Self::object_array(object, "files")
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|file| {
+                        let file = file.as_object()?;
+                        let path = Self::object_text(file, "path");
+                        let content = file.get("content").and_then(Value::as_str)?;
+                        Some(format!("===== {path} =====\n{content}"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                if !previews.is_empty() {
                     blocks.push(Self::markdown_block(
                         "file-previews",
-                        format!(
-                            "### File previews\n{}",
-                            Self::bounded_human_text(raw.text.as_str())
-                        ),
+                        format!("### File previews\n{}", Self::bounded_human_text(&previews)),
                     ));
                 }
             }
@@ -4099,19 +4028,21 @@ impl BuiltinHumanRenderer {
         blocks
     }
 
-    fn specific_skill_blocks(key: &str, object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
+    fn specific_command_blocks(
+        key: &str,
+        object: &serde_json::Map<String, Value>,
+    ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         match key {
-            "skills.list" => {
-                if let Some(tools) = Self::object_array(object, "tools") {
-                    if !tools.is_empty()
+            "commands.list" => {
+                if let Some(packages) = Self::object_array(object, "packages") {
+                    if !packages.is_empty()
                         && let Some(table) = Self::scalar_table(
-                            "skills",
-                            "Discovered skills",
-                            tools,
+                            "commands",
+                            "Discovered commands",
+                            packages,
                             &[
                                 ("name", "Name"),
-                                ("kind", "Kind"),
                                 ("summary", "Summary"),
                                 ("source", "Source"),
                                 ("editable", "Editable"),
@@ -4120,17 +4051,17 @@ impl BuiltinHumanRenderer {
                         )
                     {
                         blocks.push(table);
-                    } else if !tools.is_empty() {
+                    } else if !packages.is_empty() {
                         blocks.extend(Self::generic_value_blocks(
-                            "skills",
-                            "Discovered skills",
-                            &Value::Array(tools.clone()),
+                            "commands",
+                            "Discovered commands",
+                            &Value::Array(packages.clone()),
                             0,
                         ));
-                    } else if tools.is_empty() {
+                    } else if packages.is_empty() {
                         blocks.push(Self::markdown_block(
-                            "skills",
-                            "### Discovered skills\nNo skills found.",
+                            "commands",
+                            "### Discovered commands\nNo commands found.",
                         ));
                     }
                 }
@@ -4138,17 +4069,16 @@ impl BuiltinHumanRenderer {
                     ("Returned", Self::object_text(object, "returned")),
                     ("Total", Self::object_text(object, "total")),
                     ("Offset", Self::object_text(object, "offset")),
-                    ("Filter", Self::object_text(object, "kind")),
                 ];
                 if let Some(block) =
-                    Self::details_block_if_nonempty("skills-page", "Catalog page", &fields)
+                    Self::details_block_if_nonempty("commands-page", "Catalog page", &fields)
                 {
                     blocks.push(block);
                 }
                 if let Some(diagnostics) = Self::object_array(object, "diagnostics") {
                     if !diagnostics.is_empty()
                         && let Some(table) = Self::scalar_table(
-                            "skills-diagnostics",
+                            "commands-diagnostics",
                             "Discovery diagnostics",
                             diagnostics,
                             &[("problem", "Problem")],
@@ -4157,40 +4087,41 @@ impl BuiltinHumanRenderer {
                         blocks.push(table);
                     } else if !diagnostics.is_empty() {
                         blocks.extend(Self::generic_value_blocks(
-                            "skills-diagnostics",
+                            "commands-diagnostics",
                             "Discovery diagnostics",
                             &Value::Array(diagnostics.clone()),
                             0,
                         ));
                     } else if diagnostics.is_empty() {
                         blocks.push(Self::markdown_block(
-                            "skills-diagnostics",
+                            "commands-diagnostics",
                             "### Discovery diagnostics\nNo discovery diagnostics.",
                         ));
                     }
                 }
             }
-            "skills.get" => {
+            "commands.get" => {
                 let fields = [
                     ("Name", Self::object_text(object, "name")),
-                    ("Kind", Self::object_text(object, "kind")),
                     ("Source", Self::object_text(object, "source")),
                     ("Source path", Self::object_text(object, "source_path")),
                     ("Editable", Self::object_text(object, "editable")),
                     ("Hash", Self::object_text(object, "content_hash")),
+                    ("Revision", Self::object_text(object, "revision")),
                 ];
-                if let Some(block) = Self::details_block_if_nonempty("skill-meta", "Skill", &fields)
+                if let Some(block) =
+                    Self::details_block_if_nonempty("command-meta", "Command", &fields)
                 {
                     blocks.push(block);
                 }
                 if let Some(body) = Self::object_string(object, "body") {
                     blocks.push(Self::markdown_block(
-                        "skill-body",
+                        "command-body",
                         format!("### Body\n{}", Self::bounded_human_text(&body)),
                     ));
                 }
             }
-            "skills.create" | "skills.update" | "skills.delete" => {
+            "commands.install" | "commands.remove" => {
                 let fields = [
                     ("Operation", Self::object_text(object, "operation")),
                     ("Name", Self::object_text(object, "name")),
@@ -4206,14 +4137,14 @@ impl BuiltinHumanRenderer {
                     ("Editable", Self::object_text(object, "editable")),
                 ];
                 if let Some(block) =
-                    Self::details_block_if_nonempty("skill-write", "Skill change", &fields)
+                    Self::details_block_if_nonempty("command-write", "Command change", &fields)
                 {
                     blocks.push(block);
                 }
             }
-            "skills.read_resource" => {
+            "commands.read_resource" => {
                 let fields = [
-                    ("Skill", Self::object_text(object, "name")),
+                    ("Command", Self::object_text(object, "name")),
                     ("Path", Self::object_text(object, "path")),
                     ("Source", Self::object_text(object, "source")),
                     ("Source path", Self::object_text(object, "source_path")),
@@ -4221,8 +4152,8 @@ impl BuiltinHumanRenderer {
                     ("Hash", Self::object_text(object, "content_hash")),
                 ];
                 if let Some(block) = Self::details_block_if_nonempty(
-                    "skill-resource-meta",
-                    "Skill resource",
+                    "command-resource-meta",
+                    "Command resource",
                     &fields,
                 ) {
                     blocks.push(block);
@@ -4235,61 +4166,47 @@ impl BuiltinHumanRenderer {
                     .filter(|value| !value.is_empty())
                 {
                     blocks.push(Self::markdown_block(
-                        "skill-resource-content",
+                        "command-resource-content",
                         format!("### Content\n{}", Self::bounded_human_text(content)),
                     ));
                 }
             }
-            "skills.refresh" => {
+            "commands.refresh" => {
                 let fields = [
                     ("Changed", Self::object_text(object, "changed")),
                     ("Generation", Self::object_text(object, "generation")),
-                    ("Skills", Self::object_text(object, "skills")),
-                    ("Commands", Self::object_text(object, "commands")),
+                    ("Declared", Self::object_text(object, "declared")),
+                    ("External", Self::object_text(object, "external")),
                 ];
                 if let Some(block) =
-                    Self::details_block_if_nonempty("skills-refresh", "Skill catalog", &fields)
+                    Self::details_block_if_nonempty("commands-refresh", "Command catalog", &fields)
                 {
                     blocks.push(block);
                 }
-                for child_key in ["tools", "skills", "commands"] {
-                    if let Some(values) = Self::object_array(object, child_key) {
-                        if let Some(table) = Self::scalar_table(
-                            format!("skills-refresh-{child_key}"),
-                            &Self::humanize_key(child_key),
-                            values,
-                            &[
-                                ("name", "Name"),
-                                ("kind", "Kind"),
-                                ("summary", "Summary"),
-                                ("source", "Source"),
-                            ],
-                        ) {
-                            blocks.push(table);
-                        } else if values.iter().all(Value::is_string) {
-                            blocks.push(Self::markdown_block(
-                                format!("skills-refresh-{child_key}"),
-                                format!(
-                                    "### {}\n{}",
-                                    Self::humanize_key(child_key),
-                                    values
-                                        .iter()
-                                        .map(Self::generic_field_value)
-                                        .map(|value| format!("- {value}"))
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                ),
-                            ));
-                        }
-                    }
-                }
                 if let Some(watcher) = object.get("watcher") {
                     blocks.extend(Self::generic_value_blocks(
-                        "skills-watcher",
+                        "commands-watcher",
                         "Watcher",
                         watcher,
                         0,
                     ));
+                }
+                if let Some(diagnostics) = Self::object_array(object, "diagnostics") {
+                    if let Some(table) = Self::scalar_table(
+                        "commands-refresh-diagnostics",
+                        "Discovery diagnostics",
+                        diagnostics,
+                        &[("problem", "Problem")],
+                    ) {
+                        blocks.push(table);
+                    } else if !diagnostics.is_empty() {
+                        blocks.extend(Self::generic_value_blocks(
+                            "commands-refresh-diagnostics",
+                            "Discovery diagnostics",
+                            &Value::Array(diagnostics.clone()),
+                            0,
+                        ));
+                    }
                 }
             }
             _ => {}
@@ -4802,13 +4719,10 @@ impl BuiltinHumanRenderer {
             .collect()
     }
 
-    /// Build the object used by tool-specific presentation renderers from all
-    /// structured result channels. Adapters normally put the main result in
-    /// `payload`, but receipts, exit codes, truncation markers, and provider
-    /// facts can arrive in `metadata` or as a JSON text fallback. Keep the
-    /// payload's values when keys overlap, except that an explicit failure
-    /// status from a supplemental channel must not be hidden by a stale
-    /// `status: completed` payload.
+    /// Build the object used by tool-specific presentation renderers from the
+    /// structured payload and a JSON text fallback. Keep the payload's values
+    /// when keys overlap, except that an explicit failure status from the text
+    /// must not be hidden by a stale `status: completed` payload.
     fn specific_result_object(raw: &RawOutput) -> Option<serde_json::Map<String, Value>> {
         let mut object = serde_json::Map::new();
         let mut merge = |source: &serde_json::Map<String, Value>| {
@@ -4830,17 +4744,9 @@ impl BuiltinHumanRenderer {
             merge(payload);
         }
         if let Some(text_object) =
-            Self::json_document(raw.text.as_str()).and_then(|value| value.as_object().cloned())
+            Self::json_document(raw.text_content()).and_then(|value| value.as_object().cloned())
         {
             merge(&text_object);
-        }
-        if !raw.metadata.is_empty() {
-            let metadata = raw
-                .metadata
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect::<serde_json::Map<_, _>>();
-            merge(&metadata);
         }
         (!object.is_empty()).then_some(object)
     }
@@ -4866,14 +4772,14 @@ impl BuiltinHumanRenderer {
             if key == "memory.delete" {
                 return vec![Self::markdown_block(
                     "memory-delete",
-                    if raw.text.trim().is_empty() {
+                    if raw.text_content().trim().is_empty() {
                         "### Memory deletion\nNo deletion details returned.".to_owned()
                     } else {
-                        format!("### Memory deletion\n{}", raw.text.trim())
+                        format!("### Memory deletion\n{}", raw.text_content().trim())
                     },
                 )];
             }
-            if raw.text.trim().is_empty() {
+            if raw.text_content().trim().is_empty() {
                 return vec![Self::empty_state_block(&key)];
             }
             return Vec::new();
@@ -4892,7 +4798,7 @@ impl BuiltinHumanRenderer {
         };
         match key.as_str() {
             value if value.starts_with("fs.") => {
-                blocks.extend(Self::specific_filesystem_blocks(value, &object, raw));
+                blocks.extend(Self::specific_filesystem_blocks(value, &object));
             }
             "code.search_ast" | "code.syntax_tree" => {
                 blocks.extend(Self::specific_code_blocks(key.as_str(), &object));
@@ -4919,8 +4825,8 @@ impl BuiltinHumanRenderer {
             value if value.starts_with("tasks.") => {
                 blocks.extend(Self::specific_task_blocks(value, &object));
             }
-            value if value.starts_with("skills.") => {
-                blocks.extend(Self::specific_skill_blocks(value, &object));
+            value if value.starts_with("commands.") => {
+                blocks.extend(Self::specific_command_blocks(value, &object));
             }
             value if value.starts_with("settings.") => {
                 blocks.extend(Self::specific_settings_blocks(value, &object));
@@ -4937,7 +4843,7 @@ impl BuiltinHumanRenderer {
             "notebook.edit_cell" => blocks.extend(Self::specific_notebook_blocks(&object)),
             _ => {}
         }
-        if blocks.is_empty() && raw.text.trim().is_empty() && object.is_empty() {
+        if blocks.is_empty() && raw.text_content().trim().is_empty() && object.is_empty() {
             blocks.push(Self::empty_state_block(&key));
         }
         blocks
@@ -4957,7 +4863,7 @@ impl BuiltinHumanRenderer {
             Vec::new()
         };
         if parsed.is_none() && blocks.is_empty() {
-            blocks = Self::specific_discovery_text_blocks(tool_name, raw.text.as_str());
+            blocks = Self::specific_discovery_text_blocks(tool_name, raw.text_content());
             if blocks.is_empty() {
                 return Vec::new();
             }
@@ -5294,8 +5200,8 @@ impl BuiltinHumanRenderer {
                         let stdout = output
                             .map(|output| Self::bounded_human_text(&output))
                             .unwrap_or_else(|| {
-                                if !raw.text.is_empty() {
-                                    Self::bounded_human_text(raw.text.as_str())
+                                if !raw.text_content().is_empty() {
+                                    Self::bounded_human_text(raw.text_content())
                                 } else {
                                     Self::bounded_human_text(event_stdout.as_str())
                                 }
@@ -5400,11 +5306,11 @@ impl BuiltinHumanRenderer {
                             stream: agena_domain::CommandOutputStream::Stdout,
                             text: Self::bounded_human_text(output.as_str()),
                         });
-                    } else if !raw.text.trim().is_empty() {
+                    } else if !raw.text_content().trim().is_empty() {
                         blocks.push(ViewBlock::Log {
                             id: Some("monitor-output".into()),
                             stream: agena_domain::CommandOutputStream::Stdout,
-                            text: Self::bounded_human_text(raw.text.as_str()),
+                            text: Self::bounded_human_text(raw.text_content()),
                         });
                     }
                     let mut fields = vec![("Action", action)];
@@ -5658,9 +5564,8 @@ impl BuiltinHumanRenderer {
         }
 
         if !discovery_text_projected {
-            Self::append_distinct_raw_text(&mut blocks, raw);
+            Self::append_unrendered_payload_text(&mut blocks, raw);
         }
-        Self::raw_metadata_blocks(&mut blocks, raw);
         Self::raw_media_blocks(&mut blocks, raw);
         Self::raw_attachment_blocks(&mut blocks, raw);
         Self::raw_flags(&mut blocks, raw);
@@ -5697,7 +5602,6 @@ mod tests {
     use super::*;
     use agena_tool::RenderContext as ToolRenderContext;
     use serde_json::json;
-    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     fn ctx() -> ToolRenderContext {
@@ -5710,16 +5614,18 @@ mod tests {
     #[test]
     fn apply_patch_renders_file_changes_and_diff() {
         let renderer = BuiltinHumanRenderer::new("fs.apply_patch");
-        let raw = RawOutput {
-            payload: Some(json!({
+        let raw = RawOutput::from_parts(
+            Some(json!({
                 "operation_id": "op-1",
                 "inverse_patch": "",
                 "changes": [{"path": "a.txt", "kind": "updated"}],
                 "diff": "--- a\n+++ b\n"
             })),
-            text: String::new(),
-            ..RawOutput::default()
-        };
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
         assert!(
             blocks
@@ -5734,15 +5640,17 @@ mod tests {
         let renderer = BuiltinHumanRenderer::new("shell")
             .with_command("cargo test")
             .with_cwd("/tmp");
-        let raw = RawOutput {
-            payload: Some(json!({
+        let raw = RawOutput::from_parts(
+            Some(json!({
                 "action": "run",
                 "exit_code": 0,
                 "output": "ok\n"
             })),
-            text: "ok\n".into(),
-            ..RawOutput::default()
-        };
+            "ok\n",
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
         let command = blocks.iter().find_map(|block| match block {
             ViewBlock::Command {
@@ -5856,19 +5764,21 @@ mod tests {
     #[test]
     fn read_many_keeps_file_sections_in_a_named_preview_block() {
         let renderer = BuiltinHumanRenderer::new("fs.read_many");
-        let raw = RawOutput {
-            text: "===== a.rs =====\nfn a() {}\n\n===== b.rs =====\nfn b() {}".into(),
-            payload: Some(json!({
+        let raw = RawOutput::from_parts(
+            Some(json!({
                 "files": [
-                    {"path": "a.rs", "bytes": 9, "returned_bytes": 9, "truncated": false},
-                    {"path": "b.rs", "bytes": 9, "returned_bytes": 9, "truncated": false}
+                    {"path": "a.rs", "content": "fn a() {}", "bytes": 9, "returned_bytes": 9, "truncated": false},
+                    {"path": "b.rs", "content": "fn b() {}", "bytes": 9, "returned_bytes": 9, "truncated": false}
                 ],
                 "max_total_bytes": 100,
                 "remaining_bytes": 82,
                 "truncated": false
             })),
-            ..RawOutput::default()
-        };
+            "===== a.rs =====\nfn a() {}\n\n===== b.rs =====\nfn b() {}",
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
         assert!(blocks.iter().any(|block| matches!(
             block,
@@ -5884,11 +5794,13 @@ mod tests {
     #[test]
     fn glob_renders_path_list_and_fallback_prefers_text() {
         let renderer = BuiltinHumanRenderer::new("fs.glob");
-        let raw = RawOutput {
-            payload: Some(json!({ "paths": ["a.rs", "b.rs"], "count": 2 })),
-            text: String::new(),
-            ..RawOutput::default()
-        };
+        let raw = RawOutput::from_parts(
+            Some(json!({ "paths": ["a.rs", "b.rs"], "count": 2 })),
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
         assert!(
             blocks
@@ -5897,16 +5809,18 @@ mod tests {
         );
 
         let opaque = BuiltinHumanRenderer::new("unknown_tool");
-        let raw = RawOutput {
-            payload: Some(json!({ "x": 1 })),
-            text: "line\n".into(),
-            ..RawOutput::default()
-        };
+        let raw = RawOutput::from_parts(
+            Some(json!({ "x": 1 })),
+            "line\n",
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         let blocks = opaque.render_human(&ctx(), &raw).expect("render");
-        assert!(matches!(
-            blocks.first(),
-            Some(ViewBlock::Markdown { id: Some(id), .. }) if id == "text"
-        ));
+        assert!(!blocks.iter().any(|block| matches!(
+            block,
+            ViewBlock::Markdown { id: Some(id), .. } if id == "text"
+        )));
         assert!(blocks.iter().any(|block| {
             matches!(block, ViewBlock::Markdown { id: Some(id), text } if id == "result" && text.contains("X"))
         }));
@@ -6032,22 +5946,20 @@ mod tests {
     }
 
     #[test]
-    fn specific_presentations_merge_metadata_and_keep_scalar_records_visible() {
-        let mut metadata = BTreeMap::new();
-        metadata.insert(
-            "contents".into(),
-            json!([{"uri": "mcp://demo/readme", "mime_type": "text/plain", "text": "hello"}]),
-        );
+    fn specific_presentations_keep_complete_result_fields_and_scalar_records_visible() {
         let blocks = BuiltinHumanRenderer::new("mcp.resources.read")
             .render_human(
                 &ctx(),
                 &RawOutput {
-                    payload: Some(json!({"server": "demo", "uri": "mcp://demo/readme"})),
-                    metadata,
+                    payload: Some(json!({
+                        "server": "demo",
+                        "uri": "mcp://demo/readme",
+                        "contents": [{"uri": "mcp://demo/readme", "mime_type": "text/plain", "text": "hello"}]
+                    })),
                     ..RawOutput::default()
                 },
             )
-            .expect("render metadata-backed MCP result");
+            .expect("render complete MCP result");
         assert!(blocks.iter().any(|block| matches!(
             block,
             ViewBlock::Table { id: Some(id), columns, rows }
@@ -6056,14 +5968,13 @@ mod tests {
                     && rows[0][2] == json!("hello")
         )));
 
-        let mut metadata = BTreeMap::new();
-        metadata.insert("messages".into(), json!(["Review this document"]));
         let blocks = BuiltinHumanRenderer::new("mcp.prompts.get")
             .render_human(
                 &ctx(),
                 &RawOutput {
-                    payload: Some(json!({"prompt": "review"})),
-                    metadata,
+                    payload: Some(
+                        json!({"prompt": "review", "messages": ["Review this document"]}),
+                    ),
                     ..RawOutput::default()
                 },
             )
@@ -6114,24 +6025,38 @@ mod tests {
     }
 
     #[test]
-    fn typed_projection_keeps_distinct_human_text_channel() {
+    fn typed_projection_does_not_store_or_replay_a_formatted_preview() {
         let renderer = BuiltinHumanRenderer::new("fs.glob");
-        let raw = RawOutput {
-            payload: Some(json!({ "paths": ["src/lib.rs"], "count": 1 })),
-            text: "The search also respected the workspace ignore rules.".into(),
-            ..RawOutput::default()
-        };
+        let raw = RawOutput::from_parts(
+            Some(json!({ "paths": ["src/lib.rs"], "count": 1 })),
+            "The search also respected the workspace ignore rules.",
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
-        assert!(blocks.iter().any(|block| {
-            matches!(block, ViewBlock::Markdown { id: Some(id), text } if id == "output-text" && text.contains("workspace ignore rules"))
-        }));
+        assert!(
+            serde_json::to_string(&blocks)
+                .unwrap()
+                .contains("src/lib.rs")
+        );
+        assert!(
+            !serde_json::to_string(&raw)
+                .unwrap()
+                .contains("workspace ignore rules")
+        );
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| block.block_id() == Some("output-text"))
+        );
     }
 
     #[test]
     fn generic_projection_keeps_short_plugin_summaries_and_structures_payloads() {
         let renderer = BuiltinHumanRenderer::new("settings.inspect");
-        let raw = RawOutput {
-            payload: Some(json!({
+        let raw = RawOutput::from_parts(
+            Some(json!({
                 "path": "providers.openai",
                 "global": {"defined": true, "value": "redacted"},
                 "workspace": {"defined": false},
@@ -6142,13 +6067,17 @@ mod tests {
                     {"name": "environment", "active": false}
                 ]
             })),
-            text: "Inspected global, workspace, and effective settings values.".into(),
-            ..RawOutput::default()
-        };
+            "Inspected global, workspace, and effective settings values.",
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
-        assert!(blocks.iter().any(|block| {
-            matches!(block, ViewBlock::Markdown { text, .. } if text.contains("Inspected global"))
-        }));
+        assert!(
+            !serde_json::to_string(&raw)
+                .unwrap()
+                .contains("Inspected global")
+        );
         assert!(blocks.iter().any(|block| {
             matches!(block, ViewBlock::Markdown { text, .. } if text.contains("Path") && text.contains("providers.openai"))
         }));
@@ -6165,15 +6094,18 @@ mod tests {
     #[test]
     fn generic_projection_parses_json_text_into_readable_blocks() {
         let renderer = BuiltinHumanRenderer::new("lsp.servers");
-        let raw = RawOutput {
-            text: serde_json::to_string_pretty(&json!({
+        let raw = RawOutput::from_parts(
+            None,
+            serde_json::to_string_pretty(&json!({
                 "servers": [
                     {"name": "rust-analyzer", "command": "rust-analyzer", "file_extensions": ["rs"]}
                 ]
             }))
             .expect("json"),
-            ..RawOutput::default()
-        };
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
         assert!(blocks.iter().any(|block| {
             matches!(block, ViewBlock::Table { columns, rows, .. } if columns.len() == rows[0].len())
@@ -6186,18 +6118,16 @@ mod tests {
     }
 
     #[test]
-    fn generic_projection_bounds_long_scalars_and_shows_raw_metadata() {
+    fn generic_projection_bounds_long_scalars_and_shows_complete_result_fields() {
         let renderer = BuiltinHumanRenderer::new("plugin.inspect");
-        let mut metadata = BTreeMap::new();
-        metadata.insert("request_id".to_owned(), json!("req-1"));
-        metadata.insert("provider_raw".to_owned(), json!({"secret": "omitted"}));
         let long_value = "x".repeat(BuiltinHumanRenderer::GENERIC_MAX_VALUE_CHARS + 200);
         let raw = RawOutput {
             payload: Some(json!({
                 "description": long_value,
-                "items": [{"name": "first", "detail": long_value}]
+                "items": [{"name": "first", "detail": long_value}],
+                "request_id": "req-1",
+                "provider_raw": {"secret": "omitted"}
             })),
-            metadata,
             ..RawOutput::default()
         };
 
@@ -6248,11 +6178,10 @@ mod tests {
     fn specific_plugin_tools_use_compact_details_and_tables() {
         let cases = [
             (
-                "skills.list",
+                "commands.list",
                 json!({
-                    "tools": [{
+                    "packages": [{
                         "name": "review",
-                        "kind": "skill",
                         "summary": "Review changes",
                         "source": "workspace",
                         "editable": true
@@ -6261,18 +6190,17 @@ mod tests {
                     "total": 1,
                     "offset": 0
                 }),
-                vec!["skills"],
+                vec!["commands"],
             ),
             (
-                "skills.get",
+                "commands.get",
                 json!({
                     "name": "review",
-                    "kind": "skill",
                     "source": "workspace",
                     "body": "Review the change carefully.",
                     "content_hash": "hash-1"
                 }),
-                vec!["skill-meta", "skill-body"],
+                vec!["command-meta", "command-body"],
             ),
             (
                 "settings.set",
@@ -6753,24 +6681,30 @@ mod tests {
 
     #[test]
     fn human_summary_uses_readable_payload_facts_instead_of_json() {
-        let raw = RawOutput {
-            payload: Some(json!({
+        let raw = RawOutput::from_parts(
+            Some(json!({
                 "servers": [{"name": "rust-analyzer"}],
                 "status": "connected"
             })),
-            text: String::new(),
-            ..RawOutput::default()
-        };
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
         assert_eq!(BuiltinHumanRenderer::human_summary(&raw), "1 server");
 
-        let raw = RawOutput {
-            payload: Some(json!({"status": "completed"})),
-            text: "Completed the operation.".into(),
-            ..RawOutput::default()
-        };
-        assert_eq!(
-            BuiltinHumanRenderer::human_summary(&raw),
-            "Completed the operation."
+        let raw = RawOutput::from_parts(
+            Some(json!({"status": "completed"})),
+            "Completed the operation.",
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
+        assert_eq!(BuiltinHumanRenderer::human_summary(&raw), "completed");
+        assert!(
+            !serde_json::to_string(&raw)
+                .unwrap()
+                .contains("Completed the operation.")
         );
     }
 
@@ -6806,11 +6740,7 @@ mod tests {
     #[test]
     fn opaque_fallback_keeps_truncation_status() {
         let renderer = BuiltinHumanRenderer::new("unknown_tool");
-        let raw = RawOutput {
-            text: "visible output".into(),
-            truncated: true,
-            ..RawOutput::default()
-        };
+        let raw = RawOutput::from_parts(None, "visible output", Vec::new(), Vec::new(), true);
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
         assert!(matches!(blocks.first(), Some(ViewBlock::Markdown { .. })));
         assert!(blocks.iter().any(|block| {

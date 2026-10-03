@@ -43,7 +43,7 @@ impl WorkflowPlugin {
     ) -> SdkResult<()> {
         if expected.is_some_and(|expected| plan.is_none_or(|plan| plan.revision != expected)) {
             return Err(PluginError::invalid_params(
-                "plan revision changed; call plan.get and review the current plan before retrying",
+                "the plan changed since you read it; call plan.get for the current revision, then retry",
             ));
         }
         Ok(())
@@ -61,7 +61,7 @@ impl WorkflowPlugin {
         let actual = self.load_active_plan().await?;
         if actual.as_ref().map(|plan| plan.revision.as_str()) != expected.as_deref() {
             return Err(PluginError::invalid_params(
-                "stale plan or approval: the plan was edited, replaced, or cleared; no changes were applied",
+                "no changes were applied: the plan was edited, replaced, or cleared while this request was pending; call plan.get before retrying",
             ));
         }
         plan.revision = uuid::Uuid::new_v4().to_string();
@@ -70,7 +70,7 @@ impl WorkflowPlugin {
             .map_err(|error| PluginError::internal_error(&error))?;
         if value.len() > 1024 * 1024 {
             return Err(PluginError::invalid_params(
-                "plan exceeds the 1 MiB storage limit",
+                "the plan is too large to store (limit 1 MiB); shorten document_markdown or the step list",
             ));
         }
         self.host()?
@@ -98,7 +98,7 @@ impl WorkflowPlugin {
         let actual = self.load_active_plan().await?;
         if actual.as_ref().map(|plan| plan.revision.as_str()) != expected.as_deref() {
             return Err(PluginError::invalid_params(
-                "plan changed before deletion; read it again",
+                "the plan changed before it could be deleted; call plan.get and retry",
             ));
         }
         self.host()?
@@ -119,7 +119,7 @@ impl WorkflowPlugin {
     pub(super) fn require_activation_grant(&self, requested: Option<bool>) -> SdkResult<()> {
         if requested == Some(false) && !self.config()?.plan.allow_unreviewed_activation {
             return Err(PluginError::invalid_params(
-                "unreviewed activation is not authorized by plan settings; save in planning and call plan.review",
+                "cannot activate the plan without review: request_approval: false is only allowed when the trusted setting agena.plan.allow_unreviewed_activation is enabled. Save the plan in planning and call plan.review to ask the user, or have the user enable that setting.",
             ));
         }
         Ok(())

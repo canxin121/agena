@@ -98,39 +98,6 @@ const fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-#[input(non_empty("output_id"), minimum("limit", 1), maximum("limit", 16000))]
-struct OutputReadInput {
-    output_id: String,
-    #[serde(default)]
-    offset: usize,
-    #[serde(default = "output_default_limit")]
-    limit: usize,
-}
-const fn output_default_limit() -> usize {
-    8000
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-#[input(
-    non_empty("output_id", "pattern"),
-    max_chars("pattern", 4096),
-    minimum("limit", 1),
-    maximum("limit", 100)
-)]
-struct OutputSearchInput {
-    output_id: String,
-    pattern: String,
-    #[serde(default)]
-    offset: usize,
-    #[serde(default = "output_default_matches")]
-    limit: usize,
-}
-const fn output_default_matches() -> usize {
-    20
-}
-
 pub(crate) fn new_plugin() -> FsPlugin {
     FsPlugin
 }
@@ -143,98 +110,9 @@ pub(crate) fn new_plugin() -> FsPlugin {
 )]
 impl FsPlugin {
     #[tool(
-        name = "output_read",
-        tags(query, read_only),
-        summary = "Read a byte range of captured tool output owned by this session.",
-        help = "Use output_id from a tool result. Offsets are UTF-8 byte offsets; next_offset continues the capture. Capture can expire, be evicted, or already be truncated.",
-        concurrency_safe
-    )]
-    async fn output_read(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &OutputReadInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let result = agena_runtime_tools::output_resources::read(
-            Path::new(context.workspace_root),
-            context.session_id,
-            &input.output_id,
-            input.offset,
-            input.limit,
-        )
-        .map_err(PluginError::invalid_params)?;
-        let text = format!(
-            "{}\n[Next offset: {:?}; captured {}/{} bytes; capture_truncated={}]",
-            result.text,
-            result.next_offset,
-            result.captured_bytes,
-            result.original_bytes,
-            result.capture_truncated
-        );
-        Ok(ToolInvokeOutput::from_parts(
-            "Captured output",
-            format!("{} bytes", result.text.len()),
-            text,
-            Some(
-                serde_json::to_value(result)
-                    .map_err(|error| PluginError::internal_error(&error))?,
-            ),
-            Default::default(),
-            Vec::new(),
-        ))
-    }
-    #[tool(
-        name = "output_search",
-        tags(query, read_only),
-        summary = "Find literal text within captured tool output owned by this session.",
-        help = "Search before reading long logs. Results return byte offsets accepted by output_read. This searches captured bytes only, not content already dropped upstream.",
-        concurrency_safe
-    )]
-    async fn output_search(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &OutputSearchInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let result = agena_runtime_tools::output_resources::search(
-            Path::new(context.workspace_root),
-            context.session_id,
-            &input.output_id,
-            &input.pattern,
-            input.offset,
-            input.limit,
-        )
-        .map_err(PluginError::invalid_params)?;
-        let mut text = result
-            .matches
-            .iter()
-            .map(|hit| format!("byte {}: {}", hit.offset, hit.preview))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if text.is_empty() {
-            text = "No matches in captured content.".into();
-        }
-        text.push_str(&format!(
-            "\n[Next search offset: {:?}; capture_truncated={}]",
-            result.next_offset, result.capture_truncated
-        ));
-        Ok(ToolInvokeOutput::from_parts(
-            "Search captured output",
-            format!("{} matches", result.matches.len()),
-            text,
-            Some(
-                serde_json::to_value(result)
-                    .map_err(|error| PluginError::internal_error(&error))?,
-            ),
-            Default::default(),
-            Vec::new(),
-        ))
-    }
-
-    #[tool(
         tags(query, filesystem, read_only),
         summary = "Read workspace files.",
-        help = "Use `read` for text previews and directory listings. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents.",
-        examples(r#"{"file_path":"Cargo.toml"}"#),
-        concurrency_safe
+        help = "Use `read` for text previews and directory listings. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents."
     )]
     async fn invoke_read(
         &self,
@@ -247,9 +125,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, discovery, read_only),
         summary = "Find paths with glob patterns.",
-        help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.",
-        examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
-        concurrency_safe
+        help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory."
     )]
     async fn invoke_glob(
         &self,
@@ -262,9 +138,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, discovery, read_only),
         summary = "Search file contents with regex.",
-        help = "Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated.",
-        examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
-        concurrency_safe
+        help = "Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated."
     )]
     async fn invoke_grep(
         &self,
@@ -274,7 +148,11 @@ impl FsPlugin {
         invoke_internal(context, "grep", args).await
     }
 
-    #[tool(tags(mutate, filesystem), summary = "Apply a text patch to workspace files.", help = "Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root.", examples(r#"{"patch":"*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n*** End Patch"}"#))]
+    #[tool(
+        tags(mutate, filesystem),
+        summary = "Apply a text patch to workspace files.",
+        help = "Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root."
+    )]
     async fn invoke_apply_patch(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -487,8 +365,7 @@ impl FsPlugin {
 
     #[tool(
         tags(query, filesystem, read_only),
-        summary = "Read multiple UTF-8 files within one bounded byte budget.",
-        concurrency_safe
+        summary = "Read multiple UTF-8 files within one bounded byte budget."
     )]
     async fn invoke_read_many(
         &self,
@@ -524,7 +401,7 @@ impl FsPlugin {
                         sections.push(format!("===== {path} =====\n{preview}"));
                         let hash = (!file_truncated).then(|| sha256_bytes(preview.as_bytes()));
                         entries.push(serde_json::json!({"path":path,"status":"read","bytes":bytes,
-                            "returned_bytes":returned_bytes,"truncated":file_truncated,"sha256":hash}));
+                            "returned_bytes":returned_bytes,"truncated":file_truncated,"sha256":hash,"content":preview}));
                         remaining = remaining.saturating_sub(returned_bytes);
                         truncated |= file_truncated;
                         succeeded += 1;
@@ -564,8 +441,7 @@ impl FsPlugin {
 
     #[tool(
         tags(query, filesystem, read_only),
-        summary = "Inspect file metadata and an optional SHA-256 revision.",
-        concurrency_safe
+        summary = "Inspect file metadata and an optional SHA-256 revision."
     )]
     async fn invoke_stat(
         &self,
@@ -845,8 +721,6 @@ mod tests {
                 .map(|tool| tool.name.as_str())
                 .collect::<Vec<_>>(),
             [
-                "output_read",
-                "output_search",
                 "read",
                 "glob",
                 "grep",

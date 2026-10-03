@@ -63,13 +63,13 @@ test('server activity catalog normalization retains plugin-contributed kinds', (
 })
 
 test('part expansion defaults use only the canonical activity preference', () => {
-  assert.deepEqual(DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED, ['reasoning'])
+  assert.deepEqual(DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED, ['text'])
   assert.deepEqual(normalizeChatActivityKindDefaultExpanded([' operation ', 'reasoning', 'OPERATION']), [
     'operation',
     'reasoning',
     'OPERATION',
   ])
-  assert.deepEqual(resolveChatActivityKindDefaultExpanded(null), ['reasoning'])
+  assert.deepEqual(resolveChatActivityKindDefaultExpanded(null), ['text'])
   assert.deepEqual(resolveChatActivityKindDefaultExpanded({ chatActivityKindDefaultExpanded: [] }), [])
   assert.deepEqual(
     resolveChatActivityKindDefaultExpanded({ chatActivityKindDefaultExpanded: ['operation', 'example.trace'] }),
@@ -90,10 +90,10 @@ test('transcript presentation kinds resolve to server activity kind ids', () => 
   assert.equal(chatActivityKindIdForTranscriptPart('unknown', 'Example.Trace'), 'Example.Trace')
 })
 
-test('default expansion opens editing tools and otherwise inherits operation', () => {
-  assert.deepEqual(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES, ['edit', 'write', 'apply_patch', 'multiedit'])
+test('tools stay collapsed by default and explicit preferences still apply', () => {
+  assert.deepEqual(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES, [])
   const defaults = new Set<string>(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES)
-  assert.equal(resolveChatToolDefaultExpanded('fs.replace', {}, defaults, false), true)
+  assert.equal(resolveChatToolDefaultExpanded('fs.replace', {}, defaults, false), false)
   assert.equal(resolveChatToolDefaultExpanded('fs.glob', {}, defaults, false), false)
   assert.equal(resolveChatToolDefaultExpanded('fs.glob', {}, defaults, true), true)
   assert.equal(resolveChatToolDefaultExpanded('fs.glob', { 'fs.glob': false }, defaults, true), false)

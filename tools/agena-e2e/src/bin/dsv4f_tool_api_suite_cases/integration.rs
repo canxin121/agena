@@ -141,8 +141,8 @@ fn projected_transcript_text(messages: &[agena_runtime::SessionProjectedRun]) ->
             }
             Some(agena_runtime::SessionProjectedPartDetail::ToolCall(operation)) => {
                 operation.output.as_ref().and_then(|output| {
-                    if !output.text.is_empty() {
-                        Some(output.text.as_str())
+                    if !output.text_content().is_empty() {
+                        Some(output.text_content())
                     } else {
                         output.payload.as_ref().and_then(|payload| {
                             payload

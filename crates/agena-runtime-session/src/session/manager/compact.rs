@@ -354,6 +354,11 @@ impl SessionManager {
             &state.tool_executor,
         )
         .await;
+        crate::session::prompt::bound_model_tool_outputs(
+            &mut turns,
+            Some(state.tool_executor.workspace_root()),
+            session.id,
+        );
         let provider_compaction = prompt_window::provider_compaction_for_model(
             session,
             options.model.provider_id.as_ref(),
@@ -450,6 +455,11 @@ impl SessionManager {
             &state.tool_executor,
         )
         .await;
+        crate::session::prompt::bound_model_tool_outputs(
+            &mut projected,
+            Some(state.tool_executor.workspace_root()),
+            session.id,
+        );
         let source = prompt_window::normalize_prompt_runs(projected.as_slice());
         let recent_start = select_recent_start(source.as_slice());
 

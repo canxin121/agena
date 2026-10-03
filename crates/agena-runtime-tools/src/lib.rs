@@ -2,10 +2,9 @@
 //!
 //! Built-in tool execution and tool-facing runtime ports.
 //!
-//! Implements concrete built-in tool execution ([`tool`]), tool output
-//! truncation ([`tool_output`]), process monitoring, project path
-//! resolution, snapshot backends/operations, and the shared
-//! [`ToolExecutionRequest`] plumbing used by executors.
+//! Implements concrete built-in tool execution ([`tool`]), process
+//! monitoring, project path resolution, snapshot backends/operations, and the
+//! shared [`ToolExecutionRequest`] plumbing used by executors.
 
 pub use agena_runtime_contracts::ToolSessionContext;
 pub use agena_runtime_contracts::{authorization, identity, part, permission, provider_state};
@@ -14,7 +13,6 @@ mod atomic_file;
 mod bounded_process;
 pub mod media_input;
 mod monitor;
-pub mod output_resources;
 mod project_instructions;
 mod project_paths;
 pub mod shell_sandbox;
@@ -48,7 +46,8 @@ pub use project_paths::{
     MAX_GENERATED_IMAGE_BYTES, ManagedGeneratedImageArtifact, ManagedGeneratedImageError,
     agena_home_dir, generated_image_artifact_path, generated_media_extension,
     parse_base64_image_data_url, persist_generated_image_artifact, project_state_dir,
-    snapshot_managed_dir, snapshot_rift_database_path,
+    prune_tool_output, snapshot_managed_dir, snapshot_rift_database_path, tool_output_spill_dir,
+    tool_output_spill_path,
 };
 pub use snapshot_capabilities::snapshot_backend_capabilities;
 pub use snapshot_managed::{
@@ -62,9 +61,6 @@ pub use snapshot_registry::snapshot_rift_binary;
 pub use snapshot_registry::{
     ActiveSnapshot, SnapshotRegistry, SnapshotSession, list_active_snapshots, snapshot_registry,
 };
-pub use tool_output::truncate_tool_output_text;
-
-pub mod tool_output;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Request to execute a tool.

@@ -54,6 +54,32 @@ impl ToolExecutionView {
         }
     }
 
+    pub fn raw_output(&self, output: &ToolOutput) -> agena_domain::RawOutput {
+        let mut payload: serde_json::Map<String, serde_json::Value> = self
+            .metadata
+            .iter()
+            .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+            .collect();
+        payload.extend(output.payload.fields.iter().map(|field| {
+            (
+                field.name.clone(),
+                serde_json::Value::from(field.value.clone()),
+            )
+        }));
+        if output.payload.is_empty() && !self.output_text.is_empty() {
+            payload
+                .entry("text".to_owned())
+                .or_insert_with(|| serde_json::Value::String(self.output_text.clone()));
+        }
+        agena_domain::RawOutput::from_parts(
+            (!payload.is_empty()).then_some(serde_json::Value::Object(payload)),
+            self.output_text.clone(),
+            self.attachments.clone(),
+            output.managed_outputs.clone(),
+            output.truncated,
+        )
+    }
+
     /// Apply presentation fields returned by a runtime/plugin boundary.
     /// Concrete attachments remain owned by the core execution view.
     pub fn apply_neutral_fields(
@@ -205,6 +231,50 @@ mod tests {
             apply_patch: None,
         };
         assert_eq!(invocation.summary(), view.summary());
+    }
+
+    #[test]
+    fn raw_output_keeps_all_result_fields_without_overwriting_typed_values() {
+        let mut view = ToolExecutionView::simple("Shell", "Exit 0", "ok");
+        view.metadata.insert("exit_code".into(), "99".into());
+        view.metadata.insert("duration_ms".into(), "42".into());
+        let mut output = agena_domain::ToolOutput::from_json_payload(Some(&serde_json::json!({
+            "exit_code": 0,
+            "stdout": "ok",
+            "metadata": {"tool_owned": true}
+        })))
+        .unwrap();
+        output.mark_truncated("result.txt");
+
+        let raw = view.raw_output(&output);
+        assert_eq!(raw.payload.as_ref().unwrap()["exit_code"], 0);
+        assert_eq!(raw.payload.as_ref().unwrap()["duration_ms"], "42");
+        assert_eq!(
+            raw.payload.as_ref().unwrap()["metadata"]["tool_owned"],
+            true
+        );
+        assert!(serde_json::to_value(&raw).unwrap().get("text").is_none());
+        assert_eq!(raw.managed_outputs, output.managed_outputs);
+        assert!(raw.truncated);
+        assert!(
+            serde_json::to_value(&raw)
+                .unwrap()
+                .get("metadata")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn raw_output_keeps_text_and_result_fields_in_one_payload() {
+        let mut view = ToolExecutionView::simple("Plugin", "Completed", "complete result");
+        view.metadata.insert("status".into(), "completed".into());
+
+        let raw = view.raw_output(&agena_domain::ToolOutput::default());
+        assert_eq!(
+            raw.payload,
+            Some(serde_json::json!({"text": "complete result", "status": "completed"}))
+        );
+        assert!(serde_json::to_value(&raw).unwrap().get("text").is_none());
     }
 
     #[test]

@@ -11,9 +11,6 @@ fn tool_detail_api_section(
         agena_tui_transcript::TranscriptActivitySection::Output => {
             Some(agena_api::live::ToolDetailSection::Output)
         }
-        agena_tui_transcript::TranscriptActivitySection::OutputMetadata => {
-            Some(agena_api::live::ToolDetailSection::OutputMetadata)
-        }
         // Presentation is present in every transcript snapshot and is open by
         // default, so reopening it never needs a detail request.
         agena_tui_transcript::TranscriptActivitySection::Presentation => None,
@@ -86,7 +83,6 @@ impl App {
                 agena_tui_transcript::TranscriptActivitySection::Metadata
                     | agena_tui_transcript::TranscriptActivitySection::Input
                     | agena_tui_transcript::TranscriptActivitySection::Output
-                    | agena_tui_transcript::TranscriptActivitySection::OutputMetadata
             );
             should_fetch.then_some((*part_id, *section))
         });

@@ -39,7 +39,15 @@ impl ToolExecutor {
             // its side effects and must not induce an automatic mutation retry.
             tracing::warn!(tool=%model_tool_name,diagnostic=%error,"post-execution hook failed after a tool returned; preserving raw receipt");
             execution = raw_execution;
-            execution.view.output_text.push_str("\n[Post-execution processing failed after the tool returned. Its side effects may already be committed. Inspect the recorded result; do not repeat the operation automatically.]");
+            let warning = "Post-execution processing failed after the tool returned. Its side effects may already be committed. Inspect the recorded result; do not repeat the operation automatically.";
+            execution
+                .view
+                .output_text
+                .push_str(&format!("\n[{warning}]"));
+            execution
+                .view
+                .metadata
+                .insert("postprocessing_warning".into(), warning.into());
             execution
                 .view
                 .metadata
@@ -85,58 +93,19 @@ impl ToolExecutor {
             if !instructions.is_empty() {
                 execution
                     .view
+                    .metadata
+                    .insert("project_instructions".to_owned(), instructions.clone());
+                execution
+                    .view
                     .output_text
                     .push_str(&format!("\n\n{instructions}"));
-            }
-        }
-
-        // Make bounded captured text queryable before read-time projection
-        // removes the middle of a long result. Never recursively archive reads.
-        if !model_tool_name.ends_with("output_read") && !model_tool_name.ends_with("output_search")
-        {
-            let captured = if execution.view.output_text.len() > 4096
-                || execution.view.output_text.lines().count() > 100
-            {
-                Some(execution.view.output_text.clone())
-            } else {
-                execution
-                    .output
-                    .to_json_payload()
-                    .and_then(|payload| serde_json::to_string_pretty(&payload).ok())
-                    .filter(|text| text.len() > 4096)
-            };
-            if let Some(text) = captured {
-                match crate::output_resources::capture(&self.workspace_root, session_id, &text) {
-                    Ok(id) => {
-                        execution
-                            .view
-                            .metadata
-                            .insert("output_resource_id".into(), id.clone());
-                        execution.view.output_text.push_str(&format!("\n[Captured output: {id}. Use fs.output_search or fs.output_read. Cache expires after one hour and may be evicted; original capture limits still apply.]"));
-                    }
-                    Err(error) => {
-                        execution.view.output_text.push_str(&format!("\n[Output cache unavailable: {error}; do not assume truncated content can be retrieved.]"));
-                    }
-                }
             }
         }
 
         // Complete the call-time action/input title with a compact fact from
         // the full raw result so operator callers and session completion use
         // the same final headline as the read-time transcript renderer.
-        let raw_output = agena_domain::RawOutput::from_parts(
-            execution.output.to_json_payload(),
-            execution.view.output_text.clone(),
-            execution.view.attachments.clone(),
-            execution.output.managed_outputs.clone(),
-            execution
-                .view
-                .metadata
-                .iter()
-                .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
-                .collect(),
-            execution.output.truncated,
-        );
+        let raw_output = execution.view.raw_output(&execution.output);
         execution.view.title = agena_tool::completed_tool_title(invocation, &raw_output);
         Ok(execution)
     }
@@ -282,22 +251,9 @@ impl ToolExecutor {
             Default::default()
         };
 
-        let model = rendered
+        rendered
             .model
             .get_or_insert_with(|| raw_model_fallback(output));
-        project_model_at_read_time(
-            model,
-            registered
-                .as_ref()
-                .map(|tool| &tool.definition.runtime.result_policy),
-        );
-        if let Some(id) = output
-            .metadata
-            .get("output_resource_id")
-            .and_then(serde_json::Value::as_str)
-        {
-            model.push_str(&format!("\n[Read captured output with fs.output_read or search it with fs.output_search: output_id={id}. Availability is bounded by cache retention.]"));
-        }
         let plugin_human = rendered.human.take();
         let needs_runtime_human_fallback = plugin_human.as_ref().is_none_or(|human| {
             human.blocks.is_empty()
@@ -383,6 +339,15 @@ impl ToolExecutor {
 
 fn raw_model_fallback(output: &agena_domain::RawOutput) -> String {
     match output.payload.as_ref() {
+        Some(payload)
+            if payload.is_string()
+                || (payload.as_object().is_some_and(|object| object.len() == 1)
+                    && payload
+                        .get("text")
+                        .is_some_and(serde_json::Value::is_string)) =>
+        {
+            output.text_content().to_owned()
+        }
         Some(payload) => match serde_json::to_string(payload) {
             Ok(payload) => payload,
             Err(error) => {
@@ -393,106 +358,19 @@ fn raw_model_fallback(output: &agena_domain::RawOutput) -> String {
                     ),
                     "tool result model projection fell back to its text representation"
                 );
-                if output.text.is_empty() {
+                if output.text_content().is_empty() {
                     "[tool result payload could not be serialized]".to_owned()
                 } else {
-                    output.text.clone()
+                    output.text_content().to_owned()
                 }
             }
         },
-        None => output.text.clone(),
+        None => output.text_content().to_owned(),
     }
 }
 
-fn project_model_at_read_time(model: &mut String, policy: Option<&SdkToolResultPolicy>) {
-    if let Some(policy) = policy {
-        let mut truncated_by_policy = false;
-        if let Some(max_lines) = policy.preview_lines
-            && max_lines > 0
-        {
-            let mut lines = model.lines();
-            let selected = lines.by_ref().take(max_lines).collect::<Vec<_>>();
-            if lines.next().is_some() {
-                *model = selected.join("\n");
-                truncated_by_policy = true;
-            }
-        }
-        if let Some(max_chars) = policy.max_model_chars
-            && max_chars > 0
-            && model.chars().count() > max_chars
-        {
-            *model = truncate_to_char_count(model, max_chars);
-            truncated_by_policy = true;
-        }
-        if truncated_by_policy {
-            model.push_str(
-                "\n\n[model projection truncated by tool result policy; raw output retained]",
-            );
-        }
-    }
-
-    if model.trim().is_empty()
-        || !model_output_exceeds_boundary(
-            model,
-            TOOL_MODEL_OUTPUT_MAX_LINES,
-            TOOL_MODEL_OUTPUT_MAX_BYTES,
-        )
-    {
-        return;
-    }
-    let marker = format!(
-        "... model projection truncated ({} lines, {} bytes); raw output retained ...",
-        line_count(model),
-        model.len(),
-    );
-    *model = bounded_model_output_preview(
-        model,
-        marker.as_str(),
-        TOOL_MODEL_OUTPUT_MAX_LINES,
-        TOOL_MODEL_OUTPUT_MAX_BYTES,
-    );
-}
 use super::{
-    Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput, SdkToolResultPolicy,
-    TOOL_MODEL_OUTPUT_MAX_BYTES, TOOL_MODEL_OUTPUT_MAX_LINES, ToolError, ToolExecutor,
-    ToolInvocation, ToolInvocationExecution, ToolOutput, bounded_model_output_preview,
-    invocation_input_json, invocation_name, line_count, model_output_exceeds_boundary,
-    truncate_to_char_count,
+    Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput, ToolError,
+    ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput, invocation_input_json,
+    invocation_name,
 };
-
-#[cfg(test)]
-mod tests {
-    use super::{SdkToolResultPolicy, TOOL_MODEL_OUTPUT_MAX_BYTES, project_model_at_read_time};
-
-    #[test]
-    fn model_boundary_is_an_ephemeral_projection_of_unchanged_raw_text() {
-        let raw = (0..2_000)
-            .map(|index| format!("raw-line-{index:04}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut model = raw.clone();
-
-        project_model_at_read_time(&mut model, None);
-
-        assert_eq!(raw.lines().count(), 2_000);
-        assert_ne!(model, raw);
-        assert!(model.len() <= TOOL_MODEL_OUTPUT_MAX_BYTES);
-        assert!(model.contains("raw output retained"));
-    }
-
-    #[test]
-    fn tool_result_policy_changes_only_the_runtime_model_projection() {
-        let raw = "one\ntwo\nthree\nfour".to_owned();
-        let mut model = raw.clone();
-        let policy = SdkToolResultPolicy {
-            preview_lines: Some(2),
-            ..Default::default()
-        };
-
-        project_model_at_read_time(&mut model, Some(&policy));
-
-        assert_eq!(raw, "one\ntwo\nthree\nfour");
-        assert!(model.starts_with("one\ntwo"));
-        assert!(model.contains("raw output retained"));
-    }
-}

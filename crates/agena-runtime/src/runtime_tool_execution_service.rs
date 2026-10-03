@@ -103,6 +103,15 @@ pub trait RuntimeToolExecutionService: Send + Sync {
         output: &RawOutput,
     ) -> RuntimeToolResultProjection {
         let model = match output.payload.as_ref() {
+            Some(payload)
+                if payload.is_string()
+                    || (payload.as_object().is_some_and(|object| object.len() == 1)
+                        && payload
+                            .get("text")
+                            .is_some_and(serde_json::Value::is_string)) =>
+            {
+                output.text_content().to_owned()
+            }
             Some(payload) => match serde_json::to_string(payload) {
                 Ok(payload) => payload,
                 Err(error) => {
@@ -114,14 +123,14 @@ pub trait RuntimeToolExecutionService: Send + Sync {
                         ),
                         "default runtime tool result projection fell back to its text representation"
                     );
-                    if output.text.is_empty() {
+                    if output.text_content().is_empty() {
                         "[tool result payload could not be serialized]".to_owned()
                     } else {
-                        output.text.clone()
+                        output.text_content().to_owned()
                     }
                 }
             },
-            None => output.text.clone(),
+            None => output.text_content().to_owned(),
         };
         let mut renderer = BuiltinHumanRenderer::new(invocation.name.as_str());
         if let Some(command) = invocation

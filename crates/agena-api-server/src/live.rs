@@ -278,23 +278,7 @@ pub(crate) async fn project_tool_detail(
     let value = match section {
         ToolDetailSection::Metadata => serde_json::to_value(content.metadata).ok()?,
         ToolDetailSection::Input => content.input,
-        ToolDetailSection::Output => match content.output {
-            Some(output) => {
-                let mut output = serde_json::to_value(output).ok()?;
-                if let Some(object) = output.as_object_mut() {
-                    object.remove("metadata");
-                }
-                output
-            }
-            None => serde_json::Value::Null,
-        },
-        ToolDetailSection::OutputMetadata => {
-            let metadata = content
-                .output
-                .map(|output| output.metadata)
-                .unwrap_or_default();
-            serde_json::to_value(metadata).ok()?
-        }
+        ToolDetailSection::Output => serde_json::to_value(content.output).ok()?,
         ToolDetailSection::Presentation => project_tool_presentation(state, part)
             .await
             .and_then(|presentation| serde_json::to_value(presentation).ok())

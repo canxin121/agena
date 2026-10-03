@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
-import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
 import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
@@ -15,8 +14,6 @@ import {
 } from '@/pages/chat/transcriptPartPresentation'
 import { getToolPartDetail, type ToolDetailSection } from '@/stores/chat/api'
 import type { JsonValue } from '@/types/json'
-import { useDirectoryStore } from '@/stores/directory'
-import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   part: TranscriptDisplayPart
@@ -30,19 +27,15 @@ const emit = defineEmits<{
   (event: 'select'): void
 }>()
 
-const directory = useDirectoryStore()
-const ui = useUiStore()
-
 const metadataExpanded = ref(false)
 const inputExpanded = ref(false)
 const outputExpanded = ref(false)
-const outputMetadataExpanded = ref(false)
 const presentationExpanded = ref(true)
 const sectionValues = ref<Partial<Record<ToolDetailSection, JsonValue>>>({})
 const loadingSections = ref<Set<ToolDetailSection>>(new Set())
 const sectionErrors = ref<Partial<Record<ToolDetailSection, string>>>({})
 const loadedPartKey = ref('')
-const toolDetailSections: ToolDetailSection[] = ['metadata', 'input', 'output', 'output_metadata', 'presentation']
+const toolDetailSections: ToolDetailSection[] = ['metadata', 'input', 'output', 'presentation']
 
 const operation = computed(() => operationPresentation(props.part, sectionValues.value))
 const status = computed(() => partStatusPresentation(props.part.status))
@@ -63,7 +56,6 @@ function sectionExpanded(section: ToolDetailSection): boolean {
   if (section === 'metadata') return metadataExpanded.value
   if (section === 'input') return inputExpanded.value
   if (section === 'output') return outputExpanded.value
-  if (section === 'output_metadata') return outputMetadataExpanded.value
   return presentationExpanded.value
 }
 
@@ -71,7 +63,6 @@ function setSectionExpanded(section: ToolDetailSection, expanded: boolean) {
   if (section === 'metadata') metadataExpanded.value = expanded
   else if (section === 'input') inputExpanded.value = expanded
   else if (section === 'output') outputExpanded.value = expanded
-  else if (section === 'output_metadata') outputMetadataExpanded.value = expanded
   else presentationExpanded.value = expanded
 }
 
@@ -114,7 +105,6 @@ function resetSectionState() {
   metadataExpanded.value = false
   inputExpanded.value = false
   outputExpanded.value = false
-  outputMetadataExpanded.value = false
   // Presentation is the human-readable primary view and is open by default.
   presentationExpanded.value = true
 }
@@ -137,15 +127,6 @@ watch(
   () => props.collapseSignal,
   () => resetSectionState(),
 )
-
-function openAttachment(path: string, url: string) {
-  const workspace = String(directory.currentDirectory || '').trim()
-  if (workspace && path) {
-    ui.requestWorkspaceDockFile(path, 'open')
-    return
-  }
-  if (url) window.open(url, '_blank', 'noopener,noreferrer')
-}
 
 function toggleOuter() {
   emit('select')
@@ -221,11 +202,7 @@ function toggleOuter() {
         >
       </section>
 
-      <section
-        v-for="section in toolDetailSections"
-        :key="section"
-        class="py-1"
-      >
+      <section v-for="section in toolDetailSections" :key="section" class="py-1">
         <button
           type="button"
           class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
@@ -236,7 +213,7 @@ function toggleOuter() {
           <span class="w-3 text-center font-mono text-muted-foreground" aria-hidden="true">{{
             sectionExpanded(section) ? '▾' : '▸'
           }}</span>
-          {{ section === 'output_metadata' ? 'Output metadata' : section[0].toUpperCase() + section.slice(1) }}
+          {{ section[0].toUpperCase() + section.slice(1) }}
           <span v-if="sectionLoading(section)" class="font-normal text-muted-foreground">Loading…</span>
         </button>
 
@@ -260,50 +237,11 @@ function toggleOuter() {
           </template>
 
           <template v-else-if="section === 'output'">
-            <MarkdownRenderer v-if="operation.outputText" :content="operation.outputText" mode="markdown" :stream="false" />
-            <CodeBlock
-              v-if="operation.structured !== null"
-              :code="prettyJson(operation.structured)"
-              lang="json"
-              compact
-            />
-            <CodeBlock
-              v-else-if="operation.rawOutput !== null && !operation.outputText"
-              :code="prettyJson(operation.rawOutput)"
-              lang="json"
-              compact
-            />
-            <div v-if="operation.managedOutputs !== null" class="mt-2">
-              <div class="mb-1 text-[11px] font-semibold text-muted-foreground">Managed outputs</div>
-              <CodeBlock :code="prettyJson(operation.managedOutputs)" lang="json" compact />
-            </div>
-            <div v-if="operation.truncated" class="mt-1 text-[11px] text-muted-foreground">Output truncated.</div>
-            <div v-if="operation.attachments.length" class="mt-3 space-y-1">
-              <AgenaAttachmentPreview
-                v-for="attachment in operation.attachments"
-                :key="attachment.key"
-                :attachment="attachment"
-                :workspace-root="String(directory.currentDirectory || '')"
-                @open="openAttachment"
-              />
-            </div>
-          </template>
-
-          <template v-else-if="section === 'output_metadata'">
-            <MarkdownRenderer
-              :content="structuredValueMarkdown(operation.outputMetadata)"
-              mode="markdown"
-              :stream="false"
-            />
+            <CodeBlock :code="prettyJson(operation.rawOutput)" lang="json" compact />
           </template>
 
           <template v-else>
-            <MarkdownRenderer
-              v-if="operation.summary"
-              :content="operation.summary"
-              mode="markdown"
-              :stream="false"
-            />
+            <MarkdownRenderer v-if="operation.summary" :content="operation.summary" mode="markdown" :stream="false" />
             <div v-if="operation.presentationBlocks.length" class="mt-2 space-y-3">
               <AgenaOperationBlock
                 v-for="(block, index) in operation.presentationBlocks"

@@ -357,7 +357,6 @@ impl SessionProcessor {
                 output_text,
                 attachments,
                 details.managed_outputs.clone(),
-                BTreeMap::new(),
                 details.truncated,
             ),
             TimeRange {

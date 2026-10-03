@@ -31,17 +31,10 @@ export type OperationPresentation = {
   input: JsonValue | null
   inputMarkdown: string
   error: string
-  stdout: string
-  structured: JsonValue | null
   rawOutput: JsonValue | null
-  outputText: string
-  managedOutputs: JsonValue | null
-  truncated: boolean
   blocks: JsonRecord[]
   presentationBlocks: JsonRecord[]
-  attachments: AttachmentPresentation[]
   metadata: JsonRecord
-  outputMetadata: JsonRecord
   durationMs: number | null
   userInputs: InteractionPresentation[]
   permissions: OperationPermissionPresentation[]
@@ -259,60 +252,6 @@ function operationFailureMessage(value: JsonValue): string {
   return problemMessage(error.failure) || problemMessage(error.problem) || firstString(error, ['message', 'detail'])
 }
 
-function normalizedBlockText(value: string): string {
-  return value.replace(/\r\n/g, '\n').trim()
-}
-
-function splitOperationStdout(blocks: JsonRecord[]): { blocks: JsonRecord[]; stdout: string[] } {
-  const outputBlocks: JsonRecord[] = []
-  const stdout: string[] = []
-
-  for (const block of blocks) {
-    const kind = firstString(block, ['type', 'kind']).toLowerCase()
-    if (kind === 'log' && firstString(block, ['stream']).toLowerCase() === 'stdout') {
-      const text = firstString(block, ['text', 'markdown', 'content'])
-      if (text) stdout.push(text)
-      continue
-    }
-
-    if (kind === 'command') {
-      const text = firstString(block, ['stdout'])
-      if (text) stdout.push(text)
-      const remainder: JsonRecord = { ...block }
-      delete remainder.stdout
-      const hasVisibleRemainder = Boolean(
-        firstString(remainder, ['command', 'cwd', 'stderr']) || typeof remainder.exit_code === 'number',
-      )
-      if (hasVisibleRemainder) outputBlocks.push(remainder)
-      continue
-    }
-
-    outputBlocks.push(block)
-  }
-
-  return { blocks: outputBlocks, stdout }
-}
-
-function operationStdout(blockStdout: string[]): { text: string; normalized: Set<string> } {
-  const candidates = blockStdout
-  const normalized = new Set<string>()
-  const output: string[] = []
-  for (const candidate of candidates) {
-    const key = normalizedBlockText(candidate)
-    if (!key || normalized.has(key)) continue
-    normalized.add(key)
-    output.push(candidate.trim())
-  }
-  const text = output.join('\n\n')
-  if (text) normalized.add(normalizedBlockText(text))
-  return { text, normalized }
-}
-
-function isTextOnlyStructured(value: JsonValue): boolean {
-  if (!isJsonRecord(value)) return typeof value === 'string'
-  return Object.keys(value).length === 1 && typeof value.text === 'string'
-}
-
 function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresentation | null {
   const item = jsonRecord(value)
   if (!Object.keys(item).length) return null
@@ -388,43 +327,19 @@ export function operationPresentation(
   if (hasSection('metadata')) content.metadata = sectionValues.metadata as JsonValue
   if (hasSection('input')) content.input = sectionValues.input as JsonValue
   if (hasSection('output')) content.output = sectionValues.output as JsonValue
-  if (hasSection('output_metadata')) {
-    const output = jsonRecord(content.output)
-    content.output = { ...output, metadata: sectionValues.output_metadata as JsonValue }
-  }
   const presentationValue = hasSection('presentation')
     ? (sectionValues.presentation as JsonValue)
     : (part.source.agenaPresentation ?? null)
   const operation = toolCallView(content, presentationValue)
   const invocation = jsonRecord(operation.invocation)
-  const output = jsonRecord(operation.output)
   const canonicalInput = jsonRecord(content.input)
   const encodedInput = Object.keys(canonicalInput).length ? canonicalInput : jsonRecord(invocation.input)
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
   const toolName = firstString(content, ['name']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
-  const rawStructured = output.payload ?? null
-  const rawOutput: JsonValue | null = operation.output === null ? null : { ...output }
-  if (isJsonRecord(rawOutput)) delete rawOutput.metadata
-  const projectedBlocks = jsonArray(operation.blocks)
+  const rawOutput = operation.output ?? null
+  const blocks = jsonArray(operation.blocks)
     .map(jsonRecord)
     .filter((item) => Object.keys(item).length > 0)
-    .filter(
-      (item, index, values) => values.findIndex((candidate) => prettyJson(candidate) === prettyJson(item)) === index,
-    )
-  const splitBlocks = splitOperationStdout(projectedBlocks)
-  const blocks = splitBlocks.blocks
-  const stdout = operationStdout(splitBlocks.stdout)
-  const outputText = firstString(output, ['text'])
-  // A stdout ViewBlock is the human projection of a text-only raw payload.
-  // Keep the durable payload intact, but do not render the same text again in
-  // the separate structured Output section.
-  const structured =
-    rawStructured !== null && !(stdout.text && isTextOnlyStructured(rawStructured)) ? rawStructured : null
-
-  const attachments = jsonArray(output.attachments)
-    .map(attachmentFromRecord)
-    .filter((item): item is AttachmentPresentation => Boolean(item))
-    .filter((item, index, list) => list.findIndex((candidate) => candidate.key === item.key) === index)
 
   const startMs = numericValue(jsonRecord(operation.lifecycle).start_ms) ?? part.source.time?.start ?? null
   const endMs = numericValue(jsonRecord(operation.lifecycle).end_ms) ?? part.source.time?.end ?? null
@@ -478,17 +393,10 @@ export function operationPresentation(
     input,
     inputMarkdown: input === null ? '' : structuredValueMarkdown(input),
     error: operationFailureMessage(operation.error ?? null),
-    stdout: stdout.text,
-    structured,
     rawOutput,
-    outputText,
-    managedOutputs: output.managed_outputs ?? null,
-    truncated: output.truncated === true,
     blocks,
     presentationBlocks: blocks,
-    attachments,
     metadata: jsonRecord(content.metadata),
-    outputMetadata: jsonRecord(output.metadata),
     durationMs: startMs !== null && endMs !== null && endMs >= startMs ? endMs - startMs : null,
     userInputs,
     permissions,

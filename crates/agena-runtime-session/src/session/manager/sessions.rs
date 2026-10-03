@@ -23,7 +23,43 @@ impl SessionManager {
         for session_id in self.store.in_flight_session_ids().await? {
             self.reconcile_session_on_open(session_id).await?;
         }
+        self.prune_orphaned_tool_output().await;
         Ok(())
+    }
+
+    /// Drop spilled tool output whose owning session no longer exists.
+    ///
+    /// The spill directory is keyed by session id, so a directory whose id is
+    /// absent from the durable session table belongs to a deleted session.
+    /// Clearing them here — the same startup window that drops orphaned
+    /// snapshots — keeps the managed state directory from growing forever.
+    async fn prune_orphaned_tool_output(&self) {
+        let workspace_root = self.tool_executor().workspace_root().to_path_buf();
+        let live = match self
+            .list_session_summaries(SessionListRequest::default())
+            .await
+        {
+            Ok(summaries) => summaries
+                .into_iter()
+                .map(|summary| summary.id)
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                tracing::warn!(
+                    target: "agena_session",
+                    %error,
+                    "skipping spilled tool output pruning because the session list could not be read"
+                );
+                return;
+            }
+        };
+        let removed = agena_runtime_tools::prune_tool_output(&workspace_root, &live);
+        if !removed.is_empty() {
+            tracing::info!(
+                target: "agena_session",
+                removed = removed.len(),
+                "pruned spilled tool output of deleted sessions at startup"
+            );
+        }
     }
 
     /// Reconcile one session's abandoned in-flight runs and subagent subtask

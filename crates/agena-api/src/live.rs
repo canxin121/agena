@@ -19,16 +19,14 @@ pub enum ToolDetailSection {
     Metadata,
     Input,
     Output,
-    OutputMetadata,
     Presentation,
 }
 
 impl ToolDetailSection {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::Metadata,
         Self::Input,
         Self::Output,
-        Self::OutputMetadata,
         Self::Presentation,
     ];
 
@@ -37,7 +35,6 @@ impl ToolDetailSection {
             Self::Metadata => "metadata",
             Self::Input => "input",
             Self::Output => "output",
-            Self::OutputMetadata => "output_metadata",
             Self::Presentation => "presentation",
         }
     }
@@ -51,7 +48,6 @@ impl std::str::FromStr for ToolDetailSection {
             "metadata" => Ok(Self::Metadata),
             "input" => Ok(Self::Input),
             "output" => Ok(Self::Output),
-            "output_metadata" => Ok(Self::OutputMetadata),
             "presentation" => Ok(Self::Presentation),
             other => Err(format!("unknown tool detail section: {other}")),
         }
@@ -136,27 +132,7 @@ pub fn project_tool_call_content(content: &Value, sections: &[ToolDetailSection]
         projected.remove("metadata");
     }
 
-    let projected_output =
-        if has(ToolDetailSection::Output) || has(ToolDetailSection::OutputMetadata) {
-            object.get("output").map(|value| match value {
-                Value::Object(output) => {
-                    let mut value = output.clone();
-                    if !has(ToolDetailSection::OutputMetadata) {
-                        value.remove("metadata");
-                    }
-                    if !has(ToolDetailSection::Output) {
-                        value.retain(|key, _| key == "metadata");
-                    }
-                    Value::Object(value)
-                }
-                other => other.clone(),
-            })
-        } else {
-            None
-        };
-    if let Some(output) = projected_output {
-        projected.insert("output".to_owned(), output);
-    } else {
+    if !has(ToolDetailSection::Output) {
         projected.remove("output");
     }
 
@@ -267,8 +243,7 @@ mod tests {
             "state": "completed",
             "output": {
                 "text": "durable raw result",
-                "metadata": {"exit_code": 0},
-                "payload": {"large": [1, 2, 3]}
+                "payload": {"exit_code": 0, "large": [1, 2, 3]}
             },
             "user_input": {"requests": []}
         });
@@ -282,29 +257,67 @@ mod tests {
     }
 
     #[test]
-    fn tool_projection_can_load_output_and_output_metadata_independently() {
+    fn tool_projection_loads_complete_output_without_interpreting_result_fields() {
         let content = serde_json::json!({
-            "name": "fs.read",
-            "input": {"file_path": "README.md"},
+            "name": "shell.run",
+            "input": {"command": "printf ok"},
             "metadata": {"cache": true},
             "state": "completed",
             "output": {
                 "text": "durable raw result",
-                "metadata": {"exit_code": 0},
-                "payload": {"large": [1, 2, 3]}
+                "payload": {
+                    "stdout": "ok",
+                    "exit_code": 0,
+                    "duration_ms": 42,
+                    "metadata": {"tool_owned": true}
+                },
+                "managed_outputs": [{"path": "result.txt"}],
+                "truncated": true
             }
         });
         let output = project_tool_call_content(&content, &[ToolDetailSection::Output]);
-        assert_eq!(output["output"]["text"], "durable raw result");
-        assert!(output["output"].get("metadata").is_none());
+        assert_eq!(output["output"], content["output"]);
         assert!(output.get("input").is_none());
+        assert!(output.get("metadata").is_none());
 
-        let metadata = project_tool_call_content(&content, &[ToolDetailSection::OutputMetadata]);
-        assert_eq!(
-            metadata["output"],
-            serde_json::json!({"metadata": {"exit_code": 0}})
-        );
+        let metadata = project_tool_call_content(&content, &[ToolDetailSection::Metadata]);
+        assert_eq!(metadata["metadata"], content["metadata"]);
+        assert!(metadata.get("output").is_none());
         assert!(metadata.get("input").is_none());
+
+        assert_eq!(
+            project_tool_call_content(&content, &ToolDetailSection::ALL),
+            content
+        );
+    }
+
+    #[test]
+    fn tool_projection_preserves_loaded_empty_output() {
+        for output in [serde_json::Value::Null, serde_json::json!({})] {
+            let content = serde_json::json!({"name": "plugin.empty", "output": output});
+            let projected = project_tool_call_content(&content, &[ToolDetailSection::Output]);
+            assert_eq!(projected.get("output"), content.get("output"));
+            assert!(
+                project_tool_call_content(&content, &[])
+                    .get("output")
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn tool_detail_sections_round_trip_the_complete_current_catalog() {
+        assert_eq!(
+            ToolDetailSection::ALL.map(|section| section.as_str()),
+            ["metadata", "input", "output", "presentation"]
+        );
+        for section in ToolDetailSection::ALL {
+            assert_eq!(
+                section.as_str().parse::<ToolDetailSection>().unwrap(),
+                section
+            );
+        }
+        assert!("output_metadata".parse::<ToolDetailSection>().is_err());
     }
 }
 

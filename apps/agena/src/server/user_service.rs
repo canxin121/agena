@@ -68,6 +68,15 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
     let arguments = server_arguments(args)?;
 
     #[cfg(target_os = "macos")]
+    let (executable, arguments) = {
+        let host = super::macos_permissions::ensure_host()?;
+        let mut hosted_arguments = Vec::with_capacity(arguments.len() + 1);
+        hosted_arguments.push(executable.into_os_string());
+        hosted_arguments.extend(arguments);
+        (host, hosted_arguments)
+    };
+
+    #[cfg(target_os = "macos")]
     let contents = launchd_plist(
         executable.as_os_str(),
         arguments.as_slice(),
@@ -345,6 +354,8 @@ fn launchd_plist(
   <dict>\n\
     <key>Label</key>\n\
     <string>{SERVICE_LABEL}</string>\n\
+    <key>AssociatedBundleIdentifiers</key>\n\
+    <array><string>{}</string></array>\n\
     <key>ProgramArguments</key>\n\
     <array>\n{argument_xml}\n    </array>\n\
     <key>EnvironmentVariables</key>\n\
@@ -366,6 +377,7 @@ fn launchd_plist(
     <string>{}</string>\n\
   </dict>\n\
 </plist>\n",
+        super::macos_permissions::BUNDLE_ID,
         xml_escape(log_path.as_str()),
         xml_escape(log_path.as_str())
     ))
@@ -830,6 +842,8 @@ mod tests {
         .expect("render launchd plist");
         assert!(plist.contains("<key>RunAtLoad</key>"));
         assert!(plist.contains("<key>SuccessfulExit</key>"));
+        assert!(plist.contains("<key>AssociatedBundleIdentifiers</key>"));
+        assert!(plist.contains(super::super::macos_permissions::BUNDLE_ID));
         assert!(plist.contains("/Applications/Agena &amp; Tools/agena"));
         assert!(plist.contains("p&lt;&amp;&gt;&quot;&apos;"));
         assert!(!plist.contains("/bin/sh"));

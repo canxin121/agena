@@ -90,6 +90,56 @@ agena server start
 `agena server install` and `agena server uninstall` manage the native per-user
 service on macOS, Linux, and Windows.
 
+## macOS file permissions (one-time setup)
+
+For workspaces that span protected folders, other apps' data, external disks,
+or network volumes, grant **Agena** **Full Disk Access** once in **System
+Settings → Privacy & Security → Full Disk Access**. macOS requires the user
+to enable this switch; Agena cannot grant it to itself or preapprove every
+future disk/app by opening directories at startup.
+
+Run `agena server permissions` after installing the native user service. It
+reveals the exact app in Finder and opens the settings page. Use **+** and
+**Cmd+Shift+G** to select the displayed app path (normally
+`~/agena/macos/Agena.app`), enable it, then run:
+
+```bash
+agena server stop
+agena server start
+```
+
+The native service runs through a small signed supervisor in this app. Its
+executable, bundle ID, Info.plist, and signature are preserved byte-for-byte
+across normal upgrades, rollbacks, and reinstalls that preserve runtime data.
+The server and the tools it spawns inherit the responsible app's file-access
+identity. The large server executable can therefore be upgraded independently.
+Do not add the changing `bin/agena` executable to Full Disk Access instead.
+An existing grant to an older standalone executable must be granted once to
+the new app. The installer verifies an existing app and reports damage instead
+of silently replacing/re-signing it and losing the remembered identity.
+
+Interactive first installation opens this setup once. Set
+`AGENA_MACOS_OPEN_PERMISSIONS=0` for headless installers. Upgrades and restarts
+neither reopen settings nor probe private data to guess authorization status.
+Normal uninstall preserves the app with runtime data; `--purge-data`, manually
+deleting/replacing the app, revoking/resetting privacy settings, or a future
+supervisor migration can require authorization again. macOS controls the final
+decision; no app can guarantee a permanent grant after a system reset.
+
+The TUI loads its recursive file index only when file mentions are used.
+Recursive Web searches and workspace indexing from a broad home/root scope
+skip macOS privacy domains before opening them, including `~/Library`, standard
+protected user folders, and unselected mounted disks. Direct directory listing
+is still available; select a protected folder/project as the workspace/search
+root to index it deliberately. This reduces incidental prompts even without
+Full Disk Access. File access does not grant Accessibility, Screen Recording,
+microphone, camera, or Automation permissions. Direct `agena server` and
+detached/development runs remain under the launching terminal's privacy identity;
+use the native user service for the persistent Agena app identity.
+
+Apple describes the code identity constraint in
+[TN3127: Inside Code Signing: Requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+
 ## Install a specific version
 
 macOS/Linux:

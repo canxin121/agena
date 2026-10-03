@@ -19,7 +19,7 @@ PURGE_DATA=0
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [install|upgrade|uninstall|start|stop|restart|status] [options]
+Usage: install.sh [install|upgrade|uninstall|start|stop|restart|status|permissions] [options]
 
 One-click install (latest beta release):
   curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash
@@ -71,7 +71,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$ACTION" in
-  install|upgrade|uninstall|start|stop|restart|status) ;;
+  install|upgrade|uninstall|start|stop|restart|status|permissions) ;;
   *) echo "ERROR: unsupported action: $ACTION" >&2; usage >&2; exit 2 ;;
 esac
 case "$SERVICE_MODE" in
@@ -525,6 +525,11 @@ do_status() {
   agena_lifecycle server status
 }
 
+do_permissions() {
+  load_state
+  agena_lifecycle server permissions
+}
+
 do_uninstall() {
   load_state
   if [[ -x "$AGENA_BIN" ]]; then
@@ -551,4 +556,5 @@ case "$ACTION" in
   stop) do_stop ;;
   restart) do_stop || true; do_start ;;
   status) do_status ;;
+  permissions) do_permissions ;;
 esac

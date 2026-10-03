@@ -9,6 +9,11 @@ on:
       - ".github/workflows/agena-release.yml"
       - "apps/agena/src/server/lifecycle.rs"
       - "apps/agena/src/server/user_service.rs"
+      - "apps/agena/src/server/macos_permissions*"
+      - "apps/agena/src/server/macos_permissions/**"
+      - "apps/agena/src/server/macos_permission_host.c"
+      - "apps/agena/build.rs"
+      - "apps/agena/Cargo.toml"
       - "scripts/agena/install.sh"
       - "scripts/agena/install.ps1"
       - "scripts/agena/install-service.sh"
@@ -25,6 +30,11 @@ on:
       - ".github/workflows/agena-release.yml"
       - "apps/agena/src/server/lifecycle.rs"
       - "apps/agena/src/server/user_service.rs"
+      - "apps/agena/src/server/macos_permissions*"
+      - "apps/agena/src/server/macos_permissions/**"
+      - "apps/agena/src/server/macos_permission_host.c"
+      - "apps/agena/build.rs"
+      - "apps/agena/Cargo.toml"
       - "scripts/agena/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -235,6 +245,7 @@ jobs:
           TEST_PORT: "43210"
           SERVICE_MODE: ${{ matrix.service_mode }}
           TARGET: ${{ matrix.target }}
+          AGENA_MACOS_OPEN_PERMISSIONS: "0"
         run: |
           set -euo pipefail
           mkdir -p "$TEST_HOME" "$WORKSPACE_DIR"
@@ -253,6 +264,11 @@ jobs:
             --port "$TEST_PORT" \
             --service-mode "$SERVICE_MODE"
           "$INSTALL_DIR/bin/agena" --version
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            permission_host="$TEST_HOME/agena/macos/Agena.app"
+            codesign --verify --strict "$permission_host"
+            permission_hash="$(shasum -a 256 "$permission_host/Contents/MacOS/Agena" "$permission_host/Contents/Info.plist" "$permission_host/Contents/_CodeSignature/CodeResources")"
+          fi
           "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
           curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
 
@@ -325,6 +341,10 @@ jobs:
           fi
           new_hash="$(shasum -a 256 "$INSTALL_DIR/bin/agena" | awk '{print $1}')"
           test "$old_hash" = "$new_hash"
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            codesign --verify --strict "$permission_host"
+            test "$permission_hash" = "$(shasum -a 256 "$permission_host/Contents/MacOS/Agena" "$permission_host/Contents/Info.plist" "$permission_host/Contents/_CodeSignature/CodeResources")"
+          fi
           "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
           curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
 

@@ -28,6 +28,13 @@ if [[ "$OS" == "Linux" ]]; then
   rm -f "$HOME/.config/systemd/user/agena.service"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
 elif [[ "$OS" == "Darwin" ]]; then
+  if [[ -f "$HOME/Library/LaunchAgents/com.agena.server.plist" ]]; then
+    if [[ ! -x "$INSTALL_DIR/bin/agena" ]]; then
+      echo "ERROR: native service uninstall requires $INSTALL_DIR/bin/agena" >&2
+      exit 1
+    fi
+    "$INSTALL_DIR/bin/agena" server uninstall
+  fi
   PLIST_FILE="$HOME/Library/LaunchAgents/cn.cxits.agena.plist"
   launchctl unload "$PLIST_FILE" >/dev/null 2>&1 || true
   rm -f "$PLIST_FILE"

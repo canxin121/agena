@@ -161,36 +161,22 @@ EOF
   echo "Installed Agena user service."
   echo "Status: systemctl --user status agena"
 elif [[ "$OS" == "Darwin" ]]; then
-  PLIST_DIR="$HOME/Library/LaunchAgents"
-  PLIST_FILE="$PLIST_DIR/cn.cxits.agena.plist"
-  mkdir -p "$PLIST_DIR"
-  cat > "$PLIST_FILE" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>cn.cxits.agena</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$LAUNCHER</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>WorkingDirectory</key>
-  <string>$INSTALL_DIR</string>
-  <key>StandardOutPath</key>
-  <string>$INSTALL_DIR/logs/stdout.log</string>
-  <key>StandardErrorPath</key>
-  <string>$INSTALL_DIR/logs/stderr.log</string>
-</dict>
-</plist>
-EOF
-
-  launchctl unload "$PLIST_FILE" >/dev/null 2>&1 || true
-  launchctl load "$PLIST_FILE"
-  echo "Installed Agena launch agent."
-  echo "Status: launchctl list | grep agena"
+  # Migrate the legacy shell launch agent to the native lifecycle. Both public
+  # installers must use the same persistent macOS permission host.
+  LEGACY_PLIST="$HOME/Library/LaunchAgents/cn.cxits.agena.plist"
+  if [[ -f "$LEGACY_PLIST" ]]; then
+    launchctl bootout "gui/$(id -u)" "$LEGACY_PLIST" >/dev/null 2>&1 || true
+    rm -f "$LEGACY_PLIST"
+  fi
+  SERVICE_ARGS=(server install --host "$HOST" --port "$PORT" --ui-dir "$INSTALL_DIR/web-dist")
+  [[ -n "$UI_PASSWORD" ]] && SERVICE_ARGS+=(--ui-password "$UI_PASSWORD")
+  [[ -n "$WORKSPACE_ROOT" ]] && SERVICE_ARGS+=(--workspace "$WORKSPACE_ROOT")
+  [[ -n "$DATABASE_PATH" ]] && SERVICE_ARGS+=(--database-path "$DATABASE_PATH")
+  [[ -n "$DATABASE_URL" ]] && SERVICE_ARGS+=(--database-url "$DATABASE_URL")
+  for item in "${SETS[@]}"; do
+    SERVICE_ARGS+=(--set "$item")
+  done
+  "$INSTALL_DIR/bin/agena" "${SERVICE_ARGS[@]}"
+  echo "Status: agena server status"
+  echo "macOS file access setup: agena server permissions"
 fi

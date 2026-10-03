@@ -950,6 +950,8 @@ pub enum ServerLifecycleAction {
     Stop,
     Install,
     Uninstall,
+    /// Open the installed macOS service's one-time Full Disk Access setup.
+    Permissions,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1868,6 +1870,7 @@ mod parser_contract_tests {
             ("stop", ServerLifecycleAction::Stop),
             ("install", ServerLifecycleAction::Install),
             ("uninstall", ServerLifecycleAction::Uninstall),
+            ("permissions", ServerLifecycleAction::Permissions),
         ] {
             let cli = AgenaCli::try_parse_from(["agena", "server", name])
                 .expect("parse server lifecycle action");

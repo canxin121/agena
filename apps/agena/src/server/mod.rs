@@ -8,6 +8,8 @@ mod git {
     pub(crate) use agena_git_http::*;
 }
 mod lifecycle;
+#[cfg(target_os = "macos")]
+mod macos_permissions;
 pub(crate) mod mcp;
 mod path_utils;
 mod persistence;
@@ -32,6 +34,16 @@ pub(crate) async fn run(request: ServerLaunchRequest) -> Result<(), AgenaProcess
         Some(agena_cli::ServerLifecycleAction::Stop) => lifecycle::stop().await,
         Some(agena_cli::ServerLifecycleAction::Install) => lifecycle::install(request.args).await,
         Some(agena_cli::ServerLifecycleAction::Uninstall) => lifecycle::uninstall().await,
+        Some(agena_cli::ServerLifecycleAction::Permissions) => {
+            #[cfg(target_os = "macos")]
+            {
+                macos_permissions::setup()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                anyhow::bail!("`agena server permissions` is only needed on macOS")
+            }
+        }
     };
     // Preserve and classify the complete anyhow chain at the executable
     // boundary. In particular, a Runtime configuration/database/I/O failure

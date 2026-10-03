@@ -263,6 +263,7 @@ pub fn parse_typed_json_value_with_field_suggestions<T>(
 where
     T: DeserializeOwned,
 {
+    validation_paths::validate_json_container_shapes(&input, schema)?;
     reject_unknown_object_fields(&input, schema, kind)?;
     match serde_path_to_error::deserialize(input) {
         Ok(parsed) => Ok(parsed),

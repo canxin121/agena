@@ -552,9 +552,9 @@
         {
           "canonical_name": "agena.cron.list",
           "conditional": null,
-          "definition_identity": "0b1b93f647fcd1f7a88c5674dfa65eb917061631f8688af249282434775c6bb6",
+          "definition_identity": "a8e2f00a15a23191d4650b4d060cedbaa1f79812e15014da6ac4f13856b6970e",
           "gateway": false,
-          "input_schema_sha256": "5a43782476e2ea2bc99d02866a0ae9fd62c620669940fbd91391785bf0b23afa",
+          "input_schema_sha256": "0e886948107379dbe9ed475d36302a40ad0832969eb9a2c65fafe1e6029783c2",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",

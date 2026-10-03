@@ -967,6 +967,93 @@ pub(crate) fn schema_field_candidates(schema: &Value) -> Vec<String> {
     candidates
 }
 
+/// Serde accepts sequences for named structs, including `[]` for a struct
+/// whose fields all have defaults. JSON tool contracts do not: objects stay
+/// objects, including nested records and local schema references. Leave value
+/// constraints and field suggestions to their existing validators.
+pub(crate) fn validate_json_container_shapes(input: &Value, schema: &Value) -> Result<()> {
+    fn visit(input: &Value, schema: &Value, root: &Value, path: &str, depth: usize) -> Result<()> {
+        if depth > 128 {
+            return Err(PluginError::invalid_params(format!(
+                "input structure at {path} is too deeply nested"
+            )));
+        }
+        if let Some(reference) = schema
+            .get("$ref")
+            .and_then(Value::as_str)
+            .and_then(|s| s.strip_prefix('#'))
+            && let Some(target) = root.pointer(reference)
+        {
+            visit(input, target, root, path, depth + 1)?;
+        }
+        let matches_type = |kind: &str| match kind {
+            "object" => input.is_object(),
+            "array" => input.is_array(),
+            "null" => input.is_null(),
+            "string" => input.is_string(),
+            "boolean" => input.is_boolean(),
+            "integer" => input.is_i64() || input.is_u64(),
+            "number" => input.is_number(),
+            _ => true,
+        };
+        let types = schema.get("type");
+        let valid = match types {
+            Some(Value::String(kind)) => matches_type(kind),
+            Some(Value::Array(types)) => types.iter().filter_map(Value::as_str).any(matches_type),
+            _ => true,
+        };
+        if !valid {
+            return Err(PluginError::invalid_params(format!(
+                "invalid input shape at {path}: expected {}",
+                types.unwrap()
+            )));
+        }
+        for key in ["anyOf", "oneOf"] {
+            if let Some(branches) = schema.get(key).and_then(Value::as_array)
+                && !branches.is_empty()
+                && !branches
+                    .iter()
+                    .any(|branch| visit(input, branch, root, path, depth + 1).is_ok())
+            {
+                return Err(PluginError::invalid_params(format!(
+                    "invalid input shape at {path}: no {key} variant accepts this JSON type"
+                )));
+            }
+        }
+        if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
+            for branch in branches {
+                visit(input, branch, root, path, depth + 1)?;
+            }
+        }
+        if let Some(object) = input.as_object() {
+            let properties = schema.get("properties").and_then(Value::as_object);
+            for (name, value) in object {
+                let property = properties
+                    .and_then(|properties| properties.get(name))
+                    .or_else(|| schema.get("additionalProperties").filter(|s| s.is_object()));
+                if let Some(property) = property {
+                    visit(value, property, root, &format!("{path}.{name}"), depth + 1)?;
+                }
+            }
+        }
+        if let Some(items) = input.as_array()
+            && let Some(item_schema) = schema.get("items").filter(|schema| schema.is_object())
+        {
+            for (index, item) in items.iter().enumerate() {
+                visit(
+                    item,
+                    item_schema,
+                    root,
+                    &format!("{path}[{index}]"),
+                    depth + 1,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    visit(input, schema, schema, "$", 0)
+}
+
 pub(crate) fn reject_unknown_object_fields(
     input: &Value,
     schema: &Value,
@@ -1168,4 +1255,35 @@ fn human_join_paths(paths: &[&str]) -> String {
 
 fn display_path(path: &str) -> &str {
     path.strip_prefix("args.").unwrap_or(path)
+}
+
+#[cfg(test)]
+mod container_shape_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn object_records_never_accept_positional_arrays() {
+        let schema = json!({"type":"object", "properties":{"steps":{"type":"array", "items":{"$ref":"#/$defs/Step"}}}, "$defs":{"Step":{"type":"object","properties":{"title":{"type":"string"}}}}});
+        for input in [
+            json!([]),
+            json!({"steps":[[]]}),
+            json!({"steps":[["title"]]}),
+        ] {
+            assert!(validate_json_container_shapes(&input, &schema).is_err());
+        }
+        assert!(
+            validate_json_container_shapes(&json!({"steps":[{"title":"one"}]}), &schema).is_ok()
+        );
+    }
+    #[test]
+    fn declared_arrays_unions_and_free_json_remain_accepted() {
+        let schema = json!({"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"object"},{"type":"null"}]});
+        for input in [json!(["x"]), json!({}), json!(null)] {
+            assert!(validate_json_container_shapes(&input, &schema).is_ok());
+        }
+        assert!(validate_json_container_shapes(&json!([{}]), &schema).is_err());
+        assert!(
+            validate_json_container_shapes(&json!({"arbitrary":[1,true,null]}), &json!({})).is_ok()
+        );
+    }
 }

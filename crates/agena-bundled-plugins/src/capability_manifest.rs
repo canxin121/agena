@@ -95,13 +95,23 @@ pub struct BundledCommandCapability {
 /// snapshot, and the generated `cargo doc` tool reference so every surface
 /// enumerates exactly the same plugins.
 pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)> {
+    bundled_plugins()
+        .into_iter()
+        .map(|(plugin, condition)| (plugin.manifest(), condition))
+        .collect()
+}
+
+fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     let mut plugins = Vec::new();
     macro_rules! add {
         ($plugin:expr) => {
-            plugins.push(($plugin.manifest(), None));
+            plugins.push((Box::new($plugin) as Box<dyn Plugin>, None));
         };
         ($plugin:expr, $condition:literal) => {
-            plugins.push(($plugin.manifest(), Some($condition.to_string())));
+            plugins.push((
+                Box::new($plugin) as Box<dyn Plugin>,
+                Some($condition.to_string()),
+            ));
         };
     }
     add!(crate::tool::new_chatgpt_plugin());
@@ -316,4 +326,51 @@ fn json_sha256(value: &serde_json::Value) -> String {
     };
     let digest = Sha256::digest(bytes);
     hex::encode(digest)
+}
+
+#[cfg(test)]
+mod boundary_audit {
+    use super::*;
+    use agena_plugin_host::sdk::ToolInvokeInput;
+
+    #[tokio::test]
+    async fn every_bundled_tool_rejects_malformed_arguments_before_execution() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut failures = Vec::new();
+        let mut count = 0;
+        for (plugin, _) in bundled_plugins() {
+            let manifest = plugin.manifest();
+            for tool in manifest.tools {
+                count += 1;
+                for input in [
+                    serde_json::json!([]),
+                    serde_json::json!(false),
+                    serde_json::json!({"__unknown_audit_argument": true}),
+                ] {
+                    let result = plugin
+                        .tool_invoke(ToolInvokeInput {
+                            tool_name: tool.name.clone(),
+                            session_id: 1,
+                            call_id: 1,
+                            workspace_root: workspace.path().display().to_string(),
+                            input: input.clone(),
+                        })
+                        .await;
+                    if !matches!(&result, Err(error) if error.kind == agena_plugin_host::sdk::PluginErrorKind::InvalidParams)
+                    {
+                        failures.push(format!(
+                            "{}.{}({input}): {result:?}",
+                            manifest.name, tool.name
+                        ));
+                    }
+                }
+            }
+        }
+        assert_eq!(count, 135);
+        assert!(
+            failures.is_empty(),
+            "Malformed arguments escaped validation:\n{}",
+            failures.join("\n")
+        );
+    }
 }

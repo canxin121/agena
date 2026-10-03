@@ -2494,12 +2494,15 @@ fn format_package_document(entry: &PackageEntry) -> String {
     document
 }
 
-fn parse_tool_input<T: serde::de::DeserializeOwned>(tool: &str, value: Value) -> SdkResult<T> {
-    serde_json::from_value(value).map_err(|error| {
-        PluginError::invalid_params(format!(
-            "invalid input for `{COMMANDS_PLUGIN_ID}.{tool}`: {error}"
-        ))
-    })
+fn parse_tool_input<T: serde::de::DeserializeOwned + JsonSchema>(
+    tool: &str,
+    value: Value,
+) -> SdkResult<T> {
+    macro_support::parse_typed_json_value_with_field_suggestions(
+        value,
+        &macro_support::json_schema_for::<T>(),
+        &format!("{COMMANDS_PLUGIN_ID}.{tool} input field"),
+    )
 }
 
 /// The one argument a package invocation can carry. The contract supplies

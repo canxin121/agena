@@ -2427,6 +2427,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "additionalProperties": false,
   "description": "Input of the cron list tool.",
   "properties": {},
   "type": "object"

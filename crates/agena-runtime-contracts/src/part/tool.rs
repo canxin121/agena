@@ -646,6 +646,7 @@ fn default_cron_max_age() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]
 /// Input of the cron list tool.
+#[serde(deny_unknown_fields)]
 pub struct CronListToolInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]

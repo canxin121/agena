@@ -34,6 +34,19 @@ fn round_record_from_parts(
     provider_state: Option<&serde_json::Value>,
     input_notification_part_ids: &[i64],
 ) -> serde_json::Value {
+    let sources = parts
+        .iter()
+        .filter(|part| part.kind == "think")
+        .map(|part| {
+            agena_runtime_contracts::provider_state::ReasoningTextSource::from_content(
+                part.part_id,
+                &part.content,
+            )
+        })
+        .collect::<Vec<_>>();
+    let provider_state = provider_state.map(|state| {
+        agena_runtime_contracts::provider_state::reference_reasoning_text(state, &sources)
+    });
     serde_json::json!({
         "part_ids": parts.iter().map(|part| part.part_id).collect::<Vec<_>>(),
         "provider_state": provider_state,
@@ -744,7 +757,7 @@ impl SessionProcessor {
                         status: PartState::Completed,
                         abort_reason: None,
                         content: Some(merged_content),
-                        provider_state,
+                        provider_state: None,
                     },
                 )
                 .await?;
@@ -770,7 +783,7 @@ impl SessionProcessor {
                     run.session_id,
                     assistant_message_id,
                     PartDelta {
-                        provider_state,
+                        provider_state: None,
                         content: Some(merged_content),
                         ..PartDelta::default()
                     },
@@ -822,6 +835,46 @@ fn provider_native_artifact_to_raw_attachment(artifact: ProviderNativeToolArtifa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn round_records_reference_think_content_instead_of_copying_it() {
+        let text = "one canonical reasoning body";
+        let part = Part {
+            part_id: 17,
+            kind: "think".to_owned(),
+            role: agena_storage::store::PartRole::Assistant,
+            state: PartState::Completed,
+            content: serde_json::json!({"summary": [text]}),
+            summary: None,
+            visibility: agena_storage::store::PartVisibility::Both,
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 1,
+            finished_at_ms: Some(2),
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            provider_state: None,
+        };
+        let state = serde_json::json!({"anthropic_thinking_blocks": [{"type": "thinking", "thinking": text, "signature": "sig"}]});
+        let record = round_record_from_parts(&[part.clone()], Some(&state), &[]);
+        assert!(!record.to_string().contains(text));
+        let sources = vec![
+            agena_runtime_contracts::provider_state::ReasoningTextSource::from_content(
+                part.part_id,
+                &part.content,
+            ),
+        ];
+        assert_eq!(
+            agena_runtime_contracts::provider_state::restore_reasoning_text(
+                &record["provider_state"],
+                &sources
+            )
+            .unwrap(),
+            state
+        );
+    }
 
     #[test]
     fn merge_round_record_appends_to_an_existing_rounds_array() {

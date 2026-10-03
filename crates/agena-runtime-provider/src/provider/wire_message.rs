@@ -410,8 +410,16 @@ pub fn project_completion_input(parts: &[Part]) -> CompletionInputRun {
             .map(completion_input_part_from_wire)
             .collect(),
         provider_state: marker
-            .and_then(|part| part.provider_state.as_ref())
-            .and_then(completion_input_provider_state)
+            .and_then(|part| {
+                part.content
+                    .get("rounds")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|rounds| rounds.last())
+                    .and_then(|round| round.get("provider_state"))
+                    .filter(|state| !state.is_null())
+                    .or(part.provider_state.as_ref())
+            })
+            .and_then(|state| completion_input_provider_state_from_parts(state, parts))
             .unwrap_or_default(),
     }
 }
@@ -481,6 +489,29 @@ fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachmen
         height: item.height,
         duration_ms: item.duration_ms,
         page_count: item.page_count,
+    }
+}
+
+pub fn completion_input_provider_state_from_parts(
+    value: &serde_json::Value,
+    parts: &[Part],
+) -> Option<CompletionInputProviderState> {
+    let sources = parts
+        .iter()
+        .filter(|part| part.kind == "think")
+        .map(|part| {
+            agena_runtime_contracts::provider_state::ReasoningTextSource::from_content(
+                part.part_id,
+                &part.content,
+            )
+        })
+        .collect::<Vec<_>>();
+    match agena_runtime_contracts::provider_state::restore_reasoning_text(value, &sources) {
+        Ok(state) => completion_input_provider_state(&state),
+        Err(error) => {
+            tracing::error!(diagnostic = %error, "provider replay state contains an invalid part-content reference");
+            None
+        }
     }
 }
 
@@ -1837,6 +1868,54 @@ mod tests {
         assert_eq!(
             input.provider_state.gemini_thought_signatures.get("part_1"),
             Some(&"signature".to_owned())
+        );
+    }
+
+    #[test]
+    fn completion_input_restores_reasoning_from_the_single_canonical_part() {
+        let text = "signed reasoning 你好";
+        let mut thought = part(
+            "think",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({"summary": [text]}),
+        );
+        thought.part_id = 17;
+        let state = serde_json::json!({
+            "response_id": "r-1",
+            "anthropic_thinking_blocks": [{"type": "thinking", "thinking": text, "signature": "sig-1"}],
+            "openai_chat_reasoning_details": [{"type": "reasoning.text", "text": text}]
+        });
+        let sources = vec![
+            agena_runtime_contracts::provider_state::ReasoningTextSource::from_content(
+                17,
+                &thought.content,
+            ),
+        ];
+        let stored =
+            agena_runtime_contracts::provider_state::reference_reasoning_text(&state, &sources);
+        let mut marker = run_marker(PartRole::Assistant, None);
+        marker.content["rounds"] =
+            serde_json::json!([{"part_ids": [17], "provider_state": stored}]);
+        assert!(marker.provider_state.is_none());
+        assert!(!marker.content.to_string().contains(text));
+
+        let input = project_completion_input(&[marker, thought]);
+        assert_eq!(
+            input.provider_state.anthropic_thinking_blocks[0]["thinking"],
+            text
+        );
+        assert_eq!(
+            input.provider_state.anthropic_thinking_blocks[0]["signature"],
+            "sig-1"
+        );
+        assert_eq!(
+            input
+                .provider_state
+                .openai_chat_reasoning_details
+                .as_ref()
+                .unwrap()[0]["text"],
+            text
         );
     }
 

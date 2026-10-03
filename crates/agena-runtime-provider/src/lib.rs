@@ -20,8 +20,9 @@ pub use provider::{
     CatalogedModelsProvider, ManagedCredential, ModelRuntime, MultiAdapterProvider,
     ProjectedSessionPart, ProviderModelRoute, ProviderRegistry, ProviderRequestHeaderHook,
     catalog_decoration_source, completion_input_part_from_wire, completion_input_provider_state,
-    install_request_header_hook, parse_sap_ai_core_service_key, project_classifier_run_text,
-    project_completion_input, project_operation_output, project_persisted as project_session_parts,
+    completion_input_provider_state_from_parts, install_request_header_hook,
+    parse_sap_ai_core_service_key, project_classifier_run_text, project_completion_input,
+    project_operation_output, project_persisted as project_session_parts,
     project_persisted_text_lossy as project_session_text_lossy, with_request_cancellation,
 };
 pub use provider_client_versions::*;

@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use agena_domain::{ExecutionSelection, ExecutionStatus, ReasoningPart, Role};
+use agena_domain::{ExecutionSelection, ExecutionStatus, Role};
 use agena_plugin_sdk::attachment::{AttachmentPart, AttachmentSource};
 use agena_runtime_contracts::part_content;
 use agena_runtime_contracts::part_content::TypedContent;
@@ -981,60 +981,11 @@ pub(crate) fn new_part_from_content(
         kind: kind.into(),
         role,
         content: value,
-        summary: part_summary(content),
+        summary: None,
         visibility: PartVisibility::Both,
         parent_part_id: None,
         state,
     })
-}
-
-fn part_summary(content: &TypedContent) -> Option<String> {
-    match content {
-        TypedContent::Text(text) => truncate(&text.text),
-        TypedContent::Think(think) => truncate(&reasoning_from_think(think).preferred_text()),
-        // Tool failures already live in `content.error`. Copying them into the
-        // generic summary column would create a second durable representation
-        // of the same fact.
-        TypedContent::ToolCall(_) => None,
-        TypedContent::Error(error) => {
-            truncate(&part_content::user_problem_from_error(error).user.fallback)
-        }
-        TypedContent::CommandRef(reference) => {
-            truncate(&part_content::command_reference_from_command_ref(reference).summary())
-        }
-        TypedContent::Hook(hook) => truncate(&hook.summary),
-        TypedContent::Notice(notice) => truncate(&notice.summary),
-        TypedContent::SystemNotification(notification) => truncate(&notification.summary),
-        TypedContent::FileRef(attachment) => {
-            let attachment = part_content::attachment_from_file_ref(attachment);
-            if attachment.attachments.is_empty() {
-                Some("0 attachment(s)".to_string())
-            } else {
-                truncate(&format!("{} attachment(s)", attachment.attachments.len()))
-            }
-        }
-        TypedContent::Run(_) => None,
-        TypedContent::PasteRef(paste) => truncate(&paste.text),
-        TypedContent::Compaction(compaction) => {
-            truncate(compaction.summary.as_deref().unwrap_or_default())
-        }
-    }
-}
-
-fn truncate(value: &str) -> Option<String> {
-    const LIMIT: usize = 240;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut out = String::new();
-    for ch in trimmed.chars().take(LIMIT) {
-        out.push(ch);
-    }
-    if trimmed.chars().nth(LIMIT).is_some() {
-        out.push('…');
-    }
-    Some(out)
 }
 
 /// Decode the canonical JSON payload stored on a part into its typed content
@@ -1173,15 +1124,6 @@ pub(crate) fn typed_text(content: &TypedContent) -> Option<&str> {
 // `CommandReferencePart`, `ReasoningPart`, `UserProblem`) are reconstructed from
 // canonical typed content through the extractor helpers in
 // `agena_runtime_contracts::part_content`.
-
-/// Rebuild a [`ReasoningPart`] from the canonical `think` shape.
-pub(crate) fn reasoning_from_think(part: &part_content::ThinkContent) -> ReasoningPart {
-    ReasoningPart {
-        summary: part.summary.clone(),
-        raw_content: part.raw.clone(),
-        encrypted_content: part.encrypted_content.clone(),
-    }
-}
 
 pub(crate) fn role_from_part_role(role: PartRole) -> Role {
     match role {
@@ -1726,6 +1668,30 @@ mod tests {
             typed_content_from_value("text", &new_part.content).unwrap(),
             content
         );
+    }
+
+    #[test]
+    fn part_factories_do_not_store_a_second_body_in_the_summary_column() {
+        for content in [
+            TypedContent::Text(part_content::TextContent {
+                text: "one canonical body".to_owned(),
+                ..Default::default()
+            }),
+            TypedContent::Think(part_content::ThinkContent {
+                summary: vec!["one canonical reasoning body".to_owned()],
+                ..Default::default()
+            }),
+        ] {
+            let kind = match content {
+                TypedContent::Text(_) => "text",
+                _ => "think",
+            };
+            let part =
+                new_part_from_content(kind, PartRole::Assistant, &content, PartState::Completed)
+                    .unwrap();
+            assert!(part.summary.is_none());
+            assert_eq!(part.content, typed_content_to_value(&content).unwrap());
+        }
     }
 
     #[test]

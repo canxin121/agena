@@ -533,7 +533,12 @@ fn window_items_from_parts(parts: &[Part]) -> Vec<WindowItem> {
                     .get("provider_state")
                     .cloned()
                     .filter(|value| !value.is_null())
-                    .and_then(|value| crate::provider::completion_input_provider_state(&value));
+                    .and_then(|value| {
+                        crate::provider::completion_input_provider_state_from_parts(
+                            &value,
+                            &round_parts,
+                        )
+                    });
                 let mut projected = project_completion_input(&round_parts);
                 if let Some(provider_state) = provider_state {
                     projected.provider_state = provider_state;

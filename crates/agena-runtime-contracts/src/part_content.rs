@@ -141,7 +141,15 @@ impl ThinkContent {
     }
 
     pub fn as_value(&self) -> Value {
-        serde_json::to_value(self).expect("think content is always JSON serializable")
+        let mut value =
+            serde_json::to_value(self).expect("think content is always JSON serializable");
+        if !self.summary.is_empty()
+            && !self.raw.is_empty()
+            && self.summary.concat() == self.raw.concat()
+        {
+            value.as_object_mut().unwrap().remove("raw");
+        }
+        value
     }
 }
 
@@ -899,6 +907,20 @@ mod tests {
         let back = RunContent::try_from(&value).unwrap();
         assert_eq!(back.run_kind, "user_send");
         assert_eq!(back.extra["model_id"], json!("claude-3-5-sonnet"));
+    }
+
+    #[test]
+    fn think_stores_identical_raw_and_summary_text_once() {
+        let content = ThinkContent {
+            summary: vec!["single ".to_owned(), "reasoning body".to_owned()],
+            raw: vec!["single reasoning body".to_owned()],
+            ..Default::default()
+        };
+        let value = content.as_value();
+        assert!(value.get("raw").is_none());
+        let decoded = ThinkContent::try_from(&value).unwrap();
+        assert_eq!(decoded.summary.concat(), "single reasoning body");
+        assert!(decoded.raw.is_empty());
     }
 
     #[test]

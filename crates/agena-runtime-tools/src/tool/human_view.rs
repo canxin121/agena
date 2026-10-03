@@ -5717,7 +5717,6 @@ mod tests {
         let raw = RawOutput::from_parts(
             Some(json!({
                 "operation_id": "op-1",
-                "inverse_patch": "",
                 "changes": [{"path": "a.txt", "kind": "updated"}],
                 "diff": "--- a\n+++ b\n"
             })),

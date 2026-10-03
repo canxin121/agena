@@ -109,7 +109,6 @@ fn sample_payload(tool: &str) -> Value {
         }),
         "fs.apply_patch" => json!({
             "operation_id": "patch-1",
-            "inverse_patch": "*** Begin Patch\n*** End Patch",
             "changes": [{"path": "src/lib.rs", "kind": "updated"}],
             "diff": "@@ -1 +1 @@\n-old\n+new"
         }),

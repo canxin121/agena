@@ -36,7 +36,7 @@ impl InteractionPlugin {
     #[tool(
         tags(interactive),
         summary = "Ask the user for short structured input.",
-        help = "Use only when you are blocked on a decision that belongs to the user: a preference, a direction choice, or a choice with no reasonable default. If a sensible default exists or you can verify the answer yourself, proceed instead of asking. Ask all necessary clarifying questions at once. Never use this tool to ask whether you should proceed or to seek plan approval."
+        help = "Use for a decision that belongs to the user: a preference, an ambiguous requirement, authorization for a specific dangerous action, or whether to squash a concrete commit range before an authorized push. Show the target, consequences, and distinct options including a safe decline/defer choice. Reuse authorization already given for the same action and scope. If a sensible default exists within that authorization or you can verify the answer yourself, proceed. Ask all necessary questions together through this tool, never by ending the turn with a plain-text question. A timeout, cancellation, or empty answer is not approval; continue only independent, already-authorized work. Do not ask a generic 'should I proceed?' or seek plan approval here; use plan.review for plan approval."
     )]
     async fn ask(&self, input: &AskUserToolInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_ask_user(input).await

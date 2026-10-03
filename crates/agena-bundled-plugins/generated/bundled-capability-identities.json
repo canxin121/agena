@@ -893,9 +893,9 @@
         {
           "canonical_name": "agena.interaction.ask",
           "conditional": null,
-          "definition_identity": "72e165bb6f6cac8366f1e5c6e9a477c415f873d68e425d55c3ebf93558a45bae",
+          "definition_identity": "56b38a4554fba1e3f273acb900bcfbac7b5357bf93fcd1c927b0871d6aafaa43",
           "gateway": false,
-          "input_schema_sha256": "2d84bf7f1964f5acfb5a0a78aa3dbb976955dbb1de359652a01488bd72cd97cc",
+          "input_schema_sha256": "7c061e6aa68e4c74dc7109154424f3fcbc463f04f13badadf9cd13976198bb7c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "interactive"

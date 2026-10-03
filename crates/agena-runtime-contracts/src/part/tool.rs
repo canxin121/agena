@@ -478,6 +478,7 @@ pub struct AskUserToolInput {
     pub body_markdown: String,
     /// Automatically continue without an answer after this many milliseconds.
     /// Values are limited to 60 seconds through 10 minutes.
+    /// A timeout is not approval; only independent, already-authorized work may continue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

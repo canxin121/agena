@@ -3290,10 +3290,6 @@ impl SessionManager {
         {
             object.insert("diff".to_owned(), serde_json::json!(apply_patch.diff));
             object.insert(
-                "inverse_patch".to_owned(),
-                serde_json::json!(apply_patch.inverse_patch),
-            );
-            object.insert(
                 "progress".to_owned(),
                 serde_json::json!(apply_patch.progress),
             );

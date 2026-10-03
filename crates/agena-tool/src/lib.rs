@@ -4027,14 +4027,12 @@ pub struct AppliedFileChange {
     pub from_path: Option<String>,
 }
 
-/// Stable result metadata emitted after an apply-patch operation.
+/// Result metadata emitted after an apply-patch operation.
+/// Completed changes are recovered through Git, not a generated inverse patch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyPatchExecution {
     pub operation_id: String,
     pub files: Vec<AppliedFileChange>,
-    pub before_hash: String,
-    pub after_hash: String,
-    pub inverse_patch: String,
     pub diff: String,
     pub progress: Vec<String>,
 }
@@ -4054,17 +4052,6 @@ impl ApplyPatchExecution {
                 .unwrap_or_else(|| serde_json::json!([])),
         )
         .ok()?;
-        let before_hash = payload
-            .get("before_hash")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let after_hash = payload
-            .get("after_hash")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let inverse_patch = payload.get("inverse_patch")?.as_str()?.to_owned();
         let diff = payload
             .get("diff")
             .and_then(serde_json::Value::as_str)
@@ -4092,9 +4079,6 @@ impl ApplyPatchExecution {
                     from_path: change.from_path,
                 })
                 .collect(),
-            before_hash,
-            after_hash,
-            inverse_patch,
             diff,
             progress,
         })
@@ -4442,9 +4426,6 @@ mod tests {
         let execution = ApplyPatchExecution::from_tool_payload(&serde_json::json!({
             "operation_id": "operation-1",
             "changes": [{"path": "new.txt", "kind": "added"}],
-            "before_hash": "before",
-            "after_hash": "after",
-            "inverse_patch": "*** Begin Patch\n*** Delete File: new.txt\n*** End Patch",
             "diff": "+new",
             "progress": ["added new.txt"]
         }))
@@ -4454,8 +4435,8 @@ mod tests {
         assert_eq!(execution.files.len(), 1);
         assert_eq!(execution.files[0].path, "new.txt");
         assert_eq!(execution.files[0].kind, PatchOpKind::Add);
-        assert_eq!(execution.before_hash, "before");
-        assert_eq!(execution.after_hash, "after");
+        assert_eq!(execution.diff, "+new");
+        assert_eq!(execution.progress, ["added new.txt"]);
     }
 
     #[test]

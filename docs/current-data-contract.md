@@ -103,6 +103,8 @@ session / execution / background-activity / notification 的状态类型只有�
 - 继承的历史可以包含仍在流式更新的父会话 part；它们只作为历史展示，不计入新分支的运行、待执行工具或待答交互。新分支的执行状态只由它自己创建的 part 决定。
 - 显式复制或导出对话记录读取完整的用户可见分页历史；聊天界面的当前加载窗口不构成导出边界。
 
+`fork` / `rewind` 不恢复工作区文件。已完成的文件修改通过项目 Git 历史恢复；`fs.apply_patch` 只输出操作标识、文件变更、diff 和进度，不提供反向补丁或撤销哈希。Git 提交、危险操作确认和发布的行为约定见 [Git 工作流程与文件恢复](git-workflow.md)。
+
 ## 配置
 
 Runtime config 只有当前 schema：

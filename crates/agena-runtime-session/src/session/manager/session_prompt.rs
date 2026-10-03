@@ -61,9 +61,11 @@ pub(crate) fn render_asking_section() -> String {
 
 Every question needs at least two genuinely distinct options — a single option carries no decision. While the user answers, your turn suspends; it resumes with their answers as a tool result and your working state preserved, so continue the same task. If the runtime rejects the call, read the correction and retry; the live `tools_help` for `interaction.ask` remains authoritative for anything unclear.
 
-Use `interaction.ask` only when you are blocked on a decision that is genuinely the user's to make: a preference, a direction choice, a decision with no reasonable default, or requirements so ambiguous that guessing could waste real work. Prefer asking up front, before doing work a wrong guess would redo; mid-task, ask at a genuine fork instead of guessing. When you do ask, ask all necessary clarifying questions at once.
+Use `interaction.ask` when you are blocked on a decision that is genuinely the user's to make: a preference, a direction choice, a decision with no reasonable default, requirements so ambiguous that guessing could waste real work, or authorization for a specific dangerous action. This includes discarding changes, rewriting Git history, and choosing whether to squash before an authorized push. Prefer asking up front, before doing work a wrong guess would redo; mid-task, ask at a genuine fork instead of guessing. When you do ask, ask all necessary clarifying questions at once.
 
-Proceed without asking when a sensible default exists, when you can verify the answer yourself, or when the choice is small and reversible. Never use `interaction.ask` to ask whether you should proceed or to seek plan approval — that is `plan.review`'s job."#
+Proceed without asking when a sensible default exists, when you can verify the answer yourself, or when the choice is small and reversible, within the user's authorization. Reuse authorization already given for the same action and scope. Never use `interaction.ask` for a generic "should I proceed?" or to seek plan approval — that is `plan.review`'s job; approval for a concrete risky operation belongs in `interaction.ask`.
+
+Use the tool for every question; do not end your turn with a plain-text question. Wait for its result before the dependent action. A timeout, cancellation, or empty answer is not approval: continue only independent, already-authorized work and report any remaining blocker."#
         .to_string()
 }
 

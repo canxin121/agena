@@ -4,7 +4,7 @@
 //! modes are intentionally owned by their respective layers. They must never
 //! be encoded as alternative agent profiles.
 //!
-//! The static text below is the base system prompt, split into three parts so
+//! The static text below is the base system prompt, split into sections so
 //! `agena-runtime-session` can insert its per-session dynamic workflow
 //! sections (planning/ask/delegation criteria) immediately after the
 //! `# Plan, ask, and delegate` section via `system_prompt_with_sections`.
@@ -12,6 +12,11 @@
 //! demand by the `session.environment` tool because they can change mid-session.
 
 pub const AGENA_AGENT_ID: &str = "agena";
+
+/// Shared Git workflow, including recovery and tool-mediated authorization.
+/// This applies even when a session lacks shell or interaction capabilities:
+/// an unavailable tool must not silently waive the recovery/approval policy.
+pub const AGENA_GIT_WORKFLOW_PROMPT: &str = include_str!("git_workflow.md");
 
 /// Fixed head of the Agena identity prompt: identity through workflow decision
 /// sections. Dynamic per-session sections are inserted right after
@@ -69,7 +74,7 @@ Use tools exactly as the runtime declares them. A malformed tool call is rejecte
 
 # Plan, ask, and delegate
 
-Decide between planning, asking, and doing based on the work. Prefer planning for implementation tasks unless they are simple: plan before editing when the work is non-trivial (new features, multiple viable approaches, architectural decisions, changes touching several files, unclear requirements), and err on the side of planning when unsure. Ask the user only when a decision is genuinely theirs and no reasonable default exists; proceed when you can decide or verify yourself. Delegate bounded, independent, or read-heavy work so you keep conclusions instead of file dumps; do small tasks yourself."#;
+Decide between planning, asking, and doing based on the work. Prefer planning for implementation tasks unless they are simple: plan before editing when the work is non-trivial (new features, multiple viable approaches, architectural decisions, changes touching several files, unclear requirements), and err on the side of planning when unsure. Ask through the interaction tool when a decision belongs to the user or a specific dangerous action lacks authorization; proceed when you can decide or verify yourself. Delegate bounded, independent, or read-heavy work so you keep conclusions instead of file dumps; do small tasks yourself."#;
 
 /// Middle of the Agena identity prompt: tone through project instructions.
 pub const AGENA_CORE_PROMPT_MID: &str = r#"# Tone and style
@@ -120,6 +125,8 @@ pub fn system_prompt_with_sections(sections: &[String]) -> String {
         prompt.push_str(section);
     }
     prompt.push_str("\n\n");
+    prompt.push_str(AGENA_GIT_WORKFLOW_PROMPT.trim());
+    prompt.push_str("\n\n");
     prompt.push_str(AGENA_CORE_PROMPT_MID);
     prompt.push_str("\n\n");
     prompt.push_str(AGENA_CORE_PROMPT_TAIL);
@@ -140,6 +147,7 @@ mod tests {
         assert!(prompt.contains("# Executing actions with care"));
         assert!(prompt.contains("# Using your tools"));
         assert!(prompt.contains("# Plan, ask, and delegate"));
+        assert!(prompt.contains("# Git and file recovery"));
         assert!(prompt.contains("Prefer planning for implementation tasks unless they are simple"));
         assert!(prompt.contains("err on the side of planning when unsure"));
         assert!(prompt.contains("# Tone and style"));
@@ -222,7 +230,11 @@ mod tests {
         let prompt = system_prompt_with_sections(&sections);
         let plan = prompt.find("# Plan, ask, and delegate").expect("plan");
         let planning = prompt.find("# Planning").expect("planning");
+        let git = prompt
+            .find("# Git and file recovery")
+            .expect("git workflow");
         let tone = prompt.find("# Tone and style").expect("tone");
-        assert!(plan < planning && planning < tone);
+        assert!(plan < planning && planning < git && git < tone);
+        assert_eq!(prompt.matches(AGENA_GIT_WORKFLOW_PROMPT.trim()).count(), 1);
     }
 }

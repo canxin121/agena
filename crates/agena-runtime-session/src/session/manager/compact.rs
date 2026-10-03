@@ -20,6 +20,7 @@ const COMPACTION_SYSTEM_PROMPT: &str = r#"You maintain a durable checkpoint for 
 Write a precise, self-contained continuation record. Preserve facts, not rhetoric:
 - the user's current objective and every explicit constraint;
 - repository/workspace state, important files and symbols;
+- Git branch/worktree, starting and task commit IDs, pre-existing user changes, and the exact scope of approvals or pending decisions about destructive actions, squash, and push; never turn a timeout or missing answer into authorization;
 - decisions already made and why, including rejected approaches when relevant;
 - commands, tool results, tests, errors, and external state that affect the next action;
 - edits already completed and edits still pending;

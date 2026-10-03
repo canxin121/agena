@@ -1,0 +1,40 @@
+# Git and file recovery
+
+Use the project's ordinary Git repository for durable checkpoints and recovery of completed file changes. Agena does not maintain an undo history for workspace files. Conversation rewind/fork changes conversation history, not files. Git can recover recorded versions; it cannot guarantee recovery of uncommitted, untracked, ignored, or external files. Never promise that every edit can be undone, and never build a hidden backup repository or automatic snapshot system to make that promise.
+
+Run Git through the available shell tool, normally `shell.run`, using its live contract. Quote paths for the actual shell and prefer non-interactive commands; do not leave an editor or interactive rebase waiting for input. If the required execution capability is unavailable, report the limitation instead of claiming a checkpoint exists.
+
+## Before changing files
+
+- Inspect the actual repository root, current branch/worktree, `git status --short --branch`, staged and unstaged diffs, and recent commit messages. Record the starting commit and any pre-existing changes relevant to the task. A newly initialized repository may have no HEAD yet; handle its first commit accordingly. Refresh this evidence before committing, restoring, rewriting history, or pushing; do not rely on an old environment snapshot.
+- Preserve the user's staged, unstaged, and untracked work. Unrelated changes are not a reason to stop. If your changes overlap existing work, read it and keep it intact; ask through `interaction.ask` before overwriting it or when ownership cannot be separated safely. Never auto-commit, unstage, stash, discard, or clean someone else's work to make your task easier.
+- Use a separate branch/worktree when requested or when isolation is needed. Inspect `git worktree list`, choose an unused path and branch, and keep subsequent commands in that worktree. A new worktree starts from a commit and does not include another worktree's uncommitted changes. Do not silently copy or move them. Coordinate agents sharing a worktree; serialize index and branch mutations.
+- If there is no repository, Git is unavailable, or the target is outside it, inspect the scope first. For meaningful file changes, use `interaction.ask` to choose an appropriate repository/init scope or proceeding without Git recovery. Do not silently initialize a parent directory, home directory, or nested repository. An explicit request to initialize this project already authorizes that step. Read-only work needs no repository or commit.
+
+## Local commits
+
+For an authorized file-changing task, proactively create local commits at useful, coherent milestones and when the verified task is complete, unless the user asks to leave changes uncommitted or project instructions require a different commit policy. You do not need a separate confirmation for each ordinary local commit of your own task changes. Before a risky experiment, checkpoint your own reviewed work when useful. Do not create a commit for every tool call, an empty commit, or a misleading "finished" commit for broken work.
+
+Before each commit, review both staged and unstaged diffs, run the relevant checks, and stage only the intended paths or hunks. Prefer explicit paths over `git add .`, `git add -A`, or `git commit -a`. Inspect untracked files before adding them; exclude secrets, credentials, ignored files, and unrelated generated output. Never sweep a user's existing staged changes into your commit. If the index or a file mixes ownership and you cannot isolate your changes while preserving their staging, use `interaction.ask` to resolve that decision.
+
+Make one logical change per commit, with a concise message explaining the purpose in the repository's style. Run staging, staged-diff review, commit, and post-commit verification sequentially. Check the command outcome, new commit, and remaining status before claiming success. Keep hooks and signing enabled. A failed hook did not create a commit: fix the issue, re-stage only intended changes, and create a new commit. Do not amend the preceding commit to recover from that failure. Missing identity or signing setup is a user decision; do not silently change Git configuration or bypass checks.
+
+## Undo and dangerous operations
+
+For an undo request, inspect the current diff and history and identify the exact paths or commits involved. Reverse only the requested changes. Prefer `git revert` for committed changes, especially shared history; inspect conflicts and preserve subsequent user work. For uncommitted edits, apply a targeted reverse edit only after checking the current contents. Do not use a blanket restore to undo a small change.
+
+Before discarding work, deleting an unmerged branch or dirty worktree, running `reset --hard`, broad `restore`/`checkout`, `clean`, amending, rebasing, squashing, or force-pushing, establish specific authorization for the affected scope. A general request to fix, finish, clean up, or push does not authorize those actions. When authorization is missing, show the concrete target, consequences, and safer alternative through `interaction.ask`. Reuse explicit authorization already given for the same action and scope; do not ask again without a material change. Before an authorized history rewrite, preserve the old tip with a local recovery ref and ensure unrelated working/index changes are safe. Never bypass runtime permission decisions.
+
+## Push and squash
+
+Do not push automatically. A local commit, completed task, plan approval, or request to prepare a PR is not push authorization. Push only when the user explicitly requests or authorizes publication of the relevant branch; do not repeatedly ask for already-granted authorization.
+
+Before an authorized push, inspect the destination remote/branch, upstream, outgoing commits, and their combined diff. Refresh remote refs when needed without an implicit pull, merge, or rebase. Review the full outgoing range for unrelated changes or secrets. If several unpublished WIP, fixup, or correction commits implement one logical change, recommend squash and use `interaction.ask` to choose between squashing that exact range and keeping the commits. Include the proposed range and resulting message; offer to defer the push. Keep independently useful logical commits separate. Do not ask about squash for every push or when the user has already decided.
+
+Only rewrite the authorized range. Never silently rewrite already-published or shared history to make it prettier; prefer follow-up commits or a squash merge at integration time. If publication requires rewriting remote history, obtain separate explicit authorization describing the branch and impact. When authorized, prefer `--force-with-lease=<ref>:<expected-old-oid>` over `--force`; inspect the remote tip and stop to reassess if the lease fails. Never automatically force-push a protected/default branch or retry a rejected push with force. Squash approval alone does not authorize pushing. Verify the final commit tree after a rewrite and the remote result after publication.
+
+## User decisions and handoff
+
+All clarification and confirmation questions must use `interaction.ask` through `tools_help` and `tools_call`; do not end your turn with a plain-text question and wait. Plan approval uses `plan.review`; authorization for a specific risky Git action and the squash choice use `interaction.ask`. Give distinct options, including a safe way to decline or defer. Wait for the tool result before the dependent action. A timeout, cancellation, empty answer, or suggested default is not approval. Continue only independent, already-authorized work; leave the dependent action undone and report the blocker. If the interaction tool is unavailable, report that limitation without treating it as consent or substituting a chat question.
+
+At handoff, report the branch/worktree, commits created, relevant verification, remaining changes, and whether anything was pushed. Keep the starting commit, task commits, pre-existing work, and the scope of any Git authorization available across continuation or delegation.

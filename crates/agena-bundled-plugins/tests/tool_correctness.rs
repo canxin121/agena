@@ -423,20 +423,26 @@ fn isolated_memory_test(name: &str) -> bool {
 }
 
 #[tokio::test]
-async fn audit_patch_move_and_inverse_roundtrip_preserve_exact_file_contents() {
+async fn audit_patch_move_preserves_exact_file_contents_and_reports_the_change() {
     let f = Fixture::new().await;
     for original in ["a\nb\n", "a\nb", "a\r\nb\r\n", "\n"] {
         f.write("original.txt", original);
         let output = f
-            .patch("*** Update File: original.txt\n*** Move to: renamed.txt\n@@\n+added")
+            .patch("*** Update File: original.txt\n*** Move to: renamed.txt")
             .await
             .unwrap();
         assert!(!f.root.path().join("original.txt").exists());
-        f.call("fs.apply_patch", json!({"patch":output["inverse_patch"]}))
-            .await
-            .unwrap();
-        assert_eq!(f.read("original.txt"), original);
-        assert!(!f.root.path().join("renamed.txt").exists());
+        assert_eq!(f.read("renamed.txt"), original);
+        assert_eq!(
+            output["changes"],
+            json!([{
+                "path": "renamed.txt", "kind": "moved", "from_path": "original.txt"
+            }])
+        );
+        let execution = agena_tool::ApplyPatchExecution::from_tool_payload(&output)
+            .expect("decode the current patch payload");
+        assert!(execution.diff.contains("rename to renamed.txt"));
+        std::fs::remove_file(f.root.path().join("renamed.txt")).unwrap();
     }
 }
 
@@ -483,16 +489,116 @@ async fn audit_report_empty_findings_still_has_a_valid_outcome_summary() {
 }
 
 #[tokio::test]
-async fn audit_patch_deleted_files_restore_without_added_blank_lines_or_eol_conversion() {
+async fn audit_git_recovers_patch_and_external_edits_without_touching_unrelated_work() {
     let f = Fixture::new().await;
-    for original in ["a\r\nb\n", "last", "\n", "", "last\r"] {
-        f.write("deleted.txt", original);
-        let output = f.patch("*** Delete File: deleted.txt").await.unwrap();
-        f.call("fs.apply_patch", json!({"patch":output["inverse_patch"]}))
-            .await
-            .unwrap();
-        assert_eq!(f.read("deleted.txt"), original);
+    // Isolated Git commands model the prompted workflow, not a runtime
+    // checkpoint service. No machine-wide identity, hooks or signing config.
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(f.root.path())
+            .args([
+                "-c",
+                "user.name=Agena Test",
+                "-c",
+                "user.email=agena-test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .output()
+            .expect("run fixture git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "--quiet"]);
+    let deleted = ["a\r\nb\n", "last", "\n", "", "last\r"];
+    for (index, original) in deleted.iter().enumerate() {
+        f.write(&format!("deleted-{index}.txt"), original);
     }
+    f.write("original.txt", "original\r\n");
+    f.write("external.txt", "before\n");
+    f.write("user.txt", "user baseline\n");
+    git(&["add", "."]);
+    git(&["commit", "--quiet", "-m", "fixture baseline"]);
+    let baseline_tree = git(&["rev-parse", "HEAD^{tree}"]);
+    f.write("user.txt", "user work in progress\n");
+    f.write("untracked.txt", "keep me\n");
+
+    let mut patch = String::from(
+        "*** Update File: original.txt\n*** Move to: renamed.txt\n@@\n-original\n+updated\n*** Add File: added.txt\n+new\n",
+    );
+    for index in 0..deleted.len() {
+        patch.push_str(&format!("*** Delete File: deleted-{index}.txt\n"));
+    }
+    let output = f.patch(&patch).await.unwrap();
+    assert_eq!(output["changes"].as_array().unwrap().len(), 7);
+    for retired in ["inverse_patch", "before_hash", "after_hash"] {
+        assert!(
+            output.get(retired).is_none(),
+            "patch still advertises {retired}"
+        );
+    }
+    assert_eq!(f.read("renamed.txt"), "updated\r\n");
+    f.write("external.txt", "changed outside the patch tool\n");
+    git(&[
+        "add",
+        "--",
+        "original.txt",
+        "renamed.txt",
+        "added.txt",
+        "external.txt",
+        "deleted-0.txt",
+        "deleted-1.txt",
+        "deleted-2.txt",
+        "deleted-3.txt",
+        "deleted-4.txt",
+    ]);
+    git(&["commit", "--quiet", "-m", "task changes"]);
+    let task_commit = git(&["rev-parse", "HEAD"]);
+
+    // A user's later staged work must survive undoing the task commit.
+    git(&["add", "--", "user.txt"]);
+    git(&["revert", "--no-commit", task_commit.trim()]);
+    git(&[
+        "commit",
+        "--quiet",
+        "--only",
+        "-m",
+        "revert task changes",
+        "--",
+        "original.txt",
+        "renamed.txt",
+        "added.txt",
+        "external.txt",
+        "deleted-0.txt",
+        "deleted-1.txt",
+        "deleted-2.txt",
+        "deleted-3.txt",
+        "deleted-4.txt",
+    ]);
+    assert_eq!(git(&["rev-parse", "HEAD^{tree}"]), baseline_tree);
+    for (index, original) in deleted.iter().enumerate() {
+        assert_eq!(f.read(&format!("deleted-{index}.txt")), *original);
+    }
+    assert_eq!(f.read("original.txt"), "original\r\n");
+    assert_eq!(f.read("external.txt"), "before\n");
+    assert_eq!(f.read("user.txt"), "user work in progress\n");
+    assert_eq!(f.read("untracked.txt"), "keep me\n");
+    assert!(!f.root.path().join("renamed.txt").exists());
+    assert!(!f.root.path().join("added.txt").exists());
+    assert_eq!(git(&["diff", "--cached", "--name-only"]).trim(), "user.txt");
+    assert_eq!(
+        git(&["log", "--format=%s", "-1"]).trim(),
+        "revert task changes"
+    );
 }
 
 #[tokio::test]

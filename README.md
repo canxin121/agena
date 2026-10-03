@@ -20,6 +20,7 @@ Deployment guides:
 Engineering guides:
 
 - [Development validation](docs/development.md)
+- [Git workflow and file recovery](docs/git-workflow.md)
 - [Interactive terminal tools](docs/interactive-terminals.md)
 - [Vendor-hosted cloud tool boundary](docs/provider-hosted-tools.md)
 - [Explicit media input, cloud files and clipboard](docs/media-inputs.md)

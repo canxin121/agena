@@ -96,9 +96,6 @@ pub(crate) fn execute_tool(
                         from_path: f.from_path.clone(),
                     })
                     .collect(),
-                before_hash: Some(result.before_hash.clone()),
-                after_hash: Some(result.after_hash.clone()),
-                inverse_patch: result.inverse_patch.clone(),
                 diff: result.diff.clone(),
                 progress: result.progress.clone(),
             };

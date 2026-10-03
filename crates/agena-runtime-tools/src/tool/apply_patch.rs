@@ -3,7 +3,6 @@ use std::fs::{self, Permissions};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
 use similar::TextDiff;
 
 mod edit;
@@ -121,9 +120,6 @@ fn execute_locked(
     // mutation so a deterministic validation failure cannot partially apply.
     let prepared = prepare_operations(ops, |path| executor.resolve_target_path(path))?;
 
-    let mut before_state = String::new();
-    let mut after_state = String::new();
-    let mut inverse_sections = Vec::new();
     let mut changed_files = Vec::new();
     let mut diff_sections = Vec::new();
     let mut progress = prepared
@@ -134,9 +130,6 @@ fn execute_locked(
     for op in &prepared {
         match op {
             PreparedPatchOp::Add { path, content, .. } => {
-                before_state.push_str(&format!("A:{path}:<missing>\n"));
-                after_state.push_str(&format!("A:{path}:{content}\n"));
-                inverse_sections.push(format!("*** Delete File: {path}"));
                 diff_sections.push(render_add_diff(path, content));
                 changed_files.push(AppliedFileChange {
                     path: path.clone(),
@@ -145,9 +138,6 @@ fn execute_locked(
                 });
             }
             PreparedPatchOp::Delete { path, original, .. } => {
-                before_state.push_str(&format!("D:{path}:{original}\n"));
-                after_state.push_str(&format!("D:{path}:<deleted>\n"));
-                inverse_sections.push(render_add_file_section(path, original));
                 diff_sections.push(render_delete_diff(path, original));
                 changed_files.push(AppliedFileChange {
                     path: path.clone(),
@@ -161,9 +151,6 @@ fn execute_locked(
                 updated,
                 ..
             } => {
-                before_state.push_str(&format!("U:{path}:{original}\n"));
-                after_state.push_str(&format!("U:{path}:{updated}\n"));
-                inverse_sections.push(render_update_inverse_section(path, None, updated, original));
                 diff_sections.push(render_update_diff(path, None, original, updated));
                 changed_files.push(AppliedFileChange {
                     path: path.clone(),
@@ -178,14 +165,6 @@ fn execute_locked(
                 updated,
                 ..
             } => {
-                before_state.push_str(&format!("M:{path}:{original}\n"));
-                after_state.push_str(&format!("M:{target_path}:{updated}\n"));
-                inverse_sections.push(render_update_inverse_section(
-                    path,
-                    Some(target_path),
-                    updated,
-                    original,
-                ));
                 diff_sections.push(render_update_diff(
                     path,
                     Some(target_path),
@@ -205,17 +184,9 @@ fn execute_locked(
     progress.extend(prepared.iter().map(describe_applied_op));
 
     let operation_id = Uuid::new_v4().to_string();
-    let inverse_patch = format!(
-        "*** Begin Patch\n{}\n*** End Patch",
-        inverse_sections.join("\n")
-    );
-
     Ok(ApplyPatchExecution {
         operation_id,
         files: changed_files,
-        before_hash: sha256_hex(&before_state),
-        after_hash: sha256_hex(&after_state),
-        inverse_patch,
         diff: diff_sections.join("\n"),
         progress,
     })
@@ -374,6 +345,8 @@ fn add_transaction_bytes(total: &mut usize, bytes: usize) -> Result<(), ToolErro
 }
 
 fn commit_operations(ops: &[PreparedPatchOp]) -> Result<(), ToolError> {
+    // Best-effort cleanup of a failed tool invocation, not a durable undo
+    // history. Recovery after a successful edit belongs to the Git workflow.
     let mut committed = Vec::with_capacity(ops.len());
     for (index, op) in ops.iter().enumerate() {
         if let Err(commit_error) = commit_operation(op) {
@@ -502,48 +475,6 @@ pub(crate) fn planned_paths(text: &str) -> Result<Vec<String>, ToolError> {
     Ok(paths)
 }
 
-fn render_add_file_section(path: &str, content: &str) -> String {
-    let mut lines = vec![format!("*** Add File: {path}")];
-    for line in content.split_terminator('\n') {
-        lines.push(format!("+{line}"));
-    }
-    if !content.is_empty() && !content.ends_with('\n') {
-        lines.push("\\ No newline at end of file".into());
-    }
-    lines.join("\n")
-}
-
-fn push_inverse_lines(lines: &mut Vec<String>, prefix: char, content: &str) {
-    for line in normalize_lf(content).lines() {
-        lines.push(format!("{prefix}{line}"));
-    }
-    if !content.is_empty() && !content.ends_with('\n') {
-        lines.push("\\ No newline at end of file".into());
-    }
-}
-
-fn render_update_inverse_section(
-    original_path: &str,
-    current_path: Option<&str>,
-    now_content: &str,
-    before_content: &str,
-) -> String {
-    let mut lines = vec![format!(
-        "*** Update File: {}",
-        current_path.unwrap_or(original_path)
-    )];
-    if current_path.is_some() {
-        lines.push(format!("*** Move to: {original_path}"));
-    }
-    if now_content != before_content {
-        lines.push("@@".into());
-        push_inverse_lines(&mut lines, '-', now_content);
-        push_inverse_lines(&mut lines, '+', before_content);
-        lines.push("*** End of File".into());
-    }
-    lines.join("\n")
-}
-
 fn render_add_diff(path: &str, content: &str) -> String {
     format!(
         "diff --git a/{path} b/{path}\nnew file mode 100644\n{}",
@@ -629,30 +560,6 @@ fn read_patch_target(path: &Path) -> Result<String, ToolError> {
             path.display()
         ))
     })
-}
-
-fn normalize_lf(input: &str) -> String {
-    input.replace("\r\n", "\n")
-}
-
-fn sha256_hex(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push(nibble_to_hex((byte >> 4) & 0x0f));
-        out.push(nibble_to_hex(byte & 0x0f));
-    }
-    out
-}
-
-fn nibble_to_hex(v: u8) -> char {
-    match v {
-        0..=9 => (b'0' + v) as char,
-        10..=15 => (b'a' + (v - 10)) as char,
-        _ => '0',
-    }
 }
 
 #[cfg(test)]

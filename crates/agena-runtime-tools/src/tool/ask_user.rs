@@ -57,7 +57,7 @@ pub fn execution_from_timeout(input: &AskUserToolInput) -> ToolPayloadExecution 
     let mut view = ToolExecutionView::simple(
         "Ask user",
         "Timed out",
-        "No user response before the deadline. Continue with best judgment.",
+        "No user response before the deadline. A timeout is not approval. Continue only independent, already-authorized work; do not perform actions that required this answer.",
     );
     view.metadata
         .insert("timed_out".to_string(), "true".to_string());

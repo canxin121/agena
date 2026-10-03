@@ -28,12 +28,19 @@ export function useGitStatusPaged(opts: {
   const changesCount = computed(() => opts.status.value?.unstagedCount ?? changesList.value.length)
   const untrackedCount = computed(() => opts.status.value?.untrackedCount ?? untrackedList.value.length)
 
-  const hasMoreMerge = computed(() => mergeList.value.length < mergeCount.value)
-  const hasMoreStaged = computed(() => stagedList.value.length < stagedCount.value)
-  const hasMoreUnstaged = computed(() => changesList.value.length < changesCount.value)
-  const hasMoreUntracked = computed(() => untrackedList.value.length < untrackedCount.value)
-
   type Scope = 'staged' | 'unstaged' | 'untracked' | 'merge'
+  const pageByScope = ref<Partial<Record<Scope, { offset: number; hasMore: boolean }>>>({})
+  const hasMoreMerge = computed(() => pageByScope.value.merge?.hasMore ?? mergeList.value.length < mergeCount.value)
+  const hasMoreStaged = computed(() => pageByScope.value.staged?.hasMore ?? stagedList.value.length < stagedCount.value)
+  const hasMoreUnstaged = computed(
+    () => pageByScope.value.unstaged?.hasMore ?? changesList.value.length < changesCount.value,
+  )
+  const hasMoreUntracked = computed(
+    () => pageByScope.value.untracked?.hasMore ?? untrackedList.value.length < untrackedCount.value,
+  )
+
+  let generation = 0
+
   const pendingReloadByScope: Record<Scope, boolean> = {
     merge: false,
     staged: false,
@@ -89,6 +96,7 @@ export function useGitStatusPaged(opts: {
       return
     }
 
+    const requestGeneration = generation
     loading.value = true
     try {
       const resp = await opts.loadStatusPage({
@@ -97,14 +105,21 @@ export function useGitStatusPaged(opts: {
         offset: 0,
         limit: opts.pageSize,
       })
-      list.value = mapFiles(resp)
+      if (
+        requestGeneration === generation &&
+        latestDirectoryByScope[scope] === trimmedDirectory &&
+        !pendingReloadByScope[scope]
+      ) {
+        list.value = mapFiles(resp)
+        pageByScope.value[scope] = { offset: list.value.length, hasMore: resp.hasMore && list.value.length > 0 }
+      }
     } finally {
       loading.value = false
       if (pendingReloadByScope[scope]) {
         pendingReloadByScope[scope] = false
         const queuedDirectory = latestDirectoryByScope[scope]
         if (queuedDirectory) {
-          void reloadScopeFirstPage(queuedDirectory, scope)
+          void reloadScopeFirstPage(queuedDirectory, scope).catch(() => {})
         }
       }
     }
@@ -121,9 +136,10 @@ export function useGitStatusPaged(opts: {
     const loading = loadingForScope(scope)
 
     if (loading.value) return
+    const requestGeneration = generation
     loading.value = true
     try {
-      const offset = list.value.length
+      const offset = pageByScope.value[scope]?.offset ?? list.value.length
       const resp = await opts.loadStatusPage({
         directory: trimmedDirectory,
         scope,
@@ -131,14 +147,24 @@ export function useGitStatusPaged(opts: {
         limit: opts.pageSize,
       })
       const next = mapFiles(resp)
-      if (next.length) list.value = [...list.value, ...next]
+      if (
+        requestGeneration === generation &&
+        latestDirectoryByScope[scope] === trimmedDirectory &&
+        !pendingReloadByScope[scope]
+      ) {
+        // Progress follows server rows, including overlaps, rather than the
+        // deduplicated display length. An empty final page retires the control.
+        pageByScope.value[scope] = { offset: offset + next.length, hasMore: resp.hasMore && next.length > 0 }
+        const existing = new Set(list.value.map((file) => file.path))
+        list.value = [...list.value, ...next.filter((file) => !existing.has(file.path))]
+      }
     } finally {
       loading.value = false
       if (pendingReloadByScope[scope]) {
         pendingReloadByScope[scope] = false
         const queuedDirectory = latestDirectoryByScope[scope] || trimmedDirectory
         if (queuedDirectory) {
-          void reloadScopeFirstPage(queuedDirectory, scope)
+          void reloadScopeFirstPage(queuedDirectory, scope).catch(() => {})
         }
       }
     }
@@ -154,6 +180,8 @@ export function useGitStatusPaged(opts: {
   }
 
   function resetAll() {
+    generation++
+    pageByScope.value = {}
     mergeList.value = []
     stagedList.value = []
     changesList.value = []

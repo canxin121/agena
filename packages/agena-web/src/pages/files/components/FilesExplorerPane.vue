@@ -46,6 +46,7 @@ type InlineCreateKind = 'createFile' | 'createFolder'
 type FileActionId = 'download' | 'copy-path' | 'copy-absolute-path'
 type NodeClickModifiers = { toggle: boolean; range: boolean }
 type ExplorerTreeRow =
+  | { kind: 'more'; key: string; path: string; depth: number; loading: boolean; error: boolean }
   | { kind: 'node'; key: string; row: FlatRow }
   | { kind: 'inline-create'; key: '__inline-create__'; depth: number; createKind: InlineCreateKind }
 
@@ -66,6 +67,8 @@ const props = defineProps<{
   activeCreateDir: string
   hasRootChildren: boolean
   flattenedTree: FlatRow[]
+  moreDirectories?: Record<string, { loading: boolean; error: boolean }>
+  loadMoreDirectory?: (path: string) => Promise<void>
   deletingPaths: Set<string>
   selectedPaths: Set<string>
   multiSelectEnabled: boolean
@@ -238,6 +241,28 @@ const treeRows = computed<ExplorerTreeRow[]>(() => {
     key: row.node.path,
     row,
   }))
+
+  for (const [path, state] of Object.entries(props.moreDirectories || {})) {
+    let end = baseRows.length
+    let depth = 0
+    if (path !== props.root) {
+      const index = baseRows.findIndex(
+        (entry) => entry.kind === 'node' && entry.row.node.path === path && entry.row.isExpanded,
+      )
+      if (index < 0) continue
+      const entry = baseRows[index]!
+      if (entry.kind !== 'node') continue
+      depth = entry.row.depth + 1
+      end = index + 1
+      while (end < baseRows.length) {
+        const next = baseRows[end]!
+        if (next.kind === 'node' && next.row.depth < depth) break
+        if (next.kind === 'more' && next.depth < depth) break
+        end++
+      }
+    }
+    baseRows.splice(end, 0, { kind: 'more', key: `more:${path}`, path, depth, ...state })
+  }
 
   const kind = inlineCreateKind.value
   if (!kind) return baseRows
@@ -1255,7 +1280,19 @@ onBeforeUnmount(() => {
 
           <ul v-else class="space-y-0.5">
             <li v-for="entry in treeRows" :key="entry.key">
-              <template v-if="entry.kind === 'node'">
+              <button
+                v-if="entry.kind === 'more'"
+                type="button"
+                class="flex h-[22px] w-full items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground disabled:opacity-60"
+                :data-directory-page="entry.path"
+                :style="{ paddingLeft: `${8 + entry.depth * 14}px` }"
+                :disabled="entry.loading"
+                @click="props.loadMoreDirectory?.(entry.path)"
+              >
+                <RiLoader4Line v-if="entry.loading" class="h-3 w-3 animate-spin" />
+                {{ t(entry.loading ? 'common.loading' : entry.error ? 'common.retry' : 'common.loadMore') }}
+              </button>
+              <template v-else-if="entry.kind === 'node'">
                 <SidebarListItem
                   v-if="inlineRenamePath === entry.row.node.path"
                   as="div"

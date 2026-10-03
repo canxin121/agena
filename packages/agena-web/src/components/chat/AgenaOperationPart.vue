@@ -35,6 +35,11 @@ const inputExpanded = ref(false)
 const outputExpanded = ref(false)
 const presentationExpanded = ref(false)
 let partGeneration = 0
+const sectionControllers = new Map<ToolDetailSection, AbortController>()
+function cancelSectionRequests() {
+  for (const controller of sectionControllers.values()) controller.abort()
+  sectionControllers.clear()
+}
 const sectionValues = ref<Partial<Record<ToolDetailSection, JsonValue>>>({})
 const loadingSections = ref<Set<ToolDetailSection>>(new Set())
 const sectionErrors = ref<Partial<Record<ToolDetailSection, string>>>({})
@@ -78,11 +83,14 @@ async function loadSection(section: ToolDetailSection) {
   const partId = String(props.part.id || '').trim()
   if (!sessionId || !partId) return
   const requestGeneration = partGeneration
+  const controller = new AbortController()
+  sectionControllers.set(section, controller)
+  const timeout = setTimeout(() => controller.abort(), 30_000)
 
   loadingSections.value = new Set([...loadingSections.value, section])
   sectionErrors.value = { ...sectionErrors.value, [section]: '' }
   try {
-    const resource = await getToolPartDetail(sessionId, partId, section)
+    const resource = await getToolPartDetail(sessionId, partId, section, controller.signal)
     if (partGeneration !== requestGeneration) return
     if (resource.part_id !== Number(partId) || resource.section !== section) {
       throw new Error('The server returned a mismatched tool detail section')
@@ -95,6 +103,8 @@ async function loadSection(section: ToolDetailSection) {
       [section]: error instanceof Error ? error.message : 'Unable to load this section',
     }
   } finally {
+    clearTimeout(timeout)
+    if (sectionControllers.get(section) === controller) sectionControllers.delete(section)
     if (partGeneration === requestGeneration) {
       const next = new Set(loadingSections.value)
       next.delete(section)
@@ -135,6 +145,7 @@ watch(
   () => `${props.sessionId || ''}:${props.part.id || ''}`,
   (key) => {
     partGeneration += 1
+    cancelSectionRequests()
     if (loadedPartKey.value && loadedPartKey.value !== key) {
       sectionValues.value = {}
       loadingSections.value = new Set()
@@ -158,6 +169,7 @@ watch(
   () => props.part.status,
   () => {
     partGeneration += 1
+    cancelSectionRequests()
     sectionValues.value = {}
     loadingSections.value = new Set()
     sectionErrors.value = {}
@@ -166,6 +178,7 @@ watch(
 )
 onBeforeUnmount(() => {
   partGeneration += 1
+  cancelSectionRequests()
 })
 
 function toggleOuter() {

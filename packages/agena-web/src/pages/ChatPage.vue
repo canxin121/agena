@@ -1320,6 +1320,7 @@ const {
 // plugin display projections.  Keep the Web values as computed projections as
 // well; do not infer them from the paged transcript.
 const planProgress = ref('')
+let planRequest: { sessionId: string; controller: AbortController } | null = null
 let planRefreshTimer: number | null = null
 let planPollTimer: number | null = null
 
@@ -1342,13 +1343,20 @@ function formatBackgroundActivitySummary(kinds: string[]): string {
 
 async function refreshPlanProgress() {
   const sid = commandSessionId()
+  if (planRequest?.sessionId === sid) return
+  planRequest?.controller.abort()
+  planRequest = null
   if (!sid) {
     planProgress.value = ''
     return
   }
+  const controller = new AbortController()
+  planRequest = { sessionId: sid, controller }
+  const timeout = window.setTimeout(() => controller.abort(), 30_000)
   try {
     const response = await apiJson<JsonValue>('/api/v1/plugins/tools/invoke', {
       method: 'POST',
+      signal: controller.signal,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         plugin_id: 'agena.plan',
@@ -1357,7 +1365,7 @@ async function refreshPlanProgress() {
         session_id: Number(sid),
       }),
     })
-    if (chat.selectedSessionId !== sid) return
+    if (controller.signal.aborted || chat.selectedSessionId !== sid) return
     const payload = asRecord(asRecord(response).payload as JsonValue)
     const plan = asRecord(payload.plan as JsonValue)
     const steps = Array.isArray(plan.steps) ? plan.steps : []
@@ -1389,12 +1397,15 @@ async function refreshPlanProgress() {
       .join(' ')
   } catch {
     // Plan status is cosmetic; a plugin restart must not affect chat input.
-    planProgress.value = ''
+    if (!controller.signal.aborted && chat.selectedSessionId === sid) planProgress.value = ''
+  } finally {
+    window.clearTimeout(timeout)
+    if (planRequest?.controller === controller) planRequest = null
   }
 }
 
 function schedulePlanProgressRefresh() {
-  if (planRefreshTimer !== null) window.clearTimeout(planRefreshTimer)
+  if (planRefreshTimer !== null) return
   planRefreshTimer = window.setTimeout(() => {
     planRefreshTimer = null
     void refreshPlanProgress()
@@ -2216,6 +2227,7 @@ onMounted(async () => {
   modelSelection.applySessionSelection()
   await loadCommands()
   planPollTimer = window.setInterval(() => {
+    if (document.visibilityState === 'hidden') return
     void refreshPlanProgress()
   }, 5000)
   navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
@@ -2503,6 +2515,7 @@ onBeforeUnmount(() => {
   // the next focus change fetch the same transcript again and discard data
   // the user already loaded.  The store is intentionally kept until the app
   // lifecycle ends (or an explicit cache reset is requested).
+  planRequest?.controller.abort()
   if (planRefreshTimer !== null) {
     window.clearTimeout(planRefreshTimer)
     planRefreshTimer = null

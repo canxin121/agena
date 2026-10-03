@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 
 import EditorFindBar from '@/components/editor/EditorFindBar.vue'
 import { useMonacoFindSession } from '@/components/editor/useMonacoFindSession'
-import { loader } from '@/lib/monaco-editor'
+import { ensureMonacoReady } from '@/lib/monacoSetup'
 import type * as Monaco from 'monaco-editor'
 
 type HunkActionKind = 'stage' | 'unstage' | 'discard'
@@ -75,7 +75,6 @@ const diffEditorRef = shallowRef<Monaco.editor.IStandaloneDiffEditor | null>(nul
 const originalModelRef = shallowRef<Monaco.editor.ITextModel | null>(null)
 const modifiedModelRef = shallowRef<Monaco.editor.ITextModel | null>(null)
 
-let monacoSetup: Promise<void> | null = null
 let themeObserver: MutationObserver | null = null
 let diffUpdateListener: Monaco.IDisposable | null = null
 let modifiedLayoutListener: Monaco.IDisposable | null = null
@@ -874,45 +873,6 @@ function syncModels() {
 
   updateLineNumberOptions()
   scheduleHunkActionZoneRefresh()
-}
-
-async function ensureMonacoReady() {
-  if (monacoSetup) return monacoSetup
-  monacoSetup = (async () => {
-    const monaco = await import('monaco-editor')
-    const [
-      { default: editorWorker },
-      { default: jsonWorker },
-      { default: cssWorker },
-      { default: htmlWorker },
-      { default: tsWorker },
-    ] = await Promise.all([
-      import('monaco-editor/esm/vs/editor/editor.worker?worker'),
-      import('monaco-editor/esm/vs/language/json/json.worker?worker'),
-      import('monaco-editor/esm/vs/language/css/css.worker?worker'),
-      import('monaco-editor/esm/vs/language/html/html.worker?worker'),
-      import('monaco-editor/esm/vs/language/typescript/ts.worker?worker'),
-    ])
-
-    if (typeof self !== 'undefined') {
-      const globalScope = self as typeof globalThis & {
-        MonacoEnvironment?: { getWorker: (id: string, label: string) => Worker }
-      }
-      globalScope.MonacoEnvironment = {
-        getWorker(_id, label) {
-          if (label === 'json') return new jsonWorker()
-          if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker()
-          if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker()
-          if (label === 'typescript' || label === 'javascript') return new tsWorker()
-          return new editorWorker()
-        },
-      }
-    }
-
-    loader.config({ monaco })
-  })()
-
-  return monacoSetup
 }
 
 onMounted(async () => {

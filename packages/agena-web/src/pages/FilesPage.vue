@@ -172,6 +172,22 @@ const showGitignored = computed({
 const expandedDirs = ref<Set<string>>(new Set())
 const loadedDirs = ref<Set<string>>(new Set())
 const inFlightDirs = ref<Set<string>>(new Set())
+const directoryNextOffset = ref<Record<string, number>>({})
+const directoryLoadErrors = ref<Record<string, boolean>>({})
+const directoryRequests = new Map<string, AbortController>()
+const moreDirectories = computed(() =>
+  Object.fromEntries(
+    Object.keys(directoryNextOffset.value).map((path) => [
+      path,
+      { loading: inFlightDirs.value.has(path), error: directoryLoadErrors.value[path] === true },
+    ]),
+  ),
+)
+function cancelDirectoryRequests() {
+  for (const controller of directoryRequests.values()) controller.abort()
+  directoryRequests.clear()
+  inFlightDirs.value = new Set()
+}
 const entriesByDir = ref<Record<string, ListEntry[]>>({})
 const childrenByDir = ref<Record<string, FileNode[]>>({})
 
@@ -194,6 +210,7 @@ type FilesExplorerCacheState = {
   at: number
   loadedDirs: string[]
   entriesByDir: Record<string, ListEntry[]>
+  directoryNextOffset?: Record<string, number>
 }
 
 function storageKey(prefix: string, rootPath: string): string {
@@ -270,6 +287,12 @@ function persistExplorerNow() {
     at: Date.now(),
     loadedDirs: nextLoaded,
     entriesByDir: nextEntries,
+    directoryNextOffset: Object.fromEntries(
+      nextLoaded.flatMap((path) => {
+        const offset = directoryNextOffset.value[path]
+        return offset === undefined ? [] : [[path, offset]]
+      }),
+    ),
   }
   writeJson(sessionStorage, storageKey(STORAGE_FILES_EXPLORER_CACHE_PREFIX, base), cacheState)
 }
@@ -345,6 +368,12 @@ function restoreExplorerState(rootPath: string): boolean {
   }
 
   entriesByDir.value = nextEntries
+  directoryNextOffset.value = Object.fromEntries(
+    [...nextLoaded].flatMap((path) => {
+      const offset = cacheState.directoryNextOffset?.[path]
+      return typeof offset === 'number' && Number.isSafeInteger(offset) && offset >= 0 ? [[path, offset]] : []
+    }),
+  )
   childrenByDir.value = nextChildren
   loadedDirs.value = nextLoaded
   inFlightDirs.value = new Set()
@@ -499,6 +528,7 @@ function clearFileAutoRefreshTimer() {
 function startFileAutoRefreshTimer() {
   clearFileAutoRefreshTimer()
   fileAutoRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'hidden') return
     void runAutoFileRefreshTick()
   }, FILE_AUTO_REFRESH_INTERVAL_MS)
 }
@@ -791,6 +821,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  cancelDirectoryRequests()
   revokeRawUrl()
 })
 function formatBytes(bytes: number): string {
@@ -2022,6 +2053,14 @@ function applyExplorerRenameState(oldPath: string, newPath: string) {
   const destinationPath = normalizeTreePath(newPath)
   if (!sourcePath || !destinationPath || sourcePath === destinationPath) return
 
+  cancelDirectoryRequests()
+  directoryNextOffset.value = Object.fromEntries(
+    Object.entries(directoryNextOffset.value).map(([path, offset]) => [
+      remapPathPrefix(path, sourcePath, destinationPath),
+      offset,
+    ]),
+  )
+  directoryLoadErrors.value = {}
   const nextEntries: Record<string, ListEntry[]> = {}
   for (const [dirPathRaw, entriesRaw] of Object.entries(entriesByDir.value)) {
     const dirPath = normalizeTreePath(String(dirPathRaw || '').trim())
@@ -2071,6 +2110,11 @@ function applyExplorerDeletionState(targetPath: string) {
   const rootPath = normalizeTreePath(root.value)
   if (rootPath && normalizedTarget === rootPath) return
 
+  cancelDirectoryRequests()
+  directoryNextOffset.value = Object.fromEntries(
+    Object.entries(directoryNextOffset.value).filter(([path]) => !isSameOrDescendantPath(path, normalizedTarget)),
+  )
+  directoryLoadErrors.value = {}
   const nextEntries: Record<string, ListEntry[]> = {}
   for (const [dirPathRaw, entriesRaw] of Object.entries(entriesByDir.value)) {
     const dirPath = normalizeTreePath(String(dirPathRaw || '').trim())
@@ -2095,82 +2139,63 @@ function applyExplorerDeletionState(targetPath: string) {
   persistExplorerSoon()
 }
 
-async function loadDirectory(dirPath: string, opts?: { force?: boolean }) {
+async function loadDirectory(dirPath: string, opts?: { force?: boolean; more?: boolean }) {
   const workspaceRoot = root.value
   const normalized = normalizePath(dirPath.trim())
   if (!workspaceRoot || !normalized || !withinWorkspace(normalized, workspaceRoot)) return
-  if (!opts?.force && loadedDirs.value.has(normalized)) return
-  if (inFlightDirs.value.has(normalized)) return
-
-  inFlightDirs.value = new Set(inFlightDirs.value)
-  inFlightDirs.value.add(normalized)
-
+  if (!opts?.force && !opts?.more && loadedDirs.value.has(normalized)) return
+  if (directoryRequests.has(normalized)) {
+    if (!opts?.force) return
+    directoryRequests.get(normalized)?.abort()
+  }
+  const offset = opts?.more ? directoryNextOffset.value[normalized] : 0
+  if (offset == null) return
+  const controller = new AbortController()
+  directoryRequests.set(normalized, controller)
+  const timeout = window.setTimeout(() => controller.abort(), 30_000)
+  const isCurrent = () => root.value === workspaceRoot && directoryRequests.get(normalized) === controller
+  inFlightDirs.value = new Set([...inFlightDirs.value, normalized])
   try {
-    let offset = 0
-    let entries: ListEntry[] = opts?.force
-      ? []
-      : Array.isArray(entriesByDir.value[normalized])
-        ? entriesByDir.value[normalized]
-        : []
-    let hasMore = true
-
-    while (hasMore) {
-      const resp = (await listDirectory({
-        path: normalized,
-        respectGitignore: respectGitignore.value,
-        offset,
-        limit: DIRECTORY_PAGE_SIZE,
-      })) as ListResponse
-      if (root.value !== workspaceRoot) return
-      const page = Array.isArray(resp.entries) ? resp.entries : null
-      if (!page) break
-
-      if (offset === 0) entries = page
-      else if (page.length) entries = [...entries, ...page]
-
-      entriesByDir.value = { ...entriesByDir.value, [normalized]: entries }
-      childrenByDir.value = { ...childrenByDir.value, [normalized]: mapDirectoryEntries(normalized, entries) }
-
-      if (!page.length) break
-
-      const nextOffset =
-        typeof resp.nextOffset === 'number' && Number.isFinite(resp.nextOffset)
-          ? Math.max(0, Math.floor(resp.nextOffset))
-          : offset + page.length
-      if (nextOffset <= offset) {
-        break
-      }
-      const total = typeof resp.total === 'number' && Number.isFinite(resp.total) ? Math.max(0, resp.total) : null
-      if (typeof resp.hasMore === 'boolean') {
-        hasMore = resp.hasMore
-      } else if (total !== null) {
-        hasMore = nextOffset < total
-      } else {
-        hasMore = page.length === DIRECTORY_PAGE_SIZE
-      }
-      if (!hasMore) break
-      offset = nextOffset
-    }
-
-    if (root.value !== workspaceRoot) return
-    loadedDirs.value = new Set(loadedDirs.value)
-    loadedDirs.value.add(normalized)
+    const resp = (await listDirectory({
+      path: normalized,
+      respectGitignore: respectGitignore.value,
+      offset,
+      limit: DIRECTORY_PAGE_SIZE,
+      signal: controller.signal,
+    })) as ListResponse
+    if (!isCurrent() || controller.signal.aborted) return
+    const page = Array.isArray(resp.entries) ? resp.entries : []
+    const previous = offset > 0 ? entriesByDir.value[normalized] || [] : []
+    const existing = new Set(previous.map((entry) => entry.name))
+    const entries = [...previous, ...page.filter((entry) => !existing.has(entry.name))]
+    const nextOffset = typeof resp.nextOffset === 'number' ? resp.nextOffset : offset + page.length
+    const hasMore =
+      typeof resp.hasMore === 'boolean'
+        ? resp.hasMore
+        : typeof resp.total === 'number'
+          ? nextOffset < resp.total
+          : page.length === DIRECTORY_PAGE_SIZE
+    if (hasMore && (!page.length || !Number.isFinite(nextOffset) || nextOffset <= offset))
+      throw new Error('Directory pagination did not advance')
+    entriesByDir.value = { ...entriesByDir.value, [normalized]: entries }
+    childrenByDir.value = { ...childrenByDir.value, [normalized]: mapDirectoryEntries(normalized, entries) }
+    const next = { ...directoryNextOffset.value }
+    if (hasMore) next[normalized] = nextOffset
+    else delete next[normalized]
+    directoryNextOffset.value = next
+    directoryLoadErrors.value = { ...directoryLoadErrors.value, [normalized]: false }
+    loadedDirs.value = new Set([...loadedDirs.value, normalized])
   } catch {
-    if (root.value !== workspaceRoot) return
-    entriesByDir.value = {
-      ...entriesByDir.value,
-      [normalized]: Array.isArray(entriesByDir.value[normalized]) ? entriesByDir.value[normalized] : [],
-    }
-    childrenByDir.value = {
-      ...childrenByDir.value,
-      [normalized]: Array.isArray(childrenByDir.value[normalized]) ? childrenByDir.value[normalized] : [],
-    }
+    if (!isCurrent()) return
+    directoryNextOffset.value = { ...directoryNextOffset.value, [normalized]: offset }
+    directoryLoadErrors.value = { ...directoryLoadErrors.value, [normalized]: true }
+    if (!childrenByDir.value[normalized]) childrenByDir.value = { ...childrenByDir.value, [normalized]: [] }
   } finally {
-    inFlightDirs.value = new Set(inFlightDirs.value)
-    inFlightDirs.value.delete(normalized)
-
-    // Keep explorer state warm across navigation/reloads.
-    if (root.value === workspaceRoot) {
+    window.clearTimeout(timeout)
+    if (isCurrent()) {
+      directoryRequests.delete(normalized)
+      inFlightDirs.value = new Set(inFlightDirs.value)
+      inFlightDirs.value.delete(normalized)
       persistExplorerSoon()
     }
   }
@@ -3915,6 +3940,9 @@ async function restoreForRoot(next: string) {
   if (!pageMounted) return
 
   const seq = ++rootRestoreSeq
+  cancelDirectoryRequests()
+  directoryNextOffset.value = {}
+  directoryLoadErrors.value = {}
   openFileSeq += 1
   fileRefreshSeq += 1
   isRefreshingFile.value = false
@@ -4332,6 +4360,8 @@ onMounted(async () => {
                   :selected-file-path="highlightedPath || selectedDirectoryPath || selectedFile?.path || ''"
                   :has-root-children="hasRootChildren"
                   :flattened-tree="flattenedTree"
+                  :more-directories="moreDirectories"
+                  :load-more-directory="(path: string) => loadDirectory(path, { more: true })"
                   :deleting-paths="deletingPaths"
                   :selected-paths="selectedPaths"
                   :multi-select-enabled="filesMultiSelect.enabled.value"

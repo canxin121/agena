@@ -925,6 +925,7 @@ watch(currentDirectoryNorm, (next, prev) => {
 onMounted(() => {
   probeVisibleSessions()
   healthPollTimer = window.setInterval(() => {
+    if (document.visibilityState === 'hidden') return
     probeVisibleSessions()
   }, HEALTH_POLL_MS)
 })

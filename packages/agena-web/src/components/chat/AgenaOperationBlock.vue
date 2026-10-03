@@ -210,9 +210,22 @@ const progressPercent = computed(() =>
     </div>
 
     <div v-else-if="kind === 'media' && mediaUrl" class="space-y-2">
-      <img v-if="mediaMime.startsWith('image/')" :src="mediaUrl" alt="" class="max-h-96 max-w-full object-contain" />
-      <video v-else-if="mediaMime.startsWith('video/')" :src="mediaUrl" controls class="max-h-96 max-w-full" />
-      <audio v-else-if="mediaMime.startsWith('audio/')" :src="mediaUrl" controls class="w-full" />
+      <img
+        v-if="mediaMime.startsWith('image/')"
+        :src="mediaUrl"
+        alt=""
+        loading="lazy"
+        decoding="async"
+        class="max-h-96 max-w-full object-contain"
+      />
+      <video
+        v-else-if="mediaMime.startsWith('video/')"
+        :src="mediaUrl"
+        controls
+        preload="none"
+        class="max-h-96 max-w-full"
+      />
+      <audio v-else-if="mediaMime.startsWith('audio/')" :src="mediaUrl" controls preload="none" class="w-full" />
       <a
         v-else
         :href="mediaUrl"
@@ -229,9 +242,17 @@ const progressPercent = computed(() =>
         v-if="resourceMime.startsWith('image/') && resourceUri"
         :src="resourceUri"
         :alt="resourceTitle"
+        loading="lazy"
+        decoding="async"
         class="max-h-96 max-w-full object-contain"
       />
-      <audio v-else-if="resourceMime.startsWith('audio/') && resourceUri" :src="resourceUri" controls class="w-full" />
+      <audio
+        v-else-if="resourceMime.startsWith('audio/') && resourceUri"
+        :src="resourceUri"
+        controls
+        preload="none"
+        class="w-full"
+      />
       <a
         v-else-if="resourceUri"
         :href="resourceUri"

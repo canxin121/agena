@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 
 import {
@@ -321,20 +321,57 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
     refreshToken.value += 1
   }
 
-  async function refreshSessions() {
-    loading.value = true
-    error.value = ''
-    try {
-      const nextSessions = await listWorkspacePreviewSessions()
-      sessions.value = nextSessions
-      ensureActiveSession()
-      ensureSidebarPageInRange()
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err)
-    } finally {
-      loading.value = false
+  let refreshInFlight: Promise<void> | null = null
+  let refreshAgain = false
+  let refreshGeneration = 0
+  let lastRefreshAt = 0
+  let disposed = false
+  let refreshController: AbortController | null = null
+
+  function refreshSessions(opts?: { force?: boolean }): Promise<void> {
+    if (disposed) return Promise.resolve()
+    if (opts?.force) {
+      refreshAgain = true
+      refreshGeneration++
     }
+    if (refreshInFlight) return refreshInFlight
+    if (!opts?.force && Date.now() - lastRefreshAt < 1_000) return Promise.resolve()
+    refreshInFlight = (async () => {
+      loading.value = true
+      error.value = ''
+      do {
+        refreshAgain = false
+        const generation = refreshGeneration
+        const controller = new AbortController()
+        refreshController = controller
+        const timeout = window.setTimeout(() => controller.abort(), 30_000)
+        try {
+          const nextSessions = await listWorkspacePreviewSessions(controller.signal)
+          if (!disposed && generation === refreshGeneration) {
+            sessions.value = nextSessions
+            ensureActiveSession()
+            ensureSidebarPageInRange()
+          }
+        } catch (err) {
+          if (!disposed && generation === refreshGeneration)
+            error.value = err instanceof Error ? err.message : String(err)
+        } finally {
+          window.clearTimeout(timeout)
+          lastRefreshAt = Date.now()
+        }
+      } while (refreshAgain && !disposed)
+    })().finally(() => {
+      loading.value = false
+      refreshInFlight = null
+    })
+    return refreshInFlight
   }
+
+  onScopeDispose(() => {
+    disposed = true
+    refreshController?.abort()
+    if (viewportPersistTimer !== null) window.clearTimeout(viewportPersistTimer)
+  })
 
   async function createSession(input: {
     id: string
@@ -357,7 +394,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
       targetUrl: input.targetUrl,
       ...(input.agenaSessionId ? { agenaSessionId: input.agenaSessionId } : {}),
     })
-    await refreshSessions()
+    await refreshSessions({ force: true })
     if (input.select !== false) {
       selectSession(session.id)
       bumpRefreshToken()
@@ -378,7 +415,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
     },
   ) {
     const session = await updateWorkspacePreviewSession(sessionId, patch)
-    await refreshSessions()
+    await refreshSessions({ force: true })
     if (activeSessionId.value === session.id) bumpRefreshToken()
     return session
   }
@@ -386,7 +423,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
   async function deleteSession(sessionId: string) {
     await deleteWorkspacePreviewSession(sessionId)
     if (activeSessionId.value === sessionId) activeSessionId.value = ''
-    await refreshSessions()
+    await refreshSessions({ force: true })
     bumpRefreshToken()
   }
 
@@ -396,20 +433,20 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
       activeSessionId.value = updated.id
       bumpRefreshToken()
     }
-    await refreshSessions()
+    await refreshSessions({ force: true })
     return updated
   }
 
   async function startSession(sessionId: string) {
     const updated = await startWorkspacePreviewSession(sessionId)
-    await refreshSessions()
+    await refreshSessions({ force: true })
     if (activeSessionId.value === updated.id) bumpRefreshToken()
     return updated
   }
 
   async function stopSession(sessionId: string) {
     const updated = await stopWorkspacePreviewSession(sessionId)
-    await refreshSessions()
+    await refreshSessions({ force: true })
     if (activeSessionId.value === updated.id) bumpRefreshToken()
     return updated
   }

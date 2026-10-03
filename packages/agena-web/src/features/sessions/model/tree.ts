@@ -14,6 +14,8 @@ export type FlatTreeRow = {
   session: SessionLike
   depth: number
   isParent: boolean
+  childPage?: number
+  childPageCount?: number
   isExpanded: boolean
   rootId: string
 }

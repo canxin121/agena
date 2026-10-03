@@ -1094,6 +1094,7 @@ function startAutoRefresh() {
     pollTimer = null
   }
   pollTimer = window.setInterval(() => {
+    if (document.visibilityState === 'hidden') return
     void refreshPreview()
   }, AUTO_REFRESH_MS)
 }

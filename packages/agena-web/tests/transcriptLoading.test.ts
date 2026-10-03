@@ -195,3 +195,25 @@ test('an in-flight older fold response cannot overwrite a new streaming gap', as
     close()
   }
 })
+
+test('load all detects a multi-page cursor cycle and leaves the fold retryable', async () => {
+  let count = 0
+  const { chat, close } = harness((url) => {
+    if (url.pathname.endsWith('/folds')) {
+      count++
+      return response(page([], count === 1 ? 'before-12' : 'before-14'))
+    }
+    return response(page([3, 14, 15], null, [fold()]))
+  })
+  try {
+    await chat.refreshMessages('7')
+    const current = chat.getMessagesForSession('7')[0]!.folds![0]!
+    assert.equal(await chat.loadFoldedActivity('7', current, true), false)
+    assert.equal(count, 2)
+    assert.match(chat.foldErrorByKey[transcriptFoldKey('7', current)]!, /did not advance/)
+    assert.equal(chat.foldLoadingByKey[transcriptFoldKey('7', current)], false)
+  } finally {
+    chat.$dispose()
+    close()
+  }
+})

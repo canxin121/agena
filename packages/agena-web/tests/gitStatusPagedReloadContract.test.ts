@@ -72,3 +72,51 @@ test('useGitStatusPaged queues first-page reload while a scope is loading', asyn
   const stagedFirstPageCalls = calls.filter((item) => item.includes(':staged:0'))
   assert.equal(stagedFirstPageCalls.length, 2)
 })
+
+test('resetting or switching repositories cannot publish an obsolete Git page', async () => {
+  let release!: (value: ReturnType<typeof makeStatus>) => void
+  const paged = useGitStatusPaged({
+    gitReady: ref(true),
+    status: ref(makeStatus([], 'summary')),
+    pageSize: 10,
+    loadStatusPage: async () =>
+      new Promise((resolve) => {
+        release = resolve
+      }),
+  })
+  const old = paged.loadMore('/old', 'staged')
+  paged.resetAll()
+  release(makeStatus([{ path: 'old.txt', index: 'M', workingDir: '' }], 'staged'))
+  await old
+  assert.equal(paged.stagedList.value.length, 0)
+  assert.equal(paged.stagedListLoading.value, false)
+})
+
+test('overlapping Git pages advance by server rows and an empty page ends loading', async () => {
+  const offsets: number[] = []
+  const paged = useGitStatusPaged({
+    gitReady: ref(true),
+    status: ref({ ...makeStatus([], 'summary'), stagedCount: 100 }),
+    pageSize: 2,
+    loadStatusPage: async ({ offset, scope }) => {
+      offsets.push(offset)
+      const paths = offset === 0 ? ['a', 'b'] : offset === 2 ? ['b', 'c'] : []
+      return {
+        ...makeStatus(
+          paths.map((path) => ({ path, index: 'M', workingDir: '' })),
+          scope,
+        ),
+        hasMore: true,
+      }
+    },
+  })
+  await paged.loadMore('/repo', 'staged')
+  await paged.loadMore('/repo', 'staged')
+  await paged.loadMore('/repo', 'staged')
+  assert.deepEqual(offsets, [0, 2, 4])
+  assert.deepEqual(
+    paged.stagedList.value.map((file) => file.path),
+    ['a', 'b', 'c'],
+  )
+  assert.equal(paged.hasMoreStaged.value, false)
+})

@@ -653,6 +653,9 @@ export async function listSessions(opts?: {
   parentId?: number | string
   roots?: boolean
   excludeSubagents?: boolean
+  offset?: number
+  bucket?: 'pinned' | 'favorite' | 'running' | 'attention' | 'recent'
+  includeTotal?: boolean
   signal?: AbortSignal
 }): Promise<SessionListResponse> {
   const params: string[] = []
@@ -674,6 +677,9 @@ export async function listSessions(opts?: {
   if (typeof opts?.excludeSubagents === 'boolean') {
     params.push(`exclude_subagents=${opts.excludeSubagents ? 'true' : 'false'}`)
   }
+  if (opts?.offset) params.push(`offset=${Math.max(0, Math.floor(opts.offset))}`)
+  if (opts?.bucket) params.push(`bucket=${encodeURIComponent(opts.bucket)}`)
+  if (opts?.includeTotal) params.push('include_total=true')
   const suffix = params.length ? `?${params.join('&')}` : ''
 
   const payload = await apiJson<JsonValue>(
@@ -877,12 +883,14 @@ export async function getToolPartDetail(
   sessionId: string,
   partId: string,
   section: ToolDetailSection,
+  signal?: AbortSignal,
 ): Promise<ToolDetailResource> {
   const sid = String(sessionId || '').trim()
   const pid = String(partId || '').trim()
   if (!sid || !pid) throw new Error('A session id and part id are required')
   return await apiJson<ToolDetailResource>(
     `/api/v1/sessions/${encodeURIComponent(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
+    signal ? { signal } : undefined,
   )
 }
 
@@ -907,6 +915,7 @@ export async function listMessages(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
     `/api/v1/sessions/${encodeURIComponent(sid)}/transcript?${params.toString()}`,
+    { signal: AbortSignal.timeout(30_000) },
   )
   const folds = messageFoldsFromWire(parts.folds)
   if (typeof parts.user_message_count !== 'number' || !Number.isFinite(parts.user_message_count)) {
@@ -932,6 +941,7 @@ export async function listSessionMessages(sessionId: string): Promise<MessageEnt
     if (cursor) params.set('cursor', cursor)
     const page = await apiJson<AgenaSessionParts>(
       `/api/v1/sessions/${encodeURIComponent(sid)}/parts?${params.toString()}`,
+      { signal: AbortSignal.timeout(30_000) },
     )
     for (const part of page.parts) parts.set(part.part_id, part)
     if (!page.page?.has_more) break
@@ -960,6 +970,7 @@ export async function listTranscriptRunParts(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
     `/api/v1/sessions/${encodeURIComponent(sid)}/transcript/runs/${encodeURIComponent(String(runId))}?${params.toString()}`,
+    { signal: AbortSignal.timeout(30_000) },
   )
   return {
     entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], [], [runId]),
@@ -983,6 +994,7 @@ export async function listTranscriptFoldParts(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
     `/api/v1/sessions/${encodeURIComponent(sid)}/transcript/folds?${params.toString()}`,
+    { signal: AbortSignal.timeout(30_000) },
   )
   return {
     entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], [], ids),

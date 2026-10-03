@@ -351,8 +351,14 @@ function normalizeState(next: TerminalUiState): TerminalUiState {
   }
 }
 
+let terminalStateController: AbortController | null = null
+let terminalInfoRequest: { sessionId: string; controller: AbortController } | null = null
+
 async function refreshActiveSessionInfo() {
   const sid = String(activeSessionId.value || '').trim()
+  if (terminalInfoRequest?.sessionId === sid) return
+  terminalInfoRequest?.controller.abort()
+  terminalInfoRequest = null
   if (!sid) {
     activeSessionInfo.value = null
     setTerminalStdinEnabled(false)
@@ -361,10 +367,13 @@ async function refreshActiveSessionInfo() {
     return
   }
 
+  const controller = new AbortController()
+  terminalInfoRequest = { sessionId: sid, controller }
+  const timeout = window.setTimeout(() => controller.abort(), 30_000)
   const requestId = (sessionInfoRequest += 1)
   try {
-    const info = await getTerminalSessionInfo(sid)
-    if (requestId !== sessionInfoRequest) return
+    const info = await getTerminalSessionInfo(sid, controller.signal)
+    if (controller.signal.aborted || requestId !== sessionInfoRequest) return
     if (activeSessionId.value !== sid) return
 
     activeSessionInfo.value = info
@@ -381,10 +390,17 @@ async function refreshActiveSessionInfo() {
     scheduleResize()
   } catch {
     // peek errors should not block the dock panel
+  } finally {
+    window.clearTimeout(timeout)
+    if (terminalInfoRequest?.controller === controller) terminalInfoRequest = null
   }
 }
 
 async function refreshState(opts?: { silent?: boolean }) {
+  if (terminalStateController) return
+  const controller = new AbortController()
+  terminalStateController = controller
+  const timeout = window.setTimeout(() => controller.abort(), 30_000)
   const silent = opts?.silent === true
   if (!silent) {
     refreshing.value = true
@@ -394,7 +410,8 @@ async function refreshState(opts?: { silent?: boolean }) {
   }
 
   try {
-    const next = await getTerminalUiState()
+    const next = await getTerminalUiState(controller.signal)
+    if (controller.signal.aborted) return
     uiState.value = normalizeState(next)
     if (!activeSessionId.value) {
       closeStream()
@@ -403,14 +420,23 @@ async function refreshState(opts?: { silent?: boolean }) {
       status.value = 'disconnected'
     }
   } catch (err) {
+    if (controller.signal.aborted) return
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    loading.value = false
-    refreshing.value = false
+    window.clearTimeout(timeout)
+    if (terminalStateController === controller) {
+      terminalStateController = null
+      loading.value = false
+      refreshing.value = false
+    }
   }
 }
 
 async function updateState(next: TerminalUiState) {
+  terminalStateController?.abort()
+  terminalStateController = null
+  loading.value = false
+  refreshing.value = false
   const saved = await putTerminalUiState(next)
   uiState.value = normalizeState(saved)
 }
@@ -577,6 +603,7 @@ function startPolling() {
     pollTimer = null
   }
   pollTimer = window.setInterval(() => {
+    if (document.visibilityState === 'hidden') return
     void refreshState({ silent: true })
     void refreshActiveSessionInfo()
   }, 5000)
@@ -636,6 +663,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  terminalStateController?.abort()
+  terminalInfoRequest?.controller.abort()
   closeStream()
   if (pollTimer !== null) {
     window.clearInterval(pollTimer)

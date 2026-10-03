@@ -13,9 +13,9 @@ const favoriteFooterSource = readFileSync(
 
 test('sidebar projects durable favorites into a first-class paged section', () => {
   assert.ok(storeSource.includes("type SidebarFooterKind = 'pinned' | 'favorite' | 'recent' | 'running'"))
-  assert.ok(storeSource.includes('if (session.favorite === true) overview.favorites.push(session)'))
+  assert.ok(storeSource.includes('loadSidebarSessionPage({ bucket: kind, signal }'))
   assert.ok(storeSource.includes('favoriteFooterView'))
-  assert.ok(storeSource.includes('favoriteFooter: footerView(overview.favorites, uiPrefs.value.favoriteSessionsPage)'))
+  assert.ok(storeSource.includes("['pinned', 'favorite', 'recent', 'running']"))
   assert.ok(storeSource.includes("command.kind === 'favorite'"))
   assert.ok(sidebarSource.includes("commandSetFooterOpen('favorite'"))
   assert.ok(sidebarSource.includes("commandSetFooterPage('favorite'"))

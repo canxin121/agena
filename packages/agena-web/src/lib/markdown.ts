@@ -195,10 +195,10 @@ function renderEmbeddedMediaFromImage(kind: 'video' | 'audio', src: string, titl
   const ariaAttr = alt ? ` aria-label="${escapeHtml(alt)}"` : ''
 
   if (kind === 'video') {
-    return `<video class="oc-md-media oc-md-media--video" controls preload="metadata"${titleAttr}${ariaAttr}><source src="${srcEsc}" /></video>`
+    return `<video class="oc-md-media oc-md-media--video" controls preload="none"${titleAttr}${ariaAttr}><source src="${srcEsc}" /></video>`
   }
 
-  return `<audio class="oc-md-media oc-md-media--audio" controls preload="metadata"${titleAttr}${ariaAttr}><source src="${srcEsc}" /></audio>`
+  return `<audio class="oc-md-media oc-md-media--audio" controls preload="none"${titleAttr}${ariaAttr}><source src="${srcEsc}" /></audio>`
 }
 
 const md = new MarkdownIt({
@@ -246,6 +246,11 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
     }
 
     token.attrSet('decoding', 'async')
+    token.attrSet('loading', 'lazy')
+    // Never put the real source into v-html before the visibility observer
+    // runs: the browser may start downloading it immediately on insertion.
+    token.attrSet('data-oc-md-raw-src', src)
+    token.attrSet('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==')
   }
 
   if (defaultImage) return defaultImage(tokens, idx, options, env, self)

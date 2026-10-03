@@ -29,10 +29,11 @@ test('Agena session lifecycle states stay canonical tagged SessionState values',
   assert.equal(stateSnapshotFromAgenaSession({ state: { kind: 'ready', data: {} } }).state.kind, 'ready')
 })
 
-test('sidebar uses cursor pagination and hydrates workspaces outside the visible page', () => {
+test('sidebar uses bounded server pagination and hydrates workspaces outside the visible page', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/stores/directorySessionStore.ts'), 'utf8')
-  assert.ok(source.includes('excludeSubagents: true'))
-  assert.ok(source.includes('seenCursors'))
+  assert.ok(source.includes('loadSidebarSessionPage'))
+  assert.ok(source.includes('include_session_count'))
+  assert.ok(!source.includes('fetchAgenaSessions'))
   assert.ok(source.includes('await chatApi.getWorkspace(workspaceId)'))
   assert.ok(!source.includes('/api/v1/sessions/overview?'))
 })

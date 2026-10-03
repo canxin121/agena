@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 
 import * as chatApi from './chat/api'
 import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
@@ -135,6 +135,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   let refreshSessionsInFlight: Promise<void> | null = null
   const getSessionInFlightById = new Map<string, Promise<Session>>()
   const refreshMessagesRetryTimerBySession = new Map<string, number>()
+  const refreshMessagesFailuresBySession = new Map<string, number>()
   const refreshMessagesRequestSeqBySession = new Map<string, number>()
   const refreshMessagesInFlightBySession = new Map<string, Promise<void>>()
   const refreshExecutionInFlightBySession = new Map<string, Promise<void>>()
@@ -461,6 +462,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function clearMessageRefreshRetry(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return
+    refreshMessagesFailuresBySession.delete(sid)
     const timer = refreshMessagesRetryTimerBySession.get(sid)
     if (typeof timer === 'number') {
       window.clearTimeout(timer)
@@ -468,17 +470,34 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
   }
 
-  function scheduleMessageRefreshRetry(sessionId: string, delayMs: number) {
+  function scheduleMessageRefreshRetry(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return
     if (refreshMessagesRetryTimerBySession.has(sid)) return
-    const delay = Math.max(60, Math.min(10_000, Math.floor(delayMs || 180)))
+    const failures = Math.min(7, (refreshMessagesFailuresBySession.get(sid) || 0) + 1)
+    refreshMessagesFailuresBySession.set(sid, failures)
+    const delay = Math.min(30_000, 500 * 2 ** (failures - 1))
     const timer = window.setTimeout(() => {
       refreshMessagesRetryTimerBySession.delete(sid)
+      if (selectedSessionId.value !== sid || (typeof document !== 'undefined' && document.visibilityState === 'hidden'))
+        return
       void refreshMessages(sid, { silent: true }).catch(() => {})
     }, delay)
     refreshMessagesRetryTimerBySession.set(sid, timer)
   }
+
+  function resumeMessageRefresh() {
+    if (document.visibilityState === 'hidden') return
+    const sid = selectedSessionId.value
+    if (!sid || !refreshMessagesFailuresBySession.has(sid) || refreshMessagesRetryTimerBySession.has(sid)) return
+    void refreshMessages(sid, { silent: true }).catch(() => {})
+  }
+  if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', resumeMessageRefresh)
+  onScopeDispose(() => {
+    if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', resumeMessageRefresh)
+    for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
+    refreshMessagesRetryTimerBySession.clear()
+  })
 
   function upsertSessionRunConfig(sessionId: string, patch: Partial<SessionRunConfig>) {
     const sid = (sessionId || '').trim()
@@ -526,6 +545,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const limit = sessionMessageLimit(sid)
       const page = await chatApi.listMessages(sid, limit, undefined, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE)
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
+      clearMessageRefreshRetry(sid)
       const ordered = normalizeMessageList(page.entries)
       const hasLoadedOlder = historyOlderLoadedBySession.value[sid] === true
       const currentMessages = ensureSessionMessages(sid)
@@ -584,7 +604,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       // a visible empty conversation.
       const hasCurrentCache = (messagesBySession.value[sid]?.length ?? 0) > 0
       if (!authRequired && hasCurrentCache) {
-        scheduleMessageRefreshRetry(sid, 240)
+        scheduleMessageRefreshRetry(sid)
       }
       if (!hasCurrentCache && !silent) {
         setSessionMessages(sid, [])
@@ -700,8 +720,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
       let cursor: string | null = fold.nextCursor
       let loadedAny = false
       let activeFold = { ...fold }
+      const seenCursors = new Set<string>()
       const requestedPageSize = all ? 50 : normalizeTranscriptPartPageSize(pageSize)
       do {
+        if (seenCursors.has(cursor)) throw new Error('Reply pagination did not advance')
+        seenCursors.add(cursor)
         const page = await chatApi.listTranscriptFoldParts(sid, activeFold.runIds, requestedPageSize, cursor)
         if (generation !== transcriptCacheGeneration) return false
         if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor)) {
@@ -793,6 +816,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
     for (const timer of statusRefreshTimerBySession.values()) window.clearTimeout(timer)
     refreshMessagesRetryTimerBySession.clear()
+    refreshMessagesFailuresBySession.clear()
     statusRefreshTimerBySession.clear()
     refreshMessagesRequestSeqBySession.clear()
     refreshMessagesInFlightBySession.clear()

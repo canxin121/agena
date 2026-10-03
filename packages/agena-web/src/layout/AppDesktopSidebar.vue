@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -66,6 +66,7 @@ const NAV_ICONS: Record<MainTabId, Component> = {
 }
 
 const diffFileCount = ref(0)
+let diffRequest: { directory: string; controller: AbortController } | null = null
 let diffTimer: number | null = null
 
 function getRememberedSettingsRoute(): string {
@@ -85,14 +86,23 @@ function routeForTab(tabId: MainTabId): string {
 
 async function refreshDiffFileCount() {
   const dir = directoryStore.currentDirectory
+  if (diffRequest?.directory === dir) return
+  diffRequest?.controller.abort()
+  const controller = new AbortController()
+  diffRequest = { directory: dir, controller }
+  const timeout = window.setTimeout(() => controller.abort(), 30_000)
   if (!dir) {
     diffFileCount.value = 0
+    diffRequest = null
+    window.clearTimeout(timeout)
     return
   }
   try {
     const resp = await apiJson<Partial<GitStatusResponse>>(
       `/api/v1/workbench/git/status?directory=${encodeURIComponent(dir)}&summary=true`,
+      { signal: controller.signal },
     )
+    if (controller.signal.aborted || directoryStore.currentDirectory !== dir) return
     if (typeof resp?.totalFiles === 'number') {
       diffFileCount.value = resp.totalFiles
       return
@@ -100,16 +110,27 @@ async function refreshDiffFileCount() {
     const files = Array.isArray(resp?.files) ? resp.files : []
     diffFileCount.value = files.length
   } catch {
-    diffFileCount.value = 0
+    if (!controller.signal.aborted && directoryStore.currentDirectory === dir) diffFileCount.value = 0
+  } finally {
+    window.clearTimeout(timeout)
+    if (diffRequest?.controller === controller) diffRequest = null
   }
 }
 
 onMounted(() => {
   void refreshDiffFileCount()
-  diffTimer = window.setInterval(() => void refreshDiffFileCount(), 4000)
+  diffTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'hidden') void refreshDiffFileCount()
+  }, 4000)
 })
 
+watch(
+  () => directoryStore.currentDirectory,
+  () => void refreshDiffFileCount(),
+)
+
 onBeforeUnmount(() => {
+  diffRequest?.controller.abort()
   if (diffTimer !== null) {
     window.clearInterval(diffTimer)
     diffTimer = null

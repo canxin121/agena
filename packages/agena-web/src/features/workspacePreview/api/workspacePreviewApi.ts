@@ -54,9 +54,7 @@ export function normalizeWorkspacePreviewSession(value: unknown): WorkspacePrevi
   const pid = Number.isFinite(pidRaw) && pidRaw > 0 ? Math.floor(pidRaw) : undefined
 
   const agenaSessionId =
-    typeof record.agenaSessionId === 'string' && record.agenaSessionId.trim()
-      ? record.agenaSessionId.trim()
-      : undefined
+    typeof record.agenaSessionId === 'string' && record.agenaSessionId.trim() ? record.agenaSessionId.trim() : undefined
 
   return {
     id,
@@ -84,8 +82,8 @@ function normalizePreviewSessions(payload: PreviewSessionsResponse): WorkspacePr
   return sessions
 }
 
-export async function listWorkspacePreviewSessions(): Promise<WorkspacePreviewSession[]> {
-  const payload = await apiJson<PreviewSessionsResponse>('/api/v1/workbench/preview/sessions')
+export async function listWorkspacePreviewSessions(signal?: AbortSignal): Promise<WorkspacePreviewSession[]> {
+  const payload = await apiJson<PreviewSessionsResponse>('/api/v1/workbench/preview/sessions', { signal })
   return normalizePreviewSessions(payload)
 }
 

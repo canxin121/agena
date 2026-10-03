@@ -1244,6 +1244,8 @@ type ThreadSessionRow = {
   rootId: string
   isParent: boolean
   isExpanded: boolean
+  childPage?: number
+  childPageCount?: number
 }
 const statusLabelForSessionId = (sessionId: string): { label: string; dotClass: string } =>
   directorySessions.statusLabelForSessionId(sessionId)
@@ -2102,6 +2104,8 @@ function buildBackendFlattenedTree(section: DirectorySidebarView | null | undefi
         depth: Number.isFinite(Number(row?.depth)) ? Math.max(0, Math.floor(Number(row.depth))) : 0,
         isParent: row.isParent,
         isExpanded: row.isExpanded,
+        childPage: row.childPage,
+        childPageCount: row.childPageCount,
         rootId: String(row.rootId || sid).trim() || sid,
       }
     })
@@ -2540,6 +2544,10 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
             :pinnedRowsForDirectory="pinnedRowsForDirectory"
             :pagedRowsForDirectory="pagedRowsForDirectory"
             :toggleExpandedParent="toggleExpandedParent"
+            :setChildSessionPage="directorySessions.setChildSessionPage"
+            :setDirectoryPinnedPage="directorySessions.setDirectoryPinnedPage"
+            :directoryPinnedPage="(id: string) => directorySessions.directorySidebarById[id]?.pinnedPage || 0"
+            :directoryPinnedPageCount="(id: string) => directorySessions.directorySidebarById[id]?.pinnedPageCount || 1"
             :sessionRootPageCount="sessionRootPageCount"
             :sessionRootPage="sessionRootPage"
             :setSessionRootPage="

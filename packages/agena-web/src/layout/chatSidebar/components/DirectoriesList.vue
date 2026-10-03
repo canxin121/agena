@@ -132,6 +132,10 @@ const props = defineProps<{
   saveRename: () => Promise<void> | void
   cancelRename: () => void
 
+  setChildSessionPage: (directoryId: string, sessionId: string, page: number) => Promise<void>
+  setDirectoryPinnedPage: (directoryId: string, page: number) => Promise<void>
+  directoryPinnedPage: (directoryId: string) => number
+  directoryPinnedPageCount: (directoryId: string) => number
   pinnedRowsForDirectory: (directoryId: string) => ThreadSessionRow[]
   pagedRowsForDirectory: (directoryId: string) => FlatTreeRow[]
   toggleExpandedParent: (sessionId: string) => void
@@ -429,6 +433,15 @@ function sessionSelectableCount(directoryId: string): number {
                     <div class="px-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
                       {{ t('chat.sidebar.directoriesList.pinnedTitle') }}
                     </div>
+                    <SidebarPager
+                      v-if="props.directoryPinnedPageCount(directory.id) > 1"
+                      :page="props.directoryPinnedPage(directory.id)"
+                      :page-count="props.directoryPinnedPageCount(directory.id)"
+                      :disabled="props.directoryPageLoading"
+                      :prev-label="String(t('chat.sidebar.directoriesList.prevSessionsPage'))"
+                      :next-label="String(t('chat.sidebar.directoriesList.nextSessionsPage'))"
+                      @update:page="(page) => props.setDirectoryPinnedPage(directory.id, page)"
+                    />
 
                     <div
                       v-for="row in pinnedRows(directory.id)"
@@ -594,6 +607,15 @@ function sessionSelectableCount(directoryId: string): number {
                         @rename-save="props.saveRename"
                         @rename-cancel="props.cancelRename"
                         @update:sessionActionMenuQuery="(v) => emit('update:sessionActionMenuQuery', v)"
+                      />
+                      <SidebarPager
+                        v-if="row.isExpanded && (row.childPageCount || 1) > 1"
+                        :page="row.childPage || 0"
+                        :page-count="row.childPageCount || 1"
+                        :disabled="props.directoryPageLoading"
+                        :prev-label="String(t('chat.sidebar.directoriesList.prevSessionsPage'))"
+                        :next-label="String(t('chat.sidebar.directoriesList.nextSessionsPage'))"
+                        @update:page="(page) => props.setChildSessionPage(directory.id, row.id, page)"
                       />
                     </div>
                   </div>

@@ -28,6 +28,7 @@ const loading = ref(false)
 const error = ref('')
 const activePanel = ref<'mcp' | 'lsp' | null>(null)
 
+let requestController: AbortController | null = null
 let pollId: number | null = null
 let resizeObserver: ResizeObserver | null = null
 
@@ -54,14 +55,21 @@ function updateReserve() {
 }
 
 async function refresh() {
+  if (loading.value) return
+  const controller = new AbortController()
+  requestController = controller
+  const timeout = window.setTimeout(() => controller.abort(), 30_000)
   loading.value = true
   error.value = ''
   try {
-    runtime.value = await apiJson<RuntimeStatus>('/api/v1/runtime')
+    const next = await apiJson<RuntimeStatus>('/api/v1/runtime', { signal: controller.signal })
+    if (!controller.signal.aborted) runtime.value = next
   } catch (err) {
+    if (controller.signal.aborted) return
     error.value = err instanceof Error ? err.message : String(err)
     runtime.value = null
   } finally {
+    window.clearTimeout(timeout)
     loading.value = false
     await nextTick()
     updateReserve()
@@ -80,7 +88,9 @@ watch(activePanel, async () => {
 
 onMounted(() => {
   void refresh()
-  pollId = window.setInterval(() => void refresh(), 30_000)
+  pollId = window.setInterval(() => {
+    if (document.visibilityState !== 'hidden') void refresh()
+  }, 30_000)
   if (typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(updateReserve)
     if (rootEl.value) resizeObserver.observe(rootEl.value)
@@ -88,6 +98,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  requestController?.abort()
   if (pollId !== null) window.clearInterval(pollId)
   pollId = null
   resizeObserver?.disconnect()

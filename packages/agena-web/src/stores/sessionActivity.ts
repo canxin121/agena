@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 
 import { apiJson } from '../lib/api'
 import { extractSessionActivityUpdate } from '../lib/sessionActivityEvent.js'
@@ -29,15 +29,25 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
   let refreshTimer: number | null = null
+  let inFlight: Promise<void> | null = null
+  let dirty = false
+  let disposed = false
+  let eventGeneration = 0
+  let lastStartedAt = 0
+  let controller: AbortController | null = null
 
   const sessions = computed(() => Object.entries(snapshot.value))
 
   /** GET /api/v1/activities → per-session busy snapshot (active activities only). */
-  async function refresh() {
+  async function refreshInternal() {
+    const generation = eventGeneration
+    lastStartedAt = Date.now()
+    controller = new AbortController()
+    const timeout = window.setTimeout(() => controller?.abort(), 30_000)
     loading.value = true
     error.value = null
     try {
-      const list = await apiJson<ActivityItem[]>('/api/v1/activities')
+      const list = await apiJson<ActivityItem[]>('/api/v1/activities', { signal: controller.signal })
       const arr = Array.isArray(list) ? list : []
       const next: Snapshot = {}
       for (const item of arr) {
@@ -54,20 +64,38 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
           next[sid] = { type: 'busy', kinds: kind ? [...kinds, kind] : kinds }
         }
       }
-      snapshot.value = next
+      if (!disposed && generation === eventGeneration) snapshot.value = next
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err)
+      if (!disposed) error.value = err instanceof Error ? err.message : String(err)
     } finally {
+      window.clearTimeout(timeout)
       loading.value = false
     }
   }
 
+  function refresh(): Promise<void> {
+    if (disposed) return Promise.resolve()
+    if (inFlight) return inFlight
+    dirty = false
+    if (refreshTimer !== null) window.clearTimeout(refreshTimer)
+    refreshTimer = null
+    inFlight = refreshInternal().finally(() => {
+      inFlight = null
+      if (dirty) scheduleRefresh()
+    })
+    return inFlight
+  }
+
   function scheduleRefresh() {
-    if (refreshTimer !== null) return
-    refreshTimer = window.setTimeout(() => {
-      refreshTimer = null
-      void refresh()
-    }, 100)
+    dirty = true
+    if (disposed || refreshTimer !== null || inFlight) return
+    refreshTimer = window.setTimeout(
+      () => {
+        refreshTimer = null
+        void refresh()
+      },
+      Math.max(100, 500 - (Date.now() - lastStartedAt)),
+    )
   }
 
   function activityKindFromEvent(evt: SseEvent): string {
@@ -86,9 +114,13 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
     const sessionId = upd.sessionID
     const phase = upd.phase as Phase
     if (!sessionId) return
+    eventGeneration++
     const activityKind = activityKindFromEvent(evt)
     if (phase === 'idle') {
-      if (!Object.prototype.hasOwnProperty.call(snapshot.value, sessionId)) return
+      if (!Object.prototype.hasOwnProperty.call(snapshot.value, sessionId)) {
+        scheduleRefresh()
+        return
+      }
       const next = { ...snapshot.value }
       delete next[sessionId]
       snapshot.value = next
@@ -109,6 +141,12 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
     // for concurrent same-kind activities and terminal transitions.
     if (activityKind) scheduleRefresh()
   }
+
+  onScopeDispose(() => {
+    disposed = true
+    controller?.abort()
+    if (refreshTimer !== null) window.clearTimeout(refreshTimer)
+  })
 
   return { snapshot, sessions, loading, error, refresh, applyEvent }
 })

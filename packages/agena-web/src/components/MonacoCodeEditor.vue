@@ -4,7 +4,8 @@ import { useI18n } from 'vue-i18n'
 
 import EditorFindBar from '@/components/editor/EditorFindBar.vue'
 import { useMonacoFindSession } from '@/components/editor/useMonacoFindSession'
-import { VueMonacoEditor, loader } from '@/lib/monaco-editor'
+import { ensureMonacoReady } from '@/lib/monacoSetup'
+import { VueMonacoEditor } from '@/lib/monaco-editor'
 import type * as Monaco from 'monaco-editor'
 
 const props = defineProps<{
@@ -65,7 +66,7 @@ const findBarRef = ref<InstanceType<typeof EditorFindBar> | null>(null)
 let contentListener: Monaco.IDisposable | null = null
 let scrollListener: Monaco.IDisposable | null = null
 let findKeydownListener: Monaco.IDisposable | null = null
-let monacoSetup: Promise<void> | null = null
+let disposed = false
 let themeObserver: MutationObserver | null = null
 
 let inlineDecorationCollection: Monaco.editor.IEditorDecorationsCollection | null = null
@@ -482,45 +483,6 @@ function updateDiffDecorations() {
   diffDecorationCollection.set(decorations)
 }
 
-async function ensureMonacoReady() {
-  if (monacoSetup) return monacoSetup
-  monacoSetup = (async () => {
-    const monaco = await import('monaco-editor')
-    const [
-      { default: editorWorker },
-      { default: jsonWorker },
-      { default: cssWorker },
-      { default: htmlWorker },
-      { default: tsWorker },
-    ] = await Promise.all([
-      import('monaco-editor/esm/vs/editor/editor.worker?worker'),
-      import('monaco-editor/esm/vs/language/json/json.worker?worker'),
-      import('monaco-editor/esm/vs/language/css/css.worker?worker'),
-      import('monaco-editor/esm/vs/language/html/html.worker?worker'),
-      import('monaco-editor/esm/vs/language/typescript/ts.worker?worker'),
-    ])
-
-    if (typeof self !== 'undefined') {
-      const globalScope = self as typeof globalThis & {
-        MonacoEnvironment?: { getWorker: (id: string, label: string) => Worker }
-      }
-      globalScope.MonacoEnvironment = {
-        getWorker(_id, label) {
-          if (label === 'json') return new jsonWorker()
-          if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker()
-          if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker()
-          if (label === 'typescript' || label === 'javascript') return new tsWorker()
-          return new editorWorker()
-        },
-      }
-    }
-
-    loader.config({ monaco })
-  })()
-
-  return monacoSetup
-}
-
 function extname(path: string): string {
   const base = path.split('/').pop() || path
   const idx = base.lastIndexOf('.')
@@ -767,6 +729,7 @@ defineExpose({
 
 onMounted(async () => {
   await ensureMonacoReady()
+  if (disposed) return
   updateThemeFromDom()
   if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
     themeObserver = new MutationObserver(() => updateThemeFromDom())
@@ -776,6 +739,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   if (codeLensKey) {
     const registry = getCodeLensRegistry()
     clearModelCodeLenses(codeLensKey)

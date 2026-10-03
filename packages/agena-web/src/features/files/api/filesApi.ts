@@ -77,6 +77,7 @@ export type FsContentReplaceResponse = {
 }
 
 export async function listDirectory(input: {
+  signal?: AbortSignal
   path: string
   respectGitignore: boolean
   offset: number
@@ -85,6 +86,7 @@ export async function listDirectory(input: {
   const { path, respectGitignore, offset, limit } = input
   return apiJson<FsListResponse>(
     `/api/v1/workbench/fs/list?path=${encodeURIComponent(path)}&respectGitignore=${respectGitignore ? 'true' : 'false'}&offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(limit))}`,
+    { signal: input.signal },
   )
 }
 

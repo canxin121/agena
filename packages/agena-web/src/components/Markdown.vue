@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onClickOutside } from '@vueuse/core'
 import { RiListUnordered } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
+import { renderMermaid } from '@/lib/mermaidRenderer'
 import { renderMarkdown, type MarkdownUiLabels } from '@/lib/markdown'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
@@ -56,12 +57,6 @@ type MarkdownImageCacheState = {
 const MD_IMAGE_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
 const MD_IMAGE_SIZE_CACHE_STORAGE_KEY = 'agena.markdown.image-size-cache'
 const MD_IMAGE_SIZE_CACHE_LIMIT = 320
-const MD_IMAGE_META_PROBE_CONCURRENCY = 2
-const MD_IMAGE_META_PROBE_MAX_QUEUE = 96
-
-const imageMetaProbeQueue: string[] = []
-const imageMetaProbeInFlight = new Set<string>()
-let imageMetaProbeActiveCount = 0
 
 function markdownImageCacheState(): MarkdownImageCacheState {
   const g = globalThis as typeof globalThis & { __agenaMarkdownImageCacheState?: MarkdownImageCacheState }
@@ -287,6 +282,7 @@ function clearTimer() {
 }
 
 function updateNow() {
+  resetMermaid()
   if (imageObserver) {
     imageObserver.disconnect()
     imageObserver = null
@@ -402,63 +398,12 @@ function ensureMarkdownImageObserver(): IntersectionObserver | null {
     },
     {
       root: null,
-      rootMargin: '1200px 0px',
+      rootMargin: '360px 0px',
       threshold: 0.01,
     },
   )
 
   return imageObserver
-}
-
-function runMarkdownImageMetaProbe(src: string) {
-  const key = String(src || '').trim()
-  if (!key) return Promise.resolve()
-  if (cachedMarkdownImageSize(key)) return Promise.resolve()
-
-  return new Promise<void>((resolve) => {
-    const probe = new Image()
-    probe.decoding = 'async'
-    const done = () => resolve()
-    probe.onload = () => {
-      const width = Number(probe.naturalWidth)
-      const height = Number(probe.naturalHeight)
-      if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
-        rememberMarkdownImageSize(key, width, height)
-        applyCachedMarkdownImageDimensionsInRoot(key)
-      }
-      done()
-    }
-    probe.onerror = done
-    probe.src = key
-  })
-}
-
-function flushMarkdownImageMetaProbeQueue() {
-  if (typeof window === 'undefined') return
-  while (imageMetaProbeActiveCount < MD_IMAGE_META_PROBE_CONCURRENCY && imageMetaProbeQueue.length > 0) {
-    const src = String(imageMetaProbeQueue.shift() || '').trim()
-    if (!src || imageMetaProbeInFlight.has(src) || cachedMarkdownImageSize(src)) continue
-
-    imageMetaProbeActiveCount += 1
-    imageMetaProbeInFlight.add(src)
-
-    void runMarkdownImageMetaProbe(src).finally(() => {
-      imageMetaProbeInFlight.delete(src)
-      imageMetaProbeActiveCount = Math.max(0, imageMetaProbeActiveCount - 1)
-      flushMarkdownImageMetaProbeQueue()
-    })
-  }
-}
-
-function queueMarkdownImageMetaProbe(src: string) {
-  const key = String(src || '').trim()
-  if (!key) return
-  if (cachedMarkdownImageSize(key) || hasMarkdownImageLoaded(key)) return
-  if (imageMetaProbeInFlight.has(key) || imageMetaProbeQueue.includes(key)) return
-  if (imageMetaProbeQueue.length >= MD_IMAGE_META_PROBE_MAX_QUEUE) return
-
-  imageMetaProbeQueue.push(key)
-  flushMarkdownImageMetaProbeQueue()
 }
 
 function markdownImageSourceFromNode(image: HTMLImageElement): string {
@@ -484,12 +429,11 @@ function hydrateMarkdownImage(image: HTMLImageElement) {
   image.setAttribute('data-oc-md-src', src)
   image.setAttribute('decoding', 'async')
   image.setAttribute('draggable', 'false')
-  image.removeAttribute('loading')
+  image.setAttribute('loading', 'lazy')
 
   const hadCachedSize = applyCachedMarkdownImageDimensions(image, src)
   if (!hadCachedSize) {
     applyFallbackMarkdownImagePlaceholder(image)
-    queueMarkdownImageMetaProbe(src)
   }
 
   if (hasMarkdownImageLoaded(src)) {
@@ -620,107 +564,64 @@ function hashString(input: string): string {
   return (h >>> 0).toString(16)
 }
 
-type MermaidRenderResult =
-  | string
-  | {
-      svg?: string
-      bindFunctions?: (element: Element) => void
-    }
+let mermaidObserver: IntersectionObserver | null = null
+let mermaidController: AbortController | null = null
 
-type MarkdownValue = unknown
-type MarkdownRecord = Record<string, MarkdownValue>
-
-type MermaidApi = {
-  initialize: (config: MarkdownRecord) => void
-  render: (id: string, source: string) => Promise<MermaidRenderResult>
+function resetMermaid() {
+  mermaidObserver?.disconnect()
+  mermaidObserver = null
+  mermaidController?.abort()
+  mermaidController = null
 }
 
-type MermaidModule = MermaidApi & { default?: MermaidApi }
-type MermaidImport = unknown
-
-function isRecord(value: MarkdownValue): value is MarkdownRecord {
-  return typeof value === 'object' && value !== null
-}
-
-function hasMermaidApi(value: MarkdownValue): value is MermaidApi {
-  if (!isRecord(value)) return false
-  return typeof value.initialize === 'function' && typeof value.render === 'function'
-}
-
-let mermaidImportPromise: Promise<MermaidImport> | null = null
-let mermaidInitializedTheme: string | null = null
-let mermaidIdSeq = 0
-
-async function getMermaid(): Promise<MermaidApi> {
-  if (!mermaidImportPromise) {
-    mermaidImportPromise = import('mermaid')
-  }
-  const mod = await mermaidImportPromise
-  if (hasMermaidApi(mod)) return mod
-  if (isRecord(mod)) {
-    const defaultExport = (mod as MermaidModule).default
-    if (hasMermaidApi(defaultExport)) return defaultExport
-  }
-  throw new Error('Mermaid API unavailable')
-}
-
-function currentMermaidTheme(): string {
-  return document.documentElement.classList.contains('dark') ? 'dark' : 'neutral'
-}
-
-async function hydrateMermaid() {
+function hydrateMermaid() {
+  resetMermaid()
   const root = rootEl.value
   if (!root) return
-
   const blocks = Array.from(root.querySelectorAll<HTMLElement>('[data-oc-mermaidblock]'))
   if (!blocks.length) return
+  const controller = new AbortController()
+  mermaidController = controller
+  const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'neutral'
 
-  const theme = currentMermaidTheme()
-  const mermaid = await getMermaid()
-
-  if (mermaidInitializedTheme !== theme) {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme,
-      securityLevel: 'strict',
-    })
-    mermaidInitializedTheme = theme
-  }
-
-  for (const block of blocks) {
+  async function renderBlock(block: HTMLElement) {
     const srcEl = block.querySelector<HTMLElement>('[data-oc-mermaid-source]')
     const renderEl = block.querySelector<HTMLElement>('[data-oc-mermaid-render]')
-    if (!srcEl || !renderEl) continue
-
+    if (!srcEl || !renderEl) return
     const source = (srcEl.textContent || '').trim()
-    if (!source) continue
-
+    if (!source) return
     const cacheKey = `${theme}:${hashString(source)}`
-    if (block.dataset.ocMermaidHash === cacheKey && block.dataset.ocMermaidStatus === 'rendered') {
-      continue
-    }
-
+    if (block.dataset.ocMermaidHash === cacheKey && block.dataset.ocMermaidStatus === 'rendered') return
     block.dataset.ocMermaidStatus = 'pending'
-    renderEl.innerHTML = ''
-
     try {
-      const id = `oc-mermaid-${++mermaidIdSeq}`
-      const out = await mermaid.render(id, source)
+      const out = await renderMermaid(source, theme, controller.signal)
+      if (!out || controller.signal.aborted || !root?.contains(block)) return
       const svg = typeof out === 'string' ? out : out.svg
-      if (typeof svg !== 'string' || !svg.trim()) {
-        throw new Error('Mermaid render returned empty output')
-      }
+      if (!svg?.trim()) throw new Error('Mermaid render returned empty output')
       renderEl.innerHTML = svg
-      if (typeof out !== 'string') {
-        out.bindFunctions?.(renderEl)
-      }
-
+      if (typeof out !== 'string') out.bindFunctions?.(renderEl)
       block.dataset.ocMermaidHash = cacheKey
       block.dataset.ocMermaidStatus = 'rendered'
     } catch {
-      block.dataset.ocMermaidStatus = 'error'
+      if (!controller.signal.aborted) block.dataset.ocMermaidStatus = 'error'
     }
   }
+
+  if (typeof IntersectionObserver === 'undefined') {
+    for (const block of blocks) void renderBlock(block)
+    return
+  }
+  mermaidObserver = new IntersectionObserver(
+    (entries, observer) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting || controller.signal.aborted) continue
+        observer.unobserve(entry.target)
+        void renderBlock(entry.target as HTMLElement)
+      }
+    },
+    { rootMargin: '360px 0px' },
+  )
+  for (const block of blocks) mermaidObserver.observe(block)
 }
 
 function scheduleHydrateMermaid() {
@@ -831,8 +732,9 @@ onMounted(() => {
 watch(
   () => [props.mode, props.content, props.sourcePath, props.stream, props.streamDebounceMs] as const,
   () => {
-    clearTimer()
     if (props.mode !== 'markdown') {
+      resetMermaid()
+      clearTimer()
       if (imageObserver) {
         imageObserver.disconnect()
         imageObserver = null
@@ -841,12 +743,17 @@ watch(
       return
     }
     if (!props.stream) {
+      clearTimer()
       updateNow()
       scheduleHydrateMermaid()
       return
     }
+    // A continuous stream must repaint at a bounded rate instead of
+    // postponing every render until the stream becomes quiet.
+    if (timer !== null) return
     const delay = Math.max(0, Math.floor(props.streamDebounceMs || 0))
     timer = window.setTimeout(() => {
+      timer = null
       updateNow()
       scheduleHydrateMermaid()
     }, delay)
@@ -869,6 +776,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  resetMermaid()
   clearTimer()
   if (copiedTimer) {
     window.clearTimeout(copiedTimer)

@@ -150,9 +150,9 @@ export async function createTerminalSession(input: {
   return parseCreateResponse(payload)
 }
 
-export async function getTerminalSessionInfo(id: string): Promise<TerminalSessionInfo | null> {
+export async function getTerminalSessionInfo(id: string, signal?: AbortSignal): Promise<TerminalSessionInfo | null> {
   try {
-    const payload = await apiJson<JsonLike>(terminalPath(id))
+    const payload = await apiJson<JsonLike>(terminalPath(id), { signal })
     const json = asObject(payload) || {}
     return {
       sessionId: String(json.sessionId || id),
@@ -221,8 +221,8 @@ export function terminalStreamUrl(id: string, since?: number): string {
   return `${base}?since=${Math.floor(since)}`
 }
 
-export async function getTerminalUiState(): Promise<TerminalUiState> {
-  const payload = await apiJson<JsonLike>(terminalUiStatePath())
+export async function getTerminalUiState(signal?: AbortSignal): Promise<TerminalUiState> {
+  const payload = await apiJson<JsonLike>(terminalUiStatePath(), { signal })
   return parseTerminalUiState(payload)
 }
 

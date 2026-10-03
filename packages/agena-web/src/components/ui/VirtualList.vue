@@ -22,9 +22,13 @@ const overscan = computed(() => {
 })
 
 function onScroll() {
-  if (!el.value) return
-  scrollTop.value = el.value.scrollTop
+  if (scrollFrame !== null) return
+  scrollFrame = window.requestAnimationFrame(() => {
+    scrollFrame = null
+    if (el.value) scrollTop.value = el.value.scrollTop
+  })
 }
+let scrollFrame: number | null = null
 
 function measure() {
   if (!el.value) return
@@ -39,7 +43,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  if (ro && el.value) ro.unobserve(el.value)
+  if (scrollFrame !== null) window.cancelAnimationFrame(scrollFrame)
+  ro?.disconnect()
   ro = null
 })
 
@@ -123,7 +128,7 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="el" :class="['relative overflow-auto', props.class]" @scroll="onScroll">
+  <div ref="el" :class="['relative overflow-auto', props.class]" @scroll.passive="onScroll">
     <div class="relative w-full" :style="{ height: totalHeight + 'px' }">
       <div class="absolute left-0 right-0" :style="{ top: paddingTop + 'px' }">
         <template v-for="row in visible" :key="row.key">

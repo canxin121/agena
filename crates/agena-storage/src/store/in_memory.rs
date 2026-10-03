@@ -305,7 +305,11 @@ impl InMemoryEngine {
     fn in_flight_runs(&self, session_id: i64) -> Vec<InFlightRun> {
         self.ordered_parts(session_id)
             .iter()
-            .filter(|part| part.is_run_marker() && part.state.is_in_flight())
+            .filter(|part| {
+                part.origin_session_id == session_id
+                    && part.is_run_marker()
+                    && part.state.is_in_flight()
+            })
             .map(|part| InFlightRun {
                 part_id: part.part_id,
                 created_at_ms: part.created_at_ms,
@@ -2058,6 +2062,11 @@ impl PersistenceEngine for InMemoryEngine {
                 .into_iter()
                 .flat_map(|set| set.iter().copied())
                 .collect();
+            if !ids.contains(&at_part_id) {
+                return Err(StoreError::InvalidState(format!(
+                    "cutoff part {at_part_id} is not a member of session {session_id}"
+                )));
+            }
             let cutoff = parts
                 .get(&at_part_id)
                 .ok_or_else(|| StoreError::not_found(format!("cutoff part {at_part_id}")))?;
@@ -2331,7 +2340,11 @@ fn derive_state(
     parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
     let in_flight: Vec<InFlightRun> = parts
         .iter()
-        .filter(|part| part.is_run_marker() && part.state.is_in_flight())
+        .filter(|part| {
+            part.origin_session_id == session_id
+                && part.is_run_marker()
+                && part.state.is_in_flight()
+        })
         .map(|part| InFlightRun {
             part_id: part.part_id,
             created_at_ms: part.created_at_ms,
@@ -2340,7 +2353,7 @@ fn derive_state(
     let pending_interactions: Vec<PendingInteraction> = parts
         .iter()
         .filter(|part| {
-            if !part.state.is_in_flight() {
+            if part.origin_session_id != session_id || !part.state.is_in_flight() {
                 return false;
             }
             part.kind == "tool_call"
@@ -2749,6 +2762,47 @@ mod tests {
             .find(|part| part.kind == "text")
             .expect("text part");
         assert_eq!(child.state, PartState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn fork_and_rewind_reject_a_cutoff_outside_the_source_membership() {
+        let (engine, session_id) = setup().await;
+        let parent = engine.session_meta(session_id).await.unwrap();
+        let foreign = engine
+            .create_session(NewSession {
+                workspace_id: parent.workspace_id,
+                parent_id: None,
+                relation_kind: SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: "foreign".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .unwrap();
+        let sent = engine
+            .submit_user_run(
+                foreign.id,
+                vec![text_part("foreign")],
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .unwrap();
+        for rewind in [false, true] {
+            engine
+                .fork_session(
+                    session_id,
+                    sent.run_id,
+                    "invalid branch".to_owned(),
+                    rewind,
+                    engine.now_ms(),
+                )
+                .await
+                .expect_err("foreign cutoff must fail before creating a child");
+        }
+        assert_eq!(engine.list_session_tree(session_id).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -833,7 +833,7 @@ impl App {
     pub(crate) fn handle_session_rewound(
         &mut self,
         session_id: i64,
-        message_text: String,
+        message_document: agena_domain::ComposerDocument,
         target: String,
         result: UiResult<SessionExecutionResource>,
     ) {
@@ -842,9 +842,7 @@ impl App {
             Ok(execution) => {
                 let rewound_session_id = execution.session.id;
                 let rewound_message_draft = ComposerDraft {
-                    document: agena_domain::ComposerDocument(vec![
-                        agena_domain::ComposerNode::Text { text: message_text },
-                    ]),
+                    document: message_document,
                 };
                 self.set_draft_for_slot(
                     DraftSlot::Session(rewound_session_id),

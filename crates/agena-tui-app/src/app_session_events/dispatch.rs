@@ -162,10 +162,10 @@ impl App {
             }
             AppMessage::SessionRewound {
                 session_id,
-                message_text,
+                message_document,
                 target,
                 result,
-            } => self.handle_session_rewound(session_id, message_text, target, result),
+            } => self.handle_session_rewound(session_id, message_document, target, result),
             AppMessage::SessionEventArrived { session_id, live } => {
                 self.handle_session_event_arrived(session_id, live)
             }

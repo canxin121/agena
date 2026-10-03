@@ -920,6 +920,32 @@ export async function listMessages(
   }
 }
 
+/** Read the complete visible history for explicit copy/export and message lookup. */
+export async function listSessionMessages(sessionId: string): Promise<MessageEntry[]> {
+  const sid = String(sessionId || '').trim()
+  if (!sid) throw new Error('A session id is required')
+  const parts = new Map<number, AgenaPart>()
+  const cursors = new Set<string>()
+  let cursor = ''
+  for (;;) {
+    const params = new URLSearchParams({ limit: '500' })
+    if (cursor) params.set('cursor', cursor)
+    const page = await apiJson<AgenaSessionParts>(
+      `/api/v1/sessions/${encodeURIComponent(sid)}/parts?${params.toString()}`,
+    )
+    for (const part of page.parts) parts.set(part.part_id, part)
+    if (!page.page?.has_more) break
+    const next = typeof page.page.next_cursor === 'string' ? page.page.next_cursor.trim() : ''
+    if (!next || cursors.has(next)) throw new Error('Session history pagination did not advance')
+    cursors.add(next)
+    cursor = next
+  }
+  const ordered = [...parts.values()].sort(
+    (a, b) => (a.created_at_ms ?? 0) - (b.created_at_ms ?? 0) || a.part_id - b.part_id,
+  )
+  return entriesFromParts(sid, ordered)
+}
+
 /** GET /api/v1/sessions/{id}/transcript/runs/{run_id} — one expansion chunk. */
 export async function listTranscriptRunParts(
   sessionId: string,
@@ -1104,13 +1130,17 @@ export async function cancelSession(sessionId: string, executionId?: string | nu
   }
 }
 
-/** POST /api/v1/sessions/{id}/rewind — rewind to an earlier turn. */
-export async function rewindSession(sessionId: string, turnId: string): Promise<void> {
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/rewind`, {
+/** POST /api/v1/sessions/{id}/rewind — create a branch before a user message. */
+export async function rewindSession(sessionId: string, atMessageId: number): Promise<Session> {
+  if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0) throw new Error('A valid user message id is required')
+  const created = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/rewind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ turn_id: turnId }),
+    body: JSON.stringify({ at_message_id: atMessageId }),
   })
+  const session = toSession(created.session)
+  if (!session) throw new Error('Server did not return a rewound session')
+  return session
 }
 
 /** POST /api/v1/sessions/{id}/fork — clone history into a child session. */
@@ -1119,7 +1149,10 @@ export async function forkSession(
   opts?: { at_message_id?: number; title?: string },
 ): Promise<Session> {
   const body: JsonValue = {}
-  if (typeof opts?.at_message_id === 'number' && Number.isFinite(opts.at_message_id)) {
+  if (opts?.at_message_id !== undefined) {
+    if (!Number.isSafeInteger(opts.at_message_id) || opts.at_message_id <= 0) {
+      throw new Error('A valid message id is required')
+    }
     ;(body as JsonObject).at_message_id = opts.at_message_id
   }
   const title = typeof opts?.title === 'string' ? opts.title.trim() : ''
@@ -1129,7 +1162,7 @@ export async function forkSession(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const session = toSession(created)
+  const session = toSession(asRecord(created).session)
   if (!session) throw new Error('Server did not return a forked session')
   return session
 }

@@ -22,8 +22,8 @@ impl App {
     pub(crate) fn open_rewind_confirm_overlay(
         &mut self,
         session_id: i64,
-        turn_id: agena_domain::TurnId,
-        message_text: String,
+        at_message_id: i64,
+        message_document: agena_domain::ComposerDocument,
         target: String,
     ) {
         self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
@@ -38,8 +38,8 @@ impl App {
             ],
             ConfirmAction::Rewind {
                 session_id,
-                turn_id,
-                message_text,
+                at_message_id,
+                message_document,
                 target,
             },
         )));
@@ -139,8 +139,9 @@ impl App {
         agena_tui_session::session_navigation::SessionNavigationItem,
         SessionNavigationCommand,
     ) {
-        let message_text = target.message_text.clone();
-        let normalized = message_text
+        let message_document = target.message_document.clone();
+        let normalized = message_document
+            .text()
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
@@ -164,15 +165,15 @@ impl App {
         );
         (
             agena_tui_session::session_navigation::SessionNavigationItem::new(
-                format!("turn:{}", target.turn_id),
+                format!("message:{}", target.at_message_id),
                 label.clone(),
                 detail.clone(),
-                format!("{label} {detail} {}", target.turn_id),
+                format!("{label} {detail} {}", target.at_message_id),
             ),
             SessionNavigationCommand::Rewind {
                 session_id,
-                turn_id: target.turn_id,
-                message_text,
+                at_message_id: target.at_message_id,
+                message_document,
                 target: target_text,
             },
         )
@@ -461,10 +462,10 @@ impl App {
         match action {
             ConfirmAction::Rewind {
                 session_id,
-                turn_id,
-                message_text,
+                at_message_id,
+                message_document,
                 target,
-            } => self.request_session_rewind(session_id, turn_id, message_text, target),
+            } => self.request_session_rewind(session_id, at_message_id, message_document, target),
             ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
                 self.delete_permission_studio_path_rule(pattern.as_str())
             }

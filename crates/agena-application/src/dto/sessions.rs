@@ -129,16 +129,34 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for SessionReplyRequestBody<T> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Body of a session rewind request.
 pub struct SessionRewindRequestBody {
-    pub turn_id: agena_domain::TurnId,
+    pub at_message_id: i64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        SessionReplyRequestBody, SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest,
+        SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequest,
+        SessionRunRequestBody, SessionUpdateRequest,
     };
+
+    #[test]
+    fn rewind_request_requires_the_numeric_message_identity() {
+        let request = serde_json::from_value::<SessionRewindRequestBody>(serde_json::json!({
+            "at_message_id": 42,
+        }))
+        .unwrap();
+        assert_eq!(request.at_message_id, 42);
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"at_message_id": "42"}),
+            serde_json::json!({"at_message_id": 42, "unexpected": true}),
+        ] {
+            assert!(serde_json::from_value::<SessionRewindRequestBody>(value).is_err());
+        }
+    }
 
     #[test]
     fn session_update_accepts_flag_only_metadata_patches() {

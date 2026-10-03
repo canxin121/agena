@@ -112,8 +112,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const historyOlderLoadedBySession = ref<Record<string, boolean>>({})
 
   const composerDraftBySession = ref<Record<string, string>>({})
-  const pendingInputText = ref('')
-  const pendingInputParts = ref<JsonValue[]>([])
 
   const attentionBySession = ref<Record<string, AttentionEvent>>({})
   const sessionErrorBySession = ref<Record<string, SessionErrorEvent>>({})
@@ -1520,8 +1518,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function forkSession(sessionId: string, opts?: { at_message_id?: number }) {
     const sid = (sessionId || '').trim()
     if (!sid) return null
-    const atMessageId =
-      typeof opts?.at_message_id === 'number' && Number.isFinite(opts.at_message_id) ? opts.at_message_id : undefined
+    const atMessageId = opts?.at_message_id
     const created = await chatApi.forkSession(sid, atMessageId != null ? { at_message_id: atMessageId } : undefined)
     upsertSessionCache(created)
     scheduleSessionsRefresh(1200)
@@ -1532,38 +1529,26 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   async function revertToMessage(sessionId: string, messageId: string) {
     const sid = (sessionId || '').trim()
-    const mid = (messageId || '').trim()
-    if (!sid || !mid) return
-
-    // Stop any active run first. The tagged SessionState is the only source
-    // used to decide whether cancellation is meaningful.
-    const state = getSessionState(sid)
-    if (state.kind === 'running' || state.kind === 'creating' || sessionStateExecution(state)) {
-      await abortSession(sid)
+    const atMessageId = Number((messageId || '').trim())
+    if (!sid || !Number.isSafeInteger(atMessageId) || atMessageId <= 0) {
+      throw new Error('A session id and a valid user message id are required')
+    }
+    const mid = String(atMessageId)
+    let target = (messagesBySession.value[sid] ?? []).find((message) => message.info.id === mid)
+    if (!target) {
+      target = (await chatApi.listSessionMessages(sid)).find((message) => message.info.id === mid)
+    }
+    if (!target || target.info.role !== 'user' || target.info.runState !== 'completed') {
+      throw new Error('Rewind requires a completed user message in this session')
     }
 
-    // The message id is the run marker id; the turn id lives on the message.
-    const list = messagesBySession.value[sid] ?? []
-    const target = list.find((m) => String(m?.info?.id || '') === mid) ?? null
-    const turnIdRaw = target?.info?.turnId
-    const turnId = typeof turnIdRaw === 'string' ? turnIdRaw.trim() : ''
-    if (!turnId) return
-
-    await chatApi.rewindSession(sid, turnId)
-    clearMessagesHydrated(sid)
-    // Reload the timeline (server removed later parts).
-    await refreshMessages(sid, { silent: true, replace: true })
+    const created = await chatApi.rewindSession(sid, atMessageId)
+    upsertSessionCache(created)
     scheduleSessionsRefresh(1200)
+    return { session: created, message: target }
   }
 
   // ─── composer helpers ─────────────────────────────────────────────────────
-
-  function consumePendingComposer(): { text: string; parts: JsonValue[] } {
-    const value = { text: pendingInputText.value, parts: pendingInputParts.value }
-    pendingInputText.value = ''
-    pendingInputParts.value = []
-    return value
-  }
 
   function getComposerDraft(sessionId: string): string {
     const sid = (sessionId || '').trim()
@@ -1834,7 +1819,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getSessionRunConfig,
     getSessionUsage,
     cacheSessions,
-    consumePendingComposer,
     getComposerDraft,
     setComposerDraft,
     clearSessionError,

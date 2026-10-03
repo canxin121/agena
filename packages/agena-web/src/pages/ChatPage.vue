@@ -176,10 +176,21 @@ const {
   openProjectAttachDialog,
   addProjectAttachment,
 } = attachments
+const attachmentDraftsBySession = new Map<string, AttachedFile[]>()
 watch(
   () => chat.selectedSessionId,
-  () => {
+  (sid, previousSid) => {
+    const previousKey = String(previousSid || '')
+    if (attachedFiles.value.length) {
+      attachmentDraftsBySession.set(
+        previousKey,
+        attachedFiles.value.map((file) => ({ ...file })),
+      )
+    } else {
+      attachmentDraftsBySession.delete(previousKey)
+    }
     clearAttachments()
+    attachedFiles.value = (attachmentDraftsBySession.get(String(sid || '')) || []).map((file) => ({ ...file }))
   },
   { flush: 'sync' },
 )
@@ -967,10 +978,7 @@ const sessionActions = useChatSessionActions({
   sessionTitle,
   showThinking,
   copyToClipboard,
-  onSessionForked: (newId) => {
-    void router.push('/chat')
-    void chat.selectSession(newId).catch(() => {})
-  },
+  onSessionForked: (newId) => chat.selectSession(newId),
 })
 
 const {
@@ -1111,8 +1119,8 @@ function runComposerActionMenu(item: ComposerActionItem | OptionMenuItem) {
   handleSessionActionRequest(item.id)
 }
 
-async function copyToClipboard(text: string) {
-  const ok = await copyTextToClipboard(String(text || ''))
+async function copyToClipboard(text: string | Promise<string>) {
+  const ok = await copyTextToClipboard(text)
   if (!ok) throw new Error(t('common.copyFailed'))
 }
 
@@ -1683,7 +1691,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
         })) ||
         ''
       if (!requested) return
-      await chat.revertToMessage(sid, requested)
+      await handleRevertFromMessage(requested)
       return
     }
     case 'rename':

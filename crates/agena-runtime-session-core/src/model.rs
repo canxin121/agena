@@ -987,7 +987,7 @@ impl Session {
     /// Whether `part` carries an unanswered user-input ask: an in-flight
     /// `tool_call` operation whose `user_input` bucket has an awaiting record.
     fn pending_user_input_part(&self, part: &Part) -> bool {
-        if !part.state.is_in_flight() {
+        if part.origin_session_id != self.id || !part.state.is_in_flight() {
             return false;
         }
         part.kind == "tool_call"
@@ -1013,7 +1013,7 @@ impl Session {
 
     /// Whether `part` is an in-flight tool call still awaiting its result.
     fn pending_tool_call(&self, part: &Part) -> bool {
-        part.kind == "tool_call" && part.state.is_in_flight()
+        part.origin_session_id == self.id && part.kind == "tool_call" && part.state.is_in_flight()
     }
 
     // --- Derived execution state over the parts projection -----------------
@@ -1511,6 +1511,25 @@ mod parts_projection_tests {
             PartState::Pending,
             tool_call_content(&operation),
         )
+    }
+
+    #[test]
+    fn inherited_pending_tools_and_requests_are_history_in_the_branch() {
+        let parent = session_with(vec![
+            tool_call_with_ask(20, "parent-ask", false),
+            tool_call_with_permission(21, "parent-permission", false),
+        ]);
+        assert!(parent.blocked());
+        let mut branch = Session::new(2, parent.workspace_id, "branch", parent.created_at);
+        branch.parent_id = Some(parent.id);
+        branch.install_projected_parts(parent.parts().to_vec());
+        assert_eq!(branch.parts(), parent.parts());
+        assert!(!branch.blocked());
+        assert!(branch.pending_operations.is_empty());
+        assert!(branch.pending_tool_calls().next().is_none());
+        assert!(branch.pending_interactions().next().is_none());
+        assert!(branch.pending_interaction().is_none());
+        assert_eq!(branch.workflow_state(), WorkflowState::Quiescent);
     }
 
     #[test]

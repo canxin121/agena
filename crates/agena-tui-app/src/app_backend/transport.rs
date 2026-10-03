@@ -2052,16 +2052,16 @@ impl TuiBackend {
         Ok(self.client().cancel_run(session_id, execution_id).await?)
     }
 
-    pub async fn rewind_session_to_turn(
+    pub async fn rewind_session_to_message(
         &self,
         session_id: i64,
-        turn_id: agena_domain::TurnId,
+        at_message_id: i64,
     ) -> Result<SessionExecutionResource> {
         let result = self
             .client()
             .command(Command::RewindSession(RewindSessionParams {
                 session_id,
-                turn_id,
+                at_message_id,
                 expected_version: None,
             }))
             .await?;

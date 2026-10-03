@@ -349,9 +349,22 @@ impl AgenaClient {
         body: Option<&serde_json::Value>,
         accept: Option<&str>,
     ) -> Result<reqwest::Response, ClientError> {
+        self.send_request_with_headers(method, url, body, accept, reqwest::header::HeaderMap::new())
+            .await
+    }
+
+    async fn send_request_with_headers(
+        &self,
+        method: reqwest::Method,
+        url: url::Url,
+        body: Option<&serde_json::Value>,
+        accept: Option<&str>,
+        headers: reqwest::header::HeaderMap,
+    ) -> Result<reqwest::Response, ClientError> {
         let observed_generation = self.authentication.generation.load(Ordering::Acquire);
         let response = self
             .request_builder(method.clone(), url.clone(), body, accept)
+            .headers(headers.clone())
             .send()
             .await?;
         if response.status() != reqwest::StatusCode::UNAUTHORIZED {
@@ -363,6 +376,7 @@ impl AgenaClient {
         drop(response);
         Ok(self
             .request_builder(method, url, body, accept)
+            .headers(headers)
             .send()
             .await?)
     }
@@ -454,6 +468,32 @@ impl AgenaClient {
                 self.endpoint(path),
                 Some(&body),
                 None,
+            )
+            .await?;
+        self.parse_json(response).await
+    }
+
+    async fn post_json_if_match<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        expected_version: Option<i64>,
+    ) -> Result<T, ClientError> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(version) = expected_version {
+            headers.insert(
+                reqwest::header::IF_MATCH,
+                reqwest::header::HeaderValue::from_str(&format!("\"{version}\""))
+                    .expect("an integer is a valid quoted header value"),
+            );
+        }
+        let response = self
+            .send_request_with_headers(
+                reqwest::Method::POST,
+                self.endpoint(path),
+                Some(&body),
+                None,
+                headers,
             )
             .await?;
         self.parse_json(response).await
@@ -1931,12 +1971,13 @@ impl AgenaClient {
             }
             Command::RewindSession(RewindSessionParams {
                 session_id,
-                turn_id,
-                ..
+                at_message_id,
+                expected_version,
             }) => Ok(CommandResult::Execution(
-                self.post_json(
+                self.post_json_if_match(
                     &format!("/api/v1/sessions/{session_id}/rewind"),
-                    serde_json::json!({ "turn_id": turn_id }),
+                    serde_json::json!({ "at_message_id": at_message_id }),
+                    expected_version,
                 )
                 .await?,
             )),

@@ -93,6 +93,16 @@ session / execution / background-activity / notification 的状态类型只有�
 
 `awaiting_interaction` 这类 wire 字符串与 active / attention / recovery / terminal 分类都从该单一来源派生；前端帮助函数与 Rust 谓词由同一份定义校验一致。
 
+## 会话历史操作
+
+历史操作使用持久化 `run` marker 的数值 `part_id` 作为消息身份，HTTP、command、Web 与 TUI 都通过 `at_message_id` 指定目标。
+
+- `fork` 创建子会话，保留截至目标消息末尾的历史（包含目标消息）；省略目标时保留源会话的完整历史。源会话必须已有可用的历史边界。
+- `rewind` 只接受源会话中的已完成用户消息，创建只保留该消息之前历史的子会话，并把目标输入恢复到新分支的输入框。回退首条用户消息时，新分支历史为空。
+- 两种操作都返回包含新会话的 execution resource；客户端打开返回的新会话。原会话及其输入草稿继续保留，分支后续写入不会改写原会话。
+- 继承的历史可以包含仍在流式更新的父会话 part；它们只作为历史展示，不计入新分支的运行、待执行工具或待答交互。新分支的执行状态只由它自己创建的 part 决定。
+- 显式复制或导出对话记录读取完整的用户可见分页历史；聊天界面的当前加载窗口不构成导出边界。
+
 ## 配置
 
 Runtime config 只有当前 schema：

@@ -76,26 +76,19 @@ pub(crate) enum SessionNavigationCommand {
     },
     Rewind {
         session_id: i64,
-        turn_id: agena_domain::TurnId,
-        message_text: String,
+        at_message_id: i64,
+        message_document: agena_domain::ComposerDocument,
         target: String,
     },
 }
 
-/// A user-run boundary offered as a rewind target, derived from the parts
-/// projection (one `run` marker with role `user`, plus its text parts).
-///
-/// The backend rewind contract (agena-api B1) still takes
-/// `agena_domain::TurnId`; the part list carries only `part_id`. The TUI
-/// synthesizes a deterministic `TurnId` from the run marker's `part_id` (the
-/// turn identity from the current parts model) so navigation keys stay
-/// stable across refreshes. Bridging that id to the runtime's rewind target is
-/// the current session projection contract.
+/// A completed user message offered as a rewind target. The marker part id
+/// is the same message identity accepted by the server.
 #[derive(Debug, Clone)]
 pub(crate) struct RewindTarget {
-    pub(crate) turn_id: agena_domain::TurnId,
+    pub(crate) at_message_id: i64,
     pub(crate) sequence: i64,
-    pub(crate) message_text: String,
+    pub(crate) message_document: agena_domain::ComposerDocument,
     pub(crate) created_at_ms: i64,
 }
 
@@ -103,26 +96,15 @@ impl RewindTarget {
     pub(crate) fn from_run(
         marker: &agena_api::resource::SessionTranscriptPart,
         sequence: i64,
-        text: &str,
+        document: agena_domain::ComposerDocument,
     ) -> Self {
         Self {
-            turn_id: turn_id_for_run(marker.part_id),
+            at_message_id: marker.part_id,
             sequence,
-            message_text: text.trim().to_owned(),
+            message_document: document,
             created_at_ms: marker.created_at_ms,
         }
     }
-}
-
-/// Deterministic `TurnId` for a run marker. The part list carries only the
-/// run marker's `part_id` (the turn identity); the backend rewind contract
-/// still takes a `TurnId`, so one is synthesized from the part id to keep
-/// navigation keys stable across refreshes. See [`RewindTarget`].
-fn turn_id_for_run(part_id: i64) -> agena_domain::TurnId {
-    let mut bytes = [0u8; 16];
-    bytes[..8].copy_from_slice(b"agena-rw");
-    bytes[8..].copy_from_slice(&part_id.to_be_bytes());
-    agena_domain::TurnId(uuid::Uuid::from_bytes(bytes))
 }
 
 pub(crate) use agena_tui::model_chooser::{

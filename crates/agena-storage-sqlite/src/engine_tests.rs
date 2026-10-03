@@ -855,6 +855,42 @@ async fn reconcile_aborts_the_orphaned_run_atomically() {
 }
 
 #[tokio::test]
+async fn fork_and_rewind_reject_a_cutoff_outside_the_source_membership() {
+    let (engine, session_id) = setup(in_memory_db().await).await;
+    let parent = engine.session_meta(session_id).await.unwrap();
+    let foreign = engine
+        .create_session(NewSession {
+            workspace_id: parent.workspace_id,
+            parent_id: None,
+            relation_kind: SessionRelationKind::Root,
+            cutoff_part_id: None,
+            title: "foreign".to_owned(),
+            task_id: None,
+            config_json: None,
+            provider_anchors_json: None,
+        })
+        .await
+        .unwrap();
+    let sent = engine
+        .submit_user_run(foreign.id, vec![text_part("foreign")], None, 1_000_000)
+        .await
+        .unwrap();
+    for rewind in [false, true] {
+        engine
+            .fork_session(
+                session_id,
+                sent.run_id,
+                "invalid branch".to_owned(),
+                rewind,
+                1_000_000,
+            )
+            .await
+            .expect_err("foreign cutoff must fail before creating a child");
+    }
+    assert_eq!(engine.list_session_tree(session_id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn fork_copies_edges_up_to_cutoff_and_child_reads_shared_prefix() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
@@ -898,6 +934,56 @@ async fn fork_copies_edges_up_to_cutoff_and_child_reads_shared_prefix() {
         error,
         agena_storage::store::StoreError::InvalidState(_)
     ));
+}
+
+#[tokio::test]
+async fn forked_history_does_not_inherit_parent_execution_or_interaction() {
+    let db = in_memory_db().await;
+    let (engine, source_id) = setup(db.clone()).await;
+    let facade = SessionFacade::new(engine, 8);
+    let run = facade
+        .start_run(source_id, "execution", json!({}), None)
+        .await
+        .unwrap();
+    let tool = facade
+        .append_parts(
+            source_id,
+            run.run_id,
+            vec![pending_tool_call("parent question", "ask_user")],
+        )
+        .await
+        .unwrap();
+    let original = facade.load(source_id).await.unwrap();
+    let child_id = facade
+        .fork(source_id, tool[0].part_id, "branch".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(facade.load(child_id).await.unwrap().parts, original.parts);
+    let branch = facade.session_state(child_id).await.unwrap();
+    assert_eq!(branch.state, agena_storage::store::SessionState::Ready);
+    assert!(branch.active_run_id.is_none());
+    assert!(branch.pending_interaction.is_none());
+    assert!(facade.in_flight_run_ids(child_id).await.unwrap().is_empty());
+    let states = SqliteEngine::new(db)
+        .session_states(&[source_id, child_id], 1_000_000)
+        .await
+        .unwrap();
+    assert_eq!(states[&child_id], agena_storage::store::SessionState::Ready);
+    assert_eq!(
+        states[&source_id],
+        agena_storage::store::SessionState::AwaitingInteraction
+    );
+    let own = facade
+        .start_run(child_id, "execution", json!({}), None)
+        .await
+        .unwrap();
+    let child_running = facade.session_state(child_id).await.unwrap();
+    assert_eq!(
+        child_running.state,
+        agena_storage::store::SessionState::Running
+    );
+    assert_eq!(child_running.active_run_id, Some(own.run_id));
+    assert_eq!(facade.load(source_id).await.unwrap(), original);
 }
 
 #[tokio::test]

@@ -1,4 +1,26 @@
-export async function copyTextToClipboard(text: string): Promise<boolean> {
+export async function copyTextToClipboard(text: string | Promise<string>): Promise<boolean> {
+  // Start the browser write while the click still has user activation. A
+  // promised ClipboardItem lets complete-history reads finish afterwards.
+  if (typeof text !== 'string') {
+    if (
+      typeof navigator !== 'undefined' &&
+      typeof window !== 'undefined' &&
+      window.isSecureContext &&
+      typeof ClipboardItem !== 'undefined' &&
+      navigator.clipboard?.write
+    ) {
+      const blob = text.then((value) => new Blob([value], { type: 'text/plain' }))
+      // A denied write can reject before the browser consumes the item.
+      void blob.catch(() => {})
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })])
+        return true
+      } catch {
+        // Keep the text/read error available to the caller below.
+      }
+    }
+    text = await text
+  }
   const value = String(text ?? '')
   if (!value) return false
 

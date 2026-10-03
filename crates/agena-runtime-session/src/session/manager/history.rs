@@ -41,7 +41,7 @@ impl SessionManager {
         // remains a valid precise cutoff for internal callers.
         let at_part_id = match request.at_message_id {
             Some(part_id) => last_part_id_for_run_marker(source.parts(), part_id),
-            None => last_part_id_for_last_run(source.parts()),
+            None => source.parts().last().map(|part| part.part_id),
         }
         .ok_or_else(|| {
             AppError::Internal(format!(
@@ -448,21 +448,20 @@ impl SessionManager {
                 current: source.version,
             });
         }
-        let message_id = user_message_id_for_turn(&source, request.turn_id)?;
+        let message_id = request.at_message_id;
         let user_marker = source
             .parts()
             .iter()
             .find(|part| part.is_run_marker() && part.part_id == message_id)
             .ok_or_else(|| {
                 AppError::Internal(format!(
-                    "canonical turn {} has no projected user message in session {}",
-                    request.turn_id, source.id
+                    "message {message_id} is not a run marker in session {}",
+                    source.id
                 ))
             })?;
         if !is_completed_user_rewind_target(user_marker) {
             return Err(AppError::Internal(format!(
-                "rewind target must be a completed canonical user turn: {}",
-                request.turn_id
+                "rewind target must be a completed user message: {message_id}"
             )));
         }
         let title = format!("Rewind of {}", source.title);
@@ -570,65 +569,6 @@ fn user_run_id_for_execution(
     })
 }
 
-/// Inclusive storage cutoff for a session's final message: the id of the last
-/// content part of the final run, or the marker id when that run is empty.
-/// Sessions with no run markers fall back to the final part id (foreign data
-/// may hold bare content parts).
-fn last_part_id_for_last_run(parts: &[Part]) -> Option<i64> {
-    match parts.iter().rev().find(|part| part.is_run_marker()) {
-        Some(marker) => parts
-            .iter()
-            .rev()
-            .find(|part| part.run_id == Some(marker.part_id))
-            .map(|part| part.part_id)
-            .or(Some(marker.part_id)),
-        None => parts.last().map(|part| part.part_id),
-    }
-}
-
-/// Resolve the canonical user message that owns `turn_id`.
-///
-/// Assistant run markers persist the conversation UUID pair on their content
-/// (`turn_id`/`reply_id`), so the run that carries the turn id is the
-/// assistant reply. The user input of the same canonical turn is the nearest
-/// user-role run marker before that reply; user-run markers themselves do not
-/// persist the UUID pair (they are written as `{"run_kind":"user_send"}`).
-fn user_message_id_for_turn(
-    session: &Session,
-    turn_id: agena_domain::TurnId,
-) -> Result<i64, AppError> {
-    let parts = session.parts();
-    let reply_index = parts
-        .iter()
-        .position(|part| {
-            part.is_run_marker()
-                && part
-                    .content
-                    .get("turn_id")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
-                    .map(agena_domain::TurnId)
-                    == Some(turn_id)
-        })
-        .ok_or_else(|| {
-            AppError::Internal(format!(
-                "canonical turn not found in session {}: {turn_id}",
-                session.id
-            ))
-        })?;
-    parts[..reply_index]
-        .iter()
-        .rev()
-        .find(|part| part.is_run_marker() && part.role == PartRole::User)
-        .map(|part| part.part_id)
-        .ok_or_else(|| {
-            AppError::Internal(format!(
-                "canonical turn {} has no user message in session {}",
-                turn_id, session.id
-            ))
-        })
-}
-
 /// Recover every interactive request currently awaiting a reply in `session`,
 /// from the parts projection: unanswered permissions and
 /// unanswered user-input requests recorded on in-flight `tool_call` parts.
@@ -641,7 +581,10 @@ fn pending_interactive_requests_from_session(
     // Pending permissions live on the in-flight tool-call part's operation
     // authorization record (`operation.authorization.awaiting()`).
     for part in session.parts() {
-        if part.kind != "tool_call" || !part.state.is_in_flight() {
+        if part.origin_session_id != session.id
+            || part.kind != "tool_call"
+            || !part.state.is_in_flight()
+        {
             continue;
         }
         let Some(operation) = super::replies::operation_from_part(part) else {

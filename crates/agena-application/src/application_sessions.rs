@@ -11,7 +11,7 @@ use agena_api::resource::{
     PermissionReply, RunOptions, SessionExecutionResource, SessionOverviewResource,
     SessionResource, UserInputReply, WorkspaceResource,
 };
-use agena_domain::{CancellationOutcome, ComposerDocument, ExecutionId, PermissionConfig, TurnId};
+use agena_domain::{CancellationOutcome, ComposerDocument, ExecutionId, PermissionConfig};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_storage::store::SessionPartView;
 
@@ -329,10 +329,10 @@ impl Application {
         self.session_execution_resource(session_id).await
     }
 
-    pub async fn rewind_session_to_turn(
+    pub async fn rewind_session_to_message(
         &self,
         session_id: i64,
-        turn_id: TurnId,
+        at_message_id: i64,
     ) -> Result<SessionExecutionResource, ApplicationError> {
         let expected_version = self
             .get_session(session_id)
@@ -344,7 +344,7 @@ impl Application {
             .commands
             .rewind_session(SessionRewindRequest {
                 session_id,
-                turn_id,
+                at_message_id,
                 expected_version: Some(expected_version),
             })
             .await

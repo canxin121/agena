@@ -189,11 +189,9 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result =
-                crate::app_backend::operations::get_session_state(&application, session_id)
-                    .await
-                    .map(|state| rewind_targets_from_parts(&state.parts))
-                    .map_err(crate::UiFailure::from_backend);
+            let result = load_rewind_targets(&application, session_id)
+                .await
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::RewindMessagesLoaded { session_id, result })
                 .await;
@@ -251,8 +249,8 @@ impl App {
     pub(crate) fn request_session_rewind(
         &mut self,
         session_id: i64,
-        turn_id: agena_domain::TurnId,
-        message_text: String,
+        at_message_id: i64,
+        message_document: agena_domain::ComposerDocument,
         target: String,
     ) {
         self.sync_current_draft_slot();
@@ -263,13 +261,13 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = application
-                .rewind_session_to_turn(session_id, turn_id)
+                .rewind_session_to_message(session_id, at_message_id)
                 .await
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionRewound {
                     session_id,
-                    message_text,
+                    message_document,
                     target,
                     result,
                 })
@@ -702,37 +700,399 @@ use crate::{
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;
 
-/// Derive rewind picker targets from the part projection: one target per
-/// user `run` marker, with the run's text parts joined as the message preview.
-/// Mirrors the removed turn list (one target per user turn boundary).
+/// Rewind is an explicit history operation. Walk the collapsed transcript
+/// pages so the picker includes older messages without expanding tool output.
+async fn load_rewind_targets(
+    application: &crate::app_backend::TuiBackend,
+    session_id: i64,
+) -> anyhow::Result<Vec<crate::RewindTarget>> {
+    let initial = application
+        .get_session_state_with_transcript_page(session_id)
+        .await?;
+    let mut page = initial.page;
+    let mut parts = Vec::new();
+    let mut cursors = std::collections::HashSet::new();
+    loop {
+        parts.extend(page.parts);
+        if !page.has_more {
+            break;
+        }
+        let cursor = page
+            .next_cursor
+            .filter(|cursor| !cursor.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("rewind history page is missing its next cursor"))?;
+        if !cursors.insert(cursor.clone()) {
+            anyhow::bail!("rewind history cursor did not advance");
+        }
+        page = application
+            .list_session_transcript_page(session_id, 12, &cursor)
+            .await?;
+    }
+    parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
+    parts.dedup_by_key(|part| part.part_id);
+    rewind_targets_from_parts(&parts)
+}
+
+/// One target per completed user run marker. Text is selected by run_id,
+/// which also handles interleaved runs and preserves multiline input.
 fn rewind_targets_from_parts(
     parts: &[agena_api::resource::SessionTranscriptPart],
-) -> Vec<crate::RewindTarget> {
-    let mut targets = Vec::new();
-    let mut sequence = 0i64;
-    let mut current_run: Option<&agena_api::resource::SessionTranscriptPart> = None;
-    let mut run_text = String::new();
+) -> anyhow::Result<Vec<crate::RewindTarget>> {
+    let mut inputs_by_run = std::collections::HashMap::<i64, Vec<_>>::new();
     for part in parts {
-        if part.kind == "run" {
-            if let Some(marker) = current_run.take()
-                && marker.role == "user"
-            {
-                targets.push(crate::RewindTarget::from_run(marker, sequence, &run_text));
-                sequence += 1;
-            }
-            current_run = Some(part);
-            run_text = String::new();
-        } else if part.kind == "text"
-            && let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str)
+        if part.role == "user"
+            && let Some(run_id) = part.run_id
         {
-            run_text.push_str(text);
-            run_text.push('\n');
+            inputs_by_run.entry(run_id).or_default().push(part);
         }
     }
-    if let Some(marker) = current_run
-        && marker.role == "user"
-    {
-        targets.push(crate::RewindTarget::from_run(marker, sequence, &run_text));
+    parts
+        .iter()
+        .filter(|part| part.kind == "run" && part.role == "user")
+        .enumerate()
+        .filter(|(_, marker)| marker.state == "completed")
+        .map(|(index, marker)| {
+            let document = inputs_by_run
+                .get(&marker.part_id)
+                .into_iter()
+                .flatten()
+                .map(|part| rewind_composer_node(part))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(crate::RewindTarget::from_run(
+                marker,
+                index as i64 + 1,
+                agena_domain::ComposerDocument(document),
+            ))
+        })
+        .collect()
+}
+
+/// Rebuild ordered composer input from the canonical user payloads. A rewind
+/// must retain resources and command references, as well as multiline text.
+fn rewind_composer_node(
+    part: &agena_api::resource::SessionTranscriptPart,
+) -> anyhow::Result<agena_domain::ComposerNode> {
+    use agena_domain::{
+        ActivityId, ActivityPayload, ActivityProvenance, ComposerActivity, ComposerNode,
+        ResourceDelivery, ResourceKind, ResourceReference,
+    };
+    let content = &part.content;
+    if let Some(text) = content.get("text").and_then(serde_json::Value::as_str) {
+        return Ok(ComposerNode::Text {
+            text: text.to_owned(),
+        });
     }
-    targets
+    let payload = if part.kind == "skill_ref" {
+        let command = content
+            .get("skills")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|commands| commands.first())
+            .ok_or_else(|| {
+                anyhow::anyhow!("user command reference {} has no command", part.part_id)
+            })?;
+        ActivityPayload::CommandReference(serde_json::from_value(command.clone())?)
+    } else {
+        let attachment = content
+            .get("attachments")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first());
+        let source = attachment
+            .and_then(|item| item.get("source"))
+            .or_else(|| content.get("source"));
+        let path = content
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                source
+                    .and_then(|source| source.get("path"))
+                    .and_then(serde_json::Value::as_str)
+            });
+        let reference = if let Some(path) = path {
+            ResourceReference::WorkspacePath {
+                path: path.to_owned(),
+            }
+        } else if let Some(url) = source
+            .and_then(|source| source.get("url"))
+            .or_else(|| content.get("data_url"))
+            .and_then(serde_json::Value::as_str)
+        {
+            ResourceReference::Url {
+                url: url.to_owned(),
+            }
+        } else {
+            anyhow::bail!(
+                "user resource {} has no recoverable reference",
+                part.part_id
+            );
+        };
+        let mime = content
+            .get("mime")
+            .or_else(|| attachment.and_then(|item| item.get("mime")))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let kind = if mime.starts_with("image/") {
+            ResourceKind::Image
+        } else if mime.starts_with("audio/") {
+            ResourceKind::Audio
+        } else if mime.starts_with("video/") {
+            ResourceKind::Video
+        } else if mime == "application/pdf" {
+            ResourceKind::Pdf
+        } else if mime == "inode/directory" {
+            ResourceKind::Directory
+        } else {
+            ResourceKind::File
+        };
+        ActivityPayload::Resource(agena_domain::ResourceActivity {
+            delivery: if content.get("delivery").and_then(serde_json::Value::as_str)
+                == Some("model_input")
+            {
+                ResourceDelivery::ModelInput
+            } else {
+                ResourceDelivery::Reference
+            },
+            kind,
+            reference,
+            name: content
+                .get("name")
+                .or_else(|| attachment.and_then(|item| item.get("filename")))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("resource")
+                .to_owned(),
+            media_type: (!mime.is_empty()).then(|| mime.to_owned()),
+            size_bytes: content
+                .get("size_bytes")
+                .and_then(serde_json::Value::as_u64),
+            width: content
+                .get("width")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| value.try_into().ok()),
+            height: content
+                .get("height")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| value.try_into().ok()),
+            duration_ms: content
+                .get("duration_ms")
+                .and_then(serde_json::Value::as_u64),
+            page_count: content
+                .get("page_count")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| value.try_into().ok()),
+        })
+    };
+    Ok(ComposerNode::activity(ComposerActivity {
+        id: ActivityId::new(),
+        payload,
+        provenance: ActivityProvenance {
+            content_hash: content
+                .get("sha")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            ..Default::default()
+        },
+    }))
+}
+
+#[cfg(test)]
+mod rewind_tests {
+    use super::rewind_targets_from_parts;
+    use agena_api::resource::SessionTranscriptPart;
+    use agena_domain::{ActivityPayload, ComposerNode, ResourceDelivery, ResourceReference};
+    use serde_json::json;
+
+    fn part(
+        id: i64,
+        kind: &str,
+        role: &str,
+        state: &str,
+        run_id: Option<i64>,
+        content: serde_json::Value,
+    ) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id: id,
+            kind: kind.to_owned(),
+            role: role.to_owned(),
+            state: state.to_owned(),
+            content,
+            presentation: None,
+            summary: None,
+            created_at_ms: id,
+            parent_part_id: None,
+            run_id,
+        }
+    }
+
+    #[test]
+    fn rewind_picker_uses_real_message_ids_and_restores_ordered_resources() {
+        let parts = vec![
+            part(
+                10,
+                "run",
+                "user",
+                "completed",
+                None,
+                json!({"run_kind": "user_send"}),
+            ),
+            part(
+                11,
+                "text",
+                "user",
+                "completed",
+                Some(10),
+                json!({"text": "before "}),
+            ),
+            part(
+                12,
+                "file_ref",
+                "user",
+                "completed",
+                Some(10),
+                json!({"path": "input.png", "name": "input.png", "mime": "image/png", "delivery": "model_input"}),
+            ),
+            part(
+                13,
+                "run",
+                "assistant",
+                "completed",
+                None,
+                json!({"turn_id": "b673e234-d6ae-4d27-8314-c3f9c4da8d5c"}),
+            ),
+            // A delayed user part still belongs to its run, regardless of an interleaved marker.
+            part(
+                14,
+                "text",
+                "user",
+                "completed",
+                Some(10),
+                json!({"text": " after\nsecond line"}),
+            ),
+            part(
+                15,
+                "text",
+                "assistant",
+                "completed",
+                Some(13),
+                json!({"text": "assistant output"}),
+            ),
+            part(
+                16,
+                "run",
+                "user",
+                "pending",
+                None,
+                json!({"run_kind": "user_send"}),
+            ),
+        ];
+        let targets = rewind_targets_from_parts(&parts).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].at_message_id, 10);
+        assert_eq!(targets[0].sequence, 1);
+        assert_eq!(
+            targets[0].message_document.text(),
+            "before  after\nsecond line"
+        );
+        let nodes = &targets[0].message_document.0;
+        assert_eq!(nodes.len(), 3);
+        let ComposerNode::Activity { activity } = &nodes[1] else {
+            panic!("resource must remain inline")
+        };
+        let ActivityPayload::Resource(resource) = &activity.payload else {
+            panic!("expected resource")
+        };
+        assert_eq!(resource.delivery, ResourceDelivery::ModelInput);
+        assert_eq!(
+            resource.reference,
+            ResourceReference::WorkspacePath {
+                path: "input.png".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn rewind_restores_media_paths_and_message_scoped_command_references() {
+        let parts = vec![
+            part(
+                1,
+                "run",
+                "user",
+                "completed",
+                None,
+                json!({"run_kind": "user_send"}),
+            ),
+            part(
+                2,
+                "file_ref",
+                "user",
+                "completed",
+                Some(1),
+                json!({
+                    "path": ".agena/uploads/image.png", "name": "image.png", "mime": "image/png",
+                    "sha": "input-hash", "delivery": "model_input",
+                    "attachments": [{"kind": "image", "mime": "image/png", "source": {
+                        "source": "provider_data", "route": "original-route", "data": "aGVsbG8="
+                    }}]
+                }),
+            ),
+            part(
+                3,
+                "skill_ref",
+                "user",
+                "completed",
+                Some(1),
+                json!({
+                    "command": "review", "skills": [{"name": "review", "description": "Review code",
+                        "content_hash": "command-hash", "source": "agena.commands", "aliases": []}]
+                }),
+            ),
+            part(
+                4,
+                "file_ref",
+                "user",
+                "completed",
+                Some(1),
+                json!({
+                    "name": "reference", "source": {"source": "url", "url": "https://example.test/reference"}
+                }),
+            ),
+        ];
+        let targets = rewind_targets_from_parts(&parts).unwrap();
+        let nodes = &targets[0].message_document.0;
+        assert_eq!(nodes.len(), 3);
+        let ComposerNode::Activity { activity: media } = &nodes[0] else {
+            panic!("media reference")
+        };
+        let ActivityPayload::Resource(resource) = &media.payload else {
+            panic!("media payload")
+        };
+        assert_eq!(
+            resource.reference,
+            ResourceReference::WorkspacePath {
+                path: ".agena/uploads/image.png".to_owned()
+            }
+        );
+        assert_eq!(resource.delivery, ResourceDelivery::ModelInput);
+        assert_eq!(media.provenance.content_hash.as_deref(), Some("input-hash"));
+        let ComposerNode::Activity { activity: command } = &nodes[1] else {
+            panic!("command reference")
+        };
+        let ActivityPayload::CommandReference(reference) = &command.payload else {
+            panic!("command payload")
+        };
+        assert_eq!(reference.name, "review");
+        assert_eq!(reference.content_hash, "command-hash");
+        assert_eq!(reference.source, "agena.commands");
+        let ComposerNode::Activity { activity: link } = &nodes[2] else {
+            panic!("URL reference")
+        };
+        let ActivityPayload::Resource(resource) = &link.payload else {
+            panic!("URL payload")
+        };
+        assert_eq!(
+            resource.reference,
+            ResourceReference::Url {
+                url: "https://example.test/reference".to_owned()
+            }
+        );
+        agena_application::session::validate_input_document(&targets[0].message_document).unwrap();
+    }
 }

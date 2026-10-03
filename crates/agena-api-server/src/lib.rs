@@ -550,8 +550,8 @@ mod router_contract_tests {
 
     use agena_api::{
         commands::{
-            Command, CommandResult, ReplyPermissionParams, ReplyUserInputParams,
-            ResolveWorkspaceParams, SubmitRunParams,
+            Command, CommandResult, ForkSessionParams, ReplyPermissionParams, ReplyUserInputParams,
+            ResolveWorkspaceParams, RewindSessionParams, SubmitRunParams,
         },
         resource::{
             PermissionActionResource, PermissionReply, PermissionReplyKind, RunOptions,
@@ -2502,6 +2502,182 @@ mod router_contract_tests {
             Some("The operator workspace was not found.")
         );
         provider.await.expect("empty fake provider exits");
+    }
+
+    #[tokio::test]
+    async fn session_history_commands_branch_at_message_ids_through_real_http() {
+        let (provider_url, _requests, provider) = spawn_fake_responses_provider(Vec::new()).await;
+        let server = start_test_server(provider_url.as_str()).await;
+        let client = AgenaClient::new(server.url.as_str()).unwrap();
+        let source = client
+            .create_session(server.workspace_id, "history source", None)
+            .await
+            .unwrap();
+        let state = AppState::from_application(application_for_test(&server.runtime));
+        let store = state.session_store().unwrap();
+        let input = |text: &str| agena_storage::store::NewPart {
+            state: agena_storage::store::PartState::Completed,
+            ..agena_storage::store::NewPart::pending(
+                "text",
+                agena_storage::store::PartRole::User,
+                serde_json::json!({"text": text}),
+            )
+        };
+        let first = store
+            .submit_user_run(source.id, vec![input("first input")], None)
+            .await
+            .unwrap();
+        let second = store
+            .submit_user_run(source.id, vec![input("second input")], None)
+            .await
+            .unwrap();
+        let original = store.load(source.id).await.unwrap();
+
+        client
+            .command(Command::RewindSession(RewindSessionParams {
+                session_id: source.id,
+                at_message_id: second.run_id,
+                expected_version: Some(0),
+            }))
+            .await
+            .expect_err("the HTTP client must preserve rewind's optimistic version check");
+        assert_eq!(store.list_session_tree(source.id).await.unwrap().len(), 1);
+
+        let CommandResult::Execution(fork) = client
+            .command(Command::ForkSession(ForkSessionParams {
+                session_id: source.id,
+                at_message_id: Some(first.run_id),
+                title: Some("message fork".to_owned()),
+            }))
+            .await
+            .unwrap()
+        else {
+            panic!("fork must return an execution resource")
+        };
+        assert_ne!(fork.session.id, source.id);
+        assert_eq!(fork.session.parent_id, Some(source.id));
+        assert_eq!(
+            store.load(fork.session.id).await.unwrap().parts,
+            first.parts
+        );
+
+        let CommandResult::Execution(full) = client
+            .command(Command::ForkSession(ForkSessionParams {
+                session_id: source.id,
+                at_message_id: None,
+                title: None,
+            }))
+            .await
+            .unwrap()
+        else {
+            panic!("full fork must return an execution resource")
+        };
+        assert_eq!(
+            store.load(full.session.id).await.unwrap().parts,
+            original.parts
+        );
+
+        let CommandResult::Execution(rewind) = client
+            .command(Command::RewindSession(RewindSessionParams {
+                session_id: source.id,
+                at_message_id: second.run_id,
+                expected_version: None,
+            }))
+            .await
+            .expect("rewind uses the real numeric user message id on HTTP")
+        else {
+            panic!("rewind must return an execution resource")
+        };
+        assert_eq!(rewind.session.parent_id, Some(source.id));
+        assert_eq!(
+            store.load(rewind.session.id).await.unwrap().parts,
+            first.parts
+        );
+
+        let CommandResult::Execution(empty) = client
+            .command(Command::RewindSession(RewindSessionParams {
+                session_id: fork.session.id,
+                at_message_id: first.run_id,
+                expected_version: None,
+            }))
+            .await
+            .expect("an inherited user message remains a valid rewind target")
+        else {
+            panic!("inherited rewind must return an execution resource")
+        };
+        assert!(store.load(empty.session.id).await.unwrap().parts.is_empty());
+        store
+            .submit_user_run(empty.session.id, vec![input("new branch input")], None)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.load(source.id).await.unwrap(),
+            original,
+            "branch operations and subsequent input preserve the source"
+        );
+
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/api/v1/sessions/{}/rewind",
+                server.url, source.id
+            ))
+            .json(&serde_json::json!({"at_message_id": second.run_id, "unexpected": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
+
+        let streaming = client
+            .create_session(server.workspace_id, "streaming history", None)
+            .await
+            .unwrap();
+        let pending = store
+            .start_run(streaming.id, "execution", serde_json::json!({}), None)
+            .await
+            .unwrap();
+        store
+            .append_parts(
+                streaming.id,
+                pending.run_id,
+                vec![agena_storage::store::NewPart::pending(
+                    "text",
+                    agena_storage::store::PartRole::Assistant,
+                    serde_json::json!({"text": "partial answer"}),
+                )],
+            )
+            .await
+            .unwrap();
+        let streaming_original = store.load(streaming.id).await.unwrap();
+        let CommandResult::Execution(branch) = client
+            .command(Command::ForkSession(ForkSessionParams {
+                session_id: streaming.id,
+                at_message_id: None,
+                title: None,
+            }))
+            .await
+            .unwrap()
+        else {
+            panic!("streaming fork resource")
+        };
+        assert!(matches!(
+            branch.session.state,
+            agena_api::resource::SessionState::Ready { .. }
+        ));
+        let opened = client.get_session_state(branch.session.id).await.unwrap();
+        assert!(matches!(
+            opened.session.state,
+            agena_api::resource::SessionState::Ready { .. }
+        ));
+        assert_eq!(
+            store.load(branch.session.id).await.unwrap().parts,
+            streaming_original.parts
+        );
+        assert_eq!(
+            store.load(streaming.id).await.unwrap(),
+            streaming_original,
+            "opening the fork must not reconcile the parent's active history"
+        );
+        provider.await.unwrap();
     }
 
     #[tokio::test]

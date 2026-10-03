@@ -5,10 +5,10 @@
 //! and the facade derive identical state from identical rows — any process,
 //! any backend, the same answer (17.1 principle 1).
 //!
-//! No ownership dimension participates. Exactly one server process owns a data
-//! directory, and the recovering process resolves every leftover in-flight run
-//! marker before it serves a read (17.4), so an in-flight marker is always a
-//! run this process is executing (17.3).
+//! Only parts authored by this session drive its execution state. Forks share
+//! their parents' history, including streaming parts, without taking over the
+//! parent's runs or interactive requests. Process ownership does not participate:
+//! exactly one server owns a data directory and reconciles abandoned runs.
 
 use agena_domain::SessionLifecycleState;
 
@@ -78,7 +78,7 @@ impl StateInputs {
     pub fn from_view(view: &super::SessionView) -> Self {
         let mut pending_interactions = Vec::new();
         for part in &view.parts {
-            if !part.state.is_in_flight() {
+            if part.origin_session_id != view.meta.id || !part.state.is_in_flight() {
                 continue;
             }
             if part.kind == "tool_call"
@@ -96,7 +96,11 @@ impl StateInputs {
             in_flight_runs: view
                 .parts
                 .iter()
-                .filter(|part| part.is_run_marker() && part.state.is_in_flight())
+                .filter(|part| {
+                    part.origin_session_id == view.meta.id
+                        && part.is_run_marker()
+                        && part.state.is_in_flight()
+                })
                 .map(|part| InFlightRun {
                     part_id: part.part_id,
                     created_at_ms: part.created_at_ms,

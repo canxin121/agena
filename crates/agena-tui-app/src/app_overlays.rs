@@ -262,14 +262,19 @@ impl App {
             agena_tui_session::session_navigation::SessionNavigationEffect::Rewind { key } => {
                 let Some(SessionNavigationCommand::Rewind {
                     session_id,
-                    turn_id,
-                    message_text,
+                    at_message_id,
+                    message_document,
                     target,
                 }) = dialog.actions.get(key.as_str()).cloned()
                 else {
                     return false;
                 };
-                self.open_rewind_confirm_overlay(session_id, turn_id, message_text, target);
+                self.open_rewind_confirm_overlay(
+                    session_id,
+                    at_message_id,
+                    message_document,
+                    target,
+                );
                 true
             }
         }

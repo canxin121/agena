@@ -2478,6 +2478,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forked_history_does_not_inherit_parent_execution_or_interaction() {
+        let (facade, _clock) = harness();
+        let source_id = ready_session(&facade, 1, "running parent").await;
+        let run = facade
+            .start_run(source_id, "execution", json!({}), None)
+            .await
+            .unwrap();
+        let tool = facade
+            .append_parts(
+                source_id,
+                run.run_id,
+                vec![pending_tool_call("parent question", "ask_user")],
+            )
+            .await
+            .unwrap();
+        let original = facade.load(source_id).await.unwrap();
+        let child_id = facade
+            .fork(source_id, tool[0].part_id, "branch".to_owned())
+            .await
+            .unwrap();
+        assert_eq!(facade.load(child_id).await.unwrap().parts, original.parts);
+        let branch = facade.session_state(child_id).await.unwrap();
+        assert_eq!(branch.state, SessionState::Ready);
+        assert!(branch.active_run_id.is_none());
+        assert!(branch.pending_interaction.is_none());
+        assert!(facade.in_flight_run_ids(child_id).await.unwrap().is_empty());
+        let states = facade
+            .engine()
+            .session_states(&[source_id, child_id], facade.now())
+            .await
+            .unwrap();
+        assert_eq!(states[&child_id], SessionState::Ready);
+        assert_eq!(states[&source_id], SessionState::AwaitingInteraction);
+        let own = facade
+            .start_run(child_id, "execution", json!({}), None)
+            .await
+            .unwrap();
+        let child_running = facade.session_state(child_id).await.unwrap();
+        assert_eq!(child_running.state, SessionState::Running);
+        assert_eq!(child_running.active_run_id, Some(own.run_id));
+        assert_eq!(facade.load(source_id).await.unwrap(), original);
+    }
+
+    #[tokio::test]
     async fn fork_and_rewind_copy_edges_and_return_new_session_ids() {
         let (facade, clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;

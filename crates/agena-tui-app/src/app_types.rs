@@ -785,7 +785,7 @@ pub(super) enum AppMessage {
     },
     SessionRewound {
         session_id: i64,
-        message_text: String,
+        message_document: agena_domain::ComposerDocument,
         target: String,
         result: UiResult<SessionExecutionResource>,
     },

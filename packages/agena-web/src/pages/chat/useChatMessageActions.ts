@@ -5,22 +5,14 @@ import { useI18n } from 'vue-i18n'
 import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import type { JsonValue } from '@/types/json'
+import type { MessageEntry, Session } from '@/types/chat'
 import { attachmentLabel, attachmentLabelFromUrl } from '../../lib/attachmentLabels'
 import { buildAssistantErrorCopyText } from './assistantError'
-import { getComposerInput, type ComposerExpose } from './composerInput'
+import { getComposerInput, type ComposerExpose, type ComposerSegment } from './composerInput'
+import type { AttachedFile } from './useChatAttachments'
 
 type ToastKind = 'info' | 'success' | 'error'
 type ToastsStore = { push: (kind: ToastKind, message: string) => void }
-
-type AttachedFile = {
-  id: string
-  filename: string
-  size: number
-  mime: string
-  url?: string
-  serverPath?: string
-  delivery?: 'reference' | 'model_input'
-}
 
 type MessagePartLike = {
   type?: string
@@ -28,11 +20,6 @@ type MessagePartLike = {
   filename?: string
   mime?: string
   url?: string
-}
-
-type PendingComposer = {
-  text?: string
-  parts?: JsonValue[]
 }
 
 type MessageLike = {
@@ -48,9 +35,7 @@ type ChatLike = {
   selectedSessionId: string | null
   selectSession: (sessionId: string) => Promise<void>
   forkSession: (sessionId: string, opts?: { at_message_id?: number }) => Promise<JsonValue | null>
-  revertToMessage: (sessionId: string, messageId: string, opts?: { restoreComposer?: boolean }) => Promise<void>
-  consumePendingComposer: () => PendingComposer
-  refreshMessages: (sessionId: string, opts?: { silent?: boolean }) => Promise<void>
+  revertToMessage: (sessionId: string, messageId: string) => Promise<{ session: Session; message: MessageEntry }>
 }
 
 function filePartLabel(part: MessagePartLike): string {
@@ -95,6 +80,8 @@ export function useChatMessageActions(opts: {
   } = opts
 
   const copiedMessageId = ref('')
+  const historyActionBusy = ref(false)
+  const revertBusyMessageId = ref('')
   let copiedTimer: number | null = null
 
   onBeforeUnmount(() => {
@@ -128,65 +115,87 @@ export function useChatMessageActions(opts: {
     }, 1200)
   }
 
-  async function handleForkFromMessage(messageId: string) {
-    const sid = chat.selectedSessionId
-    if (!sid) return
-    const atMessageId = Number(messageId)
-    const created = await chat.forkSession(
-      sid,
-      Number.isFinite(atMessageId) && atMessageId > 0 ? { at_message_id: atMessageId } : undefined,
-    )
-    const newId = typeof created?.id === 'string' ? created.id.trim() : ''
-    if (!newId) return
+  async function openBranch(newId: string) {
     const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
     if (isEmbeddedWorkspacePane) {
       await router.replace({ path: '/chat', query: patchSessionIdInQuery(route.query, newId) })
     } else {
       await router.replace({ path: '/chat' })
     }
-    await chat.selectSession(newId).catch(() => {})
-    await nextTick()
-    scrollToBottom('auto')
+    await chat.selectSession(newId)
   }
 
-  const revertBusyMessageId = ref('')
+  async function handleForkFromMessage(messageId: string) {
+    const sid = chat.selectedSessionId
+    if (!sid || historyActionBusy.value) return
+    historyActionBusy.value = true
+    try {
+      const atMessageId = Number(messageId)
+      if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0) throw new Error('A valid message id is required')
+      const created = await chat.forkSession(sid, { at_message_id: atMessageId })
+      const newId = typeof created?.id === 'string' ? created.id.trim() : ''
+      if (!newId) throw new Error('The server did not return a forked session.')
+      await openBranch(newId)
+      await nextTick()
+      scrollToBottom('auto')
+      toasts.push('success', t('chat.toasts.sessionForked'))
+    } catch (err) {
+      toasts.push('error', err instanceof Error ? err.message : String(err))
+    } finally {
+      historyActionBusy.value = false
+    }
+  }
 
   async function handleRevertFromMessage(messageId: string) {
     const sid = chat.selectedSessionId
-    if (!sid) return
+    if (!sid || historyActionBusy.value) return
 
+    historyActionBusy.value = true
     revertBusyMessageId.value = messageId
-    await chat.revertToMessage(sid, messageId)
-    // Pull pending input from the store.
-    const pending = chat.consumePendingComposer()
-    if (pending.text || (pending.parts || []).length) {
-      draft.value = pending.text || ''
-      clearAttachments()
-      for (const p of pending.parts || []) {
-        const part = p && typeof p === 'object' ? (p as MessagePartLike) : null
-        if (part?.type === 'file' && typeof part.url === 'string' && part.url) {
-          attachedFiles.value = [
-            ...attachedFiles.value,
-            {
-              id: `revert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              filename:
-                typeof part.filename === 'string' && part.filename.trim() ? part.filename.trim() : filePartLabel(part),
-              size: 0,
-              mime: typeof part.mime === 'string' && part.mime.trim() ? part.mime.trim() : 'application/octet-stream',
-              url: String(part.url),
-            },
-          ]
+    try {
+      const { session, message } = await chat.revertToMessage(sid, messageId)
+      await openBranch(session.id)
+      const segments: ComposerSegment[] = []
+      const files: AttachedFile[] = []
+      for (const part of message.parts) {
+        if (part.type === 'text' && (!part.synthetic || part.agenaKind === 'paste_ref')) {
+          segments.push({ type: 'text', text: part.text || '' })
+          continue
         }
+        if (part.type !== 'file') continue
+        const content = part.agenaContent && typeof part.agenaContent === 'object' ? part.agenaContent : {}
+        const dataUrl = typeof part.url === 'string' && part.url.startsWith('data:') ? part.url : ''
+        const path = typeof part.serverPath === 'string' ? part.serverPath : ''
+        if (!dataUrl && !path) continue
+        const id = `rewind-${session.id}-${part.id}`
+        files.push({
+          id,
+          filename: filePartLabel(part),
+          size: 0,
+          mime: part.mime || 'application/octet-stream',
+          ...(dataUrl ? { url: dataUrl } : {}),
+          ...(path ? { serverPath: path } : {}),
+          delivery: content.delivery === 'model_input' ? 'model_input' : 'reference',
+          state: 'ready',
+        })
+        segments.push({ type: 'attachment', id })
       }
+      draft.value = segments
+        .filter((segment): segment is Extract<ComposerSegment, { type: 'text' }> => segment.type === 'text')
+        .map((segment) => segment.text)
+        .join('')
+      clearAttachments()
+      attachedFiles.value = files
       await nextTick()
+      composerRef.value?.restoreSegments?.(segments)
       getComposerInput(composerRef.value)?.focus()
+      scrollToBottom('auto')
+    } catch (err) {
+      toasts.push('error', err instanceof Error ? err.message : String(err))
+    } finally {
+      revertBusyMessageId.value = ''
+      historyActionBusy.value = false
     }
-
-    // Ensure the view reflects the reverted state.
-    await chat.refreshMessages(sid, { silent: true }).catch(() => {})
-    await nextTick()
-    scrollToBottom('auto')
-    revertBusyMessageId.value = ''
   }
 
   return {

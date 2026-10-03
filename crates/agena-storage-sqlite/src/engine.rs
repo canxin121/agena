@@ -576,6 +576,7 @@ fn session_state_projection_sql() -> String {
            SELECT 1 FROM agena_session_parts spi \
            JOIN agena_parts pi ON pi.part_id = spi.part_id \
            WHERE spi.session_id = s.id \
+             AND pi.origin_session_id = s.id \
              AND pi.state IN ('pending', 'in_progress') \
              AND pi.kind = 'tool_call' AND EXISTS ( \
                  SELECT 1 \
@@ -587,6 +588,7 @@ fn session_state_projection_sql() -> String {
            SELECT 1 FROM agena_session_parts spr \
            JOIN agena_parts pr ON pr.part_id = spr.part_id \
            WHERE spr.session_id = s.id \
+             AND pr.origin_session_id = s.id \
              AND pr.kind = 'run' \
              AND pr.state IN ('pending', 'in_progress') \
          ) THEN 'running' \
@@ -2688,6 +2690,19 @@ impl PersistenceEngine for SqliteEngine {
                 let cutoff = load_part_by_id(txn, at_part_id)
                     .await?
                     .ok_or_else(|| StoreError::not_found(format!("cutoff part {at_part_id}")))?;
+                let member = txn
+                    .query_one(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "SELECT part_id FROM agena_session_parts WHERE session_id = ? AND part_id = ?",
+                        [session_id.into(), at_part_id.into()],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                if member.is_none() {
+                    return Err(StoreError::InvalidState(format!(
+                        "cutoff part {at_part_id} is not a member of session {session_id}"
+                    )));
+                }
                 let relation_kind = if rewind {
                     SessionRelationKind::Rewind
                 } else {

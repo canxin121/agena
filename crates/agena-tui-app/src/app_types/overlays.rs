@@ -328,8 +328,8 @@ pub(crate) type ConfirmOverlay = ConfirmDialogState<ConfirmAction>;
 pub(crate) enum ConfirmAction {
     Rewind {
         session_id: i64,
-        turn_id: agena_domain::TurnId,
-        message_text: String,
+        at_message_id: i64,
+        message_document: agena_domain::ComposerDocument,
         target: String,
     },
     PermissionStudioDeletePathRule {

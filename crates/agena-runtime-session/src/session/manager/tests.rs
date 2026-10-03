@@ -1232,6 +1232,208 @@ async fn default_manager_fork_includes_the_complete_last_message() {
 }
 
 #[tokio::test]
+async fn rewind_uses_a_user_message_id_without_an_assistant_turn() {
+    let manager = test_manager().await;
+    let session = create(&manager, "rewind source").await;
+    let session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![TypedContent::Text(text_content("keep this message"))],
+    )
+    .await;
+    let session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![TypedContent::Text(text_content("restore this message"))],
+    )
+    .await;
+    let before = manager.session_store().load(session.id).await.unwrap();
+    let user_ids = before
+        .parts
+        .iter()
+        .filter(|part| part.is_run_marker() && part.role == PartRole::User)
+        .map(|part| part.part_id)
+        .collect::<Vec<_>>();
+    assert!(
+        before
+            .parts
+            .iter()
+            .all(|part| part.content.get("turn_id").is_none())
+    );
+
+    let child = manager
+        .rewind_session(crate::SessionRewindRequest {
+            session_id: session.id,
+            at_message_id: user_ids[1],
+            expected_version: Some(before.meta.version),
+        })
+        .await
+        .expect("rewind a completed user send without a reply");
+    assert_eq!(child.parent_id, Some(session.id));
+    assert_eq!(
+        child.relation_kind,
+        agena_domain::SessionRelationKind::Rewind
+    );
+    assert_eq!(
+        child.lifecycle_state,
+        agena_domain::SessionLifecycleState::Ready
+    );
+    let runs = parts_into_runs(child.parts());
+    assert_eq!(runs.len(), 1);
+    assert_eq!(run_visible_text_lossy(&runs[0]), "keep this message");
+    assert_eq!(
+        manager
+            .session_store()
+            .load(session.id)
+            .await
+            .unwrap()
+            .parts,
+        before.parts,
+        "rewind preserves every original part"
+    );
+
+    let empty = manager
+        .rewind_session(crate::SessionRewindRequest {
+            session_id: child.id,
+            at_message_id: user_ids[0],
+            expected_version: None,
+        })
+        .await
+        .expect("rewind an inherited first message");
+    assert!(empty.parts().is_empty());
+    let continued = append_message(
+        &manager,
+        empty,
+        Role::User,
+        vec![TypedContent::Text(text_content("new branch input"))],
+    )
+    .await;
+    let runs = parts_into_runs(continued.parts());
+    assert_eq!(run_visible_text_lossy(&runs[0]), "new branch input");
+    assert_eq!(
+        manager
+            .session_store()
+            .load(session.id)
+            .await
+            .unwrap()
+            .parts,
+        before.parts
+    );
+}
+
+#[tokio::test]
+async fn rewind_rejects_content_foreign_and_assistant_ids_without_creating_a_branch() {
+    let manager = test_manager().await;
+    let session = create(&manager, "invalid rewind source").await;
+    let session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![TypedContent::Text(text_content("user input"))],
+    )
+    .await;
+    let foreign = append_message(
+        &manager,
+        create(&manager, "foreign").await,
+        Role::User,
+        vec![TypedContent::Text(text_content("foreign input"))],
+    )
+    .await;
+    let assistant_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            serde_json::json!({"run_kind": "continue"}),
+        )
+        .await
+        .unwrap();
+    let content_id = session
+        .parts()
+        .iter()
+        .find(|part| !part.is_run_marker())
+        .unwrap()
+        .part_id;
+    let foreign_id = foreign
+        .parts()
+        .iter()
+        .find(|part| part.is_run_marker())
+        .unwrap()
+        .part_id;
+    for at_message_id in [content_id, foreign_id, assistant_id, -1] {
+        manager
+            .rewind_session(crate::SessionRewindRequest {
+                session_id: session.id,
+                at_message_id,
+                expected_version: None,
+            })
+            .await
+            .expect_err("only this session's completed user markers are rewind targets");
+    }
+    assert_eq!(
+        manager
+            .list_session_tree(session.root_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn default_fork_includes_parts_appended_after_the_last_run_marker() {
+    let manager = test_manager().await;
+    let session = create(&manager, "interleaved fork source").await;
+    let first_run = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            serde_json::json!({"run_kind": "continue"}),
+        )
+        .await
+        .unwrap();
+    manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            serde_json::json!({"run_kind": "continue"}),
+        )
+        .await
+        .unwrap();
+    manager
+        .store
+        .append_parts(
+            session.id,
+            first_run,
+            vec![NewPart {
+                state: PartState::Completed,
+                ..NewPart::pending(
+                    "text",
+                    PartRole::Assistant,
+                    serde_json::json!({"text": "late output"}),
+                )
+            }],
+        )
+        .await
+        .unwrap();
+    let before = manager.session_store().load(session.id).await.unwrap();
+    let child = manager
+        .fork_session(crate::SessionForkRequest {
+            session_id: session.id,
+            at_message_id: None,
+            title: None,
+            expected_version: None,
+        })
+        .await
+        .expect("fork complete history including interleaved tail");
+    assert_eq!(child.parts(), before.parts.as_slice());
+}
+
+#[tokio::test]
 async fn open_session_reconciles_a_run_paused_for_user_input() {
     let (manager, _database) = test_manager_with_database().await;
     let session = create(&manager, "awaiting user").await;

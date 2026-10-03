@@ -2264,10 +2264,14 @@ impl AgenaClient {
                 limit,
                 search,
                 include_session_count,
+                offset,
             }) => {
                 let mut url = self.endpoint("/api/v1/workspaces");
                 {
                     let mut q = url.query_pairs_mut();
+                    if offset > 0 {
+                        q.append_pair("offset", &offset.to_string());
+                    }
                     if let Some(cursor) = cursor {
                         q.append_pair("cursor", &cursor);
                     }
@@ -2298,10 +2302,25 @@ impl AgenaClient {
                 roots,
                 exclude_subagents,
                 search,
+                offset,
+                bucket,
+                include_total,
             }) => {
                 let mut url = self.endpoint("/api/v1/sessions");
                 {
                     let mut q = url.query_pairs_mut();
+                    if offset > 0 {
+                        q.append_pair("offset", &offset.to_string());
+                    }
+                    if include_total {
+                        q.append_pair("include_total", "true");
+                    }
+                    if let Some(bucket) = bucket {
+                        let value = serde_json::to_value(bucket)?;
+                        if let Some(value) = value.as_str() {
+                            q.append_pair("bucket", value);
+                        }
+                    }
                     if let Some(cursor) = cursor {
                         q.append_pair("cursor", &cursor);
                     }

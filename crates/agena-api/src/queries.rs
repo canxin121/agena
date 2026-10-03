@@ -153,6 +153,8 @@ pub struct ListSavedProviderAdapterModelsParams {
 /// Parameters for listing workspaces.
 pub struct ListWorkspacesParams {
     #[serde(default)]
+    pub offset: u64,
+    #[serde(default)]
     pub cursor: Option<String>,
     #[serde(default)]
     pub limit: Option<u64>,
@@ -166,6 +168,16 @@ pub struct ListWorkspacesParams {
 /// Parameters for fetching a workspace by id.
 pub struct GetWorkspaceParams {
     pub workspace_id: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionListBucket {
+    Pinned,
+    Favorite,
+    Running,
+    Attention,
+    Recent,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -186,6 +198,13 @@ pub struct ListSessionsParams {
     pub exclude_subagents: bool,
     #[serde(default)]
     pub search: Option<String>,
+    /// Numbered pages may use an offset instead of a cursor.
+    #[serde(default)]
+    pub offset: u64,
+    #[serde(default)]
+    pub bucket: Option<SessionListBucket>,
+    #[serde(default)]
+    pub include_total: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

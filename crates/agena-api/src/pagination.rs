@@ -20,6 +20,8 @@ pub struct PageInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A page of items together with its [`PageInfo`].
 pub struct PaginatedResponse<T> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
     pub items: Vec<T>,
     pub page: PageInfo,
 }

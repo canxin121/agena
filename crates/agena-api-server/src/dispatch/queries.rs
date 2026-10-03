@@ -25,10 +25,12 @@ pub async fn dispatch_query(
             limit,
             search,
             include_session_count,
+            offset,
         }) => Ok(QueryResult::Workspaces(
             http_page_result(state.service().list_workspaces(WorkspaceListQuery {
                 pagination: search_pagination(cursor, limit, search),
                 include_session_count,
+                offset,
             }))
             .await?,
         )),
@@ -45,6 +47,9 @@ pub async fn dispatch_query(
             parent_id,
             roots,
             exclude_subagents,
+            offset,
+            bucket,
+            include_total,
             search,
         }) => Ok(QueryResult::Sessions(
             http_page_result(state.service().list_sessions(SessionListQuery {
@@ -53,6 +58,9 @@ pub async fn dispatch_query(
                 parent_id,
                 roots,
                 exclude_subagents,
+                offset,
+                bucket,
+                include_total,
             }))
             .await?,
         )),

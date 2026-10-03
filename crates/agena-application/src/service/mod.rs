@@ -250,6 +250,7 @@ where
     C: Serialize,
 {
     Ok(PaginatedResponse {
+        total: None,
         page: PageInfo {
             limit,
             returned: items.len(),

@@ -635,6 +635,7 @@ impl StoreAdapter {
                 search: request.search,
                 limit: fetch_limit,
                 before: None,
+                ..Default::default()
             })
             .await
             .map_err(store_error)?;

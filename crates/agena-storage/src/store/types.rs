@@ -672,6 +672,11 @@ pub struct SessionListQuery {
     pub search: Option<String>,
     pub limit: Option<i64>,
     pub before: Option<SessionCursor>,
+    pub offset: u64,
+    pub favorite: Option<bool>,
+    pub pinned: Option<bool>,
+    /// An empty list includes every processing state.
+    pub states: Vec<SessionState>,
 }
 
 /// Result of [`crate::store::PersistenceEngine::reconcile`] (17.4).
@@ -908,4 +913,13 @@ mod session_state_vocabulary_tests {
             assert_eq!(SubtaskStatus::parse(wire), Some(status));
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkspaceSessionStats {
+    pub total: u64,
+    pub roots: u64,
+    pub pinned: u64,
+    pub running: u64,
+    pub attention: u64,
 }

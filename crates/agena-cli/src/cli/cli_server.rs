@@ -251,6 +251,7 @@ impl ServerSessionClient {
                     roots: false,
                     exclude_subagents: true,
                     search: None,
+                    ..Default::default()
                 }))
                 .await
                 .map_err(|error| client_error("failed to list sessions from the server", error))?;

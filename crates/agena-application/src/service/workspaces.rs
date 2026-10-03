@@ -14,6 +14,11 @@ impl ApplicationService {
             .cursor()
             .map(decode_cursor::<WorkspaceCursor>)
             .transpose()?;
+        if cursor.is_some() && query.offset > 0 {
+            return Err(ApplicationError::bad_request(
+                "use either cursor or offset pagination",
+            ));
+        }
         let rows = self
             .workspace_repository
             .list(StorageWorkspaceListQuery {
@@ -21,6 +26,7 @@ impl ApplicationService {
                 before_updated_at_ms: cursor.map(|value| value.updated_at_ms),
                 before_id: cursor.map(|value| value.id),
                 limit: limit + 1,
+                offset: query.offset,
             })
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?;
@@ -31,9 +37,31 @@ impl ApplicationService {
         } else {
             HashMap::new()
         };
+        let stats = if query.include_session_count {
+            self.session_store
+                .workspace_session_stats(&workspace_ids)
+                .await
+                .map_err(|error| ApplicationError::internal_error(&error))?
+        } else {
+            HashMap::new()
+        };
         let items = slice
             .iter()
-            .map(|row| workspace_record_resource(row, session_counts.get(&row.id).copied()))
+            .map(|row| {
+                let mut resource =
+                    workspace_record_resource(row, session_counts.get(&row.id).copied())?;
+                resource.session_stats =
+                    stats
+                        .get(&row.id)
+                        .map(|stats| agena_api::resource::WorkspaceSessionStats {
+                            total: stats.total,
+                            roots: stats.roots,
+                            pinned: stats.pinned,
+                            running: stats.running,
+                            attention: stats.attention,
+                        });
+                Ok(resource)
+            })
             .collect::<ApplicationResult<Vec<_>>>()?;
         let next_cursor = slice.last().map(|row| WorkspaceCursor {
             updated_at_ms: row.updated_at_ms,
@@ -540,6 +568,7 @@ fn workspace_record_resource(
         created_at: timestamp_millis_to_utc(row.created_at_ms)?,
         updated_at: timestamp_millis_to_utc(row.updated_at_ms)?,
         session_count,
+        session_stats: None,
     })
 }
 

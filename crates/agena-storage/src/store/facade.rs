@@ -168,6 +168,62 @@ pub trait SessionStore: Send + Sync {
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError>;
 
+    async fn workspace_session_stats(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, super::WorkspaceSessionStats>, StoreError> {
+        let mut result = HashMap::new();
+        for &id in workspace_ids {
+            let base = SessionListQuery {
+                workspace_id: Some(id),
+                exclude_subagents: true,
+                ..Default::default()
+            };
+            result.insert(
+                id,
+                super::WorkspaceSessionStats {
+                    total: self.count_session_summaries(base.clone()).await?,
+                    roots: self
+                        .count_session_summaries(SessionListQuery {
+                            roots_only: true,
+                            ..base.clone()
+                        })
+                        .await?,
+                    pinned: self
+                        .count_session_summaries(SessionListQuery {
+                            pinned: Some(true),
+                            ..base.clone()
+                        })
+                        .await?,
+                    running: self
+                        .count_session_summaries(SessionListQuery {
+                            states: vec![SessionState::Running, SessionState::Creating],
+                            ..base.clone()
+                        })
+                        .await?,
+                    attention: self
+                        .count_session_summaries(SessionListQuery {
+                            states: vec![SessionState::AwaitingInteraction, SessionState::Failed],
+                            ..base
+                        })
+                        .await?,
+                },
+            );
+        }
+        Ok(result)
+    }
+
+    /// Count matches without the pagination window.
+    async fn count_session_summaries(
+        &self,
+        mut query: SessionListQuery,
+    ) -> Result<u64, StoreError> {
+        query.limit = None;
+        query.before = None;
+        query.offset = 0;
+        Ok(self.list_session_summaries(query).await?.len() as u64)
+    }
+
     /// Batch form of [`Self::session_state`] for overview/list surfaces.
     async fn session_states(
         &self,
@@ -1165,6 +1221,17 @@ where
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError> {
         self.engine.list_session_summaries(query).await
+    }
+
+    async fn workspace_session_stats(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, super::WorkspaceSessionStats>, StoreError> {
+        self.engine.workspace_session_stats(workspace_ids).await
+    }
+
+    async fn count_session_summaries(&self, query: SessionListQuery) -> Result<u64, StoreError> {
+        self.engine.count_session_summaries(query).await
     }
 
     async fn session_states(

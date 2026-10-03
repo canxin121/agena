@@ -29,6 +29,7 @@ pub async fn list_notifications(
         .last()
         .map(|notification| notification.created_at_ms.to_string());
     Ok(Json(PaginatedResponse {
+        total: None,
         items: items.iter().map(NotificationResource::from).collect(),
         page: PageInfo {
             next_cursor,

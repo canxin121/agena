@@ -43,6 +43,7 @@ impl Application {
                 roots: false,
                 exclude_subagents: true,
                 search: None,
+                ..Default::default()
             })
             .await?;
         let mut attention = Vec::new();
@@ -146,6 +147,7 @@ impl Application {
             roots: false,
             exclude_subagents: false,
             search: None,
+            ..Default::default()
         })
         .await
         .map_err(|error| {
@@ -184,6 +186,7 @@ impl Application {
                     roots: false,
                     exclude_subagents: false,
                     search: None,
+                    ..Default::default()
                 })
                 .await
                 .map_err(|error| {
@@ -537,6 +540,7 @@ impl Application {
             roots: roots_only,
             exclude_subagents: true,
             search: None,
+            ..Default::default()
         })
         .await
         .map_err(|error| {
@@ -658,6 +662,8 @@ impl Application {
                     parent_id: query.parent_id,
                     roots: query.roots,
                     exclude_subagents: query.exclude_subagents,
+                    bucket: query.bucket,
+                    ..Default::default()
                 })
                 .await?;
             cursor = page.page.next_cursor.clone();

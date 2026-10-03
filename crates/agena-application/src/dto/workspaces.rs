@@ -1,6 +1,8 @@
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for listing workspaces.
 pub struct WorkspaceListQuery {
+    #[serde(default)]
+    pub offset: u64,
     #[serde(flatten)]
     pub pagination: SearchPaginationQuery,
     #[serde(default)]

@@ -68,6 +68,8 @@ pub struct PageInfo {
 #[derive(Debug, Clone, Serialize)]
 /// A page of items together with its [`PageInfo`].
 pub struct PaginatedResponse<T> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
     pub items: Vec<T>,
     pub page: PageInfo,
 }
@@ -80,6 +82,7 @@ pub fn api_page_from_application<T, U>(
     mut map_item: impl FnMut(T) -> U,
 ) -> agena_api::pagination::PaginatedResponse<U> {
     agena_api::pagination::PaginatedResponse {
+        total: value.total,
         items: value.items.into_iter().map(&mut map_item).collect(),
         page: agena_api::pagination::PageInfo {
             next_cursor: value.page.next_cursor,

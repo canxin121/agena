@@ -353,6 +353,7 @@ pub struct WorkspaceRecord {
 #[derive(Debug, Clone, Default)]
 /// Query for listing workspaces.
 pub struct WorkspaceListQuery {
+    pub offset: u64,
     pub search: Option<String>,
     pub before_updated_at_ms: Option<i64>,
     pub before_id: Option<i64>,

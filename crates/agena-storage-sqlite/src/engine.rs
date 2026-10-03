@@ -596,6 +596,60 @@ fn session_state_projection_sql() -> String {
     )
 }
 
+fn session_list_filter(query: &SessionListQuery) -> (String, Vec<Value>) {
+    let mut where_clauses = Vec::new();
+    let mut values: Vec<Value> = Vec::new();
+    if let Some(workspace_id) = query.workspace_id {
+        where_clauses.push("s.workspace_id = ?".to_owned());
+        values.push(workspace_id.into());
+    }
+    if let Some(parent_id) = query.parent_id {
+        where_clauses.push("s.parent_id = ?".to_owned());
+        values.push(parent_id.into());
+    } else if query.roots_only {
+        where_clauses.push("s.parent_id IS NULL".to_owned());
+    }
+    if query.exclude_subagents {
+        where_clauses.push("s.is_subagent = 0".to_owned());
+    }
+    if let Some(search) = query.search.as_deref()
+        && !search.trim().is_empty()
+    {
+        where_clauses.push("s.title LIKE ? ESCAPE '\\'".to_owned());
+        // Escape `%`/`_` so user input is a literal substring match.
+        let escaped = search
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        values.push(Value::String(Some(Box::new(format!("%{escaped}%")))));
+    }
+    if let Some(before) = query.before.as_ref() {
+        where_clauses.push("(s.updated_at_ms, s.id) < (?, ?)".to_owned());
+        values.push(before.updated_at_ms.into());
+        values.push(before.id.into());
+    }
+    for (column, flag) in [("favorite", query.favorite), ("pinned", query.pinned)] {
+        if let Some(flag) = flag {
+            where_clauses.push(format!("s.{column} = ?"));
+            values.push(i64::from(flag).into());
+        }
+    }
+    if !query.states.is_empty() {
+        where_clauses.push(format!(
+            "({}) IN ({})",
+            session_state_projection_sql(),
+            vec!["?"; query.states.len()].join(", ")
+        ));
+        values.extend(query.states.iter().map(|state| Value::from(state.as_str())));
+    }
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
+    (where_sql, values)
+}
+
 /// Load a single part by id through any connection (db or transaction).
 async fn load_part_by_id<C: ConnectionTrait>(
     connection: &C,
@@ -1184,42 +1238,7 @@ impl PersistenceEngine for SqliteEngine {
         &self,
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError> {
-        let mut where_clauses = Vec::new();
-        let mut values: Vec<Value> = Vec::new();
-        if let Some(workspace_id) = query.workspace_id {
-            where_clauses.push("s.workspace_id = ?".to_owned());
-            values.push(workspace_id.into());
-        }
-        if let Some(parent_id) = query.parent_id {
-            where_clauses.push("s.parent_id = ?".to_owned());
-            values.push(parent_id.into());
-        } else if query.roots_only {
-            where_clauses.push("s.parent_id IS NULL".to_owned());
-        }
-        if query.exclude_subagents {
-            where_clauses.push("s.is_subagent = 0".to_owned());
-        }
-        if let Some(search) = query.search.as_deref()
-            && !search.trim().is_empty()
-        {
-            where_clauses.push("s.title LIKE ? ESCAPE '\\'".to_owned());
-            // Escape `%`/`_` so user input is a literal substring match.
-            let escaped = search
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_");
-            values.push(Value::String(Some(Box::new(format!("%{escaped}%")))));
-        }
-        if let Some(before) = query.before {
-            where_clauses.push("(s.updated_at_ms, s.id) < (?, ?)".to_owned());
-            values.push(before.updated_at_ms.into());
-            values.push(before.id.into());
-        }
-        let where_sql = if where_clauses.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", where_clauses.join(" AND "))
-        };
+        let (where_sql, values) = session_list_filter(&query);
         let mut sql = format!(
             "SELECT s.id, s.workspace_id, s.parent_id, s.depth, s.root_id, s.title, \
                     s.favorite, s.pinned, \
@@ -1239,6 +1258,12 @@ impl PersistenceEngine for SqliteEngine {
         if let Some(limit) = query.limit {
             sql.push_str(&format!(" LIMIT {}", limit.max(0)));
         }
+        if query.offset > 0 {
+            if query.limit.is_none() {
+                sql.push_str(" LIMIT -1");
+            }
+            sql.push_str(&format!(" OFFSET {}", query.offset.min(i64::MAX as u64)));
+        }
         self.db()
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
@@ -1251,6 +1276,62 @@ impl PersistenceEngine for SqliteEngine {
             .map(summary_from_row)
             .collect::<Result<Vec<_>, _>>()
             .map_err(map_db_err)
+    }
+
+    async fn workspace_session_stats(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, agena_storage::store::WorkspaceSessionStats>, StoreError> {
+        if workspace_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = vec!["?"; workspace_ids.len()].join(", ");
+        let projection = session_state_projection_sql();
+        let rows = self.db().query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            format!("SELECT workspace_id, COUNT(*) AS total, SUM(parent_id IS NULL) AS roots, SUM(pinned) AS pinned, SUM(state IN ('running', 'creating')) AS running, SUM(state IN ('awaiting_interaction', 'failed')) AS attention FROM (SELECT s.workspace_id, s.parent_id, s.pinned, {projection} AS state FROM agena_sessions s WHERE s.is_subagent = 0 AND s.workspace_id IN ({placeholders})) GROUP BY workspace_id"),
+            workspace_ids.iter().copied().map(Value::from),
+        )).await.map_err(map_db_err)?;
+        let mut result = workspace_ids
+            .iter()
+            .map(|id| (*id, agena_storage::store::WorkspaceSessionStats::default()))
+            .collect::<HashMap<_, _>>();
+        for row in rows {
+            let id: i64 = row.try_get("", "workspace_id").map_err(map_db_err)?;
+            let count = |name: &str| -> Result<u64, StoreError> {
+                Ok(row.try_get::<i64>("", name).map_err(map_db_err)?.max(0) as u64)
+            };
+            result.insert(
+                id,
+                agena_storage::store::WorkspaceSessionStats {
+                    total: count("total")?,
+                    roots: count("roots")?,
+                    pinned: count("pinned")?,
+                    running: count("running")?,
+                    attention: count("attention")?,
+                },
+            );
+        }
+        Ok(result)
+    }
+
+    async fn count_session_summaries(
+        &self,
+        mut query: SessionListQuery,
+    ) -> Result<u64, StoreError> {
+        query.before = None;
+        let (where_sql, values) = session_list_filter(&query);
+        let row = self
+            .db()
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!("SELECT COUNT(*) AS count FROM agena_sessions s {where_sql}"),
+                values,
+            ))
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| StoreError::InvalidState("session count missing".into()))?;
+        let count: i64 = row.try_get("", "count").map_err(map_db_err)?;
+        Ok(count.max(0) as u64)
     }
 
     async fn session_states(

@@ -108,13 +108,14 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
             values.extend([updated.into(), updated.into(), id.into()]);
         }
         values.push(query.limit.into());
+        values.push(query.offset.min(i64::MAX as u64).into());
         let where_clause = if clauses.is_empty() {
             String::new()
         } else {
             format!(" WHERE {}", clauses.join(" AND "))
         };
         let rows = self.db.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            format!("SELECT id, path, created_at_ms, updated_at_ms FROM {TABLE}{where_clause} ORDER BY updated_at_ms DESC, id DESC LIMIT ?"), values)).await.map_err(map_error)?;
+            format!("SELECT id, path, created_at_ms, updated_at_ms FROM {TABLE}{where_clause} ORDER BY updated_at_ms DESC, id DESC LIMIT ? OFFSET ?"), values)).await.map_err(map_error)?;
         rows.into_iter().map(record_from_row).collect()
     }
     async fn path_by_id(&self, id: i64) -> Result<Option<String>, WorkspaceRepositoryError> {

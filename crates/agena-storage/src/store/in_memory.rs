@@ -831,6 +831,29 @@ impl PersistenceEngine for InMemoryEngine {
                     .as_ref()
                     .is_none_or(|needle| meta.title.to_lowercase().contains(needle))
             })
+            .filter(|meta| query.favorite.is_none_or(|value| meta.favorite == value))
+            .filter(|meta| query.pinned.is_none_or(|value| meta.pinned == value))
+            .filter(|meta| {
+                if query.states.is_empty() {
+                    return true;
+                }
+                let view = SessionView {
+                    meta: (*meta).clone(),
+                    parts: membership
+                        .get(&meta.id)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|id| parts.get(id).cloned())
+                        .collect(),
+                };
+                let inputs = StateInputs::from_view(&view);
+                query.states.contains(&derive_session_state(
+                    Some(meta),
+                    &inputs.in_flight_runs,
+                    &inputs.pending_interactions,
+                    0,
+                ))
+            })
             .map(|meta| {
                 let message_count = membership
                     .get(&meta.id)
@@ -874,6 +897,10 @@ impl PersistenceEngine for InMemoryEngine {
         if let Some(before) = query.before {
             summaries.retain(|s| (s.updated_at_ms, s.id) < (before.updated_at_ms, before.id));
         }
+        let offset = usize::try_from(query.offset)
+            .unwrap_or(usize::MAX)
+            .min(summaries.len());
+        summaries.drain(..offset);
         if let Some(limit) = query.limit {
             summaries.truncate(limit.max(0) as usize);
         }
@@ -2470,6 +2497,7 @@ mod tests {
                 search: None,
                 limit: None,
                 before: None,
+                ..Default::default()
             })
             .await
             .expect("list all");
@@ -2484,6 +2512,7 @@ mod tests {
                 search: None,
                 limit: None,
                 before: None,
+                ..Default::default()
             })
             .await
             .expect("list excluding subagents");

@@ -2452,6 +2452,7 @@ async fn list_exclude_subagents_filters_task_children_only() {
             search: None,
             limit: None,
             before: None,
+            ..Default::default()
         })
         .await
         .expect("list all");
@@ -2466,6 +2467,7 @@ async fn list_exclude_subagents_filters_task_children_only() {
             search: None,
             limit: None,
             before: None,
+            ..Default::default()
         })
         .await
         .expect("list excluding subagents");
@@ -2482,4 +2484,116 @@ async fn list_exclude_subagents_filters_task_children_only() {
         2,
         "root + user child remain, task child hidden: {titles:?}"
     );
+}
+
+#[tokio::test]
+async fn session_bucket_pagination_counts_and_workspace_stats_match_without_scanning_client_side() {
+    use agena_storage::store::SessionState;
+    let (engine, root) = setup(in_memory_db().await).await;
+    let workspace_id = engine.session_meta(root).await.unwrap().workspace_id;
+    let mut pinned = Vec::new();
+    for index in 0..25 {
+        let session = engine
+            .create_session(NewSession {
+                workspace_id,
+                parent_id: None,
+                relation_kind: SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: format!("session {index}"),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .unwrap();
+        if index % 2 == 0 {
+            engine
+                .update_session_metadata(
+                    session.id,
+                    SessionMetadataPatch {
+                        pinned: Some(true),
+                        favorite: Some(true),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            pinned.push(session.id);
+        }
+    }
+    let child = engine
+        .create_subagent_session(root, "task".into(), "subagent".into(), 123)
+        .await
+        .unwrap();
+    engine
+        .update_session_metadata(
+            child.id,
+            SessionMetadataPatch {
+                pinned: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let query = SessionListQuery {
+        workspace_id: Some(workspace_id),
+        exclude_subagents: true,
+        pinned: Some(true),
+        limit: Some(5),
+        offset: 5,
+        ..Default::default()
+    };
+    let page = engine.list_session_summaries(query.clone()).await.unwrap();
+    assert_eq!(page.len(), 5);
+    assert!(
+        page.iter()
+            .all(|row| pinned.contains(&row.id) && row.pinned && row.favorite)
+    );
+    assert_eq!(
+        engine.count_session_summaries(query.clone()).await.unwrap(),
+        13,
+        "count ignores offset and limit"
+    );
+    let first = engine
+        .list_session_summaries(SessionListQuery { offset: 0, ..query })
+        .await
+        .unwrap();
+    assert!(
+        !page
+            .iter()
+            .any(|row| first.iter().any(|first| first.id == row.id))
+    );
+    let stats = engine
+        .workspace_session_stats(&[workspace_id, 99999])
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            stats[&workspace_id].total,
+            stats[&workspace_id].roots,
+            stats[&workspace_id].pinned
+        ),
+        (26, 26, 13)
+    );
+    assert_eq!(stats[&99999].total, 0);
+    let ready = engine
+        .count_session_summaries(SessionListQuery {
+            workspace_id: Some(workspace_id),
+            exclude_subagents: true,
+            states: vec![SessionState::Ready],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(ready, 26);
+    let running = engine
+        .list_session_summaries(SessionListQuery {
+            workspace_id: Some(workspace_id),
+            exclude_subagents: true,
+            states: vec![SessionState::Running, SessionState::Creating],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(running.is_empty());
 }

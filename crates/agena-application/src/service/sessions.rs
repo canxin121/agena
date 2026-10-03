@@ -24,17 +24,49 @@ impl ApplicationService {
         let fetch_limit = i64::try_from(limit.saturating_add(1)).map_err(|_| {
             ApplicationError::internal("page limit cannot be represented in storage")
         })?;
+        if cursor.is_some() && query.offset > 0 {
+            return Err(ApplicationError::bad_request(
+                "use either cursor or offset pagination",
+            ));
+        }
+        use agena_api::queries::SessionListBucket;
+        let storage_query = SessionListQuery {
+            workspace_id: query.workspace_id,
+            parent_id: query.parent_id,
+            roots_only: query.roots,
+            exclude_subagents: query.exclude_subagents,
+            search: non_empty(query.pagination.search()).map(ToString::to_string),
+            limit: Some(fetch_limit),
+            before: cursor,
+            offset: query.offset,
+            favorite: (query.bucket == Some(SessionListBucket::Favorite)).then_some(true),
+            pinned: (query.bucket == Some(SessionListBucket::Pinned)).then_some(true),
+            states: match query.bucket {
+                Some(SessionListBucket::Running) => vec![
+                    agena_storage::store::SessionState::Running,
+                    agena_storage::store::SessionState::Creating,
+                ],
+                Some(SessionListBucket::Attention) => vec![
+                    agena_storage::store::SessionState::AwaitingInteraction,
+                    agena_storage::store::SessionState::Failed,
+                ],
+                Some(SessionListBucket::Recent) => vec![agena_storage::store::SessionState::Ready],
+                _ => Vec::new(),
+            },
+        };
+        let total = if query.include_total {
+            Some(
+                self.session_store
+                    .count_session_summaries(storage_query.clone())
+                    .await
+                    .map_err(|error| ApplicationError::internal_error(&error))?,
+            )
+        } else {
+            None
+        };
         let rows = self
             .session_store
-            .list_session_summaries(SessionListQuery {
-                workspace_id: query.workspace_id,
-                parent_id: query.parent_id,
-                roots_only: query.roots,
-                exclude_subagents: query.exclude_subagents,
-                search: non_empty(query.pagination.search()).map(ToString::to_string),
-                limit: Some(fetch_limit),
-                before: cursor,
-            })
+            .list_session_summaries(storage_query)
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?;
         let (slice, has_more) = trim_page(rows, limit)?;
@@ -59,7 +91,9 @@ impl ApplicationService {
             resources.push(session_resource_from_storage_summary(&summary, state)?);
         }
 
-        build_page(resources, has_more, next_cursor, PageOrder::Desc, limit)
+        let mut page = build_page(resources, has_more, next_cursor, PageOrder::Desc, limit)?;
+        page.total = total;
+        Ok(page)
     }
 
     pub async fn get_session(&self, session_id: i64) -> ApplicationResult<Option<SessionResource>> {
@@ -379,6 +413,87 @@ mod tests {
     /// One user content part. `submit_user_run` creates the D9 run marker.
     fn marker_part() -> NewPart {
         NewPart::pending("text", PartRole::User, json!({ "text": "hello" }))
+    }
+
+    #[tokio::test]
+    async fn filtered_pages_keep_totals_and_reject_mixed_cursor_and_offset() {
+        let (service, _, workspace_id) = test_service().await;
+        for index in 0..7 {
+            let session = service
+                .create_session(crate::dto::SessionCreateRequest {
+                    workspace_id,
+                    session: crate::dto::SessionHierarchyRequest {
+                        parent_id: None,
+                        title: format!("Session {index}"),
+                    },
+                })
+                .await
+                .unwrap();
+            if index % 2 == 0 {
+                service
+                    .replace_session(
+                        session.id,
+                        SessionUpdateRequest {
+                            favorite: Some(true),
+                            title: None,
+                            pinned: None,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let query = |offset| {
+            serde_json::from_value::<crate::dto::SessionListQuery>(json!({
+            "workspace_id": workspace_id, "bucket": "favorite", "include_total": true, "limit": 2, "offset": offset,
+        })).unwrap()
+        };
+        let first = service.list_sessions(query(0)).await.unwrap();
+        let second = service.list_sessions(query(2)).await.unwrap();
+        assert_eq!(first.total, Some(4));
+        assert_eq!(second.total, Some(4));
+        assert_eq!(first.items.len(), 2);
+        assert_eq!(second.items.len(), 2);
+        assert!(first.page.has_more);
+        assert!(!second.page.has_more);
+        assert!(
+            first
+                .items
+                .iter()
+                .chain(&second.items)
+                .all(|session| session.favorite)
+        );
+        assert!(
+            first
+                .items
+                .iter()
+                .all(|left| second.items.iter().all(|right| left.id != right.id))
+        );
+        let mixed = serde_json::from_value::<crate::dto::SessionListQuery>(json!({
+            "cursor": first.page.next_cursor, "offset": 2,
+        }))
+        .unwrap();
+        assert!(service.list_sessions(mixed).await.is_err());
+        let plain = service
+            .list_sessions(crate::dto::SessionListQuery::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            plain.total, None,
+            "ordinary lists must not pay for a total query"
+        );
+        let workspaces = service
+            .list_workspaces(serde_json::from_value(json!({"offset": 1, "limit": 2})).unwrap())
+            .await
+            .unwrap();
+        assert!(workspaces.items.is_empty());
+        let workspaces = service
+            .list_workspaces(
+                serde_json::from_value(json!({"include_session_count": true})).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(workspaces.items[0].session_stats.unwrap().total, 7);
     }
 
     #[tokio::test]

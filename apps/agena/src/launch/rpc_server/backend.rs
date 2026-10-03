@@ -174,6 +174,7 @@ impl AgenaAppServerBackend {
                     roots: false,
                     exclude_subagents: true,
                     search: None,
+                    ..Default::default()
                 }))
                 .await
                 .map_err(client_backend_error)?;

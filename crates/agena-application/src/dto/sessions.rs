@@ -21,6 +21,12 @@ pub struct SessionListQuery {
     /// Hide task child sessions (`relation_kind = 'subagent'`).
     #[serde(default)]
     pub exclude_subagents: bool,
+    #[serde(default)]
+    pub offset: u64,
+    #[serde(default)]
+    pub bucket: Option<agena_api::queries::SessionListBucket>,
+    #[serde(default)]
+    pub include_total: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

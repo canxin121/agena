@@ -914,12 +914,23 @@ pub struct RuntimeReloadResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A workspace resource.
 pub struct WorkspaceResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_stats: Option<WorkspaceSessionStats>,
     pub id: i64,
     pub path: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_count: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct WorkspaceSessionStats {
+    pub total: u64,
+    pub roots: u64,
+    pub pinned: u64,
+    pub running: u64,
+    pub attention: u64,
 }
 
 // ─── Sessions ────────────────────────────────────────────────────────────

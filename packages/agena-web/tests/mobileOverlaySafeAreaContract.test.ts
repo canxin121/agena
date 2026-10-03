@@ -9,9 +9,12 @@ test('fullscreen dialogs keep content and close controls inside mobile safe area
   assert.match(source, /--oc-safe-area-right/)
   assert.match(source, /--oc-safe-area-bottom/)
   assert.match(source, /--oc-safe-area-left/)
-  assert.match(source, /right-\[calc\(0\.75rem\+var\(--oc-safe-area-right,0px\)\)\]/)
-  assert.match(source, /top-\[calc\(0\.75rem\+var\(--oc-safe-area-top,0px\)\)\]/)
-  assert.doesNotMatch(source, /sm:right-3 sm:top-3/)
+  // The shared header stays inside the safe-area-padded content instead of
+  // positioning its close control relative to the screen edge.
+  assert.match(source, /<DialogHeader/)
+  const header = readFileSync(new URL('../src/components/ui/DialogHeader.vue', import.meta.url), 'utf8')
+  assert.match(header, /shrink-0/)
+  assert.doesNotMatch(header, /absolute/)
 })
 
 test('mobile form sheets respect horizontal safe-area insets', () => {

@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
-import { DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'radix-vue'
-import { RiCloseLine } from '@remixicon/vue'
-import { useI18n } from 'vue-i18n'
+import { DialogContent, DialogOverlay, DialogPortal, DialogRoot } from 'radix-vue'
 
-import IconButton from '@/components/ui/IconButton.vue'
+import DialogHeader from '@/components/ui/DialogHeader.vue'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
 
@@ -31,8 +29,6 @@ const emit = defineEmits<{
 const ui = useUiStore()
 const isMobileSheet = computed(() => Boolean(ui.isCompactTouch))
 
-const { t } = useI18n()
-
 const MOBILE_SHEET_MARGIN_PX = 8
 
 const mobileSheetStyle = ref<CSSProperties>({
@@ -45,14 +41,14 @@ const mobileSheetStyle = ref<CSSProperties>({
 
 const desktopContentClass = computed(() =>
   cn(
-    'fixed left-[50%] top-[50%] z-[71] pointer-events-auto flex w-[calc(100vw-1rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur duration-200 max-h-[calc(100dvh-1rem)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
+    'fixed left-[50%] top-[50%] z-[71] pointer-events-auto flex w-[calc(100vw-1rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border/70 bg-background shadow-xl duration-200 max-h-[calc(100dvh-1rem)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
     props.maxWidth || 'max-w-lg',
   ),
 )
 
 const mobileContentClass = computed(() =>
   cn(
-    'fixed z-[71] pointer-events-auto flex -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+    'fixed z-[71] pointer-events-auto flex -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border/70 bg-background shadow-xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
     props.maxWidth || 'max-w-none',
   ),
 )
@@ -64,7 +60,7 @@ const contentStyle = computed<CSSProperties | undefined>(() =>
 const sheetTitle = computed(() => (isMobileSheet.value && props.mobileTitle ? props.mobileTitle : props.title || ''))
 const contentBodyClass = computed(() =>
   cn(
-    'min-h-0 flex-1 p-4 sm:p-5',
+    'min-h-0 min-w-0 flex-1 p-3 sm:p-4 overscroll-contain',
     isMobileSheet.value && props.mobileFillViewport ? 'overflow-hidden' : 'overflow-auto',
   ),
 )
@@ -220,33 +216,20 @@ onBeforeUnmount(() => {
   <DialogRoot :open="open" @update:open="onUpdateOpen">
     <DialogPortal>
       <DialogOverlay
-        class="fixed inset-0 z-[70] pointer-events-auto bg-black/55 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+        class="fixed inset-0 z-[70] pointer-events-auto bg-black/55 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       />
       <DialogContent :class="contentClass" :style="contentStyle">
-        <div class="flex items-start justify-between gap-3 border-b border-border/40 px-4 py-3 sm:px-5 sm:py-3">
-          <div class="min-w-0">
-            <DialogTitle v-if="sheetTitle" class="text-sm font-semibold text-foreground sm:text-base break-words">
-              {{ sheetTitle }}
-            </DialogTitle>
-            <DialogDescription v-if="description" class="mt-1 text-xs text-muted-foreground break-words sm:text-sm">
-              {{ description }}
-            </DialogDescription>
-          </div>
-          <IconButton
-            size="sm"
-            :tooltip="t('common.close')"
-            :is-touch-pointer="ui.isTouchPointer"
-            :title="t('common.close')"
-            :aria-label="t('common.close')"
-            @click="close"
-          >
-            <RiCloseLine class="h-4 w-4" />
-          </IconButton>
-        </div>
+        <DialogHeader :title="sheetTitle" :description="description" @close="close" />
 
         <div :class="contentBodyClass">
           <slot />
         </div>
+        <footer
+          v-if="$slots.footer"
+          class="flex shrink-0 flex-wrap items-center gap-2 border-t border-border/50 px-3 py-2 sm:px-4"
+        >
+          <slot name="footer" />
+        </footer>
       </DialogContent>
     </DialogPortal>
   </DialogRoot>

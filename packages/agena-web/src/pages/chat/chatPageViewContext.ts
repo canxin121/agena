@@ -235,6 +235,7 @@ export type ChatPageViewContext = {
   speedModeChipLabel: MaybeRef<string>
   composerBottomLeftStatus: MaybeRef<string>
   composerBottomRightStatus: MaybeRef<string>
+  openPlanViewer: () => void
   composerStatusExtra: MaybeRef<string>
 
   sessionUsage: MaybeRef<SessionUsageLike | null>

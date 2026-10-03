@@ -2493,6 +2493,9 @@ const viewCtx = {
   composerStatusExtra,
   composerBottomLeftStatus,
   composerBottomRightStatus,
+  openPlanViewer: () => {
+    planViewerOpen.value = true
+  },
 
   // Send/stop.
   sessionUsage,

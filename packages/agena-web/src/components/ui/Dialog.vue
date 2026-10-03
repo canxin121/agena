@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import { DialogRoot, DialogContent, DialogOverlay, DialogPortal, DialogTitle, DialogDescription } from 'radix-vue'
+import { DialogRoot, DialogContent, DialogOverlay, DialogPortal } from 'radix-vue'
 import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { RiCloseLine } from '@remixicon/vue'
 import { cn } from '@/lib/utils'
-import IconButton from '@/components/ui/IconButton.vue'
+import DialogHeader from '@/components/ui/DialogHeader.vue'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
@@ -13,6 +11,8 @@ const props = defineProps<{
   description?: string
   maxWidth?: string
   mobileFullscreen?: boolean
+  /** The child owns scrolling (editors, plan viewers, split panes). */
+  bodyScroll?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -20,63 +20,48 @@ const emit = defineEmits<{
   (e: 'update:open', value: boolean): void
 }>()
 
-function close() {
-  emit('close')
-  emit('update:open', false)
+function onUpdateOpen(open: boolean) {
+  if (!open) emit('close')
+  emit('update:open', open)
 }
 
-const { t } = useI18n()
 const ui = useUiStore()
 const useMobileFullscreen = computed(() => Boolean(props.mobileFullscreen && ui.isCompactTouch))
-
 const contentClass = computed(() =>
   cn(
+    'fixed z-[71] pointer-events-auto flex min-w-0 flex-col overflow-hidden bg-background shadow-xl duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
     useMobileFullscreen.value
-      ? 'fixed inset-0 z-[71] pointer-events-auto grid h-[100dvh] w-screen min-w-0 gap-4 rounded-none border-0 bg-background/95 pt-[calc(1rem+var(--oc-safe-area-top,0px))] pr-[calc(1rem+var(--oc-safe-area-right,0px))] pb-[calc(1rem+var(--oc-safe-area-bottom,0px))] pl-[calc(1rem+var(--oc-safe-area-left,0px))] shadow-2xl backdrop-blur duration-200 overflow-y-auto overflow-x-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0'
-      : 'fixed left-[50%] top-[50%] z-[71] pointer-events-auto grid w-[calc(100vw-2rem)] min-w-0 translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl border border-border/70 bg-background/95 p-4 shadow-2xl backdrop-blur duration-200 max-h-[calc(100dvh-2rem)] overflow-y-auto overflow-x-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:w-full sm:max-h-[calc(100dvh-3rem)] sm:p-6',
-    props.maxWidth || 'max-w-lg',
+      ? 'inset-0 h-[100dvh] w-screen pt-[var(--oc-safe-area-top,0px)] pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)]'
+      : 'left-1/2 top-1/2 w-[calc(100vw-1rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border/70 max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-3rem)]',
+    useMobileFullscreen.value ? 'max-w-none' : props.maxWidth || 'max-w-lg',
   ),
 )
 </script>
 
 <template>
-  <DialogRoot :open="open" @update:open="$emit('update:open', $event)">
+  <DialogRoot :open="open" @update:open="onUpdateOpen">
     <DialogPortal>
       <DialogOverlay
-        class="fixed inset-0 z-[70] pointer-events-auto bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+        class="fixed inset-0 z-[70] pointer-events-auto bg-black/55 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       />
       <DialogContent :class="contentClass">
+        <DialogHeader :title="title" :description="description" @close="onUpdateOpen(false)" />
         <div
+          class="min-h-0 min-w-0 flex-1 p-3 sm:p-4"
           :class="
-            useMobileFullscreen
-              ? 'absolute right-[calc(0.75rem+var(--oc-safe-area-right,0px))] top-[calc(0.75rem+var(--oc-safe-area-top,0px))]'
-              : 'absolute right-3 top-3'
+            bodyScroll === false
+              ? 'flex flex-col overflow-hidden'
+              : 'overflow-y-auto overflow-x-hidden overscroll-contain'
           "
         >
-          <IconButton
-            variant="ghost"
-            size="md"
-            class="h-8 w-8"
-            :tooltip="t('common.close')"
-            :is-touch-pointer="ui.isTouchPointer"
-            :title="t('common.close')"
-            :aria-label="t('common.close')"
-            @click="close"
-          >
-            <RiCloseLine class="h-4.5 w-4.5" />
-          </IconButton>
+          <slot />
         </div>
-
-        <div class="flex flex-col space-y-1.5 text-center sm:text-left min-w-0" v-if="title || description">
-          <DialogTitle v-if="title" class="text-lg font-semibold leading-none tracking-tight break-words">{{
-            title
-          }}</DialogTitle>
-          <!-- Paths / slugs can be long unbroken strings on mobile; force wrapping to avoid overflow. -->
-          <DialogDescription v-if="description" class="text-sm text-muted-foreground break-all">{{
-            description
-          }}</DialogDescription>
-        </div>
-        <slot />
+        <footer
+          v-if="$slots.footer"
+          class="flex shrink-0 flex-wrap items-center gap-2 border-t border-border/50 px-3 py-2 sm:px-4"
+        >
+          <slot name="footer" />
+        </footer>
       </DialogContent>
     </DialogPortal>
   </DialogRoot>

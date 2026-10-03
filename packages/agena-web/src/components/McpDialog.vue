@@ -64,12 +64,8 @@ watch(
     maxWidth="max-w-[calc(100vw-2rem)] sm:max-w-lg"
     @update:open="(value) => ui.setMcpDialogOpen(value)"
   >
-    <div class="space-y-4">
-      <div class="flex items-center justify-between gap-3 border-y border-border/60 py-3">
-        <div class="text-xs text-muted-foreground">
-          <span class="font-mono font-semibold text-foreground">{{ serverCount }}</span> servers ·
-          <span class="font-mono font-semibold text-foreground">{{ toolCount }}</span> tools
-        </div>
+    <div class="space-y-3">
+      <div class="flex items-center gap-3 border-b border-border/50 pb-2">
         <IconButton
           variant="outline"
           size="md"
@@ -80,6 +76,10 @@ watch(
         >
           <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
         </IconButton>
+        <div class="text-xs text-muted-foreground">
+          <span class="font-mono font-semibold text-foreground">{{ serverCount }}</span> servers ·
+          <span class="font-mono font-semibold text-foreground">{{ toolCount }}</span> tools
+        </div>
       </div>
 
       <div v-if="loading" class="text-xs text-muted-foreground">{{ t('mcp.dialog.loading') }}</div>

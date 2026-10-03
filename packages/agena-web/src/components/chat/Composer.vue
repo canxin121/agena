@@ -401,28 +401,29 @@ defineExpose({
     @drop.prevent="$emit('drop', $event)"
   >
     <div
-      v-if="$slots.status"
-      class="pointer-events-none absolute left-2 top-0 z-10 flex max-w-[calc(100%-3.5rem)] -translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
+      v-if="$slots.status || $slots.topRight"
+      class="pointer-events-none absolute inset-x-2 top-0 z-10 flex min-w-0 -translate-y-1/2 items-center gap-2 pr-8 font-mono text-[11px]"
     >
-      <slot name="status" />
+      <div
+        v-if="$slots.status"
+        class="pointer-events-auto min-w-0 max-w-full overflow-x-auto bg-background px-1 [scrollbar-width:none]"
+      >
+        <slot name="status" />
+      </div>
+      <div v-if="$slots.topRight" class="min-w-0 shrink-0 bg-background px-1">
+        <slot name="topRight" />
+      </div>
     </div>
     <div
-      v-if="$slots.topRight"
-      class="pointer-events-none absolute right-2 top-0 z-10 flex max-w-[calc(100%-3.5rem)] -translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
+      v-if="$slots.bottomLeft || $slots.bottomRight"
+      class="pointer-events-none absolute inset-x-2 bottom-0 z-10 flex min-w-0 translate-y-1/2 items-center gap-2 font-mono text-[11px]"
     >
-      <slot name="topRight" />
-    </div>
-    <div
-      v-if="$slots.bottomLeft"
-      class="pointer-events-none absolute bottom-0 left-2 z-10 flex max-w-[calc(100%-3.5rem)] translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
-    >
-      <slot name="bottomLeft" />
-    </div>
-    <div
-      v-if="$slots.bottomRight"
-      class="pointer-events-none absolute bottom-0 right-2 z-10 flex max-w-[calc(100%-3.5rem)] translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
-    >
-      <slot name="bottomRight" />
+      <div v-if="$slots.bottomLeft" class="flex min-w-0 items-center gap-2 bg-background px-1">
+        <slot name="bottomLeft" />
+      </div>
+      <div v-if="$slots.bottomRight" class="flex min-w-0 items-center gap-2 bg-background px-1">
+        <slot name="bottomRight" />
+      </div>
     </div>
     <slot name="overlay" />
     <div class="absolute top-1 right-1 z-10 flex items-center gap-1">

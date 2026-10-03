@@ -38,6 +38,7 @@ const stashModelId = computed(() => `git-stash:${stashDiffModel.value.path}`)
     :title="dialogTitle"
     :description="t('git.ui.dialogs.stashDiff.description')"
     maxWidth="max-w-5xl"
+    :body-scroll="false"
     @update:open="onUpdateOpen"
   >
     <div class="space-y-2">
@@ -48,7 +49,7 @@ const stashModelId = computed(() => `git-stash:${stashDiffModel.value.path}`)
       >
         {{ error }}
       </div>
-      <div v-else-if="diff.trim()" class="h-[70dvh] min-h-[20rem]">
+      <div v-else-if="diff.trim()" class="h-[min(65dvh,44rem)] min-h-0">
         <MonacoDiffEditor
           :original-value="stashDiffModel.original"
           :modified-value="stashDiffModel.modified"

@@ -649,7 +649,7 @@ void sessionActionsMenuRef
                       ref="modelTriggerRef"
                       type="button"
                       data-oc-keyboard-tap="blur"
-                      class="pointer-events-auto flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                      class="pointer-events-auto flex min-h-7 touch-manipulation items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                       :class="composerPickerOpen === 'model' ? 'bg-secondary/60 text-foreground' : ''"
                       :title="modelHint"
                       :aria-label="t('chat.composer.picker.modelTitle')"
@@ -665,7 +665,7 @@ void sessionActionsMenuRef
                         ref="thinkingTriggerRef"
                         type="button"
                         data-oc-keyboard-tap="blur"
-                        class="pointer-events-auto flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                        class="pointer-events-auto flex min-h-7 touch-manipulation items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                         :class="composerPickerOpen === 'thinking' ? 'bg-secondary/60 text-foreground' : ''"
                         :title="thinkingModeHint"
                         :aria-label="t('chat.composer.picker.thinkingTitle')"
@@ -682,7 +682,7 @@ void sessionActionsMenuRef
                         ref="speedTriggerRef"
                         type="button"
                         data-oc-keyboard-tap="blur"
-                        class="pointer-events-auto flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                        class="pointer-events-auto flex min-h-7 touch-manipulation items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                         :class="composerPickerOpen === 'speed' ? 'bg-secondary/60 text-foreground' : ''"
                         :title="speedModeHint"
                         :aria-label="t('chat.composer.picker.speedTitle')"
@@ -706,14 +706,18 @@ void sessionActionsMenuRef
                   </span>
                 </template>
                 <template #bottomLeft>
-                  <span v-if="composerBottomLeftStatus" class="text-muted-foreground">
-                    {{ composerBottomLeftStatus }}
-                  </span>
-                </template>
-                <template #bottomRight>
-                  <span v-if="composerBottomRightStatus" class="text-muted-foreground">
+                  <button
+                    v-if="composerBottomRightStatus"
+                    type="button"
+                    class="pointer-events-auto inline-flex min-h-7 items-center rounded px-1.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :aria-label="t('chat.planViewer.title')"
+                    @click="ctx.openPlanViewer"
+                  >
                     {{ composerBottomRightStatus }}
-                  </span>
+                  </button>
+                  <span v-if="composerBottomLeftStatus" class="truncate text-muted-foreground">{{
+                    composerBottomLeftStatus
+                  }}</span>
                 </template>
                 <template #overlay>
                   <PromptHistoryPalette

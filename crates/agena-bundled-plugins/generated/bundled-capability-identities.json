@@ -1,6 +1,97 @@
 {
+  "commands": [
+    {
+      "aliases": [],
+      "content_sha256": "e6d399d5e3d926dc5fd22206b84debfc48bb28b3daa0bf347db97eec55ca1f7d",
+      "name": "batch"
+    },
+    {
+      "aliases": [],
+      "content_sha256": "1dcfd518c8bac6bd603c3cbf5342d41bbeb6c46535e9d4d4c7be5203bae9a079",
+      "name": "debug"
+    },
+    {
+      "aliases": [],
+      "content_sha256": "a86963c6ce5b791e8af1ce693270bfe0ade9d4cefd5bf23a391207a4d7d80f83",
+      "name": "doctor"
+    },
+    {
+      "aliases": [
+        "image-generate",
+        "image-edit"
+      ],
+      "content_sha256": "8a7e8fa650ac34a9cda78a2b6338994fa827c2040000c1f6efdbd1054744da66",
+      "name": "imagegen"
+    },
+    {
+      "aliases": [
+        "bootstrap"
+      ],
+      "content_sha256": "429c2681b567891f32216e375c7482fb0729b19bb04eccea08f50de13e543425",
+      "name": "init"
+    },
+    {
+      "aliases": [
+        "create-plugin"
+      ],
+      "content_sha256": "a17466b99d1911fdc3f331cb3884fcba6aae7a1a37d3af9f76155e51777148f1",
+      "name": "plugin_creator"
+    },
+    {
+      "aliases": [],
+      "content_sha256": "1cea33862917846caf44fce529f8d82692da641f54757670eb42f6a29ebb5e8e",
+      "name": "review"
+    },
+    {
+      "aliases": [
+        "start"
+      ],
+      "content_sha256": "a1aee83817394f7b9ba38825fa00e6bb0635465ddba63c6710b71f6d994d3aeb",
+      "name": "run"
+    },
+    {
+      "aliases": [
+        "skill-from-run"
+      ],
+      "content_sha256": "6243fa2793fdf015d224cf3ddb954bcc80a2b565bff2d6c7a3fac7cbed9e1025",
+      "name": "run_skill_generator"
+    },
+    {
+      "aliases": [
+        "security-review"
+      ],
+      "content_sha256": "3e0d63213aa8f27807772e15403eb292dc0581ed7a2dc5fdcb33d85587af4f1c",
+      "name": "security_review"
+    },
+    {
+      "aliases": [],
+      "content_sha256": "1672a6ebde20872680efe0035a0652c5aa58a363ca69068b57555f5f5aff0d12",
+      "name": "simplify"
+    },
+    {
+      "aliases": [
+        "create-skill"
+      ],
+      "content_sha256": "cb792528bc96a0d703d0d4154d6d2aceeb3533904c676cb0e530661559d121bd",
+      "name": "skill_creator"
+    },
+    {
+      "aliases": [
+        "install-skill"
+      ],
+      "content_sha256": "eecd6dd6996146401218f528cd87fbecdd11a2c759fecf5ba0e34e222107addd",
+      "name": "skill_installer"
+    },
+    {
+      "aliases": [
+        "check"
+      ],
+      "content_sha256": "372154305037a47fa6dd7b89c5f750673b47b478f70eb0204c47b55c179249e9",
+      "name": "verify"
+    }
+  ],
   "counts": {
-    "bundled_skills": 14,
+    "bundled_commands": 14,
     "execution_tools": 131,
     "gateway_tools": 4,
     "plugins": 22,
@@ -1715,9 +1806,9 @@
         {
           "canonical_name": "agena.tasks.run",
           "conditional": null,
-          "definition_identity": "9cd63e08703f9b019cbe3d8ad77351bdf2cff9627e416b03ba42da3ec836a7df",
+          "definition_identity": "8e1ebe4065d77f90d43ee68997efbb93561cf09d2adc29c2201b79d94ac6574d",
           "gateway": false,
-          "input_schema_sha256": "04f0b017446ab0cee351c94884df2feee81567bb4528c5759422820e847009ba",
+          "input_schema_sha256": "65cbe2d1a1c8b4cfe1cbc63666b818730dfdb5a2b2d5cfefef66ba96fa867a4d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
@@ -2016,97 +2107,6 @@
     }
   ],
   "schema_version": 2,
-  "skills": [
-    {
-      "aliases": [],
-      "content_sha256": "e6d399d5e3d926dc5fd22206b84debfc48bb28b3daa0bf347db97eec55ca1f7d",
-      "name": "batch"
-    },
-    {
-      "aliases": [],
-      "content_sha256": "1dcfd518c8bac6bd603c3cbf5342d41bbeb6c46535e9d4d4c7be5203bae9a079",
-      "name": "debug"
-    },
-    {
-      "aliases": [],
-      "content_sha256": "a86963c6ce5b791e8af1ce693270bfe0ade9d4cefd5bf23a391207a4d7d80f83",
-      "name": "doctor"
-    },
-    {
-      "aliases": [
-        "image-generate",
-        "image-edit"
-      ],
-      "content_sha256": "8a7e8fa650ac34a9cda78a2b6338994fa827c2040000c1f6efdbd1054744da66",
-      "name": "imagegen"
-    },
-    {
-      "aliases": [
-        "bootstrap"
-      ],
-      "content_sha256": "429c2681b567891f32216e375c7482fb0729b19bb04eccea08f50de13e543425",
-      "name": "init"
-    },
-    {
-      "aliases": [
-        "create-plugin"
-      ],
-      "content_sha256": "a17466b99d1911fdc3f331cb3884fcba6aae7a1a37d3af9f76155e51777148f1",
-      "name": "plugin_creator"
-    },
-    {
-      "aliases": [],
-      "content_sha256": "1cea33862917846caf44fce529f8d82692da641f54757670eb42f6a29ebb5e8e",
-      "name": "review"
-    },
-    {
-      "aliases": [
-        "start"
-      ],
-      "content_sha256": "a1aee83817394f7b9ba38825fa00e6bb0635465ddba63c6710b71f6d994d3aeb",
-      "name": "run"
-    },
-    {
-      "aliases": [
-        "skill-from-run"
-      ],
-      "content_sha256": "6243fa2793fdf015d224cf3ddb954bcc80a2b565bff2d6c7a3fac7cbed9e1025",
-      "name": "run_skill_generator"
-    },
-    {
-      "aliases": [
-        "security-review"
-      ],
-      "content_sha256": "3e0d63213aa8f27807772e15403eb292dc0581ed7a2dc5fdcb33d85587af4f1c",
-      "name": "security_review"
-    },
-    {
-      "aliases": [],
-      "content_sha256": "1672a6ebde20872680efe0035a0652c5aa58a363ca69068b57555f5f5aff0d12",
-      "name": "simplify"
-    },
-    {
-      "aliases": [
-        "create-skill"
-      ],
-      "content_sha256": "cb792528bc96a0d703d0d4154d6d2aceeb3533904c676cb0e530661559d121bd",
-      "name": "skill_creator"
-    },
-    {
-      "aliases": [
-        "install-skill"
-      ],
-      "content_sha256": "eecd6dd6996146401218f528cd87fbecdd11a2c759fecf5ba0e34e222107addd",
-      "name": "skill_installer"
-    },
-    {
-      "aliases": [
-        "check"
-      ],
-      "content_sha256": "372154305037a47fa6dd7b89c5f750673b47b478f70eb0204c47b55c179249e9",
-      "name": "verify"
-    }
-  ],
   "snapshot_date": "2026-07-27",
   "snapshot_kind": "capability_identity"
 }

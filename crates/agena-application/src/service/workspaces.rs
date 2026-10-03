@@ -142,11 +142,16 @@ impl ApplicationService {
         // filesystem. Defaults stay small for ordinary REST callers.
         let depth = query.depth.unwrap_or(2).min(64);
         let mut remaining = query.limit.unwrap_or(500).clamp(1, 50_000);
-        let entries = if query.respect_ignores {
-            read_ignored_workspace_entries(root.as_path(), target.as_path(), depth, &mut remaining)?
-        } else {
-            read_workspace_entries(root.as_path(), target.as_path(), depth, &mut remaining)?
-        };
+        let discovery_root = root.clone();
+        let entries = tokio::task::spawn_blocking(move || {
+            if query.respect_ignores {
+                read_ignored_workspace_entries(&discovery_root, &target, depth, &mut remaining)
+            } else {
+                read_workspace_entries(&discovery_root, &target, depth, &mut remaining, &target)
+            }
+        })
+        .await
+        .map_err(|error| ApplicationError::internal_error(&error))??;
 
         Ok(WorkspaceFileTreeResource {
             workspace_id,
@@ -602,6 +607,7 @@ fn read_workspace_entries(
     dir: &Path,
     depth: usize,
     remaining: &mut usize,
+    discovery_root: &Path,
 ) -> ApplicationResult<Vec<WorkspaceFileNode>> {
     if *remaining == 0 {
         return Ok(Vec::new());
@@ -633,8 +639,11 @@ fn read_workspace_entries(
             WorkspaceFileKind::Other
         };
         *remaining -= 1;
-        let children = if kind == WorkspaceFileKind::Directory && depth > 0 {
-            read_workspace_entries(root, path.as_path(), depth - 1, remaining)?
+        let children = if kind == WorkspaceFileKind::Directory
+            && depth > 0
+            && crate::filesystem_discovery::may_descend(discovery_root, path.as_path())
+        {
+            read_workspace_entries(root, path.as_path(), depth - 1, remaining, discovery_root)?
         } else {
             Vec::new()
         };
@@ -665,6 +674,7 @@ fn read_ignored_workspace_entries(
     depth: usize,
     remaining: &mut usize,
 ) -> ApplicationResult<Vec<WorkspaceFileNode>> {
+    let discovery_root = dir.to_path_buf();
     let mut builder = ignore::WalkBuilder::new(dir);
     builder
         .hidden(false)
@@ -676,25 +686,38 @@ fn read_ignored_workspace_entries(
         .parents(true)
         .require_git(false)
         .max_depth(Some(depth.saturating_add(1)))
-        .filter_entry(|entry| !matches!(entry.file_name().to_str(), Some(".git" | ".hg" | ".svn")));
+        .filter_entry(move |entry| {
+            !matches!(entry.file_name().to_str(), Some(".git" | ".hg" | ".svn"))
+                && crate::filesystem_discovery::may_descend(&discovery_root, entry.path())
+        });
 
     let mut nodes = std::collections::BTreeMap::<String, WorkspaceFileNode>::new();
     let mut children = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for entry in builder.build() {
-        let entry = entry.map_err(|error| {
-            ApplicationError::internal(format!(
-                "workspace ignore-aware walk failed for {}: {error}",
-                dir.display()
-            ))
-        })?;
+    let mut failure = None;
+    crate::filesystem_discovery::visit(&mut builder, |entry| {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                failure = Some(ApplicationError::internal(format!(
+                    "workspace ignore-aware walk failed for {}: {error}",
+                    dir.display()
+                )));
+                return ignore::WalkState::Quit;
+            }
+        };
         if entry.path() == dir {
-            continue;
+            return ignore::WalkState::Continue;
         }
         if *remaining == 0 {
-            break;
+            return ignore::WalkState::Quit;
         }
-        let metadata = fs::symlink_metadata(entry.path())
-            .map_err(|error| workspace_fs_error(entry.path(), error))?;
+        let metadata = match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failure = Some(workspace_fs_error(entry.path(), error));
+                return ignore::WalkState::Quit;
+            }
+        };
         let file_type = metadata.file_type();
         let kind = if file_type.is_dir() {
             WorkspaceFileKind::Directory
@@ -726,6 +749,14 @@ fn read_ignored_workspace_entries(
                 children: Vec::new(),
             },
         );
+        if *remaining == 0 {
+            ignore::WalkState::Quit
+        } else {
+            ignore::WalkState::Continue
+        }
+    });
+    if let Some(error) = failure {
+        return Err(error);
     }
 
     fn assemble(

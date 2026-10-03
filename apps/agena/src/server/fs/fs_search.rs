@@ -196,27 +196,28 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
     let mut candidates: Vec<(SearchFile, i32)> = Vec::new();
     let mut truncated = false;
 
-    for result in builder
-        .filter_entry(move |entry| {
-            let path = entry.path();
-            if path == abs_root_for_filter {
-                return true;
-            }
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                return true;
-            };
+    builder.filter_entry(move |entry| {
+        let path = entry.path();
+        if path == abs_root_for_filter {
+            return true;
+        }
+        if !agena_application::filesystem_discovery::may_descend(&abs_root_for_filter, path) {
+            return false;
+        }
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            return true;
+        };
 
-            let lower = name.to_ascii_lowercase();
-            if excluded.contains(lower.as_str()) {
-                return false;
-            }
-            if !q.include_hidden && name.starts_with('.') {
-                return false;
-            }
-            true
-        })
-        .build()
-    {
+        let lower = name.to_ascii_lowercase();
+        if excluded.contains(lower.as_str()) {
+            return false;
+        }
+        if !q.include_hidden && name.starts_with('.') {
+            return false;
+        }
+        true
+    });
+    agena_application::filesystem_discovery::visit(&mut builder, |result| {
         let entry = match result {
             Ok(e) => e,
             Err(error) => {
@@ -228,12 +229,12 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
                     ),
                     "filesystem search result is partial"
                 );
-                continue;
+                return ignore::WalkState::Continue;
             }
         };
 
         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-            continue;
+            return ignore::WalkState::Continue;
         }
 
         let path = entry.path().to_path_buf();
@@ -243,7 +244,7 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
             .unwrap_or("")
             .to_string();
         if name.is_empty() {
-            continue;
+            return ignore::WalkState::Continue;
         }
 
         let relative_path = normalize_relative_search_path(&abs_root, &path);
@@ -257,7 +258,7 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
         } else {
             match fuzzy_match_score_normalized(&query_norm, &relative_path) {
                 Some(score) => score,
-                None => continue,
+                None => return ignore::WalkState::Continue,
             }
         };
 
@@ -273,9 +274,10 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
 
         if candidates.len() >= collect_limit {
             truncated = true;
-            break;
+            return ignore::WalkState::Quit;
         }
-    }
+        ignore::WalkState::Continue
+    });
 
     if !match_all {
         candidates.sort_by(|(a, sa), (b, sb)| {

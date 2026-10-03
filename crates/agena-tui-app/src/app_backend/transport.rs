@@ -430,9 +430,8 @@ impl TuiBackend {
         if let Err(error) = backend.refresh_model_catalog_cache("", 0, 1).await {
             warn_initial_metadata_refresh("model catalog", &error);
         }
-        if let Err(error) = backend.refresh_workspace_file_tree().await {
-            warn_initial_metadata_refresh("workspace file tree", &error);
-        }
+        // File mentions load the recursive index on first use. Connecting a
+        // TUI must not crawl a home directory or trigger macOS privacy prompts.
         if let Err(error) = backend
             .refresh_workspace_directory(backend.workspace_root())
             .await

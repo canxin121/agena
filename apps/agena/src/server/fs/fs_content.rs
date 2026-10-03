@@ -211,28 +211,29 @@ fn walk_workspace_files(
     let mut files = Vec::new();
     let mut truncated = false;
 
-    for result in builder
-        .filter_entry(move |entry| {
-            let path = entry.path();
-            if path == root_for_filter {
-                return true;
-            }
+    builder.filter_entry(move |entry| {
+        let path = entry.path();
+        if path == root_for_filter {
+            return true;
+        }
+        if !agena_application::filesystem_discovery::may_descend(&root_for_filter, path) {
+            return false;
+        }
 
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                return true;
-            };
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            return true;
+        };
 
-            let lower = name.to_ascii_lowercase();
-            if excluded.contains(lower.as_str()) {
-                return false;
-            }
-            if !include_hidden && name.starts_with('.') {
-                return false;
-            }
-            true
-        })
-        .build()
-    {
+        let lower = name.to_ascii_lowercase();
+        if excluded.contains(lower.as_str()) {
+            return false;
+        }
+        if !include_hidden && name.starts_with('.') {
+            return false;
+        }
+        true
+    });
+    agena_application::filesystem_discovery::visit(&mut builder, |result| {
         let entry = match result {
             Ok(entry) => entry,
             Err(error) => {
@@ -244,20 +245,21 @@ fn walk_workspace_files(
                     ),
                     "filesystem content discovery result is partial"
                 );
-                continue;
+                return ignore::WalkState::Continue;
             }
         };
 
         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-            continue;
+            return ignore::WalkState::Continue;
         }
 
         files.push(entry.path().to_path_buf());
         if files.len() >= max_files {
             truncated = true;
-            break;
+            return ignore::WalkState::Quit;
         }
-    }
+        ignore::WalkState::Continue
+    });
 
     (files, truncated)
 }

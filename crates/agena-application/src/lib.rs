@@ -26,6 +26,7 @@ mod application_sessions;
 mod application_tools;
 pub mod dto;
 mod error;
+pub mod filesystem_discovery;
 pub mod pagination;
 pub mod provider_queries;
 pub mod provider_studio;

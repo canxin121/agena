@@ -201,6 +201,35 @@ impl FsPlugin {
                         "expected_sha256 was supplied but the target does not exist",
                     ));
                 }
+                // Capture the revision being replaced while holding the same mutation lock.
+                let (original, diff_unavailable_reason) = if existed {
+                    let mut bytes = Vec::new();
+                    File::open(&target)
+                        .map_err(fs_error)?
+                        .take(MAX_MUTATING_TEXT_BYTES + 1)
+                        .read_to_end(&mut bytes)
+                        .map_err(fs_error)?;
+                    if bytes.len() as u64 > MAX_MUTATING_TEXT_BYTES {
+                        (None, Some("Previous file exceeds the text preview limit."))
+                    } else {
+                        match String::from_utf8(bytes) {
+                            Ok(text) if !text.contains('\0') => (Some(text), None),
+                            _ => (
+                                None,
+                                Some("Previous file is binary; text comparison is unavailable."),
+                            ),
+                        }
+                    }
+                } else {
+                    (Some(String::new()), None)
+                };
+                let preview = original.as_deref().map(|before| {
+                    agena_runtime_tools::file_diff_preview(
+                        &input.path,
+                        existed.then_some(before),
+                        Some(&input.content),
+                    )
+                });
                 if let Some(parent) = target.parent()
                     && !parent.exists()
                 {
@@ -247,6 +276,11 @@ impl FsPlugin {
                         "kind": if existed { "updated" } else { "created" },
                         "bytes": input.content.len(),
                         "sha256": hash,
+                        "diff": preview.as_ref().map(|view| &view.diff),
+                        "diff_truncated": preview.as_ref().is_some_and(|view| view.diff_truncated),
+                        "additions": preview.as_ref().map(|view| view.additions),
+                        "deletions": preview.as_ref().map(|view| view.deletions),
+                        "diff_unavailable_reason": diff_unavailable_reason,
                     })),
                     std::collections::BTreeMap::from([
                         ("agena.effect".to_string(), "file_changes".to_string()),
@@ -332,6 +366,7 @@ impl FsPlugin {
                     .map_err(fs_error)?;
                 debug_assert_eq!(updated.len(), result_bytes);
                 let after_sha256 = sha256_bytes(updated.as_bytes());
+                let preview = agena_runtime_tools::file_diff_preview(&input.path, Some(&original), Some(&updated));
                 Ok(ToolInvokeOutput::from_parts(
                     format!("replaced text in {}", input.path),
                     format!(
@@ -348,6 +383,10 @@ impl FsPlugin {
                         "replacements": if input.replace_all { occurrences } else { 1 },
                         "before_sha256": before_sha256,
                         "after_sha256": after_sha256,
+                        "diff": preview.diff,
+                        "diff_truncated": preview.diff_truncated,
+                        "additions": preview.additions,
+                        "deletions": preview.deletions,
                     })),
                     std::collections::BTreeMap::from([
                         ("agena.effect".to_string(), "file_changes".to_string()),
@@ -744,7 +783,7 @@ mod tests {
             workspace_root: root.as_str(),
         };
         let plugin = FsPlugin;
-        plugin
+        let created = plugin
             .invoke_write(
                 &context,
                 &WriteFileInput {
@@ -756,6 +795,15 @@ mod tests {
             )
             .await
             .expect("create file");
+        let created_payload = created.payload.unwrap();
+        assert_eq!(created_payload["additions"], 1);
+        assert_eq!(created_payload["deletions"], 0);
+        assert!(
+            created_payload["diff"]
+                .as_str()
+                .unwrap()
+                .contains("+one one")
+        );
         assert!(
             plugin
                 .invoke_write(
@@ -771,7 +819,7 @@ mod tests {
                 .is_err()
         );
         let hash = sha256_file(&dir.path().join("demo.txt")).expect("hash");
-        plugin
+        let replaced = plugin
             .invoke_replace(
                 &context,
                 &ReplaceFileInput {
@@ -785,6 +833,12 @@ mod tests {
             )
             .await
             .expect("replace file");
+        let replaced_payload = replaced.payload.unwrap();
+        let diff = replaced_payload["diff"].as_str().unwrap();
+        assert!(diff.contains("-one one"), "{diff}");
+        assert!(diff.contains("+two two"), "{diff}");
+        assert_eq!(replaced_payload["additions"], 1);
+        assert_eq!(replaced_payload["deletions"], 1);
         assert_eq!(
             std::fs::read_to_string(dir.path().join("demo.txt")).expect("read result"),
             "two two"

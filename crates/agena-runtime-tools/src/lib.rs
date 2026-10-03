@@ -11,6 +11,8 @@ pub use agena_runtime_contracts::{authorization, identity, part, permission, pro
 
 mod atomic_file;
 mod bounded_process;
+mod file_diff;
+pub use file_diff::{FileDiffPreview, file_diff_preview};
 pub mod media_input;
 mod monitor;
 mod project_instructions;

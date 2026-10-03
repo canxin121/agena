@@ -716,7 +716,11 @@ impl BuiltinHumanRenderer {
         let mut blocks = Vec::new();
         let fields = object
             .iter()
-            .filter(|(key, value)| !Self::generic_skip_key(key) && Self::generic_scalar(value))
+            .filter(|(key, value)| {
+                !Self::generic_skip_key(key)
+                    && !Self::technical_field(&Self::humanize_key(key))
+                    && Self::generic_scalar(value)
+            })
             .filter(|(_, value)| !matches!(value, Value::Null))
             .map(|(key, value)| (Self::humanize_key(key), Self::generic_field_value(value)))
             .collect::<Vec<_>>();
@@ -948,11 +952,78 @@ impl BuiltinHumanRenderer {
         })
     }
 
+    fn technical_field(label: &str) -> bool {
+        matches!(
+            label.to_ascii_lowercase().as_str(),
+            "sha-256"
+                | "sha256"
+                | "before sha-256"
+                | "after sha-256"
+                | "hash"
+                | "hash skipped"
+                | "revision"
+                | "request id"
+                | "response id"
+                | "correlation id"
+                | "last event"
+                | "catalog generation"
+                | "generation"
+        )
+    }
+
+    fn inline_code(value: &str) -> String {
+        let max_run = value.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+        let fence = "`".repeat(max_run + 1);
+        let value = value.replace(['\n', '\r'], " ");
+        format!("{fence} {value} {fence}")
+    }
+
+    fn detail_value(label: &str, value: &str) -> String {
+        if value == "[redacted]" {
+            return value.to_owned();
+        }
+        if matches!(
+            label.to_ascii_lowercase().as_str(),
+            "path"
+                | "file"
+                | "name"
+                | "command"
+                | "pattern"
+                | "branch"
+                | "model"
+                | "id"
+                | "session"
+                | "task"
+                | "process"
+                | "monitor"
+                | "query"
+                | "uri"
+                | "url"
+                | "target"
+                | "kind"
+                | "root"
+                | "type"
+        ) {
+            return Self::inline_code(value);
+        }
+        let mut escaped = String::new();
+        for c in value.chars() {
+            if matches!(c, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>') {
+                escaped.push('\\');
+            }
+            escaped.push(c);
+        }
+        escaped.replace('\n', "\n  ")
+    }
+
     fn details_block(id: impl Into<String>, title: &str, fields: &[(&str, String)]) -> ViewBlock {
         let mut lines = vec![format!("### {title}")];
         for (label, value) in fields {
-            if !value.trim().is_empty() {
-                lines.push(format!("- **{label}**: {value}"));
+            if !value.trim().is_empty() && !Self::technical_field(label) {
+                lines.push(format!(
+                    "- **{label}**: {}",
+                    Self::detail_value(label, value)
+                ));
             }
         }
         Self::markdown_block(id, lines.join("\n"))
@@ -965,7 +1036,7 @@ impl BuiltinHumanRenderer {
     ) -> Option<ViewBlock> {
         fields
             .iter()
-            .any(|(_, value)| !value.trim().is_empty())
+            .any(|(label, value)| !value.trim().is_empty() && !Self::technical_field(label))
             .then(|| Self::details_block(id, title, fields))
     }
 
@@ -1675,43 +1746,68 @@ impl BuiltinHumanRenderer {
         }
     }
 
-    fn mcp_content_rows(values: &[Value]) -> Vec<Vec<Value>> {
-        values
-            .iter()
-            .filter_map(Value::as_object)
-            .map(|object| {
-                vec![
-                    Value::String(Self::object_text(object, "type")),
-                    Value::String(
-                        object
-                            .get("text")
-                            .or_else(|| object.get("content"))
-                            .map(Self::mcp_content_text)
-                            .unwrap_or_default(),
-                    ),
-                    Value::String(Self::object_text(object, "mime_type")),
-                    Value::String(Self::object_text(object, "uri")),
-                ]
-            })
-            .collect()
-    }
-
-    fn mcp_prompt_message_rows(values: &[Value]) -> Vec<Vec<Value>> {
-        values
-            .iter()
-            .filter_map(Value::as_object)
-            .map(|object| {
-                vec![
-                    Value::String(Self::object_text(object, "role")),
-                    Value::String(
-                        object
-                            .get("content")
-                            .map(Self::mcp_content_text)
-                            .unwrap_or_default(),
-                    ),
-                ]
-            })
-            .collect()
+    fn mcp_readable_content(id: &str, values: &[Value]) -> Vec<ViewBlock> {
+        let mut blocks = Vec::new();
+        for (index, value) in values.iter().enumerate() {
+            let value = value.get("resource").unwrap_or(value);
+            let Some(object) = value.as_object() else {
+                blocks.push(Self::markdown_block(
+                    format!("{id}-{index}"),
+                    Self::mcp_content_text(value),
+                ));
+                continue;
+            };
+            let mime = object
+                .get("mime_type")
+                .or_else(|| object.get("mimeType"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let uri = Self::object_text(object, "uri");
+            let text = object.get("text").and_then(Value::as_str).unwrap_or("");
+            if !text.is_empty() {
+                let language = match mime {
+                    "application/json" => Some("json"),
+                    "text/javascript" | "application/javascript" => Some("javascript"),
+                    "text/x-python" => Some("python"),
+                    "text/plain" => Some("text"),
+                    _ => None,
+                };
+                if let Some(language) = language {
+                    blocks.push(Self::markdown_code_block(
+                        format!("{id}-{index}"),
+                        if uri.is_empty() { "Content" } else { &uri },
+                        text,
+                        Some(language),
+                    ));
+                } else {
+                    if !uri.is_empty() {
+                        blocks.push(Self::markdown_block(
+                            format!("{id}-uri-{index}"),
+                            Self::inline_code(&uri),
+                        ));
+                    }
+                    blocks.push(Self::markdown_block(
+                        format!("{id}-{index}"),
+                        Self::bounded_human_text(text),
+                    ));
+                }
+            } else {
+                let fields = [
+                    ("Type", Self::object_text(object, "type")),
+                    ("URI", uri),
+                    ("Media type", mime.to_owned()),
+                ];
+                blocks.push(Self::details_block(
+                    format!("{id}-{index}"),
+                    "Resource",
+                    &fields,
+                ));
+            }
+        }
+        if values.is_empty() {
+            blocks.push(Self::markdown_block(id, "No content returned."));
+        }
+        blocks
     }
 
     fn provider_operation_label(tool_name: &str) -> &'static str {
@@ -1886,9 +1982,17 @@ impl BuiltinHumanRenderer {
             .enumerate()
             .filter_map(|(index, call)| {
                 let call = call.as_object()?;
+                let target = Self::provider_call_target(call);
+                let action = Self::provider_call_action(call);
                 let fields = [
-                    ("Type", Self::provider_call_value(call, &["type"])),
-                    ("Action", Self::provider_call_action(call)),
+                    (
+                        "Action",
+                        if action == target {
+                            String::new()
+                        } else {
+                            action
+                        },
+                    ),
                     (
                         "ID",
                         Self::provider_call_value(call, &["id", "call_id", "callId"]),
@@ -1897,7 +2001,11 @@ impl BuiltinHumanRenderer {
                         "Status",
                         Self::provider_call_value(call, &["status", "state"]),
                     ),
-                    ("Target", Self::provider_call_target(call)),
+                    ("Target", target),
+                    (
+                        "Server",
+                        Self::provider_call_value(call, &["server", "server_name"]),
+                    ),
                 ];
                 Self::details_block_if_nonempty(
                     format!("provider-call-operation-{index}"),
@@ -1920,7 +2028,7 @@ impl BuiltinHumanRenderer {
             .unwrap_or_default()
     }
 
-    fn provider_content_blocks(value: &Value) -> Vec<ViewBlock> {
+    fn provider_content_blocks(id: &str, title: &str, value: &Value) -> Vec<ViewBlock> {
         let mut text_parts = Vec::new();
         let mut structured = Vec::new();
         let mut collect = |value: &Value| match value {
@@ -1949,25 +2057,20 @@ impl BuiltinHumanRenderer {
         let mut blocks = Vec::new();
         if !text_parts.is_empty() {
             blocks.push(Self::markdown_block(
-                "provider-content",
-                format!("### Assistant response\n{}", text_parts.join("\n\n")),
+                id,
+                format!("### {title}\n{}", text_parts.join("\n\n")),
             ));
         }
         if !structured.is_empty() {
             blocks.extend(Self::generic_value_blocks(
-                "provider-content-data",
+                &format!("{id}-data"),
                 "Other content",
                 &Value::Array(structured),
                 0,
             ));
         }
         if blocks.is_empty() {
-            blocks.extend(Self::generic_value_blocks(
-                "provider-content",
-                "Assistant content",
-                value,
-                0,
-            ));
+            blocks.extend(Self::generic_value_blocks(id, title, value, 0));
         }
         blocks
     }
@@ -2190,6 +2293,13 @@ impl BuiltinHumanRenderer {
                 {
                     blocks.push(block);
                 }
+                if let Some(output) = object.get("outputs").or_else(|| object.get("results")) {
+                    blocks.extend(Self::provider_content_blocks(
+                        "provider-code-output",
+                        "Execution output",
+                        output,
+                    ));
+                }
             }
             "chatgpt.cloud_shell" => {
                 let pending_command = Self::object_array(object, "pending_calls")
@@ -2199,8 +2309,8 @@ impl BuiltinHumanRenderer {
                     .unwrap_or_default();
                 let command = {
                     let value = Self::object_text(object, "command");
-                    if value.is_empty() {
-                        pending_command
+                    if value == pending_command {
+                        String::new()
                     } else {
                         value
                     }
@@ -2273,9 +2383,9 @@ impl BuiltinHumanRenderer {
         let tool_name = agena_tool::provider_tools::canonical_cloud_identity(tool_name);
         let operation_blocks = Self::specific_provider_operation_blocks(tool_name, object);
         let operation_has_status = operation_blocks.iter().any(|block| {
-            block
-                .text_value()
-                .is_some_and(|text| text.contains("**Status**:"))
+            block.text_value().is_some_and(|text| {
+                text.contains("**Status**:") || text.contains("**HTTP status**:")
+            })
         });
         let status_is_failure = object
             .get("status")
@@ -2291,43 +2401,25 @@ impl BuiltinHumanRenderer {
         for (key, label) in [
             ("operation", "Operation"),
             ("provider", "Provider"),
-            ("public_tool_name", "Cloud tool"),
-            ("tool", "Provider API operation"),
             ("status", "Status"),
             ("model", "Model"),
-            ("request_id", "Request"),
-            ("response_id", "Response"),
             ("continuation_required", "Continuation required"),
         ] {
-            if key == "status" && operation_has_status && !status_is_failure {
+            if (key == "provider" && cloud.is_some())
+                || (key == "status" && operation_has_status && !status_is_failure)
+            {
                 continue;
             }
             let value = Self::object_text(object, key);
-            if !value.is_empty() {
+            if !value.is_empty() && !(key == "continuation_required" && value == "false") {
                 fields.push((label, value));
             }
         }
-        fields.insert(0, ("What", operation_label.to_owned()));
-        if let Some(cloud) = cloud {
-            fields.insert(
-                1,
-                (
-                    "Execution location",
-                    format!("{} cloud, not this computer", cloud.provider_label),
-                ),
-            );
-            fields.insert(
-                2,
-                (
-                    "Local project access",
-                    "Not automatic; only explicitly supplied inputs are available".into(),
-                ),
-            );
-        }
-        if !fields.is_empty() {
+
+        if !fields.is_empty() || cloud.is_some() {
             blocks.push(Self::details_block(
                 "provider-meta",
-                "Provider response",
+                operation_label,
                 &fields,
             ));
         }
@@ -2407,22 +2499,6 @@ impl BuiltinHumanRenderer {
         blocks.extend(operation_blocks);
         if let Some(calls) = Self::object_array(object, "pending_calls") {
             if !calls.is_empty() && !Self::provider_call_rows(calls).is_empty() {
-                // Keep the typed columns stable even when a provider puts
-                // `action` or the server identity in a nested object. The
-                // generic nested projection below still preserves the full
-                // bounded call details.
-                let rows = Self::provider_call_rows(calls);
-                blocks.push(ViewBlock::Table {
-                    id: Some("provider-calls".into()),
-                    columns: vec![
-                        "Type".into(),
-                        "Action".into(),
-                        "ID".into(),
-                        "Status".into(),
-                        "Server".into(),
-                    ],
-                    rows,
-                });
                 blocks.extend(Self::provider_call_operation_blocks(tool_name, calls));
             } else if object.get("continuation_required").and_then(Value::as_bool) == Some(true) {
                 blocks.push(Self::markdown_block(
@@ -2470,16 +2546,12 @@ impl BuiltinHumanRenderer {
                 0,
             ));
         }
-        if let Some(receipt) = object.get("response_receipt") {
-            blocks.extend(Self::generic_value_blocks(
-                "provider-receipt",
-                "Response receipt",
-                receipt,
-                0,
-            ));
-        }
         if let Some(content) = object.get("assistant_content") {
-            blocks.extend(Self::provider_content_blocks(content));
+            blocks.extend(Self::provider_content_blocks(
+                "provider-content",
+                "Assistant response",
+                content,
+            ));
         }
         if let Some(error) = object.get("error") {
             blocks.extend(Self::generic_value_blocks(
@@ -3024,23 +3096,22 @@ impl BuiltinHumanRenderer {
 
     fn specific_mcp_blocks(key: &str, object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
+        let uri = Self::object_text(object, "uri");
+        let uri_in_content = key == "mcp.resources.read"
+            && Self::object_array(object, "contents").is_some_and(|contents| {
+                contents
+                    .iter()
+                    .any(|content| content.get("uri").and_then(Value::as_str) == Some(uri.as_str()))
+            });
         let identity = [
             ("Server", Self::object_text(object, "server")),
             ("Tool", Self::object_text(object, "tool")),
-            ("URI", Self::object_text(object, "uri")),
+            ("URI", if uri_in_content { String::new() } else { uri }),
             ("Prompt", Self::object_text(object, "prompt")),
             ("Next cursor", Self::object_text(object, "next_cursor")),
         ];
         if let Some(block) = Self::details_block_if_nonempty("mcp-meta", "MCP result", &identity) {
             blocks.push(block);
-        }
-        if let Some(meta) = object.get("mcp_meta") {
-            blocks.extend(Self::generic_value_blocks(
-                "mcp-wire-meta",
-                "MCP metadata",
-                meta,
-                0,
-            ));
         }
 
         match key {
@@ -3097,49 +3168,12 @@ impl BuiltinHumanRenderer {
                 }
             }
             "mcp.resources.read" => {
-                if let Some(contents) = Self::object_array(object, "contents")
-                    && let Some(table) = Self::table_block(
-                        "mcp-resource-contents",
-                        vec!["URI", "MIME", "Text"],
-                        contents
-                            .iter()
-                            .filter_map(Value::as_object)
-                            .map(|content| {
-                                vec![
-                                    Value::String(Self::object_text(content, "uri")),
-                                    Value::String(Self::object_text(content, "mime_type")),
-                                    Value::String(
-                                        content
-                                            .get("text")
-                                            .or_else(|| content.get("blob"))
-                                            .map(Self::mcp_content_text)
-                                            .unwrap_or_default(),
-                                    ),
-                                ]
-                            })
-                            .collect(),
-                    )
-                {
-                    blocks.push(table);
-                } else if let Some(contents) = object.get("contents").and_then(Value::as_array)
-                    && !contents.is_empty()
-                {
-                    blocks.extend(Self::generic_value_blocks(
-                        "mcp-resource-contents",
-                        "Resource contents",
-                        &Value::Array(contents.clone()),
-                        0,
-                    ));
-                } else if object
-                    .get("contents")
-                    .and_then(Value::as_array)
-                    .is_some_and(Vec::is_empty)
-                {
-                    blocks.push(Self::markdown_block(
-                        "mcp-resource-contents",
-                        "### Resource contents\nNo content returned.",
-                    ));
-                }
+                blocks.extend(Self::mcp_readable_content(
+                    "mcp-resource-contents",
+                    Self::object_array(object, "contents")
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                ));
             }
             "mcp.prompts.list" => {
                 if let Some(prompts) = Self::object_array(object, "prompts")
@@ -3167,67 +3201,47 @@ impl BuiltinHumanRenderer {
                 }
             }
             "mcp.prompts.get" => {
-                if let Some(messages) = Self::object_array(object, "messages")
-                    && let Some(table) = Self::table_block(
-                        "mcp-prompt-messages",
-                        vec!["Role", "Content"],
-                        Self::mcp_prompt_message_rows(messages),
-                    )
-                {
-                    blocks.push(table);
-                } else if let Some(messages) = object.get("messages").and_then(Value::as_array)
-                    && !messages.is_empty()
-                {
-                    blocks.extend(Self::generic_value_blocks(
-                        "mcp-prompt-messages",
-                        "Prompt messages",
-                        &Value::Array(messages.clone()),
-                        0,
-                    ));
-                } else if object
-                    .get("messages")
-                    .and_then(Value::as_array)
-                    .is_some_and(Vec::is_empty)
-                {
-                    blocks.push(Self::markdown_block(
-                        "mcp-prompt-messages",
-                        "### Prompt messages\nNo prompt messages returned.",
-                    ));
+                if let Some(messages) = Self::object_array(object, "messages") {
+                    for (index, message) in messages.iter().enumerate() {
+                        let role = message
+                            .get("role")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Message");
+                        blocks.push(Self::markdown_block(
+                            format!("mcp-prompt-role-{index}"),
+                            format!("### {role}"),
+                        ));
+                        let content = message.get("content").unwrap_or(message);
+                        blocks.extend(Self::mcp_readable_content(
+                            &format!("mcp-prompt-messages-{index}"),
+                            std::slice::from_ref(content),
+                        ));
+                    }
+                    if messages.is_empty() {
+                        blocks.push(Self::markdown_block(
+                            "mcp-prompt-messages",
+                            "No prompt messages returned.",
+                        ));
+                    }
                 }
             }
             "mcp.tools.call" => {
-                if let Some(content) = Self::object_array(object, "content")
-                    && let Some(table) = Self::table_block(
-                        "mcp-content",
-                        vec!["Type", "Text", "MIME", "URI"],
-                        Self::mcp_content_rows(content),
-                    )
-                {
-                    blocks.push(table);
-                } else if let Some(content) = object.get("content").and_then(Value::as_array)
-                    && !content.is_empty()
-                {
-                    blocks.extend(Self::generic_value_blocks(
-                        "mcp-content",
-                        "Content blocks",
-                        &Value::Array(content.clone()),
-                        0,
-                    ));
-                } else if object
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .is_some_and(Vec::is_empty)
-                    && object.get("structured_content").is_none_or(Value::is_null)
-                {
+                if object.get("is_error").and_then(Value::as_bool) == Some(true) {
                     blocks.push(Self::markdown_block(
-                        "mcp-content",
-                        "### Content blocks\nNo content returned.",
+                        "mcp-error",
+                        "**Tool reported an error.**",
                     ));
+                }
+                if let Some(content) = Self::object_array(object, "content")
+                    && (!content.is_empty()
+                        || object.get("structured_content").is_none_or(Value::is_null))
+                {
+                    blocks.extend(Self::mcp_readable_content("mcp-content", content));
                 }
                 if let Some(structured) = object.get("structured_content") {
                     blocks.extend(Self::generic_value_blocks(
                         "mcp-structured-content",
-                        "Structured content",
+                        "Result details",
                         structured,
                         0,
                     ));
@@ -3516,7 +3530,10 @@ impl BuiltinHumanRenderer {
                 } else {
                     blocks.push(Self::markdown_block(
                         "memory-delete",
-                        "### Memory deletion\nNo deletion details returned.",
+                        object
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or("### Memory deletion\nNo deletion details returned."),
                     ));
                 }
             }
@@ -3629,6 +3646,11 @@ impl BuiltinHumanRenderer {
         }
         if key == "plan.review"
             && let Some(decision) = Self::object_string(object, "decision")
+            && !blocks.iter().any(|block| {
+                block
+                    .text_value()
+                    .is_some_and(|text| text.contains(&format!("**Decision**: {decision}")))
+            })
         {
             blocks.push(Self::markdown_block(
                 "plan-decision",
@@ -3650,31 +3672,22 @@ impl BuiltinHumanRenderer {
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         match key {
-            "fs.write" => {
-                let fields = [
-                    ("Path", Self::object_text(object, "path")),
-                    ("Action", Self::object_text(object, "kind")),
-                    ("Bytes", Self::object_text(object, "bytes")),
-                    ("SHA-256", Self::object_text(object, "sha256")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("file-write", "File written", &fields)
-                {
-                    blocks.push(block);
-                }
-            }
-            "fs.replace" => {
-                let fields = [
-                    ("Path", Self::object_text(object, "path")),
-                    ("Replacements", Self::object_text(object, "replacements")),
-                    ("Before SHA-256", Self::object_text(object, "before_sha256")),
-                    ("After SHA-256", Self::object_text(object, "after_sha256")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("file-replace", "Text replaced", &fields)
-                {
-                    blocks.push(block);
-                }
+            "fs.write" | "fs.replace" => {
+                let (id, title) = if key == "fs.write" {
+                    ("file-write", "File written")
+                } else {
+                    ("file-replace", "Text replaced")
+                };
+                blocks.extend(Self::file_mutation_blocks(
+                    id,
+                    title,
+                    object,
+                    &[
+                        ("Action", Self::object_text(object, "kind")),
+                        ("Replacements", Self::object_text(object, "replacements")),
+                        ("Bytes", Self::object_text(object, "bytes")),
+                    ],
+                ));
             }
             "fs.read_many" => {
                 if let Some(files) = Self::object_array(object, "files")
@@ -3694,37 +3707,29 @@ impl BuiltinHumanRenderer {
                 {
                     blocks.push(table);
                 }
-                let fields = [
-                    (
-                        "Maximum bytes",
-                        Self::object_text(object, "max_total_bytes"),
-                    ),
-                    (
-                        "Remaining bytes",
-                        Self::object_text(object, "remaining_bytes"),
-                    ),
-                    ("Truncated", Self::object_text(object, "truncated")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("read-many-meta", "Read budget", &fields)
-                {
-                    blocks.push(block);
+                if object.get("truncated").and_then(Value::as_bool) == Some(true) {
+                    blocks.push(Self::markdown_block(
+                        "read-many-meta",
+                        "_Read limit reached; some file contents are omitted._",
+                    ));
                 }
-                let previews = Self::object_array(object, "files")
+                for (index, file) in Self::object_array(object, "files")
                     .into_iter()
                     .flatten()
-                    .filter_map(|file| {
-                        let file = file.as_object()?;
-                        let path = Self::object_text(file, "path");
-                        let content = file.get("content").and_then(Value::as_str)?;
-                        Some(format!("===== {path} =====\n{content}"))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                if !previews.is_empty() {
-                    blocks.push(Self::markdown_block(
-                        "file-previews",
-                        format!("### File previews\n{}", Self::bounded_human_text(&previews)),
+                    .enumerate()
+                {
+                    let Some(file) = file.as_object() else {
+                        continue;
+                    };
+                    let Some(content) = file.get("content").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let path = Self::object_text(file, "path");
+                    blocks.push(Self::markdown_code_block(
+                        format!("file-preview-{index}"),
+                        &path,
+                        content,
+                        Self::source_language(&path),
                     ));
                 }
             }
@@ -4706,17 +4711,73 @@ impl BuiltinHumanRenderer {
     }
 
     fn specific_notebook_blocks(object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
-        let fields = [
-            ("Path", Self::object_text(object, "path")),
-            ("Action", Self::object_text(object, "action")),
-            ("Cell", Self::object_text(object, "cell_index")),
-            ("Cells", Self::object_text(object, "cell_count")),
-            ("Before SHA-256", Self::object_text(object, "before_sha256")),
-            ("After SHA-256", Self::object_text(object, "after_sha256")),
-        ];
-        Self::details_block_if_nonempty("notebook-edit", "Notebook cell", &fields)
+        let mut blocks = Self::file_mutation_blocks(
+            "notebook-edit",
+            "Notebook cell",
+            object,
+            &[
+                ("Action", Self::object_text(object, "action")),
+                ("Cell", Self::object_text(object, "cell_index")),
+                ("Cells", Self::object_text(object, "cell_count")),
+            ],
+        );
+        if object.get("outputs_may_be_stale").and_then(Value::as_bool) == Some(true) {
+            blocks.push(Self::markdown_block(
+                "notebook-outputs",
+                "_Cell outputs were preserved and may be stale._",
+            ));
+        }
+        blocks
+    }
+
+    fn file_mutation_blocks(
+        id: &str,
+        title: &str,
+        object: &serde_json::Map<String, Value>,
+        extra: &[(&str, String)],
+    ) -> Vec<ViewBlock> {
+        let has_diff = object
+            .get("diff")
+            .and_then(Value::as_str)
+            .is_some_and(|diff| !diff.is_empty());
+        let mut fields = Vec::new();
+        if !has_diff {
+            fields.push(("Path", Self::object_text(object, "path")));
+        }
+        fields.extend_from_slice(extra);
+        let mut blocks = Self::details_block_if_nonempty(id, title, &fields)
             .into_iter()
-            .collect()
+            .collect::<Vec<_>>();
+        if let Some(diff) = object.get("diff").and_then(Value::as_str) {
+            if diff.is_empty() {
+                blocks.push(Self::markdown_block("diff-status", "No text changes."));
+            } else {
+                blocks.push(ViewBlock::Diff {
+                    id: Some("diff".into()),
+                    diff: diff.into(),
+                    language: Some("diff".into()),
+                });
+            }
+            if object.get("diff_truncated").and_then(Value::as_bool) == Some(true) {
+                blocks.push(Self::markdown_block(
+                    "diff-status",
+                    format!(
+                        "_Diff preview truncated. Complete change: +{} / −{} lines._",
+                        Self::object_text(object, "additions"),
+                        Self::object_text(object, "deletions"),
+                    ),
+                ));
+            }
+        } else if object.contains_key("path") {
+            blocks.push(Self::markdown_block(
+                "diff-status",
+                object
+                    .get("diff_unavailable_reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("This recorded result has no diff preview."),
+            ));
+        }
+        blocks
     }
 
     /// Build the object used by tool-specific presentation renderers from the
@@ -4880,8 +4941,6 @@ impl BuiltinHumanRenderer {
                 ToolPayloadOutput::ApplyPatch {
                     changes,
                     diff,
-                    before_hash,
-                    after_hash,
                     progress,
                     ..
                 } => {
@@ -4901,13 +4960,7 @@ impl BuiltinHumanRenderer {
                         });
                     }
                     let mut fields = Vec::new();
-                    if let Some(hash) = before_hash {
-                        fields.push(("Before", hash));
-                    }
-                    if let Some(hash) = after_hash {
-                        fields.push(("After", hash));
-                    }
-                    if !progress.is_empty() {
+                    if !has_changes && !has_diff && !progress.is_empty() {
                         fields.push(("Progress", progress.join(" · ")));
                     }
                     if !fields.is_empty() {
@@ -5179,7 +5232,11 @@ impl BuiltinHumanRenderer {
                             stream: agena_domain::CommandOutputStream::Stdout,
                             text: Self::bounded_human_text(&screen.text),
                         });
-                        if let Some(output) = output.filter(|text| !text.is_empty()) {
+                        if let Some(output) = output.filter(|text| !text.is_empty())
+                            && !screen
+                                .text
+                                .contains(super::terminal_tool::display_output(&output).trim())
+                        {
                             blocks.push(ViewBlock::Log {
                                 id: Some("terminal-output".into()),
                                 stream: agena_domain::CommandOutputStream::Stdout,
@@ -5278,7 +5335,12 @@ impl BuiltinHumanRenderer {
                         Self::process_rows(&processes),
                     ) {
                         blocks.push(table);
-                    } else if matches!(action.as_str(), "list" | "logs" | "stop") {
+                    } else if action == "list"
+                        || (action == "logs"
+                            && !blocks
+                                .iter()
+                                .any(|block| matches!(block, ViewBlock::Log { .. })))
+                    {
                         blocks.push(Self::markdown_block(
                             "processes",
                             match action.as_str() {
@@ -5573,6 +5635,44 @@ impl BuiltinHumanRenderer {
     }
 }
 
+impl BuiltinHumanRenderer {
+    fn compact_blocks(mut blocks: Vec<ViewBlock>) -> Vec<ViewBlock> {
+        for block in &mut blocks {
+            if let ViewBlock::Table { columns, rows, .. } = block {
+                let keep = columns
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, label)| {
+                        (!Self::technical_field(label)
+                            && rows.iter().any(|row| {
+                                row.get(index).is_some_and(|value| match value {
+                                    Value::Null => false,
+                                    Value::String(text) => !text.trim().is_empty(),
+                                    Value::Array(items) => !items.is_empty(),
+                                    Value::Object(fields) => !fields.is_empty(),
+                                    _ => true,
+                                })
+                            }))
+                        .then_some(index)
+                    })
+                    .collect::<Vec<_>>();
+                *columns = keep.iter().map(|&index| columns[index].clone()).collect();
+                for row in rows {
+                    *row = keep
+                        .iter()
+                        .map(|&index| row.get(index).cloned().unwrap_or(Value::Null))
+                        .collect();
+                }
+            }
+        }
+        blocks.retain(|block| match block {
+            ViewBlock::Table { columns, rows, .. } => !columns.is_empty() && !rows.is_empty(),
+            _ => true,
+        });
+        blocks
+    }
+}
+
 impl ToolHumanRenderer for BuiltinHumanRenderer {
     fn render_human(
         &self,
@@ -5581,7 +5681,7 @@ impl ToolHumanRenderer for BuiltinHumanRenderer {
     ) -> Result<Vec<ViewBlock>, RenderError> {
         let output = match ToolOutput::from_json_payload(raw.payload.as_ref()) {
             Ok(output) => output,
-            Err(_) => return Ok(Self::fallback(raw)),
+            Err(_) => return Ok(Self::compact_blocks(Self::fallback(raw))),
         };
         let blocks = Self::structured_blocks(
             &self.tool_name,
@@ -5591,9 +5691,9 @@ impl ToolHumanRenderer for BuiltinHumanRenderer {
             self.cwd.as_deref(),
         );
         if blocks.is_empty() {
-            return Ok(Self::fallback(raw));
+            return Ok(Self::compact_blocks(Self::fallback(raw)));
         }
-        Ok(blocks)
+        Ok(Self::compact_blocks(blocks))
     }
 }
 
@@ -5783,7 +5883,7 @@ mod tests {
         assert!(blocks.iter().any(|block| matches!(
             block,
             ViewBlock::Markdown { id: Some(id), text }
-                if id == "file-previews" && text.contains("===== a.rs =====")
+                if id == "file-preview-0" && text.contains("### a.rs\n```rust\n")
         )));
         assert!(!blocks.iter().any(|block| matches!(
             block,
@@ -5847,10 +5947,10 @@ mod tests {
                 columns,
                 rows
             } if id == "matches"
-                && columns == &["Path", "Line", "Column", "Match"]
+                && columns == &["Path", "Line", "Match"]
                 && rows[0][0] == json!("src/lib.rs")
                 && rows[0][1] == json!("7")
-                && rows[0][3] == json!("fn render()")
+                && rows[0][2] == json!("fn render()")
         )));
 
         let stat = BuiltinHumanRenderer::new("fs.stat")
@@ -5962,10 +6062,8 @@ mod tests {
             .expect("render complete MCP result");
         assert!(blocks.iter().any(|block| matches!(
             block,
-            ViewBlock::Table { id: Some(id), columns, rows }
-                if id == "mcp-resource-contents"
-                    && columns == &["URI", "MIME", "Text"]
-                    && rows[0][2] == json!("hello")
+            ViewBlock::Markdown { id: Some(id), text }
+                if id == "mcp-resource-contents-0" && text.contains("```text\nhello\n```")
         )));
 
         let blocks = BuiltinHumanRenderer::new("mcp.prompts.get")
@@ -6137,8 +6235,9 @@ mod tests {
             .filter_map(ViewBlock::text_value)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("Request Id"));
-        assert!(text.contains("[truncated]"));
+        assert!(!text.contains("Request Id"));
+        assert_eq!(raw.payload.as_ref().unwrap()["request_id"], "req-1");
+        assert!(text.contains("truncated"));
         assert!(
             text.len() < BuiltinHumanRenderer::GENERIC_MAX_VALUE_CHARS * 4,
             "generic projection should remain bounded: {} chars",
@@ -6419,18 +6518,22 @@ mod tests {
         let blocks = renderer
             .render_human(&ctx(), &raw)
             .expect("render pending call");
+        let calls = blocks
+            .iter()
+            .filter(|block| {
+                block
+                    .block_id()
+                    .is_some_and(|id| id.starts_with("provider-call-operation"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        let text = calls[0].text_value().unwrap();
+        assert!(text.contains("printf docs"));
+        assert!(text.contains("call-1"));
         assert!(
-            blocks.iter().any(|block| {
-                matches!(
-                    block,
-                    ViewBlock::Table { columns, rows, .. }
-                        if columns == &["Type", "Action", "ID", "Status", "Server"]
-                            && rows.iter().any(|row| row.iter().any(|value| value == "shell_call"))
-                            && rows.iter().any(|row| row.iter().any(|value| value == "printf docs"))
-                            && rows.iter().any(|row| row.iter().any(|value| value == "call-1"))
-                )
-            }),
-            "{blocks:#?}"
+            !blocks
+                .iter()
+                .any(|block| block.block_id() == Some("provider-calls"))
         );
     }
 
@@ -6585,7 +6688,7 @@ mod tests {
                     })),
                     ..RawOutput::default()
                 },
-                vec!["mcp-content", "mcp-structured-content", "mcp-wire-meta"],
+                vec!["mcp-content", "mcp-structured-content", "3 matches"],
             ),
             (
                 "memory.delete",

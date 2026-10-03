@@ -157,6 +157,22 @@ impl NotebookPlugin {
                     .and_then(serde_json::Value::as_array_mut)
                     .ok_or_else(|| PluginError::invalid_params("notebook has no cells array"))?;
 
+                let previous_source = cells.get(input.cell_index).map(cell_source_text).unwrap_or_default();
+                let source_before = match input.action {
+                    NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => None,
+                    _ => Some(previous_source.as_str()),
+                };
+                let source_after = if matches!(input.action, NotebookEditAction::Delete) { None } else { Some(input.source.as_str()) };
+                let cell_label = if matches!(input.action, NotebookEditAction::InsertAfter) {
+                    format!("after cell {}", input.cell_index)
+                } else {
+                    format!("cell {}", input.cell_index)
+                };
+                let preview = agena_runtime_tools::file_diff_preview(
+                    &format!("{} ({cell_label})", input.path), source_before, source_after,
+                );
+                let mut outputs_may_be_stale = false;
+
                 match input.action {
                     NotebookEditAction::Replace => {
                         let cell_count = cells.len();
@@ -173,7 +189,9 @@ impl NotebookPlugin {
                         let kind = input.cell_type.map(|kind| kind.as_str().to_string()).unwrap_or(previous_type.clone());
                         object.insert("cell_type".into(), serde_json::Value::String(kind.clone()));
                         object.insert("source".to_string(), notebook_source(input.source.as_str()));
-                        validation::normalize_cell(object, &kind, input.preserve_outputs && previous_type == "code" && kind == "code");
+                        let preserve_outputs = input.preserve_outputs && previous_type == "code" && kind == "code";
+                        outputs_may_be_stale = preserve_outputs && object.get("outputs").and_then(serde_json::Value::as_array).is_some_and(|outputs| !outputs.is_empty());
+                        validation::normalize_cell(object, &kind, preserve_outputs);
                     }
                     NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => {
                         if input.cell_index > cells.len()
@@ -233,7 +251,11 @@ impl NotebookPlugin {
                         "cell_count": cell_count,
                         "before_sha256": before_sha256,
                         "after_sha256": after_sha256,
-                        "outputs_may_be_stale": input.preserve_outputs,
+                        "outputs_may_be_stale": outputs_may_be_stale,
+                        "diff": preview.diff,
+                        "diff_truncated": preview.diff_truncated,
+                        "additions": preview.additions,
+                        "deletions": preview.deletions,
                     })),
                     std::collections::BTreeMap::from([
                         ("agena.effect".to_string(), "file_changes".to_string()),
@@ -309,6 +331,16 @@ fn io_error(error: std::io::Error) -> PluginError {
     PluginError::internal(format!("notebook filesystem operation failed: {error}"))
 }
 
+fn cell_source_text(cell: &serde_json::Value) -> String {
+    match cell.get("source") {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Array(lines)) => {
+            lines.iter().filter_map(serde_json::Value::as_str).collect()
+        }
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use agena_plugin_host::sdk::{Plugin, ToolInvokeContext};
@@ -339,7 +371,7 @@ mod tests {
             call_id: 1,
             workspace_root: dir.path().to_str().expect("root"),
         };
-        NotebookPlugin
+        let result = NotebookPlugin
             .edit_cell(
                 &context,
                 &NotebookEditInput {
@@ -354,12 +386,73 @@ mod tests {
             )
             .await
             .expect("edit cell");
+        let payload = result.payload.unwrap();
+        let diff = payload["diff"].as_str().unwrap();
+        assert!(diff.contains("-old"));
+        assert!(diff.contains("+print('new')"));
+        assert!(!diff.contains("execution_count"));
+        assert_eq!(payload["additions"], 1);
+        assert_eq!(payload["deletions"], 1);
         let updated: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).expect("read updated notebook"))
                 .expect("updated json");
         assert_eq!(updated["cells"][0]["source"][0], "print('new')\n");
         assert_eq!(updated["cells"][0]["outputs"], serde_json::json!([]));
         assert!(updated["cells"][0]["execution_count"].is_null());
+
+        let inserted = NotebookPlugin
+            .edit_cell(
+                &context,
+                &NotebookEditInput {
+                    path: "demo.ipynb".into(),
+                    action: NotebookEditAction::InsertAfter,
+                    cell_index: 0,
+                    cell_type: None,
+                    source: "print('inserted')\n".into(),
+                    preserve_outputs: true,
+                    expected_sha256: sha256(&std::fs::read(&path).unwrap()),
+                },
+            )
+            .await
+            .unwrap()
+            .payload
+            .unwrap();
+        assert!(
+            inserted["diff"]
+                .as_str()
+                .unwrap()
+                .contains("b/demo.ipynb (after cell 0)")
+        );
+        assert_eq!(inserted["outputs_may_be_stale"], false);
+        assert_eq!(inserted["additions"], 1);
+        assert_eq!(inserted["deletions"], 0);
+
+        let removed = NotebookPlugin
+            .edit_cell(
+                &context,
+                &NotebookEditInput {
+                    path: "demo.ipynb".into(),
+                    action: NotebookEditAction::Delete,
+                    cell_index: 1,
+                    cell_type: None,
+                    source: String::new(),
+                    preserve_outputs: true,
+                    expected_sha256: sha256(&std::fs::read(&path).unwrap()),
+                },
+            )
+            .await
+            .unwrap()
+            .payload
+            .unwrap();
+        assert!(
+            removed["diff"]
+                .as_str()
+                .unwrap()
+                .contains("-print('inserted')")
+        );
+        assert_eq!(removed["outputs_may_be_stale"], false);
+        assert_eq!(removed["additions"], 0);
+        assert_eq!(removed["deletions"], 1);
     }
 
     #[test]

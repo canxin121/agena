@@ -786,7 +786,7 @@ fn high_risk_tool_families_use_stable_operation_blocks() {
 
     let tool = "chatgpt.cloud_shell";
     let ids = render_ids(tool, sample_raw(tool));
-    assert_has(tool, &ids, "provider-calls");
+    assert!(!ids.iter().any(|id| id == "provider-calls"));
     assert_has(tool, &ids, "provider-call-operation-0");
     assert!(
         ids.iter().all(|id| !id.starts_with("result-")),
@@ -917,7 +917,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 false,
             ),
             vec!["demo", "# Hello from MCP"],
-            true,
+            false,
         ),
         (
             "mcp.prompts.list",
@@ -957,7 +957,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 false,
             ),
             vec!["demo", "summarize", "Summarize this document"],
-            true,
+            false,
         ),
         (
             "mcp.tools.call",
@@ -974,8 +974,8 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 Vec::new(),
                 false,
             ),
-            vec!["demo", "search", "mcp-17"],
-            true,
+            vec!["demo", "search", "3 matching documents"],
+            false,
         ),
         (
             "mcp.tools.search",
@@ -1273,7 +1273,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 Vec::new(),
                 false,
             ),
-            vec!["renderer-notes", "skillhash1", "workspace"],
+            vec!["renderer-notes", "Rendering conventions", "workspace"],
             true,
         ),
         (
@@ -1484,7 +1484,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 Vec::new(),
                 false,
             ),
-            vec!["proc-1", "test result: ok", "Last event"],
+            vec!["proc-1", "test result: ok"],
             false,
         ),
         (
@@ -1772,7 +1772,11 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 Vec::new(),
                 false,
             ),
-            vec!["req-openai-1", "Agena rendering guide", "receipt-hash"],
+            vec![
+                "OpenAI cloud",
+                "Agena rendering guide",
+                "example.test/guide",
+            ],
             true,
         ),
         (
@@ -1795,8 +1799,8 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 Vec::new(),
                 false,
             ),
-            vec!["req-shell-1", "call-shell-1", "shell-receipt"],
-            true,
+            vec!["OpenAI cloud", "call-shell-1", "pwd"],
+            false,
         ),
         (
             "gemini.cloud_google_search",
@@ -1819,7 +1823,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 Vec::new(),
                 false,
             ),
-            vec!["req-gemini-1", "gemini-2.5-pro", "gemini-receipt"],
+            vec!["Google cloud", "gemini-2.5-pro", "Grounded result"],
             true,
         ),
         (
@@ -1886,7 +1890,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 Vec::new(),
                 false,
             ),
-            vec!["renderer-notes", "memoryhash", "50"],
+            vec!["renderer-notes", "50"],
             true,
         ),
         (
@@ -1905,7 +1909,7 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
                 Vec::new(),
                 false,
             ),
-            vec!["renderer-notes", "Keep human output concise", "memoryhash"],
+            vec!["renderer-notes", "Keep human output concise"],
             false,
         ),
     ];
@@ -1980,10 +1984,8 @@ fn every_cloud_tool_keeps_its_location_visible_in_titles_and_result_views() {
                 .find(|block| block.block_id() == Some("provider-meta"))
                 .and_then(ViewBlock::text_value)
                 .unwrap();
-            assert!(
-                metadata.contains(&format!("{} cloud, not this computer", tool.provider_label))
-            );
-            assert!(metadata.contains("Local project access"));
+            assert!(metadata.contains(&format!("{} cloud", tool.provider_label)));
+            assert!(!metadata.contains("Local project access"));
             let empty = BuiltinHumanRenderer::new(&name)
                 .render_human(&render_context(), &RawOutput::default())
                 .unwrap();
@@ -2020,4 +2022,124 @@ fn cloud_continuation_never_looks_like_missing_local_callbacks() {
     assert!(text.contains("Cloud continuation"));
     assert!(text.contains("No local command"));
     assert!(!text.contains("No pending calls could be decoded"));
+}
+
+#[test]
+fn every_tool_has_compact_tables_and_preserves_its_raw_payload() {
+    for plugin in agena_bundled_plugins::bundled_capability_manifest().plugins {
+        for tool in plugin.tools.into_iter().filter(|tool| !tool.gateway) {
+            let name = tool
+                .canonical_name
+                .strip_prefix("agena.")
+                .unwrap_or(&tool.canonical_name);
+            let raw = sample_raw(name);
+            let original = serde_json::to_value(&raw).unwrap();
+            let blocks = BuiltinHumanRenderer::new(name)
+                .render_human(&render_context(), &raw)
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&raw).unwrap(),
+                original,
+                "{name} mutated its durable output"
+            );
+            let mut texts = std::collections::BTreeSet::new();
+            for block in &blocks {
+                if let Some(text) = block.text_value() {
+                    assert!(
+                        texts.insert(text.trim()),
+                        "{name} repeats a human block: {text}"
+                    );
+                }
+                if let ViewBlock::Table { columns, rows, .. } = block {
+                    for (index, column) in columns.iter().enumerate() {
+                        assert!(
+                            !matches!(column.as_str(), "SHA-256" | "Hash" | "Revision"),
+                            "{name}: technical column {column}"
+                        );
+                        assert!(
+                            rows.iter()
+                                .any(|row| row.get(index).is_some_and(
+                                    |value| !value.is_null() && value.as_str() != Some("")
+                                )),
+                            "{name}: empty column {column}"
+                        );
+                    }
+                    assert!(
+                        rows.iter().all(|row| row.len() == columns.len()),
+                        "{name}: malformed table"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn file_mutations_show_diffs_and_keep_checksums_in_raw_details() {
+    for name in ["fs.write", "fs.replace", "notebook.edit_cell"] {
+        let preview =
+            agena_runtime_tools::file_diff_preview("src/main.rs", Some("old\n"), Some("new\n"));
+        let raw = RawOutput {
+            payload: Some(json!({
+                "path": "src/main.rs", "kind": "updated", "replacements": 1,
+                "diff": preview.diff, "additions": 1, "deletions": 1,
+                "before_sha256": "private-before-checksum", "after_sha256": "private-after-checksum"
+            })),
+            ..RawOutput::default()
+        };
+        let blocks = BuiltinHumanRenderer::new(name)
+            .render_human(&render_context(), &raw)
+            .unwrap();
+        assert!(blocks.iter().any(
+            |block| matches!(block, ViewBlock::Diff { diff, .. } if diff.contains("-old\n+new\n"))
+        ));
+        let human = serde_json::to_string(&blocks).unwrap();
+        assert!(!human.contains("private-before-checksum"));
+        assert!(!human.contains("private-after-checksum"));
+        assert_eq!(
+            raw.payload.as_ref().unwrap()["before_sha256"],
+            "private-before-checksum"
+        );
+    }
+}
+
+#[test]
+fn cloud_execution_keeps_the_actual_output_and_shell_logs_do_not_claim_to_be_empty() {
+    for name in [
+        "chatgpt.cloud_code_interpreter",
+        "claude.cloud_code_execution",
+        "gemini.cloud_code_execution",
+    ] {
+        let blocks = BuiltinHumanRenderer::new(name)
+            .render_human(&render_context(), &sample_raw(name))
+            .unwrap();
+        assert!(
+            blocks
+                .iter()
+                .filter_map(ViewBlock::text_value)
+                .any(|text| text.contains("passed")),
+            "{name} hid execution output"
+        );
+    }
+    let logs = BuiltinHumanRenderer::new("shell.logs")
+        .render_human(&render_context(), &sample_raw("shell.logs"))
+        .unwrap();
+    assert!(
+        !serde_json::to_string(&logs)
+            .unwrap()
+            .contains("No process events")
+    );
+    for name in ["shell.resize", "shell.signal", "shell.write"] {
+        let blocks = BuiltinHumanRenderer::new(name)
+            .render_human(&render_context(), &sample_raw(name))
+            .unwrap();
+        assert_eq!(
+            blocks
+                .iter()
+                .filter_map(ViewBlock::text_value)
+                .filter(|text| text.contains("PROMPT>"))
+                .count(),
+            1
+        );
+    }
 }

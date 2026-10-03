@@ -545,23 +545,21 @@ fn render_update_inverse_section(
 }
 
 fn render_add_diff(path: &str, content: &str) -> String {
-    let mut lines = vec![format!("diff --git a/{} b/{}", path, path)];
-    lines.push("new file mode 100644".to_string());
-    lines.push("--- /dev/null".to_string());
-    lines.push(format!("+++ b/{path}"));
-    lines.push("@@".to_string());
-    push_prefixed_lines(&mut lines, '+', content);
-    lines.join("\n")
+    format!(
+        "diff --git a/{path} b/{path}\nnew file mode 100644\n{}",
+        TextDiff::from_lines("", content)
+            .unified_diff()
+            .header("/dev/null", &format!("b/{path}"))
+    )
 }
 
 fn render_delete_diff(path: &str, content: &str) -> String {
-    let mut lines = vec![format!("diff --git a/{path} b/{path}")];
-    lines.push("deleted file mode 100644".to_string());
-    lines.push(format!("--- a/{path}"));
-    lines.push("+++ /dev/null".to_string());
-    lines.push("@@".to_string());
-    push_prefixed_lines(&mut lines, '-', content);
-    lines.join("\n")
+    format!(
+        "diff --git a/{path} b/{path}\ndeleted file mode 100644\n{}",
+        TextDiff::from_lines(content, "")
+            .unified_diff()
+            .header(&format!("a/{path}"), "/dev/null")
+    )
 }
 
 fn render_update_diff(path: &str, move_to: Option<&str>, original: &str, updated: &str) -> String {
@@ -577,16 +575,6 @@ fn render_update_diff(path: &str, move_to: Option<&str>, original: &str, updated
             .to_string(),
     );
     output
-}
-
-fn push_prefixed_lines(lines: &mut Vec<String>, prefix: char, content: &str) {
-    let normalized = normalize_lf(content);
-    for line in normalized.lines() {
-        lines.push(format!("{prefix}{line}"));
-    }
-    if normalized.ends_with('\n') {
-        lines.push(prefix.to_string());
-    }
 }
 
 fn describe_prepared_op(op: &PreparedPatchOp) -> String {

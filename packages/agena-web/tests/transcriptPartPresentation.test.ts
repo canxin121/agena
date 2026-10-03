@@ -453,16 +453,19 @@ describe('TUI-parity part presentation', () => {
     expect(projected.presentationBlocks).toEqual([block])
   })
 
-  test('keeps raw detail sections folded and presents the four tool sections in order', () => {
+  test('keeps both technical disclosure levels closed by default', () => {
     const source = readFileSync(new URL('../src/components/chat/AgenaOperationPart.vue', import.meta.url), 'utf8')
     expect(source).toContain('const metadataExpanded = ref(false)')
     expect(source).toContain('const inputExpanded = ref(false)')
     expect(source).toContain('const outputExpanded = ref(false)')
-    expect(source).toContain('const presentationExpanded = ref(true)')
+    expect(source).toContain('const detailsExpanded = ref(false)')
+    expect(source).toContain('data-tool-details-toggle')
+    expect(source).toContain('data-tool-presentation')
+    expect(source).toContain('v-if="detailsExpanded"')
     expect(source).not.toContain('output_metadata')
     expect(source).toContain('prettyJson(operation.rawOutput)')
     expect(source).toContain(
-      "const toolDetailSections: ToolDetailSection[] = ['metadata', 'input', 'output', 'presentation']",
+      "const toolDetailSections: ToolDetailSection[] = ['input', 'output', 'metadata', 'presentation']",
     )
     expect(source).toContain('getToolPartDetail')
     expect(source).toContain('data-tool-detail-section')

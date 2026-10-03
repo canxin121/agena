@@ -3,11 +3,13 @@ import { computed } from 'vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
+import AgenaDiffBlock from '@/components/chat/AgenaDiffBlock.vue'
 import {
   jsonArray,
   jsonRecord,
   prettyJson,
   stringValue,
+  structuredValueMarkdown,
   type JsonRecord,
 } from '@/pages/chat/transcriptPartPresentation'
 import type { JsonValue } from '@/types/json'
@@ -49,7 +51,10 @@ function formatCell(value: JsonValue | undefined): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return JSON.stringify(value)
+  if (Array.isArray(value)) return value.map(formatCell).filter(Boolean).join(' · ')
+  return Object.entries(value)
+    .map(([key, item]) => `${key}: ${formatCell(item)}`)
+    .join(' · ')
 }
 
 const searchResults = computed(() => {
@@ -136,17 +141,17 @@ const progressPercent = computed(() =>
       <div v-if="exitCode !== null" class="font-mono text-[11px] text-muted-foreground">exit {{ exitCode }}</div>
     </div>
 
-    <CodeBlock
+    <MarkdownRenderer
       v-else-if="kind === 'json'"
-      :code="prettyJson(block.value ?? block.data ?? block.content ?? block)"
-      lang="json"
-      compact
+      :content="structuredValueMarkdown(block.value ?? block.data ?? block.content ?? block)"
+      mode="markdown"
+      :stream="false"
     />
 
-    <CodeBlock v-else-if="kind === 'diff'" :code="stringValue(block.diff) || bodyText" lang="diff" compact />
+    <AgenaDiffBlock v-else-if="kind === 'diff'" :diff="stringValue(block.diff) || bodyText" />
 
     <div v-else-if="kind === 'table'" class="overflow-x-auto border-y border-border/60">
-      <table class="w-full min-w-max border-collapse text-left font-mono text-xs">
+      <table class="w-full border-collapse text-left text-xs">
         <thead class="text-muted-foreground">
           <tr>
             <th
@@ -160,7 +165,11 @@ const progressPercent = computed(() =>
         </thead>
         <tbody>
           <tr v-for="(row, rowIndex) in tableRows" :key="rowIndex" class="border-b border-border/35 last:border-b-0">
-            <td v-for="(column, columnIndex) in tableColumns" :key="column.key" class="px-2 py-1.5 align-top">
+            <td
+              v-for="(column, columnIndex) in tableColumns"
+              :key="column.key"
+              class="min-w-24 max-w-xl break-words px-2 py-1.5 align-top whitespace-pre-wrap"
+            >
               {{ tableCell(row, column.key, columnIndex) }}
             </td>
           </tr>
@@ -287,7 +296,12 @@ const progressPercent = computed(() =>
       <span class="min-w-0 flex-1 break-words">{{ stringValue(block.title) || stringValue(block.task_id) }}</span>
     </div>
 
-    <CodeBlock v-else-if="kind === 'custom'" :code="prettyJson(block.value)" lang="json" compact />
+    <MarkdownRenderer
+      v-else-if="kind === 'custom'"
+      :content="structuredValueMarkdown(block.presentation ?? {})"
+      mode="markdown"
+      :stream="false"
+    />
 
     <CodeBlock v-else :code="prettyJson(block.value ?? block.presentation ?? block)" lang="json" compact />
   </div>

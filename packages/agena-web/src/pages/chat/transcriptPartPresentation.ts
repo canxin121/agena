@@ -1,3 +1,4 @@
+import { transcriptDiffFiles } from './transcriptDiff'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { ToolDetailSection } from '@/stores/chat/api'
 import type { JsonValue } from '@/types/json'
@@ -386,6 +387,25 @@ export function operationPresentation(
     }
   })
 
+  const diffPaths = new Set(
+    blocks
+      .filter((block) => block.type === 'diff')
+      .flatMap((block) => transcriptDiffFiles(stringValue(block.diff)).flatMap((file) => [file.path, file.oldPath]))
+      .filter(Boolean),
+  )
+  const presentationBlocks = blocks.flatMap((block) => {
+    if (block.type === 'file_changes') {
+      const changes = jsonArray(block.changes).filter((change) => !diffPaths.has(stringValue(jsonRecord(change).path)))
+      return changes.length ? [{ ...block, changes }] : []
+    }
+    // The interaction card already presents questions and the user's answers.
+    if (userInputs.length && ['answers', 'interaction-answers', 'interaction-meta'].includes(stringValue(block.id)))
+      return []
+    const text = stringValue(block.text)
+    if (text && text.trim() === operationFailureMessage(operation.error ?? null).trim()) return []
+    return [block]
+  })
+
   return {
     title: firstString(operation, ['title']) || part.title,
     summary: firstString(operation, ['summary']) || part.summary,
@@ -395,7 +415,7 @@ export function operationPresentation(
     error: operationFailureMessage(operation.error ?? null),
     rawOutput,
     blocks,
-    presentationBlocks: blocks,
+    presentationBlocks,
     metadata: jsonRecord(content.metadata),
     durationMs: startMs !== null && endMs !== null && endMs >= startMs ? endMs - startMs : null,
     userInputs,

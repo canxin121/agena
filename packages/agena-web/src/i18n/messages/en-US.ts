@@ -1091,6 +1091,22 @@ export default {
     },
   },
   chat: {
+    toolDetails: {
+      copyDiff: 'Copy diff',
+      diffChangeA: 'Added',
+      diffChangeM: 'Modified',
+      diffChangeD: 'Deleted',
+      diffChangeR: 'Renamed',
+
+      presentation: 'Presentation data',
+      diff: 'Changes',
+      expandDiff: 'Show {count} more lines',
+      collapseDiff: 'Show fewer lines',
+      label: 'Technical details',
+      input: 'Input',
+      output: 'Output',
+      metadata: 'Metadata',
+    },
     planViewer: {
       title: 'Plan',
       session: 'Session {id}',

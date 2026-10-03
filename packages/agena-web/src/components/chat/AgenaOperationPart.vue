@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
@@ -27,15 +28,18 @@ const emit = defineEmits<{
   (event: 'select'): void
 }>()
 
+const { t } = useI18n()
+const detailsExpanded = ref(false)
 const metadataExpanded = ref(false)
 const inputExpanded = ref(false)
 const outputExpanded = ref(false)
-const presentationExpanded = ref(true)
+const presentationExpanded = ref(false)
+let partGeneration = 0
 const sectionValues = ref<Partial<Record<ToolDetailSection, JsonValue>>>({})
 const loadingSections = ref<Set<ToolDetailSection>>(new Set())
 const sectionErrors = ref<Partial<Record<ToolDetailSection, string>>>({})
 const loadedPartKey = ref('')
-const toolDetailSections: ToolDetailSection[] = ['metadata', 'input', 'output', 'presentation']
+const toolDetailSections: ToolDetailSection[] = ['input', 'output', 'metadata', 'presentation']
 
 const operation = computed(() => operationPresentation(props.part, sectionValues.value))
 const status = computed(() => partStatusPresentation(props.part.status))
@@ -73,24 +77,29 @@ async function loadSection(section: ToolDetailSection) {
   const sessionId = String(props.sessionId || '').trim()
   const partId = String(props.part.id || '').trim()
   if (!sessionId || !partId) return
+  const requestGeneration = partGeneration
 
   loadingSections.value = new Set([...loadingSections.value, section])
   sectionErrors.value = { ...sectionErrors.value, [section]: '' }
   try {
     const resource = await getToolPartDetail(sessionId, partId, section)
+    if (partGeneration !== requestGeneration) return
     if (resource.part_id !== Number(partId) || resource.section !== section) {
       throw new Error('The server returned a mismatched tool detail section')
     }
     sectionValues.value = { ...sectionValues.value, [section]: resource.value }
   } catch (error) {
+    if (partGeneration !== requestGeneration) return
     sectionErrors.value = {
       ...sectionErrors.value,
       [section]: error instanceof Error ? error.message : 'Unable to load this section',
     }
   } finally {
-    const next = new Set(loadingSections.value)
-    next.delete(section)
-    loadingSections.value = next
+    if (partGeneration === requestGeneration) {
+      const next = new Set(loadingSections.value)
+      next.delete(section)
+      loadingSections.value = next
+    }
   }
 }
 
@@ -101,17 +110,31 @@ async function toggleSection(section: ToolDetailSection) {
   if (expanded) await loadSection(section)
 }
 
+function toggleDetails() {
+  emit('select')
+  detailsExpanded.value = !detailsExpanded.value
+}
+
+function loadVisibleSections() {
+  if (props.expanded && detailsExpanded.value) {
+    for (const section of toolDetailSections) {
+      if (sectionExpanded(section)) void loadSection(section)
+    }
+  }
+}
+
 function resetSectionState() {
+  detailsExpanded.value = false
   metadataExpanded.value = false
   inputExpanded.value = false
   outputExpanded.value = false
-  // Presentation is the human-readable primary view and is open by default.
-  presentationExpanded.value = true
+  presentationExpanded.value = false
 }
 
 watch(
   () => `${props.sessionId || ''}:${props.part.id || ''}`,
   (key) => {
+    partGeneration += 1
     if (loadedPartKey.value && loadedPartKey.value !== key) {
       sectionValues.value = {}
       loadingSections.value = new Set()
@@ -127,6 +150,23 @@ watch(
   () => props.collapseSignal,
   () => resetSectionState(),
 )
+
+watch([() => props.expanded, detailsExpanded], loadVisibleSections)
+
+// Details requested while a tool was running must not overwrite its completed result.
+watch(
+  () => props.part.status,
+  () => {
+    partGeneration += 1
+    sectionValues.value = {}
+    loadingSections.value = new Set()
+    sectionErrors.value = {}
+    loadVisibleSections()
+  },
+)
+onBeforeUnmount(() => {
+  partGeneration += 1
+})
 
 function toggleOuter() {
   emit('select')
@@ -202,62 +242,87 @@ function toggleOuter() {
         >
       </section>
 
-      <section v-for="section in toolDetailSections" :key="section" class="py-1">
-        <button
-          type="button"
-          class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
-          :aria-expanded="sectionExpanded(section)"
-          :data-tool-detail-section="section"
-          @click="toggleSection(section)"
-        >
-          <span class="w-3 text-center font-mono text-muted-foreground" aria-hidden="true">{{
-            sectionExpanded(section) ? '▾' : '▸'
-          }}</span>
-          {{ section[0].toUpperCase() + section.slice(1) }}
-          <span v-if="sectionLoading(section)" class="font-normal text-muted-foreground">Loading…</span>
-        </button>
+      <div class="space-y-3 py-1" data-tool-presentation>
+        <MarkdownRenderer
+          v-if="
+            operation.summary &&
+            !operation.presentationBlocks.length &&
+            !operation.userInputs.length &&
+            !operation.permissions.length &&
+            !operation.error
+          "
+          :content="operation.summary"
+          mode="markdown"
+          :stream="false"
+        />
+        <AgenaOperationBlock
+          v-for="(block, index) in operation.presentationBlocks"
+          :key="String(block.id || `${block.type || block.kind || 'block'}:${index}`)"
+          :block="block"
+        />
+      </div>
 
-        <div v-if="sectionExpanded(section)" class="min-w-0 pl-5 pt-1">
-          <div v-if="sectionError(section)" class="py-1 text-xs text-rose-700 dark:text-rose-300">
-            {{ sectionError(section) }}
-          </div>
+      <button
+        type="button"
+        class="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
+        :aria-expanded="detailsExpanded"
+        data-tool-details-toggle
+        @click="toggleDetails"
+      >
+        <span class="w-3 text-center font-mono" aria-hidden="true">{{ detailsExpanded ? '▾' : '▸' }}</span>
+        {{ t('chat.toolDetails.label') }}
+      </button>
+      <div v-if="detailsExpanded" class="ml-2 border-l border-border/40 pl-3" data-tool-details>
+        <section v-for="section in toolDetailSections" :key="section" class="py-1">
+          <button
+            type="button"
+            class="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
+            :aria-expanded="sectionExpanded(section)"
+            :data-tool-detail-section="section"
+            @click="toggleSection(section)"
+          >
+            <span class="w-3 text-center font-mono text-muted-foreground" aria-hidden="true">{{
+              sectionExpanded(section) ? '▾' : '▸'
+            }}</span>
+            {{ t(`chat.toolDetails.${section}`) }}
+            <span v-if="sectionLoading(section)" class="font-normal text-muted-foreground">{{
+              t('common.loading')
+            }}</span>
+          </button>
 
-          <template v-else-if="section === 'metadata'">
-            <MarkdownRenderer :content="structuredValueMarkdown(operation.metadata)" mode="markdown" :stream="false" />
-          </template>
-
-          <template v-else-if="section === 'input'">
-            <MarkdownRenderer
-              v-if="operation.inputMarkdown"
-              :content="operation.inputMarkdown"
-              mode="markdown"
-              :stream="false"
-            />
-            <CodeBlock v-else :code="prettyJson(operation.input || {})" lang="json" compact />
-          </template>
-
-          <template v-else-if="section === 'output'">
-            <CodeBlock :code="prettyJson(operation.rawOutput)" lang="json" compact />
-          </template>
-
-          <template v-else>
-            <MarkdownRenderer v-if="operation.summary" :content="operation.summary" mode="markdown" :stream="false" />
-            <div v-if="operation.presentationBlocks.length" class="mt-2 space-y-3">
-              <AgenaOperationBlock
-                v-for="(block, index) in operation.presentationBlocks"
-                :key="String(block.id || `${block.type || block.kind || 'block'}:${index}`)"
-                :block="block"
+          <div v-if="sectionExpanded(section)" class="min-w-0 pl-5 pt-1">
+            <div v-if="sectionError(section)" role="alert" class="py-1 text-xs text-rose-700 dark:text-rose-300">
+              {{ sectionError(section) }}
+              <button type="button" class="ml-2 underline" @click="loadSection(section)">
+                {{ t('common.retry') }}
+              </button>
+            </div>
+            <template v-else-if="sectionLoading(section)" />
+            <template v-else-if="section === 'metadata'">
+              <MarkdownRenderer
+                :content="structuredValueMarkdown(operation.metadata)"
+                mode="markdown"
+                :stream="false"
               />
-            </div>
-            <div
-              v-if="!operation.summary && !operation.presentationBlocks.length"
-              class="text-xs text-muted-foreground"
-            >
-              No presentation details.
-            </div>
-          </template>
-        </div>
-      </section>
+            </template>
+
+            <template v-else-if="section === 'input'">
+              <MarkdownRenderer
+                v-if="operation.inputMarkdown"
+                :content="operation.inputMarkdown"
+                mode="markdown"
+                :stream="false"
+              />
+              <CodeBlock v-else :code="prettyJson(operation.input || {})" lang="json" compact />
+            </template>
+
+            <template v-else-if="section === 'output'">
+              <CodeBlock :code="prettyJson(operation.rawOutput)" lang="json" compact />
+            </template>
+            <CodeBlock v-else :code="prettyJson(part.source.agenaPresentation)" lang="json" compact />
+          </div>
+        </section>
+      </div>
     </div>
   </div>
 </template>

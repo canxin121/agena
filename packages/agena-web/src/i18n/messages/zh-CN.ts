@@ -1086,6 +1086,22 @@ export default {
     },
   },
   chat: {
+    toolDetails: {
+      copyDiff: '复制 diff',
+      diffChangeA: '新增',
+      diffChangeM: '修改',
+      diffChangeD: '删除',
+      diffChangeR: '重命名',
+
+      presentation: '展示数据',
+      diff: '文件改动',
+      expandDiff: '展开其余 {count} 行',
+      collapseDiff: '收起更多行',
+      label: '技术详情',
+      input: '输入',
+      output: '输出',
+      metadata: '元数据',
+    },
     planViewer: {
       title: '计划',
       session: '会话 {id}',

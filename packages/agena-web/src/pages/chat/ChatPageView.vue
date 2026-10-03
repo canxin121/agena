@@ -114,6 +114,7 @@ const {
   navBottomOffset,
   navIndex,
   navTotalLabel,
+  navCurrentOrdinal,
   navPrev,
   navNext,
   scrollToBottom,
@@ -541,7 +542,7 @@ void sessionActionsMenuRef
               v-if="navigableMessageIds.length > 0"
               class="pointer-events-none text-[10px] text-muted-foreground/80 bg-background/80 backdrop-blur rounded-full px-2 py-0.5 border border-border/60 select-none"
             >
-              {{ navIndex + 1 }} / {{ navTotalLabel }}
+              {{ navCurrentOrdinal }} / {{ navTotalLabel }}
             </div>
 
             <!-- Keep this slot fixed so other controls don't move -->

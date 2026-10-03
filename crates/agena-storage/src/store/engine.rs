@@ -68,6 +68,20 @@ pub trait PersistenceEngine: Send + Sync {
     /// exact session size before older pages are loaded.
     async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError>;
 
+    /// Resolve the 1-based ordinal of one user-send run marker among the
+    /// session's user-send run markers in durable `(created_at_ms, part_id)`
+    /// order. Returns `None` when `part_id` is not a user-send run marker of
+    /// this session.
+    ///
+    /// The ordinal is derived from the durable order rather than a stored
+    /// counter, so it is always contiguous (`1..=user_message_count`) and can
+    /// never drift after rewind, fork, compaction, import, or withdrawal.
+    async fn user_message_ordinal(
+        &self,
+        session_id: i64,
+        part_id: i64,
+    ) -> Result<Option<u64>, StoreError>;
+
     /// Load a session's metadata plus all parts ordered by
     /// `(created_at_ms, part_id)` — one membership JOIN.
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError>;

@@ -203,7 +203,8 @@ pub(crate) async fn session_parts(
         .into_iter()
         .filter(|part| part.visibility.visible_to_user())
         .collect::<Vec<_>>();
-    let parts = project_parts_for_user(state, &visible).await;
+    let mut parts = project_parts_for_user(state, &visible).await;
+    assign_user_message_ordinals(store, session_id, &mut parts).await?;
     Ok(SessionPartsResource {
         session_id,
         version: view.meta.version,
@@ -259,6 +260,9 @@ pub(crate) async fn project_part_for_sections(
         finished_at_ms: part.finished_at_ms,
         created_at_ms: part.created_at_ms,
         updated_at_ms: part.updated_at_ms,
+        // Assigned by `assign_user_message_ordinals` at the response boundary,
+        // which is the only layer that knows the surrounding page/window.
+        user_message_ordinal: None,
         provider_state: part.provider_state.clone(),
     }
 }
@@ -299,6 +303,95 @@ pub(crate) async fn project_parts_for_user(state: &AppState, parts: &[Part]) -> 
         }
     }
     projected
+}
+
+/// Attach durable user-message ordinals to the user-send run markers in
+/// `parts`, which must already be in chronological
+/// `(created_at_ms, part_id)` order — the order every read path projects.
+///
+/// The ordinal of the first user marker present is resolved from the store;
+/// every following marker advances by one. That is exact because each read
+/// path returns a contiguous slice of the session's role-grouped blocks, so
+/// the user markers it contains are themselves a contiguous slice of the
+/// session's user-message sequence. Deriving from the durable order (rather
+/// than a stored counter) is what keeps the numbering contiguous after
+/// rewind, fork, compaction, import, and withdrawal.
+pub(crate) async fn assign_user_message_ordinals(
+    store: &dyn SessionStore,
+    session_id: i64,
+    parts: &mut [PartResource],
+) -> Result<(), ServerError> {
+    let marker_indices = parts
+        .iter()
+        .enumerate()
+        .filter(|(_, part)| is_user_message_marker(part))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let Some(&first) = marker_indices.first() else {
+        return Ok(());
+    };
+    let start = store
+        .user_message_ordinal(session_id, parts[first].part_id)
+        .await
+        .map_err(|error| ServerError::internal_error(&error))?;
+    let mut ordinals = parts
+        .iter()
+        .map(|part| part.user_message_ordinal)
+        .collect::<Vec<_>>();
+    number_user_markers(&mut ordinals, &marker_indices, start);
+    for (part, ordinal) in parts.iter_mut().zip(ordinals) {
+        part.user_message_ordinal = ordinal;
+    }
+    Ok(())
+}
+
+/// Number the user markers at `marker_indices` (ascending) starting at
+/// `start`, incrementing by one. Kept pure and index-based so the walk — the
+/// only place a page could be silently mis-numbered — is unit-testable
+/// without a store.
+fn number_user_markers(ordinals: &mut [Option<u64>], marker_indices: &[usize], start: Option<u64>) {
+    let mut next = start;
+    for index in marker_indices {
+        if let Some(slot) = ordinals.get_mut(*index) {
+            *slot = next;
+        }
+        next = next.map(|value| value.saturating_add(1));
+    }
+}
+
+/// Resolve one live part's user-message ordinal in isolation. There is no
+/// surrounding page to count against, so the store ranks the marker directly.
+async fn project_part_with_ordinal(state: &AppState, session_id: i64, part: &Part) -> PartResource {
+    let mut projected = project_part_for_user(state, part).await;
+    if !is_user_message_marker(&projected) {
+        return projected;
+    }
+    let store = match state.session_store() {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::error!(
+                part_id = part.part_id,
+                diagnostic = %error,
+                "live user-message ordinal could not be resolved: session store unavailable"
+            );
+            return projected;
+        }
+    };
+    match store.user_message_ordinal(session_id, part.part_id).await {
+        Ok(ordinal) => projected.user_message_ordinal = ordinal,
+        Err(error) => {
+            tracing::error!(
+                part_id = part.part_id,
+                diagnostic = %error,
+                "live user-message ordinal could not be resolved"
+            );
+        }
+    }
+    projected
+}
+
+fn is_user_message_marker(part: &PartResource) -> bool {
+    part.kind == "run" && part.role == "user"
 }
 
 async fn project_tool_presentation(
@@ -362,13 +455,13 @@ async fn project_change(state: &AppState, change: SessionChange) -> Option<Sessi
         SessionChange::PartAdded { session_id, part } if part.visibility.visible_to_user() => {
             SessionChangeResource::PartAdded {
                 session_id,
-                part: Box::new(project_part_for_user(state, &part).await),
+                part: Box::new(project_part_with_ordinal(state, session_id, &part).await),
             }
         }
         SessionChange::PartUpdated { session_id, part } if part.visibility.visible_to_user() => {
             SessionChangeResource::PartUpdated {
                 session_id,
-                part: Box::new(project_part_for_user(state, &part).await),
+                part: Box::new(project_part_with_ordinal(state, session_id, &part).await),
             }
         }
         SessionChange::PartAdded { .. } | SessionChange::PartUpdated { .. } => return None,
@@ -442,6 +535,65 @@ fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
                 "serialize a runtime tool-registry live signal payload",
             ),
         },
+    }
+}
+
+#[cfg(test)]
+mod ordinal_tests {
+    use super::{is_user_message_marker, number_user_markers};
+    use agena_api::live::PartResource;
+
+    /// The minimal `PartResource` the ordinal walk inspects.
+    fn part(part_id: i64, kind: &str, role: &str) -> PartResource {
+        PartResource {
+            part_id,
+            kind: kind.to_owned(),
+            role: role.to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::Value::Null,
+            presentation: None,
+            summary: None,
+            visibility: "both".to_owned(),
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            user_message_ordinal: None,
+            provider_state: None,
+        }
+    }
+
+    #[test]
+    fn only_user_send_run_markers_carry_an_ordinal() {
+        assert!(is_user_message_marker(&part(1, "run", "user")));
+        assert!(!is_user_message_marker(&part(2, "run", "assistant")));
+        assert!(!is_user_message_marker(&part(3, "text", "user")));
+    }
+
+    #[test]
+    fn a_page_numbers_its_user_markers_from_the_resolved_offset() {
+        // parts: [assistant run, user run, text, user run]
+        let mut ordinals = vec![None, None, None, None];
+        number_user_markers(&mut ordinals, &[1, 3], Some(7));
+        assert_eq!(ordinals, vec![None, Some(7), None, Some(8)]);
+    }
+
+    #[test]
+    fn a_page_without_a_resolved_offset_leaves_markers_unset() {
+        let mut ordinals = vec![None, None];
+        number_user_markers(&mut ordinals, &[0, 1], None);
+        assert_eq!(ordinals, vec![None, None]);
+    }
+
+    #[test]
+    fn out_of_range_indices_are_ignored_instead_of_panicking() {
+        let mut ordinals = vec![None];
+        number_user_markers(&mut ordinals, &[0, 5], Some(3));
+        assert_eq!(ordinals, vec![Some(3)]);
     }
 }
 

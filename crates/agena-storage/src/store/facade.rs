@@ -96,6 +96,17 @@ pub trait SessionStore: Send + Sync {
     /// Count durable user-send run markers without loading transcript parts.
     async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError>;
 
+    /// Resolve the 1-based ordinal of one user-send run marker among the
+    /// session's user-send run markers in durable `(created_at_ms, part_id)`
+    /// order. `None` when `part_id` is not a user-send run marker of this
+    /// session. Derived from the durable order, so it stays contiguous after
+    /// rewind, fork, compaction, import, and withdrawal.
+    async fn user_message_ordinal(
+        &self,
+        session_id: i64,
+        part_id: i64,
+    ) -> Result<Option<u64>, StoreError>;
+
     /// Load one bounded newest-first keyset page without materializing the
     /// complete session transcript.
     async fn load_page(
@@ -1037,6 +1048,14 @@ where
 
     async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
         self.engine.user_message_count(session_id).await
+    }
+
+    async fn user_message_ordinal(
+        &self,
+        session_id: i64,
+        part_id: i64,
+    ) -> Result<Option<u64>, StoreError> {
+        self.engine.user_message_ordinal(session_id, part_id).await
     }
 
     async fn load_page(
@@ -3317,6 +3336,14 @@ mod tests {
 
         async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
             self.inner.user_message_count(session_id).await
+        }
+
+        async fn user_message_ordinal(
+            &self,
+            session_id: i64,
+            part_id: i64,
+        ) -> Result<Option<u64>, StoreError> {
+            self.inner.user_message_ordinal(session_id, part_id).await
         }
 
         async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {

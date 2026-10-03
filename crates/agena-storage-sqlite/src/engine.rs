@@ -761,6 +761,44 @@ impl PersistenceEngine for SqliteEngine {
         })
     }
 
+    async fn user_message_ordinal(
+        &self,
+        session_id: i64,
+        part_id: i64,
+    ) -> Result<Option<u64>, StoreError> {
+        // One statement both proves the anchor is a user-send run marker of
+        // this session and ranks it in durable `(created_at_ms, part_id)`
+        // order. No row means the part is not a user message at all.
+        let row = self
+            .db()
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT ( \
+                     SELECT COUNT(*) AS ordinal \
+                     FROM agena_session_parts sp \
+                     JOIN agena_parts p ON p.part_id = sp.part_id \
+                     WHERE sp.session_id = ? AND p.kind = 'run' AND p.role = 'user' \
+                       AND (p.created_at_ms < anchor.created_at_ms \
+                            OR (p.created_at_ms = anchor.created_at_ms \
+                                AND p.part_id <= anchor.part_id)) \
+                 ) AS ordinal \
+                 FROM agena_session_parts asp \
+                 JOIN agena_parts anchor ON anchor.part_id = asp.part_id \
+                 WHERE asp.session_id = ? AND anchor.part_id = ? \
+                   AND anchor.kind = 'run' AND anchor.role = 'user'",
+                [session_id.into(), session_id.into(), part_id.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let ordinal: i64 = row.try_get("", "ordinal").map_err(map_db_err)?;
+        u64::try_from(ordinal).map(Some).map_err(|_| {
+            StoreError::InvalidState(format!("negative user message ordinal for part {part_id}"))
+        })
+    }
+
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {
         let meta = self.session_meta(session_id).await?;
         let parts = self

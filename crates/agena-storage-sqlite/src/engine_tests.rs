@@ -102,6 +102,163 @@ async fn submit_hello(engine: &SqliteEngine, session_id: i64) -> (i64, SessionVi
     (outcome.run_id, view)
 }
 
+/// The chat history navigator numbers user messages by their durable
+/// `(created_at_ms, part_id)` rank. These tests pin the two properties that
+/// make the number trustworthy: it is contiguous `1..=user_message_count`, and
+/// it is re-derived from the durable order so withdrawal/fork renumber instead
+/// of leaving holes.
+#[tokio::test]
+async fn user_message_ordinals_are_contiguous_and_ignore_non_user_runs() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+
+    let first = engine
+        .submit_user_run(session_id, vec![text_part("one")], None, 1_000_000)
+        .await
+        .expect("submit first");
+    // An assistant run (and its content) is a message, but never a user
+    // message: it must not consume an ordinal.
+    let reply = engine
+        .start_run(session_id, "continue", json!({}), None, 1_001_000)
+        .await
+        .expect("start assistant run");
+    let second = engine
+        .submit_user_run(session_id, vec![text_part("two")], None, 1_002_000)
+        .await
+        .expect("submit second");
+    let third = engine
+        .submit_user_run(session_id, vec![text_part("three")], None, 1_003_000)
+        .await
+        .expect("submit third");
+
+    assert_eq!(
+        engine.user_message_count(session_id).await.expect("count"),
+        3
+    );
+    assert_eq!(
+        engine
+            .user_message_ordinal(session_id, first.run_id)
+            .await
+            .expect("first ordinal"),
+        Some(1)
+    );
+    assert_eq!(
+        engine
+            .user_message_ordinal(session_id, second.run_id)
+            .await
+            .expect("second ordinal"),
+        Some(2)
+    );
+    assert_eq!(
+        engine
+            .user_message_ordinal(session_id, third.run_id)
+            .await
+            .expect("third ordinal"),
+        Some(3)
+    );
+    assert_eq!(
+        engine
+            .user_message_ordinal(session_id, reply.run_id)
+            .await
+            .expect("assistant ordinal"),
+        None
+    );
+
+    let view = engine.load_session(session_id).await.expect("load");
+    let content_part_id = view
+        .parts
+        .iter()
+        .find(|part| part.kind == "text")
+        .map(|part| part.part_id)
+        .expect("a content part exists");
+    assert_eq!(
+        engine
+            .user_message_ordinal(session_id, content_part_id)
+            .await
+            .expect("content ordinal"),
+        None,
+        "only user-send run markers carry an ordinal"
+    );
+
+    // Withdrawing the newest user run drops it from the sequence without
+    // leaving a hole: the remaining messages renumber from one.
+    engine
+        .withdraw_user_run(session_id, third.run_id, 1_004_000)
+        .await
+        .expect("withdraw third");
+    assert_eq!(
+        engine.user_message_count(session_id).await.expect("count"),
+        2
+    );
+    assert_eq!(
+        engine
+            .user_message_ordinal(session_id, second.run_id)
+            .await
+            .expect("second ordinal"),
+        Some(2),
+        "the remaining messages still count 1..=N"
+    );
+    assert_eq!(
+        engine
+            .user_message_ordinal(session_id, third.run_id)
+            .await
+            .expect("withdrawn ordinal"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn fork_renumbers_user_messages_contiguously() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    // Fork is a facade-level lineage operation, so exercise the numbering
+    // through the `SessionStore` boundary the API server actually uses.
+    let store = SessionFacade::new(engine, 8);
+
+    store
+        .submit_user_run(session_id, vec![text_part("one")], None)
+        .await
+        .expect("submit first");
+    let second = store
+        .submit_user_run(session_id, vec![text_part("two")], None)
+        .await
+        .expect("submit second");
+    store
+        .submit_user_run(session_id, vec![text_part("three")], None)
+        .await
+        .expect("submit third");
+
+    let child = store
+        .fork(session_id, second.run_id, "child".to_owned())
+        .await
+        .expect("fork");
+    let child_view = store.load(child).await.expect("load child");
+    let child_count = store.user_message_count(child).await.expect("child count");
+    assert!(
+        child_count >= 1,
+        "the fork keeps the history before its cutoff"
+    );
+
+    let mut ordinals = Vec::new();
+    for marker in child_view
+        .parts
+        .iter()
+        .filter(|part| part.is_run_marker() && part.role == PartRole::User)
+    {
+        ordinals.push(
+            store
+                .user_message_ordinal(child, marker.part_id)
+                .await
+                .expect("child ordinal"),
+        );
+    }
+    let expected = (1..=child_count).map(Some).collect::<Vec<_>>();
+    assert_eq!(
+        ordinals, expected,
+        "a forked session renumbers its user messages 1..=N"
+    );
+}
+
 #[tokio::test]
 async fn user_send_creates_marker_and_parts_with_membership() {
     let db = in_memory_db().await;

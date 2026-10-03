@@ -99,6 +99,13 @@ pub struct PartResource {
     pub finished_at_ms: Option<i64>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// 1-based ordinal of this part among the session's user-send messages in
+    /// durable `(created_at_ms, part_id)` order. Present only on user-send run
+    /// markers. Derived from the durable order rather than a stored counter, so
+    /// it is always contiguous (`1..=user_message_count`) and never drifts
+    /// after rewind, fork, compaction, import, or withdrawal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_message_ordinal: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_state: Option<Value>,
 }
@@ -217,10 +224,12 @@ mod tests {
             finished_at_ms: Some(2),
             created_at_ms: 1,
             updated_at_ms: 2,
+            user_message_ordinal: None,
             provider_state: None,
         };
 
-        let encoded = serde_json::to_value(resource).expect("serialize response projection");
+        let encoded =
+            serde_json::to_value(resource.clone()).expect("serialize response projection");
 
         assert_eq!(encoded["content"], raw_content);
         assert_eq!(encoded["presentation"]["title"], "Plugin title");
@@ -232,6 +241,14 @@ mod tests {
         assert!(encoded["content"].get("title").is_none());
         assert!(encoded["content"].get("summary").is_none());
         assert!(encoded["content"].get("blocks").is_none());
+        // `user_message_ordinal` is a Web-timeline field. It must stay off
+        // every part that is not a user-send run marker, and it must serialize
+        // under the exact snake_case name the Web client reads.
+        assert!(encoded.get("user_message_ordinal").is_none());
+        let mut numbered = resource;
+        numbered.user_message_ordinal = Some(7);
+        let encoded = serde_json::to_value(numbered).expect("serialize numbered part");
+        assert_eq!(encoded["user_message_ordinal"], 7);
     }
 
     #[test]

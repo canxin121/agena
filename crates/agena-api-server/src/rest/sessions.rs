@@ -172,7 +172,8 @@ pub async fn list_session_parts(
         .await
         .map_err(|error| ServerError::internal_error(&error))?;
     let (parts, next_cursor) = select_user_visible_part_page(session_id, page.parts)?;
-    let projected = crate::live::project_parts_for_user(&state, &parts).await;
+    let mut projected = crate::live::project_parts_for_user(&state, &parts).await;
+    crate::live::assign_user_message_ordinals(store.as_ref(), session_id, &mut projected).await?;
     Ok(Json(agena_api::live::SessionPartsResource {
         session_id,
         version: page.meta.version,

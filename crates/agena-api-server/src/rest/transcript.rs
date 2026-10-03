@@ -17,7 +17,11 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{error::ServerError, live::project_parts_for_user, state::AppState};
+use crate::{
+    error::ServerError,
+    live::{assign_user_message_ordinals, project_parts_for_user},
+    state::AppState,
+};
 
 const RAW_SCAN_PAGE_SIZE: i64 = 200;
 const ACTIVITY_VISIBLE_TAIL: usize = 5;
@@ -105,7 +109,8 @@ pub async fn list_session_transcript(
         .map(|cursor| encode_transcript_cursor(session_id, cursor))
         .transpose()?;
 
-    let projected = project_parts_for_user(&state, &page.parts).await;
+    let mut projected = project_parts_for_user(&state, &page.parts).await;
+    assign_user_message_ordinals(store.as_ref(), session_id, &mut projected).await?;
     Ok(Json(SessionPartsResource {
         session_id,
         version: page.version,

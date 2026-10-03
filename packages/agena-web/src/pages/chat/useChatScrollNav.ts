@@ -2,6 +2,8 @@ import { computed, nextTick, ref, watch, type Ref } from 'vue'
 
 import { usePinnedScroll } from '@/composables/chat/usePinnedScroll'
 
+import { timelineCurrentOrdinal, timelineTotal, type NavigableMessage } from './timelineOrdinal'
+
 type UiLike = { isCompactLayout: boolean; isCompactTouch: boolean }
 type ChatPartValue = unknown
 type ChatMessageLike = {
@@ -45,8 +47,11 @@ export function useChatScrollNav(opts: {
     )
   }
 
-  const navigableMessageIds = computed<string[]>(() => {
-    const out: string[] = []
+  // Navigable user messages carrying their server-assigned absolute ordinal.
+  // The ordinal is what lets the counter show a true conversation position
+  // even though only the newest pages are loaded into `chat.messages`.
+  const navigableMessages = computed<NavigableMessage[]>(() => {
+    const out: NavigableMessage[] = []
     for (const m of chat.messages) {
       const role = String(m?.info?.role || '')
       // Only navigate between user messages.
@@ -55,10 +60,19 @@ export function useChatScrollNav(opts: {
       if (!id) continue
       const hasText = Array.isArray(m?.parts) ? m.parts.some((p: ChatPartValue) => hasUserTextPart(p)) : false
       if (!hasText) continue
-      out.push(id)
+      const ordinalRaw = (m?.info as { userMessageOrdinal?: unknown } | undefined)?.userMessageOrdinal
+      out.push({
+        id,
+        ordinal:
+          typeof ordinalRaw === 'number' && Number.isFinite(ordinalRaw) && ordinalRaw > 0
+            ? Math.floor(ordinalRaw)
+            : null,
+      })
     }
     return out
   })
+
+  const navigableMessageIds = computed<string[]>(() => navigableMessages.value.map((entry) => entry.id))
 
   const navIndex = ref(0)
   let navRaf: number | null = null
@@ -223,11 +237,20 @@ export function useChatScrollNav(opts: {
     return `${Math.max(base, height + 12)}px`
   })
 
-  const navTotalLabel = computed(() => {
-    const total = chat.selectedHistory.userMessageCount
-    if (typeof total === 'number' && Number.isFinite(total)) return String(Math.max(0, Math.floor(total)))
-    return String(navigableMessageIds.value.length)
-  })
+  const navTotal = computed(() => timelineTotal(navigableMessages.value, chat.selectedHistory.userMessageCount))
+
+  const navTotalLabel = computed(() => String(navTotal.value))
+
+  /**
+   * Absolute 1-based position of the user message closest to the viewport
+   * centre. `navIndex` is only a position inside the loaded window, which is
+   * the newest suffix of the conversation; the server ordinal is what turns it
+   * into a true conversation index. When an ordinal has not arrived yet the
+   * same value is derived from the authoritative total instead.
+   */
+  const navCurrentOrdinal = computed(() =>
+    timelineCurrentOrdinal(navigableMessages.value, navIndex.value, navTotal.value),
+  )
 
   function navPrev() {
     void (async () => {
@@ -342,6 +365,7 @@ export function useChatScrollNav(opts: {
     navIndex,
     navBottomOffset,
     navTotalLabel,
+    navCurrentOrdinal,
     navPrev,
     navNext,
   }

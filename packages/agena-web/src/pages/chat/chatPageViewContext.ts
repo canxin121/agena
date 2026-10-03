@@ -145,6 +145,7 @@ export type ChatPageViewContext = {
   navBottomOffset: MaybeRef<string>
   navIndex: MaybeRef<number>
   navTotalLabel: MaybeRef<string>
+  navCurrentOrdinal: MaybeRef<number>
   navPrev: () => void
   navNext: () => void
   scrollToBottom: (behavior?: ScrollBehavior) => void

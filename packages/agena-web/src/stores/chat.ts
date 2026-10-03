@@ -1389,13 +1389,40 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return workspace
   }
 
+  /**
+   * A user-send message left the durable session (withdrawn send, failed-send
+   * rollback). Messages carry their own server ordinals, so nothing needs
+   * renumbering; only the authoritative total has to shrink.
+   */
+  function decrementUserMessageCount(sessionId: string, removed: MessageEntry | undefined) {
+    const sid = (sessionId || '').trim()
+    if (!sid) return
+    if (String(removed?.info?.role || '') !== 'user') return
+    const ordinal = removed?.info?.userMessageOrdinal
+    const current = historyUserMessageCountBySession.value[sid]
+    const nextCount =
+      typeof current === 'number' && current > 0
+        ? current - 1
+        : typeof ordinal === 'number' && ordinal > 0
+          ? ordinal - 1
+          : null
+    if (nextCount == null) return
+    historyUserMessageCountBySession.value = {
+      ...historyUserMessageCountBySession.value,
+      [sid]: nextCount,
+    }
+  }
+
   function removeMessageForRun(sessionId: string, runId: number) {
     const sid = (sessionId || '').trim()
     if (!sid || !Number.isFinite(runId)) return
     const list = messagesBySession.value[sid]
     if (!Array.isArray(list)) return
+    const removed = list.find((message) => Number(message?.info?.runId) === runId)
     const retained = list.filter((message) => Number(message?.info?.runId) !== runId)
-    if (retained.length !== list.length) setSessionMessages(sid, retained)
+    if (retained.length === list.length) return
+    setSessionMessages(sid, retained)
+    decrementUserMessageCount(sid, removed)
   }
 
   async function abortSession(sessionId: string): Promise<chatApi.CancellationOutcome | null> {
@@ -1620,10 +1647,20 @@ const useChatStoreDefinition = defineStore('chat', () => {
               if (adapterID) info.adapterID = adapterID
               if (modelID) info.modelID = modelID
               if (turnId) info.turnId = turnId
+              const ordinalRaw = readNumber(part.user_message_ordinal)
+              if (ordinalRaw != null && ordinalRaw > 0) info.userMessageOrdinal = Math.floor(ordinalRaw)
               upsertMessageEntryIn(list, info)
-              if (info.role === 'user' && !messageAlreadyKnown) {
+              if (info.role === 'user') {
                 const currentCount = historyUserMessageCountBySession.value[sid]
-                if (typeof currentCount === 'number') {
+                if (typeof info.userMessageOrdinal === 'number') {
+                  // The newest user message's ordinal IS the session total, so a
+                  // delivered ordinal is authoritative and idempotent under
+                  // duplicate/replayed events.
+                  historyUserMessageCountBySession.value = {
+                    ...historyUserMessageCountBySession.value,
+                    [sid]: Math.max(typeof currentCount === 'number' ? currentCount : 0, info.userMessageOrdinal),
+                  }
+                } else if (!messageAlreadyKnown && typeof currentCount === 'number') {
                   historyUserMessageCountBySession.value = {
                     ...historyUserMessageCountBySession.value,
                     [sid]: currentCount + 1,
@@ -1667,7 +1704,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
           if (Array.isArray(list)) {
             const idx = list.findIndex((m) => Number(m.info.runId) === removedPartId)
             if (idx >= 0) {
+              const removedMessage = list[idx]
               list.splice(idx, 1)
+              decrementUserMessageCount(sid, removedMessage)
               return
             }
             // Remove a part within a message.

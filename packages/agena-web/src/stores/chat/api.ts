@@ -61,6 +61,7 @@ export type AgenaPart = {
   finished_at_ms?: number | null
   parent_part_id?: number | null
   run_id?: number | null
+  user_message_ordinal?: number
   [k: string]: JsonValue
 }
 
@@ -295,6 +296,10 @@ function entriesFromParts(
       if (modelID) info.modelID = modelID
       if (turnId) info.turnId = turnId
       if (replyId) info.replyId = replyId
+      const ordinalRaw = part.user_message_ordinal
+      if (typeof ordinalRaw === 'number' && Number.isFinite(ordinalRaw) && ordinalRaw > 0) {
+        info.userMessageOrdinal = Math.floor(ordinalRaw)
+      }
       ensure(partIdStr, info)
       continue
     }

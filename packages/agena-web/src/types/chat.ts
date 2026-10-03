@@ -212,6 +212,11 @@ export type MessageInfo = {
   replyId?: string
   // Durable numeric ids that back this message (agena run marker).
   runId?: number
+  // 1-based ordinal of this message among the session's user-send messages,
+  // ordered by the server's durable `(created_at_ms, part_id)` order. Present
+  // only on user messages. Server-derived, so it is the message's true
+  // absolute position in the conversation and never shifts with paging.
+  userMessageOrdinal?: number
   // Preserve the run marker's durable state/content. Transcript projection
   // uses these fields for TUI-parity lifecycle chrome and assistant-run
   // folding instead of inferring state from the presence of text.

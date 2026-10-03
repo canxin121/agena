@@ -489,6 +489,33 @@ impl PersistenceEngine for InMemoryEngine {
         })
     }
 
+    async fn user_message_ordinal(
+        &self,
+        session_id: i64,
+        part_id: i64,
+    ) -> Result<Option<u64>, StoreError> {
+        self.session_meta(session_id).await?;
+        let membership = self.membership.read().expect("membership lock");
+        let parts = self.parts.read().expect("parts lock");
+        let mut user_runs = membership
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter_map(|id| parts.get(id))
+            .filter(|part| part.kind == "run" && part.role == PartRole::User)
+            .map(|part| (part.created_at_ms, part.part_id))
+            .collect::<Vec<_>>();
+        user_runs.sort_unstable();
+        let Some(index) = user_runs.iter().position(|entry| entry.1 == part_id) else {
+            return Ok(None);
+        };
+        u64::try_from(index + 1).map(Some).map_err(|_| {
+            StoreError::InvalidState(format!(
+                "user message ordinal overflow for session {session_id}"
+            ))
+        })
+    }
+
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {
         let meta = self.session_meta(session_id).await?;
         let parts = self.ordered_parts(session_id);
@@ -2473,6 +2500,83 @@ mod tests {
         assert_eq!(view.parts.len(), 2);
         assert_eq!(view.parts[0].part_id, marker.part_id);
         assert_eq!(view.parts[1].kind, "text");
+    }
+
+    /// The in-memory engine must derive the same contiguous user-message
+    /// numbering as the SQLite engine: rank by durable `(created_at_ms,
+    /// part_id)`, never a stored counter.
+    #[tokio::test]
+    async fn user_message_ordinals_are_contiguous_and_ignore_non_user_runs() {
+        let (engine, session_id) = setup().await;
+        let first = engine
+            .submit_user_run(session_id, vec![text_part("one")], None, engine.now_ms())
+            .await
+            .expect("submit first");
+        let reply = engine
+            .start_run(
+                session_id,
+                "continue",
+                serde_json::json!({}),
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("start assistant run");
+        let second = engine
+            .submit_user_run(session_id, vec![text_part("two")], None, engine.now_ms())
+            .await
+            .expect("submit second");
+
+        assert_eq!(
+            engine.user_message_count(session_id).await.expect("count"),
+            2
+        );
+        assert_eq!(
+            engine
+                .user_message_ordinal(session_id, first.run_id)
+                .await
+                .expect("first ordinal"),
+            Some(1)
+        );
+        assert_eq!(
+            engine
+                .user_message_ordinal(session_id, second.run_id)
+                .await
+                .expect("second ordinal"),
+            Some(2)
+        );
+        assert_eq!(
+            engine
+                .user_message_ordinal(session_id, reply.run_id)
+                .await
+                .expect("assistant ordinal"),
+            None,
+            "an assistant run must never consume a user ordinal"
+        );
+
+        engine
+            .withdraw_user_run(session_id, second.run_id, engine.now_ms())
+            .await
+            .expect("withdraw second");
+        assert_eq!(
+            engine.user_message_count(session_id).await.expect("count"),
+            1
+        );
+        assert_eq!(
+            engine
+                .user_message_ordinal(session_id, second.run_id)
+                .await
+                .expect("withdrawn ordinal"),
+            None
+        );
+        assert_eq!(
+            engine
+                .user_message_ordinal(session_id, first.run_id)
+                .await
+                .expect("first ordinal"),
+            Some(1),
+            "the remaining message is still number one"
+        );
     }
 
     #[tokio::test]

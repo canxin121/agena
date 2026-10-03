@@ -731,6 +731,7 @@ const {
   navIndex,
   navBottomOffset,
   navTotalLabel,
+  navCurrentOrdinal,
   navPrev,
   navNext,
 } = scrollNav
@@ -2430,6 +2431,7 @@ const viewCtx = {
   navBottomOffset,
   navIndex,
   navTotalLabel,
+  navCurrentOrdinal,
   navPrev,
   navNext,
   scrollToBottom,

@@ -151,15 +151,24 @@ pub fn config_error_to_settings_error(error: ConfigError) -> crate::RuntimeConfi
             crate::RuntimeConfigSettingsError::internal_error(&error)
         }
         error @ ConfigError::ParseFile { .. } => {
-            let ConfigError::ParseFile { source, .. } = &error else {
+            let ConfigError::ParseFile { path, source } = &error else {
                 unreachable!("matched parse-file configuration error")
             };
-            crate::RuntimeConfigSettingsError::invalid_input_with_diagnostic(
+            let message = if source.line() == 0 {
                 format!(
-                    "Configuration JSON is invalid at line {}, column {}.",
+                    "{} is not a valid configuration document: {source}",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "{} is not valid JSON: {source} (line {}, column {})",
+                    path.display(),
                     source.line(),
                     source.column()
-                ),
+                )
+            };
+            crate::RuntimeConfigSettingsError::invalid_input_with_diagnostic(
+                message,
                 agena_failure::diagnostic::format_error_chain(&error),
             )
         }

@@ -102,11 +102,12 @@ pub(crate) fn compact_config_toolbar_text(dialog: &PluginWorkbenchOverlay) -> Te
     ])
 }
 
-pub(crate) fn compact_config_sections_text(
+pub(crate) fn compact_config_sections_content(
     dialog: &PluginWorkbenchOverlay,
     plugin: &PluginWorkbenchPlugin,
     width: u16,
-) -> Text<'static> {
+) -> (Text<'static>, Vec<(usize, usize)>) {
+    let mut rows = Vec::new();
     let mut lines = vec![Line::from(Span::styled(
         dialog.i18n.text("plugin-workbench-sections"),
         Style::default().add_modifier(Modifier::BOLD),
@@ -124,24 +125,23 @@ pub(crate) fn compact_config_sections_text(
         }
         let focused =
             dialog.config_focus == PluginConfigFocus::Structure && index == dialog.selected_section;
-        let prefixes = if focused { ("> ", "  ") } else { ("  ", "  ") };
-        let wrapped = wrap_prefixed_text(label.as_str(), prefixes.0, prefixes.1, content_width);
-        for line in wrapped {
-            let padded = pad_to_width(line.as_str(), content_width);
-            let style = if focused {
+        rows.push((lines.len(), index));
+        let label = format!("{}{}", if focused { "› " } else { "  " }, label);
+        lines.push(Line::from(Span::styled(
+            pad_to_width(&label, content_width),
+            if focused {
                 plugin_workbench_selection_highlight_style()
             } else {
                 Style::default()
-            };
-            lines.push(Line::from(Span::styled(padded, style)));
-        }
+            },
+        )));
     }
-    Text::from(lines)
+    (Text::from(lines), rows)
 }
 
 use super::{
     Line, Modifier, PluginConfigDrilldownOverlay, PluginConfigFocus, PluginWorkbenchOverlay,
     PluginWorkbenchPlugin, Span, Style, Text, config_row_cell_label, fixed_columns,
     override_leaf_count, pad_to_width, plugin_workbench_selection_highlight_style,
-    selected_config_row_context, wrap_prefixed_text,
+    selected_config_row_context,
 };

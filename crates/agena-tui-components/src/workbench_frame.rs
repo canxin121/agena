@@ -2,11 +2,7 @@
 
 use std::borrow::Cow;
 
-use ratatui::{
-    Frame,
-    layout::Rect,
-    widgets::{Paragraph, Wrap},
-};
+use ratatui::{Frame, layout::Rect};
 
 use crate::{
     FramedSurface, FramedSurfaceSpec,
@@ -14,9 +10,7 @@ use crate::{
         SurfaceMode, VerticalSectionSize, framed_sections_target_height,
         optional_overlay_text_height, split_vertical_sections,
     },
-    render_framed_surface,
-    theme::muted_style,
-    title_with_summary,
+    render_framed_surface, title_with_summary,
 };
 
 /// Shared chrome for full-screen and modal workbenches.
@@ -105,12 +99,7 @@ pub fn render_workbench_frame(
         None
     };
     if let Some(footer_area) = footer {
-        frame.render_widget(
-            Paragraph::new(spec.footer.as_ref())
-                .style(muted_style())
-                .wrap(Wrap { trim: false }),
-            footer_area,
-        );
+        crate::render_shortcut_footer(frame, footer_area, spec.footer.as_ref());
     }
 
     WorkbenchFrame {

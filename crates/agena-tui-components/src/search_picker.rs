@@ -756,6 +756,38 @@ where
         true
     }
 
+    /// Select visible rows using the same identity bookkeeping as keyboard navigation.
+    pub fn handle_pointer(
+        &mut self,
+        action: &crate::pointer::PointerAction,
+        activate: bool,
+    ) -> Option<KeyCode> {
+        use crate::pointer::PointerAction;
+        match *action {
+            PointerAction::PickerInput => self.focus = SearchPickerFocus::Input,
+            PointerAction::PickerResults => self.focus = SearchPickerFocus::Results,
+            PointerAction::PickerRow(index) => {
+                if index >= self.row_count() {
+                    return None;
+                }
+                self.focus = SearchPickerFocus::Results;
+                if activate {
+                    self.move_selection(index as isize - self.selected as isize);
+                    if self.config.selection_mode == SearchPickerSelectionMode::Multiple {
+                        self.toggle_selected();
+                    } else {
+                        return Some(KeyCode::Enter);
+                    }
+                }
+            }
+            PointerAction::PickerPreview(delta) => {
+                self.preview_scroll = self.preview_scroll.saturating_add_signed(delta);
+            }
+            _ => {}
+        }
+        None
+    }
+
     pub fn handle_input_key(&mut self, key: KeyEvent) -> SearchPickerInputResult {
         if input_dialog_action(key, false) == Some(InputDialogAction::Close) {
             return SearchPickerInputResult::Close;

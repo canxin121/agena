@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
 };
 
 /// Usage-dashboard data view selected by the terminal user.
@@ -340,23 +340,22 @@ pub fn render_usage_dashboard(
     presentation: &UsageDashboardPresentation,
     data: Option<&UsageDashboardData>,
 ) {
-    let palette = agena_tui_components::theme::active_palette();
     let title = if loading {
-        " Usage analytics  ·  refreshing… "
+        "Usage analytics · refreshing…"
     } else {
-        " Usage analytics "
+        "Usage analytics"
     };
-    let outer = Block::default()
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.muted));
-    let inner = outer.inner(area);
-    frame.render_widget(outer, area);
+    let inner = agena_tui_components::render_framed_surface(
+        frame,
+        area,
+        agena_tui_components::SurfaceMode::Route,
+        &agena_tui_components::FramedSurfaceSpec {
+            title: title.into(),
+            target_width: area.width,
+            target_height: area.height,
+        },
+    )
+    .inner;
     if inner.width < 30 || inner.height < 10 {
         frame.render_widget(
             Paragraph::new("Terminal is too small for usage analytics")
@@ -427,16 +426,11 @@ fn render_usage_header(
         Span::styled("Ctrl+R", shortcut),
         Span::styled(" refresh", value),
     ];
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(controls),
-            Line::from(Span::styled(
-                "Up/Down selects a row · Enter opens a session · Esc closes",
-                Style::default().fg(palette.muted),
-            )),
-        ])
-        .wrap(Wrap { trim: true }),
+    let controls = agena_tui_components::line_plain_text(&Line::from(controls));
+    agena_tui_components::render_shortcut_footer(
+        frame,
         area,
+        &format!("{controls} · Enter open session · Esc close"),
     );
 }
 
@@ -722,6 +716,20 @@ fn render_usage_table(
         Style::default().fg(agena_tui_components::theme::muted_color()),
     ))];
     for (index, row) in rows.iter().enumerate().skip(start).take(visible) {
+        agena_tui_components::pointer::register(
+            Rect::new(
+                area.x.saturating_add(1),
+                area.y.saturating_add(2 + (index - start) as u16),
+                area.width.saturating_sub(2),
+                1,
+            ),
+            Some(agena_tui_components::pointer::PointerAction::List {
+                panel: 0,
+                index,
+                selected: presentation.selected,
+            }),
+            None,
+        );
         let selected = index == presentation.selected;
         let style = if selected {
             let palette = agena_tui_components::theme::active_palette();
@@ -755,9 +763,7 @@ fn render_usage_table(
         lines.push(Line::from("No usage for the selected filters"));
     }
     frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::default().title(title).borders(Borders::ALL))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(lines).block(Block::default().title(title).borders(Borders::ALL)),
         area,
     );
 }

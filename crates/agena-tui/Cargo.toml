@@ -13,7 +13,7 @@ agena-tui-components.workspace = true
 crossterm.workspace = true
 fluent-templates.workspace = true
 ratatui-image.workspace = true
-ratatui.workspace = true
+ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 reqwest = { workspace = true, features = ["query", "rustls"] }
 tokio = { workspace = true, features = ["net", "time"] }
 tracing.workspace = true

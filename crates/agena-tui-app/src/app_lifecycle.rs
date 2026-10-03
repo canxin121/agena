@@ -4,9 +4,7 @@ impl App {
     }
 
     pub(crate) fn mouse_capture_active(&self) -> bool {
-        (self.current_route_is_main() || matches!(self.current_route, Route::Hub(_)))
-            && self.overlay.is_none()
-            && self.context_help.is_none()
+        true
     }
 
     /// Resolve a possibly-relative path against the workspace root.
@@ -31,11 +29,26 @@ impl App {
         let (tx, rx) = tokio::sync::mpsc::channel(APP_MESSAGE_QUEUE_CAPACITY);
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(UI_COMMAND_QUEUE_CAPACITY);
         let draft_store_path = default_draft_store_path();
+        let prompt_history_path = default_prompt_history_path();
+        // Unit-test applications must never load or persist the developer's
+        // actual drafts/history, including the final save in App::drop.
+        #[cfg(test)]
+        let test_state_dir = tempfile::Builder::new()
+            .prefix("agena-tui-unit-")
+            .tempdir()
+            .expect("isolated TUI state");
+        #[cfg(test)]
+        let (draft_store_path, prompt_history_path) = {
+            drop((draft_store_path, prompt_history_path));
+            (
+                test_state_dir.path().join("drafts.json"),
+                test_state_dir.path().join("history.jsonl"),
+            )
+        };
         let (draft_store, pending_draft_store_error) = match DraftStore::load(&draft_store_path) {
             Ok(store) => (store, None),
             Err(error) => (DraftStore::default(), Some(error)),
         };
-        let prompt_history_path = default_prompt_history_path();
         let (prompt_history, pending_prompt_history_error) =
             match PromptHistory::load(&prompt_history_path) {
                 Ok(history) => (history, None),
@@ -61,6 +74,8 @@ impl App {
         );
         transcript.set_math_render_context(math_render_context.clone());
         let mut app = Self {
+            #[cfg(test)]
+            _test_state_dir: test_state_dir,
             application,
             i18n: i18n.clone(),
             tx,
@@ -129,6 +144,7 @@ impl App {
             next_pending_user_message_id: 1,
             layout: LayoutCache::default(),
             surface_layout: crate::SurfaceLayout::default(),
+            pointer_targets: Default::default(),
             surface_selection: None,
             transcript_scrollbar_drag: None,
             transcript_pointer_gesture: None,
@@ -459,6 +475,8 @@ impl App {
                 self.handle_paste(text);
             }
             Event::Resize(_, _) => {
+                self.pointer_targets = Default::default();
+                self.cancel_surface_selection();
                 self.transcript_scrollbar_drag = None;
                 self.transcript_pointer_gesture = None;
                 self.last_transcript_click = None;

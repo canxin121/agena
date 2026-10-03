@@ -346,6 +346,7 @@ overlay-plan-slug = 计划={$slug}
 overlay-plan-path = 路径：{$path}
 overlay-plan-steps = 步骤={$steps}
 overlay-plan-preview-heading = 预览
+plan-viewer-refresh = 刷新
 plan-viewer-title = 计划
 plan-viewer-empty = 暂无计划。
 plan-viewer-loading = 正在加载计划

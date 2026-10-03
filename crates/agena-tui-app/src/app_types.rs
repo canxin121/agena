@@ -510,6 +510,7 @@ pub struct App {
     pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
     pub(super) surface_layout: crate::SurfaceLayout,
+    pub(super) pointer_targets: agena_tui_components::pointer::PointerMap,
     pub(super) surface_selection: Option<crate::SurfaceSelection>,
     pub(super) transcript_scrollbar_drag: Option<TranscriptScrollbarDrag>,
     pub(super) transcript_pointer_gesture: Option<TranscriptPointerGesture>,
@@ -579,6 +580,8 @@ pub struct App {
     /// it (read-only `agena.plan.get`) on session open and periodically while
     /// the chip is missing.
     pub(super) plan_display_refresh: Option<PlanDisplayRefreshState>,
+    #[cfg(test)]
+    pub(super) _test_state_dir: tempfile::TempDir,
 }
 
 impl Drop for App {
@@ -1130,6 +1133,7 @@ impl ActivitiesState {
 
 #[derive(Debug, Clone)]
 pub(super) struct PlanViewerState {
+    pub(super) session_id: i64,
     pub(super) presentation: agena_tui::plan_viewer::PlanViewerPresentation,
     pub(super) loading: bool,
     pub(super) error: Option<String>,
@@ -1141,8 +1145,9 @@ pub(super) struct PlanViewerState {
 }
 
 impl PlanViewerState {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(session_id: i64) -> Self {
         Self {
+            session_id,
             presentation: agena_tui::plan_viewer::PlanViewerPresentation::new(),
             loading: false,
             error: None,

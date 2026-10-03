@@ -19,7 +19,7 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-plan-viewer-requires-session"));
             return;
         };
-        let mut state = PlanViewerState::new();
+        let mut state = PlanViewerState::new(session_id);
         state.summary = self.plan_viewer_summary(session_id);
         self.route_stack.clear();
         self.current_route = Route::PlanViewer(state);
@@ -32,13 +32,16 @@ impl App {
     /// request id so callers that hold a detached route state (during route
     /// key handling) can record it themselves.
     pub(crate) fn refresh_plan_viewer(&mut self) -> Option<u64> {
-        let Some(session_id) = self.current_or_selected_session_id() else {
-            if let Route::PlanViewer(state) = &mut self.current_route {
-                state.loading = false;
-                state.error = Some(ui_text::t(&self.i18n, "flash-plan-viewer-requires-session"));
-            }
+        let Route::PlanViewer(state) = &self.current_route else {
             return None;
         };
+        if state.loading || state.toggle_request_id != 0 {
+            return None;
+        }
+        self.refresh_plan_viewer_for(state.session_id)
+    }
+
+    fn refresh_plan_viewer_for(&mut self, session_id: i64) -> Option<u64> {
         let summary = self.plan_viewer_summary(session_id);
         let request_id = self.next_usage_request_id.saturating_add(1);
         self.next_usage_request_id = request_id;
@@ -111,6 +114,7 @@ impl App {
             if request_id != state.toggle_request_id {
                 return;
             }
+            state.toggle_request_id = 0;
             match result {
                 Ok(_) => {}
                 Err(error) => state.error = Some(error.to_string()),
@@ -149,7 +153,10 @@ impl App {
                 false
             }
             Some(KeyAction::Refresh) => {
-                if let Some(request_id) = self.refresh_plan_viewer() {
+                if !state.loading
+                    && state.toggle_request_id == 0
+                    && let Some(request_id) = self.refresh_plan_viewer_for(state.session_id)
+                {
                     state.request_id = request_id;
                     state.loading = true;
                     state.error = None;
@@ -167,10 +174,10 @@ impl App {
     /// Toggle autorun for the active plan through the application-side
     /// session tool executor (no permission prompt), then refresh the view.
     fn toggle_plan_autorun(&mut self, state: &mut PlanViewerState) {
-        let Some(session_id) = self.current_or_selected_session_id() else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-plan-viewer-requires-session"));
+        if state.loading || state.toggle_request_id != 0 {
             return;
-        };
+        }
+        let session_id = state.session_id;
         let Some(current) = state.autorun else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-plan-viewer-no-plan"));
             return;
@@ -226,7 +233,7 @@ impl App {
     }
 
     fn plan_viewer_page_size(&self) -> u16 {
-        self.layout.overlay_area.height.saturating_sub(2).max(1)
+        self.layout.overlay_area.height.saturating_sub(4).max(1)
     }
 
     /// Periodically re-request the plan display contribution for the attached

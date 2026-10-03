@@ -42,6 +42,7 @@ pub(crate) fn plugin_header_text(
 pub(crate) fn plugin_tools_text(
     dialog: &PluginWorkbenchOverlay,
     plugin: &PluginWorkbenchPlugin,
+    width: u16,
 ) -> Text<'static> {
     if plugin.tools.is_empty() {
         return Text::from(dialog.i18n.text("plugin-workbench-no-tools"));
@@ -67,7 +68,7 @@ pub(crate) fn plugin_tools_text(
                     8,
                 ),
             ],
-            124,
+            width,
         ),
         Style::default().add_modifier(Modifier::BOLD),
     )));
@@ -92,7 +93,7 @@ pub(crate) fn plugin_tools_text(
                     (description, 54),
                     (inputs.to_string().as_str(), 8),
                 ],
-                121,
+                width.saturating_sub(3),
             )
         );
         let style = if index == dialog.selected_tool {
@@ -137,7 +138,7 @@ pub(crate) fn plugin_tools_text(
                 .text("plugin-workbench-column-arguments")
                 .as_str(),
             0,
-            124,
+            width,
             18,
         );
         if let Some(result) = dialog

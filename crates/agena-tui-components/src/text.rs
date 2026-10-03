@@ -289,7 +289,7 @@ pub fn wrapped_lines_height(lines: &[Line<'_>], width: u16) -> u16 {
     lines
         .iter()
         .map(|line| wrapped_text_height(line_plain_text(line).as_str(), width))
-        .sum::<u16>()
+        .fold(0_u16, u16::saturating_add)
         .max(1)
 }
 

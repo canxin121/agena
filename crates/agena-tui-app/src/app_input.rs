@@ -4,6 +4,7 @@ impl App {
             return;
         }
 
+        self.pointer_targets = Default::default();
         self.refresh_input_derived_state();
 
         if self.focus != Focus::Transcript

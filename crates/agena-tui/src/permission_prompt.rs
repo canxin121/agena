@@ -4,18 +4,19 @@
 //! editor, and Runtime submission. This module owns only the prompt's pages,
 //! selected choice, and keyboard/navigation policy.
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::cell::Cell;
 
 use agena_tui_components::{
-    ParagraphSection, SelectionCursor, StackedDialogSection, StackedDialogSectionHeight,
-    StackedDialogSpec, SurfaceMode, render_stacked_dialog,
+    FramedSurfaceSpec, ListPanelSpec, SelectionCursor, SurfaceMode, render_framed_surface,
+    render_list_panel,
 };
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::Borders,
+    widgets::{ListItem, Paragraph, Wrap},
 };
 
 use crate::i18n::I18n;
@@ -173,6 +174,8 @@ pub struct PermissionPromptPresentation {
     content: PermissionPromptContent,
     page: PermissionPromptPage,
     selection: SelectionCursor,
+    scroll: Cell<u16>,
+    max_scroll: Cell<u16>,
 }
 
 impl PermissionPromptPresentation {
@@ -181,6 +184,8 @@ impl PermissionPromptPresentation {
             content,
             page: PermissionPromptPage::Action,
             selection: SelectionCursor::default(),
+            scroll: Cell::new(0),
+            max_scroll: Cell::new(0),
         }
     }
 
@@ -204,12 +209,23 @@ impl PermissionPromptPresentation {
         self.selection.selected
     }
 
+    pub fn scroll_by(&self, delta: i16) {
+        self.scroll.set(
+            self.scroll
+                .get()
+                .saturating_add_signed(delta)
+                .min(self.max_scroll.get()),
+        );
+    }
+
     pub fn open_scope(&mut self, decision: PermissionPromptDecision) {
+        self.scroll.set(0);
         self.page = PermissionPromptPage::Scope(decision);
         self.selection.selected = 0;
     }
 
     pub fn open_details(&mut self) -> bool {
+        self.scroll.set(0);
         self.page = match self.page {
             PermissionPromptPage::Action => {
                 PermissionPromptPage::Details(PermissionPromptDetailsReturn::Action)
@@ -224,6 +240,7 @@ impl PermissionPromptPresentation {
     }
 
     fn back(&mut self) -> PermissionPromptEffect {
+        self.scroll.set(0);
         match self.page {
             PermissionPromptPage::Action => PermissionPromptEffect::Close,
             PermissionPromptPage::Scope(_) => {
@@ -259,6 +276,19 @@ pub fn handle_key(
     presentation: &mut PermissionPromptPresentation,
     key: KeyEvent,
 ) -> PermissionPromptEffect {
+    if key.modifiers == KeyModifiers::NONE {
+        let delta = match key.code {
+            KeyCode::PageUp => Some(-10),
+            KeyCode::PageDown => Some(10),
+            KeyCode::Up if presentation.page.is_details() => Some(-1),
+            KeyCode::Down if presentation.page.is_details() => Some(1),
+            _ => None,
+        };
+        if let Some(delta) = delta {
+            presentation.scroll_by(delta);
+            return PermissionPromptEffect::KeepOpen;
+        }
+    }
     match resolve(KeyContext::PermissionPrompt, key) {
         Some(KeyAction::Back) => presentation.back(),
         Some(KeyAction::MoveUp) if !presentation.page.is_details() => {
@@ -294,48 +324,83 @@ pub fn render_overlay(
     auto_approve: Option<&PermissionPromptAutoApproveStatus>,
     i18n: &I18n,
 ) {
-    let body = Text::from(content_lines(presentation.active_content()));
+    use agena_tui_components::pointer::{self, PointerAction};
     let page = presentation.page();
-    let footer = Text::from(footer(i18n, page));
-    let mut sections = vec![StackedDialogSection::Paragraph(ParagraphSection {
-        height: StackedDialogSectionHeight::AutoText { min: 6, max: 40 },
-        title: None,
-        borders: Borders::NONE,
-        body,
-        wrap: true,
-        scroll: None,
-        alignment: None,
-    })];
-    if !page.is_details() {
-        sections.push(StackedDialogSection::Paragraph(ParagraphSection {
-            height: StackedDialogSectionHeight::AutoText { min: 3, max: 6 },
-            title: None,
-            borders: Borders::NONE,
-            body: Text::from(choice_lines(presentation, auto_approve, i18n)),
-            wrap: true,
-            scroll: None,
-            alignment: None,
-        }));
+    let mut lines = content_lines(presentation.active_content());
+    if let Some(PermissionPromptAutoApproveStatus::Failed(reason)) = auto_approve {
+        lines.push(Line::from(Span::styled(
+            sanitize_display_text(reason),
+            Style::default().fg(agena_tui_components::theme::danger_color()),
+        )));
     }
-    sections.push(StackedDialogSection::Paragraph(ParagraphSection {
-        height: StackedDialogSectionHeight::AutoText { min: 1, max: 2 },
-        title: None,
-        borders: Borders::NONE,
-        body: footer,
-        wrap: true,
-        scroll: None,
-        alignment: None,
-    }));
-    render_stacked_dialog(
+    let body = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    let choice_height = if page.is_details() {
+        0
+    } else {
+        page.choice_count() as u16 + 2
+    };
+    let width = SurfaceMode::Overlay
+        .content_width(area, 108)
+        .saturating_sub(2);
+    let content_height = body.line_count(width.max(1));
+    let surface = render_framed_surface(
         frame,
         area,
         SurfaceMode::Overlay,
-        &StackedDialogSpec {
+        &FramedSurfaceSpec {
             title: title(i18n, page).into(),
             target_width: 108,
-            sections,
+            target_height: (content_height.min(24) as u16)
+                .saturating_add(choice_height + 3)
+                .max(12),
         },
     );
+    let rows = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(choice_height),
+        Constraint::Length(1),
+    ])
+    .split(surface.inner);
+    let max_scroll = body
+        .line_count(rows[0].width.max(1))
+        .saturating_sub(usize::from(rows[0].height))
+        .min(usize::from(u16::MAX)) as u16;
+    presentation.max_scroll.set(max_scroll);
+    presentation
+        .scroll
+        .set(presentation.scroll.get().min(max_scroll));
+    frame.render_widget(body.scroll((presentation.scroll.get(), 0)), rows[0]);
+    pointer::register(
+        rows[0],
+        None,
+        Some((
+            PointerAction::Named("permission-scroll-up"),
+            PointerAction::Named("permission-scroll-down"),
+        )),
+    );
+    if !page.is_details() {
+        let choices = choice_labels(i18n, page, auto_approve)
+            .into_iter()
+            .map(ListItem::new)
+            .collect::<Vec<_>>();
+        let heading = i18n.text(if matches!(page, PermissionPromptPage::Action) {
+            "overlay-permission-decision-heading"
+        } else {
+            "overlay-permission-scope-heading"
+        });
+        render_list_panel(
+            frame,
+            rows[1],
+            &ListPanelSpec::new(
+                Some(heading.into()),
+                &choices,
+                Some(presentation.selected()),
+                agena_tui_components::theme::selection_style(),
+                "› ".into(),
+            ),
+        );
+    }
+    agena_tui_components::render_shortcut_footer(frame, rows[2], &footer(i18n, page));
 }
 
 fn content_lines(content: &[PermissionPromptLine]) -> Vec<Line<'static>> {
@@ -368,46 +433,6 @@ fn content_lines(content: &[PermissionPromptLine]) -> Vec<Line<'static>> {
                 }
                 PermissionPromptLineTone::Strong => Style::default().add_modifier(Modifier::BOLD),
             },
-        )));
-    }
-    lines
-}
-
-fn choice_lines(
-    presentation: &PermissionPromptPresentation,
-    auto_approve: Option<&PermissionPromptAutoApproveStatus>,
-    i18n: &I18n,
-) -> Vec<Line<'static>> {
-    let page = presentation.page();
-    let heading = match page {
-        PermissionPromptPage::Action => "overlay-permission-decision-heading",
-        PermissionPromptPage::Scope(_) => "overlay-permission-scope-heading",
-        PermissionPromptPage::Details(_) => return Vec::new(),
-    };
-    let mut lines = vec![Line::from(Span::styled(
-        sanitize_display_text(i18n.text(heading).as_str()),
-        Style::default().add_modifier(Modifier::BOLD),
-    ))];
-    for (index, label) in choice_labels(i18n, page, auto_approve)
-        .into_iter()
-        .enumerate()
-    {
-        let selected = index == presentation.selected();
-        let style = if selected {
-            agena_tui_components::theme::selection_style()
-        } else {
-            Style::default()
-        };
-        lines.push(Line::from(Span::styled(
-            format!("{}{}", if selected { ">> " } else { "   " }, label),
-            style,
-        )));
-    }
-    if let Some(PermissionPromptAutoApproveStatus::Failed(reason)) = auto_approve {
-        let reason = sanitize_display_text(reason.as_str());
-        lines.push(Line::from(Span::styled(
-            reason,
-            Style::default().fg(agena_tui_components::theme::muted_color()),
         )));
     }
     lines
@@ -478,6 +503,58 @@ mod tests {
         PermissionPromptLine, PermissionPromptPage, PermissionPromptPresentation, handle_key,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn long_permission_body_keeps_every_decision_visible_and_scrollable() {
+        use agena_tui_components::pointer::{self, PointerAction};
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut presentation = PermissionPromptPresentation::new(PermissionPromptContent {
+            overview: (0..80)
+                .map(|n| PermissionPromptLine::normal(format!("Path {n}")))
+                .collect(),
+            details: vec![PermissionPromptLine::normal("details")],
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        let mut targets = pointer::PointerMap::default();
+        terminal
+            .draw(|frame| {
+                targets = pointer::capture(|| {
+                    super::render_overlay(
+                        frame,
+                        frame.area(),
+                        &presentation,
+                        None,
+                        &crate::i18n::I18n::english(),
+                    )
+                })
+            })
+            .unwrap();
+        let mut choices = std::collections::BTreeSet::new();
+        for row in 0..16 {
+            for column in 0..80 {
+                if let Some(PointerAction::List { index, .. }) = targets.action(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                }) {
+                    choices.insert(index);
+                }
+            }
+        }
+        assert_eq!(choices, (0..5).collect());
+        handle_key(
+            &mut presentation,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+        );
+        assert!(presentation.scroll.get() > 0);
+        assert_eq!(
+            presentation.selected(),
+            0,
+            "scrolling the request must not change the decision"
+        );
+    }
 
     #[test]
     fn back_from_scope_returns_to_action_and_resets_selection() {

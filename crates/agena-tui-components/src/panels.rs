@@ -190,6 +190,8 @@ pub fn render_list_panel_with_offset(
             .title(format!(" {} ", title)),
         None => Block::default().borders(Borders::ALL),
     };
+    let inner = block.inner(area);
+    let panel = crate::pointer::next_list();
     let list = List::new(spec.items.iter().cloned())
         .block(block)
         .highlight_style(spec.highlight_style)
@@ -198,6 +200,32 @@ pub fn render_list_panel_with_offset(
         .with_offset(usize::from(offset))
         .with_selected(spec.selected);
     frame.render_stateful_widget(list, area, &mut state);
+    if let Some(selected) = spec.selected {
+        crate::pointer::register(
+            inner,
+            Some(crate::pointer::PointerAction::FocusList(panel)),
+            None,
+        );
+        let mut y = inner.y;
+        for (index, item) in spec.items.iter().enumerate().skip(state.offset()) {
+            let height = u16::try_from(item.height())
+                .unwrap_or(u16::MAX)
+                .min(inner.bottom().saturating_sub(y));
+            if height == 0 {
+                break;
+            }
+            crate::pointer::register(
+                Rect::new(inner.x, y, inner.width, height),
+                Some(crate::pointer::PointerAction::List {
+                    panel,
+                    index,
+                    selected,
+                }),
+                None,
+            );
+            y = y.saturating_add(height);
+        }
+    }
 }
 
 fn empty_list_state() -> ListState {
@@ -333,5 +361,57 @@ mod tests {
         assert_ne!(active, inactive);
         assert_eq!(inactive.fg, Some(crate::theme::accent_color()));
         assert_eq!(inactive.bg, None);
+    }
+}
+
+#[cfg(test)]
+mod pointer_regressions {
+    use super::*;
+    use crate::pointer::{self, PointerAction};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn pointer_targets_follow_ratatui_list_offset_and_multiline_rows() {
+        let mut terminal = Terminal::new(TestBackend::new(30, 8)).unwrap();
+        let items = (0..20)
+            .map(|i| ListItem::new(vec![Line::from(format!("row {i}")), Line::from("detail")]))
+            .collect::<Vec<_>>();
+        let mut targets = Default::default();
+        terminal
+            .draw(|frame| {
+                targets = pointer::capture(|| {
+                    render_list_panel(
+                        frame,
+                        frame.area(),
+                        &ListPanelSpec::new(
+                            None,
+                            &items,
+                            Some(15),
+                            theme::selection_style(),
+                            "> ".into(),
+                        ),
+                    )
+                });
+            })
+            .unwrap();
+        for y in 1..7 {
+            let event = MouseEvent {
+                column: 6,
+                row: y,
+                kind: MouseEventKind::Down(MouseButton::Left),
+                modifiers: KeyModifiers::NONE,
+            };
+            let Some(PointerAction::List { index, .. }) = targets.action(event) else {
+                panic!("missing row {y}");
+            };
+            let buffer = terminal.backend().buffer();
+            let row: String = (0..30)
+                .map(|x| buffer[(x, 1 + (y - 1) / 2 * 2)].symbol())
+                .collect();
+            assert!(
+                row.contains(&format!("row {index}")),
+                "{row} clicked {index}"
+            );
+        }
     }
 }

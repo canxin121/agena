@@ -265,6 +265,29 @@ impl Editor {
         }
     }
 
+    /// Place the cursor in the same wrapped viewport used by the renderer.
+    pub fn move_to_visual_cell(&mut self, width: u16, height: u16, column: u16, row: u16) {
+        let lines = wrapped_editor_lines(&self.text, width.max(1));
+        let current = visual_row_index_for_cursor(
+            &lines,
+            self.current_line_index(),
+            self.current_display_column(),
+        )
+        .unwrap_or(0);
+        let top = current.saturating_sub(usize::from(height.max(1).saturating_sub(1)));
+        let target = top
+            .saturating_add(usize::from(row))
+            .min(lines.len().saturating_sub(1));
+        if let Some(line) = lines.get(target) {
+            let position = byte_index_at_display_column(
+                &self.text[line.range.clone()],
+                line.range.start,
+                line.start_column.saturating_add(usize::from(column)),
+            );
+            self.set_cursor(position);
+        }
+    }
+
     pub fn insert_explicit_newline(&mut self) {
         self.insert_newline();
     }
@@ -1796,5 +1819,20 @@ mod tests {
         assert_eq!(editor.text(), "prefixred");
         let view = editor.render_wrapped_view(20, 1);
         assert_eq!(view.cursor_x, 9);
+    }
+}
+
+#[cfg(test)]
+mod pointer_regressions {
+    use super::*;
+    #[test]
+    fn click_uses_wrapped_viewport_unicode_cells_and_scroll() {
+        let mut editor = Editor::from_text("abc你好def\nlast".into());
+        editor.set_cursor(0);
+        editor.move_to_visual_cell(5, 4, 1, 1);
+        assert_eq!(&editor.text()[editor.cursor()..], "好def\nlast");
+        editor.set_cursor(editor.text().len());
+        editor.move_to_visual_cell(5, 1, 2, 0);
+        assert_eq!(&editor.text()[editor.cursor()..], "st");
     }
 }

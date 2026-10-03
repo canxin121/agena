@@ -7,15 +7,7 @@ const TRANSCRIPT_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 impl App {
     pub(crate) fn handle_mouse_event(&mut self, mouse: MouseEvent) {
         self.clear_transcript_pending_command();
-        if !self.mouse_capture_active() {
-            self.transcript_scrollbar_drag = None;
-            self.transcript_pointer_gesture = None;
-            self.last_transcript_click = None;
-            self.cancel_surface_selection();
-            self.transcript.cancel_text_selection(
-                self.layout.transcript_body.width,
-                self.layout.transcript_body.height,
-            );
+        if self.handle_surface_pointer(mouse) {
             return;
         }
         if matches!(self.current_route, Route::Hub(_)) {
@@ -49,7 +41,23 @@ impl App {
                 self.update_surface_selection(mouse.column, mouse.row);
             }
             MouseEventKind::Up(MouseButton::Left) if self.surface_selection.is_some() => {
-                self.update_surface_selection(mouse.column, mouse.row);
+                let editor = self.surface_layout.composer_editor;
+                let click = self.surface_selection.is_some_and(|selection| {
+                    selection.kind == crate::SurfaceSelectionKind::ComposerEditor
+                        && selection.anchor == (mouse.column, mouse.row)
+                        && selection.head == selection.anchor
+                });
+                if click {
+                    self.composer.move_to_visual_cell(
+                        editor.width,
+                        editor.height,
+                        mouse.column.saturating_sub(editor.x),
+                        mouse.row.saturating_sub(editor.y),
+                    );
+                    self.cancel_surface_selection();
+                } else {
+                    self.update_surface_selection(mouse.column, mouse.row);
+                }
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 if mouse.row == transcript.y.saturating_sub(1)
@@ -59,6 +67,9 @@ impl App {
                 {
                     self.request_older_transcript_parts_if_needed();
                     return;
+                }
+                if rect_contains(self.surface_layout.composer_editor, mouse.column, mouse.row) {
+                    self.focus = agena_tui::main_focus::Focus::Composer;
                 }
                 // Any new left-click cancels the previous surface selection.
                 self.cancel_surface_selection();
@@ -224,6 +235,7 @@ impl App {
             self.transcript_pointer_gesture = None;
             return;
         };
+        self.focus = agena_tui::main_focus::Focus::Transcript;
         self.transcript_pointer_gesture = Some(TranscriptPointerGesture::new(position));
         self.transcript_motion_prefix = None;
     }

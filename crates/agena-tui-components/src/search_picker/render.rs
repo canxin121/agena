@@ -123,6 +123,11 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
         row_index += 1;
     }
     let input_result = if input_height > 0 {
+        crate::pointer::register(
+            rows[row_index],
+            Some(crate::pointer::PointerAction::PickerInput),
+            None,
+        );
         let editor_spec = EditorPanelSpec {
             title: (!spec.search_label.trim().is_empty()).then(|| spec.search_label.clone()),
             borders: Borders::ALL,
@@ -170,6 +175,14 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
 
     render_picker_results(frame, list_area, picker, spec, &normalize_text);
     if let Some(preview_area) = preview_area {
+        crate::pointer::register(
+            preview_area,
+            None,
+            Some((
+                crate::pointer::PointerAction::PickerPreview(-3),
+                crate::pointer::PointerAction::PickerPreview(3),
+            )),
+        );
         let view_state = picker_view_state(picker, spec.loading_message.as_ref());
         let sections = build_preview(view_state);
         render_preview_sections(
@@ -181,12 +194,7 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
         );
     }
     if footer_height > 0 {
-        frame.render_widget(
-            Paragraph::new(footer)
-                .style(theme::muted_style())
-                .wrap(Wrap { trim: false }),
-            rows[row_index],
-        );
+        crate::render_shortcut_footer(frame, rows[row_index], &footer);
     }
     if let Some(result) = input_result
         && picker.focus == SearchPickerFocus::Input
@@ -295,6 +303,19 @@ fn render_picker_results<TItem, TCustom, TMeta, F>(
     }
 
     let (start, end) = picker.visible_page_bounds();
+    let inner = block.inner(area);
+    crate::pointer::register(
+        inner,
+        Some(crate::pointer::PointerAction::PickerResults),
+        None,
+    );
+    for (line, index) in (start..end).enumerate().take(usize::from(inner.height)) {
+        crate::pointer::register(
+            Rect::new(inner.x, inner.y + line as u16, inner.width, 1),
+            Some(crate::pointer::PointerAction::PickerRow(index)),
+            None,
+        );
+    }
     let row_width = area.width.saturating_sub(5).max(1) as usize;
     let list_items = (start..end)
         .map(|row| {
@@ -578,9 +599,7 @@ where
         parts.push("Enter confirm".to_string());
     }
     if picker.config.input_mode.is_visible() {
-        parts.push(
-            "Search ←/→ cursor · Results ←/→ page · ↓ enter · ↑ first row return".to_string(),
-        );
+        parts.push("↑/↓ navigate · ←/→ page".to_string());
     } else {
         parts.push("←/→ page".to_string());
     }

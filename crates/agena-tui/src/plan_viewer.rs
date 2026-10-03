@@ -1,55 +1,52 @@
-//! Presentation and rendering for the plan viewer overlay.
-//!
-//! Fetching plan content (`plan.get` full view) and toggling autorun remain
-//! application responsibilities. This module owns the terminal projection:
-//! scroll state and rendering the plan markdown through the shared
-//! `markdown_lines` helper.
-
+//! A compact plan reader with one scroll owner and frame-local pointer targets.
+use crate::{i18n::I18n, user_input::markdown_lines};
+use agena_tui_components::theme::{danger_color, muted_style};
+use agena_tui_components::{FramedSurfaceSpec, SurfaceMode, render_framed_surface};
+use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
+use std::cell::{Cell, RefCell};
 
-use agena_tui_components::theme::{danger_color, muted_style};
-
-use crate::i18n::I18n;
-use crate::user_input::markdown_lines;
-
-/// Pure presentation state for the plan viewer overlay.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanViewerPresentation {
-    scroll: u16,
+    scroll: Cell<u16>,
+    max_scroll: Cell<u16>,
+    content: RefCell<Option<(String, Vec<Line<'static>>)>>,
+}
+
+impl Default for PlanViewerPresentation {
+    fn default() -> Self {
+        Self {
+            scroll: Cell::new(0),
+            max_scroll: Cell::new(u16::MAX),
+            content: RefCell::new(None),
+        }
+    }
 }
 
 impl PlanViewerPresentation {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// The current scroll offset in rendered lines.
     pub fn scroll(&self) -> u16 {
-        self.scroll
+        self.scroll.get()
     }
-
     pub fn scroll_to(&mut self, scroll: u16) {
-        self.scroll = scroll;
+        self.scroll.set(scroll.min(self.max_scroll.get()));
     }
-
-    /// Move the scroll offset by `delta` lines, clamped at zero.
     pub fn scroll_by(&mut self, delta: i64) {
-        let next = self.scroll as i64 + delta;
-        self.scroll = next.clamp(0, u16::MAX as i64) as u16;
+        self.scroll.set(
+            (i64::from(self.scroll.get()) + delta).clamp(0, i64::from(self.max_scroll.get()))
+                as u16,
+        );
     }
 }
 
-/// Render the plan viewer overlay into `area`.
-///
-/// `summary` is the compact display text (for example `▶ 2/5 ↻`), `markdown`
-/// is the full plan document from `plan.get`, and `autorun` drives the
-/// title badge. Loading and error states replace the body while fetching.
 #[allow(clippy::too_many_arguments)]
 pub fn render_plan_viewer(
     frame: &mut Frame,
@@ -62,82 +59,96 @@ pub fn render_plan_viewer(
     error: Option<&str>,
     i18n: &I18n,
 ) {
-    let autorun_text = match autorun {
+    let title = format!(
+        "{}{}",
+        i18n.text("plan-viewer-title"),
+        summary
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| format!(" · {s}"))
+            .unwrap_or_default()
+    );
+    let surface = render_framed_surface(
+        frame,
+        area,
+        SurfaceMode::Route,
+        &FramedSurfaceSpec {
+            title: title.into(),
+            target_width: area.width,
+            target_height: area.height,
+        },
+    );
+    let inner = surface.inner;
+    if inner.is_empty() {
+        return;
+    }
+    let autorun_label = match autorun {
         Some(true) => i18n.text("plan-viewer-autorun-on"),
-        Some(false) => i18n.text("plan-viewer-autorun-off"),
-        None => String::new(),
+        _ => i18n.text("plan-viewer-autorun-off"),
     };
-    let title = match summary {
-        Some(summary) if !summary.trim().is_empty() => {
-            if autorun_text.is_empty() {
-                format!(" {summary} ")
-            } else {
-                format!(" {summary} · {autorun_text} ")
-            }
-        }
-        _ => {
-            let base = i18n.text("plan-viewer-title");
-            if autorun_text.is_empty() {
-                format!(" {base} ")
-            } else {
-                format!(" {base} · {autorun_text} ")
-            }
-        }
+    let refresh_label = i18n.text(if loading {
+        "plan-viewer-loading"
+    } else {
+        "plan-viewer-refresh"
+    });
+    let mut buttons = vec![(
+        refresh_label.as_str(),
+        agena_tui_components::pointer::key(KeyCode::Char('r')),
+    )];
+    if autorun.is_some() {
+        buttons.push((
+            autorun_label.as_str(),
+            agena_tui_components::pointer::key(KeyCode::Char('a')),
+        ));
+    }
+    agena_tui_components::pointer::render_buttons(frame, Rect { height: 1, ..inner }, &buttons);
+    let body = Rect {
+        y: inner.y.saturating_add(1),
+        height: inner.height.saturating_sub(2),
+        ..inner
     };
-    let footer = i18n.text("plan-viewer-footer");
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(muted_style())
-        .title(Line::from(Span::styled(
-            title,
-            Style::default().add_modifier(Modifier::BOLD),
-        )))
-        .title_bottom(Line::from(Span::styled(
-            footer,
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some(error) = error {
-        if !error.trim().is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!(" ✗ {error}"),
-                Style::default().fg(danger_color()),
-            )));
-        }
-    } else if loading {
-        lines.push(Line::from(Span::styled(
-            format!(" {}\u{2026}", i18n.text("plan-viewer-loading")),
-            muted_style(),
-        )));
-    } else if let Some(markdown) = markdown {
-        if markdown.trim().is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!(" {}", i18n.text("plan-viewer-empty")),
-                muted_style(),
-            )));
-        } else {
-            lines = markdown_lines(markdown);
+    let footer = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
+    agena_tui_components::render_shortcut_footer(frame, footer, &i18n.text("plan-viewer-footer"));
+    if body.is_empty() {
+        return;
+    }
+    let mut content = presentation.content.borrow_mut();
+    if let Some(markdown) = markdown.filter(|s| !s.trim().is_empty()) {
+        if content
+            .as_ref()
+            .is_none_or(|(previous, _)| previous != markdown)
+        {
+            *content = Some((markdown.to_owned(), markdown_lines(markdown)));
         }
     } else {
-        lines.push(Line::from(Span::styled(
-            format!(" {}", i18n.text("plan-viewer-empty")),
-            muted_style(),
-        )));
+        *content = None;
     }
-
-    let max_scroll = lines.len().saturating_sub(inner.height as usize);
-    let scroll = usize::from(presentation.scroll).min(max_scroll);
-    let visible: Vec<Line<'static>> = lines
-        .iter()
-        .skip(scroll)
-        .take(inner.height as usize)
-        .cloned()
-        .collect();
-    frame.render_widget(Paragraph::new(visible).wrap(Wrap { trim: false }), inner);
+    let lines = if let Some(error) = error.filter(|s| !s.trim().is_empty()) {
+        vec![Line::from(Span::styled(
+            format!("✗ {error}"),
+            Style::default().fg(danger_color()),
+        ))]
+    } else if let Some((_, lines)) = content.as_ref() {
+        lines.clone()
+    } else {
+        vec![Line::from(Span::styled(
+            i18n.text(if loading {
+                "plan-viewer-loading"
+            } else {
+                "plan-viewer-empty"
+            }),
+            muted_style(),
+        ))]
+    };
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let max_scroll = paragraph
+        .line_count(body.width)
+        .saturating_sub(usize::from(body.height))
+        .min(usize::from(u16::MAX)) as u16;
+    presentation.max_scroll.set(max_scroll);
+    presentation
+        .scroll
+        .set(presentation.scroll.get().min(max_scroll));
+    frame.render_widget(paragraph.scroll((presentation.scroll.get(), 0)), body);
 }
 
 #[cfg(test)]
@@ -256,5 +267,55 @@ mod tests {
         );
         assert!(blank.contains("No plan yet"), "{blank}");
         assert!(blank.contains("autorun: off"), "{blank}");
+    }
+}
+
+#[cfg(test)]
+mod scrolling_regressions {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn long_wrapped_paragraph_reaches_its_tail_and_scroll_clamps_after_resize() {
+        let mut terminal = Terminal::new(TestBackend::new(28, 10)).unwrap();
+        let mut state = PlanViewerPresentation::new();
+        let text = format!("{} END_OF_PLAN", "中文步骤 abc ".repeat(60));
+        let draw = |terminal: &mut Terminal<TestBackend>, state: &PlanViewerPresentation| {
+            terminal
+                .draw(|frame| {
+                    render_plan_viewer(
+                        frame,
+                        frame.area(),
+                        state,
+                        None,
+                        Some(&text),
+                        Some(false),
+                        false,
+                        None,
+                        &I18n::english(),
+                    )
+                })
+                .unwrap();
+        };
+        draw(&mut terminal, &state);
+        assert!(state.max_scroll.get() > 20);
+        state.scroll_by(i64::from(u16::MAX));
+        draw(&mut terminal, &state);
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(rendered.contains("END_OF_PLAN"), "{rendered}");
+        let end = state.scroll();
+        state.scroll_by(1);
+        assert_eq!(state.scroll(), end);
+        state.scroll_by(-1);
+        assert_eq!(state.scroll(), end - 1);
+        terminal.backend_mut().resize(160, 40);
+        terminal.resize(Rect::new(0, 0, 160, 40)).unwrap();
+        draw(&mut terminal, &state);
+        assert_eq!(state.scroll(), 0);
     }
 }

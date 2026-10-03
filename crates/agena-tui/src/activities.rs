@@ -423,23 +423,28 @@ fn render_list_pane(
         if loading { "…" } else { "" },
         filter_suffix(presentation)
     );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(muted_style())
-        .title(Line::from(Span::styled(
-            title,
-            Style::default().add_modifier(Modifier::BOLD),
-        )))
-        .title_bottom(Line::from(action_bar(
+    let surface = agena_tui_components::render_framed_surface(
+        frame,
+        area,
+        agena_tui_components::SurfaceMode::Route,
+        &agena_tui_components::FramedSurfaceSpec {
+            title: title.trim().to_owned().into(),
+            target_width: area.width,
+            target_height: area.height,
+        },
+    );
+    let inner = surface.inner;
+    agena_tui_components::render_shortcut_footer(
+        frame,
+        Rect::new(inner.x, area.bottom().saturating_sub(1), inner.width, 1),
+        &action_bar(
             presentation,
             &visible,
             active_count,
             finished_count,
             area.width,
-        )));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        ),
+    );
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     if let Some(error) = error {
@@ -486,6 +491,28 @@ fn render_list_pane(
         .copied()
         .unwrap_or(0)
         .min(lines.len().saturating_sub(inner.height as usize));
+    if error.is_none() {
+        for (index, offset) in offsets.iter().copied().enumerate() {
+            if offset >= scroll_line
+                && offset < scroll_line.saturating_add(usize::from(inner.height))
+            {
+                agena_tui_components::pointer::register(
+                    Rect::new(
+                        inner.x,
+                        inner.y + (offset - scroll_line) as u16,
+                        inner.width,
+                        1,
+                    ),
+                    Some(agena_tui_components::pointer::PointerAction::List {
+                        panel: 0,
+                        index,
+                        selected: presentation.selected,
+                    }),
+                    None,
+                );
+            }
+        }
+    }
     let visible_lines: Vec<Line<'static>> = lines
         .iter()
         .skip(scroll_line)
@@ -509,7 +536,7 @@ fn action_bar(
     let mut actions = vec![
         "Esc close".to_owned(),
         "↑↓ move".to_owned(),
-        "↵ detail".to_owned(),
+        "Enter detail".to_owned(),
     ];
     if let Some(row) = visible.get(presentation.selected) {
         if let Some(control) = row
@@ -535,8 +562,8 @@ fn action_bar(
     }
     actions.push("r refresh".to_owned());
     format!(
-        " {active_count} active · {finished_count} finished | {} ",
-        actions.join("  ")
+        " {active_count} active · {finished_count} finished · {} ",
+        actions.join(" · ")
     )
 }
 

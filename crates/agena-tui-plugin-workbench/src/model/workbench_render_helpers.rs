@@ -1,3 +1,46 @@
+/// Config tables and section lists share selection-following viewport geometry.
+/// Their lines are already fitted to the available width, so wrapping would
+/// turn a table row into a different hit target on narrow terminals.
+fn render_selectable_plugin_text(
+    frame: &mut Frame,
+    area: Rect,
+    text: Text<'static>,
+    targets: &[(usize, usize)],
+    selected: usize,
+    action: &'static str,
+) {
+    use agena_tui_components::pointer::{self, PointerAction};
+    let selected_line = targets
+        .iter()
+        .find(|(_, index)| *index == selected)
+        .map(|(line, _)| *line)
+        .unwrap_or(0);
+    let start = selected_line
+        .saturating_sub(usize::from(area.height.saturating_sub(1)))
+        .min(text.lines.len().saturating_sub(usize::from(area.height)));
+    pointer::register(area, Some(PointerAction::Named(action)), None);
+    for &(line, index) in targets {
+        if line >= start && line - start < usize::from(area.height) {
+            pointer::register(
+                Rect::new(area.x, area.y + (line - start) as u16, area.width, 1),
+                Some(PointerAction::NamedIndex(action, index)),
+                None,
+            );
+        }
+    }
+    // Slice logical lines instead of casting a potentially large offset to u16.
+    frame.render_widget(
+        Paragraph::new(Text::from(
+            text.lines
+                .into_iter()
+                .skip(start)
+                .take(usize::from(area.height))
+                .collect::<Vec<_>>(),
+        )),
+        area,
+    );
+}
+
 pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkbenchOverlay) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -45,10 +88,25 @@ pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWor
         ),
     ]);
     frame.render_widget(
-        Paragraph::new(vec![Line::from(filter_line), controls]).wrap(Wrap { trim: false }),
-        rows[0],
+        Paragraph::new(filter_line),
+        Rect {
+            height: rows[0].height.min(1),
+            ..rows[0]
+        },
     );
+    if rows[0].height > 1 {
+        agena_tui_components::render_shortcut_footer(
+            frame,
+            Rect::new(rows[0].x, rows[0].y + 1, rows[0].width, 1),
+            &agena_tui_components::line_plain_text(&controls),
+        );
+    }
 
+    let visible_count = usize::from(rows[1].height.saturating_sub(3)).max(1);
+    let start = dialog
+        .list
+        .selected_visible_index()
+        .saturating_sub(visible_count.saturating_sub(1));
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         fixed_columns(
@@ -85,7 +143,11 @@ pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWor
             dialog.i18n.text("plugin-workbench-no-filter-matches"),
         ));
     } else {
-        for visible_row in 0..dialog.list.visible_len() {
+        for visible_row in start
+            ..start
+                .saturating_add(visible_count)
+                .min(dialog.list.visible_len())
+        {
             let Some(key) = dialog.list.visible_key(visible_row) else {
                 continue;
             };
@@ -93,6 +155,23 @@ pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWor
                 continue;
             };
             let selected = visible_row == dialog.list.selected_visible_index();
+            agena_tui_components::pointer::register(
+                Rect::new(
+                    rows[1].x.saturating_add(1),
+                    rows[1]
+                        .y
+                        .saturating_add(2)
+                        .saturating_add((visible_row - start) as u16),
+                    rows[1].width.saturating_sub(2),
+                    1,
+                ),
+                Some(agena_tui_components::pointer::PointerAction::List {
+                    panel: 0,
+                    index: visible_row,
+                    selected: dialog.list.selected_visible_index(),
+                }),
+                None,
+            );
             let marker = if selected { ">> " } else { "   " };
             let line = format!(
                 "{}{}",
@@ -144,7 +223,9 @@ pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginW
         return;
     };
     if dialog.navigation.detail_tab == PluginDetailTab::Config {
-        render_plugin_compact_config_page(frame, area, dialog, plugin);
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+        render_plugin_tabs(frame, rows[0], dialog, dialog.navigation.detail_tab);
+        render_plugin_compact_config_page(frame, rows[1], dialog, plugin);
         return;
     }
 
@@ -152,7 +233,7 @@ pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginW
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
-            Constraint::Length(3),
+            Constraint::Length(1),
             Constraint::Min(8),
             Constraint::Length(1),
         ])
@@ -167,19 +248,61 @@ pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginW
     render_plugin_tabs(frame, rows[1], dialog, dialog.navigation.detail_tab);
     let body = match dialog.navigation.detail_tab {
         PluginDetailTab::Config => Text::default(),
-        PluginDetailTab::Tools => plugin_tools_text(dialog, plugin),
+        PluginDetailTab::Tools => {
+            plugin_tools_text(dialog, plugin, rows[2].width.saturating_sub(2))
+        }
         PluginDetailTab::Commands => plugin_commands_text(dialog, plugin),
         PluginDetailTab::Capabilities => plugin_capabilities_text(dialog, plugin),
         PluginDetailTab::Logs => plugin_logs_text(dialog, plugin),
         PluginDetailTab::Diagnostics => plugin_diagnostics_text(dialog, plugin),
     };
-    render_plugin_panel(
-        frame,
-        rows[2],
-        dialog.navigation.detail_tab.label(&dialog.i18n),
-        body,
-        Some((dialog.config_scroll.min(u16::MAX as usize) as u16, 0)),
-    );
+    if dialog.navigation.detail_tab == PluginDetailTab::Tools {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(dialog.navigation.detail_tab.label(&dialog.i18n));
+        let inner = block.inner(rows[2]);
+        frame.render_widget(block, rows[2]);
+        let start = if dialog.config_scroll > 0 {
+            dialog.config_scroll
+        } else {
+            dialog
+                .selected_tool
+                .saturating_add(3)
+                .saturating_sub(usize::from(inner.height.saturating_sub(1)))
+        }
+        .min(body.lines.len().saturating_sub(usize::from(inner.height)));
+        for index in 0..plugin.tools.len() {
+            let line = index + 3;
+            if line >= start && line - start < usize::from(inner.height) {
+                agena_tui_components::pointer::register(
+                    Rect::new(inner.x, inner.y + (line - start) as u16, inner.width, 1),
+                    Some(agena_tui_components::pointer::PointerAction::NamedIndex(
+                        "plugin-tool",
+                        index,
+                    )),
+                    None,
+                );
+            }
+        }
+        frame.render_widget(
+            Paragraph::new(Text::from(
+                body.lines
+                    .into_iter()
+                    .skip(start)
+                    .take(usize::from(inner.height))
+                    .collect::<Vec<_>>(),
+            )),
+            inner,
+        );
+    } else {
+        render_plugin_panel(
+            frame,
+            rows[2],
+            dialog.navigation.detail_tab.label(&dialog.i18n),
+            body,
+            Some((dialog.config_scroll.min(u16::MAX as usize) as u16, 0)),
+        );
+    }
     let footer = if dialog.navigation.detail_tab == PluginDetailTab::Tools {
         dialog.i18n.text("plugin-workbench-detail-tools-footer")
     } else {
@@ -225,9 +348,10 @@ pub(crate) fn render_plugin_compact_config_page(
         Paragraph::new(compact_config_view_line(plugin, dialog)).wrap(Wrap { trim: false }),
         rows[1],
     );
-    frame.render_widget(
-        Paragraph::new(compact_config_toolbar_text(dialog)).wrap(Wrap { trim: false }),
+    agena_tui_components::render_shortcut_footer(
+        frame,
         rows[2],
+        &compact_config_toolbar_text(dialog).to_string(),
     );
     frame.render_widget(
         Paragraph::new(agena_tui_components::build_horizontal_divider(inner.width))
@@ -263,10 +387,14 @@ pub(crate) fn render_plugin_compact_config_page(
             ]
         })
         .split(rows[4]);
-    frame.render_widget(
-        Paragraph::new(compact_config_sections_text(dialog, plugin, body[0].width))
-            .wrap(Wrap { trim: false }),
+    let (text, targets) = compact_config_sections_content(dialog, plugin, body[0].width);
+    render_selectable_plugin_text(
+        frame,
         body[0],
+        text,
+        &targets,
+        dialog.selected_section,
+        "plugin-section",
     );
     frame.render_widget(
         Paragraph::new(if stacked {
@@ -277,9 +405,14 @@ pub(crate) fn render_plugin_compact_config_page(
         .wrap(Wrap { trim: false }),
         body[1],
     );
-    frame.render_widget(
-        Paragraph::new(config_editor_text(dialog, plugin)).wrap(Wrap { trim: false }),
+    let (text, targets) = config_editor_content(dialog, plugin, body[2].width);
+    render_selectable_plugin_text(
+        frame,
         body[2],
+        text,
+        &targets,
+        dialog.selected_node,
+        "plugin-node",
     );
 }
 
@@ -413,6 +546,7 @@ pub(crate) fn render_plugin_config_drilldown_overlay(
         .constraints([Constraint::Min(8), Constraint::Length(1)])
         .split(surface.inner);
     let mut lines = Vec::new();
+    let mut targets = Vec::new();
     lines.push(Line::from(Span::styled(
         overlay.title.clone(),
         Style::default().add_modifier(Modifier::BOLD),
@@ -470,6 +604,7 @@ pub(crate) fn render_plugin_config_drilldown_overlay(
                     } else {
                         None
                     };
+                    targets.push((lines.len(), visible_index));
                     lines.push(standard_config_row_line_with_focus(
                         dialog,
                         row,
@@ -488,12 +623,13 @@ pub(crate) fn render_plugin_config_drilldown_overlay(
             dialog.i18n.text("plugin-workbench-no-editable-rows"),
         ));
     }
-    render_plugin_panel(
+    render_selectable_plugin_text(
         frame,
         rows[0],
-        overlay.title.as_str(),
         Text::from(lines),
-        None,
+        &targets,
+        overlay.selected_row,
+        "plugin-drilldown",
     );
     let footer = drilldown_footer_text(dialog, overlay);
     render_plugin_footer(frame, rows[1], footer.as_str());
@@ -551,7 +687,7 @@ pub(crate) fn render_plugin_panel(
 }
 
 pub(crate) fn render_plugin_footer(frame: &mut Frame, area: Rect, text: &str) {
-    frame.render_widget(Paragraph::new(clean(text)).wrap(Wrap { trim: false }), area);
+    agena_tui_components::render_shortcut_footer(frame, area, &clean(text));
 }
 
 pub(crate) fn render_plugin_tabs(
@@ -560,36 +696,54 @@ pub(crate) fn render_plugin_tabs(
     dialog: &PluginWorkbenchOverlay,
     selected: PluginDetailTab,
 ) {
-    let mut spans = Vec::new();
-    for (index, tab) in PluginDetailTab::ALL.iter().copied().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw(" | "));
-        }
-        let style = if tab == selected {
-            agena_tui_components::theme::selection_style()
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(
-            format!(" {} ", tab.label(&dialog.i18n)),
-            style,
-        ));
-    }
-    render_plugin_panel(
-        frame,
-        area,
-        dialog.i18n.text("plugin-workbench-tabs"),
-        Text::from(Line::from(spans)),
-        None,
+    let labels = PluginDetailTab::ALL
+        .iter()
+        .map(|tab| format!(" {} ", tab.label(&dialog.i18n)))
+        .collect::<Vec<_>>();
+    let widths = super::fit_column_widths(
+        &labels
+            .iter()
+            .map(|label| unicode_width::UnicodeWidthStr::width(label.as_str()))
+            .collect::<Vec<_>>(),
+        area.width,
     );
+    let mut x = area.x;
+    for (index, (label, width)) in labels.iter().zip(widths).enumerate() {
+        let rect = Rect::new(
+            x,
+            area.y,
+            (width as u16).min(area.right().saturating_sub(x)),
+            area.height.min(1),
+        );
+        frame.render_widget(
+            Paragraph::new(agena_tui_components::truncate_display_text(label, width)).style(
+                if PluginDetailTab::ALL[index] == selected {
+                    agena_tui_components::theme::selection_style()
+                } else {
+                    agena_tui_components::theme::muted_style()
+                },
+            ),
+            rect,
+        );
+        agena_tui_components::pointer::register(
+            rect,
+            Some(agena_tui_components::pointer::PointerAction::NamedIndex(
+                "plugin-tab",
+                index,
+            )),
+            None,
+        );
+        x = x.saturating_add(width as u16).saturating_add(2);
+    }
 }
+
 use super::{
     Block, Borders, Constraint, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec, Layout,
     Line, Modifier, Paragraph, PluginConfigActionOverlay, PluginConfigDrilldownOverlay,
     PluginConfigSelectionOverlay, PluginDetailTab, PluginWorkbenchOverlay, PluginWorkbenchPlugin,
     Rect, Span, Style, SurfaceMode, Text, Wrap, clean, compact_config_header_line,
-    compact_config_sections_text, compact_config_toolbar_text, compact_config_view_line,
-    config_diff_text, config_editor_text, drilldown_footer_text, drilldown_selected_row_cell,
+    compact_config_sections_content, compact_config_toolbar_text, compact_config_view_line,
+    config_diff_text, config_editor_content, drilldown_footer_text, drilldown_selected_row_cell,
     fixed_columns, group_has_action_column, path_display, plugin_capabilities_text,
     plugin_commands_text, plugin_diagnostics_text, plugin_header_text, plugin_logs_text,
     plugin_tools_text, plugin_uses_compact_config_layout,
@@ -597,3 +751,68 @@ use super::{
     row_visible, standard_config_row_line, standard_config_row_line_with_action,
     standard_config_row_line_with_focus, transport_display,
 };
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::*;
+    use agena_tui_components::pointer::{self, PointerAction};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn long_config_lists_follow_selection_and_click_the_visible_node() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        let mut targets = pointer::PointerMap::default();
+        terminal
+            .draw(|frame| {
+                targets = pointer::capture(|| {
+                    render_selectable_plugin_text(
+                        frame,
+                        frame.area(),
+                        Text::from(
+                            (0..100)
+                                .map(|i| Line::from(format!("设置 {i}")))
+                                .collect::<Vec<_>>(),
+                        ),
+                        &(0..100).map(|i| (i, i)).collect::<Vec<_>>(),
+                        90,
+                        "plugin-node",
+                    )
+                });
+            })
+            .unwrap();
+        assert_eq!(
+            targets.action(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 3,
+                row: 7,
+                modifiers: KeyModifiers::NONE
+            }),
+            Some(PointerAction::NamedIndex("plugin-node", 90))
+        );
+        let row = (0..40)
+            .map(|x| terminal.backend().buffer()[(x, 7)].symbol())
+            .collect::<String>();
+        // Ratatui stores an empty continuation cell after each wide glyph.
+        assert_eq!(row.split_whitespace().collect::<String>(), "设置90");
+    }
+
+    #[test]
+    fn compact_columns_keep_value_and_state_visible_with_unicode() {
+        use unicode_width::UnicodeWidthStr;
+        let columns = [
+            ("名称", 22),
+            ("type", 16),
+            ("VALUE", 22),
+            ("default", 18),
+            ("STATE", 10),
+        ];
+        for width in 0..160 {
+            let text = fixed_columns(&columns, width);
+            assert!(text.width() <= usize::from(width));
+        }
+        let text = fixed_columns(&columns, 60);
+        assert!(text.contains("VALUE"), "{text}");
+        assert!(text.contains("STATE"), "{text}");
+    }
+}

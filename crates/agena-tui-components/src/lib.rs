@@ -148,3 +148,7 @@ pub use workbench::{
 pub use workbench_frame::{
     WorkbenchFrame, WorkbenchFrameSpec, render_workbench_frame, workbench_navigation_width,
 };
+
+pub mod pointer;
+
+pub use shortcut_bar::render_shortcut_footer;

@@ -346,6 +346,7 @@ overlay-plan-slug = plan={$slug}
 overlay-plan-path = path: {$path}
 overlay-plan-steps = steps={$steps}
 overlay-plan-preview-heading = Preview
+plan-viewer-refresh = Refresh
 plan-viewer-title = Plan
 plan-viewer-empty = No plan yet.
 plan-viewer-loading = Loading plan

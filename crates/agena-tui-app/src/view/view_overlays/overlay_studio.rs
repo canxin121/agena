@@ -44,7 +44,7 @@ impl App {
                         build_accented_two_line_list_item(
                             sanitize_display_text(item.label.as_str()).into(),
                             Some(sanitize_display_text(item.value.as_str()).into()),
-                            Some(sanitize_display_text(item.detail.as_str()).into()),
+                            None,
                         )
                     })
                     .collect::<Vec<_>>()
@@ -88,7 +88,7 @@ impl App {
                     Some(section_title.clone().into()),
                     ui_text::t(&self.i18n, "overlay-settings-empty-items").into(),
                     BoundedListPanelHeight {
-                        lines_per_item: 2,
+                        lines_per_item: 1,
                         min_body_height: 6,
                         max_body_height: 18,
                     },
@@ -96,7 +96,7 @@ impl App {
             } else {
                 ListWorkbenchPanelState::items(
                     BoundedListPanelHeight {
-                        lines_per_item: 2,
+                        lines_per_item: 1,
                         min_body_height: 6,
                         max_body_height: 18,
                     },

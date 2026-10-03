@@ -73,8 +73,6 @@ pub fn render_detail_text_dialog<'a, I>(
             body_alignment: None,
             body_height_bounds: spec.body_height_bounds,
             footer_height_bounds: spec.footer_height_bounds,
-            footer_alignment: spec.footer_alignment,
-            footer_style: spec.footer_style,
         },
     );
 }

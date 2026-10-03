@@ -309,6 +309,7 @@ impl App {
                         .unwrap_or_default();
                     move_index(&mut dialog.selected_tool, count, -1);
                     dialog.tool_result = None;
+                    dialog.config_scroll = 0;
                     return false;
                 }
                 Some(KeyAction::MoveDown) => {
@@ -318,6 +319,7 @@ impl App {
                         .unwrap_or_default();
                     move_index(&mut dialog.selected_tool, count, 1);
                     dialog.tool_result = None;
+                    dialog.config_scroll = 0;
                     return false;
                 }
                 Some(KeyAction::Open) => {

@@ -363,92 +363,50 @@ pub fn plugin_workbench_summary(dialog: &PluginWorkbenchOverlay) -> String {
 }
 
 pub(crate) fn fixed_columns(columns: &[(&str, usize)], width: u16) -> String {
-    agena_tui_components::format_fixed_columns(columns, width, |text| clean(text))
+    let sizes = fit_column_widths(
+        &columns.iter().map(|(_, size)| *size).collect::<Vec<_>>(),
+        width,
+    );
+    let columns = columns
+        .iter()
+        .zip(sizes)
+        .map(|((text, _), size)| (*text, size))
+        .collect::<Vec<_>>();
+    agena_tui_components::format_fixed_columns(&columns, width, |text| clean(text))
+}
+
+/// Keep values and state columns visible instead of letting the first columns
+/// consume the entire narrow pane. Headers and styled rows use the same widths.
+pub(crate) fn fit_column_widths(preferred: &[usize], width: u16) -> Vec<usize> {
+    if preferred.is_empty() {
+        return Vec::new();
+    }
+    let available = usize::from(width).saturating_sub(preferred.len().saturating_sub(1) * 2);
+    let total: usize = preferred.iter().sum();
+    if total <= available {
+        return preferred.to_vec();
+    }
+    let minimum = (available / preferred.len()).min(3);
+    let remaining = available.saturating_sub(minimum * preferred.len());
+    let weight: usize = preferred
+        .iter()
+        .map(|value| value.saturating_sub(minimum))
+        .sum();
+    let mut sizes = preferred
+        .iter()
+        .map(|value| minimum + remaining * value.saturating_sub(minimum) / weight.max(1))
+        .collect::<Vec<_>>();
+    let extra = available.saturating_sub(sizes.iter().sum());
+    for size in sizes.iter_mut().take(extra) {
+        *size += 1;
+    }
+    sizes
 }
 
 pub(crate) fn pad_to_width(text: &str, width: usize) -> String {
     let clipped = truncate_text(text, width);
     let padding = width.saturating_sub(clipped.width());
     format!("{clipped}{}", " ".repeat(padding))
-}
-
-pub(crate) fn wrap_prefixed_text(
-    text: &str,
-    first_prefix: &str,
-    rest_prefix: &str,
-    width: usize,
-) -> Vec<String> {
-    let available_first = width.saturating_sub(first_prefix.width()).max(1);
-    let available_rest = width.saturating_sub(rest_prefix.width()).max(1);
-    let mut lines = Vec::new();
-    let mut prefix = first_prefix;
-    let mut available = available_first;
-    let mut current = String::new();
-    let mut current_width = 0usize;
-
-    for word in text.split_whitespace() {
-        let mut remaining = word.to_owned();
-        loop {
-            let room = if current.is_empty() {
-                available
-            } else {
-                available.saturating_sub(current_width + 1)
-            };
-            if room == 0 {
-                lines.push(format!("{prefix}{current}"));
-                prefix = rest_prefix;
-                available = available_rest;
-                current.clear();
-                current_width = 0;
-                continue;
-            }
-            if remaining.width() <= room {
-                if !current.is_empty() {
-                    current.push(' ');
-                    current_width += 1;
-                }
-                current.push_str(remaining.as_str());
-                current_width += remaining.width();
-                break;
-            }
-
-            let chunk = take_width_prefix(remaining.as_str(), room);
-            if chunk.is_empty() {
-                break;
-            }
-            if !current.is_empty() {
-                lines.push(format!("{prefix}{current}"));
-                prefix = rest_prefix;
-                current.clear();
-                current_width = 0;
-            }
-            lines.push(format!("{prefix}{chunk}"));
-            let consumed = chunk.len();
-            remaining = remaining[consumed..].to_owned();
-            prefix = rest_prefix;
-            available = available_rest;
-        }
-    }
-
-    if !current.is_empty() || lines.is_empty() {
-        lines.push(format!("{prefix}{current}"));
-    }
-
-    lines
-}
-
-pub(crate) fn take_width_prefix(text: &str, max_width: usize) -> String {
-    let mut out = String::new();
-    let mut width = 0usize;
-    for ch in text.chars() {
-        let ch_width = ch.width().unwrap_or_default();
-        if width + ch_width > max_width {
-            break;
-        }
-        out.push(ch);
-        width += ch_width;
-    }
-    out
 }
 
 pub(crate) fn plugin_package_preview(value: &JsonValue) -> String {

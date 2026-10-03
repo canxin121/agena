@@ -55,10 +55,17 @@ fn render_framed_surface_with_modal_style(
     spec: &FramedSurfaceSpec<'_>,
     modal: bool,
 ) -> FramedSurface {
+    crate::pointer::begin_surface();
     let outer = surface.outer_rect(area, spec.target_width, spec.target_height);
     frame.render_widget(Clear, outer);
     let mut block = Block::default()
-        .title(format!(" {} ", spec.title))
+        .title(format!(
+            " [×] {} ",
+            crate::text::truncate_display_text(
+                &spec.title,
+                usize::from(outer.width.saturating_sub(8))
+            )
+        ))
         .borders(Borders::ALL);
     if modal {
         block = block
@@ -72,6 +79,16 @@ fn render_framed_surface_with_modal_style(
     }
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
+    crate::pointer::register(
+        Rect::new(
+            outer.x.saturating_add(1),
+            outer.y,
+            4.min(outer.width.saturating_sub(2)),
+            u16::from(outer.height > 0),
+        ),
+        Some(crate::pointer::key(crossterm::event::KeyCode::Esc)),
+        None,
+    );
     FramedSurface { outer, inner }
 }
 

@@ -109,6 +109,10 @@ pub(crate) fn highlight_search_line_with_rich(
 
 impl App {
     pub(crate) fn draw(&mut self, frame: &mut Frame) {
+        self.pointer_targets = agena_tui_components::pointer::capture(|| self.draw_content(frame));
+    }
+
+    fn draw_content(&mut self, frame: &mut Frame) {
         let area = frame.area();
         if matches!(
             self.current_route,
@@ -482,6 +486,64 @@ impl App {
         let layout = layout_composer_surface(area);
         let texts = self.composer_chip_texts();
         let placements = composer_chip_placements(layout.outer, &texts);
+        use agena_tui_components::pointer::{self, PointerAction};
+        if let Some(status) = placements.status.as_ref() {
+            let mut x = status.text_column;
+            let end = status
+                .text_column
+                .saturating_add(UnicodeWidthStr::width(status.text.as_str()) as u16);
+            for row in self.composer_status_parts() {
+                let width = u16::try_from(UnicodeWidthStr::width(
+                    sanitize_display_text(&row.text).as_str(),
+                ))
+                .unwrap_or(u16::MAX);
+                let visible = width.min(end.saturating_sub(x));
+                if matches!(
+                    row.kind,
+                    "session-summary"
+                        | "session-thinking"
+                        | "session-speed"
+                        | "session-token-usage"
+                ) {
+                    pointer::register(
+                        Rect::new(x, layout.outer.y, visible, 1),
+                        Some(PointerAction::Named(row.kind)),
+                        None,
+                    );
+                }
+                x = x.saturating_add(width).saturating_add(5);
+            }
+        }
+        for (placement, y, action) in [
+            (
+                placements.top_right.as_ref(),
+                layout.outer.y,
+                if self.prompt_history_search.is_some() {
+                    "history"
+                } else {
+                    "approval"
+                },
+            ),
+            (
+                placements.bottom_left.as_ref(),
+                layout.outer.bottom().saturating_sub(1),
+                "activities",
+            ),
+            (
+                placements.bottom_right.as_ref(),
+                layout.outer.bottom().saturating_sub(1),
+                "plan",
+            ),
+        ] {
+            if let Some(placement) = placement {
+                pointer::register(
+                    Rect::new(placement.column, y, placement.chip_width, 1),
+                    Some(PointerAction::Named(action)),
+                    None,
+                );
+            }
+        }
+
         self.surface_layout.composer_status = placements
             .status
             .as_ref()

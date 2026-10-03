@@ -6,27 +6,36 @@ use super::super::{
     plugin_uses_compact_config_layout, plugin_workbench_selection_highlight_style, row_visible,
     section_selected_row_cell,
 };
-pub(crate) fn config_editor_text(
+pub(crate) fn config_editor_content(
     dialog: &PluginWorkbenchOverlay,
     plugin: &PluginWorkbenchPlugin,
-) -> Text<'static> {
+    width: u16,
+) -> (Text<'static>, Vec<(usize, usize)>) {
     let mut lines = Vec::new();
+    let mut rows = Vec::new();
     if let Some(section) = dialog.selected_section() {
         let highlight_selection = !plugin_uses_compact_config_layout(plugin)
             || dialog.config_focus == PluginConfigFocus::Editor;
-        append_section_lines(&mut lines, dialog, plugin, section, 98, highlight_selection);
+        append_section_lines(
+            &mut lines,
+            &mut rows,
+            dialog,
+            section,
+            width,
+            highlight_selection,
+        );
     } else {
         lines.push(Line::from(
             dialog.i18n.text("plugin-workbench-no-config-section"),
         ));
     }
-    Text::from(lines)
+    (Text::from(lines), rows)
 }
 
 pub(crate) fn append_section_lines(
     lines: &mut Vec<Line<'static>>,
+    rows: &mut Vec<(usize, usize)>,
     dialog: &PluginWorkbenchOverlay,
-    plugin: &PluginWorkbenchPlugin,
     section: &ConfigSectionView,
     width: u16,
     highlight_selection: bool,
@@ -64,8 +73,8 @@ pub(crate) fn append_section_lines(
                 lines.push(Line::from(""));
                 append_group_lines(
                     lines,
+                    rows,
                     dialog,
-                    plugin,
                     section,
                     group,
                     width,
@@ -196,7 +205,11 @@ pub(crate) fn styled_fixed_columns(
 ) -> Line<'static> {
     let mut spans = Vec::new();
     let mut used = 0usize;
-    for (index, (text, size, style)) in columns.iter().enumerate() {
+    let sizes = super::super::fit_column_widths(
+        &columns.iter().map(|(_, size, _)| *size).collect::<Vec<_>>(),
+        width,
+    );
+    for (index, ((text, _, style), size)) in columns.iter().zip(sizes).enumerate() {
         if index > 0 {
             if used >= width as usize {
                 break;
@@ -208,7 +221,7 @@ pub(crate) fn styled_fixed_columns(
         if remaining == 0 {
             break;
         }
-        let size = (*size).min(remaining);
+        let size = size.min(remaining);
         let cell = pad_to_width(clean(text).as_str(), size);
         spans.push(Span::styled(cell, *style));
         used += size;
@@ -355,8 +368,8 @@ pub(crate) fn pair_config_row_line_with_focus(
 
 pub(crate) fn append_group_lines(
     lines: &mut Vec<Line<'static>>,
+    rows: &mut Vec<(usize, usize)>,
     dialog: &PluginWorkbenchOverlay,
-    _plugin: &PluginWorkbenchPlugin,
     section: &ConfigSectionView,
     group: &ConfigGroupView,
     width: u16,
@@ -463,6 +476,7 @@ pub(crate) fn append_group_lines(
                         include_action,
                     ),
                 };
+                rows.push((lines.len(), visible_row_index));
                 lines.push(line);
             }
             visible_row_index += 1;

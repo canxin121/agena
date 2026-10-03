@@ -30,8 +30,6 @@ pub(crate) struct TextDialogSpec<'a> {
     pub body_alignment: Option<Alignment>,
     pub body_height_bounds: (u16, u16),
     pub footer_height_bounds: (u16, u16),
-    pub footer_alignment: Option<Alignment>,
-    pub footer_style: Style,
 }
 
 /// A line of the text dialog.
@@ -143,8 +141,6 @@ fn render_line_text_dialog_with_modal_style(
             body_alignment: spec.body_alignment,
             body_height_bounds: spec.body_height_bounds,
             footer_height_bounds: spec.footer_height_bounds,
-            footer_alignment: spec.footer_alignment,
-            footer_style: spec.footer_style,
         },
         modal,
     );
@@ -232,13 +228,7 @@ fn render_text_dialog_with_modal_style(
         .as_ref()
         .filter(|footer| !footer.trim().is_empty())
     {
-        let mut footer_paragraph = Paragraph::new(footer.as_ref().to_string())
-            .wrap(Wrap { trim: false })
-            .style(spec.footer_style);
-        if let Some(alignment) = spec.footer_alignment {
-            footer_paragraph = footer_paragraph.alignment(alignment);
-        }
-        frame.render_widget(footer_paragraph, rows[1]);
+        crate::render_shortcut_footer(frame, rows[1], footer.as_ref());
     }
 }
 

@@ -88,10 +88,7 @@ pub(crate) fn render_input_dialog(
     );
 
     if footer_height > 0 {
-        frame.render_widget(
-            Paragraph::new(spec.footer.to_string()).wrap(Wrap { trim: false }),
-            rows[row_index],
-        );
+        crate::render_shortcut_footer(frame, rows[row_index], spec.footer);
     }
 
     frame.set_cursor_position(result.cursor);

@@ -3,10 +3,11 @@ import { computed, onScopeDispose, ref } from 'vue'
 
 import * as chatApi from './chat/api'
 import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
-import { binarySearchById, compareChatIds, upsertMessageEntryIn, upsertPart } from './chat/messageIndex'
+import { binarySearchById, compareChatIds, isOlderPart, upsertMessageEntryIn, upsertPart } from './chat/messageIndex'
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
 import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
+import { createRevalidator } from '../lib/revalidation'
 import { isRunTerminal } from '../lib/chatRunState'
 import { setLocalJson, getLocalJson } from '../lib/persist'
 import { localStorageKeys } from '../lib/persistence/storageKeys'
@@ -131,7 +132,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const runConfigPersister = createSessionRunConfigPersister(STORAGE_RUN_CONFIG, () => sessionRunConfigBySession.value)
 
   // ─── timers / inflight guards ─────────────────────────────────────────────
-  let refreshTimer: number | null = null
   let refreshSessionsInFlight: Promise<void> | null = null
   const getSessionInFlightById = new Map<string, Promise<Session>>()
   const refreshMessagesRetryTimerBySession = new Map<string, number>()
@@ -139,13 +139,59 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const refreshMessagesRequestSeqBySession = new Map<string, number>()
   const refreshMessagesInFlightBySession = new Map<string, Promise<void>>()
   const refreshExecutionInFlightBySession = new Map<string, Promise<void>>()
-  const refreshAttentionInFlightBySession = new Map<string, Promise<void>>()
+  const deletedSessions = new Set<string>()
+  const removedParts = new Map<string, Set<string>>()
+  const membershipRevalidation = new Set<string>()
+  const visibleSessions = new Map<string, number>()
+  const messageRevalidators = new Map<string, ReturnType<typeof createRevalidator>>()
+  const statusRevalidators = new Map<string, ReturnType<typeof createRevalidator>>()
+  const sessionsRevalidator = createRevalidator(
+    async () => {
+      await refreshSessionsInFlight?.catch(() => {})
+      await refreshSessions()
+    },
+    { intervalMs: 500, retryMs: 1000 },
+  )
+
+  function messageRevalidator(sid: string) {
+    let queue = messageRevalidators.get(sid)
+    if (!queue) {
+      queue = createRevalidator(
+        async () => {
+          await refreshMessagesInFlightBySession.get(sid)
+          await refreshMessages(sid, { silent: true })
+        },
+        { intervalMs: 250 },
+      )
+      messageRevalidators.set(sid, queue)
+    }
+    return queue
+  }
+
+  function retainSession(sid: string) {
+    visibleSessions.set(sid, (visibleSessions.get(sid) || 0) + 1)
+    return () => {
+      const count = (visibleSessions.get(sid) || 1) - 1
+      if (count) visibleSessions.set(sid, count)
+      else visibleSessions.delete(sid)
+    }
+  }
+
+  function reconcileLiveState() {
+    sessionsRevalidator.invalidate(0)
+    // Cached inactive conversations are revalidated when opened again.
+    for (const sid of Object.keys(messagesBySession.value)) membershipRevalidation.add(sid)
+    messagesHydratedBySession.value = {}
+    for (const sid of new Set([...visibleSessions.keys(), selectedSessionId.value].filter(Boolean) as string[])) {
+      messageRevalidator(sid).invalidate(0)
+      scheduleSessionStatusRefresh(sid, 0)
+    }
+  }
   const presentedInteractiveRequestBySession = new Map<string, string>()
   // Incremented when an explicit transcript cache reset happens. In-flight
   // requests capture this generation so a late response cannot repopulate a
   // cache that has already been reset.
   let transcriptCacheGeneration = 0
-  const statusRefreshTimerBySession = new Map<string, number>()
   let createSessionInFlight: Promise<Session | null> | null = null
   const workspaceRequestById = new Map<number, Promise<{ id: number; path: string } | null>>()
   const lastSessionErrorToastByKey = new Map<string, { at: number; message: string }>()
@@ -186,7 +232,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const nextById = { ...sessionsById.value }
     for (const s of list) {
       const sid = typeof s?.id === 'string' ? s.id.trim() : ''
-      if (sid) nextById[sid] = s
+      if (sid && !deletedSessions.has(sid) && !(Number(nextById[sid]?.version || 0) > Number(s.version || 0)))
+        nextById[sid] = s
     }
     sessionsById.value = nextById
   }
@@ -194,7 +241,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function upsertSessionCache(updated: (Partial<Session> & { id: string }) | null | undefined) {
     if (!updated || typeof updated !== 'object') return
     const sid = typeof updated.id === 'string' ? updated.id.trim() : ''
-    if (!sid) return
+    if (!sid || deletedSessions.has(sid)) return
+    if (updated.version !== undefined && Number(sessionsById.value[sid]?.version || 0) > updated.version) return
     const merged = { ...(sessionsById.value[sid] || {}), ...updated, id: sid } as Session
     sessionsById.value = { ...sessionsById.value, [sid]: merged }
     const hasInCurrent = sessions.value.some((s) => s.id === sid)
@@ -206,12 +254,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function scheduleSessionsRefresh(delayMs = 250) {
-    const delay = Math.max(0, Math.floor(delayMs))
-    if (refreshTimer) window.clearTimeout(refreshTimer)
-    refreshTimer = window.setTimeout(() => {
-      refreshTimer = null
-      void refreshSessions()
-    }, delay)
+    sessionsRevalidator.invalidate(delayMs)
   }
 
   function getSessionById(sessionId: string | null | undefined): Session | null {
@@ -226,14 +269,15 @@ const useChatStoreDefinition = defineStore('chat', () => {
     try {
       const page = await chatApi.listSessions({ limit: SESSION_PAGE_SIZE, excludeSubagents: true })
       const list = Array.isArray(page?.sessions) ? page.sessions : []
-      sessions.value = list
       indexSessions(list)
+      sessions.value = list.filter((s) => !deletedSessions.has(s.id)).map((s) => sessionsById.value[s.id] || s)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const authRequired = err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
       sessionsError.value = null
       if (!authRequired) {
         pushErrorToastWithDedupe('sessions', msg || 'Failed to load sessions', 4500, 12_000)
+        throw err
       }
     } finally {
       sessionsLoading.value = false
@@ -360,6 +404,15 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function setSessionMessages(sessionId: string, list: MessageEntry[]) {
     const sid = (sessionId || '').trim()
     if (!sid) return
+    if (deletedSessions.has(sid)) return
+    const removed = removedParts.get(sid)
+    if (removed?.size)
+      list = list
+        .filter((entry) => !removed.has(entry.info.id))
+        .map((entry) => ({
+          ...entry,
+          parts: entry.parts.filter((part) => !removed.has(part.id)),
+        }))
     const existing = messagesBySession.value[sid]
     if (Array.isArray(existing)) {
       existing.splice(0, existing.length, ...list)
@@ -400,14 +453,18 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const existing = map.get(id)
       if (existing) {
         const merged: MessageEntry = {
-          info: { ...existing.info, ...m.info },
+          info: isOlderPart(m.info, existing.info)
+            ? existing.info
+            : m.info.revision !== undefined
+              ? m.info
+              : { ...existing.info, ...m.info },
           parts: [...existing.parts],
           ...(existing.folds || m.folds ? { folds: [...(existing.folds || [])] } : {}),
         }
         const partMap = new Map<string, MessagePart>()
         for (const p of [...merged.parts, ...(m.parts || [])]) {
           const pid = String(p?.id ?? '')
-          if (pid) partMap.set(pid, p)
+          if (pid && (!partMap.has(pid) || !isOlderPart(p, partMap.get(pid)!))) partMap.set(pid, p)
         }
         merged.parts = [...partMap.values()].sort((a, b) => compareChatIds(String(a.id), String(b.id)))
         // A fold-free second message can be the result of a local expansion,
@@ -456,7 +513,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
   ): boolean {
     const sid = (sessionId || '').trim()
     if (!sid || requestSeq <= 0) return false
-    return generation === transcriptCacheGeneration && refreshMessagesRequestSeqBySession.get(sid) === requestSeq
+    return (
+      !deletedSessions.has(sid) &&
+      generation === transcriptCacheGeneration &&
+      refreshMessagesRequestSeqBySession.get(sid) === requestSeq
+    )
   }
 
   function clearMessageRefreshRetry(sessionId: string) {
@@ -497,6 +558,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', resumeMessageRefresh)
     for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
     refreshMessagesRetryTimerBySession.clear()
+    sessionsRevalidator.dispose()
+    for (const queue of messageRevalidators.values()) queue.dispose()
+    for (const queue of statusRevalidators.values()) queue.dispose()
   })
 
   function upsertSessionRunConfig(sessionId: string, patch: Partial<SessionRunConfig>) {
@@ -542,6 +606,28 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (isSelected) messagesError.value = null
 
     try {
+      if (membershipRevalidation.delete(sid)) {
+        try {
+          const loaded = ensureSessionMessages(sid)
+          const ids = loaded.flatMap((entry) => [entry.info.id, ...entry.parts.map((part) => part.id)])
+          const current = await chatApi.getLoadedParts(sid, [...new Set(ids)])
+          if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
+          const present = new Set(current.map((part) => String(part.part_id)))
+          let removed = removedParts.get(sid)
+          if (!removed) removedParts.set(sid, (removed = new Set()))
+          for (const id of ids) if (!present.has(id)) removed.add(id)
+          const entries = chatApi.entriesFromParts(
+            sid,
+            current,
+            [],
+            loaded.map((entry) => Number(entry.info.id)),
+          )
+          setSessionMessages(sid, mergeMessageLists(ensureSessionMessages(sid), entries))
+        } catch (error) {
+          membershipRevalidation.add(sid)
+          throw error
+        }
+      }
       const limit = sessionMessageLimit(sid)
       const page = await chatApi.listMessages(sid, limit, undefined, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE)
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
@@ -584,8 +670,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       }
 
       // Rehydrate status + attention after load.
-      void refreshExecutionStatus(sid)
-      void refreshAttention(sid)
+      void refreshExecutionStatus(sid).catch(() => scheduleSessionStatusRefresh(sid))
     } catch (err) {
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const msg = err instanceof Error ? err.message : String(err)
@@ -603,9 +688,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
       // before clearing anything. Never turn a transient refresh failure into
       // a visible empty conversation.
       const hasCurrentCache = (messagesBySession.value[sid]?.length ?? 0) > 0
-      if (!authRequired && hasCurrentCache) {
+      if (!authRequired && !(err instanceof ApiError && err.status === 404)) {
         scheduleMessageRefreshRetry(sid)
       }
+      if (err instanceof ApiError && err.status === 404) forgetSession(sid)
       if (!hasCurrentCache && !silent) {
         setSessionMessages(sid, [])
       }
@@ -814,14 +900,15 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function clearTranscriptCache() {
     transcriptCacheGeneration += 1
     for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
-    for (const timer of statusRefreshTimerBySession.values()) window.clearTimeout(timer)
     refreshMessagesRetryTimerBySession.clear()
     refreshMessagesFailuresBySession.clear()
-    statusRefreshTimerBySession.clear()
     refreshMessagesRequestSeqBySession.clear()
     refreshMessagesInFlightBySession.clear()
     refreshExecutionInFlightBySession.clear()
-    refreshAttentionInFlightBySession.clear()
+    for (const queue of messageRevalidators.values()) queue.dispose()
+    messageRevalidators.clear()
+    for (const queue of statusRevalidators.values()) queue.dispose()
+    statusRevalidators.clear()
     presentedInteractiveRequestBySession.clear()
     messagesBySession.value = {}
     messagesHydratedBySession.value = {}
@@ -841,26 +928,38 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // ─── execution status + attention ─────────────────────────────────────────
 
   function scheduleSessionStatusRefresh(sessionId: string, delayMs = 150) {
-    const sid = (sessionId || '').trim()
-    if (!sid) return
-    if (statusRefreshTimerBySession.has(sid)) return
-    const timer = window.setTimeout(
-      () => {
-        statusRefreshTimerBySession.delete(sid)
-        void refreshAttention(sid)
-        void refreshExecutionStatus(sid)
-      },
-      Math.max(60, Math.min(1200, Math.floor(delayMs))),
-    )
-    statusRefreshTimerBySession.set(sid, timer)
+    const sid = sessionId.trim()
+    if (!sid || deletedSessions.has(sid)) return
+    let queue = statusRevalidators.get(sid)
+    if (!queue) {
+      queue = createRevalidator(
+        async () => {
+          await refreshExecutionInFlightBySession.get(sid)?.catch(() => {})
+          await refreshExecutionStatus(sid)
+        },
+        { intervalMs: 250, retryMs: 1000 },
+      )
+      statusRevalidators.set(sid, queue)
+    }
+    queue.invalidate(delayMs)
   }
 
   async function refreshExecutionStatusInternal(sessionId: string): Promise<void> {
     const sid = (sessionId || '').trim()
     if (!sid) return
-    const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
-    if (!st) return
-    upsertSessionCache({ id: sid, state: st.state })
+    const generation = transcriptCacheGeneration
+    const st = await chatApi.getSessionExecutionStatus(sid).catch((error) => {
+      if (error instanceof ApiError && error.status === 404) {
+        forgetSession(sid)
+        return null
+      }
+      throw error
+    })
+    if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return
+    if (!st) throw new Error('Session status could not be refreshed')
+    if (Number(getSessionById(sid)?.version || 0) > Number(st.session.version || 0)) return
+    upsertSessionCache(st.session)
+    applyAttention(sid, st.state)
     backgroundActivityKindsBySession.value = {
       ...backgroundActivityKindsBySession.value,
       [sid]: [...st.backgroundActivityKinds],
@@ -1020,12 +1119,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return null
   }
 
-  async function refreshAttentionInternal(sessionId: string): Promise<void> {
-    const sid = (sessionId || '').trim()
-    if (!sid) return
-    const state = await chatApi.getSessionExecution(sid).catch(() => null)
-    if (!state) return
-    const next = attentionFromPendingRequests(sid, sessionStateRequests(state.session?.state) as JsonValue[])
+  function applyAttention(sid: string, state: SessionState) {
+    const next = attentionFromPendingRequests(sid, sessionStateRequests(state) as JsonValue[])
     if (next) {
       attentionBySession.value = { ...attentionBySession.value, [sid]: next }
       const requestId = readString(asRecord(next.payload.properties).id as JsonValue)
@@ -1040,27 +1135,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
         attentionBySession.value = nextMap
       }
       presentedInteractiveRequestBySession.delete(sid)
-    }
-  }
-
-  async function refreshAttention(sessionId: string) {
-    const sid = (sessionId || '').trim()
-    if (!sid) return
-
-    const existing = refreshAttentionInFlightBySession.get(sid)
-    if (existing) {
-      await existing
-      return
-    }
-
-    const request = refreshAttentionInternal(sid)
-    refreshAttentionInFlightBySession.set(sid, request)
-    try {
-      await request
-    } finally {
-      if (refreshAttentionInFlightBySession.get(sid) === request) {
-        refreshAttentionInFlightBySession.delete(sid)
-      }
     }
   }
 
@@ -1227,10 +1301,16 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
 
+    await chatApi.deleteSession(sid)
+    forgetSession(sid)
+  }
+
+  function forgetSession(sid: string) {
+    deletedSessions.add(sid)
+    messageRevalidators.get(sid)?.dispose()
+    statusRevalidators.get(sid)?.dispose()
     clearMessageRefreshRetry(sid)
     refreshMessagesRequestSeqBySession.delete(sid)
-
-    await chatApi.deleteSession(sid)
 
     if (selectedSessionId.value === sid) {
       selectedSessionId.value = null
@@ -1404,8 +1484,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (document.length === 0) return null
     clearSessionError(sid)
     const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
-    // Let SSE stream parts in; one coalesced status refresh is enough after
-    // the POST.  The timer also absorbs a burst of runtime signals.
+    // The acknowledgement is durable even if the SSE patch was lost.
+    messageRevalidator(sid).invalidate(0)
     scheduleSessionStatusRefresh(sid, 200)
     return state
   }
@@ -1418,6 +1498,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     await chatApi.continueSession(sid, buildRunOptions({}))
+    messageRevalidator(sid).invalidate(0)
     scheduleSessionStatusRefresh(sid, 200)
   }
 
@@ -1657,7 +1738,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
    *   lagged           → full resync (handled by useAppRuntime onEvent too)
    *
    */
-  function applyEvent(evt: SseEvent) {
+  function applyEvent(evt: SseEvent, propagateShared = true) {
     const t = evt.type || ''
     if (!t) return
     const props = asRecord(evt.properties)
@@ -1666,11 +1747,40 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = sessionIdRaw != null ? String(sessionIdRaw) : readString(props.sessionId as JsonValue)
 
     if (t === 'session_changed') {
+      if (sid && changeKind === 'session_deleted') {
+        forgetSession(sid)
+        return
+      }
+      // Forks share canonical part IDs. Update only memberships already
+      // loaded in another conversation; removals remain session-specific.
+      if (propagateShared && changeKind === 'part_updated' && isRecord(props.part)) {
+        const id = String(props.part.part_id)
+        for (const [target, entries] of Object.entries(messagesBySession.value)) {
+          if (
+            target !== sid &&
+            entries.some((entry) => entry.info.id === id || entry.parts.some((part) => part.id === id))
+          ) {
+            applyEvent({ ...evt, properties: { ...props, session_id: Number(target) } }, false)
+          }
+        }
+      }
+      if (deletedSessions.has(sid)) return
       if (sid && (changeKind === 'part_added' || changeKind === 'part_updated')) {
         const part = props.part
+        // The global feed also carries sessions no pane has ever opened.
+        // Keep their list invalidation, without materializing their history.
+        if (
+          !messagesBySession.value[sid] &&
+          !visibleSessions.has(sid) &&
+          selectedSessionId.value !== sid &&
+          !refreshMessagesInFlightBySession.has(sid)
+        ) {
+          if (isRecord(part) && part.kind === 'run') scheduleSessionsRefresh(800)
+          return
+        }
         if (isRecord(part)) {
           const partId = readNumber(part.part_id)
-          if (partId != null) {
+          if (partId != null && !removedParts.get(sid)?.has(String(partId))) {
             const runId = readNumber(part.run_id)
             const key = runId != null ? String(runId) : String(partId)
             const list = ensureSessionMessages(sid)
@@ -1686,6 +1796,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
                 sessionID: sid,
                 role: readString(part.role as JsonValue) || 'assistant',
                 runId: partId,
+                revision: readNumber(part.revision) ?? 0,
+                updatedAt: readNumber(part.updated_at_ms) ?? 0,
                 ...(runState ? { runState } : {}),
                 runContent: content,
                 ...(isRunTerminal(runState) ? { finish: runState } : {}),
@@ -1745,13 +1857,18 @@ const useChatStoreDefinition = defineStore('chat', () => {
                 if (partOut) entry.parts.push(partOut)
               }
             }
-            // Any part change can affect status/attention.
-            scheduleSessionStatusRefresh(sid)
+            // Text tokens change content, not execution/interaction state.
+            if (kind === 'run' || kind === 'tool_call') scheduleSessionStatusRefresh(sid)
           }
         }
       } else if (sid && changeKind === 'part_removed') {
         const removedPartId = readNumber(props.part_id)
         if (removedPartId != null) {
+          let removed = removedParts.get(sid)
+          if (!removed) removedParts.set(sid, (removed = new Set()))
+          removed.add(String(removedPartId))
+          scheduleSessionStatusRefresh(sid)
+          scheduleSessionsRefresh()
           const list = messagesBySession.value[sid]
           if (Array.isArray(list)) {
             const idx = list.findIndex((m) => Number(m.info.runId) === removedPartId)
@@ -1776,10 +1893,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
         const favorite = typeof props.favorite === 'boolean' ? props.favorite : undefined
         const pinned = typeof props.pinned === 'boolean' ? props.pinned : undefined
         const updatedAtMs = readNumber(props.updated_at_ms)
+        const version = readNumber(props.version)
         const current = getSessionById(sid)
         if (title || current) {
           upsertSessionCache({
             id: sid,
+            ...(version !== undefined ? { version } : {}),
             ...(title ? { title } : {}),
             ...(favorite !== undefined ? { favorite } : {}),
             ...(pinned !== undefined ? { pinned } : {}),
@@ -1787,6 +1906,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           })
         }
         scheduleSessionsRefresh(600)
+        scheduleSessionStatusRefresh(sid)
       }
       return
     }
@@ -1804,11 +1924,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
 
     if (t === 'lagged') {
-      const sig = selectedSessionId.value
-      if (sig) {
-        void refreshMessages(sig, { silent: true })
-      }
-      void refreshSessions()
+      reconcileLiveState()
       return
     }
 
@@ -1894,6 +2010,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     clearSessionError,
     revertToMessage,
     applyEvent,
+    retainSession,
+    reconcileLiveState,
   }
 })
 

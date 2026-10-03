@@ -9,11 +9,13 @@ mod fs_content;
 mod fs_core;
 mod fs_http;
 mod fs_search;
+mod fs_watch;
 
 pub use fs_content::*;
 pub use fs_core::*;
 pub use fs_http::{fs_upload_http, fs_write_http};
 pub use fs_search::*;
+pub use fs_watch::fs_watch;
 
 const DEFAULT_FILE_SEARCH_LIMIT: usize = 60;
 const MAX_FILE_SEARCH_LIMIT: usize = 400;

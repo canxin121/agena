@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { connectSse, type SseClient } from '@/lib/sse'
+import { createRevalidator } from '@/lib/revalidation'
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
@@ -2139,7 +2141,10 @@ function applyExplorerDeletionState(targetPath: string) {
   persistExplorerSoon()
 }
 
-async function loadDirectory(dirPath: string, opts?: { force?: boolean; more?: boolean }) {
+async function loadDirectory(
+  dirPath: string,
+  opts?: { force?: boolean; more?: boolean; preserveLoaded?: boolean; throwOnError?: boolean },
+) {
   const workspaceRoot = root.value
   const normalized = normalizePath(dirPath.trim())
   if (!workspaceRoot || !normalized || !withinWorkspace(normalized, workspaceRoot)) return
@@ -2156,27 +2161,46 @@ async function loadDirectory(dirPath: string, opts?: { force?: boolean; more?: b
   const isCurrent = () => root.value === workspaceRoot && directoryRequests.get(normalized) === controller
   inFlightDirs.value = new Set([...inFlightDirs.value, normalized])
   try {
-    const resp = (await listDirectory({
-      path: normalized,
-      respectGitignore: respectGitignore.value,
-      offset,
-      limit: DIRECTORY_PAGE_SIZE,
-      signal: controller.signal,
-    })) as ListResponse
-    if (!isCurrent() || controller.signal.aborted) return
-    const page = Array.isArray(resp.entries) ? resp.entries : []
-    const previous = offset > 0 ? entriesByDir.value[normalized] || [] : []
-    const existing = new Set(previous.map((entry) => entry.name))
-    const entries = [...previous, ...page.filter((entry) => !existing.has(entry.name))]
-    const nextOffset = typeof resp.nextOffset === 'number' ? resp.nextOffset : offset + page.length
-    const hasMore =
-      typeof resp.hasMore === 'boolean'
-        ? resp.hasMore
-        : typeof resp.total === 'number'
-          ? nextOffset < resp.total
-          : page.length === DIRECTORY_PAGE_SIZE
-    if (hasMore && (!page.length || !Number.isFinite(nextOffset) || nextOffset <= offset))
-      throw new Error('Directory pagination did not advance')
+    const targetCount = opts?.preserveLoaded
+      ? Math.max(
+          DIRECTORY_PAGE_SIZE,
+          directoryNextOffset.value[normalized] || entriesByDir.value[normalized]?.length || 0,
+        )
+      : DIRECTORY_PAGE_SIZE
+    const entries = offset > 0 ? [...(entriesByDir.value[normalized] || [])] : []
+    const existing = new Set(entries.map((entry) => entry.name))
+    let nextOffset = offset
+    let hasMore = false
+    do {
+      const pageOffset = nextOffset
+      const resp = (await listDirectory({
+        path: normalized,
+        respectGitignore: respectGitignore.value,
+        offset: pageOffset,
+        limit: Math.min(DIRECTORY_PAGE_SIZE, targetCount - (pageOffset - offset)),
+        signal: controller.signal,
+      })) as ListResponse
+      if (!isCurrent() || controller.signal.aborted) return
+      const page = Array.isArray(resp.entries) ? resp.entries : []
+      nextOffset = typeof resp.nextOffset === 'number' ? resp.nextOffset : pageOffset + page.length
+      hasMore =
+        typeof resp.hasMore === 'boolean'
+          ? resp.hasMore
+          : typeof resp.total === 'number'
+            ? nextOffset < resp.total
+            : page.length === DIRECTORY_PAGE_SIZE
+      if (hasMore && (!page.length || !Number.isFinite(nextOffset) || nextOffset <= pageOffset)) {
+        throw new Error('Directory pagination did not advance')
+      }
+      for (const entry of page) {
+        if (!existing.has(entry.name)) {
+          entries.push(entry)
+          existing.add(entry.name)
+        }
+      }
+      // Revalidate only the loaded prefix, with one bounded request at a time.
+      // Normal expansion/load-more actions still fetch exactly one page.
+    } while (opts?.preserveLoaded && hasMore && nextOffset - offset < targetCount)
     entriesByDir.value = { ...entriesByDir.value, [normalized]: entries }
     childrenByDir.value = { ...childrenByDir.value, [normalized]: mapDirectoryEntries(normalized, entries) }
     const next = { ...directoryNextOffset.value }
@@ -2185,11 +2209,12 @@ async function loadDirectory(dirPath: string, opts?: { force?: boolean; more?: b
     directoryNextOffset.value = next
     directoryLoadErrors.value = { ...directoryLoadErrors.value, [normalized]: false }
     loadedDirs.value = new Set([...loadedDirs.value, normalized])
-  } catch {
+  } catch (error) {
     if (!isCurrent()) return
-    directoryNextOffset.value = { ...directoryNextOffset.value, [normalized]: offset }
+    if (!opts?.preserveLoaded) directoryNextOffset.value = { ...directoryNextOffset.value, [normalized]: offset }
     directoryLoadErrors.value = { ...directoryLoadErrors.value, [normalized]: true }
     if (!childrenByDir.value[normalized]) childrenByDir.value = { ...childrenByDir.value, [normalized]: [] }
+    if (opts?.throwOnError) throw error
   } finally {
     window.clearTimeout(timeout)
     if (isCurrent()) {
@@ -2201,20 +2226,21 @@ async function loadDirectory(dirPath: string, opts?: { force?: boolean; more?: b
   }
 }
 
-async function refreshRoot() {
-  if (!root.value) return
-
+async function refreshRoot(opts?: { paths?: string[]; throwOnError?: boolean }) {
   const rootPath = root.value
-  await loadDirectory(rootPath, { force: true })
-  if (root.value !== rootPath) return
-
-  // Refresh currently-expanded folders so the visible list stays coherent.
-  const expanded = Array.from(expandedDirs.value)
-  for (const d of expanded) {
-    const dir = normalizePath(String(d || '').trim())
-    if (!dir || dir === rootPath) continue
-    if (!withinWorkspace(dir, rootPath)) continue
-    await loadDirectory(dir, { force: true })
+  if (!rootPath) return
+  const paths = opts?.paths
+  for (const directory of new Set([rootPath, ...expandedDirs.value])) {
+    if (!withinWorkspace(directory, rootPath)) continue
+    if (
+      paths?.length &&
+      !paths.some(
+        (path) =>
+          path === directory || path.slice(0, path.lastIndexOf('/')) === directory || directory.startsWith(`${path}/`),
+      )
+    )
+      continue
+    await loadDirectory(directory, { force: true, preserveLoaded: true, throwOnError: opts?.throwOnError })
     if (root.value !== rootPath) return
   }
 }
@@ -2896,7 +2922,11 @@ function refreshAuxiliaryPanelsAfterFileRefresh() {
   }
 }
 
-async function refreshCurrentFile(opts?: { source?: FileRefreshSource; silent?: boolean }): Promise<boolean> {
+async function refreshCurrentFile(opts?: {
+  source?: FileRefreshSource
+  silent?: boolean
+  throwOnError?: boolean
+}): Promise<boolean> {
   const source = opts?.source || 'manual'
   const silent = source === 'auto' || Boolean(opts?.silent)
   const rootPath = root.value
@@ -2905,7 +2935,7 @@ async function refreshCurrentFile(opts?: { source?: FileRefreshSource; silent?: 
 
   const path = normalizePath(String(node.path || '').trim())
   if (!path) return false
-  if (isRefreshingFile.value || fileLoading.value || fileChunkLoadingMore.value) return false
+  if (isSaving.value || isRefreshingFile.value || fileLoading.value || fileChunkLoadingMore.value) return false
 
   const inEditableMode = ['text', 'markdown'].includes(viewerMode.value) && canEdit.value
   if (!inEditableMode) {
@@ -2936,6 +2966,7 @@ async function refreshCurrentFile(opts?: { source?: FileRefreshSource; silent?: 
       const draftMatchesRemote = payload.kind === 'text' && draftContent.value === payload.content
       if (!draftMatchesRemote) {
         if (source === 'auto') return false
+        clearAutoSaveTimer()
         fileRefreshConflict.value = {
           source,
           path,
@@ -2958,6 +2989,13 @@ async function refreshCurrentFile(opts?: { source?: FileRefreshSource; silent?: 
     if (!silent) {
       toasts.push('error', msg || t('files.toasts.refreshFileFailed'))
     }
+    if (err instanceof ApiError && err.status === 404) {
+      // Keep a local draft recoverable while showing that the remote file is
+      // gone. A later create event can reopen it; a 404 needs no retry loop.
+      fileError.value = msg || t('files.toasts.refreshFileFailed')
+      return false
+    }
+    if (opts?.throwOnError) throw err
     return false
   } finally {
     if (seq === fileRefreshSeq) {
@@ -3480,13 +3518,22 @@ async function submitMoveDialog() {
 async function save(opts?: { silent?: boolean }): Promise<boolean> {
   const rootPath = root.value
   const path = selectedFile.value?.path
-  if (!rootPath || !path || !canEdit.value) return false
+  if (!rootPath || !path || !canEdit.value || isSaving.value) return false
+  const savedContent = draftContent.value
+  const openedAt = openFileSeq
+  const current = () => root.value === rootPath && selectedFile.value?.path === path && openFileSeq === openedAt
+  // A read started before this write must never restore pre-save content.
+  fileRefreshSeq += 1
+  isRefreshingFile.value = false
   isSaving.value = true
+  let succeeded = false
   fileError.value = null
   try {
-    await writeFile({ directory: rootPath, path, content: draftContent.value })
+    await writeFile({ directory: rootPath, path, content: savedContent })
     invalidateFileReadCache({ directory: rootPath, paths: [path] })
-    fileContent.value = draftContent.value
+    if (!current()) return true
+    succeeded = true
+    fileContent.value = savedContent
     if (blameEnabled.value) {
       invalidateCurrentBlameCache()
       void loadBlame({ force: true })
@@ -3501,11 +3548,14 @@ async function save(opts?: { silent?: boolean }): Promise<boolean> {
   } catch (err) {
     const msg =
       err instanceof ApiError ? err.message || err.bodyText || '' : err instanceof Error ? err.message : String(err)
-    fileError.value = msg
+    if (current()) fileError.value = msg
     toasts.push('error', msg)
     return false
   } finally {
     isSaving.value = false
+    // Only a successful write may schedule the text edited during that write.
+    // A failed autosave waits for an edit/manual retry instead of looping.
+    if (succeeded && current() && dirty.value) scheduleAutoSave()
   }
 }
 
@@ -3573,29 +3623,22 @@ async function uploadFilesToDirectory(files: readonly File[] | FileList, targetD
   }
 }
 
+function scheduleAutoSave() {
+  clearAutoSaveTimer()
+  if (!autoSaveEnabled.value || !['text', 'markdown'].includes(viewerMode.value) || !canEdit.value) return
+  if (!dirty.value || isSaving.value || fileRefreshConflict.value) return
+  autoSaveTimer = window.setTimeout(() => {
+    autoSaveTimer = null
+    if (!autoSaveEnabled.value || !dirty.value || isSaving.value || fileRefreshConflict.value) return
+    void save({ silent: true })
+  }, 650)
+}
+
 watch(
   () => draftContent.value,
   () => {
-    if (
-      selectedFile.value?.type === 'file' &&
-      ['text', 'markdown'].includes(viewerMode.value) &&
-      canEdit.value &&
-      draftContent.value !== fileContent.value
-    ) {
-      lastDraftEditAt = Date.now()
-    }
-
-    clearAutoSaveTimer()
-    if (!autoSaveEnabled.value) return
-    if (!['text', 'markdown'].includes(viewerMode.value) || !canEdit.value) return
-    if (!dirty.value || isSaving.value) return
-
-    autoSaveTimer = window.setTimeout(() => {
-      autoSaveTimer = null
-      if (!autoSaveEnabled.value) return
-      if (!dirty.value || isSaving.value) return
-      void save({ silent: true })
-    }, 650)
+    if (selectedFile.value?.type === 'file' && canEdit.value && dirty.value) lastDraftEditAt = Date.now()
+    scheduleAutoSave()
   },
 )
 
@@ -4020,43 +4063,106 @@ watch(
   },
 )
 
-// The filesystem stream is global, so a files pane must keep its own view
-// current even while focus is on the chat pane.  Invalidate only the affected
-// cached chunks, then refresh the selected file/tree without using pane focus
-// as a gate.  This keeps both sides live while still avoiding route-driven
-// re-downloads when the user merely switches focus.
-watch(
-  () => [directoryStore.fsEventSeq, directoryStore.lastFsChangeEvent] as const,
-  ([, event]) => {
-    if (!pageMounted || !event) return
+// One non-recursive stream watches only visible directories. It owns no
+// recursive workspace scan and is closed with the pane or hidden document.
+let filesystemStream: SseClient | null = null
+let filesystemOverflowTimer: number | null = null
+let fullFilesystemRefresh = true
+const changedFilesystemPaths = new Set<string>()
+const filesystemRefresh = createRevalidator(
+  async () => {
+    if (!pageMounted || !root.value) return
     const rootPath = root.value
-    const changedDirectory = normalizeTreePath(String(event.directory || '').trim())
-    if (!rootPath || changedDirectory !== rootPath) return
-
-    const changedPaths = (Array.isArray(event.paths) ? event.paths : [])
-      .map((path) => normalizeTreePath(String(path || '').trim()))
-      .filter(Boolean)
-    const affectedPaths = event.truncated || changedPaths.length === 0 ? undefined : changedPaths
-    invalidateFileReadCache({ directory: rootPath, paths: affectedPaths })
-
-    const selectedPath = normalizeTreePath(String(selectedFile.value?.path || '').trim())
-    const selectedFileAffected =
-      event.truncated ||
-      !selectedPath ||
-      changedPaths.some(
-        (path) => isSameOrDescendantPath(selectedPath, path) || isSameOrDescendantPath(path, selectedPath),
-      )
-
-    if (selectedFileAffected && selectedPath) {
-      void refreshCurrentFile({ source: 'manual', silent: true })
+    if (
+      inFlightDirs.value.size ||
+      isSaving.value ||
+      isRefreshingFile.value ||
+      fileLoading.value ||
+      fileChunkLoadingMore.value
+    ) {
+      throw new Error('File read is busy; retain pending filesystem reconciliation')
     }
-
-    // A filesystem event can add/remove/rename a visible node.  Refresh the
-    // tree in every pane, not only the focused one; loadDirectory keeps its
-    // own in-flight guard and the sessionStorage snapshot remains warm.
-    void refreshRoot()
+    const paths = fullFilesystemRefresh ? undefined : [...changedFilesystemPaths]
+    fullFilesystemRefresh = false
+    changedFilesystemPaths.clear()
+    try {
+      invalidateFileReadCache({ directory: rootPath, paths })
+      await refreshRoot({ paths, throwOnError: true })
+      if (root.value !== rootPath) return
+      if (isSaving.value || isRefreshingFile.value || fileLoading.value || fileChunkLoadingMore.value) {
+        throw new Error('File became busy during tree reconciliation')
+      }
+      const selected = selectedFile.value?.path
+      if (selected && (!paths || paths.some((path) => selected === path || selected.startsWith(`${path}/`)))) {
+        await refreshCurrentFile({ source: 'manual', silent: true, throwOnError: true })
+      }
+    } catch (error) {
+      fullFilesystemRefresh = true
+      throw error
+    }
   },
+  { intervalMs: 500, retryMs: 1000, enabled: () => pageMounted && document.visibilityState !== 'hidden' },
 )
+
+function invalidateFilesystem() {
+  fullFilesystemRefresh = true
+  filesystemRefresh.invalidate(0)
+}
+
+function watchFilesystem() {
+  if (filesystemOverflowTimer !== null) window.clearInterval(filesystemOverflowTimer)
+  filesystemOverflowTimer = null
+  filesystemStream?.close()
+  filesystemStream = null
+  if (!pageMounted || !root.value || document.visibilityState === 'hidden') return
+  const rootPath = root.value
+  const selectedPath = selectedFile.value?.path || ''
+  const parent = selectedPath.slice(0, selectedPath.lastIndexOf('/'))
+  const visiblePaths = [...new Set([rootPath, parent, ...expandedDirs.value])].filter(
+    (path) => path && withinWorkspace(path, rootPath),
+  )
+  const paths = visiblePaths.slice(0, 128)
+  // Beyond the OS-watch budget, keep the remaining loaded folders coherent
+  // with a bounded, low-frequency fallback while this pane is visible.
+  if (visiblePaths.length > 128) filesystemOverflowTimer = window.setInterval(invalidateFilesystem, 10_000)
+  const query = new URLSearchParams({ directory: rootPath, paths: JSON.stringify(paths) })
+  filesystemStream = connectSse({
+    endpoint: `/api/v1/workbench/fs/stream?${query}`,
+    onOpen: invalidateFilesystem,
+    onEvent: (event) => {
+      directoryStore.applyGlobalEvent(event)
+    },
+    onError: invalidateFilesystem,
+  })
+  filesystemRefresh.resume()
+}
+
+watch(() => [root.value, selectedFile.value?.path, [...expandedDirs.value].sort().join('\n')], watchFilesystem)
+watch(
+  () => directoryStore.fsEventSeq,
+  () => {
+    const event = directoryStore.lastFsChangeEvent
+    if (event?.directory !== root.value) return
+    if (event.truncated || !event.paths.length) fullFilesystemRefresh = true
+    for (const path of event.paths) {
+      if (changedFilesystemPaths.size < 256) changedFilesystemPaths.add(path)
+      else fullFilesystemRefresh = true
+    }
+    filesystemRefresh.invalidate()
+  },
+  { flush: 'sync' },
+)
+
+onMounted(() => {
+  watchFilesystem()
+  document.addEventListener('visibilitychange', watchFilesystem)
+})
+onBeforeUnmount(() => {
+  filesystemStream?.close()
+  if (filesystemOverflowTimer !== null) window.clearInterval(filesystemOverflowTimer)
+  filesystemRefresh.dispose()
+  document.removeEventListener('visibilitychange', watchFilesystem)
+})
 
 watch(
   () => [selectedFile.value?.path, viewerMode.value] as const,
@@ -4200,6 +4306,7 @@ defineExpose({
 
 onMounted(async () => {
   pageMounted = true
+  watchFilesystem()
   await nextTick()
   await restoreForRoot(root.value).catch(() => {})
   await applyGitNavigationQuery()

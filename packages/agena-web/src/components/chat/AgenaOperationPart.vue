@@ -95,6 +95,11 @@ async function loadSection(section: ToolDetailSection) {
     if (resource.part_id !== Number(partId) || resource.section !== section) {
       throw new Error('The server returned a mismatched tool detail section')
     }
+    const revision = props.part.source.revision ?? 0
+    const updatedAt = props.part.source.updatedAt ?? 0
+    if (resource.revision < revision || (resource.revision === revision && resource.updated_at_ms < updatedAt)) {
+      throw new Error('This tool changed while loading its details. Retry this section.')
+    }
     sectionValues.value = { ...sectionValues.value, [section]: resource.value }
   } catch (error) {
     if (partGeneration !== requestGeneration) return
@@ -166,7 +171,7 @@ watch([() => props.expanded, detailsExpanded], loadVisibleSections)
 
 // Details requested while a tool was running must not overwrite its completed result.
 watch(
-  () => props.part.status,
+  () => [props.part.status, props.part.source.revision, props.part.source.updatedAt],
   () => {
     partGeneration += 1
     cancelSectionRequests()

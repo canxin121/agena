@@ -126,6 +126,7 @@ dependencies = [
  "jsonwebtoken",
  "libc",
  "mime",
+ "notify",
  "portable-atomic",
  "portable-pty",
  "regex",

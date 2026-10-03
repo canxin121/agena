@@ -196,6 +196,8 @@ export type Session = {
 export type PartState = ExecutionStatus
 
 export type MessageInfo = {
+  revision?: number
+  updatedAt?: number
   id: string
   sessionID: string
   role: 'user' | 'assistant' | 'system' | 'tool' | 'runtime' | string
@@ -235,6 +237,8 @@ export type MessageError = {
 }
 
 export type MessagePart = {
+  revision?: number
+  updatedAt?: number
   id: string
   sessionID: string
   messageID: string

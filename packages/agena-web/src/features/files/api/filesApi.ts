@@ -196,7 +196,9 @@ export async function readFileChunk(input: {
   if (typeof input.limit === 'number' && Number.isFinite(input.limit)) {
     params.push(`limit=${encodeURIComponent(String(Math.max(0, Math.floor(input.limit))))}`)
   }
-  return apiJson<FsReadChunkResponse>(`/api/v1/workbench/fs/read-chunk?${params.join('&')}`)
+  return apiJson<FsReadChunkResponse>(`/api/v1/workbench/fs/read-chunk?${params.join('&')}`, {
+    signal: AbortSignal.timeout(30_000),
+  })
 }
 
 export async function writeFile(input: {
@@ -208,6 +210,7 @@ export async function writeFile(input: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: input.path, content: input.content }),
+    signal: AbortSignal.timeout(60_000),
   })
 }
 

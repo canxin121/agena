@@ -69,6 +69,8 @@ export type ToolDetailSection = 'metadata' | 'input' | 'output' | 'presentation'
 
 export type ToolDetailResource = {
   part_id: number
+  revision: number
+  updated_at_ms: number
   section: ToolDetailSection
   value: JsonValue
 }
@@ -154,6 +156,7 @@ export type SessionListResponse = {
 }
 
 export type MessageListResponse = {
+  version?: number
   entries: MessageEntry[]
   hasMore?: boolean
   nextCursor?: string | null
@@ -183,6 +186,7 @@ function messageFoldsFromWire(folds: AgenaSessionParts['folds']): MessageFold[] 
 }
 
 export type SessionExecutionStatus = {
+  session: Session
   state: SessionState
   execution?: AgenaExecutionState['execution']
   usage?: AgenaExecutionState['usage']
@@ -280,6 +284,8 @@ function entriesFromParts(
         sessionID: sessionId,
         role,
         runId: partId,
+        revision: typeof part.revision === 'number' ? part.revision : 0,
+        updatedAt: typeof part.updated_at_ms === 'number' ? part.updated_at_ms : 0,
         ...(runState ? { runState } : {}),
         runContent: content,
         ...(isRunTerminal(runState) ? { finish: runState } : {}),
@@ -463,6 +469,8 @@ export function normalizeAgenaPart(
     sessionID: sessionId,
     messageID: messageId,
     type: 'text',
+    revision: typeof part.revision === 'number' ? part.revision : 0,
+    updatedAt: typeof part.updated_at_ms === 'number' ? part.updated_at_ms : 0,
     ...(state ? { partState: state } : {}),
     agenaKind: kind,
     agenaRole: str(part.role) || 'assistant',
@@ -488,14 +496,12 @@ export function normalizeAgenaPart(
   switch (kind) {
     case 'text': {
       const text = stringField(content, ['text'])
-      if (!text) return null
       return { ...base, type: 'text', text }
     }
     case 'think': {
       const summary = arrayStringField(content, 'summary')
       const rawContent = arrayStringField(content, 'raw')
       const text = summary || rawContent
-      if (!text) return null
       return { ...base, type: 'reasoning', text }
     }
     case 'tool_call': {
@@ -923,10 +929,25 @@ export async function listMessages(
   }
   return {
     entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], folds),
+    version: parts.version,
     hasMore: Boolean(parts.page?.has_more),
     nextCursor: parts.page?.next_cursor ?? null,
     userMessageCount: Math.max(0, Math.floor(parts.user_message_count)),
   }
+}
+
+/** Reconcile only the parts already loaded by this client. Missing ids are
+ * removed memberships, not a reason to enumerate the complete transcript. */
+export async function getLoadedParts(sessionId: string, ids: string[]): Promise<AgenaPart[]> {
+  const parts: AgenaPart[] = []
+  for (let start = 0; start < ids.length; start += 256) {
+    const query = new URLSearchParams({ ids: ids.slice(start, start + 256).join(',') })
+    const page = await apiJson<AgenaSessionParts>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts?${query}`, {
+      signal: AbortSignal.timeout(30_000),
+    })
+    parts.push(...page.parts)
+  }
+  return parts
 }
 
 /** Read the complete visible history for explicit copy/export and message lookup. */
@@ -1249,35 +1270,31 @@ export async function presentInteractiveRequest(sessionId: string, requestId: st
 
 // --- session execution status ----------------------------------------------
 
-/** Best-effort execution status derived from GET /state. */
+/** Execution status derived from GET /state. */
 export async function getSessionExecutionStatus(sessionId: string): Promise<SessionExecutionStatus | null> {
   const sid = String(sessionId || '').trim()
   if (!sid) return null
-  try {
-    const raw = await apiJson<AgenaExecutionState>(
-      `/api/v1/sessions/${encodeURIComponent(sid)}/state?include_parts=false`,
-    )
-    const state = {
-      ...raw,
-      session: {
-        ...raw.session,
-        state: normalizeSessionState(raw.session?.state),
-      },
-    }
-    const s = normalizeSessionState(state.session?.state)
-    const backgroundActivityKinds = Array.isArray(raw.background_activities)
-      ? raw.background_activities
-          .map((item) => str(asRecord(item).kind).toLowerCase())
-          .filter((kind) => kind.length > 0)
-      : []
-    return {
-      state: s,
-      execution: state.execution,
-      usage: state.usage,
-      backgroundActivityKinds,
-    }
-  } catch {
-    return null
+  const raw = await apiJson<AgenaExecutionState>(
+    `/api/v1/sessions/${encodeURIComponent(sid)}/state?include_parts=false`,
+    { signal: AbortSignal.timeout(30_000) },
+  )
+  const state = {
+    ...raw,
+    session: {
+      ...raw.session,
+      state: normalizeSessionState(raw.session?.state),
+    },
+  }
+  const s = normalizeSessionState(state.session?.state)
+  const backgroundActivityKinds = Array.isArray(raw.background_activities)
+    ? raw.background_activities.map((item) => str(asRecord(item).kind).toLowerCase()).filter((kind) => kind.length > 0)
+    : []
+  return {
+    session: toSession(state.session)!,
+    state: s,
+    execution: state.execution,
+    usage: state.usage,
+    backgroundActivityKinds,
   }
 }
 

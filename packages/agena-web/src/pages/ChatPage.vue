@@ -97,6 +97,14 @@ type OutgoingMessagePart =
 const route = useRoute()
 const router = useRouter()
 const chat = useChatStore()
+watch(
+  () => chat.selectedSessionId,
+  (sid, _previous, onCleanup) => {
+    if (sid) onCleanup(chat.retainSession(sid))
+  },
+  { immediate: true },
+)
+
 const workspacePane = useWorkspacePaneContext()
 const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
 const directoryStore = useDirectoryStore()

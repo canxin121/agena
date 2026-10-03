@@ -146,3 +146,105 @@ test('SSE keeps emitted cursors in arrival order when snapshots for multiple par
     [20, 10],
   )
 })
+
+test('same-frame coalescing never replaces a newer checkpoint with an older revision or timestamp', async () => {
+  const latest = { part_id: 10, revision: 4, updated_at_ms: 12, content: { text: 'latest' } }
+  const events = await consumeNotifications([
+    notification({ kind: 'part_updated', part: latest }),
+    notification({ kind: 'part_updated', part: { ...latest, revision: 3 } }),
+    notification({ kind: 'part_updated', part: { ...latest, updated_at_ms: 11 } }),
+  ])
+  assert.equal(events.length, 1)
+  assert.deepEqual(events[0].properties.part, latest)
+})
+
+test('SSE establishes each subscription before onOpen and closing suppresses queued data and errors', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  if (!globalThis.window) globalThis.window = globalThis
+  const events = []
+  const errors = []
+  let opens = 0
+  let connected
+  const opened = new Promise((resolve) => {
+    connected = resolve
+  })
+  globalThis.fetch = async (_, init) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify(notification({ kind: 'part_updated', part: { part_id: 1 } }))}\n\n`,
+            ),
+          )
+          init.signal.addEventListener('abort', () => controller.error(new Error('aborted')), { once: true })
+        },
+      }),
+      { headers: { 'content-type': 'text/event-stream' } },
+    )
+  const client = connectSse({
+    endpoint: '/fake',
+    onOpen: () => {
+      opens++
+      connected()
+    },
+    onEvent: (event) => events.push(event),
+    onError: (error) => errors.push(error),
+  })
+  try {
+    await opened
+    client.close()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(opens, 1)
+    assert.equal(events.length, 0)
+    assert.equal(errors.length, 0)
+  } finally {
+    client.close()
+    globalThis.fetch = originalFetch
+    if (originalWindow === undefined) delete globalThis.window
+  }
+})
+
+test('reconnecting a stream with no event IDs still calls onOpen again for authoritative recovery', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  if (!globalThis.window) globalThis.window = globalThis
+  let opens = 0
+  let finish
+  const recovered = new Promise((resolve) => {
+    finish = resolve
+  })
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('retry: 10\n\n'))
+          controller.close()
+        },
+      }),
+    )
+  const client = connectSse({
+    endpoint: '/fake',
+    onEvent() {},
+    onOpen() {
+      if (++opens === 2) finish()
+    },
+  })
+  let deadline
+  try {
+    await Promise.race([
+      recovered,
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('reconnect missing')), 3000)
+      }),
+    ])
+    assert.equal(opens, 2)
+    assert.equal(client.getStats().lastCursor, null)
+  } finally {
+    clearTimeout(deadline)
+    client.close()
+    globalThis.fetch = originalFetch
+    if (originalWindow === undefined) delete globalThis.window
+  }
+})

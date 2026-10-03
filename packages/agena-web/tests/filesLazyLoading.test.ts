@@ -201,3 +201,130 @@ test('file-tree paging controls stay on the left, follow their own children and 
   assert.ok(html.indexOf('data-directory-page="/repo/open"') < html.indexOf('data-directory-page="/repo"'))
   assert.doesNotMatch(html, /data-directory-page="\/repo\/closed"/)
 })
+
+type FileEditingState = {
+  explorerRootPath: Ref<string>
+  selectedFile: Ref<{ name: string; path: string; type: string } | null>
+  viewerMode: Ref<string>
+  fileContent: Ref<string>
+  draftContent: Ref<string>
+  dirty: Ref<boolean>
+  autoSaveEnabled: Ref<boolean>
+  isSaving: Ref<boolean>
+  save(options?: { silent?: boolean }): Promise<boolean>
+  clearAutoSaveTimer(): void
+  entriesByDir: Ref<Record<string, ListEntry[]>>
+  directoryNextOffset: Ref<Record<string, number>>
+  loadDirectory(path: string, options?: { force?: boolean; preserveLoaded?: boolean }): Promise<void>
+  cancelDirectoryRequests(): void
+}
+
+async function withFileEditor(run: (state: FileEditingState) => Promise<void>) {
+  prepareRuntime()
+  const { default: component } = await vite.ssrLoadModule('/src/pages/FilesPage.vue')
+  const pinia = createPinia()
+  let state!: FileEditingState
+  const app = createSSRApp({
+    ...component,
+    ssrRender: undefined,
+    setup(props: object, context: object) {
+      state = component.setup(props, context)
+      return () => null
+    },
+  })
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/', component: { render: () => null } }],
+  })
+  await router.push('/')
+  app
+    .use(router)
+    .use(pinia)
+    .use(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': {} } }))
+  const originalFetch = globalThis.fetch
+  try {
+    await renderToString(app)
+    state.explorerRootPath.value = '/repo'
+    state.selectedFile.value = { name: 'file.txt', path: '/repo/file.txt', type: 'file' }
+    state.viewerMode.value = 'text'
+    state.fileContent.value = 'original'
+    state.draftContent.value = 'submitted'
+    await run(state)
+  } finally {
+    state?.clearAutoSaveTimer()
+    state?.cancelDirectoryRequests()
+    disposePinia(pinia)
+    globalThis.fetch = originalFetch
+  }
+}
+
+test('saving captures submitted text and preserves edits made during the request; failures do not loop', async () =>
+  withFileEditor(async (state) => {
+    const requests: Array<{ body: { path: string; content: string }; resolve: (response: Response) => void }> = []
+    globalThis.fetch = ((_, init) =>
+      new Promise<Response>((resolve) =>
+        requests.push({ body: JSON.parse(String(init?.body)), resolve }),
+      )) as typeof fetch
+    state.autoSaveEnabled.value = true
+    const save = state.save({ silent: true })
+    assert.equal(requests[0]?.body.content, 'submitted')
+    state.draftContent.value = 'edited during save'
+    requests[0]!.resolve(Response.json({ success: true }))
+    assert.equal(await save, true)
+    assert.equal(state.fileContent.value, 'submitted')
+    assert.equal(state.draftContent.value, 'edited during save')
+    assert.equal(state.dirty.value, true)
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    assert.equal(requests.length, 2, 'successful save follows up once with the new draft')
+    assert.equal(requests[1]?.body.content, 'edited during save')
+    requests[1]!.resolve(new Response('{}', { status: 500 }))
+    await new Promise((resolve) => setTimeout(resolve, 750))
+    assert.equal(requests.length, 2, 'a failed autosave does not restart itself')
+    assert.equal(state.dirty.value, true)
+    assert.equal(state.isSaving.value, false)
+  }))
+
+test('a delayed save from a different root cannot replace the currently displayed file', async () =>
+  withFileEditor(async (state) => {
+    state.autoSaveEnabled.value = false
+    let finish!: (response: Response) => void
+    globalThis.fetch = (() =>
+      new Promise<Response>((resolve) => {
+        finish = resolve
+      })) as typeof fetch
+    const saving = state.save({ silent: true })
+    state.explorerRootPath.value = '/another'
+    state.selectedFile.value = { name: 'next.txt', path: '/another/next.txt', type: 'file' }
+    state.fileContent.value = 'next saved'
+    state.draftContent.value = 'next draft'
+    finish(Response.json({ success: true }))
+    await saving
+    assert.equal(state.fileContent.value, 'next saved')
+    assert.equal(state.draftContent.value, 'next draft')
+  }))
+
+test('automatic directory refresh preserves exactly the loaded pagination prefix', async () =>
+  withFileEditor(async (state) => {
+    state.entriesByDir.value = {
+      '/repo': Array.from({ length: 800 }, (_, index) => ({ name: String(index), type: 'file' })),
+    }
+    state.directoryNextOffset.value = { '/repo': 800 }
+    const offsets: number[] = []
+    globalThis.fetch = (async (url) => {
+      const params = new URL(String(url), 'http://agena.test').searchParams
+      const offset = Number(params.get('offset'))
+      const limit = Number(params.get('limit'))
+      offsets.push(offset)
+      assert.equal(limit, 400)
+      return Response.json({
+        entries: Array.from({ length: limit }, (_, index) => ({ name: `current-${offset + index}`, type: 'file' })),
+        nextOffset: offset + limit,
+        hasMore: true,
+      })
+    }) as typeof fetch
+    await state.loadDirectory('/repo', { force: true, preserveLoaded: true })
+    assert.deepEqual(offsets, [0, 400])
+    assert.equal(state.entriesByDir.value['/repo']?.length, 800)
+    assert.equal(state.entriesByDir.value['/repo']?.[0]?.name, 'current-0')
+    assert.equal(state.directoryNextOffset.value['/repo'], 800)
+  }))

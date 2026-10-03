@@ -10,6 +10,7 @@ import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 
 import { connectSse } from '@/lib/sse'
+import { createRevalidator } from '@/lib/revalidation'
 import type { SseClient, SseClientStats } from '@/lib/sse'
 import { subscribeAppBroadcast } from '@/lib/appBroadcast'
 import { installKeyboardInsets } from '@/lib/keyboardInsets'
@@ -28,6 +29,7 @@ export function useAppRuntime() {
   const directory = useDirectoryStore()
   const directorySessions = useDirectorySessionStore()
 
+  let disposed = false
   let sse: SseClient | null = null
   let visibilityHandler: (() => void) | null = null
   let onlineHandler: (() => void) | null = null
@@ -44,8 +46,15 @@ export function useAppRuntime() {
   let sseDebugTimer: number | null = null
   let lastSseDebugAt = 0
   let lastSseDebugErrorSum = 0
-  let lastSseErrorAt = 0
-  let lastSseGapAt = 0
+  const recovery = createRevalidator(
+    async () => {
+      chat.reconcileLiveState()
+      directorySessions.scheduleSidebarRecoverySync('stream-connected', 0, { force: true })
+      activity.invalidate()
+      await settings.refresh()
+    },
+    { intervalMs: 1000, retryMs: 1000 },
+  )
 
   let globalSseCursor = ''
 
@@ -98,15 +107,7 @@ export function useAppRuntime() {
       connectActivity()
     }
 
-    // Reconcile all data sources that can drift while suspended.
-    void settings.refresh().catch(() => {})
-    void chat.refreshSessions().catch(() => {})
-    const sid = chat.selectedSessionId
-    if (sid) {
-      void chat.refreshMessages(sid, { silent: true }).catch(() => {})
-    }
-    void activity.refresh().catch(() => {})
-    void directorySessions.revalidateFromApi(undefined, { silent: true }).catch(() => {})
+    recovery.invalidate(0)
 
     try {
       console.debug('[sse] resync after resume:', reason)
@@ -179,6 +180,7 @@ export function useAppRuntime() {
   }
 
   function connectActivity() {
+    if (disposed) return
     sse?.close()
     sse = null
 
@@ -190,34 +192,11 @@ export function useAppRuntime() {
         onCursor: (lastEventId) => {
           globalSseCursor = lastEventId
         },
-        onSequenceGap: () => {
-          const now = Date.now()
-          if (now - lastSseGapAt < 1500) return
-          lastSseGapAt = now
-
-          const sid = chat.selectedSessionId
-          if (sid) {
-            void chat.refreshMessages(sid, { silent: true }).catch(() => {})
-          }
-          void settings.refresh().catch(() => {})
-          void activity.refresh().catch(() => {})
-          void directorySessions.revalidateFromApi(undefined, { silent: true }).catch(() => {})
-        },
+        onOpen: () => recovery.invalidate(0),
+        onSequenceGap: () => recovery.invalidate(0),
         onEvent: (evt) => {
-          // Agena global SSE frames are tagged `event: notification` with a JSON
-          // body carrying `kind: session_changed | runtime_signal | lagged`.
-          if (evt.type === 'lagged') {
-            const now = Date.now()
-            if (now - lastSseGapAt >= 1500) {
-              lastSseGapAt = now
-              const sid = chat.selectedSessionId
-              if (sid) {
-                void chat.refreshMessages(sid, { silent: true }).catch(() => {})
-              }
-              void settings.refresh().catch(() => {})
-              void activity.refresh().catch(() => {})
-              void directorySessions.revalidateFromApi(undefined, { silent: true }).catch(() => {})
-            }
+          if (evt.type === 'lagged' || evt.type === 'subscription_closed') {
+            recovery.invalidate(0)
             return
           }
           activity.applyEvent(evt)
@@ -226,24 +205,8 @@ export function useAppRuntime() {
           directorySessions.applyGlobalEvent(evt)
         },
         onError: (err) => {
-          // When the stream drops mid-run the UI can get stuck on partial output.
-          const now = Date.now()
-          if (now - lastSseErrorAt < 1500) return
-          lastSseErrorAt = now
-
-          const sid = chat.selectedSessionId
-          if (sid) {
-            void chat.refreshMessages(sid, { silent: true }).catch(() => {})
-          }
-          void settings.refresh().catch(() => {})
-          void activity.refresh().catch(() => {})
-          void directorySessions.revalidateFromApi(undefined, { silent: true }).catch(() => {})
-
-          try {
-            console.warn('[sse] connection error', err)
-          } catch {
-            // ignore
-          }
+          recovery.invalidate(0)
+          console.warn('[sse] connection error', err)
         },
       })
     } catch (err) {
@@ -301,9 +264,12 @@ export function useAppRuntime() {
       activity.refresh().catch(() => {}),
     ])
 
+    if (disposed) return
     // Keep sessions available for all views.
     await chat.refreshSessions().catch(() => {})
+    if (disposed) return
     await ensureSelectedSessionFromQuery().catch(() => {})
+    if (disposed) return
 
     connectActivity()
 
@@ -404,6 +370,8 @@ export function useAppRuntime() {
   )
 
   onBeforeUnmount(() => {
+    disposed = true
+    recovery.dispose()
     sse?.close()
     sse = null
     cleanupKeyboard?.()

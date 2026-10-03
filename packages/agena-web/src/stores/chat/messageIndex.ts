@@ -1,5 +1,14 @@
 import type { MessageEntry, MessageInfo, MessagePart } from '@/types/chat'
 
+export function isOlderPart(
+  incoming: { revision?: number; updatedAt?: number },
+  current: { revision?: number; updatedAt?: number },
+): boolean {
+  const revision = incoming.revision ?? 0
+  const previous = current.revision ?? 0
+  return revision < previous || (revision === previous && (incoming.updatedAt ?? 0) < (current.updatedAt ?? 0))
+}
+
 export function compareChatIds(left: string, right: string): number {
   if (!/^\d+$/.test(left) || !/^\d+$/.test(right)) {
     throw new TypeError(`Agena chat ids must be decimal integers: ${left}, ${right}`)
@@ -64,7 +73,11 @@ export function upsertMessageEntryIn(list: MessageEntry[], info: MessageInfo): M
       list.splice(index, 0, fallback)
       return fallback
     }
-    Object.assign(entry.info, info)
+    if (!isOlderPart(info, entry.info)) {
+      // Run markers are complete snapshots; omitted lifecycle fields clear
+      // previous values when a run is resumed or replaced.
+      entry.info = info.revision === undefined ? { ...entry.info, ...info } : { ...info }
+    }
     if (!Array.isArray(entry.parts)) entry.parts = []
     return entry
   }
@@ -103,6 +116,11 @@ export function upsertPart(entry: MessageEntry, part: MessagePart, delta: string
     return
   }
   const base = typeof prev.text === 'string' ? String(prev.text) : ''
+  if (isOlderPart(part, prev)) return
+  if (part.revision !== undefined && !delta) {
+    parts[index] = part
+    return
+  }
 
   // Prefer authoritative part snapshots when present, but fall back to delta when
   // the snapshot isn't advancing (some emitters stream delta-only).

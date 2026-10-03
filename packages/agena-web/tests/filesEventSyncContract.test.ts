@@ -6,9 +6,10 @@ import test from 'node:test'
 test('FilesPage keeps an unfocused pane live from fs events', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/pages/FilesPage.vue'), 'utf8')
   assert.ok(source.includes('directoryStore.fsEventSeq'))
-  assert.ok(source.includes('invalidateFileReadCache({ directory: rootPath, paths: affectedPaths })'))
-  assert.ok(source.includes("void refreshCurrentFile({ source: 'manual', silent: true })"))
-  assert.ok(source.includes('void refreshRoot()'))
+  assert.ok(source.includes('invalidateFileReadCache({ directory: rootPath'))
+  assert.ok(source.includes("await refreshCurrentFile({ source: 'manual', silent: true, throwOnError: true })"))
+  assert.ok(source.includes('/api/v1/workbench/fs/stream?'))
+  assert.ok(source.includes('filesystemRefresh.invalidate'))
 })
 
 test('Files explorer keeps a manual refresh action in the toolbar', () => {

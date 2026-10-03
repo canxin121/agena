@@ -34,6 +34,7 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
   let disposed = false
   let eventGeneration = 0
   let lastStartedAt = 0
+  let failures = 0
   let controller: AbortController | null = null
 
   const sessions = computed(() => Object.entries(snapshot.value))
@@ -64,9 +65,14 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
           next[sid] = { type: 'busy', kinds: kind ? [...kinds, kind] : kinds }
         }
       }
+      failures = 0
       if (!disposed && generation === eventGeneration) snapshot.value = next
     } catch (err) {
-      if (!disposed) error.value = err instanceof Error ? err.message : String(err)
+      if (!disposed) {
+        error.value = err instanceof Error ? err.message : String(err)
+        failures = Math.min(6, failures + 1)
+        dirty = true
+      }
     } finally {
       window.clearTimeout(timeout)
       loading.value = false
@@ -94,7 +100,7 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
         refreshTimer = null
         void refresh()
       },
-      Math.max(100, 500 - (Date.now() - lastStartedAt)),
+      Math.max(failures ? Math.min(30_000, 1000 * 2 ** (failures - 1)) : 100, 500 - (Date.now() - lastStartedAt)),
     )
   }
 
@@ -148,5 +154,5 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
     if (refreshTimer !== null) window.clearTimeout(refreshTimer)
   })
 
-  return { snapshot, sessions, loading, error, refresh, applyEvent }
+  return { snapshot, sessions, loading, error, refresh, invalidate: scheduleRefresh, applyEvent }
 })

@@ -21,6 +21,10 @@ fn fs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/v1/workbench/fs/home", get(crate::server::fs::fs_home))
         .route("/api/v1/workbench/fs/list", get(crate::server::fs::fs_list))
         .route(
+            "/api/v1/workbench/fs/stream",
+            get(crate::server::fs::fs_watch),
+        )
+        .route(
             "/api/v1/workbench/fs/search",
             get(crate::server::fs::fs_search),
         )

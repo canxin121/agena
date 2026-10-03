@@ -44,6 +44,7 @@ ignore = { workspace = true }
 jsonwebtoken = { workspace = true }
 libc = "0.2.186"
 mime = "0.3.17"
+notify = { workspace = true }
 portable-pty = { workspace = true }
 regex = { workspace = true }
 regex-automata = { version = "0.4.18", default-features = false, features = ["std"] }

@@ -20,6 +20,7 @@ use tower::ServiceExt as _;
 
 mod content_replace;
 mod file_read;
+mod fs_watch;
 
 const FILE_LIMIT: usize = 50 * 1024 * 1024;
 const JSON_WIRE_LIMIT: usize = 6 * FILE_LIMIT + 64 * 1024;

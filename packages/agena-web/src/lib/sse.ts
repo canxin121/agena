@@ -37,6 +37,9 @@ export type SseClientOptions = {
   stallTimeoutMsVisible?: number
   stallTimeoutMsHidden?: number
   onEvent: (evt: SseEvent) => void
+  /** Runs after every established subscription, including the initial one.
+   * Best-effort feeds require a snapshot read here to close connection gaps. */
+  onOpen?: () => void
   onCursor?: (lastEventId: string) => void
   onSequenceGap?: (gap: { previous: number; expected: number; current: number }) => void
   onError?: (err: Error | string) => void
@@ -182,6 +185,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
   const controller = new AbortController()
   let closed = false
   let reconnectTimer: number | null = null
+  let finishBackoff: (() => void) | null = null
   let lastEventId: string | undefined =
     typeof opts.initialLastEventId === 'string' && opts.initialLastEventId.trim()
       ? opts.initialLastEventId.trim()
@@ -250,6 +254,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
 
     lastFlushAt = Date.now()
     for (const evt of events) {
+      if (closed) break
       if (!evt) continue
       stats.lastEventAt = Date.now()
       opts.onEvent(evt)
@@ -263,10 +268,25 @@ export function connectSse(opts: SseClientOptions): SseClient {
   }
 
   function pushEvent(evt: SseEvent) {
+    if (closed) return
     const k = eventKey(evt)
     if (k) {
       const idx = coalesced.get(k)
       if (idx !== undefined) {
+        const previous = queue[idx]?.properties
+        const incoming = evt.properties
+        if (previous && incoming) {
+          const before = getRecord(previous, 'part') || previous
+          const after = getRecord(incoming, 'part') || incoming
+          const beforeRevision = getNumeric(before, 'revision') ?? getNumeric(before, 'version') ?? 0
+          const afterRevision = getNumeric(after, 'revision') ?? getNumeric(after, 'version') ?? 0
+          if (
+            afterRevision < beforeRevision ||
+            (afterRevision === beforeRevision &&
+              (getNumeric(after, 'updated_at_ms') ?? 0) < (getNumeric(before, 'updated_at_ms') ?? 0))
+          )
+            return
+        }
         // Move the surviving complete snapshot to its actual arrival position.
         // Merging would retain optional fields omitted by the new snapshot.
         queue[idx] = undefined
@@ -277,6 +297,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
       coalesced.clear()
     }
     queue.push(evt)
+    if (queue.length >= 1024) flush()
     scheduleFlush()
   }
 
@@ -353,7 +374,12 @@ export function connectSse(opts: SseClientOptions): SseClient {
 
   async function sleep(ms: number) {
     await new Promise<void>((resolve) => {
-      reconnectTimer = window.setTimeout(() => resolve(), ms)
+      finishBackoff = resolve
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null
+        finishBackoff = null
+        resolve()
+      }, ms)
     })
   }
 
@@ -381,13 +407,14 @@ export function connectSse(opts: SseClientOptions): SseClient {
         const linked = linkAbortSignals([controller.signal, attemptAbort.signal])
         linkedCleanup = linked.cleanup
 
+        const handshakeTimeout = window.setTimeout(() => attemptAbort.abort(), 15_000)
         const resp = await fetch(url, {
           method: 'GET',
           headers,
           cache: 'no-store',
           credentials: auth.authorization ? 'omit' : 'include',
           signal: linked.signal,
-        })
+        }).finally(() => window.clearTimeout(handshakeTimeout))
         if (!resp.ok) {
           if (resp.status === 401) {
             let msg = ''
@@ -414,6 +441,9 @@ export function connectSse(opts: SseClientOptions): SseClient {
         }
 
         stats.connectCount += 1
+        if (closed || controller.signal.aborted) return
+        flush()
+        opts.onOpen?.()
         debugLog('connected', { attempt, lastEventId: lastEventId || '' }, { force: true })
 
         // Successful (re)connect resets exponential backoff attempts.
@@ -550,12 +580,14 @@ export function connectSse(opts: SseClientOptions): SseClient {
               try {
                 raw = JSON.parse(rawData)
               } catch {
-                continue
+                throw new Error('SSE event contains invalid JSON; snapshot reconciliation required')
               }
               normalizeAndQueue(raw, { directory: opts.directory ?? undefined, lastEventId: seenId })
             }
           }
         } finally {
+          attemptAbort.abort()
+          await reader.cancel().catch(() => {})
           try {
             reader.releaseLock()
           } catch {
@@ -569,6 +601,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
           throw new Error('SSE connection closed')
         }
       } catch (err) {
+        if (closed || controller.signal.aborted) break
         flush()
         const nextError: Error | string = err instanceof Error ? err : String(err)
         stats.errorCount += 1
@@ -616,12 +649,17 @@ export function connectSse(opts: SseClientOptions): SseClient {
         window.clearTimeout(reconnectTimer)
         reconnectTimer = null
       }
+      finishBackoff?.()
+      finishBackoff = null
       try {
         controller.abort()
       } catch {
         // ignore
       }
-      flush()
+      if (timer !== null) window.clearTimeout(timer)
+      timer = null
+      queue.length = 0
+      coalesced.clear()
     },
     getStats: () => {
       // Return a shallow copy to avoid accidental external mutation.

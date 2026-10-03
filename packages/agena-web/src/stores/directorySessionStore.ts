@@ -1712,6 +1712,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     )
   }
 
+  let sidebarStateSyncFailures = 0
   async function syncSidebarStateFromServer() {
     if (sidebarStateSyncInFlight) {
       sidebarStateSyncQueued = true
@@ -1720,14 +1721,23 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
     sidebarStateSyncInFlight = true
     try {
+      // A mutation/reconnect can arrive during a foreground page read. That
+      // read predates the invalidation; wait for it, then obtain a new page.
+      await sidebarStateRequestInFlight?.promise.catch(() => {})
       await revalidateFromStateApi()
+      sidebarStateSyncFailures = 0
     } catch {
-      // Keep existing sidebar cache on transient background sync failures.
+      // An idle stream may send no more events after a failed read. Preserve
+      // the invalidation and retry with bounded backoff until it converges.
+      sidebarStateSyncFailures = Math.min(6, sidebarStateSyncFailures + 1)
+      sidebarStateSyncQueued = true
     } finally {
       sidebarStateSyncInFlight = false
       if (sidebarStateSyncQueued) {
         sidebarStateSyncQueued = false
-        scheduleSidebarStateSync(120)
+        scheduleSidebarStateSync(
+          sidebarStateSyncFailures ? Math.min(30_000, 1000 * 2 ** (sidebarStateSyncFailures - 1)) : 120,
+        )
       }
     }
   }
@@ -1844,6 +1854,11 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }
 
     if (SIDEBAR_RECOVERY_EVENT_TYPES.has(normalizedType)) {
+      const change = evt.properties
+      if (normalizedType === 'session_changed' && change?.kind === 'part_updated') {
+        const part = change.part
+        if (part && typeof part === 'object' && !Array.isArray(part) && part.kind !== 'run') return
+      }
       scheduleSidebarRecoverySync(`event:${normalizedType}`, 180)
     }
   }

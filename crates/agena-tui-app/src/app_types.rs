@@ -10,7 +10,7 @@ use agena_api::{
     pagination::PaginatedResponse,
     resource::{
         ProviderAdapterModelsResponse, ProviderSummaryResource, SessionExecutionResource,
-        SessionOverviewResource, SessionResource,
+        SessionResource,
     },
 };
 use agena_domain::ModelRef;
@@ -643,9 +643,9 @@ pub(super) enum AppMessage {
         request_id: u64,
         result: UiResult<UsageStats>,
     },
-    HubOverviewLoaded {
+    HubCatalogLoaded {
         request_id: u64,
-        result: UiResult<SessionOverviewResource>,
+        result: UiResult<crate::app_backend::session_hub::HubCatalog>,
     },
     SessionsLoaded {
         scope: SessionLoadScope,
@@ -709,6 +709,10 @@ pub(super) enum AppMessage {
         result: UiResult<SessionResource>,
     },
     SessionFavoriteUpdated {
+        session_id: i64,
+        result: UiResult<SessionResource>,
+    },
+    SessionPinnedUpdated {
         session_id: i64,
         result: UiResult<SessionResource>,
     },
@@ -1020,6 +1024,7 @@ pub(super) struct HubState {
     /// (including the single-letter hub bindings c/j/k/l/t) type into the
     /// query instead of triggering their hub action.
     pub(super) search_active: bool,
+    pub(super) refreshed_at: Instant,
 }
 
 impl HubState {
@@ -1031,6 +1036,7 @@ impl HubState {
             error: None,
             query: String::new(),
             search_active: false,
+            refreshed_at: Instant::now(),
         }
     }
 }

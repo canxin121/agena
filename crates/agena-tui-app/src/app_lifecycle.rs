@@ -4,7 +4,9 @@ impl App {
     }
 
     pub(crate) fn mouse_capture_active(&self) -> bool {
-        self.current_route_is_main() && self.overlay.is_none() && self.context_help.is_none()
+        (self.current_route_is_main() || matches!(self.current_route, Route::Hub(_)))
+            && self.overlay.is_none()
+            && self.context_help.is_none()
     }
 
     /// Resolve a possibly-relative path against the workspace root.
@@ -344,6 +346,7 @@ impl App {
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
         self.refresh_activities_panel_if_due(now);
+        self.refresh_hub_if_due();
         self.heal_plan_display_refresh();
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);

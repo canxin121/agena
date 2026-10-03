@@ -10,6 +10,7 @@ use super::{
     transcript_node_highlight_range, transcript_selection_scroll_position,
 };
 
+mod session_hub;
 mod transcript_paging;
 mod ui;
 
@@ -5986,9 +5987,7 @@ mod live_transcript_tests {
 
 #[cfg(test)]
 mod new_session_model_stack_tests {
-    use agena_api::resource::{
-        SessionLifecycleState, SessionOverviewResource, SessionRelationKind, SessionResource,
-    };
+    use agena_api::resource::{SessionLifecycleState, SessionRelationKind, SessionResource};
     use chrono::Utc;
     use ratatui::layout::Rect;
 
@@ -6052,14 +6051,11 @@ mod new_session_model_stack_tests {
         let mut favorite = session_resource();
         favorite.favorite = true;
 
-        app.handle_hub_overview_loaded(
+        app.handle_hub_catalog_loaded(
             request_id,
-            Ok(SessionOverviewResource {
-                favorites: vec![favorite.clone()],
-                attention: Vec::new(),
-                running: Vec::new(),
-                recent: vec![favorite],
-                generated_at: Utc::now(),
+            Ok(crate::app_backend::session_hub::HubCatalog {
+                workspaces: Vec::new(),
+                sessions: vec![favorite],
             }),
         );
 
@@ -6093,14 +6089,11 @@ mod new_session_model_stack_tests {
             route => panic!("bootstrap must land on the hub, got {route:?}"),
         };
 
-        app.handle_hub_overview_loaded(
+        app.handle_hub_catalog_loaded(
             request_id,
-            Ok(SessionOverviewResource {
-                favorites: Vec::new(),
-                attention: Vec::new(),
-                running: Vec::new(),
-                recent: Vec::new(),
-                generated_at: Utc::now(),
+            Ok(crate::app_backend::session_hub::HubCatalog {
+                workspaces: Vec::new(),
+                sessions: Vec::new(),
             }),
         );
 

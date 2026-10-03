@@ -1,3 +1,4 @@
+use crate::Route;
 use std::time::{Duration, Instant};
 
 const TRANSCRIPT_WHEEL_LINES: isize = 3;
@@ -15,6 +16,10 @@ impl App {
                 self.layout.transcript_body.width,
                 self.layout.transcript_body.height,
             );
+            return;
+        }
+        if matches!(self.current_route, Route::Hub(_)) {
+            self.handle_hub_mouse(mouse);
             return;
         }
 

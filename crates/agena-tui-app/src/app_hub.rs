@@ -7,13 +7,14 @@
 //! / create / session-list effects that only the App can perform.
 
 use agena_api::resource::SessionOverviewResource;
+use agena_tui_session::session_hub::{HubRow, SessionHubDirectory};
 
 use super::{App, AppMessage, HubState, KeyEvent, Route};
 use crate::{SessionHubItem, SessionHubSection, SessionHubSectionKind, SessionResource, ui_text};
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
 
-/// Number of most-recently-used sessions the hub asks the server to include.
+/// Number of most-recently-used sessions in the quick-access region.
 const HUB_RECENT_LIMIT: u64 = 20;
 
 impl App {
@@ -21,6 +22,10 @@ impl App {
     /// load. Used as the bootstrap landing view and from the hub itself.
     pub(crate) fn open_hub(&mut self) {
         let mut state = HubState::new();
+        state.presentation.set_sections(vec![SessionHubSection::new(
+            SessionHubSectionKind::New,
+            vec![self.hub_new_session_item()],
+        )]);
         self.spawn_hub_overview_request(&mut state);
         self.route_stack.clear();
         self.current_route = Route::Hub(state);
@@ -31,190 +36,384 @@ impl App {
         state.request_id = self.next_hub_request_id;
         state.loading = true;
         state.error = None;
+        state.refreshed_at = std::time::Instant::now();
         let request_id = state.request_id;
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            // Search is applied client-side via `SessionHubPresentation::set_query`
-            // after the overview lands, so the server call stays un-filtered.
             let result = application
-                .session_overview(None, HUB_RECENT_LIMIT)
+                .session_hub_catalog()
                 .await
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx
-                .send(AppMessage::HubOverviewLoaded { request_id, result })
+                .send(AppMessage::HubCatalogLoaded { request_id, result })
                 .await;
         });
     }
 
-    pub(crate) fn handle_hub_overview_loaded(
+    pub(crate) fn refresh_hub_if_due(&mut self) {
+        let due = matches!(&self.current_route, Route::Hub(state)
+            if state.refreshed_at.elapsed().as_secs() >= if state.loading { 30 } else { 10 });
+        if !due {
+            return;
+        }
+        let Route::Hub(mut state) = std::mem::replace(&mut self.current_route, Route::Main) else {
+            return;
+        };
+        self.spawn_hub_overview_request(&mut state);
+        self.current_route = Route::Hub(state);
+    }
+
+    pub(crate) fn refresh_hub_after_mutation(&mut self) {
+        if !matches!(&self.current_route, Route::Hub(state) if state.loading) {
+            return;
+        }
+        // Reject an overview requested before the mutation was committed.
+        let Route::Hub(mut state) = std::mem::replace(&mut self.current_route, Route::Main) else {
+            return;
+        };
+        self.spawn_hub_overview_request(&mut state);
+        self.current_route = Route::Hub(state);
+    }
+
+    fn hub_sections(
+        &self,
+        overview: SessionOverviewResource,
+        pinned: Vec<SessionHubItem>,
+    ) -> Vec<SessionHubSection> {
+        vec![
+            SessionHubSection::new(
+                SessionHubSectionKind::New,
+                vec![self.hub_new_session_item()],
+            ),
+            SessionHubSection::new(
+                SessionHubSectionKind::Running,
+                overview
+                    .running
+                    .iter()
+                    .map(|session| self.hub_session_item(session))
+                    .collect(),
+            ),
+            SessionHubSection::new(
+                SessionHubSectionKind::Attention,
+                overview
+                    .attention
+                    .iter()
+                    .map(|session| self.hub_session_item(session))
+                    .collect(),
+            ),
+            SessionHubSection::new(SessionHubSectionKind::Pinned, pinned),
+            SessionHubSection::new(
+                SessionHubSectionKind::Favorites,
+                overview
+                    .favorites
+                    .iter()
+                    .map(|session| self.hub_session_item(session))
+                    .collect(),
+            ),
+            SessionHubSection::new(
+                SessionHubSectionKind::Recent,
+                overview
+                    .recent
+                    .iter()
+                    .map(|session| self.hub_session_item(session))
+                    .collect(),
+            ),
+        ]
+    }
+
+    pub(crate) fn handle_hub_catalog_loaded(
         &mut self,
         request_id: u64,
-        result: super::UiResult<SessionOverviewResource>,
+        result: super::UiResult<crate::app_backend::session_hub::HubCatalog>,
     ) {
-        let (valid, loading, error, sections) = match result {
-            Ok(overview) => (
-                true,
-                false,
-                None,
-                Some(vec![
-                    // The new-session action row is a synthetic first option:
-                    // Enter on it creates a fresh session, so the hub supports
-                    // "Enter → new session" right from the landing screen.
-                    SessionHubSection::new(
-                        SessionHubSectionKind::New,
-                        vec![self.hub_new_session_item()],
-                    ),
-                    SessionHubSection::new(
-                        SessionHubSectionKind::Favorites,
-                        overview
-                            .favorites
-                            .iter()
-                            .map(|session| self.hub_session_item(session))
-                            .collect(),
-                    ),
-                    SessionHubSection::new(
-                        SessionHubSectionKind::Running,
-                        overview
-                            .running
-                            .iter()
-                            .map(|session| self.hub_session_item(session))
-                            .collect(),
-                    ),
-                    SessionHubSection::new(
-                        SessionHubSectionKind::Attention,
-                        overview
-                            .attention
-                            .iter()
-                            .map(|session| self.hub_session_item(session))
-                            .collect(),
-                    ),
-                    SessionHubSection::new(
-                        SessionHubSectionKind::Recent,
-                        overview
-                            .recent
-                            .iter()
-                            .map(|session| self.hub_session_item(session))
-                            .collect(),
-                    ),
-                ]),
-            ),
-            Err(error) => (false, false, Some(error.to_string()), None),
-        };
-        let Route::Hub(state) = &mut self.current_route else {
-            return;
-        };
-        if !valid || request_id != state.request_id {
+        if !matches!(&self.current_route, Route::Hub(state) if state.request_id == request_id) {
             return;
         }
-        state.loading = loading;
-        if let Some(error) = error {
-            state.error = Some(error);
+        let catalog = match result {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                if let Route::Hub(state) = &mut self.current_route {
+                    state.loading = false;
+                    state.error = Some(error.to_string());
+                }
+                return;
+            }
+        };
+        let mut overview = SessionOverviewResource {
+            favorites: Vec::new(),
+            attention: Vec::new(),
+            running: Vec::new(),
+            recent: Vec::new(),
+            generated_at: chrono::Utc::now(),
+        };
+        let mut pinned = Vec::new();
+        for session in &catalog.sessions {
+            if session.pinned {
+                pinned.push(self.hub_session_item(session));
+            }
+            if session.favorite {
+                overview.favorites.push(session.clone());
+            }
+            if session.state.is_attention() {
+                overview.attention.push(session.clone());
+            } else if session.state.is_running()
+                || matches!(session.state, agena_api::resource::SessionState::Creating)
+            {
+                overview.running.push(session.clone());
+            } else {
+                overview.recent.push(session.clone());
+            }
         }
-        if let Some(sections) = sections {
-            state.presentation.set_sections(sections);
-            state.presentation.set_query(&state.query);
-            state.presentation.clamp_selection();
+        overview.recent.truncate(HUB_RECENT_LIMIT as usize);
+        let mut sections = self.hub_sections(overview, pinned);
+        let mut directories = catalog
+            .workspaces
+            .iter()
+            .map(|workspace| SessionHubDirectory {
+                workspace_id: workspace.id,
+                path: workspace.path.clone(),
+                items: catalog
+                    .sessions
+                    .iter()
+                    .filter(|session| session.workspace_id == workspace.id)
+                    .map(|session| self.hub_session_item(session))
+                    .collect(),
+                expanded: workspace.id == self.application.workspace_id(),
+                visible_limit: 20,
+            })
+            .collect::<Vec<_>>();
+        directories.sort_by(|a, b| {
+            (a.workspace_id != self.application.workspace_id())
+                .cmp(&(b.workspace_id != self.application.workspace_id()))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        // Quick-access duplicates include their directory, so identically
+        // titled sessions from different workspaces remain distinguishable.
+        for item in sections.iter_mut().flat_map(|section| &mut section.items) {
+            if let Some(workspace) = catalog
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == item.workspace_id)
+            {
+                item.detail = format!("{} | {}", workspace.path, item.detail);
+            }
+        }
+        if let Route::Hub(state) = &mut self.current_route {
+            state.loading = false;
+            state.error = None;
+            state.presentation.set_catalog(directories, sections);
         }
     }
 
-    pub(crate) fn handle_hub_key(&mut self, key: KeyEvent, state: &mut HubState) -> bool {
-        // While search is active, printable characters edit the query instead
-        // of firing the single-letter navigation bindings, so words like
-        // "attention" or "recent" can be typed uninterrupted. Arrow keys,
-        // PgUp/PgDn, Home/End, Tab, Enter, Esc and Ctrl+* still navigate.
-        let typing = state.search_active && matches!(key.code, crossterm::event::KeyCode::Char(_));
-        match resolve_tui_key(KeyContext::Hub, key) {
-            Some(KeyAction::Close) => {
-                // Esc with an active search clears the filter and leaves
-                // search mode instead of closing the hub; a second Esc closes
-                // the hub.
-                if state.search_active || !state.query.is_empty() {
-                    state.search_active = false;
-                    state.query.clear();
-                    self.spawn_hub_overview_request(state);
-                    return false;
-                }
-                return true;
+    fn create_hub_session(&mut self, workspace_id: i64) {
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        let title = ui_text::default_session_title(&self.i18n);
+        tokio::spawn(async move {
+            let result = application
+                .create_workspace_session(workspace_id, title)
+                .await
+                .map_err(crate::UiFailure::from_backend);
+            let _ = tx
+                .send(AppMessage::SessionCreated {
+                    submit_draft: None,
+                    pending_message_id: None,
+                    model_stack: None,
+                    result,
+                })
+                .await;
+        });
+    }
+
+    fn request_session_pin(&mut self, session_id: i64, pinned: bool) {
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = application
+                .set_session_pinned(session_id, pinned)
+                .await
+                .map_err(crate::UiFailure::from_backend);
+            let _ = tx
+                .send(AppMessage::SessionPinnedUpdated { session_id, result })
+                .await;
+        });
+    }
+
+    fn activate_hub_row(&mut self, state: &mut HubState) -> bool {
+        match state.presentation.selected_row().cloned() {
+            Some(HubRow::Directory { workspace_id, .. }) => {
+                state.presentation.toggle_directory(workspace_id, None)
             }
-            Some(KeyAction::HubCreateSession) if !typing => {
-                // `create_session(None)` creates a fresh session and routes
-                // into it as soon as the server confirms, so the hub closes
-                // immediately and the new session opens on Main.
-                self.create_session(None);
-                return true;
-            }
-            Some(KeyAction::HubOpenSessionList) if !typing => {
-                // Reuses the existing resume picker; it replaces the hub as
-                // the current route.
-                self.open_resume_session_picker();
-                return true;
-            }
-            Some(KeyAction::Refresh) => {
-                self.spawn_hub_overview_request(state);
-            }
-            Some(KeyAction::ToggleFavorite) if !typing => {
-                let Some(selected) = state.presentation.selected_item().cloned() else {
-                    return false;
-                };
-                if !selected.is_new_session {
-                    self.request_session_favorite(selected.session_id, !selected.favorite);
-                }
-            }
-            Some(KeyAction::MoveUp) if !typing => state.presentation.move_selection(-1),
-            Some(KeyAction::MoveDown) if !typing => state.presentation.move_selection(1),
-            Some(KeyAction::PageUp) => state.presentation.move_selection_page(-1, 10),
-            Some(KeyAction::PageDown) => state.presentation.move_selection_page(1, 10),
-            Some(KeyAction::Home) => state.presentation.move_selection_home(),
-            Some(KeyAction::End) => state.presentation.move_selection_end(),
-            // Tab / Shift+Tab jump between the hub's sections (skipping empty
-            // buckets), wrapping at the ends.
-            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) if !typing => {
-                let delta = if matches!(action, KeyAction::NextTab) {
-                    1
+            Some(HubRow::More { workspace_id, .. }) => state.presentation.show_more(workspace_id),
+            Some(HubRow::Item(item)) => {
+                if item.is_new_session {
+                    self.create_hub_session(item.workspace_id);
                 } else {
-                    -1
-                };
-                state.presentation.move_selection_section(delta);
-            }
-            Some(KeyAction::Open) => {
-                let Some(selected) = state.presentation.selected_item().cloned() else {
-                    return false;
-                };
-                if selected.is_new_session {
-                    // Enter on the first (action) row creates a fresh session.
-                    self.create_session(None);
-                    return true;
+                    self.open_session(item.session_id, item.title);
+                    self.focus = Focus::Composer;
                 }
-                self.open_session(selected.session_id, selected.title);
-                self.focus = Focus::Composer;
                 return true;
-            }
-            // A letter bound to a Hub action types into the search instead
-            // while search is active.
-            Some(_) if typing => {}
-            Some(_) | None => {}
-        }
-        // `/` (or any unbound printable key) starts search mode. While active,
-        // printable keys and Backspace edit the filter; each edit issues a
-        // fresh overview request (the server call itself is un-filtered; the
-        // query is applied client-side by the presentation).
-        match key.code {
-            crossterm::event::KeyCode::Char('/') if !state.search_active => {
-                state.search_active = true;
-            }
-            crossterm::event::KeyCode::Char(c) if c.is_ascii_graphic() || c == ' ' => {
-                state.search_active = true;
-                state.query.push(c);
-                self.spawn_hub_overview_request(state);
-            }
-            crossterm::event::KeyCode::Backspace if state.search_active => {
-                state.query.pop();
-                self.spawn_hub_overview_request(state);
             }
             _ => {}
         }
         false
+    }
+
+    pub(crate) fn handle_hub_key(&mut self, key: KeyEvent, state: &mut HubState) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        // Printable search input is handled before commands, including CJK;
+        // arrow keys and Ctrl shortcuts retain their usual meaning.
+        if state.search_active
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            match key.code {
+                KeyCode::Char(c) => {
+                    state.query.push(c);
+                    state.presentation.set_query(&state.query);
+                    return false;
+                }
+                KeyCode::Backspace => {
+                    state.query.pop();
+                    state.presentation.set_query(&state.query);
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('/') {
+            state.search_active = true;
+            return false;
+        }
+        match resolve_tui_key(KeyContext::Hub, key) {
+            Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {
+                if let Some(id) = state.presentation.selected_workspace() {
+                    state
+                        .presentation
+                        .toggle_directory(id, Some(action == KeyAction::MoveRight));
+                }
+            }
+            Some(KeyAction::HubTogglePinned) => {
+                if let Some(item) = state
+                    .presentation
+                    .selected_item()
+                    .filter(|item| !item.is_new_session)
+                {
+                    self.request_session_pin(item.session_id, !item.pinned);
+                }
+            }
+            Some(KeyAction::Close) => {
+                if state.search_active || !state.query.is_empty() {
+                    state.search_active = false;
+                    state.query.clear();
+                    state.presentation.set_query("");
+                } else {
+                    return true;
+                }
+            }
+            Some(KeyAction::HubCreateSession) => {
+                self.create_hub_session(
+                    state
+                        .presentation
+                        .selected_workspace()
+                        .unwrap_or(self.application.workspace_id()),
+                );
+                return true;
+            }
+            Some(KeyAction::HubOpenSessionList) => {
+                self.open_resume_session_picker();
+                return true;
+            }
+            Some(KeyAction::Refresh) => {
+                if !state.loading || state.refreshed_at.elapsed().as_secs() >= 30 {
+                    self.spawn_hub_overview_request(state);
+                }
+            }
+            Some(KeyAction::ToggleFavorite) => {
+                if let Some(item) = state
+                    .presentation
+                    .selected_item()
+                    .filter(|item| !item.is_new_session)
+                {
+                    self.request_session_favorite(item.session_id, !item.favorite);
+                }
+            }
+            Some(KeyAction::MoveUp) => state.presentation.move_selection(-1),
+            Some(KeyAction::MoveDown) => state.presentation.move_selection(1),
+            Some(KeyAction::PageUp) => state
+                .presentation
+                .move_selection_page(-1, (self.layout.overlay_area.height as usize / 4).max(1)),
+            Some(KeyAction::PageDown) => state
+                .presentation
+                .move_selection_page(1, (self.layout.overlay_area.height as usize / 4).max(1)),
+            Some(KeyAction::Home) => state.presentation.move_selection_home(),
+            Some(KeyAction::End) => state.presentation.move_selection_end(),
+            Some(KeyAction::NextTab) => state.presentation.move_selection_section(1),
+            Some(KeyAction::PreviousTab) => state.presentation.move_selection_section(-1),
+            Some(KeyAction::Open) => return self.activate_hub_row(state),
+            _ => {
+                if let KeyCode::Char(c) = key.code
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                {
+                    state.search_active = true;
+                    state.query.push(c);
+                    state.presentation.set_query(&state.query);
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn handle_hub_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let Route::Hub(mut state) = std::mem::replace(&mut self.current_route, Route::Main) else {
+            return;
+        };
+        let hit = agena_tui_session::session_hub::hub_hit_test(
+            self.layout.overlay_area,
+            &state.presentation,
+            state.error.is_some(),
+            mouse.column,
+            mouse.row,
+            &self.i18n,
+        );
+        let mut close = false;
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(hit) = hit {
+                    state.presentation.select_row(hit.row);
+                    if hit.activate {
+                        close = self.activate_hub_row(&mut state);
+                    }
+                }
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // Scroll the region under the pointer; subsequent motion uses
+                // the same selection/viewport model as the keyboard.
+                if let Some(hit) = hit
+                    && !state
+                        .presentation
+                        .same_region(hit.row, state.presentation.selection())
+                {
+                    state.presentation.select_row(hit.row);
+                }
+                state
+                    .presentation
+                    .scroll_region(if mouse.kind == MouseEventKind::ScrollUp {
+                        -2
+                    } else {
+                        2
+                    });
+            }
+            _ => {}
+        }
+        if !close && self.current_route_is_main() {
+            self.current_route = Route::Hub(state);
+        }
     }
 
     /// Builds the display projection of one session row. Detail mirrors the
@@ -247,6 +446,8 @@ impl App {
         }
         SessionHubItem {
             session_id: session.id,
+            workspace_id: session.workspace_id,
+            pinned: session.pinned,
             title: session.title.clone(),
             favorite: session.favorite,
             label: session.title.clone(),
@@ -260,6 +461,8 @@ impl App {
     fn hub_new_session_item(&self) -> SessionHubItem {
         SessionHubItem {
             session_id: 0,
+            workspace_id: self.application.workspace_id(),
+            pinned: false,
             title: String::new(),
             favorite: false,
             label: self.i18n.text("hub-item-new"),

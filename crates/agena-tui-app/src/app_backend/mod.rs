@@ -23,6 +23,7 @@ pub(crate) mod permission_catalog;
 pub(crate) mod permission_studio;
 pub(crate) mod plugin_effects;
 pub(crate) mod provider_mappings;
+pub(crate) mod session_hub;
 pub(crate) mod session_refresh;
 pub(crate) mod timeline;
 mod transport;

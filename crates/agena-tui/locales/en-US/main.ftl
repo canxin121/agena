@@ -2179,3 +2179,9 @@ transcript-history-error = ↑ Retry loading history · { $error }
 transcript-history-stalled = The history cursor did not advance. Retry loading.
 transcript-fold-loading = … Loading earlier reply parts
 transcript-fold-error = Load failed · Enter to retry · { $error }
+
+hub-section-directories = Directories
+hub-section-pinned = Pinned
+hub-action-directory = Fold directory
+hub-action-pin = Pin/unpin
+hub-directory-more = + Show more sessions ({ $count } remaining)

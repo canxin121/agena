@@ -1,15 +1,11 @@
 //! Session hub home screen: presentation state and rendering.
 //!
-//! The hub is the landing view of the TUI. It groups the sessions the server
-//! reports as needing attention, currently running, and recently used, and
-//! offers a create-new-session action. It renders as a single list box whose
-//! first row is the "+ new session" action; each non-empty bucket appears below
-//! it as an in-list header followed by its rows. Like the other session
-//! surfaces in this crate it owns only the display projection; the final
-//! application maps selection to session-open effects and keeps
-//! response/error handling at the application boundary.
+//! The App supplies directory/session metadata. This presentation owns tree
+//! expansion, filtering, selection and independent directory/quick-access
+//! viewports; requests and durable session operations remain in the App.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 
 use agena_tui::i18n::I18n;
 use agena_tui_components::theme::{accent_color, danger_color, muted_style, selection_style};
@@ -19,13 +15,15 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph},
 };
 
 /// A session entry shown in a hub section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHubItem {
     pub session_id: i64,
+    pub workspace_id: i64,
+    pub pinned: bool,
     pub title: String,
     /// Durable user favorite state. Rendered as a persistent star marker and
     /// used by the hub's favorite toggle without conflating it with pinning.
@@ -42,10 +40,12 @@ pub struct SessionHubItem {
 }
 
 /// Identity of a hub section. Ordering of the sections is fixed by the App:
-/// new session (action), favorites, running, attention, then recent.
+/// new session, directories, running, attention, pins, favorites, then recent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionHubSectionKind {
     New,
+    Directories,
+    Pinned,
     Favorites,
     Running,
     Attention,
@@ -56,6 +56,8 @@ impl SessionHubSectionKind {
     pub fn localization_key(self) -> &'static str {
         match self {
             Self::New => "hub-section-new",
+            Self::Directories => "hub-section-directories",
+            Self::Pinned => "hub-section-pinned",
             Self::Favorites => "hub-section-favorites",
             Self::Running => "hub-section-running",
             Self::Attention => "hub-section-attention",
@@ -85,16 +87,52 @@ pub enum HubRow {
     Header(SessionHubSectionKind),
     /// A selectable session row (including the "+ new session" action row).
     Item(SessionHubItem),
+    Directory {
+        workspace_id: i64,
+        path: String,
+        expanded: bool,
+        count: usize,
+    },
+    More {
+        workspace_id: i64,
+        remaining: usize,
+    },
+}
+
+impl HubRow {
+    fn identity(&self) -> Option<(u8, i64, i64)> {
+        match self {
+            Self::Header(_) => None,
+            Self::Item(item) => Some((0, item.session_id, item.workspace_id)),
+            Self::Directory { workspace_id, .. } => Some((1, *workspace_id, 0)),
+            Self::More { workspace_id, .. } => Some((2, *workspace_id, 0)),
+        }
+    }
+
+    fn height(&self) -> u16 {
+        match self {
+            Self::Item(_) | Self::Directory { .. } => 2,
+            _ => 1,
+        }
+    }
+}
+
+/// A display-only directory catalog. Pagination limits rendered rows; the App
+/// owns fetching metadata and durable mutations, just as for the Web sidebar.
+#[derive(Debug, Clone)]
+pub struct SessionHubDirectory {
+    pub workspace_id: i64,
+    pub path: String,
+    pub items: Vec<SessionHubItem>,
+    pub expanded: bool,
+    pub visible_limit: usize,
 }
 
 /// Display projection of the session hub.
 ///
-/// The hub is one flat list. The new-session action rows come first and carry
-/// no header — the create action is the first option of the hub — and every
-/// other section that has items appears as a header line followed by its rows.
-/// Empty sections are dropped entirely, so an empty bucket can never sit
-/// between the user and the recent sessions. Navigation moves over the
-/// selectable rows only; Tab / Shift+Tab jump between sections.
+/// Directory rows and quick-access sections share one semantic navigation
+/// order. Their screen viewports scroll independently, keeping quick access
+/// visible below long directory lists. Headers are not selectable.
 #[derive(Debug, Clone)]
 pub struct SessionHubPresentation {
     /// Full section catalog from the last overview (unfiltered). Re-filtered
@@ -107,6 +145,9 @@ pub struct SessionHubPresentation {
     selection: usize,
     /// Current client-side filter (trimmed, lowercased). Empty lists all rows.
     query: String,
+    directories: Vec<SessionHubDirectory>,
+    directory_offset: Cell<usize>,
+    quick_offset: Cell<usize>,
 }
 
 impl SessionHubPresentation {
@@ -118,6 +159,9 @@ impl SessionHubPresentation {
             rows: Vec::new(),
             selection: 0,
             query: String::new(),
+            directories: Vec::new(),
+            directory_offset: Cell::new(0),
+            quick_offset: Cell::new(0),
         }
     }
 
@@ -126,6 +170,126 @@ impl SessionHubPresentation {
     pub fn set_sections(&mut self, sections: Vec<SessionHubSection>) {
         self.sections = sections;
         self.rebuild_rows();
+    }
+
+    pub fn set_directories(&mut self, mut directories: Vec<SessionHubDirectory>) {
+        for directory in &mut directories {
+            if let Some(old) = self
+                .directories
+                .iter()
+                .find(|old| old.workspace_id == directory.workspace_id)
+            {
+                directory.expanded = old.expanded;
+                directory.visible_limit = old.visible_limit;
+            }
+        }
+        self.directories = directories;
+        self.rebuild_rows();
+    }
+
+    pub fn set_catalog(
+        &mut self,
+        directories: Vec<SessionHubDirectory>,
+        sections: Vec<SessionHubSection>,
+    ) {
+        self.sections = sections;
+        self.set_directories(directories);
+    }
+
+    pub fn set_pinned_items(&mut self, items: Vec<SessionHubItem>) {
+        if let Some(section) = self
+            .sections
+            .iter_mut()
+            .find(|section| section.kind == SessionHubSectionKind::Pinned)
+        {
+            section.items = items;
+        } else {
+            self.sections.insert(
+                self.sections.len().min(3),
+                SessionHubSection::new(SessionHubSectionKind::Pinned, items),
+            );
+        }
+        self.rebuild_rows();
+    }
+
+    pub fn selected_row(&self) -> Option<&HubRow> {
+        self.rows.get(self.selection)
+    }
+
+    pub fn selected_workspace(&self) -> Option<i64> {
+        match self.selected_row()? {
+            HubRow::Item(item) => Some(item.workspace_id),
+            HubRow::Directory { workspace_id, .. } | HubRow::More { workspace_id, .. } => {
+                Some(*workspace_id)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn select_row(&mut self, index: usize) {
+        if self
+            .rows
+            .get(index)
+            .is_some_and(|row| row.identity().is_some())
+        {
+            self.selection = index;
+        }
+    }
+
+    pub fn toggle_directory(&mut self, workspace_id: i64, expanded: Option<bool>) {
+        if let Some(directory) = self
+            .directories
+            .iter_mut()
+            .find(|directory| directory.workspace_id == workspace_id)
+        {
+            directory.expanded = expanded.unwrap_or(!directory.expanded);
+        }
+        self.rebuild_rows();
+    }
+
+    pub fn show_more(&mut self, workspace_id: i64) {
+        if let Some(directory) = self
+            .directories
+            .iter_mut()
+            .find(|directory| directory.workspace_id == workspace_id)
+        {
+            directory.visible_limit = directory.visible_limit.saturating_add(20);
+        }
+        let previous = self.selection;
+        self.rebuild_rows();
+        // Enter on "more" lands on the first newly revealed row.
+        self.selection = previous.min(self.rows.len().saturating_sub(1));
+        self.clamp_selection();
+    }
+
+    pub fn set_item_pinned(&mut self, session_id: i64, pinned: bool) {
+        let mut source = None;
+        for item in self
+            .sections
+            .iter_mut()
+            .flat_map(|section| &mut section.items)
+            .chain(
+                self.directories
+                    .iter_mut()
+                    .flat_map(|directory| &mut directory.items),
+            )
+        {
+            if item.session_id == session_id && !item.is_new_session {
+                item.pinned = pinned;
+                source = Some(item.clone());
+            }
+        }
+        let mut items = self
+            .sections
+            .iter()
+            .find(|section| section.kind == SessionHubSectionKind::Pinned)
+            .map(|section| section.items.clone())
+            .unwrap_or_default();
+        items.retain(|item| item.session_id != session_id);
+        if pinned && let Some(item) = source {
+            items.insert(0, item);
+        }
+        self.set_pinned_items(items);
     }
 
     /// Filter the sections to rows matching `query` (case-insensitive substring
@@ -141,6 +305,16 @@ impl SessionHubPresentation {
     /// session and keep the independent Favorites section in sync.
     pub fn set_item_favorite(&mut self, session_id: i64, favorite: bool) {
         let mut source_item = None;
+        for item in self
+            .directories
+            .iter_mut()
+            .flat_map(|directory| &mut directory.items)
+        {
+            if item.session_id == session_id && !item.is_new_session {
+                item.favorite = favorite;
+                source_item = Some(item.clone());
+            }
+        }
         for section in &mut self.sections {
             for item in &mut section.items {
                 if item.session_id != session_id || item.is_new_session {
@@ -214,6 +388,38 @@ impl SessionHubPresentation {
         self.selection = items[target];
     }
 
+    pub fn same_region(&self, left: usize, right: usize) -> bool {
+        let split = self
+            .rows
+            .iter()
+            .position(|row| matches!(row, HubRow::Header(_)))
+            .unwrap_or(self.rows.len());
+        (left < split) == (right < split)
+    }
+
+    pub fn scroll_region(&mut self, delta: isize) {
+        let split = self
+            .rows
+            .iter()
+            .position(|row| matches!(row, HubRow::Header(_)))
+            .unwrap_or(self.rows.len());
+        let directory_region = self.selection < split;
+        let items = self
+            .item_indices()
+            .into_iter()
+            .filter(|index| (*index < split) == directory_region)
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            return;
+        }
+        let current = items
+            .iter()
+            .position(|index| *index == self.selection)
+            .unwrap_or(0);
+        let next = (current as isize + delta).clamp(0, items.len() as isize - 1) as usize;
+        self.selection = items[next];
+    }
+
     /// Move the selection by a page of `page_size` selectable rows.
     pub fn move_selection_page(&mut self, delta: isize, page_size: usize) {
         let items = self.item_indices();
@@ -279,9 +485,7 @@ impl SessionHubPresentation {
     /// Re-flatten `self.sections` through the current filter into `self.rows`,
     /// preserving the selected row by identity when it survives.
     fn rebuild_rows(&mut self) {
-        let previous = self
-            .selected_item()
-            .map(|item| (item.session_id, item.is_new_session));
+        let previous = self.selected_row().and_then(HubRow::identity);
         let previous_selection = self.selection;
         let filtered = self
             .sections
@@ -301,19 +505,67 @@ impl SessionHubPresentation {
             })
             .collect::<Vec<_>>();
         self.rows = build_rows(filtered);
+        let insertion = self
+            .rows
+            .iter()
+            .position(|row| matches!(row, HubRow::Header(_)))
+            .unwrap_or(self.rows.len());
+        let mut directory_rows = Vec::new();
+        for directory in &self.directories {
+            let path_matches = directory.path.to_lowercase().contains(&self.query);
+            let mut items = directory
+                .items
+                .iter()
+                .filter(|item| path_matches || session_matches(item, &self.query))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !self.query.is_empty() && !path_matches && items.is_empty() {
+                continue;
+            }
+            items.sort_by_key(|item| !item.pinned);
+            let expanded = directory.expanded || !self.query.is_empty();
+            directory_rows.push(HubRow::Directory {
+                workspace_id: directory.workspace_id,
+                path: directory.path.clone(),
+                expanded,
+                count: items.len(),
+            });
+            if !expanded {
+                continue;
+            }
+            if self.query.is_empty()
+                && let Some(mut create) = self
+                    .sections
+                    .iter()
+                    .find(|section| section.kind == SessionHubSectionKind::New)
+                    .and_then(|section| section.items.first())
+                    .cloned()
+            {
+                create.workspace_id = directory.workspace_id;
+                create.detail = directory.path.clone();
+                directory_rows.push(HubRow::Item(create));
+            }
+            let remaining = items.len().saturating_sub(directory.visible_limit);
+            directory_rows.extend(
+                items
+                    .into_iter()
+                    .take(directory.visible_limit)
+                    .map(HubRow::Item),
+            );
+            if remaining > 0 {
+                directory_rows.push(HubRow::More {
+                    workspace_id: directory.workspace_id,
+                    remaining,
+                });
+            }
+        }
+        self.rows.splice(insertion..insertion, directory_rows);
         self.selection = previous
             .and_then(|previous| {
                 self.rows
                     .iter()
                     .enumerate()
-                    .filter_map(|(index, row)| match row {
-                        HubRow::Item(item)
-                            if (item.session_id, item.is_new_session) == previous =>
-                        {
-                            Some(index)
-                        }
-                        _ => None,
-                    })
+                    .filter_map(|(index, row)| (row.identity() == Some(previous)).then_some(index))
                     .min_by_key(|index| {
                         (*index as isize - previous_selection as isize).unsigned_abs()
                     })
@@ -328,7 +580,7 @@ impl SessionHubPresentation {
             .iter()
             .enumerate()
             .filter_map(|(index, row)| match row {
-                HubRow::Item(_) => Some(index),
+                HubRow::Item(_) | HubRow::Directory { .. } | HubRow::More { .. } => Some(index),
                 HubRow::Header(_) => None,
             })
             .collect()
@@ -342,7 +594,10 @@ impl SessionHubPresentation {
         for (index, row) in self.rows.iter().enumerate() {
             match row {
                 HubRow::Header(kind) => spans.push((*kind, index + 1, 0)),
-                HubRow::Item(_) => match spans.last_mut() {
+                HubRow::Directory { .. } => {
+                    spans.push((SessionHubSectionKind::Directories, index, 1))
+                }
+                HubRow::Item(_) | HubRow::More { .. } => match spans.last_mut() {
                     Some(span) => span.2 += 1,
                     None => spans.push((SessionHubSectionKind::New, index, 1)),
                 },
@@ -356,6 +611,7 @@ impl SessionHubPresentation {
 fn session_matches(item: &SessionHubItem, query_lower: &str) -> bool {
     item.label.to_lowercase().contains(query_lower)
         || item.title.to_lowercase().contains(query_lower)
+        || item.detail.to_lowercase().contains(query_lower)
         || item.session_id.to_string().contains(query_lower)
 }
 
@@ -425,7 +681,7 @@ pub fn render_session_hub(
         build_shortcut_line([
             ShortcutHint::new("Ctrl+N", i18n.text("hub-action-create")),
             ShortcutHint::new("/", i18n.text("hub-action-search")),
-            ShortcutHint::new("l", i18n.text("hub-action-list")),
+            ShortcutHint::new("←/→", i18n.text("hub-action-directory")),
             ShortcutHint::new("Ctrl+R", i18n.text("hub-action-refresh")),
         ])
     };
@@ -444,6 +700,13 @@ pub fn render_session_hub(
             muted_style(),
         ))
     };
+    let mut search_title = search_title;
+    if loading {
+        search_title.spans.push(Span::styled(
+            format!("  … {}", i18n.text("overlay-picker-loading")),
+            muted_style(),
+        ));
+    }
     frame.render_widget(Paragraph::new(search_title), search_area);
 
     if let Some(error) = error {
@@ -494,6 +757,12 @@ pub fn render_session_hub(
             }),
         ));
     }
+    if presentation
+        .selected_item()
+        .is_some_and(|item| !item.is_new_session)
+    {
+        footer_hints.push(ShortcutHint::new("p", i18n.text("hub-action-pin")));
+    }
     footer_hints.push(ShortcutHint::new("Esc", i18n.text("hub-hint-back")));
     frame.render_widget(
         Paragraph::new(build_shortcut_line(footer_hints)),
@@ -501,15 +770,189 @@ pub fn render_session_hub(
     );
 }
 
-/// Draws the single hub list: section headers and session rows inside one box.
+/// Shared geometry for rendering and hit testing. Each area retains its own
+/// scroll offset, so paging a directory never pushes quick access off screen.
+fn hub_row_regions(
+    area: Rect,
+    presentation: &SessionHubPresentation,
+) -> (Vec<(usize, Rect)>, Option<Rect>) {
+    let split = presentation
+        .rows
+        .iter()
+        .position(|row| matches!(row, HubRow::Header(_)))
+        .unwrap_or(presentation.rows.len());
+    let mut regions = Vec::new();
+    if area.height < 8 {
+        visible_region(
+            area,
+            presentation,
+            0..presentation.rows.len(),
+            &presentation.directory_offset,
+            &mut regions,
+        );
+        return (regions, None);
+    }
+    let quick_height = (area.height / 3).max(4).min(area.height.saturating_sub(4));
+    let directory_height = area.height.saturating_sub(quick_height + 1);
+    let directories = Rect::new(area.x, area.y, area.width, directory_height);
+    let divider = Rect::new(area.x, area.y + directory_height, area.width, 1);
+    let quick = Rect::new(area.x, divider.y + 1, area.width, quick_height);
+    visible_region(
+        directories,
+        presentation,
+        0..split,
+        &presentation.directory_offset,
+        &mut regions,
+    );
+    visible_region(
+        quick,
+        presentation,
+        split..presentation.rows.len(),
+        &presentation.quick_offset,
+        &mut regions,
+    );
+    (regions, Some(divider))
+}
+
+fn visible_region(
+    area: Rect,
+    presentation: &SessionHubPresentation,
+    range: std::ops::Range<usize>,
+    offset: &Cell<usize>,
+    out: &mut Vec<(usize, Rect)>,
+) {
+    if range.is_empty() || area.height == 0 {
+        return;
+    }
+    let mut first = offset.get().clamp(range.start, range.end - 1);
+    if range.contains(&presentation.selection) {
+        first = first.min(presentation.selection);
+        let mut height = presentation.rows[first..=presentation.selection]
+            .iter()
+            .map(|row| usize::from(row.height()))
+            .sum::<usize>();
+        while first < presentation.selection && height > usize::from(area.height) {
+            height -= usize::from(presentation.rows[first].height());
+            first += 1;
+        }
+    }
+    offset.set(first);
+    let mut y = area.y;
+    for index in first..range.end {
+        if y >= area.bottom() {
+            break;
+        }
+        let height = presentation.rows[index].height().min(area.bottom() - y);
+        out.push((index, Rect::new(area.x, y, area.width, height)));
+        y += height;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HubHit {
+    pub row: usize,
+    pub activate: bool,
+}
+
+pub fn hub_hit_test(
+    area: Rect,
+    presentation: &SessionHubPresentation,
+    has_error: bool,
+    column: u16,
+    row: u16,
+    i18n: &I18n,
+) -> Option<HubHit> {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    let mut content = layout[2];
+    if has_error {
+        content.y += 1;
+        content.height = content.height.saturating_sub(1);
+    }
+    let (regions, divider) = hub_row_regions(content, presentation);
+    if let Some(divider) = divider
+        && divider.contains((column, row).into())
+    {
+        let mut x = usize::from(divider.x);
+        for section in presentation
+            .sections
+            .iter()
+            .filter(|section| section.kind != SessionHubSectionKind::New)
+        {
+            // Width comes from the same terminal-aware text primitive used
+            // by the renderer, including double-width directory languages.
+            let width = Line::from(quick_bucket_label(section, i18n)).width();
+            if usize::from(column) >= x && usize::from(column) < x + width {
+                return presentation
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row, HubRow::Header(kind) if *kind == section.kind))
+                    .map(|index| HubHit {
+                        row: index + 1,
+                        activate: false,
+                    });
+            }
+            x += width + 3;
+        }
+    }
+    regions.into_iter().find_map(|(index, rect)| {
+        (rect.contains((column, row).into()) && presentation.rows[index].identity().is_some())
+            .then_some(HubHit {
+                row: index,
+                activate: true,
+            })
+    })
+}
+
+fn quick_bucket_label(section: &SessionHubSection, i18n: &I18n) -> String {
+    format!(
+        "{} {}",
+        i18n.text(section.kind.localization_key()),
+        section.items.len()
+    )
+}
+
 fn render_rows(
     frame: &mut Frame<'_>,
     area: Rect,
     presentation: &SessionHubPresentation,
     i18n: &I18n,
 ) {
-    let mut list_items = Vec::with_capacity(presentation.rows().len());
-    for row in presentation.rows() {
+    let (regions, divider) = hub_row_regions(area, presentation);
+    if let Some(divider) = divider {
+        let buckets = presentation
+            .sections
+            .iter()
+            .filter(|section| section.kind != SessionHubSectionKind::New)
+            .map(|section| quick_bucket_label(section, i18n))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        frame.render_widget(
+            Paragraph::new(buckets).style(
+                Style::default()
+                    .fg(accent_color())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            divider,
+        );
+    }
+    for (index, area) in regions {
+        let row = &presentation.rows[index];
+        let indent = if !presentation.directories.is_empty()
+            && index > 0
+            && presentation.same_region(index, 0)
+            && matches!(row, HubRow::Item(_))
+        {
+            "  "
+        } else {
+            ""
+        };
         let item = match row {
             HubRow::Header(kind) => ListItem::new(Line::from(Span::styled(
                 format!(" {} ", i18n.text(kind.localization_key())),
@@ -518,25 +961,57 @@ fn render_rows(
                     .add_modifier(Modifier::BOLD),
             ))),
             HubRow::Item(item) => build_accented_two_line_list_item(
-                if item.favorite && !item.is_new_session {
-                    Cow::Owned(format!("★ {}", item.label))
-                } else {
-                    Cow::Borrowed(item.label.as_str())
-                },
+                Cow::Owned(format!(
+                    "{}{}{}{}",
+                    indent,
+                    if item.pinned { "◆ " } else { "" },
+                    if item.favorite { "★ " } else { "" },
+                    agena_tui::sanitize_picker_text(&item.label)
+                )),
                 None,
-                Some(Cow::Borrowed(item.detail.as_str())),
+                Some(Cow::Owned(format!(
+                    "{}{}",
+                    indent,
+                    agena_tui::sanitize_picker_text(&item.detail)
+                ))),
             ),
+            HubRow::Directory {
+                path,
+                expanded,
+                count,
+                ..
+            } => {
+                let path = agena_tui::sanitize_picker_text(path);
+                let name = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(&path);
+                build_accented_two_line_list_item(
+                    Cow::Owned(format!(
+                        "{} {} ({})",
+                        if *expanded { "▾" } else { "▸" },
+                        name,
+                        count
+                    )),
+                    None,
+                    Some(Cow::Owned(path)),
+                )
+            }
+            HubRow::More { remaining, .. } => ListItem::new(i18n.text_args(
+                "hub-directory-more",
+                &agena_tui::fl_args!("count" => *remaining as i64),
+            )),
         };
-        list_items.push(item);
+        let list = List::new([item])
+            .highlight_style(selection_style())
+            .highlight_spacing(HighlightSpacing::Always)
+            .highlight_symbol("> ");
+        let mut state = ListState::default();
+        if index == presentation.selection {
+            state.select(Some(0));
+        }
+        frame.render_stateful_widget(list, area, &mut state);
     }
-    let list = List::new(list_items)
-        .highlight_style(selection_style())
-        .highlight_symbol("> ");
-    // `selected` is the ITEM index, not a line offset; the List widget itself
-    // scrolls to the selected item (honoring multi-line item heights).
-    let mut state = ListState::default();
-    state.select(Some(presentation.selection()));
-    frame.render_stateful_widget(list, area, &mut state);
 }
 
 #[cfg(test)]
@@ -548,6 +1023,8 @@ mod tests {
     fn item(id: i64) -> SessionHubItem {
         SessionHubItem {
             session_id: id,
+            workspace_id: 1,
+            pinned: false,
             title: format!("session {id}"),
             favorite: false,
             label: format!("session {id}"),
@@ -559,6 +1036,8 @@ mod tests {
     fn new_session_item() -> SessionHubItem {
         SessionHubItem {
             session_id: 0,
+            workspace_id: 1,
+            pinned: false,
             title: String::new(),
             favorite: false,
             label: "new session".to_string(),
@@ -569,6 +1048,217 @@ mod tests {
 
     fn section(kind: SessionHubSectionKind, ids: &[i64]) -> SessionHubSection {
         SessionHubSection::new(kind, ids.iter().copied().map(item).collect())
+    }
+
+    fn directory(id: i64, count: i64, expanded: bool) -> super::SessionHubDirectory {
+        super::SessionHubDirectory {
+            workspace_id: id,
+            path: format!("/projects/project-{id}"),
+            items: (1..=count)
+                .map(|n| {
+                    let mut item = item(id * 100 + n);
+                    item.workspace_id = id;
+                    item
+                })
+                .collect(),
+            expanded,
+            visible_limit: 20,
+        }
+    }
+
+    #[test]
+    fn directories_page_search_and_refresh_without_losing_selection() {
+        let mut state = SessionHubPresentation::empty();
+        state.set_catalog(
+            vec![directory(1, 45, true), directory(2, 2, false)],
+            vec![
+                SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
+                section(SessionHubSectionKind::Pinned, &[999]),
+            ],
+        );
+        assert!(
+            state
+                .rows()
+                .iter()
+                .any(|row| matches!(row, HubRow::More { remaining: 25, .. }))
+        );
+        assert!(
+            !state
+                .rows()
+                .iter()
+                .any(|row| matches!(row, HubRow::Item(item) if item.session_id == 201))
+        );
+        let more = state
+            .rows()
+            .iter()
+            .position(|row| matches!(row, HubRow::More { .. }))
+            .unwrap();
+        state.select_row(more);
+        state.show_more(1);
+        assert_eq!(state.selected_item().unwrap().session_id, 121);
+        state.set_catalog(
+            vec![directory(1, 46, false), directory(2, 2, true)],
+            vec![
+                SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
+                section(SessionHubSectionKind::Pinned, &[999]),
+            ],
+        );
+        assert_eq!(state.selected_item().unwrap().session_id, 121);
+        assert!(
+            state
+                .rows()
+                .iter()
+                .any(|row| matches!(row, HubRow::More { remaining: 6, .. }))
+        );
+        state.set_query("201");
+        assert!(
+            state
+                .rows()
+                .iter()
+                .any(|row| matches!(row, HubRow::Item(item) if item.session_id == 201))
+        );
+        state.set_query("");
+        assert!(
+            !state
+                .rows()
+                .iter()
+                .any(|row| matches!(row, HubRow::Item(item) if item.session_id == 201))
+        );
+        state.set_query("project-2");
+        assert!(
+            state
+                .rows()
+                .iter()
+                .any(|row| matches!(row, HubRow::Item(item) if item.session_id == 202))
+        );
+    }
+
+    #[test]
+    fn pins_and_favorites_update_directory_and_quick_access_independently() {
+        let mut state = SessionHubPresentation::empty();
+        state.set_catalog(
+            vec![directory(1, 2, true)],
+            vec![section(SessionHubSectionKind::Favorites, &[])],
+        );
+        state.set_item_pinned(102, true);
+        state.set_item_favorite(102, true);
+        let copies = state
+            .rows()
+            .iter()
+            .filter_map(|row| match row {
+                HubRow::Item(item) if item.session_id == 102 => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(copies.len(), 3);
+        assert!(copies.iter().all(|item| item.pinned && item.favorite));
+        state.set_item_pinned(102, false);
+        assert_eq!(state.rows().iter().filter(|row| matches!(row, HubRow::Item(item) if item.session_id == 102 && item.favorite && !item.pinned)).count(), 2);
+    }
+
+    #[test]
+    fn directory_and_quick_access_have_independent_viewports_and_mouse_hits() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+        let mut state = SessionHubPresentation::empty();
+        state.set_catalog(
+            vec![directory(1, 45, true), directory(2, 2, false)],
+            vec![
+                SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
+                section(SessionHubSectionKind::Running, &[900]),
+                section(SessionHubSectionKind::Pinned, &[901]),
+                section(SessionHubSectionKind::Favorites, &[902]),
+            ],
+        );
+        for (width, height) in [(120, 32), (60, 18), (30, 8)] {
+            let area = Rect::new(0, 0, width, height);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    super::render_session_hub(
+                        frame,
+                        area,
+                        &state,
+                        false,
+                        None,
+                        false,
+                        "",
+                        &agena_tui::i18n::I18n::english(),
+                    )
+                })
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("Session"));
+            if height >= 18 {
+                assert!(text.contains("Running 1"));
+                assert!(text.contains("session 900"));
+            }
+            if width == 120 {
+                let content = Rect::new(1, 3, width - 2, height - 5);
+                let (before, divider) = super::hub_row_regions(content, &state);
+                let divider = divider.unwrap();
+                let pin_hit = super::hub_hit_test(
+                    area,
+                    &state,
+                    false,
+                    divider.x + 12,
+                    divider.y,
+                    &agena_tui::i18n::I18n::english(),
+                )
+                .unwrap();
+                assert!(
+                    !pin_hit.activate,
+                    "clicking a bucket focuses it without opening a session"
+                );
+                assert!(
+                    matches!(&state.rows()[pin_hit.row], HubRow::Item(item) if item.session_id == 901)
+                );
+                let directory_index = state
+                    .rows()
+                    .iter()
+                    .position(|row| {
+                        matches!(
+                            row,
+                            HubRow::Directory {
+                                workspace_id: 1,
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap();
+                let (_, hit_rect) = before
+                    .iter()
+                    .find(|(index, _)| *index == directory_index)
+                    .unwrap();
+                assert_eq!(
+                    super::hub_hit_test(
+                        area,
+                        &state,
+                        false,
+                        hit_rect.x,
+                        hit_rect.y,
+                        &agena_tui::i18n::I18n::english()
+                    )
+                    .map(|hit| hit.row),
+                    Some(directory_index)
+                );
+                let quick = before.iter().find(|(index, _)| matches!(&state.rows()[*index], HubRow::Item(item) if item.session_id == 900)).unwrap().1;
+                state.select_row(
+                    state
+                        .rows()
+                        .iter()
+                        .position(|row| matches!(row, HubRow::Item(item) if item.session_id == 120))
+                        .unwrap(),
+                );
+                let after = super::hub_row_regions(content, &state).0;
+                assert!(after.iter().any(|(index, rect)| *rect == quick && matches!(&state.rows()[*index], HubRow::Item(item) if item.session_id == 900)));
+            }
+        }
     }
 
     #[test]

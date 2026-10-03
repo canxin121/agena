@@ -137,6 +137,7 @@ pub enum KeyAction {
     OpenUsage,
     HubCreateSession,
     HubOpenSessionList,
+    HubTogglePinned,
     OpenPlan,
     ModeAll,
     ModeRoots,

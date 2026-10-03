@@ -507,6 +507,8 @@ pub fn preset_specs(
                     actions,
                     vec![
                         ("Ctrl+N / c", "context-help-key-create-session"),
+                        ("← / →", "hub-action-directory"),
+                        ("p", "hub-action-pin"),
                         ("l", "context-help-key-session-list"),
                         ("f", "context-help-key-toggle-favorite"),
                         ("Ctrl+R", "context-help-key-refresh"),

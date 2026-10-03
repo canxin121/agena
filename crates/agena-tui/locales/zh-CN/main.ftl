@@ -2179,3 +2179,9 @@ transcript-history-error = ↑ 重试加载历史 · { $error }
 transcript-history-stalled = 历史游标未前进，请重试加载。
 transcript-fold-loading = … 正在加载回复片段
 transcript-fold-error = 加载失败 · Enter 重试 · { $error }
+
+hub-section-directories = 工作目录
+hub-section-pinned = 置顶
+hub-action-directory = 展开/收起目录
+hub-action-pin = 置顶/取消
+hub-directory-more = + 显示更多会话（剩余 { $count } 个）

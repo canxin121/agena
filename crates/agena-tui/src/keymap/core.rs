@@ -148,6 +148,8 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::Hub => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
+            K::Left if unmodified(key) => Some(A::MoveLeft),
+            K::Right if unmodified(key) => Some(A::MoveRight),
             K::Up | K::Char('k') if unmodified(key) => Some(A::MoveUp),
             K::Down | K::Char('j') if unmodified(key) => Some(A::MoveDown),
             K::PageUp if unmodified(key) => Some(A::PageUp),
@@ -161,6 +163,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('c') if unmodified(key) => Some(A::HubCreateSession),
             K::Char('l') if unmodified(key) => Some(A::HubOpenSessionList),
             K::Char('f') if unmodified(key) => Some(A::ToggleFavorite),
+            K::Char('p') if unmodified(key) => Some(A::HubTogglePinned),
             K::Char('r') if only_ctrl(key) => Some(A::Refresh),
             _ => None,
         },

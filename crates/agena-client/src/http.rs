@@ -882,6 +882,19 @@ impl AgenaClient {
         .await
     }
 
+    /// Update the independent durable navigation pin.
+    pub async fn set_session_pinned(
+        &self,
+        session_id: i64,
+        pinned: bool,
+    ) -> Result<SessionResource, ClientError> {
+        self.put_json(
+            &format!("/api/v1/sessions/{session_id}"),
+            serde_json::json!({ "pinned": pinned }),
+        )
+        .await
+    }
+
     pub async fn submit_message(
         &self,
         params: SubmitRunParams,

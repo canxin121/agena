@@ -38,8 +38,8 @@ impl App {
             AppMessage::UsageStatsLoaded { request_id, result } => {
                 self.handle_usage_stats_loaded(request_id, result)
             }
-            AppMessage::HubOverviewLoaded { request_id, result } => {
-                self.handle_hub_overview_loaded(request_id, result)
+            AppMessage::HubCatalogLoaded { request_id, result } => {
+                self.handle_hub_catalog_loaded(request_id, result)
             }
             AppMessage::SessionsLoaded {
                 scope,
@@ -114,6 +114,22 @@ impl App {
             AppMessage::SessionFavoriteUpdated { session_id, result } => {
                 self.handle_session_favorite_updated(session_id, result)
             }
+            AppMessage::SessionPinnedUpdated { session_id, result } => match result {
+                Ok(session) => {
+                    if self.transcript.session_id == Some(session_id)
+                        && let Some(execution) = self.transcript.execution.as_mut()
+                    {
+                        execution.session.pinned = session.pinned;
+                    }
+                    if let Route::Hub(state) = &mut self.current_route {
+                        state
+                            .presentation
+                            .set_item_pinned(session_id, session.pinned);
+                    }
+                    self.refresh_hub_after_mutation();
+                }
+                Err(error) => self.flash_error(error),
+            },
             AppMessage::PermissionReplied {
                 session_id,
                 request_id,
@@ -890,6 +906,7 @@ impl App {
                         .presentation
                         .set_item_favorite(session_id, session.favorite);
                 }
+                self.refresh_hub_after_mutation();
                 self.request_sessions(false);
                 let message_key = if session.favorite {
                     "flash-session-favorited"

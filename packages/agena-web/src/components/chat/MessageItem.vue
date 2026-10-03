@@ -301,10 +301,7 @@ function partNavigationText(part: TranscriptDisplayPart): string {
           data-part-controls="true"
           data-transcript-chrome="true"
         >
-          <span class="mr-auto min-w-0 px-1 font-mono text-[11px] text-muted-foreground">
-            {{ t('chat.messages.activity.moreCount', { count: row.hiddenCount }) }}
-          </span>
-          <div class="flex shrink-0 flex-wrap items-center gap-1">
+          <div class="flex min-w-0 flex-wrap items-center gap-1">
             <input
               :value="activityPageSize"
               type="number"
@@ -340,6 +337,9 @@ function partNavigationText(part: TranscriptDisplayPart): string {
               {{ t('chat.messages.controls.collectAll') }}
             </ToolbarChipButton>
           </div>
+          <span class="min-w-0 px-1 font-mono text-[11px] text-muted-foreground">
+            {{ t('chat.messages.activity.moreCount', { count: row.hiddenCount }) }}
+          </span>
         </div>
         <AgenaTranscriptPart
           v-else

@@ -1735,7 +1735,7 @@ message-tool-cancelled = 已取消：{$label}
 message-tool-summary = [工具] {$status} | {$label}
 message-tool-result-blocks = {$count} 个结果块
 message-tool-output-collapsed =     … 还有 {$lines} 行
-message-activity-run-collapsed =   … 隐藏了较早的 {$count} 个 part · Enter 显示 5 个 · n Enter 显示 n 个（最多 50）· Ctrl+Shift+Enter 显示全部
+message-activity-run-collapsed = Enter 显示 5 个 · n Enter · Ctrl+Shift+Enter 显示全部 · … 隐藏 {$count} 个较早 part
 
 todo-status-pending = 待处理
 todo-status-in-progress = 进行中

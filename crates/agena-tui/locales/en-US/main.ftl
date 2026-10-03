@@ -1735,7 +1735,7 @@ message-tool-cancelled = cancelled: {$label}
 message-tool-summary = [tool] {$status} | {$label}
 message-tool-result-blocks = {$count} result blocks
 message-tool-output-collapsed =     … {$lines} more
-message-activity-run-collapsed =   … {$count} older parts hidden · Enter: show 5 · n Enter: show n (max 50) · Ctrl+Shift+Enter: show all
+message-activity-run-collapsed = Enter: show 5 · n Enter · Ctrl+Shift+Enter: show all · … {$count} older parts hidden
 
 todo-status-pending = pending
 todo-status-in-progress = in_progress

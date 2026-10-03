@@ -8,7 +8,7 @@ use super::super::{
     push_label_value, push_markdown_document, push_markdown_rule, push_section_heading,
     push_single_line, push_wrapped_line, render_entry_detailed, render_expanded_tool_text_block,
     render_markdown_block, should_suppress_markdown_block, strip_terminal_ansi_sequences,
-    style_for_role, tool_output_copy_text, transcript_message_parts, transcript_part_content,
+    style_for_role, transcript_message_parts, transcript_part_content,
     transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
 };
 use super::operation_render::{
@@ -42,6 +42,8 @@ pub fn render_entry_export(
     for part in transcript_message_parts(message) {
         let sections = match transcript_part_content(part) {
             TranscriptPartContent::Activity(TranscriptActivityContent::Operation(_)) => &[
+                TranscriptActivitySection::TechnicalDetails,
+                TranscriptActivitySection::RenderData,
                 TranscriptActivitySection::Metadata,
                 TranscriptActivitySection::Input,
                 TranscriptActivitySection::Output,
@@ -1248,9 +1250,20 @@ pub(crate) fn render_part_node(
             // read-only plan + questions + answers once answered; fall through
             // to the plain tool execution renderer for operations without
             // user input.
+            let interaction_start = out.len();
             let user_input_rendered =
                 render_operation_user_input(part, tool, out, width, i18n, expanded, interactions);
 
+            let details_key = TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section: TranscriptActivitySection::TechnicalDetails,
+            };
+            let render_data_key = TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section: TranscriptActivitySection::RenderData,
+            };
             let metadata_key = TranscriptNodeKey::ActivitySection {
                 entry_id: message.id,
                 content_id: part.id,
@@ -1274,14 +1287,16 @@ pub(crate) fn render_part_node(
             let metadata_expanded = expansions.get(&metadata_key).copied().unwrap_or(false);
             let input_expanded = expansions.get(&input_key).copied().unwrap_or(false);
             let output_expanded = expansions.get(&output_key).copied().unwrap_or(false);
-            let presentation_expanded = expansions.get(&presentation_key).copied().unwrap_or(true);
+            let details_expanded = expansions.get(&details_key).copied().unwrap_or(false);
+            let render_data_expanded = expansions.get(&render_data_key).copied().unwrap_or(false);
             let execution = if user_input_rendered {
                 render_tool_detail_sections_with_sections(
                     part,
                     metadata_expanded,
                     input_expanded,
                     output_expanded,
-                    presentation_expanded,
+                    details_expanded,
+                    render_data_expanded,
                     tool,
                     out,
                     width,
@@ -1294,7 +1309,8 @@ pub(crate) fn render_part_node(
                     metadata_expanded,
                     input_expanded,
                     output_expanded,
-                    presentation_expanded,
+                    details_expanded,
+                    render_data_expanded,
                     tool,
                     out,
                     width,
@@ -1303,9 +1319,22 @@ pub(crate) fn render_part_node(
                 )
             };
             let mut children = Vec::new();
-            if let Some(section) = execution.metadata
+            if let Some(section) = execution.presentation
                 && let Some(child) = rendered_activity_section_node(
-                    metadata_key,
+                    presentation_key,
+                    section.start_line,
+                    section.end_line,
+                    section.copy_text,
+                    false,
+                    section.expanded,
+                    out,
+                )
+            {
+                children.push(child);
+            }
+            if let Some(section) = execution.details
+                && let Some(child) = rendered_activity_section_node(
+                    details_key,
                     section.start_line,
                     section.end_line,
                     section.copy_text,
@@ -1342,9 +1371,22 @@ pub(crate) fn render_part_node(
             {
                 children.push(child);
             }
-            if let Some(section) = execution.presentation
+            if let Some(section) = execution.metadata
                 && let Some(child) = rendered_activity_section_node(
-                    presentation_key,
+                    metadata_key,
+                    section.start_line,
+                    section.end_line,
+                    section.copy_text,
+                    true,
+                    section.expanded,
+                    out,
+                )
+            {
+                children.push(child);
+            }
+            if let Some(section) = execution.render_data
+                && let Some(child) = rendered_activity_section_node(
+                    render_data_key,
                     section.start_line,
                     section.end_line,
                     section.copy_text,
@@ -1360,7 +1402,16 @@ pub(crate) fn render_part_node(
                 kind: TranscriptNodeKind::Activity,
                 copy_text: if user_input_rendered {
                     if expanded {
-                        tool_output_copy_text(part, tool, i18n)
+                        let interaction = out[interaction_start..execution.headline_end]
+                            .iter()
+                            .map(|line| line.copy_text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        [interaction, execution.visible_copy_text]
+                            .into_iter()
+                            .filter(|section| !section.trim().is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n\n")
                     } else {
                         String::new()
                     }

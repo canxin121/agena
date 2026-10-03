@@ -4,279 +4,176 @@ pub(crate) fn push_expanded_diff_text(
     text: &str,
     width: u16,
 ) {
+    use super::{DiffRowKind, transcript_diff_files};
     let sanitized = sanitize_terminal_text(text);
-    let normalized = trim_empty_line_edges(sanitized.as_str());
-    let diff_lines = normalized.lines().collect::<Vec<_>>();
-
-    let available = width.max(1) as usize;
-    let prefix_width = UnicodeWidthStr::width(prefix);
-    let card_width = available.saturating_sub(prefix_width);
     let palette = agena_tui_components::theme::active_palette();
-    let code_uses_terminal_defaults = palette.code_bg == ratatui::style::Color::Reset;
-    let code_muted = if code_uses_terminal_defaults {
-        palette.code_fg
-    } else {
-        palette.muted
-    };
-    let code_accent = if code_uses_terminal_defaults {
-        palette.code_fg
-    } else {
-        palette.accent
-    };
-    if card_width < 16 {
-        for raw_line in &diff_lines {
-            push_wrapped_line(
-                out,
-                prefix,
-                prefix,
-                raw_line,
-                diff_line_style(raw_line),
-                width,
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    for file in transcript_diff_files(&sanitized) {
+        let path = if !file.old_path.is_empty() && file.old_path != file.path {
+            format!("{} → {}", file.old_path, file.path)
+        } else if file.path.is_empty() {
+            "Changes".to_owned()
+        } else {
+            file.path.clone()
+        };
+        let title = vec![
+            Span::styled(
+                format!("{} ", file.change.unwrap_or('M')),
+                Style::default().fg(palette.muted),
+            ),
+            Span::styled(path.clone(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("  +{}", file.additions),
+                Style::default().fg(palette.success),
+            ),
+            Span::styled(
+                format!(" −{}", file.deletions),
+                Style::default().fg(palette.danger),
+            ),
+        ];
+        let available = (width as usize).saturating_sub(prefix_width).max(1);
+        for line in wrap_rich_line(&title, available, available) {
+            let copy = line
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>();
+            let mut spans = vec![Span::raw(prefix.to_owned())];
+            spans.extend(line.spans);
+            out.push(
+                RenderedLine::rich(Line::from(spans)).with_copy_projection(copy, prefix_width),
             );
         }
-        return;
-    }
-
-    let language = diff_target_language(&diff_lines);
-    let label = truncate_display_width(
-        &language.as_deref().map_or_else(
-            || "diff".to_string(),
-            |language| format!("diff · {language}"),
-        ),
-        card_width.saturating_sub(7).max(1),
-    );
-    let top_start = format!("┌─ {label} ");
-    let top_fill = "─".repeat(
-        card_width
-            .saturating_sub(UnicodeWidthStr::width(top_start.as_str()))
-            .saturating_sub(1),
-    );
-    out.push(
-        RenderedLine::rich(Line::from(vec![
-            Span::raw(prefix.to_string()),
-            Span::styled("┌─ ", Style::default().fg(code_muted).bg(palette.code_bg)),
-            Span::styled(
-                label,
-                Style::default()
-                    .fg(code_accent)
-                    .bg(palette.code_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" {top_fill}┐"),
-                Style::default().fg(code_muted).bg(palette.code_bg),
-            ),
-        ]))
-        .with_copy_projection(String::new(), prefix_width),
-    );
-
-    let body_width = card_width.saturating_sub(2).max(1);
-    let highlighted = language.as_deref().map(|language| {
-        let content_lines = diff_lines
+        let language = std::path::Path::new(&file.path)
+            .extension()
+            .and_then(|value| value.to_str());
+        let source = file
+            .rows
             .iter()
-            .filter(|line| {
+            .filter(|row| {
                 matches!(
-                    diff_line_kind(line),
-                    DiffLineKind::Added | DiffLineKind::Removed | DiffLineKind::Context
+                    row.kind,
+                    DiffRowKind::Added | DiffRowKind::Removed | DiffRowKind::Context
                 )
             })
-            .map(|line| &line[line.len().min(1)..])
+            .map(|row| row.text.as_str())
             .collect::<Vec<_>>();
-        syntax_highlight_lines(language, &content_lines, palette)
-    });
-    let mut highlighted_index = 0_usize;
-
-    for raw_line in &diff_lines {
-        let navigation_unit = out.len();
-        let kind = diff_line_kind(raw_line);
-        let spans = diff_card_line_spans(
-            raw_line,
-            kind,
-            highlighted.as_deref(),
-            &mut highlighted_index,
-            palette,
-        );
-        for body in wrap_rich_line(&spans, body_width, body_width) {
-            let body_display_width = body
-                .spans
-                .iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-                .sum::<usize>();
-            let body_copy_text = body
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
-            let padding = " ".repeat(body_width.saturating_sub(body_display_width));
-            let mut line_spans = vec![
-                Span::raw(prefix.to_string()),
-                Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
-            ];
-            line_spans.extend(body.spans);
-            line_spans.extend([
-                Span::styled(padding, Style::default().bg(palette.code_bg)),
-                Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
-            ]);
-            out.push(
-                RenderedLine::rich(Line::from(line_spans))
-                    .with_copy_projection(body_copy_text, prefix_width.saturating_add(1))
-                    .with_navigation_unit(navigation_unit, *raw_line),
-            );
-        }
-    }
-    if diff_lines.is_empty() {
-        out.push(
-            RenderedLine::rich(Line::from(vec![
-                Span::raw(prefix.to_string()),
-                Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
-                Span::styled(
-                    "  (empty)".to_string() + &" ".repeat(card_width.saturating_sub(11)),
-                    Style::default().fg(palette.code_fg).bg(palette.code_bg),
-                ),
-                Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
-            ]))
-            .with_copy_projection(String::new(), prefix_width),
-        );
-    }
-    out.push(
-        RenderedLine::rich(Line::from(vec![
-            Span::raw(prefix.to_string()),
-            Span::styled(
-                format!("└{}┘", "─".repeat(card_width.saturating_sub(2))),
-                Style::default().fg(code_muted).bg(palette.code_bg),
-            ),
-        ]))
-        .with_copy_projection(String::new(), prefix_width),
-    );
-}
-
-pub(crate) fn diff_line_style(line: &str) -> Style {
-    match diff_line_kind(line) {
-        DiffLineKind::Header => Style::default().fg(agena_tui_components::theme::accent_color()),
-        DiffLineKind::Hunk => Style::default().fg(agena_tui_components::theme::warning_color()),
-        DiffLineKind::Added => Style::default().fg(agena_tui_components::theme::success_color()),
-        DiffLineKind::Removed => Style::default().fg(agena_tui_components::theme::danger_color()),
-        DiffLineKind::Context => Style::default().fg(agena_tui_components::theme::muted_color()),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DiffLineKind {
-    Header,
-    Hunk,
-    Added,
-    Removed,
-    Context,
-}
-
-fn diff_line_kind(line: &str) -> DiffLineKind {
-    if line.starts_with("diff --git ")
-        || line.starts_with("index ")
-        || line.starts_with("--- ")
-        || line.starts_with("+++ ")
-        || line.starts_with("new file mode ")
-        || line.starts_with("deleted file mode ")
-        || line.starts_with("rename from ")
-        || line.starts_with("rename to ")
-        || line.starts_with("similarity index ")
-        || line.starts_with("Binary files ")
-        || line.starts_with("GIT binary patch")
-        || line.starts_with("old mode ")
-        || line.starts_with("new mode ")
-    {
-        DiffLineKind::Header
-    } else if line.starts_with("@@") {
-        DiffLineKind::Hunk
-    } else if line.starts_with('+') {
-        DiffLineKind::Added
-    } else if line.starts_with('-') {
-        DiffLineKind::Removed
-    } else {
-        DiffLineKind::Context
-    }
-}
-
-fn diff_card_line_spans(
-    line: &str,
-    kind: DiffLineKind,
-    highlighted: Option<&[Vec<Span<'static>>]>,
-    highlighted_index: &mut usize,
-    palette: agena_tui_components::ThemePalette,
-) -> Vec<Span<'static>> {
-    let bg = palette.code_bg;
-    match kind {
-        DiffLineKind::Header => vec![Span::styled(
-            line.to_string(),
-            Style::default()
-                .fg(agena_tui_components::theme::accent_color())
-                .bg(bg),
-        )],
-        DiffLineKind::Hunk => vec![Span::styled(
-            line.to_string(),
-            Style::default()
-                .fg(agena_tui_components::theme::warning_color())
-                .bg(bg),
-        )],
-        DiffLineKind::Added | DiffLineKind::Removed | DiffLineKind::Context => {
-            let marker = &line[..line.len().min(1)];
-            let content = &line[marker.len()..];
-            let marker_style = match kind {
-                DiffLineKind::Added => Style::default()
-                    .fg(agena_tui_components::theme::success_color())
-                    .bg(bg),
-                DiffLineKind::Removed => Style::default()
-                    .fg(agena_tui_components::theme::danger_color())
-                    .bg(bg),
-                _ => Style::default()
-                    .fg(agena_tui_components::theme::muted_color())
-                    .bg(bg),
-            };
-            let mut spans = vec![Span::styled(marker.to_string(), marker_style)];
-            if let Some(highlighted) = highlighted
-                && let Some(content_spans) = highlighted.get(*highlighted_index)
-            {
-                *highlighted_index += 1;
-                spans.extend(content_spans.iter().cloned());
-            } else if !content.is_empty() {
-                let content_style = match kind {
-                    DiffLineKind::Added => Style::default()
-                        .fg(agena_tui_components::theme::success_color())
-                        .bg(bg),
-                    DiffLineKind::Removed => Style::default()
-                        .fg(agena_tui_components::theme::danger_color())
-                        .bg(bg),
-                    _ => Style::default()
-                        .fg(agena_tui_components::theme::muted_color())
-                        .bg(bg),
-                };
-                spans.push(Span::styled(content.to_string(), content_style));
+        let highlighted =
+            language.map(|language| syntax_highlight_lines(language, &source, palette));
+        let mut highlight_index = 0;
+        let max_line = file
+            .rows
+            .iter()
+            .flat_map(|row| [row.old_line, row.new_line])
+            .flatten()
+            .max()
+            .unwrap_or(1);
+        let digits = max_line.to_string().len();
+        let gutter = (digits + 2).min(available.saturating_sub(1));
+        let body_width = available.saturating_sub(gutter).max(1);
+        for row in &file.rows {
+            if matches!(row.kind, DiffRowKind::Hunk | DiffRowKind::Note) {
+                push_wrapped_line(
+                    out,
+                    prefix,
+                    prefix,
+                    &row.text,
+                    Style::default().fg(palette.muted),
+                    width,
+                );
+                continue;
             }
-            spans
+            let (marker, color) = match row.kind {
+                DiffRowKind::Added => ("+", palette.success),
+                DiffRowKind::Removed => ("-", palette.danger),
+                _ => (" ", palette.muted),
+            };
+            let background = if row.kind == DiffRowKind::Context {
+                palette.code_bg
+            } else {
+                diff_background(palette.code_bg, color)
+            };
+            let mut spans = highlighted
+                .as_ref()
+                .and_then(|lines| lines.get(highlight_index))
+                .cloned()
+                .unwrap_or_else(|| {
+                    vec![Span::styled(
+                        row.text.clone(),
+                        Style::default().fg(palette.code_fg),
+                    )]
+                });
+            highlight_index += 1;
+            for span in &mut spans {
+                span.style = span.style.bg(background);
+            }
+            let number = if row.kind == DiffRowKind::Removed {
+                row.old_line
+            } else {
+                row.new_line
+            }
+            .unwrap_or(0);
+            let navigation_unit = out.len();
+            for (index, body) in wrap_rich_line(&spans, body_width, body_width)
+                .into_iter()
+                .enumerate()
+            {
+                let body_text = body
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>();
+                let mut line = vec![Span::raw(prefix.to_owned())];
+                if gutter > 0 {
+                    let label = if index == 0 {
+                        format!("{number:>digits$} ")
+                    } else {
+                        " ".repeat(digits + 1)
+                    };
+                    line.push(Span::styled(
+                        truncate_display_width(&label, gutter - 1),
+                        Style::default().fg(palette.muted).bg(background),
+                    ));
+                    line.push(Span::styled(
+                        if index == 0 { marker } else { " " },
+                        Style::default().fg(color).bg(background),
+                    ));
+                }
+                line.extend(body.spans);
+                let padding = body_width.saturating_sub(UnicodeWidthStr::width(body_text.as_str()));
+                line.push(Span::styled(
+                    " ".repeat(padding),
+                    Style::default().bg(background),
+                ));
+                out.push(
+                    RenderedLine::rich(Line::from(line))
+                        .with_copy_projection(
+                            if index == 0 {
+                                format!("{marker}{body_text}")
+                            } else {
+                                body_text
+                            },
+                            prefix_width + gutter.saturating_sub(1),
+                        )
+                        .with_navigation_unit(navigation_unit, format!("{marker}{}", row.text)),
+                );
+            }
         }
     }
 }
 
-fn diff_target_language(diff_lines: &[&str]) -> Option<String> {
-    for line in diff_lines {
-        let path = if let Some(rest) = line.strip_prefix("+++ b/") {
-            Some(rest)
-        } else if let Some(rest) = line.strip_prefix("+++ ") {
-            Some(rest)
-        } else if let Some(rest) = line.strip_prefix("diff --git ") {
-            rest.rsplit(" b/").next().map(str::trim)
-        } else {
-            None
-        };
-        if let Some(path) = path
-            && let Some(extension) = std::path::Path::new(path)
-                .extension()
-                .and_then(|extension| extension.to_str())
-            && !extension.is_empty()
-        {
-            return Some(extension.to_string());
+fn diff_background(
+    base: ratatui::style::Color,
+    accent: ratatui::style::Color,
+) -> ratatui::style::Color {
+    use ratatui::style::Color;
+    match (base, accent) {
+        (Color::Rgb(r, g, b), Color::Rgb(ar, ag, ab)) => {
+            let blend = |value: u8, accent: u8| ((value as u16 * 9 + accent as u16) / 10) as u8;
+            Color::Rgb(blend(r, ar), blend(g, ag), blend(b, ab))
         }
+        _ => base,
     }
-    None
 }
 
 pub(crate) fn tool_invocation_label(invocation: &agena_domain::ToolInvocation) -> String {
@@ -327,150 +224,128 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     RenderedLine, push_wrapped_line, sanitize_terminal_text, syntax_highlight_lines,
-    trim_empty_line_edges, truncate_display_width, wrap_rich_line,
+    truncate_display_width, wrap_rich_line,
 };
 
 #[cfg(test)]
 mod tests {
+    use super::super::{DiffRowKind, transcript_diff_files};
     use super::*;
 
-    fn span_fg(line: &RenderedLine, needle: &str) -> Option<ratatui::style::Color> {
-        line.rich_line
-            .as_ref()?
-            .spans
-            .iter()
-            .find(|span| span.content.contains(needle))
-            .map(|span| span.style.fg.unwrap_or(ratatui::style::Color::Reset))
-    }
-
     #[test]
-    fn expanded_diff_renders_a_highlighted_diff_card() {
-        let diff = concat!(
-            "diff --git a/src/main.rs b/src/main.rs\n",
-            "index 123..456 100644\n",
-            "--- a/src/main.rs\n",
-            "+++ b/src/main.rs\n",
-            "@@ -1,3 +1,4 @@\n",
-            " fn main() {\n",
-            "-    println!(\"old\");\n",
-            "+    println!(\"new\");\n",
-            " }\n",
-        );
+    fn diff_renders_file_stats_numbers_colors_and_wrapped_copy_without_headers() {
+        let diff = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -98,3 +98,3 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new 内容 and a long line\");\n }\n";
         let mut lines = Vec::new();
-        push_expanded_diff_text(&mut lines, "  ", diff, 48);
-
-        let rendered = lines
+        push_expanded_diff_text(&mut lines, "  ", diff, 40);
+        let text = lines
             .iter()
             .map(|line| line.text.as_str())
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("src/main.rs  +1 −1"), "{text}");
+        assert!(text.contains("99 -"), "{text}");
+        assert!(text.contains("99 +"), "{text}");
+        assert!(!text.contains("--- a/"));
         assert!(
-            rendered
-                .first()
-                .is_some_and(|line| line.contains("┌─ diff · rs")),
-            "card label should include the detected language: {rendered:?}"
+            lines
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.text.as_str()) <= 40)
         );
-        assert!(
-            rendered.last().is_some_and(|line| line.contains('└')),
-            "card needs a bottom border: {rendered:?}"
-        );
-
         let added = lines
             .iter()
-            .find(|line| line.text.contains("println!(\"new\")"))
-            .expect("added line");
-        let plus_marker = added
-            .rich_line
-            .as_ref()
-            .and_then(|line| line.spans.iter().find(|span| span.content == "+"))
-            .expect("+ marker");
-        assert_eq!(
-            plus_marker.style.fg,
-            Some(agena_tui_components::theme::success_color())
-        );
-
-        let removed = lines
-            .iter()
-            .find(|line| line.text.contains("println!(\"old\")"))
-            .expect("removed line");
-        let minus_marker = removed
-            .rich_line
-            .as_ref()
-            .and_then(|line| line.spans.iter().find(|span| span.content == "-"))
-            .expect("- marker");
-        assert_eq!(
-            minus_marker.style.fg,
-            Some(agena_tui_components::theme::danger_color())
-        );
-
-        // The added content is syntax-highlighted with the file language
-        // (rust), so at least one token is not the flat diff success color.
-        let content_fgs = added
-            .rich_line
-            .as_ref()
-            .expect("rich line")
-            .spans
-            .iter()
-            .filter(|span| span.content != "+" && !span.content.trim().is_empty())
-            .map(|span| span.style.fg)
-            .collect::<Vec<_>>();
+            .find(|line| line.text.contains("99 +"))
+            .unwrap();
         assert!(
-            content_fgs
+            added
+                .rich_line
+                .as_ref()
+                .unwrap()
+                .spans
                 .iter()
-                .any(|fg| *fg != Some(agena_tui_components::theme::success_color())),
-            "added content should be syntax-highlighted: {content_fgs:?}"
+                .any(|span| span.content == "+"
+                    && span.style.fg == Some(agena_tui_components::theme::success_color()))
         );
-
-        assert_eq!(
-            span_fg(
-                lines
-                    .iter()
-                    .find(|line| line.text.contains("diff --git"))
-                    .expect("header line"),
-                "diff --git"
-            ),
-            Some(agena_tui_components::theme::accent_color())
-        );
-        assert_eq!(
-            span_fg(
-                lines
-                    .iter()
-                    .find(|line| line.text.contains("@@"))
-                    .expect("hunk line"),
-                "@@"
-            ),
-            Some(agena_tui_components::theme::warning_color())
-        );
+        assert!(added.navigation_copy_text.contains("+    println!"));
+        assert!(!added.copy_text.contains("99"));
     }
 
     #[test]
-    fn diff_target_language_detects_the_added_file() {
-        assert_eq!(
-            diff_target_language(&["diff --git a/x b/src/main.rs"]),
-            Some("rs".to_string())
+    fn parses_multifile_hunks_and_source_that_looks_like_headers() {
+        let files = transcript_diff_files(
+            "--- a/old.rs\n+++ b/new.rs\n@@ -10,2 +20,2 @@\n--- source\n+++ source\n context\n--- a/deleted.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n\\ No newline at end of file\n",
         );
-        assert_eq!(
-            diff_target_language(&["+++ b/app/models/user.py"]),
-            Some("py".to_string())
-        );
-        assert_eq!(diff_target_language(&["+++ /dev/null"]), None);
-        assert_eq!(diff_target_language(&["diff --git a/x b/y"]), None);
-        assert_eq!(diff_target_language(&["plain text"]), None);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "new.rs");
+        assert_eq!(files[0].change, Some('R'));
+        assert_eq!((files[0].additions, files[0].deletions), (1, 1));
+        assert_eq!(files[0].rows[1].text, "-- source");
+        assert_eq!(files[0].rows[1].old_line, Some(10));
+        assert_eq!(files[0].rows[2].new_line, Some(20));
+        assert_eq!(files[1].path, "deleted.py");
+        assert_eq!(files[1].change, Some('D'));
+        assert_eq!(files[1].rows.last().unwrap().kind, DiffRowKind::Note);
     }
 
     #[test]
-    fn diff_line_kind_classifies_git_diff_lines() {
-        assert_eq!(diff_line_kind("diff --git a/x b/x"), DiffLineKind::Header);
-        assert_eq!(
-            diff_line_kind("index 123..456 100644"),
-            DiffLineKind::Header
-        );
-        assert_eq!(diff_line_kind("--- a/x"), DiffLineKind::Header);
-        assert_eq!(diff_line_kind("+++ b/x"), DiffLineKind::Header);
-        assert_eq!(diff_line_kind("new file mode 100644"), DiffLineKind::Header);
-        assert_eq!(diff_line_kind("@@ -1,3 +1,4 @@"), DiffLineKind::Hunk);
-        assert_eq!(diff_line_kind("+let x = 1;"), DiffLineKind::Added);
-        assert_eq!(diff_line_kind("-let x = 1;"), DiffLineKind::Removed);
-        assert_eq!(diff_line_kind(" fn main() {"), DiffLineKind::Context);
-        assert_eq!(diff_line_kind(""), DiffLineKind::Context);
+    fn legacy_add_diff_and_blank_lines_keep_visible_gutters() {
+        let mut lines = Vec::new();
+        push_expanded_diff_text(&mut lines, "", "+++ b/新.txt\n@@\n+\n+你好\n", 12);
+        assert!(lines.iter().any(|line| line.text.starts_with("1 +")));
+        assert!(lines.iter().any(|line| line.text.contains("2 +你好")));
+    }
+
+    #[test]
+    fn terminal_buffer_shows_empty_file_operations_and_colored_diff_gutters() {
+        use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
+
+        let diff = "diff --git a/empty b/empty\nnew file mode 100644\n\
+diff --git a/gone b/gone\ndeleted file mode 100644\n\
+diff --git a/old b/new\nsimilarity index 100%\nrename from old\nrename to new\n\
+diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n";
+        for width in [32, 80] {
+            let mut lines = Vec::new();
+            push_expanded_diff_text(&mut lines, "  ", diff, width);
+            let rich = lines
+                .into_iter()
+                .map(|line| line.rich_line.unwrap())
+                .collect::<Vec<_>>();
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            terminal
+                .draw(|frame| frame.render_widget(Paragraph::new(rich), frame.area()))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let screen = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            for label in [
+                "A empty  +0 −0",
+                "D gone  +0 −0",
+                "R old → new  +0 −0",
+                "M a.rs  +1 −1",
+                "1 -old",
+                "1 +new",
+            ] {
+                assert!(screen.contains(label), "{screen}");
+            }
+            let added = buffer
+                .content
+                .iter()
+                .find(|cell| {
+                    cell.symbol() == "+"
+                        && cell.fg == agena_tui_components::theme::success_color()
+                        && cell.bg != ratatui::style::Color::Reset
+                })
+                .unwrap();
+            let removed = buffer
+                .content
+                .iter()
+                .find(|cell| {
+                    cell.symbol() == "-" && cell.fg == agena_tui_components::theme::danger_color()
+                })
+                .unwrap();
+            assert_ne!(added.bg, removed.bg);
+        }
     }
 }

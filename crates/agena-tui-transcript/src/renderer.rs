@@ -1607,7 +1607,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_tool_call_sections_keep_presentation_open_by_default() {
+    fn canonical_tool_details_have_two_independent_disclosures() {
         let now = Utc::now();
         let operation = ToolCallView::from_operation(
             OperationPart {
@@ -1653,6 +1653,11 @@ mod tests {
             entry_id: TranscriptEntryId::StoredMessage(3),
             content_id: TranscriptContentId::StoredPart(9),
         };
+        let details_key = TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(9),
+            section: crate::TranscriptActivitySection::TechnicalDetails,
+        };
         let input_key = TranscriptNodeKey::ActivitySection {
             entry_id: TranscriptEntryId::StoredMessage(3),
             content_id: TranscriptContentId::StoredPart(9),
@@ -1686,10 +1691,11 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(folded_text.contains("▸ Input"), "{folded_text}");
-        assert!(folded_text.contains("▸ Output"), "{folded_text}");
+        assert!(folded_text.contains("▸ Technical details"), "{folded_text}");
+        assert!(!folded_text.contains("Input"), "{folded_text}");
+        assert!(!folded_text.contains("▸ Output"), "{folded_text}");
         assert!(!folded_text.contains("Output metadata"), "{folded_text}");
-        assert!(folded_text.contains("▾ Presentation"), "{folded_text}");
+        assert!(!folded_text.contains("Presentation"), "{folded_text}");
         assert!(
             !folded_text.contains("private input sentinel"),
             "{folded_text}"
@@ -1700,20 +1706,31 @@ mod tests {
         );
         assert!(folded_text.contains("stdout sentinel"), "{folded_text}");
         for key in [&input_key, &output_key] {
-            let node = folded
-                .nodes
-                .iter()
-                .find(|node| &node.key == key)
-                .expect("folded operation section node");
-            assert!(node.toggleable);
-            assert!(!node.expanded);
+            assert!(!folded.nodes.iter().any(|node| &node.key == key));
         }
+        let details_open = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &std::collections::BTreeMap::from([(details_key.clone(), true)]),
+        );
+        let details_text = details_open
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(details_text.contains("▸ Input"));
+        assert!(details_text.contains("▸ Output"));
+        assert!(!details_text.contains("private input sentinel"));
+        assert!(!details_text.contains("model output sentinel"));
         let presentation = folded
             .nodes
             .iter()
             .find(|node| node.key == presentation_key)
             .expect("presentation section node");
-        assert!(presentation.toggleable);
+        assert!(!presentation.toggleable);
         assert!(presentation.expanded);
         let section_order = folded
             .nodes
@@ -1726,10 +1743,8 @@ mod tests {
         assert_eq!(
             section_order,
             vec![
-                crate::TranscriptActivitySection::Metadata,
-                crate::TranscriptActivitySection::Input,
-                crate::TranscriptActivitySection::Output,
                 crate::TranscriptActivitySection::Presentation,
+                crate::TranscriptActivitySection::TechnicalDetails,
             ]
         );
         let parent = folded
@@ -1745,7 +1760,10 @@ mod tests {
             100,
             &I18n::english(),
             &defaults,
-            &std::collections::BTreeMap::from([(input_key.clone(), true)]),
+            &std::collections::BTreeMap::from([
+                (details_key.clone(), true),
+                (input_key.clone(), true),
+            ]),
         );
         let input_text = input_expanded
             .lines
@@ -1759,7 +1777,7 @@ mod tests {
             "{input_text}"
         );
         assert!(input_text.contains("▸ Output"), "{input_text}");
-        assert!(input_text.contains("▾ Presentation"), "{input_text}");
+        assert!(!input_text.contains("▾ Presentation"), "{input_text}");
         assert!(
             !input_text.contains("model output sentinel"),
             "{input_text}"
@@ -1771,7 +1789,10 @@ mod tests {
             100,
             &I18n::english(),
             &defaults,
-            &std::collections::BTreeMap::from([(output_key.clone(), true)]),
+            &std::collections::BTreeMap::from([
+                (details_key.clone(), true),
+                (output_key.clone(), true),
+            ]),
         );
         let output_text = output_expanded
             .lines
@@ -1798,6 +1819,23 @@ mod tests {
             .expect("operation Activity node");
         assert!(parent.copy_text.contains("stdout sentinel"));
         assert!(!parent.copy_text.contains("private input sentinel"));
+
+        let reclosed = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &std::collections::BTreeMap::from([
+                (details_key.clone(), false),
+                (input_key.clone(), true),
+            ]),
+        );
+        assert!(
+            !reclosed
+                .lines
+                .iter()
+                .any(|line| line.text.contains("private input sentinel"))
+        );
 
         let export_text = render_entry_export(&message, &I18n::english(), &defaults)
             .iter()
@@ -1938,9 +1976,9 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        // Json block: pretty-printed JSON inside a fenced code box.
-        assert!(text.contains("┌─ json"), "{text}");
-        assert!(text.contains("\"key\": \"value\""), "{text}");
+        // Opaque objects get readable fields in the human view.
+        assert!(text.contains("• key: value"), "{text}");
+        assert!(text.contains("• n: 42"), "{text}");
         // Table block: a box-drawn table carrying the column labels and rows.
         assert!(text.contains("│ name"), "{text}");
         assert!(text.contains("│ Score"), "{text}");
@@ -1950,8 +1988,13 @@ mod tests {
         assert!(text.contains("[stderr]"), "{text}");
         assert!(text.contains("warning: something odd"), "{text}");
         // Custom object payload: nested bullets from the presentation map.
-        assert!(text.contains("• presentation:"), "{text}");
-        assert!(text.contains("◦ title: Chips"), "{text}");
+        assert!(text.contains("• title: Chips"), "{text}");
+        let copied = super::operation_block_copy_text(
+            tool_view(&part).presentation.blocks.last().unwrap(),
+            &I18n::english(),
+        );
+        assert!(copied.contains("Chips"));
+        assert!(!copied.contains("schema"));
     }
 
     #[test]

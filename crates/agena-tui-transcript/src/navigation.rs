@@ -56,6 +56,8 @@ pub enum TranscriptNodeKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Activity section of the transcript.
 pub enum TranscriptActivitySection {
+    TechnicalDetails,
+    RenderData,
     Metadata,
     Input,
     Output,

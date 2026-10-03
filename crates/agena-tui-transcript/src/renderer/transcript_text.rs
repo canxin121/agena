@@ -101,17 +101,9 @@ pub(crate) fn operation_block_copy_text(block: &ViewBlock, i18n: &I18n) -> Strin
             };
             format!("[{stream}]\n{text}")
         }
-        ViewBlock::Custom {
-            kind,
-            schema,
-            presentation,
-            ..
-        } => serde_json::to_string_pretty(&serde_json::json!({
-            "kind": kind,
-            "schema": schema,
-            "presentation": presentation,
-        }))
-        .unwrap_or_else(|_| kind.clone()),
+        ViewBlock::Custom { presentation, .. } => {
+            json_value_to_markdown(&serde_json::json!(presentation))
+        }
     }
 }
 
@@ -126,55 +118,6 @@ pub(crate) fn tool_display_label(tool: &ToolCallView) -> String {
         } else {
             tool_invocation_label(&tool.operation.invocation)
         }
-    }
-}
-
-pub(crate) fn should_render_tool_model_output(
-    tool: &ToolCallView,
-    skipped_text: Option<&str>,
-) -> bool {
-    let model_text = tool.model_text();
-    let model_output = normalized_tool_text(model_text.as_str());
-    if model_output.is_empty() {
-        return false;
-    }
-    if tool.operation.invocation.name == "agena_web__search"
-        && tool
-            .presentation
-            .blocks
-            .iter()
-            .any(|block| matches!(block, ViewBlock::SearchResults { .. }))
-    {
-        return false;
-    }
-    let tool_label = normalized_tool_text(tool_display_label(tool).as_str());
-    if tool_label == model_output {
-        return false;
-    }
-    if normalized_tool_text(tool.summary()) == model_output {
-        return false;
-    }
-    if let Some(prefix) = tool_label.strip_suffix(model_output.as_str())
-        && prefix.chars().last().is_some_and(|ch| ch.is_whitespace())
-        && !prefix.trim().is_empty()
-    {
-        return false;
-    }
-    if skipped_text.is_some_and(|candidate| normalized_tool_text(candidate) == model_output) {
-        return false;
-    }
-    !tool
-        .presentation
-        .blocks
-        .iter()
-        .filter_map(operation_text_block_text)
-        .any(|text| normalized_tool_text(text) == model_output)
-}
-
-pub(crate) fn operation_text_block_text(block: &ViewBlock) -> Option<&str> {
-    match block {
-        ViewBlock::Text { text, .. } | ViewBlock::Markdown { text, .. } => Some(text.as_str()),
-        _ => None,
     }
 }
 

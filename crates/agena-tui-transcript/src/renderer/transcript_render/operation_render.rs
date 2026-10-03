@@ -1,7 +1,7 @@
 use super::super::{
-    I18n, Modifier, RenderedLine, Style, apply_patch_details, compact_json_cell,
-    compact_tool_identity, json_value_to_markdown, operation_block_copy_text,
-    push_activity_headline, push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
+    I18n, Modifier, RenderedLine, Style, compact_json_cell, compact_tool_identity,
+    json_value_to_markdown, operation_block_copy_text, push_activity_headline,
+    push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
     push_expanded_tool_text, push_label_value, push_multiline, push_section_heading,
     push_single_line, render_expanded_tool_text_block, tool_display_label,
 };
@@ -22,6 +22,8 @@ pub(crate) struct ToolExecutionSectionRender {
 #[derive(Debug, Clone)]
 pub(crate) struct ToolExecutionRender {
     pub headline_end: usize,
+    pub details: Option<ToolExecutionSectionRender>,
+    pub render_data: Option<ToolExecutionSectionRender>,
     pub metadata: Option<ToolExecutionSectionRender>,
     pub input: Option<ToolExecutionSectionRender>,
     pub output: Option<ToolExecutionSectionRender>,
@@ -39,7 +41,7 @@ pub(crate) fn render_tool_execution(
     expanded: bool,
 ) {
     let _ = render_tool_execution_with_sections(
-        part, expanded, expanded, expanded, expanded, tool, out, width, i18n, expanded,
+        part, expanded, expanded, expanded, expanded, expanded, tool, out, width, i18n, expanded,
     );
 }
 
@@ -49,7 +51,8 @@ pub(crate) fn render_tool_execution_with_sections(
     metadata_expanded: bool,
     input_expanded: bool,
     output_expanded: bool,
-    presentation_expanded: bool,
+    details_expanded: bool,
+    render_data_expanded: bool,
     tool: &ToolCallView,
     out: &mut Vec<RenderedLine>,
     width: u16,
@@ -64,7 +67,8 @@ pub(crate) fn render_tool_execution_with_sections(
             metadata_expanded,
             input_expanded,
             output_expanded,
-            presentation_expanded,
+            details_expanded,
+            render_data_expanded,
             tool,
             out,
             width,
@@ -95,6 +99,8 @@ pub(crate) fn render_tool_execution_with_sections(
         );
         return ToolExecutionRender {
             headline_end: out.len(),
+            details: None,
+            render_data: None,
             metadata: None,
             input: None,
             output: None,
@@ -117,7 +123,8 @@ pub(crate) fn render_tool_execution_with_sections(
         metadata_expanded,
         input_expanded,
         output_expanded,
-        presentation_expanded,
+        details_expanded,
+        render_data_expanded,
         tool,
         out,
         width,
@@ -147,7 +154,8 @@ pub(crate) fn render_tool_detail_sections_with_sections(
     metadata_expanded: bool,
     input_expanded: bool,
     output_expanded: bool,
-    presentation_expanded: bool,
+    details_expanded: bool,
+    render_data_expanded: bool,
     tool: &ToolCallView,
     out: &mut Vec<RenderedLine>,
     width: u16,
@@ -158,6 +166,8 @@ pub(crate) fn render_tool_detail_sections_with_sections(
     if !expanded {
         return ToolExecutionRender {
             headline_end,
+            details: None,
+            render_data: None,
             metadata: None,
             input: None,
             output: None,
@@ -194,22 +204,53 @@ pub(crate) fn render_tool_detail_sections_with_sections(
         visible_copy_sections.push(format!("Error\n{error_message}"));
     }
 
-    let metadata_value = serde_json::to_value(&tool.operation.metadata)
-        .unwrap_or(Value::Object(serde_json::Map::new()));
-    let metadata_copy = json_detail_copy_text("Metadata", &metadata_value);
-    let metadata =
-        render_json_detail_section(out, "Metadata", &metadata_value, metadata_expanded, width);
-    if metadata_expanded {
-        visible_copy_sections.push(metadata_copy);
+    // Human output is the primary view. Only the technical sections live
+    // behind the first disclosure; opening it never loads their payloads.
+    let presentation_start = out.len();
+    render_tool_presentation_body(tool, out, width, i18n, failure_text);
+    let presentation_copy_text = tool_presentation_copy_text(tool, i18n, failure_text);
+    let presentation = ToolExecutionSectionRender {
+        start_line: presentation_start,
+        end_line: out.len(),
+        copy_text: presentation_copy_text.clone(),
+        expanded: true,
+    };
+    visible_copy_sections.push(presentation_copy_text);
+    let details = render_detail_section_with_body(
+        out,
+        &ui_text::t(i18n, "tool-technical-details"),
+        details_expanded,
+        width,
+        |_| {},
+        String::new(),
+    );
+    if !details_expanded {
+        return ToolExecutionRender {
+            headline_end,
+            details: Some(details),
+            render_data: None,
+            metadata: None,
+            input: None,
+            output: None,
+            presentation: Some(presentation),
+            visible_copy_text: visible_copy_sections.join("\n\n"),
+        };
     }
+    let nested_start = out.len();
+    let width = width.saturating_sub(2);
 
     // Tool arguments, presented as a nested Markdown bullet list instead of the
     // raw JSON dump. `compact_tool_identity` also unwraps a `tools.call` wrapper
     // to the inner tool + its real input.
     let tool_input = compact_tool_identity(&tool.operation.invocation).1;
     let input_markdown = json_value_to_markdown(&tool_input);
-    let input =
-        render_markdown_detail_section(out, "Input", &input_markdown, input_expanded, width);
+    let input = render_markdown_detail_section(
+        out,
+        &ui_text::t(i18n, "tool-detail-input"),
+        &input_markdown,
+        input_expanded,
+        width,
+    );
     if input_expanded {
         visible_copy_sections.push(format!("Input\n{input_markdown}"));
     }
@@ -219,7 +260,7 @@ pub(crate) fn render_tool_detail_sections_with_sections(
     let output_copy_text = format!("Output\n{output_json}");
     let output = render_detail_section_with_body(
         out,
-        "Output",
+        &ui_text::t(i18n, "tool-detail-output"),
         output_expanded,
         width,
         |body| push_expanded_tool_text(body, "      ", &output_json, Style::default(), width),
@@ -229,21 +270,52 @@ pub(crate) fn render_tool_detail_sections_with_sections(
         visible_copy_sections.push(output_copy_text);
     }
 
-    let presentation_copy_text = tool_presentation_copy_text(tool, i18n);
-    let presentation = render_detail_section_with_body(
+    let metadata_value = serde_json::to_value(&tool.operation.metadata)
+        .unwrap_or(Value::Object(serde_json::Map::new()));
+    let metadata_copy = json_detail_copy_text("Metadata", &metadata_value);
+    let metadata = render_json_detail_section(
         out,
-        "Presentation",
-        presentation_expanded,
+        &ui_text::t(i18n, "tool-detail-metadata"),
+        &metadata_value,
+        metadata_expanded,
         width,
-        |body| render_tool_presentation_body(tool, body, width, i18n, failure_text),
-        format!("Presentation\n{presentation_copy_text}"),
     );
-    if presentation_expanded && !presentation_copy_text.trim().is_empty() {
-        visible_copy_sections.push(format!("Presentation\n{presentation_copy_text}"));
+    if metadata_expanded {
+        visible_copy_sections.push(metadata_copy);
     }
 
+    let raw_presentation =
+        serde_json::to_value(&tool.presentation).expect("presentation is serializable");
+    let render_data = render_json_detail_section(
+        out,
+        &ui_text::t(i18n, "tool-presentation-data"),
+        &raw_presentation,
+        render_data_expanded,
+        width,
+    );
+    if render_data_expanded {
+        visible_copy_sections.push(render_data.copy_text.clone());
+    }
+
+    // Indent both disclosure rows and their bodies as children of Details.
+    // Preserve the copy projection so indentation never enters copied data.
+    for line in &mut out[nested_start..] {
+        line.text.insert_str(0, "  ");
+        if let Some(rich) = &mut line.rich_line {
+            rich.spans.insert(0, ratatui::text::Span::raw("  "));
+        }
+        line.copy_column += 2;
+        for placement in &mut line.math {
+            placement.column = placement.column.saturating_add(2);
+        }
+        for segment in &mut line.copy_segments {
+            segment.display_column += 2;
+        }
+    }
     ToolExecutionRender {
         headline_end,
+        details: Some(details),
+        render_data: Some(render_data),
         metadata: Some(metadata),
         input: Some(input),
         output: Some(output),
@@ -292,13 +364,13 @@ fn render_json_detail_section(
     width: u16,
 ) -> ToolExecutionSectionRender {
     let text = json_detail_copy_text(title, value);
-    let body_text = text.clone();
+    let body_text = serde_json::to_string_pretty(value).expect("JSON is serializable");
     render_detail_section_with_body(
         out,
         title,
         expanded,
         width,
-        |body| render_expanded_tool_text_block(body, "      ", body_text.as_str(), width),
+        |body| push_expanded_tool_text(body, "      ", &body_text, Style::default(), width),
         text,
     )
 }
@@ -333,33 +405,77 @@ fn render_tool_presentation_body(
     i18n: &I18n,
     failure_text: Option<&str>,
 ) {
-    if !tool.presentation.summary.trim().is_empty() {
-        render_expanded_tool_text_block(out, "      ", tool.presentation.summary.as_str(), width);
+    if tool.presentation.blocks.is_empty() && !tool.presentation.summary.trim().is_empty() {
+        push_expanded_markdown(out, "    ", tool.presentation.summary.as_str(), width);
     }
-    let apply_patch = apply_patch_details(&tool.details());
     render_operation_blocks(
-        tool.presentation.blocks.as_slice(),
+        human_tool_blocks(tool),
         out,
         width,
         i18n,
         true,
         failure_text,
-        apply_patch
-            .as_ref()
-            .is_some_and(|payload| !payload.changes.is_empty()),
+        &tool_diff_paths(tool),
     );
 }
 
-fn tool_presentation_copy_text(tool: &ToolCallView, i18n: &I18n) -> String {
+fn tool_diff_paths(tool: &ToolCallView) -> std::collections::BTreeSet<String> {
+    tool.presentation
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            ViewBlock::Diff { diff, .. } => Some(super::super::transcript_diff_files(diff)),
+            _ => None,
+        })
+        .flatten()
+        .flat_map(|file| [file.path, file.old_path])
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+fn human_tool_blocks(tool: &ToolCallView) -> impl Iterator<Item = &ViewBlock> {
+    tool.presentation.blocks.iter().filter(|block| {
+        tool.operation.user_input.requests.is_empty()
+            || !matches!(
+                block.block_id(),
+                Some("answers" | "interaction-answers" | "interaction-meta")
+            )
+    })
+}
+
+fn tool_presentation_copy_text(
+    tool: &ToolCallView,
+    i18n: &I18n,
+    failure_text: Option<&str>,
+) -> String {
     let mut sections = Vec::new();
-    if !tool.presentation.summary.trim().is_empty() {
+    let diff_paths = tool_diff_paths(tool);
+    if tool.presentation.blocks.is_empty() && !tool.presentation.summary.trim().is_empty() {
         sections.push(tool.presentation.summary.clone());
     }
     sections.extend(
-        tool.presentation
-            .blocks
-            .iter()
-            .map(|block| operation_block_copy_text(block, i18n))
+        human_tool_blocks(tool)
+            .filter(|block| {
+                !failure_text.is_some_and(|failure| {
+                    block
+                        .text_value()
+                        .is_some_and(|text| text.trim() == failure)
+                })
+            })
+            .map(|block| match block {
+                ViewBlock::FileChanges { changes, .. } => operation_block_copy_text(
+                    &ViewBlock::FileChanges {
+                        id: None,
+                        changes: changes
+                            .iter()
+                            .filter(|change| !diff_paths.contains(&change.path))
+                            .cloned()
+                            .collect(),
+                    },
+                    i18n,
+                ),
+                _ => operation_block_copy_text(block, i18n),
+            })
             .filter(|text| !text.trim().is_empty()),
     );
     sections.join("\n\n")
@@ -401,7 +517,7 @@ fn render_interaction_notification(
         _ => ("●", agena_tui_components::theme::info_color()),
     };
     let title = tool_display_label(tool);
-    if !expanded {
+    if !expanded || !tool.presentation.blocks.is_empty() {
         push_single_line(
             out,
             "  ",
@@ -429,14 +545,14 @@ fn render_interaction_notification(
     );
 }
 
-pub(crate) fn render_operation_blocks(
-    blocks: &[ViewBlock],
+pub(crate) fn render_operation_blocks<'a>(
+    blocks: impl IntoIterator<Item = &'a ViewBlock>,
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
     expanded: bool,
     skipped_text: Option<&str>,
-    skip_file_changes: bool,
+    diff_paths: &std::collections::BTreeSet<String>,
 ) {
     for block in blocks {
         match block {
@@ -528,9 +644,12 @@ pub(crate) fn render_operation_blocks(
                 }
             }
             ViewBlock::FileChanges { changes, .. } => {
-                if !skip_file_changes {
-                    render_file_changes(changes, out, width, i18n)
-                }
+                let remaining = changes
+                    .iter()
+                    .filter(|change| !diff_paths.contains(&change.path))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                render_file_changes(&remaining, out, width, i18n)
             }
             ViewBlock::SearchResults { items, .. } => {
                 let heading = ui_text::operation_search_heading(i18n, None);
@@ -574,15 +693,9 @@ pub(crate) fn render_operation_blocks(
                 );
             }
             ViewBlock::Json { value, .. } => {
-                let text =
-                    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+                let text = json_value_to_markdown(value);
                 if expanded {
-                    push_expanded_markdown(
-                        out,
-                        "    ",
-                        format!("```json\n{text}\n```").as_str(),
-                        width,
-                    );
+                    push_expanded_markdown(out, "    ", &text, width);
                 } else {
                     push_collapsible_text(
                         out,
@@ -651,20 +764,11 @@ pub(crate) fn render_operation_blocks(
                     push_collapsible_text(out, "      ", text, style, width, i18n);
                 }
             }
-            ViewBlock::Custom {
-                kind,
-                schema,
-                presentation,
-                ..
-            } => {
+            ViewBlock::Custom { presentation, .. } => {
                 // Object payloads (e.g. a plugin's `presentation` map) read
                 // best as nested bullets; any other shape falls back to
                 // pretty-printed JSON.
-                let value = serde_json::json!({
-                    "kind": kind,
-                    "schema": schema,
-                    "presentation": presentation,
-                });
+                let value = serde_json::json!(presentation);
                 if value.is_object() {
                     let text = json_value_to_markdown(&value);
                     if expanded {
@@ -702,5 +806,61 @@ pub(crate) fn render_operation_blocks(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::{
+        FileChangeKind, FileChangeRecord, RawOutput, StructuredObject, TimeRange, ToolInvocation,
+    };
+    use agena_runtime_contracts::part::OperationPart;
+
+    #[test]
+    fn a_partial_diff_keeps_uncovered_file_changes_in_the_view_and_copy() {
+        let tool = ToolCallView::from_operation(
+            OperationPart::completed(
+                7,
+                ToolInvocation::new("fs.apply_patch", StructuredObject::default()),
+                RawOutput::default(),
+                TimeRange::default(),
+            ),
+            Some(agena_api::live::HumanPresentationResource {
+                title: "Applied patch".into(),
+                summary: String::new(),
+                blocks: vec![
+                    ViewBlock::FileChanges {
+                        id: None,
+                        changes: ["a.rs", "binary.png"]
+                            .into_iter()
+                            .map(|path| FileChangeRecord {
+                                path: path.into(),
+                                kind: FileChangeKind::Updated,
+                                from_path: None,
+                            })
+                            .collect(),
+                    },
+                    ViewBlock::Diff {
+                        id: None,
+                        language: Some("diff".into()),
+                        diff: "--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n".into(),
+                    },
+                ],
+            }),
+        );
+        let mut lines = Vec::new();
+        render_tool_presentation_body(&tool, &mut lines, 80, &I18n::english(), None);
+        let visible = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(visible.contains("binary.png"), "{visible}");
+        assert_eq!(visible.matches("a.rs").count(), 1, "{visible}");
+        let copied = tool_presentation_copy_text(&tool, &I18n::english(), None);
+        assert!(copied.contains("binary.png"), "{copied}");
+        assert!(!copied.contains("M a.rs"), "{copied}");
+        assert!(copied.contains("-old\n+new"), "{copied}");
     }
 }

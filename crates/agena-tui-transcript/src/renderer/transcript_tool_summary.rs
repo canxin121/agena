@@ -130,37 +130,6 @@ pub(crate) fn push_expanded_markdown(
     push_markdown_document(out, prefix, text, width);
 }
 
-pub(crate) fn tool_output_copy_text(
-    part: &TranscriptEntryPart,
-    tool: &ToolCallView,
-    i18n: &I18n,
-) -> String {
-    let label = tool_display_label(tool);
-    let mut sections = vec![tool_execution_preview(part, tool, i18n), label];
-    if should_render_tool_model_output(tool, tool.error_message()) {
-        sections.push(tool.model_text().trim().to_string());
-    }
-    if let Some(diff) = apply_patch_details(&tool.details()).map(|payload| payload.diff)
-        && !diff.trim().is_empty()
-    {
-        sections.push(diff.trim().to_string());
-    }
-    let operation_blocks = tool
-        .presentation
-        .blocks
-        .iter()
-        .map(|block| operation_block_copy_text(block, i18n))
-        .collect::<Vec<_>>();
-    if !operation_blocks.is_empty() {
-        sections.push(operation_blocks.join("\n\n"));
-    }
-    sections
-        .into_iter()
-        .filter(|section| !section.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
 pub(crate) fn tool_status_color(status: PartExecutionStatusResource) -> Color {
     match status {
         PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress => {
@@ -311,7 +280,7 @@ pub(crate) fn tool_execution_compact_summary(
         "{} {}",
         activity_status_icon(status),
         bounded_title_summary(
-            tool_display_label(tool).as_str(),
+            super::tool_display_label(tool).as_str(),
             tool.summary(),
             content_width,
         )
@@ -450,11 +419,9 @@ pub(crate) fn concise_text(text: &str, max_width: usize) -> String {
 
 use super::transcript_ast::markdown_inline_line;
 use super::{
-    Color, I18n, Line, Modifier, RenderedLine, Span, Style, UnicodeWidthStr, apply_patch_details,
-    normalized_tool_text, operation_block_copy_text, push_markdown_document, push_multiline,
-    push_wrapped_line, sanitize_terminal_text, should_render_tool_model_output,
-    tool_api_display_name, tool_display_label, tool_invocation_label, tool_output_preview,
-    truncate_display_width,
+    Color, I18n, Line, Modifier, RenderedLine, Span, Style, UnicodeWidthStr, normalized_tool_text,
+    push_markdown_document, push_multiline, push_wrapped_line, sanitize_terminal_text,
+    tool_api_display_name, tool_invocation_label, tool_output_preview, truncate_display_width,
 };
 use crate::{PartExecutionStatusResource, ToolCallView, TranscriptEntryPart, truncate_rich_line};
 use unicode_segmentation::UnicodeSegmentation;

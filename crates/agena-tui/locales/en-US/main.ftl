@@ -2185,3 +2185,9 @@ hub-section-pinned = Pinned
 hub-action-directory = Fold directory
 hub-action-pin = Pin/unpin
 hub-directory-more = + Show more sessions ({ $count } remaining)
+
+tool-technical-details = Technical details
+tool-presentation-data = Presentation data
+tool-detail-input = Input
+tool-detail-output = Output
+tool-detail-metadata = Metadata

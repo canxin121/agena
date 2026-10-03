@@ -2185,3 +2185,9 @@ hub-section-pinned = 置顶
 hub-action-directory = 展开/收起目录
 hub-action-pin = 置顶/取消
 hub-directory-more = + 显示更多会话（剩余 { $count } 个）
+
+tool-technical-details = 技术详情
+tool-presentation-data = 展示数据
+tool-detail-input = 输入
+tool-detail-output = 输出
+tool-detail-metadata = 元数据

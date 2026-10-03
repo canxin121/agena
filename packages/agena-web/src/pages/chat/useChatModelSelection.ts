@@ -453,6 +453,10 @@ export function useChatModelSelection(opts: {
   }
 
   watch(
+    () => chat.selectedSessionId,
+    () => applySessionSelection(),
+  )
+  watch(
     () => chat.selectedSessionRunConfig?.at ?? null,
     () => applySessionSelection(),
     { immediate: true },

@@ -57,6 +57,34 @@ test('useChatModelSelection: restores per-session manual model after session swi
   assert.equal(selection.selectedModelId.value, 'manual-model')
 })
 
+test('useChatModelSelection: session switch without run-config or message changes restores the global default', async () => {
+  const { chat, selection } = await createTestHarness({
+    selectedSessionId: 'session-before-project',
+  })
+
+  selection.runtimeDefaultSelection.value = {
+    provider: 'default-provider',
+    adapter: 'default-adapter',
+    model: 'default-model',
+    thinkingMode: '',
+    speedMode: '',
+    verbosity: '',
+  }
+  selection.applySessionSelection()
+  selection.chooseModelSlug('manual-provider/manual-adapter/manual-model')
+  assert.equal(selection.selectedModelId.value, 'manual-model')
+
+  // A newly created project's session can have neither a run config nor any
+  // messages yet. Those watched values remain unchanged while its ID changes.
+  chat.selectedSessionId = 'session-new-project'
+  await nextTick()
+
+  assert.equal(selection.selectedProviderId.value, 'default-provider')
+  assert.equal(selection.selectedAdapterId.value, 'default-adapter')
+  assert.equal(selection.selectedModelId.value, 'default-model')
+  assert.equal(selection.modelSource.value, 'default')
+})
+
 test('useChatModelSelection: manual model overrides newer session run-config', async () => {
   const { chat, selection } = await createTestHarness({
     selectedSessionId: 'session-1',

@@ -1,0 +1,364 @@
+{
+  "checked_on": "2026-10-04",
+  "recorded_at_utc": "2026-10-03T18:05:25.149587+00:00",
+  "method": "Public official project README or documentation fetched with curl; no Agena tools, service credentials, or project file uploads. Hashes identify fetched bytes; URLs can change.",
+  "sources": [
+    {
+      "id": "agent-browser",
+      "url": "https://raw.githubusercontent.com/vercel-labs/agent-browser/HEAD/README.md",
+      "repository": "https://github.com/vercel-labs/agent-browser",
+      "bytes": 103420,
+      "sha256": "8254bcc72e867ef76b4c6a352ae5d111a991e55fc8488eaee0da6f668f264be2"
+    },
+    {
+      "id": "ast-grep",
+      "url": "https://raw.githubusercontent.com/ast-grep/ast-grep/HEAD/README.md",
+      "repository": "https://github.com/ast-grep/ast-grep",
+      "bytes": 5689,
+      "sha256": "c2b6f0d19696fcb6ef2a0d7711bdaf49d39cc7c9fbbf63b0a3f674eda3c2a2c7"
+    },
+    {
+      "id": "bat",
+      "url": "https://raw.githubusercontent.com/sharkdp/bat/HEAD/README.md",
+      "repository": "https://github.com/sharkdp/bat",
+      "bytes": 33947,
+      "sha256": "df367a657941804edb4fe722edc389a3f597d402370c038cf3edb5a4f881a49f"
+    },
+    {
+      "id": "brave-auth",
+      "url": "https://api-dashboard.search.brave.com/documentation/guides/authentication",
+      "repository": null,
+      "bytes": 56214,
+      "sha256": "c7784f1a23a7ea04f8d81e96bdf1b7aa12fd5320c9854ac4f7eee63c214420bb"
+    },
+    {
+      "id": "brave-search",
+      "url": "https://api-dashboard.search.brave.com/documentation/services/web-search",
+      "repository": null,
+      "bytes": 110890,
+      "sha256": "fcf47de84495b5fb84dfde5caeaa8c3fad7b36cc8eed85e0a905b74d96d49927"
+    },
+    {
+      "id": "chrome-devtools-mcp",
+      "url": "https://raw.githubusercontent.com/ChromeDevTools/chrome-devtools-mcp/HEAD/README.md",
+      "repository": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+      "bytes": 6445,
+      "sha256": "059a0349daaef6bda98eae6d9384ed349ac94b8033b18be817c317a01b472024"
+    },
+    {
+      "id": "crawl4ai",
+      "url": "https://raw.githubusercontent.com/unclecode/crawl4ai/HEAD/README.md",
+      "repository": "https://github.com/unclecode/crawl4ai",
+      "bytes": 26926,
+      "sha256": "c3f6d704fe58c197b59d9ac7fe669fffc5fb3c86fbbc27871253311400e529a6"
+    },
+    {
+      "id": "delta",
+      "url": "https://raw.githubusercontent.com/dandavison/delta/HEAD/README.md",
+      "repository": "https://github.com/dandavison/delta",
+      "bytes": 7783,
+      "sha256": "192dcae133af9f942a909681c607de8aa808119e403d9968ae72ac6f37112396"
+    },
+    {
+      "id": "difftastic",
+      "url": "https://raw.githubusercontent.com/Wilfred/difftastic/HEAD/README.md",
+      "repository": "https://github.com/Wilfred/difftastic",
+      "bytes": 7011,
+      "sha256": "395325cdaeef69a79d2d39befd278cf24a062f1e4a91848482dcb9613bf20c8f"
+    },
+    {
+      "id": "docling",
+      "url": "https://raw.githubusercontent.com/docling-project/docling/HEAD/README.md",
+      "repository": "https://github.com/docling-project/docling",
+      "bytes": 8535,
+      "sha256": "4f55583e9c57442b635a2bdf0c718a9919752a73a18b710b0b5cb57ef23c0aed"
+    },
+    {
+      "id": "duckdb",
+      "url": "https://raw.githubusercontent.com/duckdb/duckdb/HEAD/README.md",
+      "repository": "https://github.com/duckdb/duckdb",
+      "bytes": 3480,
+      "sha256": "907b44f4727089c4475a5f9342e76ed2cdb39cac5619feb4ed9c5c065f5cc559"
+    },
+    {
+      "id": "duf",
+      "url": "https://raw.githubusercontent.com/muesli/duf/HEAD/README.md",
+      "repository": "https://github.com/muesli/duf",
+      "bytes": 4143,
+      "sha256": "e183257f8f3d66eb82882a634218b084c3c53a17c0af8551ed3e9078d414899a"
+    },
+    {
+      "id": "dust",
+      "url": "https://raw.githubusercontent.com/bootandy/dust/HEAD/README.md",
+      "repository": "https://github.com/bootandy/dust",
+      "bytes": 7560,
+      "sha256": "b84fccb8bb0e3263e8acd2166672fbafb5c2c31e0494327d710fd3b68b3628de"
+    },
+    {
+      "id": "exa",
+      "url": "https://docs.exa.ai/reference/search.md",
+      "repository": null,
+      "bytes": 91150,
+      "sha256": "fa3cdde97d7f39c53cc3cecba5519bb498299e7193f0542a5945b99222362d4e"
+    },
+    {
+      "id": "eza",
+      "url": "https://raw.githubusercontent.com/eza-community/eza/HEAD/README.md",
+      "repository": "https://github.com/eza-community/eza",
+      "bytes": 10459,
+      "sha256": "f057eaf79288831a7c0922fc0f9f586dc3adcd3c73f56311262ad5d973b45ac6"
+    },
+    {
+      "id": "fd",
+      "url": "https://raw.githubusercontent.com/sharkdp/fd/HEAD/README.md",
+      "repository": "https://github.com/sharkdp/fd",
+      "bytes": 28132,
+      "sha256": "9c4547aa703c8bf329c862b30053cf138024fb9265dc23541604e9b056dd5811"
+    },
+    {
+      "id": "firecrawl",
+      "url": "https://raw.githubusercontent.com/firecrawl/firecrawl/HEAD/README.md",
+      "repository": "https://github.com/firecrawl/firecrawl",
+      "bytes": 24755,
+      "sha256": "124279f3a47fb239e60b9b5263f8811ba6a9cdc23b1cb36de56984a6f524f2b2"
+    },
+    {
+      "id": "fzf",
+      "url": "https://raw.githubusercontent.com/junegunn/fzf/HEAD/README.md",
+      "repository": "https://github.com/junegunn/fzf",
+      "bytes": 41829,
+      "sha256": "cf04eefdc64236aeb99de2208e17fc43271bee9da798aa639f45baeae84f987c"
+    },
+    {
+      "id": "github-cli",
+      "url": "https://raw.githubusercontent.com/cli/cli/HEAD/README.md",
+      "repository": "https://github.com/cli/cli",
+      "bytes": 6284,
+      "sha256": "5816da6f27253e6e5544e9c8d7b0f652e03200a0345fae1693e50d72fabb8cc4"
+    },
+    {
+      "id": "httpie",
+      "url": "https://raw.githubusercontent.com/httpie/cli/HEAD/README.md",
+      "repository": "https://github.com/httpie/cli",
+      "bytes": 4893,
+      "sha256": "c2eb9bb804c3d07b8865f8347ea95b57ed071e47ea1ca7aef7eb118ff959c3e2"
+    },
+    {
+      "id": "hyperfine",
+      "url": "https://raw.githubusercontent.com/sharkdp/hyperfine/HEAD/README.md",
+      "repository": "https://github.com/sharkdp/hyperfine",
+      "bytes": 10823,
+      "sha256": "b36f8d7009ed5df092dfe58f23b3056ec08b4b7f28ee443912fd4f16837764ca"
+    },
+    {
+      "id": "jq",
+      "url": "https://raw.githubusercontent.com/jqlang/jq/HEAD/README.md",
+      "repository": "https://github.com/jqlang/jq",
+      "bytes": 2603,
+      "sha256": "6857fbaaeb430df947b028d0e74e8135856a6a7a8bb59411e7b1bc8de6515027"
+    },
+    {
+      "id": "just",
+      "url": "https://raw.githubusercontent.com/casey/just/HEAD/README.md",
+      "repository": "https://github.com/casey/just",
+      "bytes": 162532,
+      "sha256": "d82fb3a20f1bd67d0238b8114032d59812a1a2fc9e294c3d3fa2263be76c78e5"
+    },
+    {
+      "id": "markitdown",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/HEAD/README.md",
+      "repository": "https://github.com/microsoft/markitdown",
+      "bytes": 18313,
+      "sha256": "9f9dc0e582d066e8ac671a1f63b3a73c70a7be9909e8be51a7f5aeb5a7c04af2"
+    },
+    {
+      "id": "nbformat",
+      "url": "https://raw.githubusercontent.com/jupyter/nbformat/HEAD/README.md",
+      "repository": "https://github.com/jupyter/nbformat",
+      "bytes": 2303,
+      "sha256": "b094cc8e42b6486ee12c4e4bf0319bf35479a052362554f9075b35ba0c1b0c9d"
+    },
+    {
+      "id": "playwright-auto-wait",
+      "url": "https://playwright.dev/docs/actionability",
+      "repository": null,
+      "bytes": 47845,
+      "sha256": "cded98cec886429590ce55ec29936585a4088567165d8becc35d5e2c81799960"
+    },
+    {
+      "id": "playwright-cli",
+      "url": "https://raw.githubusercontent.com/microsoft/playwright-cli/HEAD/README.md",
+      "repository": null,
+      "bytes": 25617,
+      "sha256": "45680e2004227e89dec1e2764722acb3cb3576db3d65f80ca74f64f6dce97f5e"
+    },
+    {
+      "id": "playwright-mcp",
+      "url": "https://raw.githubusercontent.com/microsoft/playwright-mcp/HEAD/README.md",
+      "repository": "https://github.com/microsoft/playwright-mcp",
+      "bytes": 66837,
+      "sha256": "b33aa71a13d655e96e6b736d0c9de1e5ddea52f205916ca20b876387ff830e87"
+    },
+    {
+      "id": "poppler",
+      "url": "https://poppler.freedesktop.org/",
+      "repository": null,
+      "bytes": 5510,
+      "sha256": "7be952d3b937bf794c2ce0005aeb79293ccd5019d13a9076bd49a5489f9945fc"
+    },
+    {
+      "id": "procs",
+      "url": "https://raw.githubusercontent.com/dalance/procs/HEAD/README.md",
+      "repository": "https://github.com/dalance/procs",
+      "bytes": 34336,
+      "sha256": "cee945d818ca1ed79e122ed393628d0a601a2bd1fb70657ebd75dba7da775802"
+    },
+    {
+      "id": "qsv",
+      "url": "https://raw.githubusercontent.com/dathere/qsv/HEAD/README.md",
+      "repository": "https://github.com/dathere/qsv",
+      "bytes": 83301,
+      "sha256": "109bd80ce0c78f708b20df20f5c335c914f027d10ed4e98ca57e11342e38c6b3"
+    },
+    {
+      "id": "ripgrep",
+      "url": "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/README.md",
+      "repository": "https://github.com/BurntSushi/ripgrep",
+      "bytes": 21599,
+      "sha256": "945622d974f65e4e141ef9726c948c2640eebd222c5b101afb6445728283921e"
+    },
+    {
+      "id": "ripgrep-all",
+      "url": "https://raw.githubusercontent.com/phiresky/ripgrep-all/HEAD/README.md",
+      "repository": "https://github.com/phiresky/ripgrep-all",
+      "bytes": 10010,
+      "sha256": "4f03a73eb9dd6e10d46bd3397bad638e70469efd5ec30e8d2c08566b2232dba1"
+    },
+    {
+      "id": "rtk",
+      "url": "https://raw.githubusercontent.com/rtk-ai/rtk/HEAD/README.md",
+      "repository": "https://github.com/rtk-ai/rtk",
+      "bytes": 29743,
+      "sha256": "c4bbcf366611021de2b2d3dcbfb57c6934ba22f7d08e1ca55c6a23de3b94c3cd"
+    },
+    {
+      "id": "rust-analyzer",
+      "url": "https://raw.githubusercontent.com/rust-lang/rust-analyzer/HEAD/README.md",
+      "repository": "https://github.com/rust-lang/rust-analyzer",
+      "bytes": 2521,
+      "sha256": "12088386740a84f313a37a0e7afc5326385349ee00c4089a3ff3973fee5b5d42"
+    },
+    {
+      "id": "scc",
+      "url": "https://raw.githubusercontent.com/boyter/scc/HEAD/README.md",
+      "repository": "https://github.com/boyter/scc",
+      "bytes": 105154,
+      "sha256": "1767607734b973cc157140bffd2b88078f7857fdb3e9343a48691150df628ba2"
+    },
+    {
+      "id": "sd",
+      "url": "https://raw.githubusercontent.com/chmln/sd/HEAD/README.md",
+      "repository": "https://github.com/chmln/sd",
+      "bytes": 7010,
+      "sha256": "9908fcf52655578892c3f56c80406fa63d59dfb2fdacd86c9e9ed0815b649590"
+    },
+    {
+      "id": "searxng",
+      "url": "https://raw.githubusercontent.com/searxng/searxng/HEAD/README.rst",
+      "repository": null,
+      "bytes": 2296,
+      "sha256": "6a78fb798e890f75c99d2637f83dcdc90bebfdfdc563d24b59b38ef8a673e2ab"
+    },
+    {
+      "id": "semgrep",
+      "url": "https://raw.githubusercontent.com/semgrep/semgrep/HEAD/README.md",
+      "repository": "https://github.com/semgrep/semgrep",
+      "bytes": 20250,
+      "sha256": "cb039cfdcd7f53d69a1e3ac960113a02b9803885f069e6bb299f91b88d78b064"
+    },
+    {
+      "id": "serena",
+      "url": "https://raw.githubusercontent.com/oraios/serena/HEAD/README.md",
+      "repository": "https://github.com/oraios/serena",
+      "bytes": 15104,
+      "sha256": "9b0d78749517f0b91427ae433ab49ec7e77e46620ca367c75d2a082c5f30a4a5"
+    },
+    {
+      "id": "spider",
+      "url": "https://raw.githubusercontent.com/spider-rs/spider/HEAD/README.md",
+      "repository": "https://github.com/spider-rs/spider",
+      "bytes": 5815,
+      "sha256": "dbafb29706680b59c9540c8dc2ddaf8072c2afcc8af97b016e5759820b8a0ae2"
+    },
+    {
+      "id": "tantivy",
+      "url": "https://raw.githubusercontent.com/quickwit-oss/tantivy/HEAD/README.md",
+      "repository": "https://github.com/quickwit-oss/tantivy",
+      "bytes": 7954,
+      "sha256": "dcdc08ce8e41040d0b1eddcc2627c0128ec8527e9a990a7ff343836e03099dd3"
+    },
+    {
+      "id": "tavily",
+      "url": "https://docs.tavily.com/documentation/api-reference/endpoint/search.md",
+      "repository": null,
+      "bytes": 31647,
+      "sha256": "c2591c8505fc2c689638f779431fb49f90606d735700c36ec7e332a3f3de262f"
+    },
+    {
+      "id": "tokei",
+      "url": "https://raw.githubusercontent.com/XAMPPRocky/tokei/HEAD/README.md",
+      "repository": "https://github.com/XAMPPRocky/tokei",
+      "bytes": 14595,
+      "sha256": "6bdbc5efa11b5794e56af481996af5df3ef09cde2f3aa2a3ae4ac14a1078d890"
+    },
+    {
+      "id": "trafilatura",
+      "url": "https://raw.githubusercontent.com/adbar/trafilatura/HEAD/README.md",
+      "repository": "https://github.com/adbar/trafilatura",
+      "bytes": 9293,
+      "sha256": "42962884fec6a66270f58a71f2b7494e294cf0b0881691eb79e50bbec55bc25a"
+    },
+    {
+      "id": "uv",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/HEAD/README.md",
+      "repository": "https://github.com/astral-sh/uv",
+      "bytes": 9859,
+      "sha256": "57a84a5a635f30e3a26541ebc16ca690944a7750f05713b1af92d3170b58f704"
+    },
+    {
+      "id": "watchexec",
+      "url": "https://raw.githubusercontent.com/watchexec/watchexec/HEAD/README.md",
+      "repository": "https://github.com/watchexec/watchexec",
+      "bytes": 4258,
+      "sha256": "625f2e3126cfadde51fc70cab0bc70f36f63d9566c22239c7ab21817c0dc2bc9"
+    },
+    {
+      "id": "xan",
+      "url": "https://raw.githubusercontent.com/medialab/xan/HEAD/README.md",
+      "repository": "https://github.com/medialab/xan",
+      "bytes": 37753,
+      "sha256": "05158ee163b07f88bf7f01ecc387f16a0c6cf7056d1b5b39b2272d60e6d8eb79"
+    },
+    {
+      "id": "xh",
+      "url": "https://raw.githubusercontent.com/ducaale/xh/HEAD/README.md",
+      "repository": "https://github.com/ducaale/xh",
+      "bytes": 12804,
+      "sha256": "13451467dc1134e2eb6de3fb79530113a386099a747e37541fe105b7a2f066cb"
+    },
+    {
+      "id": "yq",
+      "url": "https://raw.githubusercontent.com/mikefarah/yq/HEAD/README.md",
+      "repository": "https://github.com/mikefarah/yq",
+      "bytes": 18338,
+      "sha256": "87a2abca7077d480d54265e9da1a1c1b41d523efcb1ad72932ad4698b9482f13"
+    },
+    {
+      "id": "zoxide",
+      "url": "https://raw.githubusercontent.com/ajeetdsouza/zoxide/HEAD/README.md",
+      "repository": "https://github.com/ajeetdsouza/zoxide",
+      "bytes": 23525,
+      "sha256": "a36d76c76de48fe56ef074307695aa32de4ba0d161c8a855ed8870f6f889ec1a"
+    }
+  ]
+}

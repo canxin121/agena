@@ -41,7 +41,9 @@ pub(crate) async fn run(request: ServerLaunchRequest) -> Result<(), AgenaProcess
             }
             #[cfg(not(target_os = "macos"))]
             {
-                anyhow::bail!("`agena server permissions` is only needed on macOS")
+                Err(anyhow::anyhow!(
+                    "`agena server permissions` is only needed on macOS"
+                ))
             }
         }
     };

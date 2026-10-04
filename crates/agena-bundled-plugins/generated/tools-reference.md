@@ -9055,31 +9055,22 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured search provider (HTML, Brave, Tavily, Exa or SearXNG). Explicit bing/duckduckgo/baidu selects that HTML engine. API providers return at most 20 results and report failures without switching providers. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.
+> Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines; source is the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Verification, consent and JavaScript-only pages are source failures. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `allowed_domains` | `array<string>` | — | — |  |
 | `blocked_domains` | `array<string>` | — | — |  |
-| `engine` | `WebSearchEngineSelection / null` | — | — |  |
-| `max_results` | `integer / null` | — | — |  |
+| `engine` | `string / null` | — | — | Omit or use auto for the configured provider. HTML auto searches all eight engines concurrently.<br>Use one name or a comma-separated list, e.g. "baidu,google", to query only those free HTML<br>websites concurrently, overriding the configured API provider. Names: duckduckgo, bing, baidu,<br>yandex, google, yahoo, brave, naver. Case and surrounding spaces are ignored; duplicates run<br>once, in first-occurrence order. auto must stand alone; empty or unknown names are errors. |
+| `max_pages_per_engine` | `integer / null` | — | — | HTML only: maximum pages per engine, including the first page; not a starting page or offset.<br>Default 1 (configurable), capped by search.max_pages_per_engine. Stops early when the candidate<br>budget is reached or a page has no new URLs. Increase both HTML budgets for deeper retrieval. |
+| `max_results` | `integer / null` | — | — | Maximum total results after domain filtering, URL deduplication and ranking.<br>Default 5, capped by search.max_limit (default 20). Does not increase HTML retrieval budgets. |
+| `max_results_per_engine` | `integer / null` | — | — | HTML only: distinct candidates to collect per engine before domain filtering.<br>Default 10 (configurable); independent of max_results and capped by search.max_results_per_engine. |
 | `query` | `string` | ✓ | — |  |
 
 **Input schema**:
 ```json
 {
-  "$defs": {
-    "WebSearchEngineSelection": {
-      "enum": [
-        "auto",
-        "bing",
-        "duckduckgo",
-        "baidu"
-      ],
-      "type": "string"
-    }
-  },
   "additionalProperties": false,
   "properties": {
     "allowed_domains": {
@@ -9088,7 +9079,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       },
       "maxItems": 64,
       "type": "array",
-      "x-agena-order": "000003"
+      "x-agena-order": "000005"
     },
     "blocked_domains": {
       "items": {
@@ -9096,20 +9087,31 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       },
       "maxItems": 64,
       "type": "array",
-      "x-agena-order": "000004"
+      "x-agena-order": "000006"
     },
     "engine": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/WebSearchEngineSelection"
-        },
-        {
-          "type": "null"
-        }
+      "description": "Omit or use auto for the configured provider. HTML auto searches all eight engines concurrently.\nUse one name or a comma-separated list, e.g. \"baidu,google\", to query only those free HTML\nwebsites concurrently, overriding the configured API provider. Names: duckduckgo, bing, baidu,\nyandex, google, yahoo, brave, naver. Case and surrounding spaces are ignored; duplicates run\nonce, in first-occurrence order. auto must stand alone; empty or unknown names are errors.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000004"
+    },
+    "max_pages_per_engine": {
+      "description": "HTML only: maximum pages per engine, including the first page; not a starting page or offset.\nDefault 1 (configurable), capped by search.max_pages_per_engine. Stops early when the candidate\nbudget is reached or a page has no new URLs. Increase both HTML budgets for deeper retrieval.",
+      "format": "uint32",
+      "maximum": 5,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000003"
     },
     "max_results": {
+      "description": "Maximum total results after domain filtering, URL deduplication and ranking.\nDefault 5, capped by search.max_limit (default 20). Does not increase HTML retrieval budgets.",
       "format": "uint32",
       "maximum": 50,
       "minimum": 1,
@@ -9118,6 +9120,17 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
         "null"
       ],
       "x-agena-order": "000001"
+    },
+    "max_results_per_engine": {
+      "description": "HTML only: distinct candidates to collect per engine before domain filtering.\nDefault 10 (configurable); independent of max_results and capped by search.max_results_per_engine.",
+      "format": "uint32",
+      "maximum": 50,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
     },
     "query": {
       "maxLength": 8192,

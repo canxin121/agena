@@ -1104,6 +1104,7 @@ dependencies = [
  "path-clean",
  "portable-atomic",
  "process_control",
+ "rayon",
  "regex",
  "schemars",
  "sea-orm",

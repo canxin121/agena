@@ -8,7 +8,7 @@ Implementation worktree: `/Volumes/Rc20/Projects/agena-tool-modernization`; bran
 | --- | --- | --- |
 | Modern CLI availability and routing | Runtime PATH-aware discovery, accurate identity/availability, bounded optional probes, deterministic tests; modern CLI scenarios from every research table row accounted for | In progress |
 | Unified command effects and exit semantics | Shared classification for runtime/workflow; executable/subcommand/flag/quoting cases; no automatic rewrites; meaningful regression tests | In progress |
-| Grep/glob completeness, output control and performance | Literal/case/context/output/filter controls; explicit truncation; bounded and cancellable work; equivalent-result benchmarks including in-process implementations | Functional changes implemented and targeted tests pass; throughput optimization still pending |
+| Grep/glob completeness, output control and performance | Literal/case/context/output/filter controls; explicit truncation; bounded and cancellable work; equivalent-result benchmarks including in-process implementations | Grep controls, bounded persistent parallelism and equivalence benchmarks implemented; glob profiling in progress |
 | AST and language-server improvements | Structural rules/rewrites and language-server availability/use; revision-safe changes; integration tests and documented optional semantic backend | Pending |
 | Search providers | Working configurable structured providers and self-hosted option; credentials and network effects; deterministic HTTP fixtures and error/limit tests | Implemented and fixture-validated; live relevance/latency not measured |
 | Browser modernization | Functional mature optional backend with session/permission/download ownership; real browser behavior and lifecycle checks | Pending |
@@ -97,4 +97,23 @@ AGENA_NOTEBOOK_REFERENCE_OUTPUT=/tmp/agena-notebook-edits.json cargo test --lock
 uv run --no-project --python 3.13 --with nbformat==5.11.1 python tools/verify_notebook_reference.py --outputs /tmp/agena-notebook-edits.json
 ```
 
-The optimized in-process grep equivalence benchmark is currently compiling/running. The only recorded completed measurement remains the slower debug experiment above. The AST audit also found that reaching its match limit currently stops without marking incomplete results; fix that alongside rule/rewrite extensions.
+## Optimized search measurements and parallel implementation
+
+The serial optimized benchmark completed (`tool-modernization-search-benchmark-release.json`): sparse-match medians were 84.306 ms legacy / 84.481 ms enhanced (+0.2%), and no-match medians were 85.546 / 87.055 ms (+1.8%). These show near-parity for this corpus, not a speedup.
+
+The first parallel prototype reserved byte budgets before dispatch, used at most sixteen jobs per batch and four workers, merged in sorted discovery order, and counted speculative reads. Tests cover context ordering, exact limits across batch boundaries, disjoint byte budgets and changed-file reservations. All 163 runtime-tools tests passed (two opt-in benchmarks ignored), and Clippy passed with `-D warnings`.
+
+That prototype recreated OS threads for each batch. Its optimized synthetic sparse-match median regressed (81.608 ms legacy / 94.133 ms enhanced), while no-match improved (76.611 / 68.021 ms). The actual repository experiment improved both workloads (61.180 / 53.648 ms and 86.810 / 76.407 ms). Complete rows were equal every iteration, but the samples show substantial host-load variance. Raw measurements are retained in `tool-modernization-search-benchmark-parallel-release.json` and `tool-modernization-search-benchmark-repository.json`; the earlier debug gains are not a product performance claim.
+
+The implementation now uses a dedicated persistent Rayon pool, limited to four threads process-wide, instead of per-batch thread creation. It preserves the same budget and ordering contracts. Fourteen grep regression tests passed, followed by all 163 runtime-tools tests (two opt-in benchmarks ignored) and Clippy with `-D warnings`.
+
+| Persistent-pool optimized workload | Legacy median | Enhanced median | Legacy / enhanced |
+| --- | ---: | ---: | ---: |
+| Synthetic sparse match, 2,048 files | 36.211 ms | 34.674 ms | 1.04× |
+| Synthetic no match, 2,048 files | 41.898 ms | 43.427 ms | 0.96× |
+| Repository sparse match, 1,234 Rust files | 33.674 ms | 32.234 ms | 1.04× |
+| Repository no match, 1,234 Rust files | 56.733 ms | 42.829 ms | 1.32× |
+
+`tool-modernization-search-benchmark-pool-release.json` and `tool-modernization-search-benchmark-pool-repository.json` retain all 21 samples, corpus/result hashes and equality checks. Results are mixed: no uniform speedup claim is supported. Do not compare absolute timings across separate runs as controlled measurements. The dedicated pool avoids the thread churn of the prototype and caps aggregate worker threads across concurrent searches; sorted discovery and bounded merge remain deliberate constraints.
+
+The AST audit found that reaching its match limit currently stops without marking incomplete results. The LSP registry also selects overlapping extensions using HashMap iteration and caches clients only by server name despite resolving multiple project roots. These defects remain to be repaired alongside the pending AST/LSP extensions.

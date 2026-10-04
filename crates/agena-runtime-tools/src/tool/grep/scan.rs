@@ -16,6 +16,8 @@ pub(super) struct FileRequest<'a> {
     pub remaining_output: usize,
     pub remaining_bytes: u64,
     pub max_file_bytes: u64,
+    /// Directory batches reserve the observed length before starting workers.
+    pub expected_len: Option<u64>,
     pub deadline: Instant,
     pub cancel: Option<&'a CancellationToken>,
 }
@@ -231,6 +233,15 @@ pub(super) fn search_file(
             ..FileResult::default()
         });
     }
+    if request
+        .expected_len
+        .is_some_and(|length| length != before.len())
+    {
+        return Ok(FileResult {
+            changed: true,
+            ..FileResult::default()
+        });
+    }
     if before.len() > request.max_file_bytes {
         return Ok(FileResult {
             too_large: true,
@@ -264,9 +275,10 @@ pub(super) fn search_file(
         tracing::debug!(path = %request.path.display(), %error, "grep cannot recheck opened file");
         sink.result.io_error = true;
     }
-    let changed = after.as_ref().is_ok_and(|after| {
-        before.len() != after.len() || before.modified().ok() != after.modified().ok()
-    });
+    let changed = (request.expected_len.is_some() && reader.hit_limit)
+        || after.as_ref().is_ok_and(|after| {
+            before.len() != after.len() || before.modified().ok() != after.modified().ok()
+        });
     if sink.result.binary || changed {
         return Ok(FileResult {
             bytes_read: reader.bytes_read,
@@ -317,6 +329,7 @@ mod tests {
             remaining_output: 256 * 1024,
             remaining_bytes: 4,
             max_file_bytes: 4,
+            expected_len: None,
             deadline: Instant::now() + std::time::Duration::from_secs(5),
             cancel: None,
         }
@@ -358,6 +371,23 @@ mod tests {
         assert!(reader.read(&mut buffer).is_err());
         assert!(reader.hit_limit);
         assert_eq!(reader.bytes_read, 4);
+    }
+    #[test]
+    fn changed_length_invalidates_a_reserved_file_without_consuming_other_budgets() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("file");
+        std::fs::write(&path, b"hit\n").unwrap();
+        let mut req = request(&path);
+        req.expected_len = Some(0);
+        let mut searcher = grep_searcher::SearcherBuilder::new()
+            .line_number(true)
+            .build();
+        let matcher = grep_regex::RegexMatcher::new("hit").unwrap();
+        let result = search_file(&mut searcher, &matcher, req).unwrap();
+        assert!(result.changed);
+        assert!(result.records.is_empty());
+        assert_eq!(result.bytes_read, 0);
+        assert_eq!(result.stop_reason, None);
     }
     #[cfg(unix)]
     #[test]

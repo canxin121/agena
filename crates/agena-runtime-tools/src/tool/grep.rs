@@ -1,6 +1,7 @@
 //! Bounded in-process ripgrep search. Count limits apply to files, not lines.
 #[cfg(test)]
 mod benchmark;
+mod parallel;
 mod scan;
 #[cfg(test)]
 mod tests;
@@ -55,6 +56,7 @@ impl StopReason {
 
 #[derive(Debug)]
 struct SearchLimits {
+    parallelism: usize,
     max_results: usize,
     max_visited_entries: usize,
     max_searched_files: usize,
@@ -66,6 +68,7 @@ struct SearchLimits {
 impl Default for SearchLimits {
     fn default() -> Self {
         Self {
+            parallelism: 4,
             max_results: MAX_MATCHES,
             max_visited_entries: MAX_VISITED_ENTRIES,
             max_searched_files: MAX_SEARCHED_FILES,
@@ -322,96 +325,16 @@ fn collect_matches(
     )?;
     let exclude = compile_globs(input.exclude.iter().map(String::as_str))?;
     let include_ignored = effective_include_ignored(input.include_ignored, base_path, workspace);
-    let started = Instant::now();
-    // Reuse buffers across files instead of rebuilding a searcher for each path.
-    let mut searcher = SearcherBuilder::new()
-        .line_number(true)
-        .before_context(input.before_context as usize)
-        .after_context(input.after_context as usize)
-        .binary_detection(BinaryDetection::quit(b'\0'))
-        .heap_limit(Some(SEARCHER_HEAP_BYTES))
-        .build();
-    let mut records = Vec::new();
-    let mut stats = SearchStats::default();
-    let mut returned_matches = 0;
-    let mut output_bytes = 0;
-    for entry in walk_builder(base_path, include_ignored).build() {
-        if cancel.is_some_and(CancellationToken::is_cancelled) {
-            return Err(ToolError::Cancelled);
-        }
-        if started.elapsed() >= limits.max_duration {
-            stats.stop_reason = Some(StopReason::Deadline);
-            break;
-        }
-        if stats.visited_entries >= limits.max_visited_entries {
-            stats.stop_reason = Some(StopReason::Entries);
-            break;
-        }
-        stats.visited_entries += 1;
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                stats.skipped_io_errors += 1;
-                tracing::debug!(%error, "grep skipped unreadable entry");
-                continue;
-            }
-        };
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
-        }
-        let relative = if metadata.is_file() {
-            entry
-                .path()
-                .file_name()
-                .map(Path::new)
-                .unwrap_or(entry.path())
-        } else {
-            entry.path().strip_prefix(base_path).unwrap_or(entry.path())
-        };
-        let relative = normalize_path_for_display(relative);
-        if (!include.is_empty() && !include.is_match(&relative)) || exclude.is_match(&relative) {
-            continue;
-        }
-        if stats.searched_files >= limits.max_searched_files {
-            stats.stop_reason = Some(StopReason::Files);
-            break;
-        }
-        let display_path = normalize_path_for_display(
-            entry.path().strip_prefix(workspace).unwrap_or(entry.path()),
-        );
-        let result = scan::search_file(
-            &mut searcher,
-            &matcher,
-            scan::FileRequest {
-                path: entry.path(),
-                display_path: &display_path,
-                mode: input.mode,
-                remaining_results: limits.max_results - returned_matches,
-                remaining_output: limits.max_output_bytes - output_bytes,
-                remaining_bytes: limits.max_total_bytes - stats.searched_bytes,
-                max_file_bytes: limits.max_file_bytes,
-                deadline: started + limits.max_duration,
-                cancel,
-            },
-        )?;
-        stats.searched_files += 1;
-        stats.searched_bytes += result.bytes_read;
-        stats.skipped_large_files += usize::from(result.too_large);
-        stats.skipped_io_errors += usize::from(result.io_error);
-        stats.skipped_changed_files += usize::from(result.changed);
-        stats.binary_files += usize::from(result.binary);
-        stats.shortened_lines += result.shortened_lines;
-        returned_matches += result.returned_matches;
-        output_bytes += result.output_bytes;
-        records.extend(result.records);
-        if let Some(reason) = result.stop_reason {
-            stats.stop_reason = Some(reason);
-            break;
-        }
-    }
-    Ok(SearchResult {
-        records,
-        stats,
-        returned_matches,
+    parallel::collect(parallel::Plan {
+        base: base_path,
+        workspace,
+        base_is_file: metadata.is_file(),
+        input,
+        matcher: &matcher,
+        include,
+        exclude,
+        include_ignored,
+        cancel,
+        limits,
     })
 }

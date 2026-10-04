@@ -12,6 +12,99 @@ fn run(root: &Path, value: serde_json::Value) -> SearchResult {
     };
     collect_matches(root, root, &input, None, &limits).unwrap()
 }
+
+#[test]
+fn parallel_batches_preserve_order_context_and_global_result_budgets() {
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..48 {
+        std::fs::write(
+            root.path().join(format!("file-{index:03}.txt")),
+            if index % 11 == 0 {
+                "hit\n\0binary"
+            } else {
+                "before\nhit\nmiddle\nhit\nafter\n"
+            },
+        )
+        .unwrap();
+    }
+    for mode in ["content", "files", "count"] {
+        for limit in [3, 27, 500] {
+            let mut value = json!({"pattern":"hit", "mode":mode});
+            if mode == "content" {
+                value["before_context"] = json!(1);
+                value["after_context"] = json!(1);
+            }
+            let input = input(value);
+            let serial = collect_matches(
+                root.path(),
+                root.path(),
+                &input,
+                None,
+                &SearchLimits {
+                    parallelism: 1,
+                    max_results: limit,
+                    ..SearchLimits::default()
+                },
+            )
+            .unwrap();
+            let parallel = collect_matches(
+                root.path(),
+                root.path(),
+                &input,
+                None,
+                &SearchLimits {
+                    parallelism: 4,
+                    max_results: limit,
+                    ..SearchLimits::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&serial.records).unwrap(),
+                serde_json::to_value(&parallel.records).unwrap()
+            );
+            assert_eq!(serial.stats.stop_reason, parallel.stats.stop_reason);
+            assert_eq!(serial.returned_matches, parallel.returned_matches);
+            assert!(parallel.returned_matches <= limit);
+        }
+    }
+}
+
+#[test]
+fn batch_boundaries_prove_exact_limits_and_reserve_disjoint_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..16 {
+        std::fs::write(root.path().join(format!("file-{index:03}")), "hit\n").unwrap();
+    }
+    let input = input(json!({"pattern":"hit"}));
+    let limits = SearchLimits {
+        max_results: 16,
+        ..SearchLimits::default()
+    };
+    let exact = collect_matches(root.path(), root.path(), &input, None, &limits).unwrap();
+    assert_eq!(exact.returned_matches, 16);
+    assert!(exact.stats.scan_complete());
+    std::fs::write(root.path().join("file-016"), "hit\n").unwrap();
+    let more = collect_matches(root.path(), root.path(), &input, None, &limits).unwrap();
+    assert_eq!(more.returned_matches, 16);
+    assert_eq!(more.stats.stop_reason, Some(StopReason::Results));
+    for bytes in [0, 3, 4, 7, 8, 64, 68] {
+        let result = collect_matches(
+            root.path(),
+            root.path(),
+            &input,
+            None,
+            &SearchLimits {
+                max_total_bytes: bytes,
+                ..SearchLimits::default()
+            },
+        )
+        .unwrap();
+        assert!(result.stats.searched_bytes <= bytes);
+        assert_eq!(result.returned_matches as u64, (bytes / 4).min(17));
+        assert_eq!(result.stats.scan_complete(), bytes == 68);
+    }
+}
 fn lines(result: &SearchResult) -> Vec<(u64, &str, bool)> {
     result
         .records

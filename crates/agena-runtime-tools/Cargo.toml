@@ -39,6 +39,7 @@ parking_lot = { workspace = true }
 path-clean = { workspace = true }
 process_control = { workspace = true }
 regex = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }

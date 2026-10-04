@@ -39,7 +39,7 @@ For unknown tools, search by task with `tools_search`, using a `plugin` or `tags
 
 # Choosing tools
 
-When available, use `fs.glob` for paths, `fs.grep` for text, `code.search_ast` for syntax patterns, and LSP for symbols. Prefer `fs.read_many` for small file batches; retain revision checks with `fs.replace`, `fs.write` and `fs.apply_patch`.
+When available, use `fs.glob` for paths, `fs.grep` for text, `code.search_ast` for syntax patterns, and LSP for symbols. Prefer `fs.read_many` for small file batches and `fs.document` for local PDF/Office text. Preview `code.rewrite_ast` before applying its revision. Retain revision checks with `fs.replace`, `fs.write` and `fs.apply_patch`.
 
 In shell, prefer rg over recursive grep, fd or rg --files for paths, jq for JSON, and ast-grep for code structure. Use task-specific tools for structured data/documents; `session.executables` provides availability, usage and optional versions. Follow the actual runtime PATH, project toolchain and user-supplied commands; do not install dependencies or rewrite scripts merely to modernize them. Fall back when a preferred tool is unavailable.
 

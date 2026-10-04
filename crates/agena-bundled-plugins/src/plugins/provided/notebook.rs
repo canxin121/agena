@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod schema;
 mod validation;
 
 pub(crate) const NOTEBOOK_PLUGIN_ID: &str = "agena.notebook";
@@ -187,6 +188,9 @@ impl NotebookPlugin {
                         })?;
                         let previous_type = object.get("cell_type").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
                         let kind = input.cell_type.map(|kind| kind.as_str().to_string()).unwrap_or(previous_type.clone());
+                        if !matches!(kind.as_str(), "code" | "markdown" | "raw") {
+                            return Err(PluginError::invalid_params("editing a future cell type requires an explicit supported cell_type"));
+                        }
                         object.insert("cell_type".into(), serde_json::Value::String(kind.clone()));
                         object.insert("source".to_string(), notebook_source(input.source.as_str()));
                         let preserve_outputs = input.preserve_outputs && previous_type == "code" && kind == "code";
@@ -280,7 +284,7 @@ impl NotebookPlugin {
 }
 
 fn new_cell(cell_type: NotebookCellType, source: &str) -> serde_json::Value {
-    let mut cell = match cell_type {
+    match cell_type {
         NotebookCellType::Code => serde_json::json!({
             "cell_type": "code",
             "execution_count": null,
@@ -298,9 +302,7 @@ fn new_cell(cell_type: NotebookCellType, source: &str) -> serde_json::Value {
             "metadata": {},
             "source": notebook_source(source),
         }),
-    };
-    cell["id"] = serde_json::Value::String(uuid::Uuid::new_v4().simple().to_string());
-    cell
+    }
 }
 
 fn notebook_source(source: &str) -> serde_json::Value {
@@ -344,6 +346,95 @@ mod tests {
     use agena_plugin_host::sdk::{Plugin, ToolInvokeContext};
 
     use super::*;
+
+    #[tokio::test]
+    async fn raw_attachments_and_legacy_ids_survive_cell_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.ipynb");
+        let context = ToolInvokeContext {
+            tool_name: "edit_cell",
+            session_id: 1,
+            call_id: 1,
+            workspace_root: dir.path().to_str().unwrap(),
+        };
+        let attachments = serde_json::json!({"note.txt":{"text/plain":"retained attachment"}});
+        let mut exported = Vec::new();
+        for minor in 0..=5 {
+            let mut cell = serde_json::json!({"cell_type":"raw", "metadata":{}, "source":"old", "attachments":attachments});
+            if minor >= 5 {
+                cell["id"] = serde_json::json!("original-id");
+            }
+            let book = serde_json::json!({"nbformat":4, "nbformat_minor":minor, "metadata":{}, "cells":[cell]});
+            std::fs::write(&path, serde_json::to_vec(&book).unwrap()).unwrap();
+            for action in [NotebookEditAction::Replace, NotebookEditAction::InsertAfter] {
+                let original = std::fs::read(&path).unwrap();
+                NotebookPlugin
+                    .edit_cell(
+                        &context,
+                        &NotebookEditInput {
+                            path: "fixture.ipynb".into(),
+                            action,
+                            cell_index: 0,
+                            cell_type: None,
+                            source: "new source\n".into(),
+                            preserve_outputs: false,
+                            expected_sha256: sha256(&original),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                let updated: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                assert_eq!(updated["cells"][0]["attachments"], attachments);
+                for cell in updated["cells"].as_array().unwrap() {
+                    assert_eq!(cell.get("id").is_some(), minor >= 5);
+                }
+                schema::validate(&updated, minor).unwrap();
+                exported.push(updated);
+            }
+        }
+        // Optional evidence for the separate Python/nbformat reference check.
+        if let Some(output) = std::env::var_os("AGENA_NOTEBOOK_REFERENCE_OUTPUT") {
+            std::fs::write(output, serde_json::to_vec_pretty(&exported).unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_unedited_mime_output_prevents_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.ipynb");
+        let mut book = serde_json::json!({"nbformat":4, "nbformat_minor":5, "metadata":{}, "cells":[
+            new_cell(NotebookCellType::Code, "old"), new_cell(NotebookCellType::Code, "other")
+        ]});
+        book["cells"][1]["outputs"] = serde_json::json!([{
+            "output_type":"display_data", "metadata":{}, "data":{"text/plain":{"invalid":true}}
+        }]);
+        let original = serde_json::to_vec(&book).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let context = ToolInvokeContext {
+            tool_name: "edit_cell",
+            session_id: 1,
+            call_id: 1,
+            workspace_root: dir.path().to_str().unwrap(),
+        };
+        let error = NotebookPlugin
+            .edit_cell(
+                &context,
+                &NotebookEditInput {
+                    path: "fixture.ipynb".into(),
+                    action: NotebookEditAction::Replace,
+                    cell_index: 0,
+                    cell_type: None,
+                    source: "new".into(),
+                    preserve_outputs: false,
+                    expected_sha256: sha256(&original),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("schema validation failed"));
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
 
     #[tokio::test]
     async fn replaces_cell_with_revision_check_and_clears_outputs() {

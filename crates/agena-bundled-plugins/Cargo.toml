@@ -29,6 +29,7 @@ chrono = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
 ignore = { workspace = true }
+jsonschema = { workspace = true }
 notify = { workspace = true }
 process_control = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "multipart", "stream"] }

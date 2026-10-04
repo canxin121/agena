@@ -14,7 +14,7 @@ Implementation worktree: `/Volumes/Rc20/Projects/agena-tool-modernization`; bran
 | Browser modernization | Functional mature optional backend with session/permission/download ownership; real browser behavior and lifecycle checks | Pending |
 | Fetch/crawl/extraction | Existing third-party stack audited; working optional quality backends where useful; bounded output, cancellation and representative fixtures | Pending |
 | Local document content | Functional local format conversion/search adapter, capability discovery, clear missing dependencies, fixture-based validation | Pending |
-| Read/write/patch/notebook | Existing revision/publication contracts preserved, discovered defects fixed, batch and notebook compatibility validated | Pending |
+| Read/write/patch/notebook | Existing revision/publication contracts preserved, discovered defects fixed, batch and notebook compatibility validated | Publication checks and notebook schema compatibility implemented; remaining read/write audit in progress |
 | Shell/process/monitor/snapshot lifecycle | Audit and fix actual defects; modern tools remain within existing lifecycle/effect contracts; lifecycle regressions | Pending |
 | Memory, discovery, stateful and hosted tools | Inventory-wide audit, retained engines justified by evidence, affected correctness/contract tests passing | Pending |
 | Concise, formatted and effective prompts | Reduced assembled prompt budget while retaining actual behavioral requirements, modern-tool guidance, clear headings, no redundant tool schemas; behavior/format/budget checks | Implemented; deterministic obligations/format/byte-budget tests pass; no model task-success evaluation yet |
@@ -68,7 +68,7 @@ AGENA_SEARCH_BENCH_OUTPUT=docs/research/tool-modernization-search-benchmark.json
 
 The earlier table's pending areas remain mandatory; none is satisfied merely by the CLI catalog. In particular, finish validation of structured search providers and implement a functional optional mature browser backend, local document adapters, AST rule/rewrite extensions and fetch/extraction options. Account for optional analysis/display tools deliberately, retaining raw logs and exit codes for any compression experiment.
 
-Publication-time revision checks have been added, but the rest of the file/notebook audit and nbformat reference validation remain pending. Even a final comparison cannot make arbitrary external writers participate in the sidecar-lock protocol; state that boundary honestly.
+Publication-time revision checks and nbformat reference validation have been added; the remaining file audit is still required. Even a final comparison cannot make arbitrary external writers participate in the sidecar-lock protocol; state that boundary honestly.
 
 ## Structured search providers
 
@@ -79,3 +79,22 @@ Foundation implementation is committed as `dea9c58f`. The next changes add confi
 - API errors do not cause automatic retries or cross-provider fallback. Errors retain status and numeric retry delay without echoing response bodies or credentials. Bounded streaming works with or without Content-Length.
 - Result normalization covers provider attribution, domain allow/block filters, duplicate URLs, malformed rows, SearXNG partial failures, text clipping and provider-reported usage. Four request/response shapes, status/JSON errors, budgets, timeouts, DNS pinning and the actual SearXNG plugin dispatch are covered by local fixtures. Live relevance, paid-service availability and comparative latency remain unmeasured.
 - Verification: 237 tests passed across all `agena-web` and `agena-bundled-plugins` unit/integration/doc targets. Clippy passed for those crates plus `agena-runtime-tools`, including all targets and `-D warnings`. Generated references and identities were refreshed; the only identity change is `web.search`'s documented input bounds/help/network tag. Source retrieval hashes are in `tool-modernization-provider-sources.json`.
+
+## Notebook reference implementation and compatibility
+
+Structured search was committed as `fb84eb81`. The notebook audit then found that hand-written validation rejected/deleted valid raw-cell attachments and that inserted cells always received an `id`, even in older nbformat 4.0–4.4 files where it is an unknown field.
+
+- The editor now preserves attachments across raw/markdown edits and conversions, removes them when converting to code, and adds IDs only for notebook minor versions 5 and newer.
+- Six unmodified official schemas from nbformat 5.11.1 replace the incomplete hand-written field checks. Their BSD-3-Clause license, source/version and SHA-256 hashes are included alongside the schemas. Runtime validation uses the workspace's existing Rust `jsonschema` implementation; Python is only a test reference dependency.
+- Future minor versions follow nbformat's additional-property/unknown-cell/unknown-output relaxation, preserving fields the current implementation does not understand. Editing an unknown target cell type requires an explicit supported type. Duplicate IDs remain an explicit conflict instead of accepting nbformat's warning-and-repair behavior.
+- Twenty-four positive/negative reference cases cover all six current minor versions, attachment/MIME rules, notebook/cell metadata, unknown fields, output shape, duplicate IDs and future minor versions. Twelve real edited files (replace/insert for all six minor versions) passed Python nbformat validation. An invalid unedited MIME output prevents publication.
+- All 149 bundled unit tests passed. The full bundled run had one integration failure because its old assertion required raw attachments to be deleted; that expectation was corrected, and all three notebook correctness integration tests passed afterward. All other integration/doc targets passed in the full run. Clippy passed with all targets and `-D warnings` after the correction. No final workspace pass is claimed yet.
+
+Reproduce the independent reference check (with Python 3.13 available):
+
+```sh
+AGENA_NOTEBOOK_REFERENCE_OUTPUT=/tmp/agena-notebook-edits.json cargo test --locked -p agena-bundled-plugins --lib raw_attachments_and_legacy_ids_survive_cell_edits
+uv run --no-project --python 3.13 --with nbformat==5.11.1 python tools/verify_notebook_reference.py --outputs /tmp/agena-notebook-edits.json
+```
+
+The optimized in-process grep equivalence benchmark is currently compiling/running. The only recorded completed measurement remains the slower debug experiment above. The AST audit also found that reaching its match limit currently stops without marking incomplete results; fix that alongside rule/rewrite extensions.

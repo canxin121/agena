@@ -1,0 +1,32 @@
+{
+  "package": "nbformat",
+  "version": "5.11.1",
+  "source": "https://github.com/jupyter/nbformat/tree/v5.11.1/nbformat/v4",
+  "license": "BSD-3-Clause",
+  "files": [
+    {
+      "file": "nbformat.v4.0.schema.json",
+      "sha256": "573477534050198c20629c0dc2ef2b543479a41d5dbc87b3ba614e85a191c2de"
+    },
+    {
+      "file": "nbformat.v4.1.schema.json",
+      "sha256": "eea4f3b35fae4fd3afafe96fa6ceebe64686e3457b3035ed43c0e7999bb30be0"
+    },
+    {
+      "file": "nbformat.v4.2.schema.json",
+      "sha256": "08b23013c5148935f39184245ac96dbc001d526f2321ad82eb8dd98dabf732fd"
+    },
+    {
+      "file": "nbformat.v4.3.schema.json",
+      "sha256": "1441b5c14cd69f0dc7de0e7ef85471b41119beb2dc401c209ca2433cfbd398a3"
+    },
+    {
+      "file": "nbformat.v4.4.schema.json",
+      "sha256": "dddf3bff4c0bd42bd467117321d72bceddb8de7361b0cc9581bd8318e9b4d3c8"
+    },
+    {
+      "file": "nbformat.v4.5.schema.json",
+      "sha256": "523e3578ddbfcad52933d2423dc5951114ef73f48df180b6a601498ba5ca071a"
+    }
+  ]
+}

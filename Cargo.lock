@@ -272,6 +272,7 @@ dependencies = [
  "futures-util",
  "hex",
  "ignore",
+ "jsonschema",
  "libc",
  "notify",
  "portable-atomic",

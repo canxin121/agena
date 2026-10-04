@@ -232,7 +232,7 @@ fn notebook(cell_type: &str) -> Value {
         cell["outputs"] = json!([{"output_type":"stream","name":"stdout","text":["old\n"]}]);
         cell["execution_count"] = json!(1);
     }
-    if cell_type == "markdown" {
+    if matches!(cell_type, "markdown" | "raw") {
         cell["attachments"] = json!({"image.png":{"image/png":"aGVsbG8="}});
     }
     json!({"cells":[cell],"metadata":{"kernelspec":{"name":"python3","display_name":"Python"}},"nbformat":4,"nbformat_minor":5})
@@ -258,8 +258,14 @@ async fn audit_notebook_all_type_conversions_preserve_metadata_and_invalidate_ex
                 assert!(cell.get("outputs").is_none(), "{before}->{after}: {cell}");
                 assert!(cell.get("execution_count").is_none());
             }
-            if after != "markdown" {
+            if after == "code" || before == "code" {
                 assert!(cell.get("attachments").is_none());
+            } else {
+                assert_eq!(
+                    cell["attachments"],
+                    notebook(before)["cells"][0]["attachments"],
+                    "{before}->{after}: attachments must survive"
+                );
             }
         }
     }

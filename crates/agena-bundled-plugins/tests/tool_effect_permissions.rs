@@ -64,7 +64,7 @@ async fn fixture(
     principal.network_policy = NetworkPermissionPolicy::new(network);
     (
         directory,
-        ToolExecutor::new(workspace, principal, plugins, None, None, None),
+        ToolExecutor::new(workspace, principal, plugins, None, None),
     )
 }
 

@@ -122,7 +122,6 @@ async fn build_tool_api_executor() -> (ToolExecutor, std::path::PathBuf) {
         plugins,
         None,
         None,
-        None,
     );
     (executor, workspace_root)
 }

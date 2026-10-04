@@ -9,7 +9,6 @@ pub mod mcp;
 pub mod monitor;
 pub mod notebook;
 pub mod planning;
-pub mod repo;
 pub mod report;
 pub mod session;
 pub mod settings;

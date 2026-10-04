@@ -77,7 +77,6 @@ async fn test_manager_with_database() -> (SessionManager, DatabaseConnection) {
         Arc::clone(&plugins),
         None,
         None,
-        None,
     );
     let provider_registry = Arc::new(ProviderRegistry::new());
     let context_governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
@@ -2198,7 +2197,6 @@ async fn manager_with_permission(
         Arc::clone(&plugins),
         None,
         None,
-        None,
     );
     // Compile the permission config exactly as `for_session_context_async`
     // does for a session's effective permission config, which is what installs
@@ -2900,7 +2898,6 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
             ToolPermissionPolicy::allow_all(),
         ),
         Arc::clone(&plugins),
-        None,
         None,
         None,
     );

@@ -13,7 +13,7 @@ use crate::dto::{
     RuntimeDiagnosticsResource, RuntimeMetricsResource, RuntimeSnapshotSummaryResource,
     TuiPreferencesResource,
 };
-use crate::service::{ApplicationService, SNAPSHOT_WORKERS};
+use crate::service::ApplicationService;
 
 /// Shared in-process application handle.
 ///
@@ -708,51 +708,16 @@ impl Application {
         &self.service
     }
 
-    /// Returns the application-owned snapshot projection for the composed
-    /// session runtime. Callers must not inspect Runtime's snapshot registry
-    /// directly: registry availability and the stable presentation shape are
-    /// application-service concerns.
-    pub async fn snapshot_status(
-        &self,
-    ) -> Result<crate::dto::SnapshotStatusResource, ApplicationError> {
-        let permit = SNAPSHOT_WORKERS.acquire().await.map_err(|error| {
-            ApplicationError::internal_error_with_context(
-                "acquire a snapshot status worker",
-                &error,
-            )
-        })?;
-        let runtime_control = Arc::clone(&self.runtime_control);
-        let execution_control = self.execution_control.clone();
-        let workspace_root = self.workspace_root.clone();
-        let service = self.service.clone();
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let capabilities = agena_runtime::RuntimeControlService::snapshot_backend_capabilities(
-                runtime_control.as_ref(),
-                &workspace_root,
-            );
-            service.snapshot_status(execution_control.as_deref(), capabilities)
-        })
-        .await
-        .map_err(|error| {
-            ApplicationError::internal_error_with_context("snapshot status worker failed", &error)
-        })
-    }
-
-    /// Returns the application-owned source-control projection. The concrete
-    /// Runtime execution-control port is supplied only at this composition
-    /// boundary so CLI, TUI, and transport consumers share the same status
-    /// policy and snapshot accounting.
+    /// Returns the Git source-control projection shared by CLI, TUI, and
+    /// transport consumers.
     pub async fn git_status(&self) -> Result<crate::dto::GitStatusResource, ApplicationError> {
-        self.service
-            .git_status(self.execution_control.clone())
-            .await
+        self.service.git_status().await
     }
 
     /// Initializes source control through the application use case while
-    /// retaining snapshot accounting at the application boundary.
+    /// sharing status queries across clients.
     pub async fn git_init(&self) -> Result<crate::dto::GitStatusResource, ApplicationError> {
-        self.service.git_init(self.execution_control.clone()).await
+        self.service.git_init().await
     }
 
     /// Returns the raw version-control patch used by the application-facing
@@ -766,9 +731,7 @@ impl Application {
         &self,
         request: crate::dto::GitStageRequest,
     ) -> Result<crate::dto::GitStatusResource, ApplicationError> {
-        self.service
-            .git_stage(self.execution_control.clone(), request)
-            .await
+        self.service.git_stage(request).await
     }
 
     /// Creates a commit through the application-owned Git use case.
@@ -779,14 +742,10 @@ impl Application {
         match request.workspace_id {
             Some(workspace_id) => {
                 self.service
-                    .git_commit_for_workspace(self.execution_control.clone(), workspace_id, request)
+                    .git_commit_for_workspace(workspace_id, request)
                     .await
             }
-            None => {
-                self.service
-                    .git_commit(self.execution_control.clone(), request)
-                    .await
-            }
+            None => self.service.git_commit(request).await,
         }
     }
 
@@ -798,18 +757,10 @@ impl Application {
         match request.workspace_id {
             Some(workspace_id) => {
                 self.service
-                    .git_create_pull_request_for_workspace(
-                        self.execution_control.clone(),
-                        workspace_id,
-                        request,
-                    )
+                    .git_create_pull_request_for_workspace(workspace_id, request)
                     .await
             }
-            None => {
-                self.service
-                    .git_create_pull_request(self.execution_control.clone(), request)
-                    .await
-            }
+            None => self.service.git_create_pull_request(request).await,
         }
     }
 

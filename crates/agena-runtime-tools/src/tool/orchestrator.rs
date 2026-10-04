@@ -6,8 +6,8 @@ use agena_plugin_host::sdk::ToolInput;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
-    ToolRuntimeContext, apply_patch, ask_user, glob, grep, process_tool, read, snapshot,
-    suggest_tool_names, task, tool_search, unknown_tool_hint,
+    ToolRuntimeContext, apply_patch, ask_user, glob, grep, process_tool, read, suggest_tool_names,
+    task, tool_search, unknown_tool_hint,
 };
 
 const BUILTIN_TOOL_NAMES: &[&str] = &[
@@ -20,7 +20,6 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "cron_pause",
     "cron_resume",
     "cron_update",
-    "exit_snapshot",
     "glob",
     "grep",
     "lsp_definition",
@@ -31,7 +30,6 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "read",
     "task",
     "tool_search",
-    "enter_snapshot",
 ];
 
 fn apply_patch_output_text(result: &agena_tool::ApplyPatchExecution) -> String {
@@ -135,12 +133,6 @@ pub(crate) fn execute_tool(
             context,
             &executor.cancellation_token().cloned().unwrap_or_default(),
         ),
-        "enter_snapshot" => {
-            snapshot::execute_enter(executor, &parse_shape_input(input)?, context.session_id)
-        }
-        "exit_snapshot" => {
-            snapshot::execute_exit(executor, &parse_shape_input(input)?, context.session_id)
-        }
         other => {
             let suggestions = suggest_tool_names(other, BUILTIN_TOOL_NAMES, 1);
             Err(unknown_tool_hint(other, suggestions))

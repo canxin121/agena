@@ -395,7 +395,6 @@ async fn two_asks_in_one_batch_project_their_own_answers() {
         Arc::clone(&plugins),
         None,
         None,
-        None,
     );
     let mut registry = ProviderRegistry::new();
     registry.register_arc(provider.clone());

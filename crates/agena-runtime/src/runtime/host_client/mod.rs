@@ -12,7 +12,7 @@ use std::{
 use agena_plugin_sdk::PluginKey;
 use async_trait::async_trait;
 
-use crate::part::{AskUserToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput};
+use crate::part::AskUserToolInput;
 use crate::plugins::storage::{
     PluginSecretStore, PluginStorage, PluginStorageError, StorageLocator,
 };
@@ -26,24 +26,24 @@ use agena_plugin_host::sdk::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostCallbackContext,
     HostClient, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
     HostConfigReloadStatusResponse, HostContextStatusRequest, HostContextStatusResponse,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostGetSessionRequest,
-    HostGetSessionResponse, HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation,
-    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostGetSessionRequest, HostGetSessionResponse, HostImageExecuteRequest,
+    HostImageExecuteResponse, HostImageOperation, HostLspDiagnostic, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRenameSessionRequest,
+    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
-    HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
-    LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PathPermissionQuery,
-    PermissionQuery, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
-    RunSubtaskResponse, RunSubtaskStatus, RunSubtaskUsage, SubtaskControlResponse,
-    SubtaskOutputChunk, ToolDescriptor, current_host_callback_context,
+    HostSetSessionModelRequest, HostSetSessionModelResponse, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageRecord, HostStorageSetRequest, LogLevel, MessageSubtaskRequest, MonitorEvent,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, PathPermissionQuery, PermissionQuery, ReadSubtaskOutputRequest,
+    ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
+    RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
+    current_host_callback_context,
 };
 use agena_plugin_host::{
     EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
@@ -996,46 +996,6 @@ impl HostClient for RuntimeHostClient {
         })
     }
 
-    async fn enter_snapshot(
-        &self,
-        req: HostEnterSnapshotRequest,
-    ) -> Result<ToolInvokeOutput, PluginError> {
-        let (session_id, _) = self.callback_session_and_call()?;
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let execution = executor
-            .enter_snapshot_internal(
-                &EnterSnapshotToolInput {
-                    name: req.name,
-                    path: req.path,
-                },
-                session_id,
-            )
-            .map_err(crate::tool::ToolError::into_plugin_error)?;
-        Ok(crate::tool::router::tool_execution_to_invoke_output(
-            execution,
-        ))
-    }
-
-    async fn exit_snapshot(
-        &self,
-        req: HostExitSnapshotRequest,
-    ) -> Result<ToolInvokeOutput, PluginError> {
-        let (session_id, _) = self.callback_session_and_call()?;
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let execution = executor
-            .exit_snapshot_internal(
-                &ExitSnapshotToolInput {
-                    action: req.action,
-                    discard_changes: req.discard_changes,
-                },
-                session_id,
-            )
-            .map_err(crate::tool::ToolError::into_plugin_error)?;
-        Ok(crate::tool::router::tool_execution_to_invoke_output(
-            execution,
-        ))
-    }
-
     async fn monitor_start(&self, req: MonitorStartRequest) -> Result<MonitorHandle, PluginError> {
         let (executor, registry) = self.executor_feature(
             |executor| executor.monitor_registry().cloned(),
@@ -1279,23 +1239,6 @@ impl HostClient for RuntimeHostClient {
         Ok(HostLspListDiagnosticsResponse {
             diagnostics: diagnostics_out,
         })
-    }
-
-    async fn snapshot_list(&self) -> Result<HostSnapshotListResponse, PluginError> {
-        let (_, registry) = self.executor_feature(
-            |executor| executor.snapshot_registry().cloned(),
-            "snapshot registry is not enabled in this runtime",
-        )?;
-        let snapshots: Vec<HostSnapshotSummary> = agena_runtime::list_active_snapshots(&registry)
-            .into_iter()
-            .map(|w| HostSnapshotSummary {
-                session_id: w.session_id,
-                path: w.path.display().to_string(),
-                branch: w.branch,
-                created_here: w.created_here,
-            })
-            .collect();
-        Ok(HostSnapshotListResponse { snapshots })
     }
 
     async fn scheduler_list(&self) -> Result<HostSchedulerListResponse, PluginError> {

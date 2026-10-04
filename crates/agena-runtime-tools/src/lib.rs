@@ -3,14 +3,13 @@
 //! Built-in tool execution and tool-facing runtime ports.
 //!
 //! Implements concrete built-in tool execution ([`tool`]), process
-//! monitoring, project path resolution, snapshot backends/operations, and the
+//! monitoring, project path resolution, and the
 //! shared [`ToolExecutionRequest`] plumbing used by executors.
 
 pub use agena_runtime_contracts::ToolSessionContext;
 pub use agena_runtime_contracts::{authorization, identity, part, permission, provider_state};
 
 mod atomic_file;
-mod bounded_process;
 pub mod cli_tools;
 mod file_diff;
 pub use file_diff::{FileDiffPreview, file_diff_preview};
@@ -19,10 +18,6 @@ mod monitor;
 mod project_instructions;
 mod project_paths;
 pub mod shell_sandbox;
-mod snapshot_capabilities;
-mod snapshot_managed;
-mod snapshot_operations;
-mod snapshot_registry;
 mod terminal;
 pub mod tool;
 
@@ -49,22 +44,8 @@ pub use project_paths::{
     MAX_GENERATED_IMAGE_BYTES, ManagedGeneratedImageArtifact, ManagedGeneratedImageError,
     agena_home_dir, generated_image_artifact_path, generated_media_extension,
     parse_base64_image_data_url, persist_generated_image_artifact, project_state_dir,
-    prune_tool_output, snapshot_managed_dir, snapshot_rift_database_path, tool_output_spill_dir,
-    tool_output_spill_path,
+    prune_tool_output, tool_output_spill_dir, tool_output_spill_path,
 };
-pub use snapshot_capabilities::snapshot_backend_capabilities;
-pub use snapshot_managed::{
-    ManagedSnapshot, list_managed_snapshots, prune_stale_managed_snapshots,
-};
-pub use snapshot_operations::{
-    SnapshotCreation, SnapshotOperationError, attach_existing_snapshot, create_managed_snapshot,
-    remove_managed_snapshot, snapshot_has_local_changes,
-};
-pub use snapshot_registry::snapshot_rift_binary;
-pub use snapshot_registry::{
-    ActiveSnapshot, SnapshotRegistry, SnapshotSession, list_active_snapshots, snapshot_registry,
-};
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Request to execute a tool.
 pub struct ToolExecutionRequest {

@@ -18,55 +18,6 @@ pub struct GitStatusResource {
     pub untracked_files: u64,
     pub changed_files: u64,
     pub clean: bool,
-    pub snapshot_active_sessions: u64,
-    pub snapshot_managed_dirs: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Whether a snapshot backend is available and why.
-pub struct SnapshotBackendSupportResource {
-    pub backend: String,
-    pub available: bool,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// An active workspace snapshot.
-pub struct ActiveSnapshotResource {
-    pub session_id: i64,
-    pub path: String,
-    pub branch: String,
-    pub backend: String,
-    pub created_here: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A managed workspace snapshot.
-pub struct ManagedSnapshotResource {
-    pub path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub backend: Option<String>,
-    pub registered_with_git: bool,
-    pub registered_with_rift: bool,
-    pub stale: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Snapshot backends, active and managed snapshots.
-pub struct SnapshotStatusResource {
-    pub workspace_root: String,
-    pub session_runtime_available: bool,
-    pub registry_available: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preferred_backend: Option<String>,
-    pub git: SnapshotBackendSupportResource,
-    pub rift: SnapshotBackendSupportResource,
-    pub active: Vec<ActiveSnapshotResource>,
-    pub managed: Vec<ManagedSnapshotResource>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

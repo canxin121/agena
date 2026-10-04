@@ -15,7 +15,7 @@
 //! - **Shell** — [`shell`] provides [`ShellRequest`] / [`ShellOutput`] and
 //!   [`ShellError`]; [`shell_analysis`] analyzes command shapes.
 //! - **Search** — [`code_search`] and [`tool_search`] locate code and tools.
-//! - **Value types** — [`ReadMode`], [`SnapshotBackend`],
+//! - **Value types** — [`ReadMode`],
 //!   [`ToolAvailability`], patch operations, and cron summaries.
 
 use std::collections::BTreeMap;
@@ -4147,53 +4147,6 @@ impl BuiltinToolProfile {
     }
 }
 
-/// Snapshot backend selected by the concrete repository/snapshot adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SnapshotBackend {
-    Rift,
-    Git,
-}
-
-impl AsRef<str> for SnapshotBackend {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Rift => "rift",
-            Self::Git => "git",
-        }
-    }
-}
-
-impl std::fmt::Display for SnapshotBackend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_ref())
-    }
-}
-
-#[derive(Debug, Clone)]
-/// Whether a snapshot backend is available and why.
-pub struct SnapshotBackendSupport {
-    pub backend: SnapshotBackend,
-    pub available: bool,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone)]
-/// Capabilities of the available snapshot backends.
-pub struct SnapshotBackendCapabilities {
-    pub preferred_backend: Option<SnapshotBackend>,
-    pub git: SnapshotBackendSupport,
-    pub rift: SnapshotBackendSupport,
-}
-
-impl SnapshotBackendCapabilities {
-    pub fn for_backend(&self, backend: SnapshotBackend) -> &SnapshotBackendSupport {
-        match backend {
-            SnapshotBackend::Rift => &self.rift,
-            SnapshotBackend::Git => &self.git,
-        }
-    }
-}
-
 /// Presentation-neutral availability result for one builtin tool.
 #[derive(Debug, Clone)]
 pub struct ToolAvailability {
@@ -4360,7 +4313,6 @@ mod tests {
 
     use super::{
         ApplyPatchExecution, BuiltinToolProfile, PatchOpKind, PreparedShellCommand,
-        SnapshotBackend, SnapshotBackendCapabilities, SnapshotBackendSupport,
         ToolAttachmentSummary, ToolAvailability, ToolExecutionSummary, ToolOutputTruncationPolicy,
     };
 
@@ -4391,25 +4343,6 @@ mod tests {
             BuiltinToolProfile::infer(Some("model-no-task")),
             BuiltinToolProfile::NoTask
         );
-    }
-
-    #[test]
-    fn snapshot_capabilities_select_the_requested_backend() {
-        let capabilities = SnapshotBackendCapabilities {
-            preferred_backend: Some(SnapshotBackend::Rift),
-            git: SnapshotBackendSupport {
-                backend: SnapshotBackend::Git,
-                available: false,
-                detail: "missing git".to_owned(),
-            },
-            rift: SnapshotBackendSupport {
-                backend: SnapshotBackend::Rift,
-                available: true,
-                detail: "ready".to_owned(),
-            },
-        };
-        assert!(capabilities.for_backend(SnapshotBackend::Rift).available);
-        assert!(!capabilities.for_backend(SnapshotBackend::Git).available);
     }
 
     #[test]

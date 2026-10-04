@@ -4,7 +4,35 @@ Objective: implement the improvements established by the tool-alternatives inves
 
 Implementation worktree: `/Volumes/Rc20/Projects/agena-tool-modernization`; branch: `feat/tool-modernization`; source baseline: `98c1c116`. Research commit `a0e2c53e` was incorporated as `f5383449`. Do not use Agena connector tools for this work. There are no applicable AGENTS files at initialization. Work is performed without delegated agents.
 
-The current requirement table and the final master-integration section are authoritative for the merged source. The phase narratives and prompt audit below retain intermediate measurements and failures as an audit trail; their earlier pending-work and publication statements describe those phases, not the final disposition. Research inventory: 22 plugins / 135 definitions. The corrected implemented catalog is **22 plugins / 138 definitions / 131 execution tools / 7 manifest gateway handlers**, plus runtime-synthesized `tools_call` for **8 provider-facing gateway functions**. Earlier 134/4, 133/4 and 132/4 classifications in this ledger mistakenly counted the three `plugins_*` gateway handlers as execution tools; those historical statements do not mean tools were removed in the follow-up.
+The requirement table and final master-integration section record the modernization merge; subsequent product decisions are noted below. The phase narratives and prompt audit below retain intermediate measurements and failures as an audit trail; their earlier pending-work and publication statements describe those phases, not the final disposition. Research inventory: 22 plugins / 135 definitions. The corrected catalog at modernization completion was **22 plugins / 138 definitions / 131 execution tools / 7 manifest gateway handlers**, plus runtime-synthesized `tools_call` for **8 provider-facing gateway functions**. Earlier 134/4, 133/4 and 132/4 classifications in this ledger mistakenly counted the three `plugins_*` gateway handlers as execution tools; those historical statements do not mean tools were removed in the follow-up.
+
+## 2026-10-05: retire managed workspace snapshots
+
+Agena now records file changes and renders their diffs; Git owns file recovery,
+version history, and worktree management. The `agena.snapshot` plugin, its
+enter/exit/status tools, CLI command, HTTP endpoint, host callbacks, registry,
+Rift/Git snapshot backends, and automatic directory pruning have been removed.
+The current catalog is **21 plugins / 135 definitions / 128 execution tools /
+7 manifest gateway handlers**, plus runtime-synthesized `tools_call`.
+
+Old snapshot parts retain read-only rendering. Old static plugin settings and
+profile patches are accepted and retired before host activation. Existing
+workspace directories and saved session workspace paths are preserved; upgrade
+does not discard files. Conversation rewind/fork and explicit Git operations
+keep their separate semantics. Atomic writes and rollback within a failed file
+operation remain correctness safeguards, not user-facing history restoration.
+
+File records remain best-effort evidence from the tools that produce them,
+not a universal journal of shell, external MCP, or background process writes.
+The validation counts in earlier phase sections describe those historical runs.
+
+Removal validation: 1,551 affected Rust tests pass (six optional environment or
+benchmark cases remain ignored), including old-profile upgrades, legacy part
+rendering, file diffs, failed-write cleanup, conversation forks and Git APIs.
+The regenerated capability identity passes its drift check. Workspace all-target
+`cargo check` and Clippy with `-D warnings`, formatting of changed Rust files,
+Web type checking, and 37 Web diff/part presentation tests pass. The compiled
+CLI help no longer lists `snapshot`.
 
 | Requirement | Required evidence | Current status |
 | --- | --- | --- |
@@ -17,7 +45,7 @@ The current requirement table and the final master-integration section are autho
 | Fetch/crawl/extraction | Audited third-party stack, useful extraction options, bounded output/cancellation and fixtures | Implemented; pinned bounded HTTP, managed rendered contexts, optional local Trafilatura; representative local fixtures pass |
 | Local document content | Local conversion/search adapter, discovery, missing-dependency errors and format fixtures | Implemented; MarkItDown PDF/Office fixtures and plugin dispatch pass; Poppler not live-tested |
 | Read/write/patch/notebook | Revision/publication contracts, batch bounds and notebook compatibility | Implemented; regular-file reads, observed-change/budget checks, staged revision validation, official nbformat schemas; external writers remain nontransactional |
-| Shell/process/monitor/snapshot lifecycle | Shared lifecycle and effect contracts, actual defect fixes, regression tests | Implemented; bounded shared collection, descendant cleanup, verified Darwin zombie handling and recoverable line framing; 20 parallel runtime-tools rounds pass |
+| Shell/process/monitor lifecycle | Shared lifecycle and effect contracts, actual defect fixes, regression tests | Implemented; bounded shared collection, descendant cleanup, verified Darwin zombie handling and recoverable line framing; 20 parallel runtime-tools rounds pass |
 | Memory, discovery, stateful and hosted tools | Inventory-wide disposition and affected correctness/contract tests | Audited; unchanged Tantivy indexes reused, committed results preserved on contention, discovery reads bounded, state/hosted contracts retained |
 | Concise and formatted prompts | Reduced byte budget, usable call contracts, capability-aware workflow guidance | Audited and merged with upstream Git policy; core excluding Git 6,414 / base including Git 16,498 / all sections 21,247 UTF-8 bytes; production-schema examples, 24 capability combinations and real plan-state fixture; no sampled-model success claim |
 | Optional analysis/display/log tools | Explicit candidate disposition, exact raw-output recovery, preserved status/diagnostics | Complete; curated optional CLI tiers and offline measured log experiment; no transparent output proxy |
@@ -232,7 +260,7 @@ The initial `tool-alternatives.md` is a historical source/benchmark snapshot. Th
 | Docling / ripgrep-all | Optional discovered document tools | OCR/layout and multi-format archive search are distinct tasks; heavyweight models/converters are not installed implicitly |
 | nbformat | Official schemas embedded; Python reference validation in development | Preserve notebook revisions and attachments without starting Python for every cell edit |
 | Tantivy | Retained with content-aware transactional reuse | Avoid rebuilding unchanged memory indexes; no speculative vector-database migration |
-| Git worktree / Rift | Retained managed snapshot backends with corrected lifecycle/probes | No replacement of version-control semantics merely to choose a newer CLI |
+| Git worktree / Rift | Managed snapshot layer retired on 2026-10-05; use Git directly | Preserve existing directories and change records; no Agena-owned workspace restore |
 | plan / tasks / cron / settings / interaction / report | Retained Agena state protocols; audited against existing failure/concurrency tests | Delayed plan approvals bind revisions; task admission/cancel failures retain state; scheduling is session-aware; saved settings survive reload failure |
 | commands / tools discovery / MCP | Retained contract/resource/connection protocols | Bounded discovery, regular-file reads, exact schemas, reconnect cleanup and structured content are not equivalent to shell aliases |
 | chatgpt / claude / gemini hosted tools | Existing 32 wrappers retained and fixture-validated | Vendor-hosted files/containers remain separate from local workspace; returned client actions are not executed locally |

@@ -40,10 +40,6 @@ pub fn project_state_dir(workspace_root: &Path) -> PathBuf {
         .join(workspace_key(workspace_root))
 }
 
-pub fn snapshot_managed_dir(workspace_root: &Path) -> PathBuf {
-    project_state_dir(workspace_root).join("snapshots")
-}
-
 /// Per-workspace directory holding the spilled full text of oversized
 /// model-facing tool results. The session layer truncates a result that
 /// exceeds its budget, writes the whole text here, and hands the model the
@@ -92,10 +88,6 @@ fn prune_session_dirs(base: &Path, live_session_ids: &[i64]) -> Vec<PathBuf> {
         }
     }
     removed
-}
-
-pub fn snapshot_rift_database_path(workspace_root: &Path) -> PathBuf {
-    project_state_dir(workspace_root).join("rift.sqlite")
 }
 
 /// Stable location for a generated image that belongs to one tool call.

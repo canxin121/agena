@@ -196,8 +196,6 @@ pub mod method {
     pub const HOST_CONTEXT_STATUS: &str = "host/context.status";
     pub const HOST_SESSION_SET_MODEL: &str = "host/session.set_model";
     pub const HOST_IMAGE_EXECUTE: &str = "host/image.execute";
-    pub const HOST_SNAPSHOT_ENTER: &str = "host/snapshot.enter";
-    pub const HOST_SNAPSHOT_EXIT: &str = "host/snapshot.exit";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
     pub const HOST_MONITOR_READ: &str = "host/monitor.read";
@@ -222,7 +220,6 @@ pub mod method {
     pub const HOST_PLUGIN_STATUS_GET: &str = "host/plugin.status.get";
     pub const HOST_LSP_LIST_SERVERS: &str = "host/lsp.list_servers";
     pub const HOST_LSP_LIST_DIAGNOSTICS: &str = "host/lsp.list_diagnostics";
-    pub const HOST_SNAPSHOT_LIST: &str = "host/snapshot.list";
     pub const HOST_SCHEDULER_LIST: &str = "host/scheduler.list";
     pub const HOST_SCHEDULER_CREATE: &str = "host/scheduler.create";
     pub const HOST_SCHEDULER_DELETE: &str = "host/scheduler.delete";

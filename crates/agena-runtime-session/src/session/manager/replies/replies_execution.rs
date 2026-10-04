@@ -3313,7 +3313,6 @@ impl SessionManager {
             })
             .transpose()?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
-        self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
         // The launch tool and the launched work have distinct lifecycles. The
         // tool call completes with a durable launch receipt; the normalized

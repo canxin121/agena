@@ -1763,15 +1763,14 @@ mod tests {
 }
 use super::{
     AppError, Arc, DecisionTraceStep, ExecutionControl, ExecutionSource, ExecutionStatus, ModelRef,
-    ModelSpeedModeRequestOverride, OperationPart, PathBuf, PermissionAction, PermissionReplyKind,
+    ModelSpeedModeRequestOverride, OperationPart, PermissionAction, PermissionReplyKind,
     PermissionScope, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
     ProviderPromptAnchor, ResolvedPendingTool, SessionExecutionReplyRequest, SessionManager,
     SessionManagerState, SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest,
     SessionRunTermination, StreamingToolExecution, TimeRange, ToolError, ToolInvocation,
     ToolInvocationExecution, UserInputReplyKind, Utc, background_operation_from_execution,
-    background_operation_id, completed_lifecycle, custom_payload_value,
-    execution_control_to_app_error, host_user_input_response, mpsc,
-    payload_tool_name_for_invocation, permission_action_key, persisted_rules_for_reply,
+    background_operation_id, completed_lifecycle, execution_control_to_app_error,
+    host_user_input_response, mpsc, permission_action_key, persisted_rules_for_reply,
     requested_background_kind, reserve_background_external_id, resolve_pending_tool,
     run_abort_reason, user_input_execution,
 };

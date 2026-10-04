@@ -453,7 +453,7 @@ struct BundledCommand {
 const BUNDLED_COMMANDS: &[BundledCommand] = &[
     BundledCommand {
         name: "batch",
-        description: "Execute independent repository tasks with isolated snapshots and delegated agents",
+        description: "Execute independent repository tasks with Git worktree isolation and delegated agents",
         aliases: &[],
         instructions: include_str!("../../../assets/commands/batch.md"),
     },

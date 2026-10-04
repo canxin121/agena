@@ -633,35 +633,6 @@ pub struct WebSearchToolInput {
     pub max_results: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]
-#[input(
-    trim("name", "path"),
-    non_empty_if_present("name", "path"),
-    conflicts_with("name", "path")
-)]
-/// Input of the enter-snapshot tool.
-pub struct EnterSnapshotToolInput {
-    /// Optional name; when absent a slug is generated from the timestamp.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Path of an already-existing snapshot to enter. Mutually
-    /// exclusive with `name`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("action"), non_empty("action"))]
-/// Input of the exit-snapshot tool.
-pub struct ExitSnapshotToolInput {
-    /// "keep" leaves the snapshot on disk; "remove" deletes it.
-    pub action: String,
-    /// Required `true` when `action = "remove"` and the snapshot has
-    /// uncommitted changes / unpushed commits.
-    #[serde(default)]
-    pub discard_changes: bool,
-}
-
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 /// Policy applied when a scheduled job misses its fire time.

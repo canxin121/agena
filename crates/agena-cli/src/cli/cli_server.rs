@@ -7,30 +7,28 @@
 use std::{collections::BTreeMap, fs, io::Read as _, path::Path, time::Duration};
 
 use super::{
-    ActiveSnapshotOutput, AgenaCli, AppError, ApplyArgs, ApplyOutput, AuthCommand, AuthListArgs,
-    AuthListOutput, AuthSubcommand, AuthSummary, CallToolParams, CallToolResult, CommitArgs,
-    CommitOutput, ConfigCommand, ConfigResolveArgs, ConfigSubcommand, ContinueArgs, CostArgs,
-    CostOutput, DebugCommand, DebugRunOutput, DebugSessionArgs, DebugSessionOutput,
-    DebugSubcommand, DiagnosticsArgs, DiagnosticsConfigOutput, DiagnosticsEnvironmentOutput,
-    DiagnosticsOutput, ExecArgs, ExecOutput, ForkArgs, GitArgs, GitOutput, LoginArgs, LogoutArgs,
-    ManagedSnapshotOutput, McpAddArgs, McpConfigLayerArg, McpHttpAuthArg, McpPluginToggleArgs,
-    McpReconnectArgs, McpRemoveArgs, McpServerArgs, McpServerBackend, McpServerError,
-    McpStatusArgs, MemoryCommand, MemoryListArgs, MemoryListOutput, MemorySubcommand,
-    MemorySummaryOutput, OutputFormat, PermissionModeArg, PermissionReplyKindArg,
-    PermissionScopeArg, PermissionsArgs, PermissionsListArgs, PermissionsOutput,
-    PermissionsSubcommand, PermissionsWriteArgs, PluginArchitectureArgs, PluginInspectArgs,
-    PluginInspectOutput, PluginLogOutputFormat, PluginLogsArgs, PluginLogsOutput, PluginStatusArgs,
-    PluginStatusOutput, PrArgs, PrOutput, ProviderCapabilitiesOutput, ProviderCommand,
-    ProviderListArgs, ProviderListOutput, ProviderModelsOutput, ProviderSubcommand,
-    ProviderSummary, ResumeArgs, ReviewArgs, SessionDetail, SessionForkOutput, SessionImportOutput,
-    SessionListArgs, SessionListOutput, SessionListView, SessionOutput, SessionSummary,
-    SessionsCommand, SessionsSubcommand, SnapshotArgs, SnapshotBackendSupportOutput,
-    SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor, UsageArgs, async_trait,
-    browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
-    format_debug_session_output, format_plugin_logs_output, memory_type_label,
-    normalize_login_provider, paginate_session_summaries, permission_rule_output,
-    prompt_browser_login, prompt_device_login, render_serialized, review_prompt, title_from_prompt,
-    usage_stats_query_from_args,
+    AgenaCli, AppError, ApplyArgs, ApplyOutput, AuthCommand, AuthListArgs, AuthListOutput,
+    AuthSubcommand, AuthSummary, CallToolParams, CallToolResult, CommitArgs, CommitOutput,
+    ConfigCommand, ConfigResolveArgs, ConfigSubcommand, ContinueArgs, CostArgs, CostOutput,
+    DebugCommand, DebugRunOutput, DebugSessionArgs, DebugSessionOutput, DebugSubcommand,
+    DiagnosticsArgs, DiagnosticsConfigOutput, DiagnosticsEnvironmentOutput, DiagnosticsOutput,
+    ExecArgs, ExecOutput, ForkArgs, GitArgs, GitOutput, LoginArgs, LogoutArgs, McpAddArgs,
+    McpConfigLayerArg, McpHttpAuthArg, McpPluginToggleArgs, McpReconnectArgs, McpRemoveArgs,
+    McpServerArgs, McpServerBackend, McpServerError, McpStatusArgs, MemoryCommand, MemoryListArgs,
+    MemoryListOutput, MemorySubcommand, MemorySummaryOutput, OutputFormat, PermissionModeArg,
+    PermissionReplyKindArg, PermissionScopeArg, PermissionsArgs, PermissionsListArgs,
+    PermissionsOutput, PermissionsSubcommand, PermissionsWriteArgs, PluginArchitectureArgs,
+    PluginInspectArgs, PluginInspectOutput, PluginLogOutputFormat, PluginLogsArgs,
+    PluginLogsOutput, PluginStatusArgs, PluginStatusOutput, PrArgs, PrOutput,
+    ProviderCapabilitiesOutput, ProviderCommand, ProviderListArgs, ProviderListOutput,
+    ProviderModelsOutput, ProviderSubcommand, ProviderSummary, ResumeArgs, ReviewArgs,
+    SessionDetail, SessionForkOutput, SessionImportOutput, SessionListArgs, SessionListOutput,
+    SessionListView, SessionOutput, SessionSummary, SessionsCommand, SessionsSubcommand,
+    ToolDescriptor, UsageArgs, async_trait, browser_login_redirect_uri,
+    filter_session_summaries_by_view, format_apply_output, format_debug_session_output,
+    format_plugin_logs_output, memory_type_label, normalize_login_provider,
+    paginate_session_summaries, permission_rule_output, prompt_browser_login, prompt_device_login,
+    render_serialized, review_prompt, title_from_prompt, usage_stats_query_from_args,
 };
 use agena_api::{
     commands::{
@@ -49,7 +47,7 @@ use agena_api::{
 use agena_application::dto::{
     AuthBrowserStartResource, AuthDeviceStartResource, AuthLoginKindResource,
     AuthLoginResultResource, AuthProviderResource, GitCommitResource, GitPullRequestResource,
-    GitStatusResource, MemoryResource, OperatorToolResource, SnapshotStatusResource,
+    GitStatusResource, MemoryResource, OperatorToolResource,
 };
 use agena_client::{AgenaClient, ClientError};
 use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
@@ -856,68 +854,6 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_server_snapshot_command(
-        &self,
-        args: SnapshotArgs,
-    ) -> Result<String, AppError> {
-        let client = connect_server_client(self).await?;
-        let snapshot: SnapshotStatusResource = decode_server_resource(
-            client.snapshot_status().await.map_err(|error| {
-                client_error("failed to read snapshot status from server", error)
-            })?,
-            "snapshot-status",
-        )?;
-        ensure_server_workspace_matches_cli(snapshot.workspace_root.as_str())?;
-        if !snapshot.registry_available {
-            return Err(AppError::Config(
-                "snapshot registry is not enabled in the server".to_owned(),
-            ));
-        }
-        let active = snapshot
-            .active
-            .into_iter()
-            .map(|entry| ActiveSnapshotOutput {
-                session_id: entry.session_id,
-                path: entry.path,
-                branch: entry.branch,
-                backend: entry.backend,
-                created_here: entry.created_here,
-            })
-            .collect::<Vec<_>>();
-        let managed = snapshot
-            .managed
-            .into_iter()
-            .map(|entry| ManagedSnapshotOutput {
-                path: entry.path,
-                session_id: entry.session_id,
-                branch: entry.branch,
-                backend: entry.backend,
-                registered_with_git: entry.registered_with_git,
-                registered_with_rift: entry.registered_with_rift,
-                stale: entry.stale,
-            })
-            .collect::<Vec<_>>();
-        render_serialized(
-            args.format,
-            &SnapshotOutput {
-                workspace_root: snapshot.workspace_root,
-                capabilities: SnapshotCapabilitiesOutput {
-                    preferred_backend: snapshot.preferred_backend,
-                    git: SnapshotBackendSupportOutput {
-                        available: snapshot.git.available,
-                        detail: snapshot.git.detail,
-                    },
-                    rift: SnapshotBackendSupportOutput {
-                        available: snapshot.rift.available,
-                        detail: snapshot.rift.detail,
-                    },
-                },
-                active,
-                managed,
-            },
-        )
-    }
-
     pub(super) async fn render_server_git_command(
         &self,
         args: GitArgs,
@@ -947,8 +883,6 @@ impl AgenaCli {
                 untracked_files: status.untracked_files,
                 changed_files: status.changed_files,
                 clean: status.clean,
-                snapshot_active_sessions: status.snapshot_active_sessions,
-                snapshot_managed_dirs: status.snapshot_managed_dirs,
             },
         )
     }
@@ -2536,7 +2470,6 @@ mod tests {
             "agena.tasks",
             "agena.cron",
             "agena.monitor",
-            "agena.snapshot",
             "agena.report",
             "agena.mcp",
             "agena.settings",

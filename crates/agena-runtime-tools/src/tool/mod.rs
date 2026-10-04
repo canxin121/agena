@@ -25,7 +25,6 @@ pub mod result;
 pub mod router;
 pub(crate) mod shell;
 pub(crate) mod shell_tools;
-pub(crate) mod snapshot;
 pub(crate) mod task;
 mod terminal_tool;
 pub mod tool_registry;
@@ -68,7 +67,6 @@ pub use builtin_tools::BuiltinToolSet;
 pub use output_helpers::{bounded_model_output_preview, line_count, model_output_exceeds_boundary};
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
-pub use snapshot::registry_for_executor as snapshot_registry_for_executor;
 pub use tool_registry::{
     ExecutionPermissionInspector, ExecutionTool, ToolApiBinding, ToolError, ToolExecutor,
 };

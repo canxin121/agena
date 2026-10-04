@@ -216,28 +216,12 @@ pub(super) fn build_tool_executor(
         scheduler_database,
     } = inputs;
     let principal = build_execution_principal(crate::authorization::PermissionConfig::default());
-    let snapshot_registry = crate::tool::snapshot_registry_for_executor();
-
-    // Drop any orphan snapshots left over from a previously-crashed
-    // session so a clean startup does not accumulate
-    // managed snapshot directories indefinitely. Stale = no live
-    // session and not registered with `git worktree list`.
-    let pruned = agena_runtime::prune_stale_managed_snapshots(workspace_root, &snapshot_registry);
-    if !pruned.is_empty() {
-        tracing::info!(
-            target: "agena::runtime::snapshot",
-            removed = pruned.len(),
-            "pruned stale snapshot directories at startup"
-        );
-    }
-
     let scheduler =
         session_manager.map(|session_manager| build_scheduler(session_manager, scheduler_database));
     let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
         principal,
         plugins,
-        Some(snapshot_registry),
         scheduler,
         lsp_registry,
     )

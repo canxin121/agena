@@ -225,7 +225,6 @@ fn configure_isolated_environment(fixture: &Fixture) -> anyhow::Result<()> {
     unsafe {
         std_env::set_var("HOME", &fixture.home);
         std_env::set_var("AGENA_PLUGIN_STORAGE_DIR", &fixture.plugin_storage);
-        std_env::set_var("AGENA_RIFT_BIN", fixture.root.join("missing-rift"));
     }
     Ok(())
 }

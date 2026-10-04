@@ -7154,6 +7154,46 @@ mod tests {
     }
 
     #[test]
+    fn historical_snapshot_parts_remain_readable_without_the_plugin() {
+        for (name, payload) in [
+            (
+                "snapshot.enter",
+                json!({"path": "/tmp/legacy-snapshot", "branch": "snapshot/main", "backend": "git"}),
+            ),
+            (
+                "snapshot.exit",
+                json!({"action": "restore", "path": "/tmp/legacy-snapshot"}),
+            ),
+            (
+                "snapshot.status",
+                json!({"snapshots": [{"session_id": 42, "path": "/tmp/legacy-snapshot", "branch": "snapshot/main", "created_here": true}]}),
+            ),
+        ] {
+            for tool_name in [name.to_owned(), format!("agena.{name}")] {
+                let raw = RawOutput {
+                    payload: Some(payload.clone()),
+                    ..RawOutput::default()
+                };
+                let blocks = BuiltinHumanRenderer::new(&tool_name)
+                    .render_human(&ctx(), &raw)
+                    .expect("render historical part without a plugin host");
+                assert!(
+                    blocks
+                        .iter()
+                        .all(|block| !matches!(block, ViewBlock::Json { .. })),
+                    "{tool_name} lost its human projection: {blocks:?}"
+                );
+                assert!(
+                    serde_json::to_string(&blocks)
+                        .unwrap()
+                        .contains("/tmp/legacy-snapshot"),
+                    "{tool_name} lost its recorded workspace path"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_typed_family_has_a_non_json_human_projection() {
         let cases = [
             (

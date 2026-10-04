@@ -1,13 +1,12 @@
 //! Lifecycle and background-task controls for an already-composed runtime.
 
-use std::{future::Future, path::Path, pin::Pin};
+use std::{future::Future, pin::Pin};
 
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use agena_provider::ProviderClientVersions;
-use agena_tool::SnapshotBackendCapabilities;
 
 use crate::{
     RuntimeBackgroundTask, RuntimeBackgroundTaskControlError, RuntimeBackgroundTaskKind,
@@ -65,10 +64,6 @@ pub trait RuntimeControlService: Send + Sync {
     /// Reads the Runtime-owned process telemetry through the composed control
     /// capability rather than a global public helper.
     fn runtime_metrics(&self) -> crate::RuntimeMetricsSnapshot;
-
-    /// Probes the Runtime-owned managed-snapshot backends without exposing the
-    /// concrete process probe as a Runtime root free function to Application.
-    fn snapshot_backend_capabilities(&self, workspace: &Path) -> SnapshotBackendCapabilities;
 
     fn start_runtime_reload_task(
         &self,

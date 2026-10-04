@@ -1,8 +1,10 @@
 # UI and bundled tool audit — 2026-10-04
 
 This audit covers the Web application, the terminal presentation and pointer
-routing, and the complete source-level bundled plugin catalog: 22 plugins,
-135 tool definitions (131 execution tools and four discovery gateways).
+routing, and the bundled plugin catalog. Following tool modernization and the
+2026-10-05 removal of managed workspace snapshots, the catalog contains
+21 plugins and 135 definitions (128 execution tools and seven manifest
+discovery gateways; the runtime also synthesizes `tools_call`).
 
 ## Shared interface behavior
 
@@ -38,10 +40,10 @@ The test uses an isolated workspace and no configured external services.
 | `agena.chatgpt` | 11 | Hosted service routing, adapter gates, media handles, error/result projection |
 | `agena.claude` | 9 | Hosted service routing, pause/resume, callback quarantine, media handles |
 | `agena.gemini` | 12 | Hosted service routing, adapter gates, media and result projection |
-| `agena.code` | 2 | Structured search contracts and human rendering |
+| `agena.code` | 3 | Structured search contracts and human rendering |
 | `agena.commands` | 6 | Workspace package discovery, install/read/remove, refresh generations, read-only catalog entries |
 | `agena.cron` | 7 | Input contracts, execution permission boundaries and human rendering |
-| `agena.fs` | 8 | Exact Unicode/CRLF edits, revision checks, ambiguous patch rejection, multi-file preflight, move/inverse operations, bounded reads, symlink identity |
+| `agena.fs` | 9 | Exact Unicode/CRLF edits, revision checks, ambiguous patch rejection, multi-file preflight, move/diff records, bounded reads, symlink identity |
 | `agena.interaction` | 2 | Interaction contracts, effect permissions and human rendering |
 | `agena.lsp` | 5 | Navigation/observability contracts and human rendering |
 | `agena.mcp` | 9 | Bridge/discovery contracts, host lifecycle and failure boundaries |
@@ -50,10 +52,9 @@ The test uses an isolated workspace and no configured external services.
 | `agena.notebook` | 1 | Cell conversion, execution invalidation, metadata preservation, unique/duplicate cell IDs |
 | `agena.plan` | 6 | Edit/phase validation, review cancellation/timeouts, autorun state, display output |
 | `agena.report` | 1 | Invalid line range rejection and empty-result presentation |
-| `agena.session` | 5 | Session/environment facts, nongit workspace semantics and human rendering |
+| `agena.session` | 6 | Session/environment facts, nongit workspace semantics and human rendering |
 | `agena.settings` | 7 | Explicit scopes, field diagnostics, secret redaction, commit facts after reload failure |
 | `agena.shell` | 7 | Process/terminal lifecycle, cancellation, permissions, bounded output and human rendering |
-| `agena.snapshot` | 3 | Snapshot contracts, effect permissions and human rendering |
 | `agena.tasks` | 7 | Concurrent admission, cancellation, rollback after persistence failure, completion notifications |
 | `agena.tools` | 7 | Discovery/help, exact tool identity, collision rejection and gateway/execution separation |
 | `agena.web` | 13 | Partial search failures, browser ownership, response timeouts, UTF-8 log budgets, download completion and terminal rendering |
@@ -78,7 +79,8 @@ from the real manifests.
 
 ## Validation
 
-The affected plugin/host/SDK/runtime suites pass 796 tests. The final TUI suites
+The original 2026-10-04 audit validation is preserved below.
+The affected plugin/host/SDK/runtime suites passed 796 tests. The final TUI suites
 pass 551 tests, and Web passes 577 tests plus its production build (including
 import-boundary checks, settings translations and Vue type checking).
 The CLI/server binary passes another 101 tests; the runtime capability gate

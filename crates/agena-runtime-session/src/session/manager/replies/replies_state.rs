@@ -1,12 +1,10 @@
 use super::super::recover_read;
 use super::{
-    AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, SessionManager, SessionManagerState,
-    SessionRunOptions, ToolInvocationExecution, custom_payload_value,
-    mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
+    AppError, Arc, ModelRef, PersistedPermissionRule, SessionManager, SessionManagerState,
+    SessionRunOptions, mode_request_override_for_adapter, mpsc,
 };
 use crate::session::Session;
 use crate::session::store::new_part_from_content;
-use agena_domain::ToolInvocation;
 use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{PartDelta, PartRole, PartState};
 
@@ -402,55 +400,6 @@ impl SessionManager {
             .then(|| base_model.model_id.as_ref());
         let model_id = requested_model.or(base_model_id);
         Ok(provider_registry.resolve_model_selection(provider_id, adapter_id, model_id)?)
-    }
-
-    pub(in crate::session::manager) fn apply_tool_success_execution_context(
-        &self,
-        session: &mut Session,
-        invocation: &ToolInvocation,
-        execution: &ToolInvocationExecution,
-    ) {
-        let payload_tool_name = payload_tool_name_for_invocation(invocation);
-        if let Some(output) = crate::tool::ToolPayloadOutput::from_tool_output(
-            payload_tool_name.as_str(),
-            &execution.output,
-        ) {
-            match output {
-                crate::tool::ToolPayloadOutput::EnterSnapshot { path, .. } => {
-                    session
-                        .runtime
-                        .set_effective_workspace_root(Some(PathBuf::from(path)));
-                    return;
-                }
-                crate::tool::ToolPayloadOutput::ExitSnapshot { .. } => {
-                    session.runtime.set_effective_workspace_root(None);
-                    return;
-                }
-                _ => {}
-            }
-        }
-
-        match execution
-            .view
-            .metadata
-            .get("agena.effect")
-            .map(String::as_str)
-        {
-            Some("enter_snapshot") => {
-                if let Some(path) = custom_payload_value(&execution.output)
-                    .and_then(|value| value.get("path").cloned())
-                    .and_then(|value| value.as_str().map(str::to_string))
-                {
-                    session
-                        .runtime
-                        .set_effective_workspace_root(Some(PathBuf::from(path)));
-                }
-            }
-            Some("exit_snapshot") => {
-                session.runtime.set_effective_workspace_root(None);
-            }
-            _ => {}
-        }
     }
 
     pub(in crate::session::manager) fn subtask_run_options(

@@ -21,7 +21,6 @@ const EFFECT_TAGS: &[&str] = &[
     "network",
     "shell",
     "interactive",
-    "snapshot",
     "scheduler",
     "subtask",
 ];
@@ -139,7 +138,6 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_session_plugin());
     add!(crate::tool::new_settings_plugin());
     add!(crate::tool::new_shell_plugin());
-    add!(crate::tool::new_snapshot_plugin());
     add!(crate::tool::new_tasks_plugin());
     add!(crate::tool::new_tool_api_plugin());
     add!(crate::tool::new_web_plugin());
@@ -363,7 +361,7 @@ mod boundary_audit {
                 }
             }
         }
-        assert_eq!(count, 138);
+        assert_eq!(count, 135);
         assert!(
             failures.is_empty(),
             "Malformed arguments escaped validation:\n{}",

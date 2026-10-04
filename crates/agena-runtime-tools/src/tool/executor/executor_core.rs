@@ -3,7 +3,6 @@ impl ToolExecutor {
         workspace_root: impl Into<PathBuf>,
         principal: ExecutionPrincipal,
         plugins: Arc<PluginHost>,
-        snapshot_registry: Option<crate::SnapshotRegistry>,
         scheduler: Option<Arc<agena_scheduler::Scheduler>>,
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     ) -> Self {
@@ -18,16 +17,11 @@ impl ToolExecutor {
             definition_catalog: None,
             monitor_registry: crate::default_monitor_registry(),
             plugins,
-            snapshot_registry,
             scheduler,
             lsp_registry,
             cancellation_token: None,
             permission_inspector: None,
         }
-    }
-
-    pub fn snapshot_registry(&self) -> Option<&crate::SnapshotRegistry> {
-        self.snapshot_registry.as_ref()
     }
 
     pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {

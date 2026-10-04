@@ -186,7 +186,6 @@ pub enum AgenaCommand {
     Review(ReviewArgs),
     Sessions(SessionsCommand),
     Tui(TuiArgs),
-    Snapshot(SnapshotArgs),
 }
 
 /// Fully resolved process launch intent.
@@ -518,13 +517,6 @@ pub struct PermissionsReplyArgs {
     pub reason: Option<String>,
     #[arg(long, value_enum)]
     pub scope: Option<PermissionScopeArg>,
-    #[arg(long, default_value = "json")]
-    pub format: OutputFormat,
-}
-
-#[derive(Debug, Clone, Args)]
-/// Snapshot management command.
-pub struct SnapshotArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
@@ -1561,47 +1553,6 @@ struct PermissionsOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct ActiveSnapshotOutput {
-    session_id: i64,
-    path: String,
-    branch: String,
-    backend: String,
-    created_here: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ManagedSnapshotOutput {
-    path: String,
-    session_id: Option<i64>,
-    branch: Option<String>,
-    backend: Option<String>,
-    registered_with_git: bool,
-    registered_with_rift: bool,
-    stale: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct SnapshotBackendSupportOutput {
-    available: bool,
-    detail: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SnapshotCapabilitiesOutput {
-    preferred_backend: Option<String>,
-    git: SnapshotBackendSupportOutput,
-    rift: SnapshotBackendSupportOutput,
-}
-
-#[derive(Debug, Serialize)]
-struct SnapshotOutput {
-    workspace_root: String,
-    capabilities: SnapshotCapabilitiesOutput,
-    active: Vec<ActiveSnapshotOutput>,
-    managed: Vec<ManagedSnapshotOutput>,
-}
-
-#[derive(Debug, Serialize)]
 struct GitOutput {
     workspace_root: String,
     git_available: bool,
@@ -1616,8 +1567,6 @@ struct GitOutput {
     untracked_files: u64,
     changed_files: u64,
     clean: bool,
-    snapshot_active_sessions: u64,
-    snapshot_managed_dirs: u64,
 }
 
 #[derive(Debug, Serialize)]

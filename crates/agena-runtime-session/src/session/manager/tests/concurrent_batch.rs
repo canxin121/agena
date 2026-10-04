@@ -248,7 +248,6 @@ async fn manager_with_concurrent_batch_fixture(
         Arc::clone(&plugins),
         None,
         None,
-        None,
     );
     let mut registry = ProviderRegistry::new();
     registry.register_arc(provider);

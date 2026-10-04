@@ -156,7 +156,6 @@ mod tests {
             plugins,
             None,
             None,
-            None,
         )
     }
     #[tokio::test]

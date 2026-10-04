@@ -28,26 +28,25 @@ use crate::sdk::host_api::{
     HostCommandRemoveRequest, HostCommandUpdateRequest, HostConfigReloadRequestResponse,
     HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
     HostContextStatusResponse, HostDisplayContributeRequest, HostDisplayRemoveRequest,
-    HostDisplayRemoveResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
-    HostHookDescriptor, HostHookListResponse, HostHookRegistration, HostImageExecuteRequest,
-    HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredCommandListResponse, HostRegisteredToolDescriptor,
+    HostDisplayRemoveResponse, HostHookDescriptor, HostHookListResponse, HostHookRegistration,
+    HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
+    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostRegisteredCommandListResponse, HostRegisteredToolDescriptor,
     HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
     HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
     HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSetSessionModelRequest, HostSnapshotListResponse,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    PluginNotifyAction, PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse,
-    RunSubtaskRequest, RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor,
-    ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    HostSecretSetRequest, HostSetSessionModelRequest, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
+    HostThemeRemoveRequest, HostThemeRemoveResponse, HostToolMutationResponse,
+    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest, LogLevel,
+    MessageSubtaskRequest, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, PluginNotifyAction,
+    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
+    RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor, ToolRegistryChangeKind,
+    ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -1048,21 +1047,6 @@ struct HostImageExecuteParams {
     _context: Option<HostCallbackContext>,
 }
 
-#[derive(serde::Deserialize, Default)]
-struct HostEnterSnapshotParams {
-    #[serde(default)]
-    request: HostEnterSnapshotRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostExitSnapshotParams {
-    request: HostExitSnapshotRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
 #[derive(serde::Deserialize)]
 struct HostMonitorStartParams {
     request: MonitorStartRequest,
@@ -1205,12 +1189,6 @@ struct HostLspListServersParams {
 struct HostLspListDiagnosticsParams {
     #[serde(default)]
     request: HostLspListDiagnosticsRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct HostSnapshotListParams {
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }

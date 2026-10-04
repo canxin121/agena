@@ -19,8 +19,7 @@ pub(super) use self::builtin_plugins::{run_mcp_cases, run_memory_cases, run_sche
 pub(super) use self::builtin_runtime::{run_plan_cases, run_runtime_cases, run_shell_cases};
 pub(super) use self::common::run_single;
 pub(super) use self::integration::{
-    run_external_plugin_suite, run_nested_permission_suite, run_snapshot_cases, run_task_case,
-    run_web_cases,
+    run_external_plugin_suite, run_nested_permission_suite, run_task_case, run_web_cases,
 };
 pub(super) use self::meta::run_tool_api_meta_suite;
 
@@ -41,7 +40,6 @@ pub(crate) async fn run_builtin_suite(
     run_memory_cases(harness, report).await?;
     run_schema_lab_cases(harness, report).await?;
     run_mcp_cases(harness, report).await?;
-    run_snapshot_cases(harness, report).await?;
     run_task_case(harness, report).await?;
     run_web_cases(harness, fixture, report).await?;
     Ok(())

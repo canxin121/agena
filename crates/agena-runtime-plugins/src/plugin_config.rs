@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use agena_plugin_host::{ConfigInput, ConfiguredPlugin, PluginHost, PluginsConfig};
+use agena_plugin_host::{ConfigInput, ConfiguredPlugin, PluginHost, PluginPackage, PluginsConfig};
 
 /// Merge the runtime's bundled plugin entries with user configuration.
 ///
@@ -24,6 +24,12 @@ pub fn merge_bundled_plugin_config(
     } = configured;
     let mut list = bundled;
     list.extend(configured_list);
+    // A retired builtin may still be patched/disabled by an existing profile.
+    // Resolve those layers against an inert entry, then drop it before host
+    // activation. Explicit external replacements keep the usual precedence.
+    const RETIRED_SNAPSHOT_PLUGIN: &str = "agena.snapshot";
+    list.entry(RETIRED_SNAPSHOT_PLUGIN.to_owned())
+        .or_insert_with(ConfiguredPlugin::static_default);
     let mut resolved = PluginsConfig {
         host,
         policy,
@@ -33,6 +39,13 @@ pub fn merge_bundled_plugin_config(
         profile_resolution,
     };
     resolved.resolve_profiles_in_place()?;
+    if resolved
+        .list
+        .get(RETIRED_SNAPSHOT_PLUGIN)
+        .is_some_and(|plugin| matches!(plugin.package, PluginPackage::Static {}))
+    {
+        resolved.list.remove(RETIRED_SNAPSHOT_PLUGIN);
+    }
     Ok(resolved)
 }
 
@@ -73,6 +86,64 @@ mod tests {
             merged.list["example"].settings(),
             &serde_json::json!({"origin": "user"})
         );
+    }
+
+    #[test]
+    fn retired_snapshot_settings_and_profile_patches_do_not_break_upgrade() {
+        for explicit_entry in [false, true] {
+            let mut configured: PluginsConfig = serde_json::from_value(serde_json::json!({
+                "profiles": {
+                    "coding": {
+                        "plugins": {
+                            "agena.snapshot": {"action": "patch", "enabled": true}
+                        }
+                    }
+                },
+                "active_profiles": ["coding"]
+            }))
+            .expect("old profile config");
+            if explicit_entry {
+                configured.list.insert(
+                    "agena.snapshot".to_owned(),
+                    ConfiguredPlugin::static_default(),
+                );
+            }
+            let bundled =
+                BTreeMap::from([("agena.fs".to_owned(), ConfiguredPlugin::static_default())]);
+
+            let resolved = merge_bundled_plugin_config(configured, bundled)
+                .expect("resolve old settings after retiring the snapshot plugin");
+
+            assert!(!resolved.list.contains_key("agena.snapshot"));
+            assert!(resolved.list.contains_key("agena.fs"));
+            assert_eq!(resolved.profile_resolution.applied_profiles, ["coding"]);
+        }
+    }
+
+    #[test]
+    fn external_replacement_of_a_retired_builtin_keeps_user_precedence() {
+        let configured: PluginsConfig = serde_json::from_value(serde_json::json!({
+            "profiles": {
+                "custom": {
+                    "plugins": {
+                        "agena.snapshot": {
+                            "action": "patch",
+                            "package": {"kind": "http", "url": "https://example.test/plugin"}
+                        }
+                    }
+                }
+            },
+            "active_profiles": ["custom"]
+        }))
+        .expect("external plugin profile");
+
+        let resolved = merge_bundled_plugin_config(configured, BTreeMap::new())
+            .expect("resolve external replacement");
+
+        assert!(matches!(
+            resolved.list["agena.snapshot"].package,
+            agena_plugin_host::PluginPackage::Http { .. }
+        ));
     }
 
     #[test]

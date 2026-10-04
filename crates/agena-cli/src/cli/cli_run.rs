@@ -4,7 +4,7 @@ use super::{
     GitArgs, InspectArgs, LoginArgs, LogoutArgs, McpCommand, McpGetArgs, McpServerArgs,
     McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat, PermissionsArgs, PluginCommand,
     PluginReleaseSubcommand, PluginSubcommand, PluginTemplateArg, PrArgs, ProviderCommand,
-    ResumeArgs, ReviewArgs, SessionsCommand, SnapshotArgs, UsageArgs, render_completion_command,
+    ResumeArgs, ReviewArgs, SessionsCommand, UsageArgs, render_completion_command,
     render_plugin_validate_output, validate_plugin_target,
 };
 impl AgenaCli {
@@ -42,7 +42,6 @@ impl AgenaCli {
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Review(args)) => self.run_review(args).await,
             Some(AgenaCommand::Sessions(command)) => self.run_sessions(command).await,
-            Some(AgenaCommand::Snapshot(args)) => self.run_snapshot(args).await,
         }
     }
 
@@ -288,12 +287,6 @@ impl AgenaCli {
 
     pub(super) async fn run_permissions(self, args: PermissionsArgs) -> Result<(), AppError> {
         let output = self.render_server_permissions_command(args).await?;
-        println!("{output}");
-        Ok(())
-    }
-
-    pub(super) async fn run_snapshot(self, args: SnapshotArgs) -> Result<(), AppError> {
-        let output = self.render_server_snapshot_command(args).await?;
         println!("{output}");
         Ok(())
     }

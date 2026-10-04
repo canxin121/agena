@@ -33,12 +33,6 @@ pub fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolI
         ToolPayloadOutput::ToolSearch { .. } => {
             metadata.insert("agena.effect".to_string(), "load_tools".to_string());
         }
-        ToolPayloadOutput::EnterSnapshot { .. } => {
-            metadata.insert("agena.effect".to_string(), "enter_snapshot".to_string());
-        }
-        ToolPayloadOutput::ExitSnapshot { .. } => {
-            metadata.insert("agena.effect".to_string(), "exit_snapshot".to_string());
-        }
         _ => {}
     }
     let payload = summary.payload.clone();

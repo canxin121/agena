@@ -344,28 +344,6 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
-    async fn enter_snapshot(
-        &self,
-        req: HostEnterSnapshotRequest,
-    ) -> crate::sdk::Result<ToolInvokeOutput> {
-        self.run_callback(async {
-            let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(self.context()?, inner.enter_snapshot(req)).await
-        })
-        .await
-    }
-
-    async fn exit_snapshot(
-        &self,
-        req: HostExitSnapshotRequest,
-    ) -> crate::sdk::Result<ToolInvokeOutput> {
-        self.run_callback(async {
-            let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(self.context()?, inner.exit_snapshot(req)).await
-        })
-        .await
-    }
-
     async fn monitor_start(&self, req: MonitorStartRequest) -> crate::sdk::Result<MonitorHandle> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
@@ -590,14 +568,6 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
-    async fn snapshot_list(&self) -> crate::sdk::Result<HostSnapshotListResponse> {
-        self.run_callback(async {
-            let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(self.context()?, inner.snapshot_list()).await
-        })
-        .await
-    }
-
     async fn scheduler_list(&self) -> crate::sdk::Result<HostSchedulerListResponse> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
@@ -719,16 +689,15 @@ use super::{
     HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandUpdateRequest,
     HostConfigReloadRequestResponse, HostConfigReloadStatusRequest, HostConfigReloadStatusResponse,
     HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
-    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostEnterSnapshotRequest,
-    HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
-    HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredCommandListResponse,
-    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSnapshotListResponse, HostStorageDeleteRequest,
+    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostHookListResponse,
+    HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
+    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostRegisteredCommandListResponse, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
     HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,

@@ -23,18 +23,17 @@ use agena_storage::{
 use crate::{
     ApplicationError,
     dto::{
-        ActiveExecutionResource, ActiveSnapshotResource, GitCommitRequest, GitCommitResource,
-        GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest, GitStatusResource,
-        ManagedSnapshotResource, MemoryResource, MemoryWriteRequest,
-        PendingInteractiveRequestResource, PermissionRuleResource, PermissionRuleWriteRequest,
-        ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
-        SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
-        SessionExecutionResource, SessionResource, SessionRunOptionsRequest, SessionState,
-        SessionUpdateRequest, SessionUsageResource, SnapshotBackendSupportResource,
-        SnapshotStatusResource, SubtaskStatus, WorkspaceFileDownloadQuery, WorkspaceFileKind,
-        WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
-        WorkspaceFileUploadRequest, WorkspaceFileUploadResource, WorkspaceListQuery,
-        WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
+        ActiveExecutionResource, GitCommitRequest, GitCommitResource, GitPullRequestCreateRequest,
+        GitPullRequestResource, GitStageRequest, GitStatusResource, MemoryResource,
+        MemoryWriteRequest, PendingInteractiveRequestResource, PermissionRuleResource,
+        PermissionRuleWriteRequest, ScheduledJobResource, ScheduledJobRunResource,
+        SearchPaginationQuery, SessionAutomationResource, SessionCreateRequest,
+        SessionExecutionContextResource, SessionExecutionResource, SessionResource,
+        SessionRunOptionsRequest, SessionState, SessionUpdateRequest, SessionUsageResource,
+        SubtaskStatus, WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode,
+        WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceFileUploadRequest,
+        WorkspaceFileUploadResource, WorkspaceListQuery, WorkspacePathRequest,
+        WorkspaceResolveRequest, WorkspaceResource,
     },
     pagination::{
         PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor, normalize_limit,
@@ -42,8 +41,6 @@ use crate::{
 };
 
 type ApplicationResult<T> = Result<T, ApplicationError>;
-
-pub(crate) static SNAPSHOT_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 pub(crate) mod execution;
 mod git;

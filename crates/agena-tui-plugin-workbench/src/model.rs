@@ -803,7 +803,7 @@ mod tests {
     fn opening_an_unavailable_plugin_leaves_the_workbench_closed() {
         let mut workbench = workbench_with_plugin("agena.memory");
 
-        assert!(!workbench.open_plugin_detail("agena.snapshot", PluginDetailTab::Tools));
+        assert!(!workbench.open_plugin_detail("example.unavailable", PluginDetailTab::Tools));
         assert_eq!(workbench.navigation.mode, PluginWorkbenchMode::List);
     }
 }

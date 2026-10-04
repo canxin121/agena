@@ -42,7 +42,6 @@ async fn cron_tools_report_database_failures_instead_of_success_or_empty_results
             ToolPermissionPolicy::allow_all(),
         ),
         empty_test_plugin_host(workspace.path()).await,
-        None,
         Some(scheduler.clone()),
         None,
     );
@@ -128,7 +127,6 @@ async fn all_cron_tool_controls_are_bound_to_the_launching_session() {
             ToolPermissionPolicy::allow_all(),
         ),
         empty_test_plugin_host(workspace.path()).await,
-        None,
         Some(scheduler.clone()),
         None,
     );

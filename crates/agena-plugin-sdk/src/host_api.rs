@@ -212,16 +212,6 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Enter a managed snapshot for the current session.
-    async fn enter_snapshot(&self, _req: HostEnterSnapshotRequest) -> Result<ToolInvokeOutput> {
-        Err(unavailable())
-    }
-
-    /// Exit the current session's active snapshot.
-    async fn exit_snapshot(&self, _req: HostExitSnapshotRequest) -> Result<ToolInvokeOutput> {
-        Err(unavailable())
-    }
-
     /// Long-lived background process registry — start.
     async fn monitor_start(&self, _req: MonitorStartRequest) -> Result<MonitorHandle> {
         Err(unavailable())
@@ -368,11 +358,6 @@ pub trait HostClient: Send + Sync + 'static {
         &self,
         _req: HostLspListDiagnosticsRequest,
     ) -> Result<HostLspListDiagnosticsResponse> {
-        Err(unavailable())
-    }
-
-    /// Snapshot registry — list active snapshots.
-    async fn snapshot_list(&self) -> Result<HostSnapshotListResponse> {
         Err(unavailable())
     }
 
@@ -1103,23 +1088,6 @@ pub struct HostImageExecuteResponse {
     pub attachments: Vec<AttachmentItem>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Request to enter a workspace snapshot.
-pub struct HostEnterSnapshotRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Request to exit the active workspace snapshot.
-pub struct HostExitSnapshotRequest {
-    pub action: String,
-    #[serde(default)]
-    pub discard_changes: bool,
-}
-
 // ---------------- monitor ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1590,24 +1558,7 @@ pub struct HostLspDiagnostic {
     pub code: Option<String>,
 }
 
-// ---------------- snapshot / scheduler ----------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Response listing snapshots.
-pub struct HostSnapshotListResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub snapshots: Vec<HostSnapshotSummary>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Summary of a snapshot.
-pub struct HostSnapshotSummary {
-    pub session_id: i64,
-    pub path: String,
-    pub branch: String,
-    #[serde(default)]
-    pub created_here: bool,
-}
+// ---------------- scheduler ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 /// Response listing scheduler jobs.

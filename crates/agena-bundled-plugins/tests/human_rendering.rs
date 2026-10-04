@@ -345,13 +345,6 @@ fn sample_payload(tool: &str) -> Value {
         "commands.refresh" => {
             json!({"changed": true, "generation": 3, "declared": 14, "external": 0})
         }
-        "snapshot.enter" => {
-            json!({"path": "/tmp/snapshot", "branch": "snapshot/main", "backend": "git", "note": "before release"})
-        }
-        "snapshot.exit" => json!({"action": "restore", "path": "/tmp/snapshot"}),
-        "snapshot.status" => {
-            json!({"snapshots": [{"session_id": 42, "path": "/tmp/snapshot", "branch": "snapshot/main", "created_here": true}]})
-        }
         "tasks.run" => json!({
             "task_id": "task-1", "session_id": 42, "parent_session_id": 0, "status": "completed",
             "resumed": false, "final_text": "Task completed.", "model_provider_id": "openai", "model_id": "gpt-5",
@@ -458,9 +451,6 @@ fn sample_input(tool: &str) -> Value {
         value if value.starts_with("settings.") => json!({"path": "providers.openai.model"}),
         "session.rename" => json!({"title": "Release"}),
         value if value.starts_with("session.") => json!({}),
-        "snapshot.enter" => json!({"path": "/tmp/snapshot"}),
-        "snapshot.exit" => json!({"path": "/tmp/snapshot"}),
-        value if value.starts_with("snapshot.") => json!({}),
         "notebook.edit_cell" => json!({"notebook_path": "demo.ipynb", "cell": 0}),
         "report.findings" => json!({"summary": "Review release"}),
         "web.search" => json!({"query": "Agena"}),

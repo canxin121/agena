@@ -2,7 +2,7 @@
 
 调查日期：2026-10-04。源码基线：`740b54df4107ade81242a335c49bca590c52c1cd`。调查分支：`research/tool-alternatives`。独立 worktree：`/Volumes/Rc20/Projects/agena-tool-alternatives`。
 
-**后续实施入口：** 本文保留最初的调研基线与候选比较；独立 `feat/tool-modernization` 分支中的实际接入、缺陷修复、最终候选取舍和验证状态见[实施台账](tool-modernization-progress.md)。以下“当前实现”和 135 个定义均指调查基线，实施后的目录为 138 个定义。
+**后续实施入口：** 本文保留最初的调研基线与候选比较；独立 `feat/tool-modernization` 分支中的实际接入、缺陷修复、最终候选取舍和验证状态见[实施台账](tool-modernization-progress.md)。以下“当前实现”和 135 个定义均指调查基线，现代化实施完成时的目录为 138 个定义。2026-10-05 移除托管工作区快照后，当前目录为 21 个插件、135 个定义；下文关于保留 `snapshot.*` 的建议已被该决定取代，文件恢复与版本历史交给 Git。
 
 本次只做源码调查、第三方官方资料核对和独立 CLI 基准测量，没有改动产品实现，没有安装候选工具，没有调用任何 Agena tools。目录中的脚本只运行 `git`、`rg`、`grep`、`fd`、`find`，不启动 Agena。
 
@@ -196,7 +196,7 @@ python3 docs/research/benchmark-tool-alternatives.py --output /tmp/agena-tool-be
 [R15]: ../../crates/agena-bundled-plugins/src/plugins/provided/notebook.rs#L1
 [R16]: ../../crates/agena-memory-index/src/lib.rs#L1
 [R17]: ../../crates/agena-bundled-plugins/src/plugins/provided/shell.rs#L92
-[R18]: ../../crates/agena-runtime-tools/src/snapshot_capabilities.rs#L10
+[R18]: https://github.com/canxin121/agena/blob/0f8c65b5b1439022f721227941ebf908aeaf40dc/crates/agena-runtime-tools/src/snapshot_capabilities.rs#L10
 [R19]: ../../crates/agena-runtime-contracts/src/part/tool.rs#L252
 [R20]: ../../crates/agena-runtime-contracts/src/identity/mod.rs#L39
 [R21]: ../../crates/agena-runtime-session/src/session/manager/session_prompt.rs#L1

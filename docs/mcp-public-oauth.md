@@ -262,7 +262,7 @@ web search/fetch/crawl tools. There is no read-only exposure mode and no MCP
 setting that filters these tools by their declared tags.
 
 The connector intentionally hides Agena's session/runtime and control-plane
-plugins: interaction, session, plan, tasks, cron, monitor, snapshot, report,
+plugins: interaction, session, plan, tasks, cron, monitor, report,
 settings, memory, commands, tools discovery, and the nested `agena.mcp` bridge.
 Provider/developer adapters (ChatGPT/Gemini/Claude/OpenAI/schema-lab) and the
 managed `web.browser_*` lifecycle are hidden as well. These capabilities either

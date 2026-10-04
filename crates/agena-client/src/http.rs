@@ -1293,10 +1293,6 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    pub async fn snapshot_status(&self) -> Result<serde_json::Value, ClientError> {
-        self.get_json("/api/v1/snapshots").await
-    }
-
     pub async fn runtime_status(
         &self,
     ) -> Result<agena_api::resource::RuntimeStatusResponse, ClientError> {

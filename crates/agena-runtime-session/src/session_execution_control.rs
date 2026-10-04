@@ -4,12 +4,9 @@
 //! transcript, event, and persistence projections are concrete adapter work
 //! and must not leak through this contract while they are still core-owned.
 
-use std::path::Path;
-
 use async_trait::async_trait;
 
 use agena_domain::{CancellationOutcome, ExecutionId, ExecutionLifecycle, ModelRef};
-use agena_tool::SnapshotBackend;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Error of a session execution control operation.
@@ -40,39 +37,6 @@ impl std::fmt::Display for SessionExecutionControlError {
 }
 
 impl std::error::Error for SessionExecutionControlError {}
-
-/// Stable active-snapshot projection for callers that inspect execution state.
-/// The Runtime retains the mutable registry and snapshot-tool composition.
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// An active runtime snapshot.
-pub struct RuntimeActiveSnapshot {
-    pub session_id: i64,
-    pub path: String,
-    pub branch: String,
-    pub backend: SnapshotBackend,
-    pub created_here: bool,
-}
-
-/// Stable managed-snapshot projection for callers that inspect workspace state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// A managed runtime snapshot.
-pub struct RuntimeManagedSnapshot {
-    pub stale: bool,
-    pub path: String,
-    pub session_id: Option<i64>,
-    pub branch: Option<String>,
-    pub backend: Option<SnapshotBackend>,
-    pub registered_with_git: bool,
-    pub registered_with_rift: bool,
-}
-
-/// Snapshot state available through the composed execution-control service.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-/// Runtime snapshot status.
-pub struct RuntimeSnapshotStatus {
-    pub active: Vec<RuntimeActiveSnapshot>,
-    pub managed: Vec<RuntimeManagedSnapshot>,
-}
 
 /// Narrow control port for a composed session execution service.
 #[async_trait]
@@ -120,20 +84,16 @@ pub trait SessionExecutionControl: Send + Sync {
         &self,
         session_id: i64,
     ) -> Result<Option<ModelRef>, SessionExecutionControlError>;
-
-    /// Projects managed snapshot state when the composed service has snapshot
-    /// support. The Runtime retains the registry and concrete snapshot tools.
-    fn snapshot_status(&self, workspace_root: &Path) -> Option<RuntimeSnapshotStatus>;
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::Mutex};
+    use std::sync::Mutex;
 
     use agena_domain::{CancellationOutcome, ExecutionId, ExecutionLifecycle, ExecutionPhase};
     use uuid::Uuid;
 
-    use super::{RuntimeSnapshotStatus, SessionExecutionControl, SessionExecutionControlError};
+    use super::{SessionExecutionControl, SessionExecutionControlError};
 
     struct FakeControl {
         cancelled: Mutex<Vec<i64>>,
@@ -190,10 +150,6 @@ mod tests {
             _session_id: i64,
         ) -> Result<Option<agena_domain::ModelRef>, SessionExecutionControlError> {
             Ok(None)
-        }
-
-        fn snapshot_status(&self, _workspace_root: &Path) -> Option<RuntimeSnapshotStatus> {
-            None
         }
     }
 

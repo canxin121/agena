@@ -35,7 +35,6 @@ async fn fixture(policy: ToolPermissionPolicy) -> (tempfile::TempDir, ToolExecut
         plugins,
         None,
         None,
-        None,
     );
     (directory, executor)
 }

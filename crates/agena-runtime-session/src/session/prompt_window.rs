@@ -1488,7 +1488,6 @@ mod tool_result_render_tests {
             plugins,
             None,
             None,
-            None,
         )
     }
 

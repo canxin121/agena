@@ -1896,13 +1896,6 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
         agena_runtime::runtime_metrics_snapshot()
     }
 
-    fn snapshot_backend_capabilities(
-        &self,
-        workspace: &Path,
-    ) -> agena_tool::SnapshotBackendCapabilities {
-        agena_runtime::snapshot_backend_capabilities(workspace)
-    }
-
     fn start_runtime_reload_task(
         &self,
         cause: agena_runtime::RuntimeReloadCause,
@@ -2352,7 +2345,6 @@ impl AgenaRuntime {
                 ToolPermissionPolicy::allow_all(),
             ),
             snapshot.plugin_manager(),
-            None,
             None,
             None,
         )

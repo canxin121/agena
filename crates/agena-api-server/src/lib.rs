@@ -126,7 +126,6 @@ pub fn router(state: AppState) -> Router {
                 get(rest::download_session_media_file),
             )
             .route("/api/v1/git/status", get(rest::get_git_status))
-            .route("/api/v1/snapshots", get(rest::get_snapshot_status))
             .route("/api/v1/git/stage", post(rest::stage_git_changes))
             .route("/api/v1/git/commits", post(rest::create_git_commit))
             .route(

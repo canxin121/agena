@@ -77,7 +77,6 @@ impl Fixture {
                 plugins,
                 None,
                 None,
-                None,
             ),
         }
     }

@@ -101,7 +101,6 @@ async fn fixture(
         plugins.clone(),
         None,
         None,
-        None,
     );
     let provider = Arc::new(MediaProvider {
         model: ModelId::new("vision"),

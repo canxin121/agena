@@ -4,12 +4,6 @@ pub async fn get_git_status(
     json_http(state.git_status()).await
 }
 
-pub async fn get_snapshot_status(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, ServerError> {
-    json_http(state.snapshot_status()).await
-}
-
 pub async fn init_git_repository(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {

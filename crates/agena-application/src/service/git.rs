@@ -10,125 +10,15 @@ const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const MUTATING_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 
-async fn snapshot_counts(
-    control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
-    workspace_root: PathBuf,
-) -> ApplicationResult<(u64, u64)> {
-    let Some(control) = control else {
-        return Ok((0, 0));
-    };
-    let permit = SNAPSHOT_WORKERS.acquire().await.map_err(|error| {
-        ApplicationError::internal_error_with_context(
-            "acquire a Git snapshot status worker",
-            &error,
-        )
-    })?;
-    let status = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        control.snapshot_status(&workspace_root)
-    })
-    .await
-    .map_err(|error| {
-        ApplicationError::internal_error_with_context("Git snapshot status worker failed", &error)
-    })?;
-    Ok(status
-        .map(|status| (status.active.len() as u64, status.managed.len() as u64))
-        .unwrap_or((0, 0)))
-}
-
 impl ApplicationService {
-    pub fn snapshot_status(
-        &self,
-        control: Option<&dyn agena_runtime::SessionExecutionControl>,
-        capabilities: agena_tool::SnapshotBackendCapabilities,
-    ) -> SnapshotStatusResource {
+    pub async fn git_status(&self) -> ApplicationResult<GitStatusResource> {
         let workspace_root = PathBuf::from(&self.workspace_root);
-        let Some(control) = control else {
-            return SnapshotStatusResource {
-                workspace_root: workspace_root.display().to_string(),
-                session_runtime_available: false,
-                registry_available: false,
-                preferred_backend: capabilities
-                    .preferred_backend
-                    .map(|backend| backend.to_string()),
-                git: snapshot_backend_support_resource(capabilities.git),
-                rift: snapshot_backend_support_resource(capabilities.rift),
-                active: Vec::new(),
-                managed: Vec::new(),
-            };
-        };
-        let Some(snapshot_status) = control.snapshot_status(&workspace_root) else {
-            return SnapshotStatusResource {
-                workspace_root: workspace_root.display().to_string(),
-                session_runtime_available: true,
-                registry_available: false,
-                preferred_backend: capabilities
-                    .preferred_backend
-                    .map(|backend| backend.to_string()),
-                git: snapshot_backend_support_resource(capabilities.git),
-                rift: snapshot_backend_support_resource(capabilities.rift),
-                active: Vec::new(),
-                managed: Vec::new(),
-            };
-        };
-
-        let active = snapshot_status
-            .active
-            .into_iter()
-            .map(|entry| ActiveSnapshotResource {
-                session_id: entry.session_id,
-                path: entry.path,
-                branch: entry.branch,
-                backend: entry.backend.to_string(),
-                created_here: entry.created_here,
-            })
-            .collect();
-        let managed = snapshot_status
-            .managed
-            .into_iter()
-            .map(|entry| ManagedSnapshotResource {
-                stale: entry.stale,
-                path: entry.path,
-                session_id: entry.session_id,
-                branch: entry.branch,
-                backend: entry.backend.map(|backend| backend.to_string()),
-                registered_with_git: entry.registered_with_git,
-                registered_with_rift: entry.registered_with_rift,
-            })
-            .collect();
-
-        SnapshotStatusResource {
-            workspace_root: workspace_root.display().to_string(),
-            session_runtime_available: true,
-            registry_available: true,
-            preferred_backend: capabilities
-                .preferred_backend
-                .map(|backend| backend.to_string()),
-            git: snapshot_backend_support_resource(capabilities.git),
-            rift: snapshot_backend_support_resource(capabilities.rift),
-            active,
-            managed,
-        }
+        self.git_status_at(workspace_root).await
     }
 
-    pub async fn git_status(
-        &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
-    ) -> ApplicationResult<GitStatusResource> {
-        let workspace_root = PathBuf::from(&self.workspace_root);
-        self.git_status_at(control, workspace_root).await
-    }
-
-    async fn git_status_at(
-        &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
-        workspace_root: PathBuf,
-    ) -> ApplicationResult<GitStatusResource> {
+    async fn git_status_at(&self, workspace_root: PathBuf) -> ApplicationResult<GitStatusResource> {
         let (git_available, gh_available) =
             tokio::join!(command_available("git"), command_available("gh"));
-
-        let (snapshot_active_sessions, snapshot_managed_dirs) =
-            snapshot_counts(control, workspace_root.clone()).await?;
 
         if !git_available {
             return Ok(GitStatusResource {
@@ -145,8 +35,6 @@ impl ApplicationService {
                 untracked_files: 0,
                 changed_files: 0,
                 clean: true,
-                snapshot_active_sessions,
-                snapshot_managed_dirs,
             });
         }
 
@@ -166,8 +54,6 @@ impl ApplicationService {
                 untracked_files: 0,
                 changed_files: 0,
                 clean: true,
-                snapshot_active_sessions,
-                snapshot_managed_dirs,
             });
         }
 
@@ -229,15 +115,10 @@ impl ApplicationService {
             untracked_files,
             changed_files,
             clean: changed_files == 0,
-            snapshot_active_sessions,
-            snapshot_managed_dirs,
         })
     }
 
-    pub async fn git_init(
-        &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
-    ) -> ApplicationResult<GitStatusResource> {
+    pub async fn git_init(&self) -> ApplicationResult<GitStatusResource> {
         let workspace_root = PathBuf::from(&self.workspace_root);
         if !command_available("git").await {
             return Err(ApplicationError::bad_request(
@@ -257,7 +138,7 @@ impl ApplicationService {
             }
         }
 
-        self.git_status(control).await
+        self.git_status().await
     }
 
     pub async fn vcs_diff_raw(&self) -> ApplicationResult<String> {
@@ -305,11 +186,10 @@ impl ApplicationService {
 
     pub async fn git_stage(
         &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
         request: GitStageRequest,
     ) -> ApplicationResult<GitStatusResource> {
         let workspace_root = PathBuf::from(&self.workspace_root);
-        let status = self.git_status(control.clone()).await?;
+        let status = self.git_status().await?;
         if !status.git_available || !status.repo {
             return Err(ApplicationError::bad_request(
                 "the selected workspace is not a git repository",
@@ -338,37 +218,32 @@ impl ApplicationService {
                 ),
             ));
         }
-        self.git_status(control).await
+        self.git_status().await
     }
 
     pub async fn git_commit(
         &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
         request: GitCommitRequest,
     ) -> ApplicationResult<GitCommitResource> {
         let workspace_root = PathBuf::from(&self.workspace_root);
-        self.git_commit_at(control, request, workspace_root).await
+        self.git_commit_at(request, workspace_root).await
     }
 
     pub async fn git_commit_for_workspace(
         &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
         workspace_id: i64,
         request: GitCommitRequest,
     ) -> ApplicationResult<GitCommitResource> {
         let workspace_root = self.git_workspace_root(workspace_id).await?;
-        self.git_commit_at(control, request, workspace_root).await
+        self.git_commit_at(request, workspace_root).await
     }
 
     async fn git_commit_at(
         &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
         request: GitCommitRequest,
         workspace_root: PathBuf,
     ) -> ApplicationResult<GitCommitResource> {
-        let status = self
-            .git_status_at(control.clone(), workspace_root.clone())
-            .await?;
+        let status = self.git_status_at(workspace_root.clone()).await?;
         if !status.git_available || !status.repo {
             return Err(ApplicationError::bad_request(
                 "the selected workspace is not a git repository",
@@ -400,38 +275,35 @@ impl ApplicationService {
         Ok(GitCommitResource {
             commit: git_output(&workspace_root, ["rev-parse", "HEAD"]).await?,
             summary: git_output(&workspace_root, ["log", "-1", "--pretty=%s"]).await?,
-            status: self.git_status_at(control, workspace_root).await?,
+            status: self.git_status_at(workspace_root).await?,
         })
     }
 
     pub async fn git_create_pull_request(
         &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
         request: GitPullRequestCreateRequest,
     ) -> ApplicationResult<GitPullRequestResource> {
         let workspace_root = PathBuf::from(&self.workspace_root);
-        self.git_create_pull_request_at(control, request, workspace_root)
+        self.git_create_pull_request_at(request, workspace_root)
             .await
     }
 
     pub async fn git_create_pull_request_for_workspace(
         &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
         workspace_id: i64,
         request: GitPullRequestCreateRequest,
     ) -> ApplicationResult<GitPullRequestResource> {
         let workspace_root = self.git_workspace_root(workspace_id).await?;
-        self.git_create_pull_request_at(control, request, workspace_root)
+        self.git_create_pull_request_at(request, workspace_root)
             .await
     }
 
     async fn git_create_pull_request_at(
         &self,
-        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
         request: GitPullRequestCreateRequest,
         workspace_root: PathBuf,
     ) -> ApplicationResult<GitPullRequestResource> {
-        let status = self.git_status_at(control, workspace_root.clone()).await?;
+        let status = self.git_status_at(workspace_root.clone()).await?;
         if !status.git_available || !status.repo {
             return Err(ApplicationError::bad_request(
                 "the selected workspace is not a git repository",
@@ -514,16 +386,6 @@ impl ApplicationService {
             ));
         }
         Ok(canonical)
-    }
-}
-
-fn snapshot_backend_support_resource(
-    support: agena_tool::SnapshotBackendSupport,
-) -> SnapshotBackendSupportResource {
-    SnapshotBackendSupportResource {
-        backend: support.backend.to_string(),
-        available: support.available,
-        detail: support.detail,
     }
 }
 
@@ -824,8 +686,7 @@ fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
     (staged, unstaged, untracked, changed)
 }
 use super::{
-    ActiveSnapshotResource, ApplicationError, ApplicationResult, ApplicationService, Arc,
-    GitCommitRequest, GitCommitResource, GitPullRequestCreateRequest, GitPullRequestResource,
-    GitStageRequest, GitStatusResource, ManagedSnapshotResource, Path, SNAPSHOT_WORKERS,
-    SnapshotBackendSupportResource, SnapshotStatusResource, non_empty,
+    ApplicationError, ApplicationResult, ApplicationService, GitCommitRequest, GitCommitResource,
+    GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest, GitStatusResource, Path,
+    non_empty,
 };

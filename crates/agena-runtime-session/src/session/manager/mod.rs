@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    path::PathBuf,
     sync::{
         Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard, RwLock as StdRwLock,
         RwLockReadGuard as StdRwLockReadGuard, RwLockWriteGuard as StdRwLockWriteGuard,

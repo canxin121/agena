@@ -1,4 +1,4 @@
-use std::{fs, path::Path, time::Duration};
+use std::{fs, time::Duration};
 
 use agena_domain::PermissionMode;
 use agena_domain::PermissionReplyKind;
@@ -6,59 +6,7 @@ use anyhow::{Context, ensure};
 use serde_json::{Value, json};
 
 use super::run_single;
-use super::{
-    Fixture, Harness, PendingReply, SuiteReport, assert_contains, baseline_permission,
-    payload_string,
-};
-
-pub(crate) async fn run_snapshot_cases(
-    harness: &Harness,
-    report: &mut SuiteReport,
-) -> anyhow::Result<()> {
-    if !harness.selector.any_in_group("snapshot") {
-        return Ok(());
-    }
-    let session = harness
-        .create_session(
-            "dsv4f snapshot chain",
-            &["agena.snapshot.enter", "agena.snapshot.exit"],
-            baseline_permission(PermissionMode::Allow),
-        )
-        .await?;
-    let entered = harness
-        .run_execution_tool(
-            session,
-            "snapshot.enter",
-            "snapshot.enter",
-            json!({"target": "new", "name": "dsv4f-snapshot"}),
-            PendingReply::None,
-            true,
-        )
-        .await?;
-    let snapshot_path = payload_string(&entered.payload(), "path")?;
-    ensure!(
-        Path::new(&snapshot_path).is_dir(),
-        "snapshot path was not created: {snapshot_path}"
-    );
-    report.pass("snapshot.enter");
-    let exited = harness
-        .run_execution_tool(
-            session,
-            "snapshot.exit",
-            "snapshot.exit",
-            json!({"exit_action": "remove", "discard_changes": false}),
-            PendingReply::None,
-            true,
-        )
-        .await?;
-    assert_contains(&exited, "remove")?;
-    ensure!(
-        !Path::new(&snapshot_path).exists(),
-        "snapshot.exit did not remove {snapshot_path}"
-    );
-    report.pass("snapshot.exit");
-    Ok(())
-}
+use super::{Fixture, Harness, PendingReply, SuiteReport, assert_contains, baseline_permission};
 
 pub(crate) async fn run_task_case(
     harness: &Harness,

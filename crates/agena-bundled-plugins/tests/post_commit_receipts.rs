@@ -63,7 +63,6 @@ async fn successful_write_survives_an_after_hook_failure_with_explicit_warning()
         plugins,
         None,
         None,
-        None,
     );
     let invocation = ToolInvocation::new(
         "fs.write",

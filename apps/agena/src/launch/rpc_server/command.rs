@@ -29,7 +29,6 @@ pub(crate) async fn run_command(mut cli: AgenaCli) -> Result<(), AgenaProcessErr
                 | AgenaCommand::Login(_)
                 | AgenaCommand::Logout(_)
                 | AgenaCommand::Git(_)
-                | AgenaCommand::Snapshot(_)
                 | AgenaCommand::Commit(_)
                 | AgenaCommand::Pr(_)
                 | AgenaCommand::Memory(_)

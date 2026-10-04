@@ -118,7 +118,11 @@ python3 scripts/experiments/git_workflow.py
 
 Git 保护实际记录过的内容。未提交、未跟踪、被忽略或仓库外的文件不能保证恢复；reflog 会过期，也不是永久备份。Git 提交不能撤销数据库、部署或其他外部副作用。聊天 `rewind` / `fork` 只改变会话历史，不恢复文件。
 
-`fs.apply_patch` 输出操作标识、文件变更、diff 和进度，不生成或持久化 `inverse_patch`、`before_hash`、`after_hash`。应用前校验、文件锁、原子替换和失败调用内的尽力清理继续负责单次写入的正确性；它们不是跨回合的撤销历史。现有 snapshot/worktree 能力仍可用于隔离，不承担自动恢复承诺。
+`fs.apply_patch` 输出操作标识、文件变更、diff 和进度，不生成或持久化 `inverse_patch`、`before_hash`、`after_hash`。应用前校验、文件锁、原子替换和失败调用内的尽力清理继续负责单次写入的正确性；它们不是跨回合的撤销历史。
+
+Agena 的托管工作区快照已经移除，包括 `agena.snapshot` 的 enter/exit/status 工具、`agena snapshot` 命令、`/api/v1/snapshots` 接口和 Git/Rift 快照管理后端。需要隔离工作时直接使用 Git worktree，需要恢复文件时使用项目 Git 历史。升级会保留已有目录、会话工作路径与历史 part；旧快照记录仍可查看，但不再提供执行入口或自动清理目录。
+
+part 是变更记录与展示，不是完整备份。专用文件工具继续提供它们已记录的修改和 diff；任意 shell、外部 MCP 或后台进程的写入没有全量捕获保证，预览也可能截断。
 
 这是一套模型行为规则，现有运行时权限继续生效；没有新增保证模型绝不执行危险命令的运行时边界。提示词保持一份紧凑规则，命令细节、依据和实验留在文档中，避免把每个边缘案例都扩展成独立的审批流程。
 

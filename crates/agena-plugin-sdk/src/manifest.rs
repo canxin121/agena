@@ -148,8 +148,6 @@ pub enum ToolTag {
     Planning,
     /// Goal-driven or long-horizon task tools.
     Goal,
-    /// Works with snapshots/checkpoints.
-    Snapshot,
     /// Scheduled/background automation.
     Scheduler,
     /// Language-server-backed code intelligence.
@@ -221,7 +219,6 @@ impl ToolTag {
             "interactive" => Self::Interactive,
             "planning" => Self::Planning,
             "goal" => Self::Goal,
-            "snapshot" => Self::Snapshot,
             "scheduler" => Self::Scheduler,
             "lsp" => Self::Lsp,
             "mcp" => Self::Mcp,
@@ -245,7 +242,6 @@ impl ToolTag {
             Self::Interactive => "interactive",
             Self::Planning => "planning",
             Self::Goal => "goal",
-            Self::Snapshot => "snapshot",
             Self::Scheduler => "scheduler",
             Self::Lsp => "lsp",
             Self::Mcp => "mcp",

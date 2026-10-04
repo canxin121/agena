@@ -8,11 +8,10 @@ use crate::part::{AskUserToolInput, TaskToolInput};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
-    HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest, HostEnterSnapshotRequest,
-    HostExitSnapshotRequest, HostGetSessionRequest, HostRegisteredToolDescriptor,
-    HostRenameSessionRequest, HostSession, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageScope, HostStorageSetRequest, HostStorageVisibility, RunSubtaskModelSelection,
-    RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
+    HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest, HostGetSessionRequest,
+    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
+    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
 };
 use agena_plugin_host::sdk::{
     CommandBeforeInput, CommandBeforeResponse, ContributionKind, PluginDisplayContent,
@@ -110,7 +109,6 @@ impl Default for WorkflowPlanConfig {
 }
 
 mod planning_tools;
-mod repo_tools;
 mod runtime_tools;
 mod tool_api_inputs;
 
@@ -119,7 +117,6 @@ pub(crate) use planning_tools::{
     WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
     WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
 };
-pub(crate) use repo_tools::{EnterSnapshotCommandInput, ExitSnapshotCommandInput};
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
 pub(crate) use tool_api_inputs::{
     ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiStringBatch, ToolApiTagsInput,

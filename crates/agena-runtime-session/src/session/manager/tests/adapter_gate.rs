@@ -205,7 +205,6 @@ async fn run_family(adapter: &str, parallel: bool, expected_calls: usize, family
         plugins.clone(),
         None,
         None,
-        None,
     );
     let database = Database::connect("sqlite::memory:").await.unwrap();
     initialize(&database).await;

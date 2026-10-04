@@ -1114,26 +1114,6 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
                     }
-                    method::HOST_SNAPSHOT_ENTER => {
-                        let p: HostEnterSnapshotParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, None),
-                            inner.enter_snapshot(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params_error(&e))
-                    }
-                    method::HOST_SNAPSHOT_EXIT => {
-                        let p: HostExitSnapshotParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, None),
-                            inner.exit_snapshot(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params_error(&e))
-                    }
                     method::HOST_MONITOR_START => {
                         let p: HostMonitorStartParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
@@ -1346,16 +1326,6 @@ impl HostHandle {
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
                             inner.lsp_list_diagnostics(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params_error(&e))
-                    }
-                    method::HOST_SNAPSHOT_LIST => {
-                        let _p: HostSnapshotListParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, None),
-                            inner.snapshot_list(),
                         )
                         .await?;
                         serde_json::to_value(&out)
@@ -2021,25 +1991,24 @@ use super::{
     HostCommandMutationResponse, HostCommandRegisterParams, HostCommandRemoveParams,
     HostCommandUpdateParams, HostConfigReadParams, HostConfigReloadParams, HostContextStatusParams,
     HostDisplayContributeParams, HostDisplayContributeRequest, HostDisplayContribution,
-    HostDisplayRemoveParams, HostDisplayRemoveResponse, HostEnterSnapshotParams,
-    HostExitSnapshotParams, HostHandle, HostHookListResponse, HostHookRegistration,
-    HostImageExecuteParams, HostInvokeServiceParams, HostInvokeToolParams, HostListToolsParams,
-    HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,
-    HostMcpListServersParams, HostMcpRemoveServerParams, HostMessageSubtaskParams,
-    HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
-    HostNotification, HostNotifyParams, HostPermissionCheckNetworkParams,
+    HostDisplayRemoveParams, HostDisplayRemoveResponse, HostHandle, HostHookListResponse,
+    HostHookRegistration, HostImageExecuteParams, HostInvokeServiceParams, HostInvokeToolParams,
+    HostListToolsParams, HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams,
+    HostMcpAddServerParams, HostMcpListServersParams, HostMcpRemoveServerParams,
+    HostMessageSubtaskParams, HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams,
+    HostMonitorStopParams, HostNotification, HostNotifyParams, HostPermissionCheckNetworkParams,
     HostPermissionCheckPathParams, HostPluginStatusGetParams, HostPluginStatusGetResponse,
     HostPluginStatusListResponse, HostReadSubtaskOutputParams, HostRegisteredCommandListResponse,
     HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,
     HostSchedulerCreateParams, HostSchedulerDeleteParams, HostSchedulerListParams,
     HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams, HostSecretSetParams,
-    HostSetSessionModelParams, HostSnapshotListParams, HostStorageDeleteParams,
-    HostStorageGetParams, HostStorageListParams, HostStorageSetParams, HostSubscribeParams,
-    HostThemeListResponse, HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest,
-    HostThemeRemoveParams, HostThemeRemoveResponse, HostToolMutationResponse,
-    HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams,
-    Mutex, PluginEffectScope, PluginEffectScopeInspect, PluginError, PluginErrorKind, PluginKey,
-    PluginLogRecord, PluginLogStore, PluginNotifyRequest, PluginScopeKey, PluginServiceBinding,
+    HostSetSessionModelParams, HostStorageDeleteParams, HostStorageGetParams,
+    HostStorageListParams, HostStorageSetParams, HostSubscribeParams, HostThemeListResponse,
+    HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest, HostThemeRemoveParams,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterParams,
+    HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams, Mutex, PluginEffectScope,
+    PluginEffectScopeInspect, PluginError, PluginErrorKind, PluginKey, PluginLogRecord,
+    PluginLogStore, PluginNotifyRequest, PluginScopeKey, PluginServiceBinding,
     PluginServiceBindingKey, PluginServiceInvokeInput, PluginServiceInvokeOutput,
     PluginToolRegistry, PluginTransport, RegisteredTool, RwLock, ScopedHostClient, ScopedRegistry,
     ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque,

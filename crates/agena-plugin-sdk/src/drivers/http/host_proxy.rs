@@ -191,14 +191,6 @@ impl HostClient for HostClientProxy {
         self.run(self.current().image_execute(_req)).await
     }
 
-    async fn enter_snapshot(&self, _req: HostEnterSnapshotRequest) -> Result<ToolInvokeOutput> {
-        self.run(self.current().enter_snapshot(_req)).await
-    }
-
-    async fn exit_snapshot(&self, _req: HostExitSnapshotRequest) -> Result<ToolInvokeOutput> {
-        self.run(self.current().exit_snapshot(_req)).await
-    }
-
     async fn monitor_start(&self, _req: MonitorStartRequest) -> Result<MonitorHandle> {
         self.run(self.current().monitor_start(_req)).await
     }
@@ -290,10 +282,6 @@ impl HostClient for HostClientProxy {
         _req: HostLspListDiagnosticsRequest,
     ) -> Result<HostLspListDiagnosticsResponse> {
         self.run(self.current().lsp_list_diagnostics(_req)).await
-    }
-
-    async fn snapshot_list(&self) -> Result<HostSnapshotListResponse> {
-        self.run(self.current().snapshot_list()).await
     }
 
     async fn scheduler_list(&self) -> Result<HostSchedulerListResponse> {

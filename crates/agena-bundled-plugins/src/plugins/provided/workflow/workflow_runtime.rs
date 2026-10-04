@@ -51,12 +51,8 @@ impl WorkflowPlugin {
         if ToolTag::is_shell(tags) || ToolTag::is_read_only(tags) || ToolTag::is_interactive(tags) {
             return true;
         }
-        tags.iter().any(|tag| {
-            matches!(
-                tag,
-                ToolTag::Discovery | ToolTag::Planning | ToolTag::Snapshot
-            )
-        })
+        tags.iter()
+            .any(|tag| matches!(tag, ToolTag::Discovery | ToolTag::Planning))
     }
 
     pub(in crate::plugins::provided::workflow) fn is_probably_read_only_shell(
@@ -410,35 +406,6 @@ impl WorkflowPlugin {
             std::collections::BTreeMap::new(),
             Vec::new(),
         ))
-    }
-
-    pub(crate) async fn invoke_snapshot_enter(
-        &self,
-        args: &EnterSnapshotCommandInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let request = match args {
-            EnterSnapshotCommandInput::New { name } => HostEnterSnapshotRequest {
-                name: name.clone(),
-                path: None,
-            },
-            EnterSnapshotCommandInput::Existing { path } => HostEnterSnapshotRequest {
-                name: None,
-                path: Some(path.clone()),
-            },
-        };
-        self.host()?.enter_snapshot(request).await
-    }
-
-    pub(crate) async fn invoke_snapshot_exit(
-        &self,
-        args: &ExitSnapshotCommandInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        self.host()?
-            .exit_snapshot(HostExitSnapshotRequest {
-                action: args.exit_action.to_string(),
-                discard_changes: args.discard_changes,
-            })
-            .await
     }
 
     pub(crate) async fn invoke_ask_user(
@@ -1169,15 +1136,13 @@ impl WorkflowPlugin {
 }
 use super::{
     AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
-    CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, PlanEditInput, PlanEditTarget, PlanGetInput,
-    PlanPhaseInput, PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError,
-    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskToolInput,
-    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput,
-    ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput,
-    ToolTag, ToolTagRecord, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep,
-    WorkflowPlanStepStatus, WorkflowPlugin, ask_user, compact_tool_summary, search_tools,
-    tags_summary,
+    CommandBeforeInput, HashMap, PlanEditInput, PlanEditTarget, PlanGetInput, PlanPhaseInput,
+    PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError, RunSubtaskModelSelection,
+    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskToolInput, ToolApiHelpInput,
+    ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput, ToolDescriptor,
+    ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput, ToolTag,
+    ToolTagRecord, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus,
+    WorkflowPlugin, ask_user, compact_tool_summary, search_tools, tags_summary,
 };
 
 fn validated_search_queries(

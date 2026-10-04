@@ -659,7 +659,6 @@ async fn plan_contribution_survives_real_tool_executor_route() {
         Arc::clone(&host),
         None,
         None,
-        None,
     );
 
     let invocation = ToolInvocation::plugin_named(

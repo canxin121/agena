@@ -22,7 +22,6 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     "agena.tasks",
     "agena.cron",
     "agena.monitor",
-    "agena.snapshot",
     "agena.report",
     // Agena's own control/knowledge plane is intentionally separate from the
     // focused computer-control surface. MCP already provides tool discovery,

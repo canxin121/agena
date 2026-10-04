@@ -32,16 +32,15 @@ use crate::host_api::{
     HostCommandUpdateRequest, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
     HostConfigReloadStatusResponse, HostContextStatusRequest, HostContextStatusResponse,
     HostDisplayContributeRequest, HostDisplayRemoveRequest, HostDisplayRemoveResponse,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookListResponse,
-    HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredCommandListResponse, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
+    HostHookListResponse, HostImageExecuteRequest, HostImageExecuteResponse,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostRegisteredCommandListResponse,
+    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSetSessionModelRequest, HostSetSessionModelResponse,
     HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
     HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
     HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
@@ -898,34 +897,6 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn enter_snapshot(
-        &self,
-        req: HostEnterSnapshotRequest,
-    ) -> crate::error::Result<ToolInvokeOutput> {
-        self.call(
-            method::HOST_SNAPSHOT_ENTER,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn exit_snapshot(
-        &self,
-        req: HostExitSnapshotRequest,
-    ) -> crate::error::Result<ToolInvokeOutput> {
-        self.call(
-            method::HOST_SNAPSHOT_EXIT,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
     async fn monitor_start(&self, req: MonitorStartRequest) -> crate::error::Result<MonitorHandle> {
         self.call(
             method::HOST_MONITOR_START,
@@ -1224,16 +1195,6 @@ impl HostClient for StdioHostClient {
             method::HOST_LSP_LIST_DIAGNOSTICS,
             serde_json::json!({
                 "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn snapshot_list(&self) -> crate::error::Result<HostSnapshotListResponse> {
-        self.call(
-            method::HOST_SNAPSHOT_LIST,
-            serde_json::json!({
                 "context": crate::host_api::current_host_callback_context(),
             }),
         )

@@ -2,7 +2,7 @@
   "commands": [
     {
       "aliases": [],
-      "content_sha256": "e6d399d5e3d926dc5fd22206b84debfc48bb28b3daa0bf347db97eec55ca1f7d",
+      "content_sha256": "f58872984161a4221f63c76461fde99a3c08dc96b152b77a162aacada8ce980b",
       "name": "batch"
     },
     {
@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 131,
+    "execution_tools": 128,
     "gateway_tools": 7,
-    "plugins": 22,
-    "tools": 138
+    "plugins": 21,
+    "tools": 135
   },
   "plugins": [
     {
@@ -1697,54 +1697,6 @@
             "mutate",
             "execute",
             "shell"
-          ]
-        }
-      ],
-      "version": "0.1.0"
-    },
-    {
-      "conditional": null,
-      "hooks": [
-        "init",
-        "tool.invoke"
-      ],
-      "id": "agena.snapshot",
-      "tools": [
-        {
-          "canonical_name": "agena.snapshot.enter",
-          "conditional": null,
-          "definition_identity": "3df970d8e5b5ac997a6c41e7fe6a01faff731b473feb8c47efaa164eac7aa912",
-          "gateway": false,
-          "input_schema_sha256": "f96e6d13867cb962a07417c4843325347deda2a8e81112e1b147ab0bd3ddf9fc",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "mutate",
-            "snapshot"
-          ]
-        },
-        {
-          "canonical_name": "agena.snapshot.exit",
-          "conditional": null,
-          "definition_identity": "bd36b78a65c11226786f09c7b6c7e5fbdf9f3fb2d04087fa6624ce45032a6cd4",
-          "gateway": false,
-          "input_schema_sha256": "c72b252403db7242c8d9b4e410bed1639269ed00754f2443011addfc735c51c2",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "mutate",
-            "snapshot"
-          ]
-        },
-        {
-          "canonical_name": "agena.snapshot.status",
-          "conditional": null,
-          "definition_identity": "faf46667bd5234809ada65a71dd0202c0f57f85ac0a8daaac0125bf6a92d9f65",
-          "gateway": false,
-          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "query",
-            "snapshot",
-            "read_only"
           ]
         }
       ],

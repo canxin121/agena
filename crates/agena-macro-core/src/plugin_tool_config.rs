@@ -398,7 +398,6 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
         "interactive" => quote! { ::agena_plugin_sdk::ToolTag::Interactive },
         "planning" => quote! { ::agena_plugin_sdk::ToolTag::Planning },
         "goal" => quote! { ::agena_plugin_sdk::ToolTag::Goal },
-        "snapshot" => quote! { ::agena_plugin_sdk::ToolTag::Snapshot },
         "scheduler" => quote! { ::agena_plugin_sdk::ToolTag::Scheduler },
         "lsp" => quote! { ::agena_plugin_sdk::ToolTag::Lsp },
         "mcp" => quote! { ::agena_plugin_sdk::ToolTag::Mcp },

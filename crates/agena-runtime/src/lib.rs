@@ -192,10 +192,6 @@ pub(crate) use agena_runtime_session::{
     ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry,
 };
 pub use agena_runtime_session::{
-    RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,
-    SessionExecutionControlError,
-};
-pub use agena_runtime_session::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
     SessionUserRunRequest,
@@ -207,6 +203,7 @@ pub use agena_runtime_session::{
     SessionExecutionContext, SessionPresentation, SessionProjectedPart, SessionProjectedPartDetail,
     SessionProjectedRun, SessionProjectedRunHeader, SessionQueryError, SessionQueryService,
 };
+pub use agena_runtime_session::{SessionExecutionControl, SessionExecutionControlError};
 pub use agena_runtime_session::{
     SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
 };
@@ -221,24 +218,12 @@ pub(crate) use agena_runtime_session::{
     record_provider_call, record_provider_stream, record_tool_execution, session_finished,
     session_started,
 };
-pub(crate) use agena_runtime_tools::list_managed_snapshots;
-pub(crate) use agena_runtime_tools::prune_stale_managed_snapshots;
-pub(crate) use agena_runtime_tools::snapshot_backend_capabilities;
-pub(crate) use agena_runtime_tools::snapshot_rift_binary;
 pub(crate) use agena_runtime_tools::{
     MonitorError, MonitorListener, MonitorRead, MonitorReadParams, MonitorRegistry, MonitorService,
     MonitorStart, MonitorStartParams, MonitorStopOutcome, default_monitor_registry,
 };
 pub(crate) use agena_runtime_tools::{
-    SnapshotCreation, attach_existing_snapshot, create_managed_snapshot, remove_managed_snapshot,
-    snapshot_has_local_changes,
-};
-pub(crate) use agena_runtime_tools::{
-    SnapshotRegistry, SnapshotSession, list_active_snapshots, snapshot_registry,
-};
-pub(crate) use agena_runtime_tools::{
-    agena_home_dir, generated_image_artifact_path, project_state_dir, snapshot_managed_dir,
-    snapshot_rift_database_path,
+    agena_home_dir, generated_image_artifact_path, project_state_dir,
 };
 pub use application_services::{RuntimeApplicationRepositories, RuntimeApplicationServices};
 pub(crate) use application_services::{

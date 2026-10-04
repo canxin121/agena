@@ -239,7 +239,6 @@ fn replace_manager_host(runtime: &AgenaRuntime, next: Arc<agena_plugin_host::Plu
         next.clone(),
         None,
         None,
-        None,
     );
     runtime.session_manager().unwrap().reconfigure(
         runtime.current_snapshot().provider_registry(),

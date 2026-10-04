@@ -50,8 +50,7 @@ impl SessionManager {
     ///
     /// The spill directory is keyed by session id, so a directory whose id is
     /// absent from the durable session table belongs to a deleted session.
-    /// Clearing them here — the same startup window that drops orphaned
-    /// snapshots — keeps the managed state directory from growing forever.
+    /// Clearing them at startup bounds disk use without touching workspaces.
     async fn prune_orphaned_tool_output(&self) {
         let workspace_root = self.tool_executor().workspace_root().to_path_buf();
         let live = match self
@@ -847,36 +846,5 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
                 "session {session_id} contains invalid persisted model reference: {error}"
             ))
         })
-    }
-
-    fn snapshot_status(
-        &self,
-        workspace_root: &std::path::Path,
-    ) -> Option<agena_runtime::RuntimeSnapshotStatus> {
-        let executor = self.tool_executor();
-        let registry = executor.snapshot_registry()?;
-        let active = agena_runtime::list_active_snapshots(registry)
-            .into_iter()
-            .map(|snapshot| agena_runtime::RuntimeActiveSnapshot {
-                session_id: snapshot.session_id,
-                path: snapshot.path.display().to_string(),
-                branch: snapshot.branch,
-                backend: snapshot.backend,
-                created_here: snapshot.created_here,
-            })
-            .collect();
-        let managed = agena_runtime::list_managed_snapshots(workspace_root, registry)
-            .into_iter()
-            .map(|snapshot| agena_runtime::RuntimeManagedSnapshot {
-                stale: snapshot.is_stale(),
-                path: snapshot.path.display().to_string(),
-                session_id: snapshot.session_id,
-                branch: snapshot.branch,
-                backend: snapshot.backend,
-                registered_with_git: snapshot.registered_with_git,
-                registered_with_rift: snapshot.registered_with_rift,
-            })
-            .collect();
-        Some(agena_runtime::RuntimeSnapshotStatus { active, managed })
     }
 }

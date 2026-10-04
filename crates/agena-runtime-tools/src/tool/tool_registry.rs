@@ -638,7 +638,6 @@ pub struct ToolExecutor {
     pub(super) definition_catalog: Option<Arc<Vec<RegisteredTool>>>,
     pub(super) monitor_registry: Option<Arc<dyn MonitorService>>,
     pub(super) plugins: Arc<PluginHost>,
-    pub(super) snapshot_registry: Option<crate::SnapshotRegistry>,
     pub(super) scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,

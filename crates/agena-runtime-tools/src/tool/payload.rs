@@ -7,10 +7,9 @@ use strum::Display;
 use crate::part::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
     CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,
-    CronUpdateToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput,
-    GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
-    LspReferencesToolInput, MonitorToolInput, ReadToolInput, ShellToolInput, ToolSearchToolInput,
-    WebFetchToolInput, WebSearchToolInput,
+    CronUpdateToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
+    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorToolInput,
+    ReadToolInput, ShellToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 use agena_domain::{
     FileChangeRecord, StructuredObject, ToolInvocation, ToolOutput, WebSearchResult,
@@ -43,8 +42,6 @@ pub enum ToolPayloadInput {
     AskUser(AskUserToolInput),
     WebFetch(WebFetchToolInput),
     WebSearch(WebSearchToolInput),
-    EnterSnapshot(EnterSnapshotToolInput),
-    ExitSnapshot(ExitSnapshotToolInput),
     CronCreate(CronCreateToolInput),
     CronList(CronListToolInput),
     CronDelete(CronDeleteToolInput),
@@ -73,8 +70,6 @@ impl ToolPayloadInput {
             Self::AskUser(_) => "ask_user",
             Self::WebFetch(_) => "web_fetch",
             Self::WebSearch(_) => "web_search",
-            Self::EnterSnapshot(_) => "enter_snapshot",
-            Self::ExitSnapshot(_) => "exit_snapshot",
             Self::CronCreate(_) => "cron_create",
             Self::CronList(_) => "cron_list",
             Self::CronDelete(_) => "cron_delete",
@@ -461,6 +456,8 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<WebSearchResult>,
     },
+    /// Read-only compatibility for persisted parts from the retired snapshot
+    /// plugin. There is no corresponding executable input or workspace effect.
     EnterSnapshot {
         path: String,
         branch: String,
@@ -469,6 +466,7 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+    /// Read-only compatibility for persisted snapshot exit results.
     ExitSnapshot {
         action: String,
         path: String,
@@ -598,9 +596,9 @@ impl ToolPayloadOutput {
 /// The provider catalog uses compact names such as `fs.read` and `cron.create`,
 /// workflows use canonical names such as `agena.fs.read`, and the plugin wire
 /// format uses names such as `agena_fs_read` / `agena_web__fetch`. Every
-/// spelling must resolve to the same `ToolPayloadOutput` / `ToolPayloadInput`
-/// variant tag; a missed spelling makes the renderer fall back to dumping the
-/// whole payload as a raw JSON card.
+/// spelling must resolve to the same payload variant tag; a missed spelling
+/// makes the renderer fall back to dumping the whole payload as a raw JSON
+/// card. Retired tools have output variants only.
 const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
     ("read", "fs.read", "agena.fs.read", "agena_fs_read"),
     ("glob", "fs.glob", "agena.fs.glob", "agena_fs_glob"),
@@ -636,6 +634,7 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena.web.search",
         "agena_web__search",
     ),
+    // Retired snapshot names remain recognizable when rendering old history.
     (
         "enter_snapshot",
         "snapshot.enter",
@@ -781,39 +780,6 @@ fn invocation_name_for_payload_tool(
         "cron_pause" => canonical_registry_tool_name("agena.cron", "pause"),
         "cron_resume" => canonical_registry_tool_name("agena.cron", "resume"),
         "cron_history" => canonical_registry_tool_name("agena.cron", "history"),
-        "enter_snapshot" => {
-            let name = input
-                .remove("name")
-                .and_then(|value| value.as_str().map(str::to_string));
-            let path = input
-                .remove("path")
-                .and_then(|value| value.as_str().map(str::to_string));
-            match (name, path) {
-                (_, Some(path)) => {
-                    input.insert(
-                        "target".to_string(),
-                        serde_json::Value::String("existing".to_string()),
-                    );
-                    input.insert("path".to_string(), serde_json::Value::String(path));
-                }
-                (name, None) => {
-                    input.insert(
-                        "target".to_string(),
-                        serde_json::Value::String("new".to_string()),
-                    );
-                    if let Some(name) = name {
-                        input.insert("name".to_string(), serde_json::Value::String(name));
-                    }
-                }
-            }
-            canonical_registry_tool_name("agena.snapshot", "enter")
-        }
-        "exit_snapshot" => {
-            if let Some(action) = input.remove("action") {
-                input.insert("exit_action".to_string(), action);
-            }
-            canonical_registry_tool_name("agena.snapshot", "exit")
-        }
         _ => {
             let (plugin, tool) = direct_mapping_for_tool(tool)?;
             canonical_registry_tool_name(plugin, tool)
@@ -1030,7 +996,6 @@ mod tests {
         for (plugin, tool) in [
             ("agena.fs", "write"),
             ("agena.tasks", "run"),
-            ("agena.snapshot", "enter"),
             ("agena.interaction", "notify"),
         ] {
             let registered = registered_tool(plugin, tool);

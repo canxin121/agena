@@ -235,11 +235,8 @@ export type ChatPageViewContext = {
   speedModeChipLabel: MaybeRef<string>
   composerBottomLeftStatus: MaybeRef<string>
   composerBottomRightStatus: MaybeRef<string>
-  openBtw: (question?: string) => void
-  openSide: (question?: string) => Promise<void>
   returnFromSide: () => void
   sideParentId: ComputedRef<string | null>
-  sideBusy: Ref<boolean>
   openPlanViewer: () => void
   composerStatusExtra: MaybeRef<string>
 

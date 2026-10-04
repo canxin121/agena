@@ -2540,11 +2540,8 @@ const viewCtx = {
   composerStatusExtra,
   composerBottomLeftStatus,
   composerBottomRightStatus,
-  openBtw,
-  openSide,
   returnFromSide,
   sideParentId,
-  sideBusy,
   openPlanViewer: () => {
     planViewerOpen.value = true
   },

@@ -406,7 +406,7 @@ defineExpose({
     >
       <div
         v-if="$slots.status"
-        class="pointer-events-auto min-w-0 max-w-full overflow-x-auto bg-background px-1 [scrollbar-width:none]"
+        class="pointer-events-auto flex min-w-0 max-w-full items-center overflow-x-auto whitespace-nowrap bg-background px-1 [scrollbar-width:none]"
       >
         <slot name="status" />
       </div>

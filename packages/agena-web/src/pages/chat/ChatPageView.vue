@@ -17,6 +17,7 @@ import {
   RiSearchLine,
   RiCloseLine,
   RiCommandLine,
+  RiGitBranchLine,
 } from '@remixicon/vue'
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
@@ -644,35 +645,22 @@ void sessionActionsMenuRef
                 @removeAttachment="removeAttachment"
               >
                 <template #status>
-                  <span v-if="chat.selectedSessionId" class="flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      class="pointer-events-auto min-h-8 touch-manipulation rounded px-2 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-                      :title="t('chat.btw.description')"
-                      @click.stop="ctx.openBtw()"
-                    >
-                      /btw
-                    </button>
-                    <button
-                      v-if="ctx.sideParentId.value"
-                      type="button"
-                      class="pointer-events-auto min-h-8 touch-manipulation rounded px-2 text-primary hover:bg-secondary/50"
-                      @click.stop="ctx.returnFromSide"
-                    >
-                      {{ t('chat.btw.returnToParent') }}
-                    </button>
-                    <button
-                      v-else
-                      type="button"
-                      class="pointer-events-auto min-h-8 touch-manipulation rounded px-2 text-muted-foreground hover:bg-secondary/50 hover:text-foreground disabled:opacity-50"
-                      :disabled="ctx.sideBusy.value"
-                      :title="t('chat.btw.sideDescription')"
-                      @click.stop="ctx.openSide()"
-                    >
-                      /side
-                    </button>
-                  </span>
-                  <span class="flex items-center gap-1">
+                  <span class="flex w-max items-center gap-1 whitespace-nowrap">
+                    <template v-if="ctx.sideParentId.value">
+                      <button
+                        type="button"
+                        data-oc-keyboard-tap="blur"
+                        class="pointer-events-auto flex min-h-7 touch-manipulation items-center gap-1 rounded px-1 py-0.5 text-primary hover:bg-secondary/50 hover:text-foreground"
+                        :title="t('chat.btw.returnToParent')"
+                        :aria-label="t('chat.btw.returnToParent')"
+                        @mousedown.prevent
+                        @click.stop="ctx.returnFromSide"
+                      >
+                        <RiGitBranchLine class="h-3 w-3" />
+                        <span :class="modeChipTextClass">Side</span>
+                      </button>
+                      <span class="text-muted-foreground/50">|</span>
+                    </template>
                     <button
                       ref="modelTriggerRef"
                       type="button"

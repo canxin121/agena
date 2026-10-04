@@ -16,6 +16,72 @@ fn files() -> FilePage {
 }
 
 #[tokio::test]
+async fn tool_execution_stays_out_of_accessories_and_resolved_retry_collapses() {
+    let mut app = app();
+    app.transcript.execution = Some(
+        serde_json::from_value(serde_json::json!({
+            "session": {
+                "id": 7, "depth": 0, "root_id": 7, "workspace_id": 1,
+                "title": "Tool execution", "version": 1,
+                "relation_kind": "root", "lifecycle_state": "ready",
+                "state": {"kind": "running", "data": {"workflow": "tool_pending"}},
+                "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z",
+                "message_count": 0, "child_session_count": 0
+            },
+            "parts": [], "execution": {"agent_id": "default"}, "usage": {"current_tokens": 0}
+        }))
+        .unwrap(),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+    let render = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
+        terminal
+            .draw(|frame| app.render_session_work(frame, frame.area()))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    };
+    let normal = render(&mut app, &mut terminal);
+    assert!(!normal.contains(&app.i18n.text("session-work-waiting")));
+    assert!(!normal.contains(&app.i18n.text("session-work-stop")));
+
+    app.transcript
+        .execution
+        .as_mut()
+        .unwrap()
+        .execution
+        .provider_retry = Some(agena_domain::ProviderRetryStatus {
+        attempt: 2,
+        max_retries: 5,
+        next_at_ms: chrono::Utc::now().timestamp_millis() + 10_000,
+        message: "Provider unavailable; retrying shortly".into(),
+    });
+    assert!(render(&mut app, &mut terminal).contains("↻ 2"));
+    app.handle_session_work_action("work-status");
+    assert!(render(&mut app, &mut terminal).contains("Provider unavailable; retrying shortly"));
+
+    app.transcript
+        .execution
+        .as_mut()
+        .unwrap()
+        .execution
+        .provider_retry = None;
+    app.heal_session_work();
+    assert_eq!(app.session_work_height(30), 1);
+    assert_eq!(app.work_focus, None);
+    let resumed = render(&mut app, &mut terminal);
+    assert!(!resumed.contains("retrying shortly"));
+    assert!(!resumed.contains(&app.i18n.text("session-work-waiting")));
+    app.handle_session_work_action("work-toggle");
+    assert_eq!(app.session_work[&7].tab, Tab::Files);
+    assert!(app.session_work[&7].expanded);
+}
+
+#[tokio::test]
 async fn accessories_align_with_composer_and_leave_room_for_chat() {
     let mut app = app();
     app.composer.insert_str("MAIN DRAFT");

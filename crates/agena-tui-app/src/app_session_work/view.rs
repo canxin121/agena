@@ -42,16 +42,6 @@ impl App {
             .execution
             .as_ref()
             .and_then(|e| e.execution.provider_retry.clone());
-        let waiting = self.transcript.execution.as_ref().is_some_and(|e| {
-            matches!(
-                e.session.state,
-                SessionState::Running {
-                    workflow: agena_domain::WorkflowState::ToolPending,
-                    ..
-                }
-            )
-        });
-        let can_stop = self.active_run_session_id() == Some(id);
         let state = self.session_work.entry(id).or_default();
         if let Some(Detail::Task(task)) = &state.detail
             && let Some(activity) = activities.iter().find(|a| &a.id == task)
@@ -73,15 +63,13 @@ impl App {
                 .map_or_else(|| "…".to_owned(), |f| f.total_files.to_string())
         );
         let request_label = format!("{} {requests}", self.i18n.text("session-work-requests"));
-        let status_label = if let Some(retry) = &retry {
+        let status_label = retry.as_ref().map(|retry| {
             format!(
                 "↻ {} · {}s",
                 retry.attempt,
                 ((retry.next_at_ms - chrono::Utc::now().timestamp_millis()).max(0) + 999) / 1000
             )
-        } else {
-            self.i18n.text("session-work-waiting")
-        };
+        });
         let mut buttons = vec![(
             if expanded { "▾ F6" } else { "▸ F6" },
             PointerAction::Named("work-toggle"),
@@ -89,8 +77,8 @@ impl App {
         if requests > 0 {
             buttons.push((&request_label, PointerAction::Named("work-request")));
         }
-        if retry.is_some() || waiting {
-            buttons.push((&status_label, PointerAction::Named("work-status")));
+        if let Some(label) = &status_label {
+            buttons.push((label, PointerAction::Named("work-status")));
         }
         if !activities.is_empty() {
             buttons.push((&tasks_label, PointerAction::Named("work-tasks")));
@@ -144,10 +132,6 @@ impl App {
             for (label, action) in &control_labels {
                 actions.push((label, PointerAction::Named(action)));
             }
-        }
-        let stop = self.i18n.text("session-work-stop");
-        if state.tab == Tab::Status && can_stop {
-            actions.push((&stop, PointerAction::Named("work-stop-run")));
         }
         // Keep task controls and diff source reachable before utility actions
         // when a narrow terminal cannot fit every button on this row.
@@ -227,13 +211,7 @@ impl App {
                 _ => state.diff.clone(),
             })
         } else if state.tab == Tab::Status {
-            Some(retry.map(|r| r.message).unwrap_or_else(|| {
-                self.i18n.text(if waiting {
-                    "session-work-waiting"
-                } else {
-                    "session-work-ready"
-                })
-            }))
+            Some(retry.map(|r| r.message).unwrap_or_default())
         } else {
             None
         };

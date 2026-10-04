@@ -167,10 +167,8 @@ const {
   setAttachmentsPanelOpen,
   closeAttachmentsPanel,
 
-  // Header actions.
-  canAbort,
+  // Retry notice.
   retryCountdownLabel,
-  abortRun,
 
   // Composer action menu.
   composerActionMenuOpen,
@@ -532,11 +530,8 @@ void sessionActionsMenuRef
                   v-if="chat.selectedSessionId"
                   :key="chat.selectedSessionId"
                   :session-id="chat.selectedSessionId"
-                  :can-abort="canAbort"
-                  :aborting="aborting"
                   :retry="retryStatus"
                   :countdown="retryCountdownLabel"
-                  @stop="abortRun"
                   @reveal-request="messageListRef?.revealRequest($event)"
                 />
                 <WorkspaceChangesSection

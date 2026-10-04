@@ -1,9 +1,7 @@
 //! Compact session accessories. One expanded body, bounded reads, and the
 //! canonical execution snapshot for task/request/retry state.
 use crate::{App, AppMessage, Route};
-use agena_api::resource::{
-    BackgroundActivityLogResource, BackgroundActivityResource, SessionState,
-};
+use agena_api::resource::{BackgroundActivityLogResource, BackgroundActivityResource};
 use agena_tui::main_focus::Focus;
 use agena_tui_components::{
     pointer::{self, PointerAction},
@@ -127,16 +125,10 @@ impl SessionWorkState {
 
 impl App {
     fn session_work_has_status(&self) -> bool {
-        self.transcript.execution.as_ref().is_some_and(|e| {
-            e.execution.provider_retry.is_some()
-                || matches!(
-                    e.session.state,
-                    SessionState::Running {
-                        workflow: agena_domain::WorkflowState::ToolPending,
-                        ..
-                    }
-                )
-        })
+        self.transcript
+            .execution
+            .as_ref()
+            .is_some_and(|e| e.execution.provider_retry.is_some())
     }
 
     pub(crate) fn collapse_session_work(&mut self, id: i64) {
@@ -190,7 +182,8 @@ impl App {
                 ..Default::default()
             };
         }
-        if state.tab == Tab::Status && state.expanded && !has_status {
+        if state.tab == Tab::Status && !has_status {
+            state.tab = Tab::Files;
             state.expanded = false;
             if self.work_focus == Some(id) {
                 self.work_focus = None;
@@ -291,10 +284,6 @@ impl App {
             if let Some(kind) = self.current_session_pending_interactive_kind() {
                 self.open_pending_interactive_overlay_for_kind(kind);
             }
-            return;
-        }
-        if action == "work-stop-run" {
-            self.request_cancel_run(id);
             return;
         }
         if action == "work-control-primary" {

@@ -12,12 +12,10 @@ import Button from '@/components/ui/Button.vue'
 
 const props = defineProps<{
   sessionId: string
-  canAbort: boolean
-  aborting: boolean
   retry?: { attempt: number; message: string; next: number } | null
   countdown?: string
 }>()
-defineEmits<{ revealRequest: [id: string]; stop: [] }>()
+defineEmits<{ revealRequest: [id: string] }>()
 const { t } = useI18n()
 const chat = useChatStore()
 const expanded = ref(false)
@@ -56,12 +54,6 @@ const pendingSummary = computed(() => {
     .filter(([, count]) => count)
     .map(([kind, count]) => t(`chat.sessionWork.${kind}`, { count }))
     .join(' · ')
-})
-const waiting = computed(() => {
-  const state = chat.selectedSessionState
-  if (state.kind === 'running' && state.data.workflow === 'tool_pending') return t('chat.sessionWork.waitingTools')
-  if (state.kind === 'awaiting_interaction' && !requests.value.length) return t('chat.sessionWork.waitingInput')
-  return ''
 })
 const logKey = computed(() => (expanded.value && selected.value ? `${props.sessionId}/${selected.value.id}` : ''))
 const logs = useVisibleResource<ActivityLog>({
@@ -105,7 +97,7 @@ async function control(activity: SessionActivity, action: string) {
 
 <template>
   <div
-    v-if="requests.length || retry || waiting"
+    v-if="requests.length || retry"
     class="my-3 rounded-lg border border-border/60 px-3 py-2 text-xs"
     data-transcript-chrome="true"
     aria-live="polite"
@@ -114,14 +106,10 @@ async function control(activity: SessionActivity, action: string) {
       <Button v-if="attentionId" size="sm" variant="secondary" @click="$emit('revealRequest', attentionId)">{{
         t('chat.sessionWork.resolve')
       }}</Button>
-      <Button v-if="canAbort" size="sm" variant="ghost" :disabled="aborting" @click="$emit('stop')">{{
-        t('chat.sessionWork.stop')
-      }}</Button>
       <span v-if="pendingSummary" class="font-medium">{{ pendingSummary }}</span>
       <span v-else-if="retry" class="font-medium"
         >{{ t('chat.sessionWork.retry', { attempt: retry.attempt }) }} · {{ countdown }}</span
       >
-      <span v-else class="text-muted-foreground">{{ waiting }}</span>
     </div>
     <p v-if="retry?.message" class="mt-1 line-clamp-3 break-words text-muted-foreground">{{ retry.message }}</p>
   </div>

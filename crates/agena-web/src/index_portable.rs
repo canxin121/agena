@@ -113,6 +113,7 @@ mod tests {
     #[test]
     fn portable_index_scores_matching_chunks() {
         let document = StoredDocument {
+            final_url: String::new(),
             id: "1".into(),
             url: "https://example.test".into(),
             canonical_url: "https://example.test".into(),
@@ -125,6 +126,7 @@ mod tests {
             status: 200,
             truncated: false,
             rendered: false,
+            extraction_backend: crate::ExtractionBackend::default(),
             hash: String::new(),
             raw_html_hash: String::new(),
             markdown_hash: String::new(),

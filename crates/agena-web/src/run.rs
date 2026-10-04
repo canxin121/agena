@@ -13,6 +13,7 @@ use crate::{
 #[derive(Debug, Clone)]
 /// Options of a crawl run.
 pub struct CrawlRunOptions {
+    pub extraction_backend: crate::ExtractionBackend,
     pub max_pages: usize,
     pub max_depth: u32,
     pub same_host_only: bool,
@@ -27,6 +28,7 @@ pub struct CrawlRunOptions {
 impl Default for CrawlRunOptions {
     fn default() -> Self {
         Self {
+            extraction_backend: crate::ExtractionBackend::default(),
             max_pages: 10,
             max_depth: 1,
             same_host_only: true,
@@ -49,6 +51,12 @@ pub struct CrawlRunReport {
     pub start_url: String,
     pub engine: String,
     pub rendered: bool,
+    #[serde(default)]
+    pub attempted_count: usize,
+    #[serde(default)]
+    pub discovered_count: usize,
+    #[serde(default)]
+    pub truncated: bool,
     pub stored_count: usize,
     pub cached_count: usize,
     pub duplicate_count: usize,
@@ -64,6 +72,14 @@ pub struct CrawlRunReport {
 
 /// Fetcher used by a crawl run.
 pub trait CrawlPageFetcher {
+    /// Revalidate access before exposing stored content, including its actual
+    /// transport destination. This also runs on a document-cache hit.
+    fn authorize_cached<'a>(
+        &'a self,
+        requested_url: &'a Url,
+        document: &'a StoredDocument,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), CrawlError>> + Send + 'a>>;
+
     fn fetch_page<'a>(
         &'a self,
         url: &'a Url,
@@ -80,6 +96,14 @@ pub async fn crawl_site(
     options: &CrawlRunOptions,
     fetcher: &impl CrawlPageFetcher,
 ) -> Result<CrawlRunReport, CrawlError> {
+    if options.max_pages == 0 || options.max_pages > 1000 || options.max_depth > 16 {
+        return Err(CrawlError::InvalidInput(
+            "crawl requires 1–1000 pages and depth at most 16".into(),
+        ));
+    }
+    let max_urls = options.max_pages.saturating_mul(32).clamp(128, 32_000);
+    let mut truncated = false;
+    let mut attempted_count = 0usize;
     let mut queue = VecDeque::from([(start_url.clone(), 0u32)]);
     let mut seen_urls = HashSet::from([start_url.to_string()]);
     let mut documents = Vec::new();
@@ -95,15 +119,26 @@ pub async fn crawl_site(
         .collect::<Vec<_>>();
 
     while let Some((url, depth)) = queue.pop_front() {
-        if documents.len() >= options.max_pages {
+        if attempted_count + cached_count >= options.max_pages {
+            truncated = true;
             break;
         }
 
         if options.use_cache
             && let Some(existing) = store.find_by_url(url.as_str())?
             && document_matches_render_mode(&existing, options.render_js)
+            && existing.extraction_backend == options.extraction_backend
+            && !existing.final_url.is_empty()
             && is_document_fresh(&existing, options.document_cache_ttl)
+            && !existing.truncated
+            && (200..300).contains(&existing.status)
         {
+            if let Err(err) = fetcher.authorize_cached(&url, &existing).await {
+                attempted_count += 1;
+                tracing::warn!(diagnostic = %err, "cached crawl page authorization failed");
+                failures.push(crawl_page_failure().into());
+                continue;
+            }
             if depth < options.max_depth {
                 enqueue_document_links(
                     start_url,
@@ -112,6 +147,8 @@ pub async fn crawl_site(
                     options.same_host_only,
                     &mut queue,
                     &mut seen_urls,
+                    max_urls,
+                    &mut truncated,
                 );
             }
             cached_count += 1;
@@ -119,12 +156,13 @@ pub async fn crawl_site(
             continue;
         }
 
+        attempted_count += 1;
         match fetcher
             .fetch_page(&url, options.use_cache, options.render_js)
             .await
         {
             Ok(page) => {
-                if page.status >= 400 {
+                if !(200..300).contains(&page.status) {
                     let failure = crawl_page_failure();
                     tracing::warn!(
                         failure_id = %failure.id,
@@ -134,6 +172,24 @@ pub async fn crawl_site(
                     );
                     failures.push(failure.into());
                     continue;
+                }
+                truncated |= page.truncated;
+                if page.truncated {
+                    // A partial extraction must not become a reusable document.
+                    failures.push(crawl_page_failure().into());
+                    continue;
+                }
+                if depth < options.max_depth {
+                    enqueue_links(
+                        start_url,
+                        &page,
+                        depth,
+                        options.same_host_only,
+                        &mut queue,
+                        &mut seen_urls,
+                        max_urls,
+                        &mut truncated,
+                    );
                 }
                 let document =
                     StoredDocument::from_fetched_page(page.clone(), depth, options.max_chunk_chars);
@@ -162,16 +218,6 @@ pub async fn crawl_site(
 
                 store.save_document(&document)?;
                 known_simhashes.push(document.simhash);
-                if depth < options.max_depth {
-                    enqueue_links(
-                        start_url,
-                        &page,
-                        depth,
-                        options.same_host_only,
-                        &mut queue,
-                        &mut seen_urls,
-                    );
-                }
                 stored_count += 1;
                 documents.push(document.summary());
             }
@@ -196,8 +242,11 @@ pub async fn crawl_site(
     let total_documents = store.list_documents()?.len();
     Ok(CrawlRunReport {
         start_url: start_url.to_string(),
-        engine: "spider".to_string(),
+        engine: if options.render_js { "spider" } else { "http" }.to_string(),
         rendered: options.render_js,
+        attempted_count,
+        discovered_count: seen_urls.len(),
+        truncated,
         stored_count,
         cached_count,
         duplicate_count,
@@ -255,6 +304,7 @@ fn is_near_duplicate(candidate: u64, existing: &[u64], max_distance: u32) -> boo
         .any(|value| simhash::hamming_distance(candidate, *value) <= max_distance)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enqueue_links(
     start_url: &Url,
     page: &FetchedPage,
@@ -262,6 +312,8 @@ fn enqueue_links(
     same_host_only: bool,
     queue: &mut VecDeque<(Url, u32)>,
     seen_urls: &mut HashSet<String>,
+    max_urls: usize,
+    truncated: &mut bool,
 ) {
     for link in &page.links {
         enqueue_url(
@@ -271,10 +323,13 @@ fn enqueue_links(
             same_host_only,
             queue,
             seen_urls,
+            max_urls,
+            truncated,
         );
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enqueue_document_links(
     start_url: &Url,
     document: &StoredDocument,
@@ -282,6 +337,8 @@ fn enqueue_document_links(
     same_host_only: bool,
     queue: &mut VecDeque<(Url, u32)>,
     seen_urls: &mut HashSet<String>,
+    max_urls: usize,
+    truncated: &mut bool,
 ) {
     for link in &document.links {
         enqueue_url(
@@ -291,10 +348,13 @@ fn enqueue_document_links(
             same_host_only,
             queue,
             seen_urls,
+            max_urls,
+            truncated,
         );
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enqueue_url(
     start_url: &Url,
     raw: &str,
@@ -302,6 +362,8 @@ fn enqueue_url(
     same_host_only: bool,
     queue: &mut VecDeque<(Url, u32)>,
     seen_urls: &mut HashSet<String>,
+    max_urls: usize,
+    truncated: &mut bool,
 ) {
     let Ok(url) = prepare_fetch_url(raw) else {
         return;
@@ -309,7 +371,17 @@ fn enqueue_url(
     if same_host_only && url.host_str() != start_url.host_str() {
         return;
     }
+    if seen_urls.contains(url.as_str()) {
+        return;
+    }
+    if seen_urls.len() >= max_urls {
+        *truncated = true;
+        return;
+    }
     if seen_urls.insert(url.to_string()) {
         queue.push_back((url, current_depth + 1));
     }
 }
+
+#[cfg(test)]
+mod tests;

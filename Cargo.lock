@@ -1454,11 +1454,14 @@ dependencies = [
  "blake3",
  "chrono",
  "crw-extract",
+ "encoding_rs",
  "governor",
  "libc",
  "moka",
  "redb",
  "reqwest 0.13.4",
+ "robotstxt",
+ "schemars",
  "scraper",
  "serde",
  "serde_json",
@@ -8592,6 +8595,12 @@ dependencies = [
  "serde_json",
  "syn 3.0.3",
 ]
+
+[[package]]
+name = "robotstxt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbc52377db80e3fec3a2c748ca603b8b6cacdd34ff89ff4b742a635361d4b4a7"
 
 [[package]]
 name = "ron"

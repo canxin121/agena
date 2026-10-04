@@ -27,12 +27,21 @@ pub struct CrawlStorePruneReport {
 /// On-disk store for crawled documents.
 pub struct CrawlStore {
     dir: CrawlDir,
+    metadata: std::sync::Arc<std::sync::Mutex<Option<CrawlMetadataStore>>>,
 }
 
 impl CrawlStore {
+    #[cfg(test)]
+    pub(crate) fn for_test(path: &Path) -> Self {
+        Self {
+            dir: CrawlDir::for_test(path.to_path_buf()),
+            metadata: Default::default(),
+        }
+    }
     pub fn for_workspace(workspace_root: &Path) -> Self {
         Self {
             dir: CrawlDir::from_workspace(workspace_root),
+            metadata: Default::default(),
         }
     }
 
@@ -177,7 +186,16 @@ impl CrawlStore {
     }
 
     fn metadata(&self) -> Result<CrawlMetadataStore, CrawlError> {
-        CrawlMetadataStore::open(self.dir.metadata_db_path().as_path())
+        let mut retained = self
+            .metadata
+            .lock()
+            .map_err(|_| CrawlError::InvalidInput("crawl metadata handle mutex poisoned".into()))?;
+        if retained.is_none() {
+            *retained = Some(CrawlMetadataStore::open(
+                self.dir.metadata_db_path().as_path(),
+            )?);
+        }
+        Ok(retained.as_ref().expect("initialized above").clone())
     }
 
     fn document_path(&self, id: &str) -> std::path::PathBuf {

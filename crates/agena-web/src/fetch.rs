@@ -77,14 +77,9 @@ pub fn prepare_fetch_url(raw: &str) -> Result<Url, CrawlError> {
             "url must not be empty".to_string(),
         ));
     }
-    let url = if let Some(rest) = raw.strip_prefix("http://")
-        && should_upgrade_http(raw)
-    {
-        format!("https://{rest}")
-    } else {
-        raw.to_string()
-    };
-    canonicalize_url(url.as_str())
+    // Fetch the supplied scheme/query exactly; query order, repeated keys and
+    // seemingly tracking-like parameters can be meaningful or signed.
+    canonicalize_url(raw)
 }
 
 pub fn canonicalize_url(raw: &str) -> Result<Url, CrawlError> {
@@ -94,6 +89,11 @@ pub fn canonicalize_url(raw: &str) -> Result<Url, CrawlError> {
             "unsupported url scheme '{}'",
             url.scheme()
         )));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(CrawlError::InvalidInput(
+            "URL credentials are unsupported; use an explicit authenticated workflow".into(),
+        ));
     }
     Ok(normalize_url(url))
 }
@@ -184,31 +184,7 @@ fn normalize_url(mut url: Url) -> Url {
         let _ = url.set_port(None);
     }
 
-    let mut filtered_pairs = url
-        .query_pairs()
-        .filter(|(key, _)| !is_tracking_query_param(key.as_ref()))
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect::<Vec<_>>();
-    if filtered_pairs.is_empty() {
-        url.set_query(None);
-        return url;
-    }
-    filtered_pairs.sort();
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (key, value) in filtered_pairs {
-        serializer.append_pair(key.as_str(), value.as_str());
-    }
-    url.set_query(Some(serializer.finish().as_str()));
     url
-}
-
-fn is_tracking_query_param(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    lower.starts_with("utm_")
-        || matches!(
-            lower.as_str(),
-            "fbclid" | "gclid" | "igshid" | "mc_cid" | "mc_eid" | "ref"
-        )
 }
 
 fn should_retry_status(status: u16) -> bool {
@@ -223,23 +199,6 @@ fn retry_delay(attempt: usize) -> Duration {
             .saturating_mul(multiplier)
             .min(MAX_RETRY_DELAY_MS),
     )
-}
-
-fn should_upgrade_http(raw_url: &str) -> bool {
-    let Ok(url) = Url::parse(raw_url) else {
-        return true;
-    };
-    let Some(host) = url.host_str() else {
-        return true;
-    };
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
-        return false;
-    }
-    match url.host() {
-        Some(url::Host::Ipv4(addr)) => !addr.is_loopback(),
-        Some(url::Host::Ipv6(addr)) => !addr.is_loopback(),
-        Some(url::Host::Domain(_)) | None => true,
-    }
 }
 
 #[cfg(test)]

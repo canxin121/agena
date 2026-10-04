@@ -12,10 +12,13 @@ base64 = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 crw-extract = { workspace = true }
+encoding_rs = { workspace = true }
 governor = { workspace = true }
 moka = { workspace = true }
 reqwest = { workspace = true, features = ["rustls"] }
 redb = { workspace = true }
+robotstxt = { workspace = true }
+schemars = { workspace = true }
 scraper = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -1,0 +1,24 @@
+{
+  "retrieved_on": "2026-10-04",
+  "note": "Official source observations; hashes identify fetched content, not pinned runtime source. Runtime versions: robotstxt 0.3.0; local test Trafilatura 2.3.0.",
+  "sources": [
+    {
+      "label": "robotstxt matcher and product token",
+      "url": "https://raw.githubusercontent.com/Folyd/robotstxt/master/README.md",
+      "bytes": 2480,
+      "sha256": "c27dc63e990dbff800fa57ff9938bfd76f6808b3727bb7c649ff422cfa342262"
+    },
+    {
+      "label": "Trafilatura Python usage",
+      "url": "https://raw.githubusercontent.com/adbar/trafilatura/master/docs/usage-python.rst",
+      "bytes": 20393,
+      "sha256": "ffcdb50ff283b56d05be05dc8c2102b80d91a08b5f6b66202fbb3c1f37e1ebbf"
+    },
+    {
+      "label": "Trafilatura extraction implementation",
+      "url": "https://raw.githubusercontent.com/adbar/trafilatura/master/trafilatura/core.py",
+      "bytes": 31952,
+      "sha256": "e33fbd0bcc59995974f5a4a7e1d6adedc34674a2a440557950b2688a8629ed70"
+    }
+  ]
+}

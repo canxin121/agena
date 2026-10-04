@@ -32,6 +32,10 @@ pub use browser::{
     local_browser_touch, shutdown_local_browser,
 };
 pub use error::CrawlError;
+pub use extract::{
+    ExtractionBackend, decode_response_body, extract_page_from_body, extract_with_backend,
+    robots_allows,
+};
 pub use fetch::{
     DEFAULT_FETCH_TIMEOUT_SECS, DEFAULT_MAX_BODY_BYTES, FetchOptions, build_client,
     canonicalize_url, fetch_page, fetch_page_with_client, prepare_fetch_url, resolve_link_url,

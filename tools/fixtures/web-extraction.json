@@ -1,0 +1,41 @@
+[
+  {
+    "name": "article",
+    "facts": [
+      "Helsinki",
+      "42 kilometres",
+      "2026-10-04",
+      "中文"
+    ],
+    "noise": [
+      "NOISE_ADVERTISEMENT"
+    ],
+    "html": "<html lang=\"en\"><head><title>Harbor article</title></head><body><nav>Home | About | NOISE_ADVERTISEMENT</nav><main><article><h1>Harbor survey</h1><p>The Helsinki harbor survey was completed on 2026-10-04. The research team measured 42 kilometres of shoreline using a consistent survey method.</p><p>This article explains the field methods and preserves multilingual observations: 中文内容 and coastal measurements. The observations cover the northern and eastern shore with independent checkpoints.</p><p>All measurements describe this controlled fixture and do not represent a real-world survey. The tabulated values were reviewed by two researchers before publication.</p></article></main><aside>NOISE_ADVERTISEMENT Buy unrelated products here.</aside><footer>Copyright and contact links.</footer></body></html>"
+  },
+  {
+    "name": "documentation",
+    "facts": [
+      "CACHE_TTL",
+      "300",
+      "cache.get",
+      "retry budget"
+    ],
+    "noise": [
+      "NOISE_PROMO"
+    ],
+    "html": "<html><head><title>Cache API guide</title></head><body><nav>NOISE_PROMO Subscribe for offers</nav><main><h1>Cache API guide</h1><p>The cache stores successful reads until the configured lifetime ends. Set CACHE_TTL to 300 seconds for this example. Failures are never inserted into the cache.</p><pre><code>let result = cache.get(\"key\");</code></pre><h2>Request options</h2><table><tr><th>Option</th><th>Meaning</th></tr><tr><td>retry budget</td><td>Two attempts at most</td></tr></table><p>When the request times out, the client reports the real status and the caller decides whether to retry. This preserves accurate diagnostics for repeated failures and prevents silent extra requests.</p></main><footer>Copyright fixture</footer></body></html>"
+  },
+  {
+    "name": "discussion",
+    "facts": [
+      "QUESTION_MARKER",
+      "ANSWER_MARKER",
+      "UTF-8",
+      "中文"
+    ],
+    "noise": [
+      "NOISE_BANNER"
+    ],
+    "html": "<html><head><title>Unicode discussion</title></head><body><header>NOISE_BANNER seasonal sale</header><main><h1>Unicode discussion</h1><article><h2>QUESTION_MARKER</h2><p>How should the service handle UTF-8 text that contains Chinese characters and emoji? The stream might end in the middle of a multi-byte character, so the response needs a visible truncation indicator.</p><section class=\"comments\"><h2>ANSWER_MARKER</h2><p>Decode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error.</p></section></article></main><footer>Contact fixture moderators</footer></body></html>"
+  }
+]

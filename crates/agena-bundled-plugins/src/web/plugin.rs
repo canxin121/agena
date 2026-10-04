@@ -1,4 +1,5 @@
 mod downloads;
+mod fetch_transport;
 mod playwright;
 use playwright::BrowserInteractionBackend;
 mod search_provider;
@@ -81,6 +82,7 @@ pub(crate) struct WebConfig {
 #[serde(default, deny_unknown_fields)]
 /// Fetch configuration of the web plugin.
 pub struct WebFetchConfig {
+    pub extractor: agena_web::ExtractionBackend,
     #[serde(default = "default_web_fetch_enabled")]
     pub enabled: bool,
     pub request: WebRequestConfig,
@@ -91,6 +93,7 @@ impl Default for WebFetchConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            extractor: agena_web::ExtractionBackend::default(),
             request: WebRequestConfig::default(),
             cache: WebFetchCacheConfig::default(),
         }
@@ -332,6 +335,11 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "/fetch",
             "Fetch",
             "Controls direct page fetch operations, request throttling, and fetch cache behavior.",
+        ),
+        (
+            "/fetch/extractor",
+            "HTML Extractor",
+            "Readability (local Rust default) or optional local Trafilatura via AGENA_EXTRACT_PYTHON. No remote extraction or automatic dependency installation.",
         ),
         (
             "/fetch/enabled",
@@ -967,6 +975,8 @@ struct CrawlFetchInput {
     use_cache: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     render_js: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extractor: Option<agena_web::ExtractionBackend>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -1349,6 +1359,7 @@ impl WebPlugin {
         let delay = (config.browser.wait.delay_ms > 0)
             .then(|| Duration::from_millis(config.browser.wait.delay_ms));
         Ok(SpiderFetchOptions {
+            extractor: config.fetch.extractor,
             max_body_bytes: config.fetch.request.max_body_bytes as usize,
             timeout: Duration::from_secs(config.fetch.request.timeout_secs),
             delay_ms: config.fetch.request.delay_ms,
@@ -1875,6 +1886,17 @@ impl WebPlugin {
         use_cache: bool,
         render_js: bool,
     ) -> SdkResult<FetchedPage> {
+        self.fetch_page_with_extractor(url, use_cache, render_js, self.config()?.fetch.extractor)
+            .await
+    }
+
+    async fn fetch_page_with_extractor(
+        &self,
+        url: &url::Url,
+        use_cache: bool,
+        render_js: bool,
+        extractor: agena_web::ExtractionBackend,
+    ) -> SdkResult<FetchedPage> {
         let state = self.state()?;
         if !state.config.fetch.enabled {
             return Err(PluginError::internal(
@@ -1882,36 +1904,80 @@ impl WebPlugin {
             ));
         }
         state
+            .host
+            .require_network_permission(url.to_string())
+            .await?;
+        // Alternate per-call extractors must not pollute the configured cache.
+        let use_cache = use_cache && extractor == state.config.fetch.extractor;
+        let page = state
             .fetch_coordinator
             .fetch_or_cached(url, render_js, use_cache, || async {
-                self.validate_network_target(url).await?;
-                let options = self.spider_fetch_options(render_js)?;
-                let page = fetch_page_with_spider(url, &options)
-                    .await
-                    .map_err(crawl_error_to_plugin)?;
-                let final_url = url::Url::parse(page.canonical_url.as_str()).map_err(|error| {
-                    plugin_internal_error_with_context("invalid final fetch URL", &error)
-                })?;
-                // Spider follows HTTP redirects internally. Do not return a response
-                // whose final destination would fail the same network policy.
-                self.validate_network_target(&final_url).await?;
-                Ok(page)
+                let mut options = self.spider_fetch_options(render_js)?;
+                options.extractor = extractor;
+                if render_js {
+                    state.fetch_coordinator.wait_for_url_host(url).await;
+                    self.validate_network_target(url).await?;
+                    let page = fetch_page_with_spider(url, &options)
+                        .await
+                        .map_err(crawl_error_to_plugin)?;
+                    let final_url = url::Url::parse(&page.final_url)
+                        .map_err(|error| PluginError::internal_error(&error))?;
+                    self.validate_network_target(&final_url).await?;
+                    Ok(page)
+                } else {
+                    let source = fetch_transport::fetch(url, &options, |target| async move {
+                        state
+                            .host
+                            .require_network_permission(target.to_string())
+                            .await?;
+                        state.fetch_coordinator.wait_for_url_host(&target).await;
+                        resolve_public_network_target(&target).await
+                    })
+                    .await?;
+                    fetch_transport::extract(source, url.clone(), extractor).await
+                }
             })
-            .await
+            .await?;
+        if !page.final_url.is_empty() {
+            state
+                .host
+                .require_network_permission(page.final_url.clone())
+                .await?;
+        }
+        Ok(page)
     }
 
     #[tool(
         summary = "Fetch one web page and inspect its actual content.",
         help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
-        tags(read_only)
+        tags(network, read_only)
     )]
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         let config = self.config()?;
         let render_js = input.render_js.unwrap_or(config.browser.enabled);
-        let page = self.fetch_page(&url, input.use_cache, render_js).await?;
-        let payload =
-            serde_json::to_value(&page).map_err(|err| PluginError::internal_error(&err))?;
+        let page = self
+            .fetch_page_with_extractor(
+                &url,
+                input.use_cache,
+                render_js,
+                input.extractor.unwrap_or(config.fetch.extractor),
+            )
+            .await?;
+        let mut returned = page.clone();
+        let original_text_bytes = returned.markdown.len();
+        let original_links = returned.links.len();
+        returned.markdown = agena_web::preview_text(&returned.markdown, 16_000);
+        returned.links.truncate(32);
+        for link in &mut returned.links {
+            *link = agena_web::preview_text(link, 2048);
+        }
+        let mut payload =
+            serde_json::to_value(&returned).map_err(|err| PluginError::internal_error(&err))?;
+        payload["available_markdown_bytes"] = serde_json::json!(original_text_bytes);
+        payload["available_link_count"] = serde_json::json!(original_links);
+        payload["output_truncated"] =
+            serde_json::json!(returned.markdown != page.markdown || returned.links != page.links);
         let text = format_fetched_page(&page, input.prompt.as_deref());
         Ok(ToolInvokeOutput::from_parts(
             format!("web fetch {}", url),
@@ -1930,7 +1996,7 @@ impl WebPlugin {
 
     #[tool(
         summary = "Crawl a site and cache indexed pages locally.",
-        tags(discovery, mutate)
+        tags(network, discovery, mutate)
     )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
         let start_url =
@@ -1939,6 +2005,7 @@ impl WebPlugin {
         let _guard = self.crawl_lock.lock().await;
         let config = self.config()?;
         let options = CrawlRunOptions {
+            extraction_backend: config.fetch.extractor,
             max_pages: clamp_limit(
                 input.max_pages,
                 config.crawl.defaults.max_pages as usize,
@@ -2920,6 +2987,10 @@ impl WebPlugin {
 }
 
 async fn validate_public_network_target(url: &url::Url) -> SdkResult<()> {
+    resolve_public_network_target(url).await.map(|_| ())
+}
+
+async fn resolve_public_network_target(url: &url::Url) -> SdkResult<Vec<std::net::SocketAddr>> {
     let host = url
         .host_str()
         .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
@@ -2927,26 +2998,33 @@ async fn validate_public_network_target(url: &url::Url) -> SdkResult<()> {
         .port_or_known_default()
         .ok_or_else(|| PluginError::invalid_params("web URL has no known port"))?;
 
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|error| {
-            plugin_internal_error_with_context(format!("failed to resolve {host}").as_str(), &error)
-        })?
-        .map(|address| address.ip())
-        .collect::<BTreeSet<_>>();
+    let addresses: BTreeSet<std::net::SocketAddr> = match url.host() {
+        Some(url::Host::Ipv4(ip)) => [std::net::SocketAddr::new(ip.into(), port)]
+            .into_iter()
+            .collect(),
+        Some(url::Host::Ipv6(ip)) => [std::net::SocketAddr::new(ip.into(), port)]
+            .into_iter()
+            .collect(),
+        _ => tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|error| {
+                plugin_internal_error_with_context("failed to resolve fetch host", &error)
+            })?
+            .collect(),
+    };
     if addresses.is_empty() {
         return Err(PluginError::internal(format!(
             "DNS resolution returned no addresses for {host}"
         )));
     }
-    for address in addresses {
-        if !is_public_address(address) {
+    for address in &addresses {
+        if !is_public_address(address.ip()) {
             return Err(PluginError::invalid_params(format!(
                 "web URL host `{host}` resolves to non-public address `{address}`"
             )));
         }
     }
-    Ok(())
+    Ok(addresses.into_iter().collect())
 }
 
 type CdpSocket =
@@ -3896,6 +3974,36 @@ struct PluginPageFetcher<'a> {
 }
 
 impl CrawlPageFetcher for PluginPageFetcher<'_> {
+    fn authorize_cached<'a>(
+        &'a self,
+        requested_url: &'a url::Url,
+        document: &'a agena_web::StoredDocument,
+    ) -> Pin<Box<dyn Future<Output = Result<(), agena_web::CrawlError>> + Send + 'a>> {
+        Box::pin(async move {
+            let state = self.plugin.state().map_err(|error| {
+                agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
+            })?;
+            // Legacy documents have no final URL; do not infer it from an HTML
+            // canonical hint, which need not be the transport destination.
+            if document.final_url.is_empty() {
+                return Err(agena_web::CrawlError::InvalidInput(
+                    "cached document predates transport URL tracking; crawl with use_cache=false"
+                        .into(),
+                ));
+            }
+            for url in [requested_url.as_str(), &document.url, &document.final_url] {
+                state
+                    .host
+                    .require_network_permission(url.to_owned())
+                    .await
+                    .map_err(|error| {
+                        agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
+                    })?;
+            }
+            Ok(())
+        })
+    }
+
     fn fetch_page<'a>(
         &'a self,
         url: &'a url::Url,
@@ -3932,6 +4040,16 @@ fn parse_web_config(value: serde_json::Value) -> SdkResult<WebConfig> {
 }
 
 fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
+    if web.fetch.request.max_body_bytes > 32 * 1024 * 1024 || web.fetch.request.timeout_secs > 120 {
+        return Err(PluginError::invalid_params(
+            "fetch.request allows at most 32 MiB and 120 seconds",
+        ));
+    }
+    if web.crawl.limits.max_pages > 1000 || web.crawl.limits.max_depth > 16 {
+        return Err(PluginError::invalid_params(
+            "crawl limits allow at most 1000 pages and depth 16",
+        ));
+    }
     search_provider::validate_config(&web.search)?;
     for (label, value) in [
         ("crawl.defaults.max_pages", web.crawl.defaults.max_pages),
@@ -4049,6 +4167,17 @@ fn format_fetched_page(page: &FetchedPage, focus: Option<&str>) -> String {
         "Rendered: {}",
         if page.rendered { "yes" } else { "no" }
     ));
+    lines.push(format!("Final URL: {}", page.final_url));
+    lines.push(format!(
+        "Extractor: {}",
+        match page.extraction_backend {
+            agena_web::ExtractionBackend::Readability => "readability",
+            agena_web::ExtractionBackend::Trafilatura => "trafilatura",
+        }
+    ));
+    for warning in &page.warnings {
+        lines.push(format!("Warning: {warning}"));
+    }
     if let Some(etag) = &page.etag {
         lines.push(format!("ETag: {etag}"));
     }
@@ -4198,6 +4327,10 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
         output.failure_count,
         output.total_documents
     )];
+    lines.push(format!(
+        "Fetch attempts: {}. Discovered URLs: {}. Partial/truncated: {}.",
+        output.attempted_count, output.discovered_count, output.truncated
+    ));
     for document in &output.documents {
         lines.push(format!(
             "- {} [{} chunk(s), depth {}] {}",

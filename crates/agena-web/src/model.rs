@@ -6,6 +6,9 @@ use text_splitter::MarkdownSplitter;
 /// A fetched web page.
 pub struct FetchedPage {
     pub url: String,
+    /// Actual transport destination, distinct from an HTML canonical hint.
+    #[serde(default)]
+    pub final_url: String,
     pub canonical_url: String,
     pub title: String,
     pub markdown: String,
@@ -14,6 +17,10 @@ pub struct FetchedPage {
     pub truncated: bool,
     #[serde(default)]
     pub rendered: bool,
+    #[serde(default)]
+    pub extraction_backend: crate::ExtractionBackend,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub raw_html_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
@@ -28,6 +35,8 @@ pub struct FetchedPage {
 pub struct StoredDocument {
     pub id: String,
     pub url: String,
+    #[serde(default)]
+    pub final_url: String,
     pub canonical_url: String,
     pub title: String,
     pub markdown: String,
@@ -42,6 +51,8 @@ pub struct StoredDocument {
     pub truncated: bool,
     #[serde(default)]
     pub rendered: bool,
+    #[serde(default)]
+    pub extraction_backend: crate::ExtractionBackend,
     pub hash: String,
     pub raw_html_hash: String,
     pub markdown_hash: String,
@@ -95,6 +106,7 @@ impl StoredDocument {
         Self {
             id,
             url: page.url,
+            final_url: page.final_url,
             canonical_url: page.canonical_url,
             title: page.title,
             markdown: page.markdown.clone(),
@@ -105,6 +117,7 @@ impl StoredDocument {
             status: page.status,
             truncated: page.truncated,
             rendered: page.rendered,
+            extraction_backend: page.extraction_backend,
             hash,
             raw_html_hash: page.raw_html_hash,
             markdown_hash,

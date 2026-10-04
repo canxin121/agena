@@ -9027,7 +9027,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.crawl` · **Summary**: Crawl a site and cache indexed pages locally.
 
-**Tags**: `discovery` `mutate`
+**Tags**: `network` `discovery` `mutate`
 
 **Runtime**: streaming `buffered`
 
@@ -9099,7 +9099,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.fetch` · **Summary**: Fetch one web page and inspect its actual content.
 
-**Tags**: `read_only`
+**Tags**: `network` `read_only`
 
 **Runtime**: streaming `buffered`
 
@@ -9109,6 +9109,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `extractor` | `ExtractionBackend / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
 | `render_js` | `boolean / null` | — | — |  |
 | `url` | `string` | ✓ | — |  |
@@ -9117,8 +9118,28 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ExtractionBackend": {
+      "enum": [
+        "readability",
+        "trafilatura"
+      ],
+      "type": "string"
+    }
+  },
   "additionalProperties": false,
   "properties": {
+    "extractor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExtractionBackend"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000004"
+    },
     "prompt": {
       "minLength": 1,
       "type": [

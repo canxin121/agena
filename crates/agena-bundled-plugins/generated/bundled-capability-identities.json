@@ -2108,11 +2108,12 @@
         {
           "canonical_name": "agena.web.crawl",
           "conditional": null,
-          "definition_identity": "324d2c9c3bce6c7ae5465909785e0ee53fa547d8393d0fb03e458afdf674c259",
+          "definition_identity": "a1d50cebda340d0edb0bc4ae7c44cc2f2b925a333699af28606d3d29a721abbe",
           "gateway": false,
           "input_schema_sha256": "fc17dc394ff452db1897d80f4618c7b72b1b2740154ec0e7e08e383e69cdb962",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
+            "network",
             "discovery",
             "mutate"
           ]
@@ -2120,11 +2121,12 @@
         {
           "canonical_name": "agena.web.fetch",
           "conditional": null,
-          "definition_identity": "7d0ce6cf533fe81558e95501af9347b6514a1b54f0f97dcacf6fee16b9ad62d5",
+          "definition_identity": "043708c651e130cf498ca793cf2339a667f3129885fa78cfa322ca0ae1eea68c",
           "gateway": false,
-          "input_schema_sha256": "e19bfb678a04be4168bc223831c2f9ef60bef1a7c4cef2726ab7849c7893dd05",
+          "input_schema_sha256": "9de0c4d09c204f74f5902488eb7abe1389fe8aa77dc7b0aa8ac9b5554a852ccd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
+            "network",
             "read_only"
           ]
         },

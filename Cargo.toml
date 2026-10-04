@@ -251,6 +251,8 @@ lru = "0.18.2"
 libc = "0.2.186"
 lsp-types = "0.97.0"
 mime_guess = "2.0.5"
+encoding_rs = "0.8.35"
+robotstxt = "0.3.0"
 merge = "0.2.0"
 moka = { version = "0.12.15", features = ["future"] }
 mockito = "1.7.2"

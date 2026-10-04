@@ -10,7 +10,7 @@ Implementation worktree: `/Volumes/Rc20/Projects/agena-tool-modernization`; bran
 | Unified command effects and exit semantics | Shared classification for runtime/workflow; executable/subcommand/flag/quoting cases; no automatic rewrites; meaningful regression tests | In progress |
 | Grep/glob completeness, output control and performance | Literal/case/context/output/filter controls; explicit truncation; bounded and cancellable work; equivalent-result benchmarks including in-process implementations | Functional changes implemented and targeted tests pass; throughput optimization still pending |
 | AST and language-server improvements | Structural rules/rewrites and language-server availability/use; revision-safe changes; integration tests and documented optional semantic backend | Pending |
-| Search providers | Working configurable structured providers and self-hosted option; credentials and network effects; deterministic HTTP fixtures and error/limit tests | Pending |
+| Search providers | Working configurable structured providers and self-hosted option; credentials and network effects; deterministic HTTP fixtures and error/limit tests | Implemented and fixture-validated; live relevance/latency not measured |
 | Browser modernization | Functional mature optional backend with session/permission/download ownership; real browser behavior and lifecycle checks | Pending |
 | Fetch/crawl/extraction | Existing third-party stack audited; working optional quality backends where useful; bounded output, cancellation and representative fixtures | Pending |
 | Local document content | Functional local format conversion/search adapter, capability discovery, clear missing dependencies, fixture-based validation | Pending |
@@ -66,6 +66,16 @@ AGENA_SEARCH_BENCH_OUTPUT=docs/research/tool-modernization-search-benchmark.json
 
 ## Next implementation and audit work
 
-The earlier table's pending areas remain mandatory; none is satisfied merely by the CLI catalog. In particular, implement structured search providers, a functional optional mature browser backend, local document adapters, AST rule/rewrite extensions and fetch/extraction options, then validate them. Account for optional analysis/display tools deliberately, retaining raw logs and exit codes for any compression experiment.
+The earlier table's pending areas remain mandatory; none is satisfied merely by the CLI catalog. In particular, finish validation of structured search providers and implement a functional optional mature browser backend, local document adapters, AST rule/rewrite extensions and fetch/extraction options. Account for optional analysis/display tools deliberately, retaining raw logs and exit codes for any compression experiment.
 
 Publication-time revision checks have been added, but the rest of the file/notebook audit and nbformat reference validation remain pending. Even a final comparison cannot make arbitrary external writers participate in the sidecar-lock protocol; state that boundary honestly.
+
+## Structured search providers
+
+Foundation implementation is committed as `dea9c58f`. The next changes add configurable Brave, Tavily, Exa and SearXNG adapters to `web.search`, with the existing HTML route as the default. Configuration and usage are documented in `docs/web-settings-workbench.md`.
+
+- Official request schemas were checked against Brave web-search docs, Tavily's search OpenAPI, Exa's search OpenAPI and SearXNG's `docs/dev/search_api.rst` on 2026-10-04. No paid provider was called.
+- API credentials remain environment variables and sensitive headers. HTTPS is required for authenticated APIs. Private SearXNG needs an explicit endpoint, its private-network setting and a runtime network-policy allowance. Search calls now honor the host's network permission before performing network I/O; endpoint connections pin the validated DNS addresses, disable environment proxies and do not follow redirects.
+- API errors do not cause automatic retries or cross-provider fallback. Errors retain status and numeric retry delay without echoing response bodies or credentials. Bounded streaming works with or without Content-Length.
+- Result normalization covers provider attribution, domain allow/block filters, duplicate URLs, malformed rows, SearXNG partial failures, text clipping and provider-reported usage. Four request/response shapes, status/JSON errors, budgets, timeouts, DNS pinning and the actual SearXNG plugin dispatch are covered by local fixtures. Live relevance, paid-service availability and comparative latency remain unmeasured.
+- Verification: 237 tests passed across all `agena-web` and `agena-bundled-plugins` unit/integration/doc targets. Clippy passed for those crates plus `agena-runtime-tools`, including all targets and `-D warnings`. Generated references and identities were refreshed; the only identity change is `web.search`'s documented input bounds/help/network tag. Source retrieval hashes are in `tool-modernization-provider-sources.json`.

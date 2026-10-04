@@ -37,6 +37,50 @@ The source selector shows a compact summary for every loaded layer so the user c
 - **MCP Server** — listener enablement, authentication mode, mixed-auth anonymous access, OAuth client registration, public resource URL, issuer URL, OAuth password, endpoint inspection, and tool exposure.
 - **Tool harnesses** — named Browser, Shell, and Editor harnesses with explicit Global/Workspace targets, effective-value copying, rename/delete, raw JSON, browser launch options, shell environment variables, and all typed runtime fields.
 
+#### Bundled web search configuration
+
+In **Plugin Workbench → agena.web → Config → Search**, choose the backend used when `web.search` omits `engine` or sets it to `auto`. These are plugin-owned settings; the examples below are the contents of `agena.web`'s settings object.
+
+| `search.provider` | Default endpoint | Server credential environment variable | Behavior |
+| --- | --- | --- | --- |
+| `html` (default) | DuckDuckGo, Bing, Baidu | None | Existing HTML engines, in that fallback order |
+| `brave` | `https://api.search.brave.com/res/v1/web/search` | `BRAVE_SEARCH_API_KEY` | Structured web results; at most 20 per request |
+| `tavily` | `https://api.tavily.com/search` | `TAVILY_API_KEY` | Basic search, without generated answers or raw page bodies; reports returned credit usage |
+| `exa` | `https://api.exa.ai/search` | `EXA_API_KEY` | Automatic search with highlights; reports returned total cost |
+| `searxng` | Required: your instance's full `/search` URL | None | JSON must be enabled on the instance; reports unresponsive upstreams |
+
+For a hosted API, set the credential in the Agena server's environment and configure:
+
+```json
+{
+  "search": {
+    "provider": "brave",
+    "default_limit": 5,
+    "max_limit": 20
+  }
+}
+```
+
+`search.api_key_env` can select a different environment variable **name**. Never put the key itself in plugin settings. `search.endpoint` can select a compatible HTTPS API endpoint; it cannot contain URL credentials, query parameters or a fragment. The configured endpoint receives the API credential and search query.
+
+For a private SearXNG service:
+
+```json
+{
+  "search": {
+    "provider": "searxng",
+    "endpoint": "http://127.0.0.1:8080/search",
+    "allow_private_endpoint": true
+  }
+}
+```
+
+The runtime network policy must also allow this endpoint. The private-endpoint setting applies only to the configured SearXNG search service; it does not enable private page fetching. Search connections pin the approved DNS addresses, use direct connections and reject redirects. An HTTP proxy configured in the process environment is not used by these API adapters; configure a compatible HTTPS endpoint if a gateway is required.
+
+Explicit `engine: "bing"`, `"duckduckgo"` or `"baidu"` selects that HTML engine. A configured API's error or empty result does not automatically send the query to another provider. API requests are not retried automatically. HTTP status and numeric `Retry-After` are reported without echoing response error bodies.
+
+Use bare hostnames in `allowed_domains` and `blocked_domains`; subdomains match and exclusions win. Filters apply locally to every provider and are also sent to Tavily/Exa. Local filtering can leave fewer results than requested. API results include the effective limit, provider/filtered counts, partial/truncated flags and bounded snippets; fetch relevant pages before relying on their contents. Responses are limited to 4 MiB, each title to 512 characters and each description to 2,000 characters. These adapters have deterministic HTTP-fixture tests; no live paid-provider relevance or latency comparison is claimed.
+
 ### Runtime & Session
 
 - **Provider client versions** — edit exact Codex, Claude, and Gemini compatibility versions or refresh all three from npm.

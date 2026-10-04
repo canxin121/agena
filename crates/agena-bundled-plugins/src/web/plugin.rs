@@ -1,4 +1,6 @@
 mod downloads;
+mod search_provider;
+use search_provider::WebSearchBackend;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::future::Future;
 use std::net::IpAddr;
@@ -201,6 +203,13 @@ impl Default for WebCrawlIndexingConfig {
 pub struct WebSearchConfig {
     pub default_limit: u32,
     pub max_limit: u32,
+    pub provider: WebSearchBackend,
+    /// Full API search endpoint. SearXNG requires an explicit endpoint.
+    pub endpoint: Option<String>,
+    /// Environment variable name only; credentials never belong in settings.
+    pub api_key_env: Option<String>,
+    /// Allow a configured SearXNG endpoint on a private network.
+    pub allow_private_endpoint: bool,
 }
 
 impl Default for WebSearchConfig {
@@ -208,6 +217,10 @@ impl Default for WebSearchConfig {
         Self {
             default_limit: 5,
             max_limit: 20,
+            provider: WebSearchBackend::default(),
+            endpoint: None,
+            api_key_env: None,
+            allow_private_endpoint: false,
         }
     }
 }
@@ -423,7 +436,27 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
         (
             "/search",
             "Search",
-            "Default and maximum limits for web search result lists.",
+            "Search backend, credentials and result limits.",
+        ),
+        (
+            "/search/provider",
+            "Search Provider",
+            "Use the free HTML engines, a configured Brave/Tavily/Exa API, or SearXNG. API failures do not silently switch providers.",
+        ),
+        (
+            "/search/endpoint",
+            "Search API Endpoint",
+            "Full search URL. Required for SearXNG; hosted providers use their official endpoint by default.",
+        ),
+        (
+            "/search/api_key_env",
+            "API Key Environment Variable",
+            "Name of the server environment variable holding the credential, never the credential itself.",
+        ),
+        (
+            "/search/allow_private_endpoint",
+            "Allow Private SearXNG Endpoint",
+            "Permit only the configured SearXNG search endpoint on a private network. Page fetching keeps its public-network policy.",
         ),
         (
             "/search/default_limit",
@@ -943,14 +976,18 @@ struct CrawlRunInput {
 #[input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 struct CrawlWebSearchInput {
+    #[schemars(length(max = 8192))]
     query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 50))]
     max_results: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     engine: Option<WebSearchEngineSelection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 64))]
     allowed_domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 64))]
     blocked_domains: Vec<String>,
 }
 
@@ -1859,10 +1896,11 @@ impl WebPlugin {
 
     #[tool(
         summary = "Find candidate public-web pages to fetch.",
-        help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
-        tags(discovery, read_only)
+        help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured search provider (HTML, Brave, Tavily, Exa or SearXNG). Explicit bing/duckduckgo/baidu selects that HTML engine. API providers return at most 20 results and report failures without switching providers. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
+        tags(network, discovery, read_only)
     )]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
+        search_provider::validate_input(input)?;
         let query = input.query.as_str();
         let config = self.config()?;
         let limit = clamp_limit(
@@ -1870,6 +1908,11 @@ impl WebPlugin {
             config.search.default_limit as usize,
             config.search.max_limit as usize,
         );
+        if matches!(input.engine, None | Some(WebSearchEngineSelection::Auto))
+            && config.search.provider != WebSearchBackend::Html
+        {
+            return self.search_with_provider(input, limit).await;
+        }
         let engines = search_engines(input.engine);
         let explicit_engine = !matches!(input.engine, None | Some(WebSearchEngineSelection::Auto));
         let mut attempted_engines = Vec::new();
@@ -2647,6 +2690,10 @@ impl WebPlugin {
         let engine_url = url::Url::parse(engine.permission_url())
             .map_err(|err| PluginError::internal_error(&err))?;
         let state = self.state()?;
+        state
+            .host
+            .require_network_permission(engine_url.to_string())
+            .await?;
         state.fetch_coordinator.wait_for_url_host(&engine_url).await;
         self.validate_network_target(&engine_url).await?;
         let config = &state.config;
@@ -3681,6 +3728,7 @@ fn parse_web_config(value: serde_json::Value) -> SdkResult<WebConfig> {
 }
 
 fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
+    search_provider::validate_config(&web.search)?;
     for (label, value) in [
         ("crawl.defaults.max_pages", web.crawl.defaults.max_pages),
         ("crawl.limits.max_pages", web.crawl.limits.max_pages),
@@ -3966,22 +4014,7 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
 }
 
 fn domain_allowed(url: &str, allow: &[String], block: &[String]) -> bool {
-    let host = url::Url::parse(url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-        .unwrap_or_default();
-    if !allow.is_empty() && !allow.iter().any(|domain| host_matches(&host, domain)) {
-        return false;
-    }
-    if block.iter().any(|domain| host_matches(&host, domain)) {
-        return false;
-    }
-    true
-}
-
-fn host_matches(host: &str, pattern: &str) -> bool {
-    let pattern = pattern.trim().to_ascii_lowercase();
-    !pattern.is_empty() && (host == pattern || host.ends_with(&format!(".{pattern}")))
+    agena_web::search_domain_allowed(url, allow, block)
 }
 
 #[cfg(test)]

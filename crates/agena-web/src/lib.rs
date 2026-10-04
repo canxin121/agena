@@ -23,6 +23,7 @@ mod model;
 mod paths;
 mod run;
 mod search;
+mod search_api;
 mod spider;
 mod store;
 
@@ -47,6 +48,9 @@ pub use run::{
 pub use search::{
     WebSearchEngine, WebSearchOptions, WebSearchResult, normalize_web_search_engine,
     results_to_text, search_web,
+};
+pub use search_api::{
+    SearchApiOptions, SearchApiProvider, SearchApiResponse, search_api, search_domain_allowed,
 };
 pub use spider::{
     BrowserRenderOptions, LocalBrowserOptions, SpiderFetchOptions, fetch_page_with_spider,

@@ -2106,11 +2106,12 @@
         {
           "canonical_name": "agena.web.search",
           "conditional": null,
-          "definition_identity": "33487f7d19728845558db31f9c2741353194342499ecaf02c95cf49c7d138d44",
+          "definition_identity": "13f9cf548a483d260718d49017c079166d6497832a3fd75ed9f0776d23d4ff2a",
           "gateway": false,
-          "input_schema_sha256": "d60d475beec4cce3c67abc483081393611f33043c3675d4af5c078aa7069f4ac",
+          "input_schema_sha256": "26a9b0523f946ac77de238e3ff9cc8530f03f5bafb24d966fa4f14e1d9dedf5b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
+            "network",
             "discovery",
             "read_only"
           ]

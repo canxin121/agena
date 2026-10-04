@@ -8866,12 +8866,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.search` · **Summary**: Find candidate public-web pages to fetch.
 
-**Tags**: `discovery` `read_only`
+**Tags**: `network` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.
+> Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured search provider (HTML, Brave, Tavily, Exa or SearXNG). Explicit bing/duckduckgo/baidu selects that HTML engine. API providers return at most 20 results and report failures without switching providers. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8902,6 +8902,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "items": {
         "type": "string"
       },
+      "maxItems": 64,
       "type": "array",
       "x-agena-order": "000003"
     },
@@ -8909,6 +8910,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "items": {
         "type": "string"
       },
+      "maxItems": 64,
       "type": "array",
       "x-agena-order": "000004"
     },
@@ -8925,7 +8927,8 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "max_results": {
       "format": "uint32",
-      "minimum": 0,
+      "maximum": 50,
+      "minimum": 1,
       "type": [
         "integer",
         "null"
@@ -8933,6 +8936,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "x-agena-order": "000001"
     },
     "query": {
+      "maxLength": 8192,
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"

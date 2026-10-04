@@ -2789,6 +2789,15 @@ impl BuiltinHumanRenderer {
                         ("Query", Self::object_text(object, "query")),
                         ("Engine", Self::object_text(object, "engine")),
                         ("Tried", Self::object_text(object, "attempted_engines")),
+                        ("Partial", Self::object_text(object, "partial")),
+                        ("Truncated", Self::object_text(object, "truncated")),
+                        (
+                            "Effective limit",
+                            Self::object_text(object, "effective_limit"),
+                        ),
+                        ("Warnings", Self::object_text(object, "warnings")),
+                        ("Engine errors", Self::object_text(object, "engine_errors")),
+                        ("Usage", Self::object_text(object, "usage")),
                     ],
                 ) {
                     blocks.push(block);

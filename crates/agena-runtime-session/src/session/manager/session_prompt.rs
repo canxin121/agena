@@ -9,10 +9,8 @@
 //! matching sections, which `crate::identity::system_prompt_with_sections`
 //! inserts immediately after `# Plan, ask, and delegate`.
 //!
-//! The sections mirror Claude Code decision semantics: a strong default
-//! toward planning and delegation with explicit exceptions, rather than a
-//! neutral when-to-use list, because models respond more reliably to a
-//! prefer-unless-simple anchor.
+//! Each section preserves the corresponding tool workflow while keeping
+//! schemas and detailed usage in live tool help.
 //!
 //! Environment facts are intentionally not injected here: they are served on
 //! demand by the `session.environment` tool because they can change
@@ -29,20 +27,9 @@ use super::merge_system_prompts;
 pub(crate) fn render_planning_section() -> String {
     r#"# Planning
 
-Prefer using `plan.set` for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply:
-- New feature implementation
-- Multiple valid approaches exist
-- Changes affect existing behavior or structure
-- An architectural decision is needed
-- The change will likely touch more than 2-3 files
-- Requirements are unclear and need exploration
-- You would otherwise ask the user to clarify the approach — use `plan.set` instead
+Prefer `plan.set` for non-trivial implementation: new features, architectural choices, uncertain requirements, or coordinated changes. Skip it for small clear fixes and pure research. Explore and refine the plan before requesting review.
 
-Only skip planning for simple tasks: single-line or few-line fixes, adding a single function with clear requirements, tasks with very specific detailed instructions, or pure research/read-only work. If unsure whether to plan, err on the side of planning.
-
-`plan.set` never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` to `plan.set` or `plan.phase` only when the user has already declared that the plan or change needs no approval AND trusted plan configuration permits unreviewed activation; the runtime rejects an unauthorized waiver. Never default to it. Plan reviews are revision-bound; after concurrent edits, read and review the new version.
-
-While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools — delegating parallel exploration to `tasks.run` when the scope spans multiple areas — clarify requirements with `ask`, and refine the plan with `plan.edit` (which never requests approval and never changes phase). When the plan is complete, call `plan.review` to request user approval."#
+`plan.set` records a plan without blocking. With `request_approval: true` (default), mutating tools remain blocked in the planning phase; call `plan.review` for approval. Use `request_approval: false` only with prior user authorization AND trusted configuration allowing it. Reviews bind to a revision; review again after changing an approved plan. Use `plan.edit` for edits, not approval requests."#
         .to_string()
 }
 
@@ -57,24 +44,18 @@ While the current plan is in the `planning` phase, mutating tools are blocked by
 pub(crate) fn render_asking_section() -> String {
     r#"# Asking the user
 
-`interaction.ask` is a first-class tool for decisions that are genuinely the user's to make. Its name is known, so do not search for it — read its live contract with `tools_help` before the first call, then invoke it through `tools_call`.
-
-Every question needs at least two genuinely distinct options — a single option carries no decision. While the user answers, your turn suspends; it resumes with their answers as a tool result and your working state preserved, so continue the same task. If the runtime rejects the call, read the correction and retry; the live `tools_help` for `interaction.ask` remains authoritative for anything unclear.
-
-Use `interaction.ask` only when you are blocked on a decision that is genuinely the user's to make: a preference, a direction choice, a decision with no reasonable default, or requirements so ambiguous that guessing could waste real work. Prefer asking up front, before doing work a wrong guess would redo; mid-task, ask at a genuine fork instead of guessing. When you do ask, ask all necessary clarifying questions at once.
-
-Proceed without asking when a sensible default exists, when you can verify the answer yourself, or when the choice is small and reversible. Never use `interaction.ask` to ask whether you should proceed or to seek plan approval — that is `plan.review`'s job."#
+Use `interaction.ask` only for a decision the user must make with no reasonable default. Read its live help first; include at least two distinct choices and bundle related questions. Your turn suspends until answers arrive, then continue the same task. Read and repair rejected input. Do not ask whether to proceed with already authorized work or use this tool for plan approval (`plan.review`)."#
         .to_string()
 }
 
 /// Delegation decision semantics injected when the `agena.tasks` tools are
-/// available: an active trigger paired with restraint, mirroring Claude Code.
+/// available: bounded independent work with retained responsibility.
 pub(crate) fn render_delegating_section() -> String {
     r#"# Delegating work
 
-Reach for `tasks.run` when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. Attach `commands` that match the task (for example an explore command for exploration, a read-only review command for review). For a single-fact lookup where you already know the file, symbol, or value, search directly. Once you have delegated a search, do not also run it yourself — wait for the result.
+Use `tasks.run` for bounded independent work, a suitable available command/subagent, or exploration that benefits from returning conclusions. Give concrete scope and checks, attach relevant `commands`, keep concurrency low, and verify results. Handle simple lookups yourself; do not redo delegated work or delegate your responsibility for understanding it.
 
-By default `tasks.run` waits synchronously for the delegated task and returns its final result; set `run_in_background: true` to launch it in the background instead — the background discipline (immediate return, `system_notification`) is covered by `# Background execution`. Do small tasks yourself instead of delegating them; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; keep the number of concurrent subtasks low. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result."#
+Default execution waits for the task's result. Use `run_in_background: true` when other useful work can proceed; completion follows the background notification rules below."#
         .to_string()
 }
 
@@ -82,20 +63,15 @@ By default `tasks.run` waits synchronously for the delegated task and returns it
 /// background work is available (`shell.run` and friends, `tasks.run`,
 /// `monitor.start`): a background launch returns immediately, the session is
 /// *notified* when the work settles (the `system_notification` part), and the
-/// model must never poll — mirroring Claude Code's Monitor/task-notification
-/// contract.
+/// model must consume the notification instead of polling for completion.
 pub(crate) fn render_background_section() -> String {
     r#"# Background execution
 
-`shell.run` and `tasks.run` with `run_in_background: true` start work that continues while the session moves on. The tool returns immediately with a handle; the work keeps running in the background. When the operation settles — completes, fails, times out, or is cancelled — you are notified with a `system_notification` message describing the outcome. The result is also written onto the operation's own transcript part.
+`shell.run` and `tasks.run` with `run_in_background: true` return a handle and later deliver a `system_notification` on completion, failure, timeout or cancellation. Continue useful work while waiting; incorporate notifications even after an earlier turn ended. Never poll status/logs merely to wait for completion.
 
-`monitor.start` is a continuous background listener: each event is delivered as its own `system_notification` message (with a per-event sequence), so you will be notified on every event — keep working, do not poll or sleep, and do not repeatedly call `monitor.start`/`shell.list` to check for new events.
+`monitor.start` is continuous: each event has a sequence and arrives as a notification. Do not restart it, poll or sleep waiting for events. `cron.create` schedules wakes at safe turn boundaries and retains the originating assistant run. Use the IANA timezone from `<environment_context>`; returned timestamps are explicit RFC 3339 instants. Jobs are session-only and expire after seven days.
 
-`cron.create` schedules a recurring wake. Every fire is persisted as a typed `system_notification`; if you are active, it waits for the current provider/tool part to finish and is handed to you at the next safe part boundary. AI-created schedules retain the assistant run that created them instead of opening a new run. Always pass the IANA timezone from `<environment_context>` (for example `Asia/Shanghai`); cron wall-clock fields are evaluated in that timezone, while returned timestamps remain explicit RFC 3339 instants. Jobs are session-only and expire after seven days.
-
-Never poll: do not repeatedly call `shell.run`/`tasks.run` status or read logs just to wait for completion. After launching background work, continue with other useful work (or end your turn) and wait for the `system_notification`. When a `system_notification` arrives mid-task, act on it: incorporate the outcome into your ongoing work and report it when relevant. When it arrives after you finished a turn, pick up where you left off.
-
-Interactive terminals are different: `shell.run` with `tty: true` retains a live terminal, which may be waiting for input rather than completing. Read its incremental output and screen, then use `shell.write` with the returned `process_id` to type or send keys. Input is exact: `\r` means Enter and `\u0003` means Ctrl-C. Empty `chars` or `shell.logs` may perform a bounded read to observe a prompt; this is allowed interactive I/O, not repeated completion polling. Omit `since_seq` on `shell.write` to consume unread output, or pass an explicit cursor for replay/paging. A quiet period or yield deadline is not process exit. Use `shell.resize` for terminal dimensions and `shell.signal`/`shell.stop` for interruption/cleanup. Declare the effects of subsequent input just as for the launch. Never resend an entire input blindly after a partial-write error."#
+Interactive terminals use `shell.run(tty: true)` and the returned `process_id`. Read incremental output, then send exact input with `shell.write`: `\r` is Enter, `\u0003` is Ctrl-C. Empty input or bounded `shell.logs` reads may observe a prompt. Omit `since_seq` to consume unread output, or pass a cursor for replay. Silence/yield is not process exit. Use resize/signal/stop for lifecycle control, declare subsequent effects, and never resend a whole input after a partial write."#
         .to_string()
 }
 
@@ -195,93 +171,95 @@ mod tests {
     use super::*;
 
     #[test]
-    fn planning_section_anchors_on_prefer_unless_simple() {
-        let section = render_planning_section();
-        assert!(section.contains("# Planning"));
-        assert!(section.contains("Prefer using `plan.set`"));
-        assert!(section.contains("unless they are simple"));
-        assert!(section.contains("err on the side of planning"));
-        assert!(section.contains("use `plan.set` instead"));
-        assert!(section.contains("call `plan.review` to request user approval"));
-        assert!(section.contains("request_approval"));
-        assert!(section.contains("has already declared"));
+    fn compact_workflow_sections_preserve_required_behavior() {
+        let planning = render_planning_section();
+        for rule in [
+            "plan.set",
+            "pure research",
+            "plan.review",
+            "prior user authorization AND trusted configuration",
+            "mutating tools remain blocked",
+            "revision",
+            "plan.edit",
+        ] {
+            assert!(planning.contains(rule), "planning rule: {rule}");
+        }
+        let asking = render_asking_section();
+        for rule in [
+            "interaction.ask",
+            "at least two distinct choices",
+            "turn suspends",
+            "already authorized work",
+            "plan.review",
+        ] {
+            assert!(asking.contains(rule), "asking rule: {rule}");
+        }
+        let delegation = render_delegating_section();
+        for rule in [
+            "tasks.run",
+            "bounded independent work",
+            "commands",
+            "verify results",
+            "do not redo delegated work",
+            "waits for the task",
+            "run_in_background: true",
+        ] {
+            assert!(delegation.contains(rule), "delegation rule: {rule}");
+        }
+        let background = render_background_section();
+        for rule in [
+            "system_notification",
+            "Never poll",
+            "each event has a sequence",
+            "IANA timezone",
+            "RFC 3339",
+            "originating assistant run",
+            "seven days",
+            "since_seq",
+            "partial write",
+            "Silence/yield is not process exit",
+        ] {
+            assert!(background.contains(rule), "background rule: {rule}");
+        }
+        assert!(background.contains("`\\r` is Enter"));
+        assert!(background.contains("`\\u0003` is Ctrl-C"));
     }
 
     #[test]
-    fn asking_section_names_tool_and_carries_red_line() {
-        let section = render_asking_section();
-        assert!(section.contains("# Asking the user"));
-        assert!(section.contains("interaction.ask"));
-        assert!(section.contains("genuinely the user's to make"));
-        assert!(section.contains("tools_help"));
-        assert!(!section.contains("\"questions\""));
-        assert!(section.contains("your turn suspends"));
-        assert!(section.contains("Never use `interaction.ask`"));
+    fn assembled_prompt_budget_and_heading_layout_are_bounded() {
+        let sections = vec![
+            render_planning_section(),
+            render_asking_section(),
+            render_delegating_section(),
+            render_background_section(),
+        ];
+        let prompt = crate::identity::system_prompt_with_sections(&sections);
+        assert!(
+            prompt.len() <= 9_000,
+            "assembled prompt grew to {} bytes",
+            prompt.len()
+        );
+        assert!(!prompt.contains("\n\n\n"));
+        let mut headings = std::collections::HashSet::new();
+        let lines = prompt.lines().collect::<Vec<_>>();
+        for (index, line) in lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("# "))
+        {
+            assert!(headings.insert(*line), "duplicate heading: {line}");
+            assert!(index == 0 || lines[index - 1].is_empty());
+            assert!(lines[index + 1].is_empty());
+        }
     }
 
     #[test]
-    fn delegating_section_reaches_for_parallel_work_and_keeps_conclusions() {
-        let section = render_delegating_section();
-        assert!(section.contains("# Delegating work"));
-        assert!(section.contains("Reach for `tasks.run`"));
-        assert!(section.contains("keep the conclusion, not the file dumps"));
-        assert!(section.contains("wait for the result"));
-        assert!(section.contains("Do small tasks yourself"));
-        assert!(section.contains("Never delegate understanding"));
-    }
-
-    #[test]
-    fn delegating_section_specifies_the_background_decision_rule() {
-        let section = render_delegating_section();
-        assert!(section.contains("waits synchronously"));
-        assert!(section.contains("`run_in_background: true`"));
-        assert!(section.contains("covered by `# Background execution`"));
-    }
-
-    #[test]
-    fn background_section_forbids_polling_and_announces_notification() {
-        let section = render_background_section();
-        assert!(section.contains("# Background execution"));
-        assert!(section.contains("`run_in_background: true`"));
-        assert!(section.contains("system_notification"));
-        assert!(section.contains("Never poll"));
-        assert!(section.contains("wait for the `system_notification`"));
-    }
-
-    #[test]
-    fn background_section_announces_monitor_per_event_events() {
-        let section = render_background_section();
-        assert!(section.contains("`monitor.start` is a continuous background listener"));
-        assert!(section.contains("notified on every event"));
-        assert!(section.contains("do not poll or sleep"));
-    }
-
-    #[test]
-    fn background_section_announces_cron_scheduled_jobs() {
-        let section = render_background_section();
-        assert!(section.contains("`cron.create` schedules a recurring wake"));
-        assert!(section.contains("next safe part boundary"));
-        assert!(section.contains("retain the assistant run that created them"));
-        assert!(section.contains("Jobs are session-only and expire after seven days"));
-    }
-
-    #[test]
-    fn monitor_start_alone_injects_the_background_section() {
-        assert!(super::wants_background_section(&[
-            "monitor.start".to_owned()
-        ]));
-        assert!(!super::wants_background_section(&[
-            "monitor.stop".to_owned()
-        ]));
-        assert!(!super::wants_background_section(&["read".to_owned()]));
-    }
-
-    #[test]
-    fn cron_create_injects_the_background_section() {
-        assert!(super::wants_background_section(&["cron.create".to_owned()]));
-        assert!(!super::wants_background_section(&["cron.list".to_owned()]));
-        assert!(!super::wants_background_section(&[
-            "cron.history".to_owned()
-        ]));
+    fn background_guidance_tracks_launch_capabilities() {
+        for name in ["monitor.start", "cron.create", "shell.run", "tasks.run"] {
+            assert!(wants_background_section(&[name.to_owned()]), "{name}");
+        }
+        for name in ["monitor.stop", "cron.list", "cron.history", "fs.read"] {
+            assert!(!wants_background_section(&[name.to_owned()]), "{name}");
+        }
     }
 }

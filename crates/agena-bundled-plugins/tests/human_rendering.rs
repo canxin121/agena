@@ -251,7 +251,14 @@ fn sample_payload(tool: &str) -> Value {
         }),
         "session.environment" => json!({
             "workspace_root": "/workspace", "git_branch": "main", "git_short_sha": "abc123", "git_dirty": true,
-            "shell": "/bin/zsh", "os": "macos", "arch": "aarch64"
+            "shell": "/bin/zsh", "os": "macos", "arch": "aarch64",
+            "cli_tools": {"available": {"rg": "/usr/bin/rg"}, "cache_age_ms": 0, "versions_probed": false}
+        }),
+        "session.executables" => json!({
+            "tools": [{"name": "rg", "available": true, "executable": "/usr/bin/rg",
+                "version": "ripgrep 15.1.0", "purpose": "Text search", "guidance": "Use rg -n for lines or rg -l for filenames."},
+                {"name": "fd", "available": false, "purpose": "File discovery"}],
+            "missing": ["fd"], "checked_at_unix_ms": 1, "cache_age_ms": 0
         }),
         "session.get" | "session.rename" => json!({
             "session": {"id": 42, "title": "Release", "parent_id": null, "root_id": 42, "is_subagent": false}
@@ -674,7 +681,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
         }
     }
 
-    assert_eq!(checked, 131);
+    assert_eq!(checked, 132);
 }
 
 #[test]
@@ -715,7 +722,7 @@ fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
         }
     }
 
-    assert_eq!(checked, 131);
+    assert_eq!(checked, 132);
 }
 
 #[test]
@@ -750,7 +757,7 @@ fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
         }
     }
 
-    assert_eq!(checked, 131);
+    assert_eq!(checked, 132);
 }
 
 #[test]
@@ -851,7 +858,7 @@ fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
         }
     }
 
-    assert_eq!(checked, 131);
+    assert_eq!(checked, 132);
 }
 
 #[test]

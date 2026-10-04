@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 131,
+    "execution_tools": 132,
     "gateway_tools": 4,
     "plugins": 22,
-    "tools": 135
+    "tools": 136
   },
   "plugins": [
     {
@@ -624,9 +624,9 @@
         {
           "canonical_name": "agena.fs.glob",
           "conditional": null,
-          "definition_identity": "ddfac631c246b13a54d9da8c7c1957977cf8c04b96967edb3eb88b2c0ac8f573",
+          "definition_identity": "12993729edc1563422b9095d8ff09d13c7e12aa95b197af8f72a000c70f23453",
           "gateway": false,
-          "input_schema_sha256": "e407acc4d53fda6c92566c4652ad7b3d45022faee8e6002c60541a59379c9a13",
+          "input_schema_sha256": "5eb5425ef1c6fbe536d57999fea0271aa74d1750353e65cc16b87ff9169c2f05",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -638,9 +638,9 @@
         {
           "canonical_name": "agena.fs.grep",
           "conditional": null,
-          "definition_identity": "06ad832e18703bee0430088a80c7e7b85c75fb59e904f0d9a16e18bac28293b0",
+          "definition_identity": "77217f01c4cdccb463f902724860a0f1c9f67c29302b37be030b2c425c7928e6",
           "gateway": false,
-          "input_schema_sha256": "ca8f625c2298141e21b3c4c136fc8e3ce51ae731f507398272bb1488d67feddd",
+          "input_schema_sha256": "a15b1506ccee8090dde538ff2fc0ffac198f132941623988973526b92afafdb0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1388,9 +1388,22 @@
         {
           "canonical_name": "agena.session.environment",
           "conditional": null,
-          "definition_identity": "148dd827f65748fa31f4a1853c3d10ac2837b3c43abc9e8a33d060959489679d",
+          "definition_identity": "fdc478253e7271c5ed20b63ec488b74165acfab731188cb15d9c69ab40c4cfa6",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.session.executables",
+          "conditional": null,
+          "definition_identity": "a2755dd0d12d627de0dd10344a13d2d5eba0819892bb63087869eef1b561f364",
+          "gateway": false,
+          "input_schema_sha256": "b1923606dfba293f0386b05242e97ec8838e42ee0946ee4037c95c378e20b795",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",

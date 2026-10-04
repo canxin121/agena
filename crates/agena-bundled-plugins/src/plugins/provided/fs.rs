@@ -1,8 +1,8 @@
 //! `agena.fs` plugin: filesystem read/write/search tools.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
-use std::{fs::File, io::Read};
 
 use crate::part::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
 use crate::plugins::provided::router;
@@ -125,7 +125,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, discovery, read_only),
         summary = "Find paths with glob patterns.",
-        help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory."
+        help = "Use `glob` for focused path discovery before reading or editing files. Use kind=file/directory/all and exclude globs to narrow results. Results are paginated (default 200, maximum 1000); scans are cancellable, bounded to 100,000 entries / 10 seconds between I/O, and 256 KiB of paths. Pagination is deterministic for an unchanged directory tree. Ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory."
     )]
     async fn invoke_glob(
         &self,
@@ -137,8 +137,8 @@ impl FsPlugin {
 
     #[tool(
         tags(query, filesystem, discovery, read_only),
-        summary = "Search file contents with regex.",
-        help = "Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated."
+        summary = "Search text with ripgrep, returning lines, paths, or counts.",
+        help = "Use regex or fixed_strings with case=sensitive/insensitive/smart. Pattern whitespace is significant. mode=content returns structured lines with optional before_context/after_context (0–20); files returns each matching path once; count returns matching-line counts per file, omitting zeroes. max_results is global (1–500): lines for content, files otherwise, never a per-file count cap. include and includes are ORed relative-path globs; exclude wins. Hidden/ignored paths follow ripgrep rules unless explicitly targeted or include_ignored=true. Search is bounded to 32 MiB/file, 256 MiB total, 25,000 files, 100,000 entries, 20 seconds between I/O/callbacks, and 256 KiB of records. Lines over 4 KiB are visibly shortened; lines beyond the 2 MiB search buffer may be skipped. scan_complete distinguishes an incomplete scan from clipped display text; partial counts are lower bounds. Files mode stops at its first match. Binary data detected while scanning is excluded. Narrow path or filters if truncated; use fs.read for nearby lines. Blocking filesystem I/O itself has no hard deadline."
     )]
     async fn invoke_grep(
         &self,
@@ -204,7 +204,7 @@ impl FsPlugin {
                 // Capture the revision being replaced while holding the same mutation lock.
                 let (original, diff_unavailable_reason) = if existed {
                     let mut bytes = Vec::new();
-                    File::open(&target)
+                    agena_tool::file_io::open_regular_file(&target)
                         .map_err(fs_error)?
                         .take(MAX_MUTATING_TEXT_BYTES + 1)
                         .read_to_end(&mut bytes)
@@ -243,8 +243,26 @@ impl FsPlugin {
                     }
                 }
                 if existed {
-                    agena_runtime_tools::atomic_replace_file(&target, input.content.as_bytes())
-                        .map_err(fs_error)?;
+                    agena_runtime_tools::atomic_replace_file_with_check(
+                        &target,
+                        input.content.as_bytes(),
+                        || {
+                            verify_expected_hash(
+                                &target,
+                                input
+                                    .expected_sha256
+                                    .as_deref()
+                                    .expect("existing target requires revision"),
+                            )
+                            .map_err(|error| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    error.to_string(),
+                                )
+                            })
+                        },
+                    )
+                    .map_err(fs_error)?;
                 } else {
                     agena_runtime_tools::atomic_create_file(
                         &target,
@@ -362,8 +380,9 @@ impl FsPlugin {
                         MAX_MUTATING_TEXT_BYTES / 1024 / 1024
                     )));
                 }
-                agena_runtime_tools::atomic_replace_file(&target, updated.as_bytes())
-                    .map_err(fs_error)?;
+                agena_runtime_tools::atomic_replace_file_with_check(&target, updated.as_bytes(), || {
+                    agena_runtime_tools::verify_file_contents(&target, original.as_bytes())
+                }).map_err(fs_error)?;
                 debug_assert_eq!(updated.len(), result_bytes);
                 let after_sha256 = sha256_bytes(updated.as_bytes());
                 let preview = agena_runtime_tools::file_diff_preview(&input.path, Some(&original), Some(&updated));
@@ -499,7 +518,7 @@ impl FsPlugin {
             let mut metadata = std::fs::symlink_metadata(&target).map_err(fs_error)?;
             let mut hash_skipped = false;
             let hash = if input.hash && metadata.is_file() {
-                let file = File::open(&target).map_err(fs_error)?;
+                let file = agena_tool::file_io::open_regular_file(&target).map_err(fs_error)?;
                 metadata = file.metadata().map_err(fs_error)?;
                 if !metadata.is_file() {
                     return Err(PluginError::invalid_params(
@@ -649,21 +668,44 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 fn sha256_file(path: &Path) -> SdkResult<String> {
-    let mut file = File::open(path).map_err(fs_error)?;
+    let file = agena_tool::file_io::open_regular_file(path).map_err(fs_error)?;
+    let before = file.metadata().map_err(fs_error)?;
+    if before.len() > MAX_STAT_HASH_BYTES {
+        return Err(PluginError::invalid_params(
+            "revision hashing supports files up to 64 MiB",
+        ));
+    }
+    let mut reader = (&file).take(MAX_STAT_HASH_BYTES + 1);
+    let mut bytes = 0;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = file.read(&mut buffer).map_err(fs_error)?;
+        let read = reader.read(&mut buffer).map_err(fs_error)?;
         if read == 0 {
             break;
         }
+        bytes += read as u64;
+        if bytes > MAX_STAT_HASH_BYTES {
+            return Err(PluginError::invalid_params(
+                "file grew beyond the 64 MiB revision hash budget",
+            ));
+        }
         digest.update(&buffer[..read]);
+    }
+    let after = file.metadata().map_err(fs_error)?;
+    if before.len() != bytes
+        || after.len() != bytes
+        || before.modified().ok() != after.modified().ok()
+    {
+        return Err(PluginError::invalid_params(
+            "file changed while computing its revision; retry",
+        ));
     }
     Ok(hex::encode(digest.finalize()))
 }
 
 fn read_file_bounded(path: &Path, max_bytes: u64, operation: &str) -> SdkResult<Vec<u8>> {
-    let file = File::open(path).map_err(fs_error)?;
+    let file = agena_tool::file_io::open_regular_file(path).map_err(fs_error)?;
     let capacity = match file.metadata() {
         Ok(metadata) => usize::try_from(metadata.len().min(max_bytes)).unwrap_or_default(),
         Err(error) => {
@@ -696,7 +738,7 @@ fn read_utf8_prefix(
     max_bytes: usize,
     display_path: &str,
 ) -> SdkResult<(String, usize, bool)> {
-    let mut file = File::open(path).map_err(fs_error)?;
+    let mut file = agena_tool::file_io::open_regular_file(path).map_err(fs_error)?;
     let metadata = file.metadata().map_err(fs_error)?;
     let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
     file.by_ref()
@@ -735,6 +777,18 @@ fn verify_expected_hash(path: &Path, expected: &str) -> SdkResult<()> {
             actual
         )))
     }
+}
+
+#[cfg(test)]
+#[test]
+fn revision_hash_rejects_files_above_the_stat_budget() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("large");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(MAX_STAT_HASH_BYTES + 1)
+        .unwrap();
+    assert!(sha256_file(&path).is_err());
 }
 
 fn fs_error(error: std::io::Error) -> PluginError {

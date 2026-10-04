@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 135 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 136 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -29,7 +29,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
-- [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (5 tools)
+- [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (6 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell command execution and background process tools. (7 tools)
 - [`agena.snapshot`](#agenasnapshot) — Managed snapshot tools backed by Rift or git worktree. (3 tools)
@@ -2687,12 +2687,14 @@ Filesystem command tools for read/search and explicit edits.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.
+> Use `glob` for focused path discovery before reading or editing files. Use kind=file/directory/all and exclude globs to narrow results. Results are paginated (default 200, maximum 1000); scans are cancellable, bounded to 100,000 entries / 10 seconds between I/O, and 256 KiB of paths. Pagination is deterministic for an unchanged directory tree. Ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `exclude` | `array<string>` | — | — | Exclude matching base-path-relative globs. Exclusions win. |
 | `include_ignored` | `boolean` | — | `false` | Include dependency, VCS, and build-output directories that are skipped<br>by default (`.git`, `node_modules`, `target`, `dist`, and caches). |
+| `kind` | `GlobKind` | — | `all` | Filter by path kind; defaults to both files and directories. |
 | `limit` | `integer / null` | — | — | Maximum paths to return. Defaults to 200 and cannot exceed 1000. |
 | `offset` | `integer / null` | — | — | Number of matching paths to skip before returning results. |
 | `path` | `string / null` | — | — | Optional base path. Defaults to the workspace root. |
@@ -2701,13 +2703,42 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "GlobKind": {
+      "description": "Filter by path kind; defaults to both files and directories.",
+      "enum": [
+        "all",
+        "file",
+        "directory"
+      ],
+      "type": "string",
+      "x-agena-order": "000005"
+    }
+  },
+  "additionalProperties": false,
   "description": "Input of the glob tool.",
   "properties": {
+    "exclude": {
+      "description": "Exclude matching base-path-relative globs. Exclusions win.",
+      "items": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-agena-order": "000006"
+    },
     "include_ignored": {
       "default": false,
       "description": "Include dependency, VCS, and build-output directories that are skipped\nby default (`.git`, `node_modules`, `target`, `dist`, and caches).",
       "type": "boolean",
       "x-agena-order": "000004"
+    },
+    "kind": {
+      "$ref": "#/$defs/GlobKind",
+      "default": "all",
+      "description": "Filter by path kind; defaults to both files and directories."
     },
     "limit": {
       "description": "Maximum paths to return. Defaults to 200 and cannot exceed 1000.",
@@ -2754,42 +2785,161 @@ Filesystem command tools for read/search and explicit edits.
 
 ### grep
 
-`agena.fs.grep` · **Summary**: Search file contents with regex.
+`agena.fs.grep` · **Summary**: Search text with ripgrep, returning lines, paths, or counts.
 
 **Tags**: `query` `filesystem` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated.
+> Use regex or fixed_strings with case=sensitive/insensitive/smart. Pattern whitespace is significant. mode=content returns structured lines with optional before_context/after_context (0–20); files returns each matching path once; count returns matching-line counts per file, omitting zeroes. max_results is global (1–500): lines for content, files otherwise, never a per-file count cap. include and includes are ORed relative-path globs; exclude wins. Hidden/ignored paths follow ripgrep rules unless explicitly targeted or include_ignored=true. Search is bounded to 32 MiB/file, 256 MiB total, 25,000 files, 100,000 entries, 20 seconds between I/O/callbacks, and 256 KiB of records. Lines over 4 KiB are visibly shortened; lines beyond the 2 MiB search buffer may be skipped. scan_complete distinguishes an incomplete scan from clipped display text; partial counts are lower bounds. Files mode stops at its first match. Binary data detected while scanning is excluded. Narrow path or filters if truncated; use fs.read for nearby lines. Blocking filesystem I/O itself has no hard deadline.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `after_context` | `integer` | — | `0` | Context lines after each match (0–20); content mode only. |
+| `before_context` | `integer` | — | `0` | Context lines before each match (0–20); content mode only. |
+| `case` | `GrepCase` | — | `sensitive` | Sensitive by default; smart ignores case for patterns without uppercase. |
+| `exclude` | `array<string>` | — | — | Exclude relative-path globs; exclusions override all includes. |
+| `fixed_strings` | `boolean` | — | `false` | Treat pattern literally instead of as a regex. |
 | `include` | `string / null` | — | — | Optional glob filter applied before matching lines. |
 | `include_ignored` | `boolean` | — | `false` | Include hidden and ignored files that are skipped by default according<br>to ripgrep-compatible ignore rules. |
+| `includes` | `array<string>` | — | — | Additional include globs, ORed with `include`. An empty set includes all. |
+| `max_results` | `integer / null` | — | — | Global matching-line limit in content mode, matching-file limit otherwise.<br>Defaults to 500; 1–500. Context lines do not consume this limit. |
+| `mode` | `GrepMode` | — | `content` | Content, matching file paths, or matching-line counts per file. |
 | `path` | `string / null` | — | — | Optional target: a directory to search recursively, or a single file.<br>Defaults to the workspace root. |
-| `pattern` | `string` | ✓ | — | Regex pattern to search for. |
+| `pattern` | `string` | ✓ | — | Regex or fixed string to search for. Whitespace is significant. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "GrepCase": {
+      "description": "Sensitive by default; smart ignores case for patterns without uppercase.",
+      "oneOf": [
+        {
+          "enum": [
+            "sensitive",
+            "insensitive"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "smart",
+          "description": "Ignore case unless the pattern contains an uppercase character.",
+          "type": "string"
+        }
+      ],
+      "x-agena-order": "000005"
+    },
+    "GrepMode": {
+      "description": "Content, matching file paths, or matching-line counts per file.",
+      "oneOf": [
+        {
+          "enum": [
+            "content"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "files",
+          "description": "Return each matching file once, stopping at its first matching line.",
+          "type": "string"
+        },
+        {
+          "const": "count",
+          "description": "Count matching lines per file, omitting files without matches.",
+          "type": "string"
+        }
+      ],
+      "x-agena-order": "000006"
+    }
+  },
+  "additionalProperties": false,
   "description": "Input of the grep tool.",
   "properties": {
+    "after_context": {
+      "default": 0,
+      "description": "Context lines after each match (0–20); content mode only.",
+      "format": "uint32",
+      "maximum": 20,
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000010"
+    },
+    "before_context": {
+      "default": 0,
+      "description": "Context lines before each match (0–20); content mode only.",
+      "format": "uint32",
+      "maximum": 20,
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000009"
+    },
+    "case": {
+      "$ref": "#/$defs/GrepCase",
+      "default": "sensitive",
+      "description": "Sensitive by default; smart ignores case for patterns without uppercase."
+    },
+    "exclude": {
+      "description": "Exclude relative-path globs; exclusions override all includes.",
+      "items": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-agena-order": "000008"
+    },
+    "fixed_strings": {
+      "default": false,
+      "description": "Treat pattern literally instead of as a regex.",
+      "type": "boolean",
+      "x-agena-order": "000004"
+    },
     "include": {
       "description": "Optional glob filter applied before matching lines.",
+      "maxLength": 1024,
       "minLength": 1,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000001"
     },
     "include_ignored": {
       "default": false,
       "description": "Include hidden and ignored files that are skipped by default according\nto ripgrep-compatible ignore rules.",
       "type": "boolean",
       "x-agena-order": "000003"
+    },
+    "includes": {
+      "description": "Additional include globs, ORed with `include`. An empty set includes all.",
+      "items": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-agena-order": "000007"
+    },
+    "max_results": {
+      "description": "Global matching-line limit in content mode, matching-file limit otherwise.\nDefaults to 500; 1–500. Context lines do not consume this limit.",
+      "format": "uint32",
+      "maximum": 500,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000011"
+    },
+    "mode": {
+      "$ref": "#/$defs/GrepMode",
+      "default": "content",
+      "description": "Content, matching file paths, or matching-line counts per file."
     },
     "path": {
       "description": "Optional target: a directory to search recursively, or a single file.\nDefaults to the workspace root.",
@@ -2798,10 +2948,11 @@ Filesystem command tools for read/search and explicit edits.
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000000"
     },
     "pattern": {
-      "description": "Regex pattern to search for.",
+      "description": "Regex or fixed string to search for. Whitespace is significant.",
+      "maxLength": 16384,
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
@@ -5738,13 +5889,13 @@ Structured review and verification findings.
 
 ## agena.session
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.0` · **Tools** 6
 
 Inspect and manage the current runtime session and its environment, model, and token state.
 
 ### environment
 
-`agena.session.environment` · **Summary**: Inspect the current runtime environment: working directory, git state, shell, OS, and architecture.
+`agena.session.environment` · **Summary**: Inspect the runtime workspace, git state, shell, platform, and available host CLIs.
 
 **Tags**: `query` `discovery` `read_only`
 
@@ -5755,6 +5906,57 @@ Inspect and manage the current runtime session and its environment, model, and t
 {
   "additionalProperties": false,
   "properties": {},
+  "type": "object"
+}
+```
+
+### executables
+
+`agena.session.executables` · **Summary**: Inspect installed modern CLIs, their task-specific usage, and optional versions.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Resolves tools from the Agena server PATH and workspace, including fd/fdfind and bat/batcat aliases. Does not install tools or read interactive shell startup files. Omit names for installed tools and a compact missing list; pass names to inspect specific tools. probe_versions runs bounded version commands only when 1–8 names are supplied. refresh bypasses the 15-second availability cache. Presence does not establish plugin/model dependencies or authorize execution.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `names` | `array<string>` | — | `[]` | Curated tool names or aliases. Empty lists installed tools and missing names. |
+| `probe_versions` | `boolean` | — | `false` | Explicitly run bounded version probes. Requires 1–8 named tools. |
+| `refresh` | `boolean` | — | `false` | Bypass the 15-second availability cache after installing/changing tools. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "names": {
+      "default": [],
+      "description": "Curated tool names or aliases. Empty lists installed tools and missing names.",
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-agena-order": "000000"
+    },
+    "probe_versions": {
+      "default": false,
+      "description": "Explicitly run bounded version probes. Requires 1–8 named tools.",
+      "type": "boolean",
+      "x-agena-order": "000001"
+    },
+    "refresh": {
+      "default": false,
+      "description": "Bypass the 15-second availability cache after installing/changing tools.",
+      "type": "boolean",
+      "x-agena-order": "000002"
+    }
+  },
   "type": "object"
 }
 ```

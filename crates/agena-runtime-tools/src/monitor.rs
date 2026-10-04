@@ -1352,7 +1352,9 @@ mod tests {
     }
 
     async fn wait_for_terminal(registry: Arc<MonitorRegistry>, id: String) -> MonitorRead {
-        tokio::time::timeout(Duration::from_secs(2), async {
+        // The fixture itself may run for two seconds, followed by process
+        // cleanup and a queued blocking read. Do not race that same deadline.
+        tokio::time::timeout(Duration::from_secs(5), async {
             let mut since_seq = 0;
             let mut events = Vec::new();
             loop {

@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::Read;
 use std::path::Path;
 
@@ -107,7 +106,7 @@ fn prepare_file_attachment(
 }
 
 fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ToolError> {
-    let file = fs::File::open(path)?;
+    let file = agena_tool::file_io::open_regular_file(path)?;
     let mut bytes = Vec::with_capacity(
         file.metadata()
             .ok()

@@ -324,7 +324,21 @@ async fn sync_document(
     path: &Path,
     uri: &Uri,
 ) -> Result<agena_lsp::DocumentReceipt, agena_lsp::LspError> {
-    let file = tokio::fs::File::open(path).await?;
+    if !tokio::fs::metadata(path).await?.is_file() {
+        return Err(agena_lsp::LspError::Protocol(
+            "LSP target must be a regular file".into(),
+        ));
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let file = options.open(path).await?;
+    if !file.metadata().await?.is_file() {
+        return Err(agena_lsp::LspError::Protocol(
+            "LSP target changed to a non-regular file".into(),
+        ));
+    }
     let initial_capacity = match file.metadata().await {
         Ok(metadata) => match usize::try_from(metadata.len().min(MAX_LSP_DOCUMENT_BYTES)) {
             Ok(capacity) => capacity,

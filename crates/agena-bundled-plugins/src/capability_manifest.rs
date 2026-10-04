@@ -366,7 +366,7 @@ mod boundary_audit {
                 }
             }
         }
-        assert_eq!(count, 135);
+        assert_eq!(count, 136);
         assert!(
             failures.is_empty(),
             "Malformed arguments escaped validation:\n{}",

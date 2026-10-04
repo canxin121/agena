@@ -29,6 +29,7 @@ fn main() {
     for name in [
         "agena-bundled-plugins",
         "agena-runtime-tools",
+        "agena-tool",
         "agena-runtime-contracts",
         "agena-process",
         "agena-scheduler",

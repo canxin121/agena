@@ -5,7 +5,6 @@
 //! request validation, filesystem traversal, and stable result values.
 
 use std::{
-    fs::File,
     io::Read as _,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -536,7 +535,7 @@ fn collect_language_files(
 }
 
 fn read_source_bounded(path: &Path) -> Result<String, CodeSearchError> {
-    let file = File::open(path).map_err(|source| CodeSearchError::Read {
+    let file = crate::file_io::open_regular_file(path).map_err(|source| CodeSearchError::Read {
         path: path.display().to_string(),
         source,
     })?;

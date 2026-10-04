@@ -1,0 +1,12 @@
+{
+  "baseline_commit": "98c1c116",
+  "measurement": "UTF-8 bytes, not model-specific tokenizer counts",
+  "before": {
+    "base_utf8_bytes": 9738,
+    "with_all_workflow_sections_utf8_bytes": 16811
+  },
+  "after": {
+    "base_utf8_bytes": 4557,
+    "with_all_workflow_sections_utf8_bytes": 7392
+  }
+}

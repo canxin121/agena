@@ -239,6 +239,61 @@ pub struct ReadAttachmentOutput {
     pub page_count: Option<u32>,
 }
 
+/// Structured grep records keep paths (including colons) separate from text.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GrepRecord {
+    Line {
+        path: String,
+        line: u64,
+        text: String,
+        matched: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        text_truncated: bool,
+    },
+    File {
+        path: String,
+    },
+    Count {
+        path: String,
+        /// Number of matching lines, not the number of regex occurrences.
+        count: u64,
+        /// False means this is only a lower bound from a partial file scan.
+        complete: bool,
+    },
+}
+
+impl GrepRecord {
+    pub(super) fn display(&self) -> String {
+        match self {
+            Self::Line {
+                path,
+                line,
+                text,
+                matched,
+                text_truncated,
+            } => format!(
+                "{path}{separator}{line}{separator} {text}{suffix}",
+                separator = if *matched { ':' } else { '-' },
+                suffix = if *text_truncated {
+                    "… [line shortened]"
+                } else {
+                    ""
+                },
+            ),
+            Self::File { path } => path.clone(),
+            Self::Count {
+                path,
+                count,
+                complete,
+            } => format!(
+                "{path}: {count}{}",
+                if *complete { "" } else { "+ (partial)" }
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 /// Output payload of a tool execution.
@@ -285,6 +340,16 @@ pub enum ToolPayloadOutput {
         /// Matching `path:line: text` records.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<String>,
+        #[serde(default)]
+        mode: crate::part::GrepMode,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        records: Vec<GrepRecord>,
+        /// True only if the selected scope was fully searched. In files mode,
+        /// a file needs only one match to establish membership.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scan_complete: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
         #[serde(default, skip_serializing_if = "is_false")]
         truncated: bool,
     },

@@ -105,7 +105,7 @@ impl ToolExecutor {
     }
 }
 fn read_guidance(path: &Path, limit: usize) -> Result<(String, bool), String> {
-    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let file = agena_tool::file_io::open_regular_file(path).map_err(|e| e.to_string())?;
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("not a regular file".into());
     }

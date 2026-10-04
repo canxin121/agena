@@ -111,7 +111,7 @@ impl NotebookPlugin {
                 ));
             }
             agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
-                let file = std::fs::File::open(&path).map_err(io_error)?;
+                let file = agena_tool::file_io::open_regular_file(&path).map_err(io_error)?;
                 let capacity = match file.metadata() {
                     Ok(metadata) => usize::try_from(metadata.len().min(MAX_NOTEBOOK_BYTES))
                         .unwrap_or_default(),
@@ -227,7 +227,9 @@ impl NotebookPlugin {
                 let cell_count = cells.len();
                 validation::validate(&mut notebook)?;
                 let updated = validation::serialize(&notebook)?;
-                atomic_write(&path, updated.as_slice())?;
+                agena_runtime_tools::atomic_replace_file_with_check(&path, updated.as_slice(), || {
+                    agena_runtime_tools::verify_file_contents(&path, &original)
+                }).map_err(io_error)?;
                 let after_sha256 = sha256(updated.as_slice());
                 Ok(ToolInvokeOutput::from_parts(
                     format!("edited notebook {}", input.path),
@@ -321,10 +323,6 @@ fn resolve_path(workspace_root: &str, path: &str) -> PathBuf {
 
 fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> SdkResult<()> {
-    agena_runtime_tools::atomic_replace_file(path, bytes).map_err(io_error)
 }
 
 fn io_error(error: std::io::Error) -> PluginError {

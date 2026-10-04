@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions, Permissions};
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Weak};
 use std::thread;
@@ -171,6 +171,17 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
 /// Atomically replace one regular file using a temporary file in the same
 /// directory. Existing permissions are retained.
 pub fn atomic_replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_replace_file_with_check(path, bytes, || Ok(()))
+}
+
+/// Stage and sync the new contents, then revalidate the original immediately
+/// before publication. Callers must also hold mutation locks. This detects
+/// observed external edits; arbitrary writers can still race the final rename.
+pub fn atomic_replace_file_with_check(
+    path: &Path,
+    bytes: &[u8],
+    check: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
         return Err(io::Error::new(
@@ -188,10 +199,35 @@ pub fn atomic_replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
         ));
     }
     let temporary = staged_file(path, bytes, Some(metadata.permissions()), false)?;
+    check()?;
     temporary
         .persist(path)
         .map(|_| ())
         .map_err(|error| error.error)
+}
+
+/// Compare with a captured revision using bounded memory and reads. Unlike
+/// metadata alone this detects same-size changes and restored timestamps.
+pub fn verify_file_contents(path: &Path, expected: &[u8]) -> io::Result<()> {
+    let mut file = agena_tool::file_io::open_regular_file(path)?;
+    let mut remaining = expected;
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 && remaining.is_empty() {
+            return Ok(());
+        }
+        if read == 0 || !remaining.starts_with(&buffer[..read]) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "file revision conflict before publication: {}; read the file and retry",
+                    path.display()
+                ),
+            ));
+        }
+        remaining = &remaining[read..];
+    }
 }
 
 /// Atomically create one file without clobbering a target that appeared after
@@ -271,6 +307,27 @@ mod tests {
     use super::{
         atomic_create_file, atomic_replace_file, atomic_write_file, with_file_mutation_locks,
     };
+
+    #[test]
+    fn publication_check_preserves_external_edit_and_cleans_staged_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("revision.txt");
+        std::fs::write(&path, b"before").unwrap();
+        let error = super::atomic_replace_file_with_check(&path, b"our change", || {
+            // Simulate an uncooperative writer after output has been staged.
+            std::fs::write(&path, b"edited")?;
+            super::verify_file_contents(&path, b"before")
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(&path).unwrap(), b"edited");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        super::atomic_replace_file_with_check(&path, b"accepted", || {
+            super::verify_file_contents(&path, b"edited")
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"accepted");
+    }
 
     #[test]
     fn create_never_clobbers_and_replace_preserves_complete_content() {

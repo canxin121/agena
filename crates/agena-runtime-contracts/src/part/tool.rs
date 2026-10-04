@@ -226,6 +226,12 @@ pub struct ReadToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    max_items("exclude", 32),
+    min_chars("exclude[]", 1),
+    max_chars("exclude[]", 1024)
+)]
+#[serde(deny_unknown_fields)]
 /// Input of the glob tool.
 pub struct GlobToolInput {
     /// Glob pattern to match.
@@ -245,13 +251,64 @@ pub struct GlobToolInput {
     /// by default (`.git`, `node_modules`, `target`, `dist`, and caches).
     #[serde(default)]
     pub include_ignored: bool,
+    /// Filter by path kind; defaults to both files and directories.
+    #[serde(default)]
+    pub kind: GlobKind,
+    /// Exclude matching base-path-relative globs. Exclusions win.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GlobKind {
+    #[default]
+    All,
+    File,
+    Directory,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GrepCase {
+    #[default]
+    Sensitive,
+    Insensitive,
+    /// Ignore case unless the pattern contains an uppercase character.
+    Smart,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GrepMode {
+    #[default]
+    Content,
+    /// Return each matching file once, stopping at its first matching line.
+    Files,
+    /// Count matching lines per file, omitting files without matches.
+    Count,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    max_items("includes", 32),
+    max_items("exclude", 32),
+    min_chars("includes[]", 1),
+    min_chars("exclude[]", 1),
+    max_chars("includes[]", 1024),
+    max_chars("exclude[]", 1024),
+    max_chars("include", 1024),
+    max_chars("pattern", 16384),
+    min_chars("pattern", 1),
+    maximum("before_context", 20),
+    maximum("after_context", 20),
+    minimum("max_results", 1),
+    maximum("max_results", 500)
+)]
+#[serde(deny_unknown_fields)]
 /// Input of the grep tool.
 pub struct GrepToolInput {
-    /// Regex pattern to search for.
-    #[arg(trim, non_empty)]
+    /// Regex or fixed string to search for. Whitespace is significant.
     pub pattern: String,
     /// Optional target: a directory to search recursively, or a single file.
     /// Defaults to the workspace root.
@@ -266,6 +323,31 @@ pub struct GrepToolInput {
     /// to ripgrep-compatible ignore rules.
     #[serde(default)]
     pub include_ignored: bool,
+    /// Treat pattern literally instead of as a regex.
+    #[serde(default)]
+    pub fixed_strings: bool,
+    /// Sensitive by default; smart ignores case for patterns without uppercase.
+    #[serde(default)]
+    pub case: GrepCase,
+    /// Content, matching file paths, or matching-line counts per file.
+    #[serde(default)]
+    pub mode: GrepMode,
+    /// Additional include globs, ORed with `include`. An empty set includes all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub includes: Vec<String>,
+    /// Exclude relative-path globs; exclusions override all includes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Context lines before each match (0–20); content mode only.
+    #[serde(default)]
+    pub before_context: u32,
+    /// Context lines after each match (0–20); content mode only.
+    #[serde(default)]
+    pub after_context: u32,
+    /// Global matching-line limit in content mode, matching-file limit otherwise.
+    /// Defaults to 500; 1–500. Context lines do not consume this limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]

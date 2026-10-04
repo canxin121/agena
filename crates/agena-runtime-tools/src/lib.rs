@@ -11,6 +11,7 @@ pub use agena_runtime_contracts::{authorization, identity, part, permission, pro
 
 mod atomic_file;
 mod bounded_process;
+pub mod cli_tools;
 mod file_diff;
 pub use file_diff::{FileDiffPreview, file_diff_preview};
 pub mod media_input;
@@ -28,8 +29,8 @@ pub mod tool;
 pub use terminal::{TerminalOwner, TerminalRead, TerminalRegistry, TerminalStartParams};
 
 pub use atomic_file::{
-    atomic_create_file, atomic_replace_file, atomic_write_file, canonicalize_mutation_path,
-    with_file_mutation_locks,
+    atomic_create_file, atomic_replace_file, atomic_replace_file_with_check, atomic_write_file,
+    canonicalize_mutation_path, verify_file_contents, with_file_mutation_locks,
 };
 pub use monitor::{
     MonitorError, MonitorListener, MonitorRead, MonitorRegistry, MonitorService, MonitorStart,

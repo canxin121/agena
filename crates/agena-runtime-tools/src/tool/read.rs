@@ -21,6 +21,7 @@ pub(super) fn execute(
     executor: &ToolExecutor,
     input: &ReadToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    executor.ensure_not_cancelled()?;
     let target = executor.resolve_target_path(&input.file_path);
 
     if !target.exists() {
@@ -48,7 +49,7 @@ pub(super) fn execute(
         }
 
         let (preview, page_truncated, count, scan_truncated) =
-            read_directory_listing(&target, offset, limit)?;
+            read_directory_listing(&target, offset, limit, executor.cancellation_token())?;
         let truncated = page_truncated || scan_truncated;
         let output = ToolPayloadOutput::Read {
             read_info: None,
@@ -124,7 +125,7 @@ pub(super) fn execute(
 
 fn read_prefix(path: &std::path::Path, limit: usize) -> Result<Vec<u8>, ToolError> {
     let mut bytes = Vec::with_capacity(limit);
-    fs::File::open(path)?
+    agena_tool::file_io::open_regular_file(path)?
         .take(limit as u64)
         .read_to_end(&mut bytes)?;
     Ok(bytes)
@@ -142,17 +143,25 @@ fn parse_limit(value: Option<u32>) -> usize {
         .and_then(|v| usize::try_from(v).ok())
         .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_LIMIT)
+        .min(DEFAULT_LIMIT)
 }
 
 fn read_directory_listing(
     dir: &std::path::Path,
     offset: usize,
     limit: usize,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(String, bool, usize, bool), ToolError> {
     let mut entries = Vec::new();
     let mut scan_truncated = false;
+    let started = std::time::Instant::now();
     for (entry_index, entry) in fs::read_dir(dir)?.enumerate() {
-        if entry_index >= MAX_DIRECTORY_ENTRIES {
+        if cancel.is_some_and(|token| token.is_cancelled()) {
+            return Err(ToolError::Cancelled);
+        }
+        if entry_index >= MAX_DIRECTORY_ENTRIES
+            || started.elapsed() >= std::time::Duration::from_secs(5)
+        {
             scan_truncated = true;
             break;
         }

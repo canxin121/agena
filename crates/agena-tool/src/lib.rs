@@ -3982,7 +3982,9 @@ mod tool_title_tests {
     }
 }
 
+pub mod cli_catalog;
 pub mod code_search;
+pub mod file_io;
 pub mod provider_tools;
 pub mod shell;
 pub mod shell_analysis;

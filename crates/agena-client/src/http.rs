@@ -1248,6 +1248,51 @@ impl AgenaClient {
         self.get_json("/api/v1/git/status").await
     }
 
+    /// Bounded workbench status shared by terminal and browser clients.
+    pub async fn workspace_git_status(
+        &self,
+        directory: &str,
+        offset: usize,
+        summary: bool,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut url = self.endpoint("/api/v1/workbench/git/status");
+        url.query_pairs_mut()
+            .append_pair("directory", directory)
+            .append_pair("offset", &offset.to_string())
+            .append_pair("limit", "40")
+            .append_pair("summary", if summary { "true" } else { "false" })
+            .append_pair("includeDiffStats", "false");
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    /// One file only; untracked files and binary patches use server semantics.
+    pub async fn workspace_git_diff(
+        &self,
+        directory: &str,
+        path: &str,
+        staged: bool,
+        max_bytes: usize,
+        old_path: Option<&str>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut url = self.endpoint("/api/v1/workbench/git/diff");
+        url.query_pairs_mut()
+            .append_pair("directory", directory)
+            .append_pair("path", path)
+            .append_pair("staged", if staged { "true" } else { "false" })
+            .append_pair("contextLines", "3")
+            .append_pair("maxBytes", &max_bytes.to_string());
+        if let Some(old_path) = old_path {
+            url.query_pairs_mut().append_pair("oldPath", old_path);
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
     pub async fn snapshot_status(&self) -> Result<serde_json::Value, ClientError> {
         self.get_json("/api/v1/snapshots").await
     }

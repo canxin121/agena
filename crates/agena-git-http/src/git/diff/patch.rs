@@ -18,11 +18,16 @@ use super::unified::{parse_unified_diff_meta, patch_paths_are_safe, validate_uni
 pub struct GitDiffQuery {
     pub directory: Option<String>,
     pub path: Option<String>,
+    #[serde(rename = "oldPath")]
+    pub old_path: Option<String>,
     pub staged: Option<String>,
     #[serde(rename = "contextLines")]
     pub context_lines: Option<String>,
     #[serde(rename = "includeMeta")]
     pub include_meta: Option<String>,
+    /// Optional preview budget; full Git editors retain the existing behavior.
+    #[serde(rename = "maxBytes")]
+    pub max_bytes: Option<usize>,
 }
 
 pub async fn git_diff(Query(q): Query<GitDiffQuery>) -> Response {
@@ -50,7 +55,11 @@ pub async fn git_diff(Query(q): Query<GitDiffQuery>) -> Response {
             .into_response();
     };
 
-    if !is_safe_repo_rel_path(path) {
+    if !is_safe_repo_rel_path(path)
+        || q.old_path
+            .as_deref()
+            .is_some_and(|p| !is_safe_repo_rel_path(p))
+    {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Invalid path", "code": "invalid_path"})),
@@ -111,6 +120,9 @@ pub async fn git_diff(Query(q): Query<GitDiffQuery>) -> Response {
         args.push(path.to_string());
     } else {
         args.push("--".into());
+        if let Some(old_path) = &q.old_path {
+            args.push(old_path.clone());
+        }
         args.push(path.to_string());
     }
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -158,7 +170,135 @@ pub async fn git_diff(Query(q): Query<GitDiffQuery>) -> Response {
         return Json(serde_json::json!({"diff": out, "meta": meta})).into_response();
     }
 
-    Json(serde_json::json!({"diff": out})).into_response()
+    let total_bytes = out.len();
+    let (preview, truncated) = diff_preview(&out, q.max_bytes);
+    Json(serde_json::json!({"diff": preview, "truncated": truncated, "totalBytes": total_bytes}))
+        .into_response()
+}
+
+fn diff_preview(diff: &str, max_bytes: Option<usize>) -> (&str, bool) {
+    let Some(limit) = max_bytes else {
+        return (diff, false);
+    };
+    let limit = limit.clamp(1024, 16 * 1024 * 1024);
+    if diff.len() <= limit {
+        return (diff, false);
+    }
+    let mut end = limit;
+    while !diff.is_char_boundary(end) {
+        end -= 1;
+    }
+    let preview = &diff[..end];
+    (
+        preview
+            .rfind('\n')
+            .map_or(preview, |newline| &preview[..newline + 1]),
+        true,
+    )
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::diff_preview;
+    #[test]
+    fn preview_is_bounded_on_utf8_and_line_boundaries_and_can_expand() {
+        let diff = format!(
+            "--- a/文.rs\n+++ b/文.rs\n@@ -1,1 +1,1 @@\n-{}\n+new\n",
+            "中文".repeat(700)
+        );
+        let (preview, truncated) = diff_preview(&diff, Some(1024));
+        assert!(truncated);
+        assert!(preview.len() <= 1024);
+        assert!(preview.ends_with('\n'));
+        assert_eq!(diff_preview(&diff, Some(8192)), (diff.as_str(), false));
+        assert_eq!(diff_preview(&diff, None), (diff.as_str(), false));
+    }
+
+    #[tokio::test]
+    async fn workspace_status_and_diff_handle_paging_renames_untracked_and_binary() {
+        use super::{GitDiffQuery, Query, git_diff};
+        use crate::git::status::{GitStatusQuery, git_status};
+        async fn json(response: axum::response::Response) -> serde_json::Value {
+            assert!(response.status().is_success(), "{}", response.status());
+            serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let repo = git2::Repository::init(root).unwrap();
+        std::fs::write(root.join("before 文.txt"), "first\nsecond\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(std::path::Path::new("before 文.txt"))
+            .unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let author = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        repo.commit(Some("HEAD"), &author, &author, "fixture", &tree, &[])
+            .unwrap();
+        std::fs::rename(root.join("before 文.txt"), root.join("after 文.txt")).unwrap();
+        index
+            .remove_path(std::path::Path::new("before 文.txt"))
+            .unwrap();
+        index
+            .add_path(std::path::Path::new("after 文.txt"))
+            .unwrap();
+        index.write().unwrap();
+        for i in 0..45 {
+            std::fs::write(root.join(format!("new-{i:02}.txt")), "untracked text\n").unwrap();
+        }
+        std::fs::write(root.join("binary.bin"), b"\0binary\0").unwrap();
+        let directory = root.to_string_lossy().to_string();
+        let status = |offset, summary| GitStatusQuery {
+            directory: Some(directory.clone()),
+            offset: Some(offset),
+            limit: Some(40),
+            scope: None,
+            summary,
+            include_diff_stats: false,
+        };
+        let first = json(git_status(Query(status(0, false))).await).await;
+        assert_eq!(first["files"].as_array().unwrap().len(), 40);
+        assert_eq!(first["hasMore"], true);
+        let renamed = first["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["path"] == "after 文.txt")
+            .unwrap();
+        assert_eq!(renamed["indexOldPath"], "before 文.txt");
+        let second = json(git_status(Query(status(40, false))).await).await;
+        assert_eq!(second["hasMore"], false);
+        let summary = json(git_status(Query(status(0, true))).await).await;
+        assert_eq!(summary["files"].as_array().unwrap().len(), 0);
+        assert_eq!(summary["totalFiles"], first["totalFiles"]);
+        let query = |path: &str, staged: bool, old_path: Option<&str>| GitDiffQuery {
+            directory: Some(directory.clone()),
+            path: Some(path.into()),
+            old_path: old_path.map(str::to_owned),
+            staged: Some(staged.to_string()),
+            context_lines: Some("3".into()),
+            include_meta: None,
+            max_bytes: Some(262144),
+        };
+        let renamed =
+            json(git_diff(Query(query("after 文.txt", true, Some("before 文.txt")))).await).await;
+        assert!(renamed["diff"].as_str().unwrap().contains("rename from"));
+        let added = json(git_diff(Query(query("new-00.txt", false, None))).await).await;
+        assert!(added["diff"].as_str().unwrap().contains("+untracked text"));
+        let binary = json(git_diff(Query(query("binary.bin", false, None))).await).await;
+        assert!(binary["diff"].as_str().unwrap().contains("Binary files"));
+        assert_eq!(
+            git_diff(Query(query("after 文.txt", true, Some("../outside"))))
+                .await
+                .status(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+    }
 }
 
 #[derive(Debug, Deserialize)]

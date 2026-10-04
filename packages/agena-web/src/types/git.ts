@@ -1,4 +1,6 @@
 export interface GitStatusFile {
+  indexOldPath?: string
+  workingOldPath?: string
   path: string
   index: string
   workingDir: string
@@ -212,6 +214,8 @@ export interface GitDiffMeta {
 }
 
 export interface GitDiffResponse {
+  truncated?: boolean
+  totalBytes?: number
   diff: string
   meta?: GitDiffMeta
 }

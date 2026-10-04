@@ -28,6 +28,10 @@ pub struct GitStatusFile {
     pub path: String,
     pub index: String,
     pub working_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_old_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_old_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -343,7 +347,8 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
             opts.include_untracked(true)
                 .recurse_untracked_dirs(true)
                 .include_ignored(false)
-                .include_unmodified(false);
+                .include_unmodified(false)
+                .renames_head_to_index(true);
 
             let statuses = repo.statuses(Some(&mut opts)).map_err(|error| {
                 git2_utils::Git2OpenError::Other(git2_utils::git2_error_diagnostic(
@@ -400,6 +405,20 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
                 let path = entry
                     .path()
                     .map_err(|error| git2_other("Git status path is not valid UTF-8", &error))?;
+                let head_delta = entry.head_to_index();
+                let work_delta = entry.index_to_workdir();
+                let new_path = work_delta
+                    .as_ref()
+                    .and_then(|d| d.new_file().path())
+                    .or_else(|| head_delta.as_ref().and_then(|d| d.new_file().path()));
+                let path = new_path.and_then(|p| p.to_str()).unwrap_or(path);
+                let old_path = |delta: Option<&git2::DiffDelta<'_>>| {
+                    delta
+                        .filter(|d| d.status() == git2::Delta::Renamed)
+                        .and_then(|d| d.old_file().path())
+                        .and_then(|p| p.to_str())
+                        .map(str::to_owned)
+                };
                 let st = entry.status();
                 let x = idx_code(st).to_string();
                 let y = wt_code(st).to_string();
@@ -416,6 +435,8 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
                     path: path.to_string(),
                     index: x,
                     working_dir: y,
+                    index_old_path: old_path(head_delta.as_ref()),
+                    working_old_path: old_path(work_delta.as_ref()),
                 });
             }
             files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -713,7 +734,8 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                     opts.include_untracked(true)
                         .recurse_untracked_dirs(true)
                         .include_ignored(false)
-                        .include_unmodified(false);
+                        .include_unmodified(false)
+                .renames_head_to_index(true);
 
                     let statuses = repo.statuses(Some(&mut opts)).map_err(|error| {
                         git2_other("failed to inspect Git status for the watch stream", &error)

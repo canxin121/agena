@@ -242,7 +242,7 @@ pub async fn crawl_site(
     let total_documents = store.list_documents()?.len();
     Ok(CrawlRunReport {
         start_url: start_url.to_string(),
-        engine: if options.render_js { "spider" } else { "http" }.to_string(),
+        engine: if options.render_js { "browser" } else { "http" }.to_string(),
         rendered: options.render_js,
         attempted_count,
         discovered_count: seen_urls.len(),

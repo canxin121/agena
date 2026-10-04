@@ -1,6 +1,7 @@
 mod downloads;
 mod fetch_transport;
 mod playwright;
+mod rendered_fetch;
 use playwright::BrowserInteractionBackend;
 mod search_provider;
 use search_provider::WebSearchBackend;
@@ -16,8 +17,8 @@ use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebFetchCoordinator,
     WebFetchCoordinatorConfig, WebSearchEngine, WebSearchOptions, WebSearchResult, crawl_site,
-    fetch_page_with_spider, local_browser_endpoint, local_browser_running, local_browser_touch,
-    prepare_fetch_url, preview_text, results_to_text, search_web, shutdown_local_browser,
+    local_browser_endpoint, local_browser_running, local_browser_touch, prepare_fetch_url,
+    preview_text, results_to_text, search_web, shutdown_local_browser,
 };
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
@@ -882,18 +883,18 @@ impl ActivitySourceAdapter for BrowserActivitySource {
 
 struct WebPluginState {
     config: WebConfig,
-    fetch_coordinator: WebFetchCoordinator,
+    fetch_coordinator: Arc<WebFetchCoordinator>,
     host: Arc<dyn HostClient>,
 }
 
 impl WebPluginState {
     fn new(config: WebConfig, host: Arc<dyn HostClient>) -> Self {
         Self {
-            fetch_coordinator: WebFetchCoordinator::new(WebFetchCoordinatorConfig {
+            fetch_coordinator: Arc::new(WebFetchCoordinator::new(WebFetchCoordinatorConfig {
                 cache_ttl: Duration::from_secs(config.fetch.cache.ttl_secs),
                 cache_capacity: config.fetch.cache.capacity,
                 per_host_delay: Duration::from_millis(config.fetch.request.delay_ms),
-            }),
+            })),
             config,
             host,
         }
@@ -1388,6 +1389,10 @@ impl WebPlugin {
     }
 
     async fn validate_network_target(&self, url: &url::Url) -> SdkResult<()> {
+        self.state()?
+            .host
+            .require_network_permission(url.to_string())
+            .await?;
         validate_public_network_target(url).await
     }
 
@@ -1404,51 +1409,56 @@ impl WebPlugin {
     async fn browser_preflight_redirects(&self, initial: &url::Url) -> SdkResult<Vec<String>> {
         const MAX_REDIRECTS: usize = 10;
         let timeout = Duration::from_secs(self.config()?.fetch.request.timeout_secs);
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout)
-            .build()
-            .map_err(|error| {
-                plugin_internal_error_with_context(
-                    "browser redirect preflight setup failed",
-                    &error,
-                )
-            })?;
-        let mut current = initial.clone();
-        let mut checked = Vec::new();
-        for _ in 0..=MAX_REDIRECTS {
-            self.validate_network_target(&current).await?;
-            checked.push(current.to_string());
-            let response = client.head(current.clone()).send().await.map_err(|error| {
-                plugin_internal_error_with_context(
-                    format!("browser redirect preflight failed for {current}").as_str(),
-                    &error,
-                )
-            })?;
-            if !response.status().is_redirection() {
-                return Ok(checked);
-            }
-            let location = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .ok_or_else(|| {
-                    PluginError::internal(format!(
-                        "browser redirect from {current} had no Location header"
-                    ))
-                })?
-                .to_str()
-                .map_err(|error| {
+        let preflight = async {
+            let mut current = initial.clone();
+            let mut checked = Vec::new();
+            for _ in 0..=MAX_REDIRECTS {
+                self.validate_network_target(&current).await?;
+                let addresses = resolve_public_network_target(&current).await?;
+                let client = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(timeout)
+                    .no_proxy()
+                    .resolve_to_addrs(current.host_str().expect("validated host"), &addresses)
+                    .build()
+                    .map_err(|error| PluginError::internal_error(&error))?;
+                checked.push(current.to_string());
+                let response = client.head(current.clone()).send().await.map_err(|error| {
                     plugin_internal_error_with_context(
-                        format!("browser redirect from {current} had an invalid Location header")
-                            .as_str(),
+                        format!("browser redirect preflight failed for {current}").as_str(),
                         &error,
                     )
                 })?;
-            current = resolve_browser_redirect(&current, location)?;
-        }
-        Err(PluginError::internal(format!(
-            "browser redirect preflight exceeded {MAX_REDIRECTS} hops"
-        )))
+                if !response.status().is_redirection() {
+                    return Ok(checked);
+                }
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .ok_or_else(|| {
+                        PluginError::internal(format!(
+                            "browser redirect from {current} had no Location header"
+                        ))
+                    })?
+                    .to_str()
+                    .map_err(|error| {
+                        plugin_internal_error_with_context(
+                            format!(
+                                "browser redirect from {current} had an invalid Location header"
+                            )
+                            .as_str(),
+                            &error,
+                        )
+                    })?;
+                current = resolve_browser_redirect(&current, location)?;
+            }
+            Err(PluginError::internal(format!(
+                "browser redirect preflight exceeded {MAX_REDIRECTS} hops"
+            )))
+        };
+        tokio::time::timeout(timeout, preflight)
+            .await
+            .map_err(|_| PluginError::internal("browser redirect preflight deadline exceeded"))?
     }
 
     fn local_browser_options(&self) -> SdkResult<LocalBrowserOptions> {
@@ -1659,7 +1669,22 @@ impl WebPlugin {
         }
 
         let endpoint = self.browser_endpoint().await?;
-        let client = CdpClient::connect(endpoint.as_str(), Some(target_id), events).await?;
+        let host = self.state()?.host.clone();
+        let policy: BrowserRequestPolicy = Arc::new(move |url, _| {
+            let host = host.clone();
+            Box::pin(async move {
+                if agena_plugin_host::sdk::host_api::current_host_callback_context().is_none() {
+                    return Err("browser network authorization requires an active tool call".into());
+                }
+                host.require_network_permission(url.clone())
+                    .await
+                    .map_err(|error| error.diagnostic_message().to_owned())?;
+                authorize_browser_document_request(&url).await
+            })
+        });
+        let client =
+            CdpClient::connect_with_policy(endpoint.as_str(), Some(target_id), events, policy)
+                .await?;
         client.enable_navigation_interception().await?;
         self.browser_state
             .clients
@@ -1697,6 +1722,7 @@ impl WebPlugin {
         // while a native download holds that lease.
         let _download_guard = self.browser_download_lock.lock().await;
         let _native = self.browser_client(Some(request.target_id)).await?;
+        _native.refresh_callback_context()?;
         let endpoint = self.browser_endpoint().await?;
         let context_id = self
             .browser_state
@@ -1915,15 +1941,7 @@ impl WebPlugin {
                 let mut options = self.spider_fetch_options(render_js)?;
                 options.extractor = extractor;
                 if render_js {
-                    state.fetch_coordinator.wait_for_url_host(url).await;
-                    self.validate_network_target(url).await?;
-                    let page = fetch_page_with_spider(url, &options)
-                        .await
-                        .map_err(crawl_error_to_plugin)?;
-                    let final_url = url::Url::parse(&page.final_url)
-                        .map_err(|error| PluginError::internal_error(&error))?;
-                    self.validate_network_target(&final_url).await?;
-                    Ok(page)
+                    rendered_fetch::fetch(self, url, &options).await
                 } else {
                     let source = fetch_transport::fetch(url, &options, |target| async move {
                         state
@@ -2991,6 +3009,14 @@ async fn validate_public_network_target(url: &url::Url) -> SdkResult<()> {
 }
 
 async fn resolve_public_network_target(url: &url::Url) -> SdkResult<Vec<std::net::SocketAddr>> {
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(PluginError::invalid_params(
+            "web requests require HTTP(S) without URL credentials",
+        ));
+    }
     let host = url
         .host_str()
         .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
@@ -3056,18 +3082,57 @@ struct NavigationDecision {
 const CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+type BrowserRequestPolicy = Arc<
+    dyn Fn(String, bool) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync,
+>;
+
+type BrowserCallbackContext =
+    Arc<std::sync::Mutex<Option<agena_plugin_host::sdk::host_api::HostCallbackContext>>>;
+struct CdpAuthorization {
+    policy: BrowserRequestPolicy,
+    context: BrowserCallbackContext,
+}
+
 #[derive(Clone)]
 struct CdpClient {
     commands: mpsc::Sender<CdpCommandRequest>,
     navigation_interception_enabled: Arc<OnceLock<()>>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
+    callback_context: BrowserCallbackContext,
 }
 
 impl CdpClient {
+    fn refresh_callback_context(&self) -> SdkResult<()> {
+        if let Some(context) = agena_plugin_host::sdk::host_api::current_host_callback_context() {
+            *self
+                .callback_context
+                .lock()
+                .map_err(|_| PluginError::internal("browser callback context lock poisoned"))? =
+                Some(context);
+        }
+        Ok(())
+    }
     async fn connect(
         endpoint: &str,
         target_id: Option<&str>,
         events: Option<mpsc::Sender<CdpEvent>>,
+    ) -> SdkResult<Self> {
+        Self::connect_with_policy(
+            endpoint,
+            target_id,
+            events,
+            Arc::new(|url, _| {
+                Box::pin(async move { authorize_browser_document_request(&url).await })
+            }),
+        )
+        .await
+    }
+
+    async fn connect_with_policy(
+        endpoint: &str,
+        target_id: Option<&str>,
+        events: Option<mpsc::Sender<CdpEvent>>,
+        policy: BrowserRequestPolicy,
     ) -> SdkResult<Self> {
         let (mut socket, _) = tokio::time::timeout(
             CDP_CONNECT_TIMEOUT,
@@ -3105,6 +3170,9 @@ impl CdpClient {
         let (commands, command_receiver) = mpsc::channel(32);
         let navigation_interception_enabled = Arc::new(OnceLock::new());
         let navigation_errors = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+        let callback_context = Arc::new(std::sync::Mutex::new(
+            agena_plugin_host::sdk::host_api::current_host_callback_context(),
+        ));
         tokio::spawn(run_cdp_connection(
             socket,
             session_id,
@@ -3112,12 +3180,17 @@ impl CdpClient {
             command_receiver,
             Arc::clone(&navigation_errors),
             events,
+            CdpAuthorization {
+                policy,
+                context: callback_context.clone(),
+            },
         ));
 
         Ok(Self {
             commands,
             navigation_interception_enabled,
             navigation_errors,
+            callback_context,
         })
     }
 
@@ -3162,6 +3235,10 @@ impl CdpClient {
         // Every CDP exchange is browser activity: restart the idle auto-close
         // timer so a session mid-flight is never torn down underneath us.
         local_browser_touch().map_err(crawl_error_to_plugin)?;
+        // Tokio tasks do not inherit task-local host authority. Refresh it on
+        // each foreground command and echo it for intercepted requests. The
+        // host rejects an expired authority; no background workspace fallback.
+        self.refresh_callback_context()?;
         if let Some(error) = self.take_navigation_error() {
             return Err(PluginError::internal(error));
         }
@@ -3323,6 +3400,7 @@ async fn run_cdp_connection(
     mut commands: mpsc::Receiver<CdpCommandRequest>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
     events: Option<mpsc::Sender<CdpEvent>>,
+    authorization: CdpAuthorization,
 ) {
     let (mut sink, mut source) = socket.split();
     // At most sixteen authorization checks can be active, so one result slot
@@ -3330,9 +3408,15 @@ async fn run_cdp_connection(
     let (decisions, mut decision_receiver) = mpsc::channel::<NavigationDecision>(16);
     let authorization_slots = Arc::new(Semaphore::new(16));
     let mut pending = BTreeMap::<u64, PendingCdpCommand>::new();
+    let mut checks = tokio::task::JoinSet::new();
 
     loop {
         tokio::select! {
+            result = checks.join_next(), if !checks.is_empty() => {
+                if let Some(Err(error)) = result {
+                    push_navigation_error(&navigation_errors, format!("browser request authorization worker failed: {error}"));
+                }
+            }
             command = commands.recv() => {
                 let Some(command) = command else {
                     if let Err(error) = sink.close().await {
@@ -3347,6 +3431,10 @@ async fn run_cdp_connection(
                     break;
                 };
                 let id = next_id;
+                pending.retain(|_, command| match command {
+                    PendingCdpCommand::Caller { response, .. } => !response.is_closed(),
+                    PendingCdpCommand::Interception { .. } => true,
+                });
                 next_id = next_id.saturating_add(1);
                 match send_cdp_request(
                     &mut sink,
@@ -3556,13 +3644,22 @@ async fn run_cdp_connection(
                     }
                     continue;
                 };
-                tokio::spawn(async move {
+                let policy = authorization.policy.clone();
+                let context = match authorization.context.lock() {
+                    Ok(context) => context.clone(),
+                    Err(_) => { push_navigation_error(&navigation_errors, "browser callback context lock poisoned".into()); break; }
+                };
+                checks.spawn(async move {
                     let _authorization_slot = authorization_slot;
-                    let result = if !is_document {
-                        Ok(())
-                    } else {
-                        authorize_browser_document_request(url.as_str()).await
+                    let authorized = async {
+                        let operation = policy(url.clone(), is_document);
+                        match context {
+                            Some(context) => agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(context, operation).await,
+                            None => operation.await,
+                        }
                     };
+                    let result = tokio::time::timeout(CDP_COMMAND_TIMEOUT, authorized).await
+                        .unwrap_or_else(|_| Err("browser request authorization timed out".into()));
                     if let Err(error) = decisions
                         .send(NavigationDecision {
                             request_id,
@@ -3945,10 +4042,14 @@ fn is_public_address(address: IpAddr) -> bool {
                 && address.octets()[0] < 224
         }
         IpAddr::V6(address) => {
+            if let Some(mapped) = address.to_ipv4_mapped() {
+                return is_public_address(mapped.into());
+            }
             !address.is_loopback()
                 && !address.is_unique_local()
                 && !address.is_unicast_link_local()
                 && !address.is_unspecified()
+                && !address.is_multicast()
         }
     }
 }
@@ -4374,6 +4475,7 @@ mod tests {
     async fn cdp_commands_fail_instead_of_waiting_forever_for_a_response() {
         let (commands, _requests) = tokio::sync::mpsc::channel(1);
         let client = CdpClient {
+            callback_context: Default::default(),
             commands,
             navigation_interception_enabled: Arc::new(OnceLock::new()),
             navigation_errors: Arc::new(std::sync::Mutex::new(VecDeque::new())),
@@ -4466,6 +4568,9 @@ mod tests {
         assert!(!is_public_address(Ipv4Addr::LOCALHOST.into()));
         assert!(!is_public_address(Ipv4Addr::new(10, 0, 0, 1).into()));
         assert!(!is_public_address(Ipv6Addr::LOCALHOST.into()));
+        assert!(!is_public_address("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_public_address("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(!is_public_address("ff02::1".parse().unwrap()));
     }
 
     #[test]

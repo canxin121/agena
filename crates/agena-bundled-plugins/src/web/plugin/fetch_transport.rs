@@ -99,7 +99,7 @@ async fn bounded_body(
     Ok((body, false))
 }
 
-async fn robots<F, Fut>(
+pub(super) async fn robots<F, Fut>(
     target: &url::Url,
     options: &SpiderFetchOptions,
     resolve: &F,

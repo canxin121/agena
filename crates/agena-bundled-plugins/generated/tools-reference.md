@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 137 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 138 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -19,7 +19,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
-- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (8 tools)
+- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (9 tools)
 - [`agena.gemini`](#agenagemini) — Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (12 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
@@ -2775,7 +2775,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 ## agena.fs
 
-**Version** `0.1.0` · **Tools** 8
+**Version** `0.1.0` · **Tools** 9
 
 Filesystem command tools for read/search and explicit edits.
 
@@ -2809,6 +2809,95 @@ Filesystem command tools for read/search and explicit edits.
   },
   "required": [
     "patch"
+  ],
+  "type": "object"
+}
+```
+
+### document
+
+`agena.fs.document` · **Summary**: Extract or search text in one local PDF/Office document.
+
+**Tags**: `query` `filesystem` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Supported formats: pdf, docx, pptx, xlsx. backend=auto prefers pdftotext for PDFs and otherwise uses selected local MarkItDown converters. MarkItDown needs a Python environment with its format extras; set AGENA_DOCUMENT_PYTHON to that interpreter, or install in the host python3 environment. No dependency installation, plugins, audio/image transcription or remote document service is enabled. Supply pattern to search extracted lines (fixed_strings defaults true); start_line is 1-based, max_lines 1–500. Outputs include source_sha256, extraction warnings, line counts and explicit truncation. Source limit 32 MiB; conversion 30 seconds / 2 MiB per output stream; displayed records 128 KiB. Empty text can indicate a scanned PDF needing OCR. Extracted lines are not source page numbers.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `backend` | `Backend` | — | `auto` |  |
+| `fixed_strings` | `boolean` | — | `true` |  |
+| `ignore_case` | `boolean` | — | `false` |  |
+| `max_lines` | `integer` | — | `100` |  |
+| `path` | `string` | ✓ | — |  |
+| `pattern` | `string / null` | — | — |  |
+| `start_line` | `integer` | — | `1` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Backend": {
+      "enum": [
+        "auto",
+        "pdftotext",
+        "markitdown"
+      ],
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "backend": {
+      "$ref": "#/$defs/Backend",
+      "default": "auto"
+    },
+    "fixed_strings": {
+      "default": true,
+      "type": "boolean",
+      "x-agena-order": "000003"
+    },
+    "ignore_case": {
+      "default": false,
+      "type": "boolean",
+      "x-agena-order": "000004"
+    },
+    "max_lines": {
+      "default": 100,
+      "format": "uint",
+      "maximum": 500,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000003"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "pattern": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "start_line": {
+      "default": 1,
+      "format": "uint",
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000002"
+    }
+  },
+  "required": [
+    "path"
   ],
   "type": "object"
 }

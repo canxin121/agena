@@ -3701,6 +3701,44 @@ impl BuiltinHumanRenderer {
                     ],
                 ));
             }
+            "fs.document" => {
+                let fields = [
+                    ("Path", Self::object_text(object, "path")),
+                    ("Converter", Self::object_text(object, "backend")),
+                    ("Extracted lines", Self::object_text(object, "total_lines")),
+                    (
+                        "Matching lines",
+                        Self::object_text(object, "matching_lines"),
+                    ),
+                    ("Truncated", Self::object_text(object, "truncated")),
+                    ("Warnings", Self::object_text(object, "warnings")),
+                ];
+                if let Some(block) =
+                    Self::details_block_if_nonempty("document-meta", "Document text", &fields)
+                {
+                    blocks.push(block);
+                }
+                if let Some(lines) = Self::object_array(object, "lines")
+                    && let Some(table) = Self::scalar_table(
+                        "document-lines",
+                        "Extracted text",
+                        lines,
+                        &[
+                            ("line", "Line"),
+                            ("text", "Text"),
+                            ("text_truncated", "Shortened"),
+                        ],
+                    )
+                {
+                    blocks.push(table);
+                }
+                if object.get("empty").and_then(Value::as_bool) == Some(true) {
+                    blocks.push(Self::markdown_block(
+                        "document-empty",
+                        "No text was extracted. A scanned PDF may require OCR.",
+                    ));
+                }
+            }
             "fs.read_many" => {
                 if let Some(files) = Self::object_array(object, "files")
                     && let Some(table) = Self::scalar_table(

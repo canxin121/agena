@@ -1,5 +1,7 @@
 //! `agena.fs` plugin: filesystem read/write/search tools.
 
+mod document;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -109,6 +111,19 @@ pub(crate) fn new_plugin() -> FsPlugin {
     summary = "Filesystem command tools for read/search and explicit edits.",
 )]
 impl FsPlugin {
+    #[tool(
+        tags(query, filesystem, read_only),
+        summary = "Extract or search text in one local PDF/Office document.",
+        help = "Supported formats: pdf, docx, pptx, xlsx. backend=auto prefers pdftotext for PDFs and otherwise uses selected local MarkItDown converters. MarkItDown needs a Python environment with its format extras; set AGENA_DOCUMENT_PYTHON to that interpreter, or install in the host python3 environment. No dependency installation, plugins, audio/image transcription or remote document service is enabled. Supply pattern to search extracted lines (fixed_strings defaults true); start_line is 1-based, max_lines 1–500. Outputs include source_sha256, extraction warnings, line counts and explicit truncation. Source limit 32 MiB; conversion 30 seconds / 2 MiB per output stream; displayed records 128 KiB. Empty text can indicate a scanned PDF needing OCR. Extracted lines are not source page numbers."
+    )]
+    async fn invoke_document(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: document::DocumentInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        document::invoke(Path::new(context.workspace_root), input).await
+    }
+
     #[tool(
         tags(query, filesystem, read_only),
         summary = "Read workspace files.",
@@ -705,22 +720,18 @@ fn sha256_file(path: &Path) -> SdkResult<String> {
 }
 
 fn read_file_bounded(path: &Path, max_bytes: u64, operation: &str) -> SdkResult<Vec<u8>> {
-    let file = agena_tool::file_io::open_regular_file(path).map_err(fs_error)?;
-    let capacity = match file.metadata() {
-        Ok(metadata) => usize::try_from(metadata.len().min(max_bytes)).unwrap_or_default(),
-        Err(error) => {
-            tracing::warn!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "read metadata used to preallocate a bounded file read",
-                    &error,
-                ),
-                "bounded file read is continuing without a preallocated buffer"
-            );
-            0
-        }
-    };
+    let mut file = agena_tool::file_io::open_regular_file(path).map_err(fs_error)?;
+    let before = file.metadata().map_err(fs_error)?;
+    if before.len() > max_bytes {
+        return Err(PluginError::invalid_params(format!(
+            "{operation} source exceeds its {} MiB limit",
+            max_bytes / 1024 / 1024
+        )));
+    }
+    let capacity = usize::try_from(before.len()).unwrap_or_default();
     let mut bytes = Vec::with_capacity(capacity);
-    file.take(max_bytes.saturating_add(1))
+    (&mut file)
+        .take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(fs_error)?;
     if bytes.len() as u64 > max_bytes {
@@ -728,6 +739,12 @@ fn read_file_bounded(path: &Path, max_bytes: u64, operation: &str) -> SdkResult<
             "{operation} supports files up to {} MiB: {}",
             max_bytes / 1024 / 1024,
             path.display()
+        )));
+    }
+    let after = file.metadata().map_err(fs_error)?;
+    if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+        return Err(PluginError::invalid_params(format!(
+            "{operation} source changed while reading; retry"
         )));
     }
     Ok(bytes)
@@ -814,6 +831,7 @@ mod tests {
                 .map(|tool| tool.name.as_str())
                 .collect::<Vec<_>>(),
             [
+                "document",
                 "read",
                 "glob",
                 "grep",

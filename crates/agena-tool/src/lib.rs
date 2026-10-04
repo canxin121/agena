@@ -826,6 +826,17 @@ fn tool_result_fragment(
                 return Some(format!("loaded · {}", format_bytes(size)));
             }
         }
+        "fs.document" => {
+            if let Some(lines) = object.get("matching_lines").and_then(value_as_u64) {
+                let boundary =
+                    if object.get("truncated").and_then(serde_json::Value::as_bool) == Some(true) {
+                        " · truncated"
+                    } else {
+                        ""
+                    };
+                return Some(format!("{lines} matching lines{boundary}"));
+            }
+        }
         "fs.read_many" => {
             if let Some(files) = object.get("files").and_then(serde_json::Value::as_array) {
                 let count = format_count(files.len(), "files read");
@@ -2330,6 +2341,7 @@ fn tool_action_label(tool_name: &str) -> String {
         "code.search_ast" => "Search AST".to_owned(),
         "code.syntax_tree" => "Inspect syntax tree".to_owned(),
         "code.rewrite_ast" => "Rewrite AST".to_owned(),
+        "fs.document" => "Read document".to_owned(),
         "shell.run" | "shell" => "Run process".to_owned(),
         "shell.list" => "List processes".to_owned(),
         "shell.logs" => "Show process logs".to_owned(),

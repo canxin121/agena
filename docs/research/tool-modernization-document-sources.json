@@ -1,0 +1,23 @@
+{
+  "checked_on": "2026-10-04",
+  "tested_distribution": "markitdown==0.1.8",
+  "python": "3.13",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/main/packages/markitdown/src/markitdown/__main__.py",
+      "bytes": 9164,
+      "sha256": "348b122fa4ea48ed9615f6901bc85464fc7789e57a636acd0253d839612feaeb"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/main/packages/markitdown/src/markitdown/converters/_docx_converter.py",
+      "bytes": 4581,
+      "sha256": "35b6da35a3d2bb940d2c872a092965c249b9f34cb77e3f3dfb76131a110d7302"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/main/packages/markitdown/src/markitdown/_markitdown.py",
+      "bytes": 32924,
+      "sha256": "753481c59531db3a2d31cbb34db6c29fbde7f40481f945883b4ff25b9e130332"
+    }
+  ],
+  "note": "Public source observations use main; executable fixture validation separately pins the installed PyPI release. No hosted conversion was called."
+}

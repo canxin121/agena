@@ -257,6 +257,7 @@ dependencies = [
  "agena-memory-index",
  "agena-plugin-host",
  "agena-plugin-sdk",
+ "agena-process",
  "agena-provider",
  "agena-runtime-config",
  "agena-runtime-contracts",
@@ -277,6 +278,7 @@ dependencies = [
  "notify",
  "portable-atomic",
  "process_control",
+ "regex",
  "reqwest 0.13.4",
  "schemars",
  "serde",
@@ -289,6 +291,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "which",
  "yaml_serde",
 ]
 

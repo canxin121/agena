@@ -64,6 +64,9 @@ fn sample_payload(tool: &str) -> Value {
             "loaded_paths": ["src/main.rs"],
             "truncated": false
         }),
+        "fs.document" => {
+            json!({"path":"report.pdf","backend":"markitdown","total_lines":10,"matching_lines":1,"truncated":false,"lines":[{"line":2,"text":"Fixture needle","text_truncated":false}]})
+        }
         "fs.read_many" => json!({
             "files": [{
                 "path": "src/lib.rs",
@@ -415,6 +418,7 @@ fn sample_input(tool: &str) -> Value {
             json!({"patch": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch"})
         }
         "fs.glob" | "fs.grep" => json!({"pattern": "TODO", "path": "src"}),
+        "fs.document" => json!({"path":"report.pdf","pattern":"revenue"}),
         "code.rewrite_ast" => {
             json!({"path":"src/lib.rs","pattern":"old($A)","replacement":"new($A)"})
         }
@@ -687,7 +691,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
         }
     }
 
-    assert_eq!(checked, 133);
+    assert_eq!(checked, 134);
 }
 
 #[test]
@@ -728,7 +732,7 @@ fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
         }
     }
 
-    assert_eq!(checked, 133);
+    assert_eq!(checked, 134);
 }
 
 #[test]
@@ -763,7 +767,7 @@ fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
         }
     }
 
-    assert_eq!(checked, 133);
+    assert_eq!(checked, 134);
 }
 
 #[test]
@@ -864,7 +868,7 @@ fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
         }
     }
 
-    assert_eq!(checked, 133);
+    assert_eq!(checked, 134);
 }
 
 #[test]

@@ -667,3 +667,41 @@ async fn audit_ast_rules_and_revision_checked_rewrite_through_plugin_dispatch() 
         "console.log(1); function demo() { logger.info(2); }\n"
     );
 }
+
+#[tokio::test]
+#[ignore = "requires AGENA_DOCUMENT_PYTHON with MarkItDown extras and AGENA_DOCUMENT_FIXTURE_DIR; see tools/document_adapter_fixtures.py"]
+async fn audit_local_documents_with_real_markitdown() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("AGENA_DOCUMENT_FIXTURE_DIR").expect("fixture directory"),
+    );
+    let f = Fixture::new().await;
+    for extension in ["pdf", "docx", "pptx", "xlsx"] {
+        let path = format!("test.{extension}");
+        std::fs::copy(directory.join(&path), f.root.path().join(&path)).unwrap();
+        let result = f
+            .call(
+                "fs.document",
+                json!({"path":path,"backend":"markitdown","pattern":"Fixture needle"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["backend"], "markitdown");
+        assert_eq!(result["conversion_complete"], true);
+        assert!(
+            !result["lines"].as_array().unwrap().is_empty(),
+            "{extension}: {result}"
+        );
+        assert_eq!(result["source_sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(result["truncated"], false);
+        if extension != "pdf" {
+            assert!(
+                result["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|line| line["text"].as_str().unwrap().contains("中文")),
+                "Unicode was lost for {extension}"
+            );
+        }
+    }
+}

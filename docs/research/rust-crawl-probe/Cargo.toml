@@ -1,0 +1,19 @@
+[package]
+name = "agena-rust-web-extraction-survey"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crw-extract = { version = "=0.24.1", default-features = false }
+dom_smoothie = "=0.18.2"
+htmd = "=0.5.5"
+trafilatura = { version = "=0.3.0", default-features = false, features = ["markdown"] }
+rs-trafilatura = "=0.2.2"
+serde_json = "1"
+html-to-markdown-rs = "=3.17.0"
+
+[profile.dev]
+debug = 0
+
+# Standalone research probe: do not join the Agena workspace.
+[workspace]

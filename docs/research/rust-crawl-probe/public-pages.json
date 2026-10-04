@@ -1,0 +1,61 @@
+[
+  {
+    "name": "rust-release",
+    "url": "https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/",
+    "facts": [
+      "Rust 1.85.0",
+      "Rust 2024"
+    ],
+    "noise": [],
+    "retrieved_at": "2026-10-04T14:42:31.331456+00:00",
+    "expected_sha256": "84cec6f776471d11f57460d44e489e3de6d546cc23b281e792a22362475d9653",
+    "original_bytes": 42506,
+    "status": 200,
+    "final_url": "https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/"
+  },
+  {
+    "name": "rust-book-zh",
+    "url": "https://kaisery.github.io/trpl-zh-cn/ch04-01-what-is-ownership.html",
+    "facts": [
+      "所有权",
+      "String",
+      "堆"
+    ],
+    "noise": [],
+    "retrieved_at": "2026-10-04T14:42:31.350120+00:00",
+    "expected_sha256": "ff5a6c023edfefd68e21e0ab44ce3744427b69b264f55afb794bc99b8ec74982",
+    "original_bytes": 53823,
+    "status": 200,
+    "final_url": "https://kaisery.github.io/trpl-zh-cn/ch04-01-what-is-ownership.html"
+  },
+  {
+    "name": "tokio-spawn",
+    "url": "https://docs.rs/tokio/latest/tokio/task/fn.spawn.html",
+    "facts": [
+      "pub fn spawn",
+      "Future",
+      "JoinHandle"
+    ],
+    "noise": [],
+    "retrieved_at": "2026-10-04T14:42:31.312046+00:00",
+    "expected_sha256": "4c352c9ba5a7c34b136b449c2057227f8adac8a48dee2a70afc22cb3ff8d42a6",
+    "original_bytes": 37238,
+    "status": 200,
+    "final_url": "https://docs.rs/tokio/latest/tokio/task/fn.spawn.html"
+  },
+  {
+    "name": "mdn-async",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function",
+    "facts": [
+      "async function",
+      "Promise",
+      "await"
+    ],
+    "noise": [],
+    "retrieved_at": "2026-10-04T14:42:32.068829+00:00",
+    "expected_sha256": "0f86ce91c2d2445d0756a55ec1a95ea472e1673464664220d98a296f9637fd9d",
+    "original_bytes": 216187,
+    "status": 200,
+    "final_url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function"
+  }
+]

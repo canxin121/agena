@@ -1,0 +1,1792 @@
+{
+  "as_of": "2026-10-05",
+  "method": "Diagnostic fixtures, five standalone extraction pipelines and Agena production pipeline. Marker matching includes title, Markdown (only escaped underscores normalized), and separate comments. Not a representative quality/performance benchmark. Public fixtures reuse captured HTML; input hashes identify the actual observation.",
+  "inputs": [
+    {
+      "name": "article",
+      "url": null,
+      "html_sha256": "03fb2117d9cf70b91f75479ec1aad362493746acc00abfbed3858bc73f77a8b6",
+      "facts": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "noise": [
+        "NOISE_ADVERTISEMENT"
+      ]
+    },
+    {
+      "name": "documentation",
+      "url": null,
+      "html_sha256": "eb9c91331ab39d59d1386593fadc14f06b18972cd41b76b40b447da11e9b9719",
+      "facts": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "noise": [
+        "NOISE_PROMO"
+      ]
+    },
+    {
+      "name": "discussion",
+      "url": null,
+      "html_sha256": "f242fbf372c18f2e789eaa0e09cf4b87c8702fc3fa60b17b506bd7f104983c56",
+      "facts": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "noise": [
+        "NOISE_BANNER"
+      ]
+    },
+    {
+      "name": "split-forum",
+      "url": "https://fixture.example/thread",
+      "html_sha256": "e0acd51c0e6c652f7f5a5b78f176d05e10ed1282a5cc9885ef84d1e160149c09",
+      "facts": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "noise": [
+        "NOISE_SIDEBAR"
+      ]
+    },
+    {
+      "name": "rust-release",
+      "url": "https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/",
+      "html_sha256": "84cec6f776471d11f57460d44e489e3de6d546cc23b281e792a22362475d9653",
+      "facts": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "noise": []
+    },
+    {
+      "name": "rust-book-zh",
+      "url": "https://kaisery.github.io/trpl-zh-cn/ch04-01-what-is-ownership.html",
+      "html_sha256": "ff5a6c023edfefd68e21e0ab44ce3744427b69b264f55afb794bc99b8ec74982",
+      "facts": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "noise": []
+    },
+    {
+      "name": "tokio-spawn",
+      "url": "https://docs.rs/tokio/latest/tokio/task/fn.spawn.html",
+      "html_sha256": "4c352c9ba5a7c34b136b449c2057227f8adac8a48dee2a70afc22cb3ff8d42a6",
+      "facts": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "noise": []
+    },
+    {
+      "name": "mdn-async",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function",
+      "html_sha256": "0f86ce91c2d2445d0756a55ec1a95ea472e1673464664220d98a296f9637fd9d",
+      "facts": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "noise": []
+    },
+    {
+      "name": "technical-structure",
+      "url": "https://fixture.example/article",
+      "html_sha256": "63f87c6fc115cdae7aa56dd764fbbe8b2604c302b1199bae82410ec13fd6964a",
+      "facts": [
+        "Generic signature",
+        "F: Future + Send + 'static",
+        "中文正文",
+        "MAX_PAGES",
+        "25"
+      ],
+      "noise": [
+        "NAV_NOISE",
+        "FOOTER_NOISE"
+      ]
+    },
+    {
+      "name": "short-main",
+      "url": "https://fixture.example/article",
+      "html_sha256": "1d73a960c44738f8f5305b7480aa10471c031b27a24620ca152655a0b6108c10",
+      "facts": [
+        "Current release: 2.7.1"
+      ],
+      "noise": [
+        "NAV_NOISE",
+        "FOOTER_NOISE"
+      ]
+    },
+    {
+      "name": "relative-links",
+      "url": "https://fixture.example/article",
+      "html_sha256": "7a523297a1c3759036d11700200d5db265326039f107707d4ec70b2eef039f44",
+      "facts": [
+        "upgrade guide",
+        "Architecture diagram"
+      ],
+      "noise": []
+    },
+    {
+      "name": "nested-table",
+      "url": "https://fixture.example/article",
+      "html_sha256": "c6c3ea9e0e3d77d88f207e2243bc55cfb8802457a044d4498e1d1e871c3b62bd",
+      "facts": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "noise": []
+    },
+    {
+      "name": "chinese-forum",
+      "url": "https://fixture.example/article",
+      "html_sha256": "d3b7282a07e91c21347e480940f1f732fb54b02c9bb97680a864f4b3b298743d",
+      "facts": [
+        "问题：必须保留全部回答",
+        "回答一",
+        "设置并发上限为四",
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "noise": []
+    },
+    {
+      "name": "math-and-details",
+      "url": "https://fixture.example/article",
+      "html_sha256": "9a1990fda8ac8fa172f1b49d1a39fe6cb54795a96942597bca6b14f96b90e878",
+      "facts": [
+        "1 / (60 + rank)",
+        "Derivation",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "noise": []
+    }
+  ],
+  "baselines": [
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "fixture": "article",
+      "markdown": "# Harbor survey\n\nThe Helsinki harbor survey was completed on 2026-10-04. The research team measured 42 kilometres of shoreline using a consistent survey method.\n\nThis article explains the field methods and preserves multilingual observations: 中文内容 and coastal measurements. The observations cover the northern and eastern shore with independent checkpoints.\n\nAll measurements describe this controlled fixture and do not represent a real-world survey. The tabulated values were reviewed by two researchers before publication.",
+      "markdown_bytes": 532,
+      "noise_found": [],
+      "title": "Harbor article",
+      "markdown_sha256": "e83a370697bfdc60481b0e06a37b941da5de17291d6c28d6c995e6a3361162fe"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "fixture": "article",
+      "markdown": "## Harbor survey\n\nThe Helsinki harbor survey was completed on 2026-10-04. The research team measured 42 kilometres of shoreline using a consistent survey method.\n\nThis article explains the field methods and preserves multilingual observations: 中文内容 and coastal measurements. The observations cover the northern and eastern shore with independent checkpoints.\n\nAll measurements describe this controlled fixture and do not represent a real-world survey. The tabulated values were reviewed by two researchers before publication.",
+      "markdown_bytes": 533,
+      "noise_found": [],
+      "title": "Harbor article",
+      "markdown_sha256": "66d04bd184085603b531b59b94f562d0adc98cc6970b37a36ad66e908e8b4d41"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "fixture": "article",
+      "markdown": "## Harbor survey\n\nThe Helsinki harbor survey was completed on 2026-10-04. The research team measured 42 kilometres of shoreline using a consistent survey method.\n\nThis article explains the field methods and preserves multilingual observations: 中文内容 and coastal measurements. The observations cover the northern and eastern shore with independent checkpoints.\n\nAll measurements describe this controlled fixture and do not represent a real-world survey. The tabulated values were reviewed by two researchers before publication.\n",
+      "markdown_bytes": 534,
+      "noise_found": [],
+      "title": "Harbor article",
+      "markdown_sha256": "0bb19c5bebeb7e19eb5ba8d1025347aba3362a7f0216a6247c6c8c054fa6f99d"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "fixture": "article",
+      "markdown": "# Harbor survey\n\nThe Helsinki harbor survey was completed on 2026-10-04. The research team measured 42 kilometres of shoreline using a consistent survey method.\n\nThis article explains the field methods and preserves multilingual observations: 中文内容 and coastal measurements. The observations cover the northern and eastern shore with independent checkpoints.\n\nAll measurements describe this controlled fixture and do not represent a real-world survey. The tabulated values were reviewed by two researchers before publication.\n",
+      "markdown_bytes": 533,
+      "noise_found": [],
+      "title": "Harbor survey",
+      "markdown_sha256": "33641391b17dd08c6f58f1ae1167e00fa980d4576615192a18f73f620aae15ef"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "fixture": "article",
+      "markdown": "# Harbor survey\n\nThe Helsinki harbor survey was completed on 2026-10-04. The research team measured 42 kilometres of shoreline using a consistent survey method.\n\nThis article explains the field methods and preserves multilingual observations: 中文内容 and coastal measurements. The observations cover the northern and eastern shore with independent checkpoints.\n\nAll measurements describe this controlled fixture and do not represent a real-world survey. The tabulated values were reviewed by two researchers before publication.\n",
+      "markdown_bytes": 533,
+      "noise_found": [],
+      "title": "Harbor article",
+      "markdown_sha256": "33641391b17dd08c6f58f1ae1167e00fa980d4576615192a18f73f620aae15ef"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "comments": "",
+      "facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "fixture": "documentation",
+      "markdown": "# Cache API guide\n\nThe cache stores successful reads until the configured lifetime ends. Set CACHE\\_TTL to 300 seconds for this example. Failures are never inserted into the cache.\n\n```\nlet result = cache.get(\"key\");\n```\n\n## Request options\n\n| Option       | Meaning              |\n| ------------ | -------------------- |\n| retry budget | Two attempts at most |\n\nWhen the request times out, the client reports the real status and the caller decides whether to retry. This preserves accurate diagnostics for repeated failures and prevents silent extra requests.",
+      "markdown_bytes": 560,
+      "noise_found": [],
+      "title": "Cache API guide",
+      "markdown_sha256": "ff51dc57c6b2594e94b0f1c0846cb256b84e579ad8c4728b3aa50ab1c9854433"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "comments": "",
+      "facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "fixture": "documentation",
+      "markdown": "The cache stores successful reads until the configured lifetime ends. Set CACHE\\_TTL to 300 seconds for this example. Failures are never inserted into the cache.\n\n```\nlet result = cache.get(\"key\");\n```\n\n## Request options\n\n| Option       | Meaning              |\n| ------------ | -------------------- |\n| retry budget | Two attempts at most |\n\nWhen the request times out, the client reports the real status and the caller decides whether to retry. This preserves accurate diagnostics for repeated failures and prevents silent extra requests.",
+      "markdown_bytes": 541,
+      "noise_found": [],
+      "title": "Cache API guide",
+      "markdown_sha256": "a5a432bdb2dc4961e4133451cfc09032c9f81e28992b27fcf2fd212e1a29240e"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "comments": "",
+      "facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "fixture": "documentation",
+      "markdown": "The cache stores successful reads until the configured lifetime ends. Set CACHE_TTL to 300 seconds for this example. Failures are never inserted into the cache.\n\n```\nlet result = cache.get(\"key\");\n```\n\n## Request options\n\n| Option       | Meaning              |\n| ------------ | -------------------- |\n| retry budget | Two attempts at most |\n\nWhen the request times out, the client reports the real status and the caller decides whether to retry. This preserves accurate diagnostics for repeated failures and prevents silent extra requests.\n",
+      "markdown_bytes": 541,
+      "noise_found": [],
+      "title": "Cache API guide",
+      "markdown_sha256": "5a2400d3e8f0249e898215dcf727990b4d5a84dd5cc9c849b58118aecd6de899"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "comments": "",
+      "facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "fixture": "documentation",
+      "markdown": "# Cache API guide\n\nThe cache stores successful reads until the configured lifetime ends. Set CACHE\\_TTL to 300 seconds for this example. Failures are never inserted into the cache.\n\n`let result = cache.get(\"key\");`\n\n## Request options\n\n| Option       | Meaning              |\n| ------------ | -------------------- |\n| retry budget | Two attempts at most |\n\nWhen the request times out, the client reports the real status and the caller decides whether to retry. This preserves accurate diagnostics for repeated failures and prevents silent extra requests.\n",
+      "markdown_bytes": 555,
+      "noise_found": [],
+      "title": "Cache API guide",
+      "markdown_sha256": "30a2f922ceecf916a43feef55a6a7695bc48e96a432c4bc865004e845a1875a1"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "comments": "",
+      "facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "fixture": "documentation",
+      "markdown": "# Cache API guide\n\nThe cache stores successful reads until the configured lifetime ends. Set CACHE\\_TTL to 300 seconds for this example. Failures are never inserted into the cache.\n\n```\nlet result = cache.get(\"key\");\n```\n\n## Request options\n\n| Option       | Meaning              |\n| ------------ | -------------------- |\n| retry budget | Two attempts at most |\n\nWhen the request times out, the client reports the real status and the caller decides whether to retry. This preserves accurate diagnostics for repeated failures and prevents silent extra requests.\n",
+      "markdown_bytes": 561,
+      "noise_found": [],
+      "title": "Cache API guide",
+      "markdown_sha256": "fffc3da16e1391860e776d55687b143e36273626fce649581bd6d1714a648460"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "fixture": "discussion",
+      "markdown": "# Unicode discussion\n\n## QUESTION\\_MARKER\n\nHow should the service handle UTF-8 text that contains Chinese characters and emoji? The stream might end in the middle of a multi-byte character, so the response needs a visible truncation indicator.\n\n## ANSWER\\_MARKER\n\nDecode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error.",
+      "markdown_bytes": 457,
+      "noise_found": [],
+      "title": "Unicode discussion",
+      "markdown_sha256": "315def2b3cdcb0d5a84c6e2688f3f40a00ba1508ff1745d8fbcd2d12b66bcafe"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "fixture": "discussion",
+      "markdown": "## QUESTION\\_MARKER\n\nHow should the service handle UTF-8 text that contains Chinese characters and emoji? The stream might end in the middle of a multi-byte character, so the response needs a visible truncation indicator.\n\n## ANSWER\\_MARKER\n\nDecode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error.",
+      "markdown_bytes": 435,
+      "noise_found": [],
+      "title": "Unicode discussion",
+      "markdown_sha256": "5ca268aad8aa3a7deb5ca71de68d96d4ee91c6fe72a7c602d8b290fd0afeecd4"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "fixture": "discussion",
+      "markdown": "## QUESTION_MARKER\n\nHow should the service handle UTF-8 text that contains Chinese characters and emoji? The stream might end in the middle of a multi-byte character, so the response needs a visible truncation indicator.\n\n## ANSWER_MARKER\n\nDecode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error.\n",
+      "markdown_bytes": 434,
+      "noise_found": [],
+      "title": "Unicode discussion",
+      "markdown_sha256": "7803064b7958e0aaa939bb788be1f16ebedd63e7cb300b056e7975f21004a777"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "comments": "ANSWER_MARKER Decode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error.",
+      "facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "fixture": "discussion",
+      "markdown": "QUESTION\\_MARKERHow should the service handle UTF-8 text that contains Chinese characters and emoji? The stream might end in the middle of a multi-byte character, so the response needs a visible truncation indicator.ANSWER\\_MARKERDecode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error.\n",
+      "markdown_bytes": 424,
+      "noise_found": [],
+      "title": "Unicode discussion",
+      "markdown_sha256": "62ca629ad35c8445d466d8aa62a1d82867c24fe4595dcec146f0c35f6a358dcc"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "QUESTION_MARKER",
+        "UTF-8"
+      ],
+      "comments": "ANSWER_MARKER\n\nDecode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error.",
+      "facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "fixture": "discussion",
+      "markdown": "## QUESTION\\_MARKER\n\nHow should the service handle UTF-8 text that contains Chinese characters and emoji? The stream might end in the middle of a multi-byte character, so the response needs a visible truncation indicator.\n",
+      "markdown_bytes": 222,
+      "noise_found": [],
+      "title": "Unicode discussion",
+      "markdown_sha256": "ad6a70658455139e16bcc92cf857d9ba7345e07f2336b70c59d555f26e37ad3e"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "ANSWER_TWO"
+      ],
+      "comments": "",
+      "facts_found": [
+        "ANSWER_TWO"
+      ],
+      "fixture": "split-forum",
+      "markdown": "## ANSWER\\_TWO\n\nThe second response explains retries: retain the original request deadline, count every attempted request, and surface a visible partial-result indicator. A caller should inspect the actual state before repeating a timed-out mutation.",
+      "markdown_bytes": 250,
+      "noise_found": [],
+      "title": "Cache failure discussion",
+      "markdown_sha256": "c2629992a7321bf3d2132c479ab7775ad871a4f837f7385a30d2984e5f1b168b"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "comments": "",
+      "facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "fixture": "split-forum",
+      "markdown": "## QUESTION\\_SPLIT\n\nHow can a cache distinguish an unavailable remote service from an empty lookup? It is important that Unicode parameters and structured diagnostics remain available to the caller when the backend response is incomplete.\n\n## ANSWER\\_ONE\n\nThe first response explains the protocol: a cache miss is a successful query without a stored result, while an unavailable remote service is an execution error. Keep 中文参数 intact and report the error code rather than inventing an empty success.\n\n```\ncache.invalidate(\"key\");\n```\n\n## ANSWER\\_TWO\n\nThe second response explains retries: retain the original request deadline, count every attempted request, and surface a visible partial-result indicator. A caller should inspect the actual state before repeating a timed-out mutation.",
+      "markdown_bytes": 793,
+      "noise_found": [],
+      "title": "Cache failure discussion",
+      "markdown_sha256": "09f3f33f3be027c6f0d57cd75cecfe9aa5ba6656c2fc2de23f254de70cd928d3"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "comments": "",
+      "facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "fixture": "split-forum",
+      "markdown": "## QUESTION_SPLIT\n\nHow can a cache distinguish an unavailable remote service from an empty lookup? It is important that Unicode parameters and structured diagnostics remain available to the caller when the backend response is incomplete.\n\n## ANSWER_ONE\n\nThe first response explains the protocol: a cache miss is a successful query without a stored result, while an unavailable remote service is an execution error. Keep 中文参数 intact and report the error code rather than inventing an empty success.\n\n```\ncache.invalidate(\"key\");\n```\n\n## ANSWER_TWO\n\nThe second response explains retries: retain the original request deadline, count every attempted request, and surface a visible partial-result indicator. A caller should inspect the actual state before repeating a timed-out mutation.\n",
+      "markdown_bytes": 791,
+      "noise_found": [],
+      "title": "Cache failure discussion",
+      "markdown_sha256": "293e0397139d81eb2a9f3998345b04791fd83185844f121fee95bfc8ca39ce46"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "comments": "",
+      "facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "fixture": "split-forum",
+      "markdown": "How can a cache distinguish an unavailable remote service from an empty lookup? It is important that Unicode parameters and structured diagnostics remain available to the caller when the backend response is incomplete.\n\n# QUESTION\\_SPLIT\n\nHow can a cache distinguish an unavailable remote service from an empty lookup? It is important that Unicode parameters and structured diagnostics remain available to the caller when the backend response is incomplete.\n\n## ANSWER\\_ONE\n\nThe first response explains the protocol: a cache miss is a successful query without a stored result, while an unavailable remote service is an execution error. Keep 中文参数 intact and report the error code rather than inventing an empty success.\n\n`cache.invalidate(\"key\");`\n\n## ANSWER\\_TWO\n\nThe second response explains retries: retain the original request deadline, count every attempted request, and surface a visible partial-result indicator. A caller should inspect the actual state before repeating a timed-out mutation.\n",
+      "markdown_bytes": 1007,
+      "noise_found": [],
+      "title": "QUESTION_SPLIT",
+      "markdown_sha256": "f09d47c77c75dbd2216c3736eb139a29bcd0a325c4b1aee8d8b1d48e7233f5eb"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "comments": "",
+      "facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "fixture": "split-forum",
+      "markdown": "# QUESTION\\_SPLIT\n\nHow can a cache distinguish an unavailable remote service from an empty lookup? It is important that Unicode parameters and structured diagnostics remain available to the caller when the backend response is incomplete.\n\n## ANSWER\\_ONE\n\nThe first response explains the protocol: a cache miss is a successful query without a stored result, while an unavailable remote service is an execution error. Keep 中文参数 intact and report the error code rather than inventing an empty success.\n\n```\ncache.invalidate(\"key\");\n```\n\n## ANSWER\\_TWO\n\nThe second response explains retries: retain the original request deadline, count every attempted request, and surface a visible partial-result indicator. A caller should inspect the actual state before repeating a timed-out mutation.\n",
+      "markdown_bytes": 793,
+      "noise_found": [],
+      "title": "Cache failure discussion",
+      "markdown_sha256": "624dcf7d83a86665bbc6727fc0891488d4d8f9138e44aa7a6d9ca047df2cd1a0"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "fixture": "rust-release",
+      "markdown_bytes": 16823,
+      "noise_found": [],
+      "title": "Announcing Rust 1.85.0 and Rust 2024 | Rust Blog",
+      "markdown_sha256": "ecb9c19214ff1844c76fe775d885858e164034ea90e93820574b9de503a55f64"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "fixture": "rust-release",
+      "markdown_bytes": 16834,
+      "noise_found": [],
+      "title": "Announcing Rust 1.85.0 and Rust 2024 | Rust Blog",
+      "markdown_sha256": "fcaeedb98f659b15fa71bdcdb523df10da840d32ee35ec8d6eb8c7ce9f180578"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "fixture": "rust-release",
+      "markdown_bytes": 16651,
+      "noise_found": [],
+      "title": "Announcing Rust 1.85.0 and Rust 2024 | Rust Blog",
+      "markdown_sha256": "88b94e8806d0e437a68058cbb98619f3aa96631b466f3d2c8164390fac53ae17"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "fixture": "rust-release",
+      "markdown_bytes": 13781,
+      "noise_found": [],
+      "title": "Announcing Rust 1.85.0 and Rust 2024 | Rust Blog",
+      "markdown_sha256": "283e534d2f7420c7cb2d5b9a64d7b890ac058d333af766f060fd48adde1ae0aa"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "fixture": "rust-release",
+      "markdown_bytes": 16863,
+      "noise_found": [],
+      "title": "Announcing Rust 1.85.0 and Rust 2024",
+      "markdown_sha256": "9528a8c9d39d233d0376bfec96b4456b64adbf07a4586b4f9a3c17d8ab314e7b"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "fixture": "rust-book-zh",
+      "markdown_bytes": 25820,
+      "noise_found": [],
+      "title": "什么是所有权？ - Rust 程序设计语言 简体中文版",
+      "markdown_sha256": "7c69b2602305c63176fadc19da366544f52d62780f55ee7d66db11baec1292f5"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "fixture": "rust-book-zh",
+      "markdown_bytes": 26123,
+      "noise_found": [],
+      "title": "什么是所有权？ - Rust 程序设计语言 简体中文版",
+      "markdown_sha256": "4c8a5d6c35bb3c853a4044f20974c0865147f8b8560969f97218780afb518d21"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "fixture": "rust-book-zh",
+      "markdown_bytes": 26137,
+      "noise_found": [],
+      "title": "什么是所有权？ - Rust 程序设计语言 简体中文版",
+      "markdown_sha256": "3b381d571ceefc5c5b7375e4ba9ffb618902ef2b94e0a1055eadeb7301ac25ef"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "fixture": "rust-book-zh",
+      "markdown_bytes": 23045,
+      "noise_found": [],
+      "title": "Rust 程序设计语言 简体中文版",
+      "markdown_sha256": "8bf0b6fd5dbc13c7b89a429a5e83a87c465b75d68283470528ed40135b335167"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "fixture": "rust-book-zh",
+      "markdown_bytes": 24101,
+      "noise_found": [],
+      "title": "Rust 程序设计语言 简体中文版",
+      "markdown_sha256": "0b01343d4d32f6ef37ffb8de0b951b695af553960695875955225ed7536f19fb"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "fixture": "tokio-spawn",
+      "markdown_bytes": 4980,
+      "noise_found": [],
+      "title": "spawn in tokio::task - Rust",
+      "markdown_sha256": "f6c34f78775bad552044bfeec14cf50dd9108aca0003c97bc1d42e5dc1670eaf"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "fixture": "tokio-spawn",
+      "markdown_bytes": 5405,
+      "noise_found": [],
+      "title": "spawn in tokio::task - Rust",
+      "markdown_sha256": "3647409f1328f8bacee83edec871e1db1d03848284db11cda14c76e162c92bef"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "fixture": "tokio-spawn",
+      "markdown_bytes": 5412,
+      "noise_found": [],
+      "title": "spawn in tokio::task - Rust",
+      "markdown_sha256": "2c8ab4ea15381398b201f3cf7b4bedb62cdf2001f36eda0da1324c991ff4ffba"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "pub fn spawn",
+        "JoinHandle"
+      ],
+      "facts_found": [
+        "pub fn spawn",
+        "JoinHandle"
+      ],
+      "fixture": "tokio-spawn",
+      "markdown_bytes": 3753,
+      "noise_found": [],
+      "title": "Function spawn Copy item path",
+      "markdown_sha256": "e4db2e37bfcb4a6bd8389f63b91c2ce399d5482a10a3a2141a70fa312a0a0180"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "fixture": "tokio-spawn",
+      "markdown_bytes": 3982,
+      "noise_found": [],
+      "title": "spawn in tokio::task",
+      "markdown_sha256": "f36da915d7b76e6c68fe7de77682c1d3b0db5f4a7fa3204dbfa6387f405453fa"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "fixture": "mdn-async",
+      "markdown_bytes": 16461,
+      "noise_found": [],
+      "title": "async function - JavaScript | MDN",
+      "markdown_sha256": "6cbfee1edae1cf78182f31c4fbbfb818949eb82cb394fc6804c6cd88abf09cbe"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "fixture": "mdn-async",
+      "markdown_bytes": 14877,
+      "noise_found": [],
+      "title": "async function - JavaScript | MDN",
+      "markdown_sha256": "30d873f31d71c749c443f19e8eba98e2c1d63ef22afb1d1f7d2fc8430f0d9c7b"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "fixture": "mdn-async",
+      "markdown_bytes": 14873,
+      "noise_found": [],
+      "title": "async function - JavaScript | MDN",
+      "markdown_sha256": "2a0ecac56f1e30dc488f2055c0025f1cfd8134987be189d4caeaebb3fdadd22b"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "fixture": "mdn-async",
+      "markdown_bytes": 13362,
+      "noise_found": [],
+      "title": "async function",
+      "markdown_sha256": "e10a3e5c7088fabecbf453c20e16caec20d3b1e80d3b844d226c4c8403602342"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "fixture": "mdn-async",
+      "markdown_bytes": 14655,
+      "noise_found": [],
+      "title": "async function - JavaScript",
+      "markdown_sha256": "21a053445c0e77d94d03802e209013b991b8d8b8016959966650849d8f7c9c7f"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "Generic signature",
+        "F: Future + Send + 'static",
+        "中文正文",
+        "MAX_PAGES",
+        "25"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Generic signature",
+        "F: Future + Send + 'static",
+        "中文正文",
+        "MAX_PAGES",
+        "25"
+      ],
+      "fixture": "technical-structure",
+      "markdown": "# Client guide\n\n## Generic signature\n\n```rust\npub fn spawn<F>(future: F)\nwhere F: Future + Send + 'static {\n    let message = \"中文正文\";\n}\n```\n\n## Runtime limits\n\n| Option     | Value |\n| ---------- | ----- |\n| MAX\\_PAGES | 25    |\n\nKeep both sections for API compatibility.",
+      "markdown_bytes": 279,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "5289c879fe5a86fb3c2434f3e33a8a39d84e6f140e25b63450a85fe68b777731"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "Generic signature",
+        "F: Future + Send + 'static",
+        "中文正文",
+        "MAX_PAGES",
+        "25"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Generic signature",
+        "F: Future + Send + 'static",
+        "中文正文",
+        "MAX_PAGES",
+        "25"
+      ],
+      "fixture": "technical-structure",
+      "markdown": "## Client guide\n\n## Generic signature\n\n```\npub fn spawn<F>(future: F)\nwhere F: Future + Send + 'static {\n    let message = \"中文正文\";\n}\n```\n\n## Runtime limits\n\n| Option     | Value |\n| ---------- | ----- |\n| MAX\\_PAGES | 25    |\n\nKeep both sections for API compatibility.",
+      "markdown_bytes": 276,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "1334875cfd1158469f38cb96da401db4f55f6b5535092ce75178015246061788"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "Generic signature",
+        "F: Future + Send + 'static",
+        "中文正文",
+        "MAX_PAGES",
+        "25"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Generic signature",
+        "F: Future + Send + 'static",
+        "中文正文",
+        "MAX_PAGES",
+        "25"
+      ],
+      "fixture": "technical-structure",
+      "markdown": "## Client guide\n\n## Generic signature\n\n```\npub fn spawn<F>(future: F)\nwhere F: Future + Send + 'static {\n    let message = \"中文正文\";\n}\n```\n\n## Runtime limits\n\n| Option    | Value |\n| --------- | ----- |\n| MAX_PAGES | 25    |\n\nKeep both sections for API compatibility.\n",
+      "markdown_bytes": 274,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "41f78d23dc6f6342fe587e1e44eab9d178ebecb4490678e744ce7359c8e1a8bb"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "F: Future + Send + 'static",
+        "中文正文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "F: Future + Send + 'static",
+        "中文正文"
+      ],
+      "fixture": "technical-structure",
+      "markdown": "pub fn spawn\\<F>(future: F) where F: Future + Send + 'static { let message = \"中文正文\"; }\n\nKeep both sections for API compatibility.\n",
+      "markdown_bytes": 138,
+      "noise_found": [],
+      "title": "Client guide",
+      "markdown_sha256": "b78d4a8eb34ef6c9a8cf14a44406b29524174c733fb90026e8158df79847c322"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "F: Future + Send + 'static",
+        "中文正文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "F: Future + Send + 'static",
+        "中文正文"
+      ],
+      "fixture": "technical-structure",
+      "markdown": "pub fn spawn\\<F>(future: F)\nwhere F: Future + Send + 'static {\n    let message = \"中文正文\";\n}\n\nKeep both sections for API compatibility.\n",
+      "markdown_bytes": 142,
+      "noise_found": [],
+      "title": "Client guide",
+      "markdown_sha256": "f14eadb3d6f9fad2587a26bba6a0286efcffadba45cd0296288cbdabd18a4a38"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "fixture": "short-main",
+      "markdown": "# Version\n\nCurrent release: 2.7.1",
+      "markdown_bytes": 33,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "6b4aeacc0dc3afb94f42b3eaa44c1edebf98b4f014f28fcef2f4edc0484ebd1a"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "fixture": "short-main",
+      "markdown": "NAV\\_NOISE\n\n## Version\n\nCurrent release: 2.7.1",
+      "markdown_bytes": 46,
+      "noise_found": [
+        "NAV_NOISE"
+      ],
+      "title": "",
+      "markdown_sha256": "2622dff4002515d6f4f5cd558746cddbfed33103b5a6f2543a1b6a4cda82c095"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "fixture": "short-main",
+      "markdown": "## Version\n\nCurrent release: 2.7.1\n",
+      "markdown_bytes": 35,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "c01b2765661aa4b4e88745e2eb8719cfac9c9d37ca68049cce4d0452fa31b3eb"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "fixture": "short-main",
+      "markdown": "Current release: 2.7.1\n\nNAV\\_NOISEVersionCurrent release: 2.7.1\n",
+      "markdown_bytes": 64,
+      "noise_found": [
+        "NAV_NOISE"
+      ],
+      "title": "Version",
+      "markdown_sha256": "d83b99f0ab5035ff2bcddf1c1dd305516ea034e32080797cc789fd9329317941"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "fixture": "short-main",
+      "markdown": "Current release: 2.7.1\n",
+      "markdown_bytes": 23,
+      "noise_found": [],
+      "title": "Version",
+      "markdown_sha256": "1dc3a2fb028aa46bb42cdba7f5fe8dab3495fdd80c0b57dc355912176d33989c"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "upgrade guide",
+        "Architecture diagram"
+      ],
+      "comments": "",
+      "facts_found": [
+        "upgrade guide",
+        "Architecture diagram"
+      ],
+      "fixture": "relative-links",
+      "markdown": "# Migration\n\nRead the [upgrade guide](../guide?a=1&b=2) before applying changes. The rollout requires two steps and a compatibility check.\n\n![Architecture diagram](diagrams/start.svg)",
+      "markdown_bytes": 183,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "d102c550ba945014232cf636ff5072e2b8d4075430c4a3a136f1dbb4a9182f8c"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "upgrade guide",
+        "Architecture diagram"
+      ],
+      "comments": "",
+      "facts_found": [
+        "upgrade guide",
+        "Architecture diagram"
+      ],
+      "fixture": "relative-links",
+      "markdown": "## Migration\n\nRead the [upgrade guide](https://docs.example.com/guide?a=1&b=2) before applying changes. The rollout requires two steps and a compatibility check.\n\n![Architecture diagram](https://docs.example.com/v2/diagrams/start.svg)",
+      "markdown_bytes": 234,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "503b6d8b7f49cff71e7514aed9a27b30501114598baf40b8135e958347e9cc8d"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "upgrade guide",
+        "Architecture diagram"
+      ],
+      "comments": "",
+      "facts_found": [
+        "upgrade guide",
+        "Architecture diagram"
+      ],
+      "fixture": "relative-links",
+      "markdown": "## Migration\n\nRead the [upgrade guide](https://docs.example.com/guide?a=1&b=2) before applying changes. The rollout requires two steps and a compatibility check.\n\n![Architecture diagram](https://docs.example.com/v2/diagrams/start.svg)\n",
+      "markdown_bytes": 235,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "9ed122599bd38c7c5087a26c46712b0dc65b9e22fa753d7c4b59d86783547982"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "upgrade guide"
+      ],
+      "comments": "",
+      "facts_found": [
+        "upgrade guide"
+      ],
+      "fixture": "relative-links",
+      "markdown": "Read the upgrade guide before applying changes. The rollout requires two steps and a compatibility check.\n",
+      "markdown_bytes": 106,
+      "noise_found": [],
+      "title": "Migration",
+      "markdown_sha256": "a2edf1a28ffc7791ea2c9bf5a1256fef5d82877bf8024cf14a969c11dd228964"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "upgrade guide"
+      ],
+      "comments": "",
+      "facts_found": [
+        "upgrade guide"
+      ],
+      "fixture": "relative-links",
+      "markdown": "Read the upgrade guide before applying changes. The rollout requires two steps and a compatibility check.\n",
+      "markdown_bytes": 106,
+      "noise_found": [],
+      "title": "Migration",
+      "markdown_sha256": "a2edf1a28ffc7791ea2c9bf5a1256fef5d82877bf8024cf14a969c11dd228964"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "fixture": "nested-table",
+      "markdown": "# HTTP status matrix\n\n| Region    | Details                  |\n| --------- | ------------------------ |\n| Singapore | retry\\_after  60 seconds |\n\nOnly retry requests that are safe to repeat; this nested table contains the per-region policy.",
+      "markdown_bytes": 240,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "9585316025126e505d6da03d6e240b5968eef5fe3a2de4b11b22fe0fcb2176e7"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "fixture": "nested-table",
+      "markdown": "## HTTP status matrix\n\n| Region    | Details                  |\n| --------- | ------------------------ |\n| Singapore | retry\\_after  60 seconds |\n\nOnly retry requests that are safe to repeat; this nested table contains the per-region policy.",
+      "markdown_bytes": 241,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "2c430d5e2d9e273d1554a9e71b04d29daa81e3f8d369ad5f076e5e4a578a050c"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "fixture": "nested-table",
+      "markdown": "## HTTP status matrix\n\n| Region    | Details               |\n| --------- | --------------------- |\n| Singapore | \\| retry_after \\| 60 seconds \\| \\| ----------- \\| ---------- \\| |\n\nOnly retry requests that are safe to repeat; this nested table contains the per-region policy.\n",
+      "markdown_bytes": 275,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "dc53c66df87eba936be370df74a94e03590a2ced500d7c8f9fccbcf79b5fac86"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "comments": "",
+      "facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "fixture": "nested-table",
+      "markdown": "Only retry requests that are safe to repeat; this nested table contains the per-region policy.\n\nHTTP status matrix Region Details Singapore retry\\_after 60 seconds Only retry requests that are safe to repeat; this nested table contains the per-region policy.\n",
+      "markdown_bytes": 259,
+      "noise_found": [],
+      "title": "HTTP status matrix",
+      "markdown_sha256": "bdeaba8916f43a6c9502f3528e06cf06674d6c90164d5eeaae16d8403c5cb388"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [],
+      "comments": "",
+      "facts_found": [],
+      "fixture": "nested-table",
+      "markdown": "Only retry requests that are safe to repeat; this nested table contains the per-region policy.\n",
+      "markdown_bytes": 95,
+      "noise_found": [],
+      "title": "HTTP status matrix",
+      "markdown_sha256": "9b2c1f5168dacf0f23e058404e56e6b2be2673ae5f451744b06f0861eaadfb6c"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "问题：必须保留全部回答",
+        "回答一",
+        "设置并发上限为四",
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "问题：必须保留全部回答",
+        "回答一",
+        "设置并发上限为四",
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "fixture": "chinese-forum",
+      "markdown": "# 如何限制抓取并发？\n\n问题：必须保留全部回答，不能只选最长的一篇。\n\n## 回答一\n\n设置并发上限为四，同时保留主机级限流。\n\n## 回答二\n\n每个请求都应有截止时间，并在调用取消时回收浏览器上下文。",
+      "markdown_bytes": 270,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "8e68c5026f9934158a0280effbe5acffb8b9469611b24035c5d23c3a162d8eb5"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "fixture": "chinese-forum",
+      "markdown": "## 回答二\n\n每个请求都应有截止时间，并在调用取消时回收浏览器上下文。",
+      "markdown_bytes": 98,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "a97c20d7fd47d6d5aad00f5dae33933363ad29f43576718a00e3725b084de57d"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "fixture": "chinese-forum",
+      "markdown": "## 回答二\n\n每个请求都应有截止时间，并在调用取消时回收浏览器上下文。\n",
+      "markdown_bytes": 99,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "6dc5a34ae1f334e6d6eca15745841ada42b7f1e6f002184a972dee7051255c3f"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "问题：必须保留全部回答",
+        "回答一",
+        "设置并发上限为四",
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "问题：必须保留全部回答",
+        "回答一",
+        "设置并发上限为四",
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "fixture": "chinese-forum",
+      "markdown": "问题：必须保留全部回答，不能只选最长的一篇。\n\n设置并发上限为四，同时保留主机级限流。\n\n每个请求都应有截止时间，并在调用取消时回收浏览器上下文。\n\n如何限制抓取并发？问题：必须保留全部回答，不能只选最长的一篇。回答一设置并发上限为四，同时保留主机级限流。回答二每个请求都应有截止时间，并在调用取消时回收浏览器上下文。\n",
+      "markdown_bytes": 466,
+      "noise_found": [],
+      "title": "如何限制抓取并发？",
+      "markdown_sha256": "e9b5325c3edc2197876eb86333708c58539c1a9d72e8029597c4e3b3a1b3273d"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "问题：必须保留全部回答",
+        "设置并发上限为四",
+        "回收浏览器上下文"
+      ],
+      "comments": "",
+      "facts_found": [
+        "问题：必须保留全部回答",
+        "设置并发上限为四",
+        "回收浏览器上下文"
+      ],
+      "fixture": "chinese-forum",
+      "markdown": "问题：必须保留全部回答，不能只选最长的一篇。\n\n设置并发上限为四，同时保留主机级限流。\n\n每个请求都应有截止时间，并在调用取消时回收浏览器上下文。\n",
+      "markdown_bytes": 212,
+      "noise_found": [],
+      "title": "如何限制抓取并发？",
+      "markdown_sha256": "faf4a3e54928c51cc636b944014bd244caeead7a6922acfb0f716831b1c55923"
+    },
+    {
+      "backend": "agena_crw_0.24.1",
+      "body_facts_found": [
+        "1 / (60 + rank)",
+        "Derivation",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "comments": "",
+      "facts_found": [
+        "1 / (60 + rank)",
+        "Derivation",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "fixture": "math-and-details",
+      "markdown": "# Algorithm\n\nThe reciprocal score is x1 / (60 + rank).\n\nDerivation\n\nEach source contributes at most once.\n\n````\nliteral = \"```\"\n    indented_code = True\n````",
+      "markdown_bytes": 157,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "efc0668b4e2574bb684bec849f1570710fbb274bc727f31d34efb42bf4c2ec04"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_htmd",
+      "body_facts_found": [
+        "1 / (60 + rank)",
+        "Derivation",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "comments": "",
+      "facts_found": [
+        "1 / (60 + rank)",
+        "Derivation",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "fixture": "math-and-details",
+      "markdown": "## Algorithm\n\nThe reciprocal score is x1 / (60 + rank).\n\nDerivation\n\nEach source contributes at most once.\n\n````\nliteral = \"```\"\n    indented_code = True\n````",
+      "markdown_bytes": 158,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "d6efc1168d6339c2698fbf84fb01740b5c65a16fc091144f6635a10cd8ba5c98"
+    },
+    {
+      "backend": "dom_smoothie_0.18.2_xberg_3.17.0",
+      "body_facts_found": [
+        "1 / (60 + rank)",
+        "Derivation",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "comments": "",
+      "facts_found": [
+        "1 / (60 + rank)",
+        "Derivation",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "fixture": "math-and-details",
+      "markdown": "## Algorithm\n\nThe reciprocal score is <!-- MathML: <math><semantics><mrow><mi>x</mi></mrow><annotation encoding=\"application/x-tex\">1 / (60 + rank)</annotation></semantics></math> --> x1 / (60 + rank).\n\n**Derivation**\n\nEach source contributes at most once.\n\n````\nliteral = \"```\"\n    indented_code = True\n````\n",
+      "markdown_bytes": 309,
+      "noise_found": [],
+      "title": "",
+      "markdown_sha256": "df219e5788889abedfc72c4568cf18435a921395acc66ed26380179891ea2065"
+    },
+    {
+      "backend": "trafilatura_0.3.0",
+      "body_facts_found": [
+        "1 / (60 + rank)",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "comments": "",
+      "facts_found": [
+        "1 / (60 + rank)",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "fixture": "math-and-details",
+      "markdown": "The reciprocal score is x1 / (60 + rank).\n\nEach source contributes at most once.\n\nliteral = \"\\`\\`\\`\" indented\\_code = True\n",
+      "markdown_bytes": 123,
+      "noise_found": [],
+      "title": "Algorithm",
+      "markdown_sha256": "2c2c8de7f9db2d3ce7a75f292c7c92d81438f6e2f4613e399674ccf348ef1dae"
+    },
+    {
+      "backend": "rs_trafilatura_0.2.2",
+      "body_facts_found": [
+        "1 / (60 + rank)",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "comments": "",
+      "facts_found": [
+        "1 / (60 + rank)",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "fixture": "math-and-details",
+      "markdown": "The reciprocal score is x1 / (60 + rank).\n\nEach source contributes at most once.\n\nliteral = \"\\`\\`\\`\"\n    indented\\_code = True\n",
+      "markdown_bytes": 127,
+      "noise_found": [],
+      "title": "Algorithm",
+      "markdown_sha256": "b53a160af637f88238c47ec93ea3a00ef9bc551d3f91887171f52a5dfb28b5a9"
+    }
+  ],
+  "production": [
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "Helsinki",
+        "42 kilometres",
+        "2026-10-04",
+        "中文"
+      ],
+      "fixture": "article",
+      "noise_found": [],
+      "title": "Harbor article",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 532,
+      "markdown_sha256": "e83a370697bfdc60481b0e06a37b941da5de17291d6c28d6c995e6a3361162fe",
+      "markdown": "# Harbor survey\n\nThe Helsinki harbor survey was completed on 2026-10-04. The research team measured 42 kilometres of shoreline using a consistent survey method.\n\nThis article explains the field methods and preserves multilingual observations: 中文内容 and coastal measurements. The observations cover the northern and eastern shore with independent checkpoints.\n\nAll measurements describe this controlled fixture and do not represent a real-world survey. The tabulated values were reviewed by two researchers before publication."
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "CACHE_TTL",
+        "300",
+        "cache.get",
+        "retry budget"
+      ],
+      "fixture": "documentation",
+      "noise_found": [],
+      "title": "Cache API guide",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 560,
+      "markdown_sha256": "ff51dc57c6b2594e94b0f1c0846cb256b84e579ad8c4728b3aa50ab1c9854433",
+      "markdown": "# Cache API guide\n\nThe cache stores successful reads until the configured lifetime ends. Set CACHE\\_TTL to 300 seconds for this example. Failures are never inserted into the cache.\n\n```\nlet result = cache.get(\"key\");\n```\n\n## Request options\n\n| Option       | Meaning              |\n| ------------ | -------------------- |\n| retry budget | Two attempts at most |\n\nWhen the request times out, the client reports the real status and the caller decides whether to retry. This preserves accurate diagnostics for repeated failures and prevents silent extra requests."
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "QUESTION_MARKER",
+        "ANSWER_MARKER",
+        "UTF-8",
+        "中文"
+      ],
+      "fixture": "discussion",
+      "noise_found": [],
+      "title": "Unicode discussion",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 457,
+      "markdown_sha256": "315def2b3cdcb0d5a84c6e2688f3f40a00ba1508ff1745d8fbcd2d12b66bcafe",
+      "markdown": "# Unicode discussion\n\n## QUESTION\\_MARKER\n\nHow should the service handle UTF-8 text that contains Chinese characters and emoji? The stream might end in the middle of a multi-byte character, so the response needs a visible truncation indicator.\n\n## ANSWER\\_MARKER\n\nDecode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error."
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "QUESTION_SPLIT",
+        "ANSWER_ONE",
+        "ANSWER_TWO",
+        "中文参数",
+        "cache.invalidate"
+      ],
+      "fixture": "split-forum",
+      "noise_found": [],
+      "title": "Cache failure discussion",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 792,
+      "markdown_sha256": "a343dd811be91e22444bf0155550664c7766b1a4ed931fe6a50a8263337fcf39",
+      "markdown": "# QUESTION\\_SPLIT\n\nHow can a cache distinguish an unavailable remote service from an empty lookup? It is important that Unicode parameters and structured diagnostics remain available to the caller when the backend response is incomplete.\n\n## ANSWER\\_ONE\n\nThe first response explains the protocol: a cache miss is a successful query without a stored result, while an unavailable remote service is an execution error. Keep 中文参数 intact and report the error code rather than inventing an empty success.\n\n```\ncache.invalidate(\"key\");\n```\n\n## ANSWER\\_TWO\n\nThe second response explains retries: retain the original request deadline, count every attempted request, and surface a visible partial-result indicator. A caller should inspect the actual state before repeating a timed-out mutation."
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "Rust 1.85.0",
+        "Rust 2024"
+      ],
+      "fixture": "rust-release",
+      "noise_found": [],
+      "title": "Announcing Rust 1.85.0 and Rust 2024 | Rust Blog",
+      "content_status": "readable",
+      "strategy": "dom_smoothie",
+      "warnings": [],
+      "markdown_bytes": 16834,
+      "markdown_sha256": "fcaeedb98f659b15fa71bdcdb523df10da840d32ee35ec8d6eb8c7ce9f180578"
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "所有权",
+        "String",
+        "堆"
+      ],
+      "fixture": "rust-book-zh",
+      "noise_found": [],
+      "title": "什么是所有权？ - Rust 程序设计语言 简体中文版",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 27543,
+      "markdown_sha256": "413440aa6ff5e972479ae7548b60af7fee352ac6f13f9b74ca3f7bf8bd1fe871"
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "pub fn spawn",
+        "Future",
+        "JoinHandle"
+      ],
+      "fixture": "tokio-spawn",
+      "noise_found": [],
+      "title": "spawn in tokio::task - Rust",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 5890,
+      "markdown_sha256": "1c7609fd8dc63fdb38d63ed05fb1bf4d76e5bfa5d16b5b31383c341121310119"
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "async function",
+        "Promise",
+        "await"
+      ],
+      "fixture": "mdn-async",
+      "noise_found": [],
+      "title": "async function - JavaScript | MDNMDNMDNMozilla",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 18579,
+      "markdown_sha256": "cb3432baa9f5e096e7ddb6230688f56a3c5968c74d527c81dbdd1aa1edc0a9c1"
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "Generic signature",
+        "F: Future + Send + 'static",
+        "中文正文",
+        "MAX_PAGES",
+        "25"
+      ],
+      "fixture": "technical-structure",
+      "noise_found": [],
+      "title": "Client guide",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 279,
+      "markdown_sha256": "5289c879fe5a86fb3c2434f3e33a8a39d84e6f140e25b63450a85fe68b777731",
+      "markdown": "# Client guide\n\n## Generic signature\n\n```rust\npub fn spawn<F>(future: F)\nwhere F: Future + Send + 'static {\n    let message = \"中文正文\";\n}\n```\n\n## Runtime limits\n\n| Option     | Value |\n| ---------- | ----- |\n| MAX\\_PAGES | 25    |\n\nKeep both sections for API compatibility."
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "Current release: 2.7.1"
+      ],
+      "fixture": "short-main",
+      "noise_found": [],
+      "title": "Version",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 33,
+      "markdown_sha256": "6b4aeacc0dc3afb94f42b3eaa44c1edebf98b4f014f28fcef2f4edc0484ebd1a",
+      "markdown": "# Version\n\nCurrent release: 2.7.1"
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "upgrade guide",
+        "Architecture diagram"
+      ],
+      "fixture": "relative-links",
+      "noise_found": [],
+      "title": "Migration",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 233,
+      "markdown_sha256": "64e672f3eaa7038b0ad4eec7d8774bdccc6498dc5bc1afaf29a58cb6c5ce7083",
+      "markdown": "# Migration\n\nRead the [upgrade guide](https://docs.example.com/guide?a=1&b=2) before applying changes. The rollout requires two steps and a compatibility check.\n\n![Architecture diagram](https://docs.example.com/v2/diagrams/start.svg)"
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "Singapore",
+        "retry_after",
+        "60 seconds"
+      ],
+      "fixture": "nested-table",
+      "noise_found": [],
+      "title": "HTTP status matrix",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 240,
+      "markdown_sha256": "9585316025126e505d6da03d6e240b5968eef5fe3a2de4b11b22fe0fcb2176e7",
+      "markdown": "# HTTP status matrix\n\n| Region    | Details                  |\n| --------- | ------------------------ |\n| Singapore | retry\\_after  60 seconds |\n\nOnly retry requests that are safe to repeat; this nested table contains the per-region policy."
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "问题：必须保留全部回答",
+        "回答一",
+        "设置并发上限为四",
+        "回答二",
+        "回收浏览器上下文"
+      ],
+      "fixture": "chinese-forum",
+      "noise_found": [],
+      "title": "如何限制抓取并发？",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 270,
+      "markdown_sha256": "8e68c5026f9934158a0280effbe5acffb8b9469611b24035c5d23c3a162d8eb5",
+      "markdown": "# 如何限制抓取并发？\n\n问题：必须保留全部回答，不能只选最长的一篇。\n\n## 回答一\n\n设置并发上限为四，同时保留主机级限流。\n\n## 回答二\n\n每个请求都应有截止时间，并在调用取消时回收浏览器上下文。"
+    },
+    {
+      "backend": "agena_semantic_dom_smoothie_htmd",
+      "facts_found": [
+        "1 / (60 + rank)",
+        "Derivation",
+        "Each source contributes at most once.",
+        "indented_code"
+      ],
+      "fixture": "math-and-details",
+      "noise_found": [],
+      "title": "Algorithm",
+      "content_status": "readable",
+      "strategy": "semantic_main",
+      "warnings": [],
+      "markdown_bytes": 158,
+      "markdown_sha256": "d40752532543d2b15f2e02445a2885d2af18fd40e8b453405f9b4185365a64ae",
+      "markdown": "# Algorithm\n\nThe reciprocal score is $1 / (60 + rank)$.\n\nDerivation\n\nEach source contributes at most once.\n\n````\nliteral = \"```\"\n    indented_code = True\n````"
+    }
+  ]
+}

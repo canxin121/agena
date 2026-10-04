@@ -1,0 +1,97 @@
+{
+  "recorded_at_utc": "2026-10-04T19:08:54.323560+00:00",
+  "implementation_commit": "090243bfdbfbdbd9b1b74d123ce2b7e15a370e09",
+  "base_commit": "a4e3425c3c0f908030b8c77ae3ee4454a732c044",
+  "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "execution": "Standalone programs and Rust library/tests only; no Agena tools or Agena process launched. Real Chrome test uses only an isolated local HTTP fixture and browser contexts.",
+  "tests": [
+    {
+      "name": "web_library",
+      "command": "cargo test --locked -p agena-web --lib",
+      "passed": 53,
+      "failed": 0,
+      "ignored_in_this_command": 2,
+      "log_sha256": "491347f6f8d1d84c78055f2a2906d5f4e5284a537d6cf38bee1a943e1662ab87"
+    },
+    {
+      "name": "web_plugin",
+      "command": "cargo test --locked -p agena-bundled-plugins --lib web::",
+      "passed": 55,
+      "failed": 0,
+      "ignored_in_this_command": 2,
+      "log_sha256": "709373e4c45e65428b6eb20b5430a03977aeb73626054431a296da6550634b62"
+    },
+    {
+      "name": "real_chrome",
+      "command": "cargo test --locked -p agena-bundled-plugins --lib real_rendered_fetch_checks_requests_status_budgets_and_cancellation -- --ignored --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "ignored_in_this_command": 0,
+      "log_sha256": "d30f3e682bfa12364d6e869258c7cc2009fbf515a8af45d07c2046b751d5be5c"
+    },
+    {
+      "name": "tool_library",
+      "command": "cargo test --locked -p agena-tool --lib",
+      "passed": 77,
+      "failed": 0,
+      "ignored_in_this_command": 0,
+      "log_sha256": "a81bc78df07b4006a1e76f45a689ddb030f4093a634e0cb2bc9eebdc869cddf3"
+    },
+    {
+      "name": "human_view",
+      "command": "cargo test --locked -p agena-runtime-tools --lib tool::human_view",
+      "passed": 30,
+      "failed": 0,
+      "ignored_in_this_command": 0,
+      "log_sha256": "f34e0ad07d9bb5082ed0264d72d71dd2b96d55099e6bee76233c22a850f0a8be"
+    },
+    {
+      "name": "system_prompt",
+      "command": "cargo test --locked -p agena-runtime-session --lib session_prompt",
+      "passed": 5,
+      "failed": 0,
+      "ignored_in_this_command": 0,
+      "log_sha256": "da6ddabc3e331022ed704ff36524a88d379d52280fa99a16e6028a1e0bb48b6e"
+    },
+    {
+      "name": "manifest_docs_human_integration",
+      "command": "cargo test --locked -p agena-bundled-plugins --test docs_reference --test capability_manifest --test human_rendering",
+      "passed": 14,
+      "failed": 0,
+      "ignored_in_this_command": 0,
+      "log_sha256": "90253af410eeba8c75dfbd8b879d758c847b4b0e488fbb70caec79b68da2f889"
+    }
+  ],
+  "passed_test_executions": 235,
+  "clippy": {
+    "command": "cargo clippy --locked -p agena-web -p agena-bundled-plugins -p agena-runtime-session -p agena-runtime-tools -p agena-tool --all-targets -- -D warnings",
+    "passed": true,
+    "log_sha256": "997cd67ae9dac55b5624c62d73f9cb6970ac566fcb5d71d750234499b523c5b6"
+  },
+  "format_and_whitespace": [
+    "cargo fmt --all --check",
+    "git diff --check",
+    "cargo fmt --manifest-path docs/research/rust-crawl-probe/Cargo.toml --check"
+  ],
+  "generated_contracts": [
+    "generate_tools_reference example",
+    "generate_capability_identity_snapshot example"
+  ],
+  "extraction_comparison": {
+    "fixtures": 14,
+    "standalone_baseline_observations": 70,
+    "production_observations": 14,
+    "production_retained_markers": 48,
+    "total_expected_markers": 48,
+    "remaining_authored_noise_markers": 0,
+    "artifact": "rust-crawling-comparison.json"
+  },
+  "notes": [
+    "The real Chrome test is ignored by the ordinary plugin command and was explicitly executed separately; ignored counts are per command.",
+    "Other live/external-runtime tests requiring separate dependencies were not run.",
+    "The existing Cargo warning about the unused xxhash-rust patch remains; no new unrelated dependency versions were updated.",
+    "The 14-fixture marker test is not a representative semantic-quality or latency benchmark.",
+    "The library comparison probe and fixture preparation scripts are included for replay.",
+    "Source provenance SHA-256 values preserve earlier and refreshed observations; failed Spider refresh requests are recorded explicitly."
+  ]
+}

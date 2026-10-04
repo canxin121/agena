@@ -1,3 +1,6 @@
+use agena_macros::ToolInput;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::process::Stdio;
@@ -14,13 +17,27 @@ use agena_plugin_host::sdk::host_api::{
 use agena_plugin_host::sdk::{
     InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
-use process_control::{ChildExt as _, Control as _};
 
 pub(crate) const SESSION_PLUGIN_ID: &str = "agena.session";
 
 pub(crate) struct SessionPlugin {
     inner: WorkflowPlugin,
     host: OnceLock<Arc<dyn HostClient>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(trim("names[]"), non_empty("names[]"), max_items("names", 32))]
+#[serde(deny_unknown_fields)]
+struct ExecutablesInput {
+    /// Curated tool names or aliases. Empty lists installed tools and missing names.
+    #[serde(default)]
+    names: Vec<String>,
+    /// Explicitly run bounded version probes. Requires 1–8 named tools.
+    #[serde(default)]
+    probe_versions: bool,
+    /// Bypass the 15-second availability cache after installing/changing tools.
+    #[serde(default)]
+    refresh: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -32,7 +49,9 @@ struct GitFacts {
 
 fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
     const MAX_GIT_FACT_BYTES: usize = 4 * 1024 * 1024;
-    let child = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
+        .arg("--no-optional-locks")
         .arg("-C")
         .arg(workspace)
         .args(args)
@@ -41,50 +60,25 @@ fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")
         .env("GPG_TTY", "")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                "start Git while inspecting the session environment",
-                &error,
-            ))
-        })?;
-    let mut retained = 0_usize;
-    let truncated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let capture_truncated = truncated.clone();
-    let output = child
-        .controlled_with_output()
-        .stdout_filter(move |chunk: &[u8]| {
-            if retained.saturating_add(chunk.len()) <= MAX_GIT_FACT_BYTES {
-                retained += chunk.len();
-                Ok(true)
-            } else {
-                retained = MAX_GIT_FACT_BYTES;
-                capture_truncated.store(true, std::sync::atomic::Ordering::Relaxed);
-                Ok(false)
-            }
-        })
-        .time_limit(Duration::from_secs(15))
-        .terminate_for_timeout()
-        .wait()
-        .map_err(|error| {
-            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                "wait for Git while inspecting the session environment",
-                &error,
-            ))
-        })?
-        .ok_or_else(|| {
-            PluginError::timeout_with_public_detail(
+        .stdin(Stdio::null());
+    let output = match agena_process::blocking::output(
+        command,
+        Duration::from_secs(15),
+        MAX_GIT_FACT_BYTES,
+    ) {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+            tracing::warn!(arguments = ?args, "Git inspection output exceeded its budget; facts remain unknown");
+            return Ok(None);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+            return Err(PluginError::timeout_with_public_detail(
                 "Git session environment inspection timed out after 15 seconds",
                 "Git inspection timed out after 15 seconds.",
-            )
-        })?;
-    if truncated.load(std::sync::atomic::Ordering::Relaxed) {
-        tracing::warn!(arguments = ?args, "Git inspection output exceeded its budget; facts remain unknown");
-        return Ok(None);
-    }
+            ));
+        }
+        Err(error) => return Err(PluginError::internal_error(&error)),
+    };
     if !output.status.success() {
         tracing::debug!(
             arguments = ?args,
@@ -103,22 +97,49 @@ fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
     Ok(Some(stdout.trim().to_string()))
 }
 
-fn git_dirty_from_status(status: Option<&str>) -> Option<bool> {
-    status.map(|status| !status.trim().is_empty())
+/// Porcelain v2 uses NUL-separated records and includes branch facts in the
+/// same snapshot. Rename source paths are separate records, not headers.
+fn parse_git_facts(status: &str) -> Option<GitFacts> {
+    let mut facts = GitFacts {
+        dirty: Some(false),
+        ..GitFacts::default()
+    };
+    let mut skip_rename_source = false;
+    let mut saw_oid = false;
+    for record in status.split('\0').filter(|record| !record.is_empty()) {
+        if skip_rename_source {
+            skip_rename_source = false;
+            continue;
+        }
+        if let Some(oid) = record.strip_prefix("# branch.oid ") {
+            saw_oid = true;
+            if oid != "(initial)" && oid.len() >= 8 && oid.chars().all(|ch| ch.is_ascii_hexdigit())
+            {
+                facts.short_sha = Some(oid[..8].to_owned());
+            }
+        } else if let Some(branch) = record.strip_prefix("# branch.head ") {
+            facts.branch = Some(
+                if branch == "(detached)" {
+                    "HEAD"
+                } else {
+                    branch
+                }
+                .to_owned(),
+            );
+        } else if !record.starts_with("# ") && !record.starts_with("! ") {
+            facts.dirty = Some(true);
+            skip_rename_source = record.starts_with("2 ");
+        }
+    }
+    (saw_oid && facts.branch.is_some()).then_some(facts)
 }
 
 fn git_facts(workspace: &Path) -> SdkResult<Option<GitFacts>> {
-    let Some(branch) = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])? else {
-        return Ok(None);
-    };
-    let short_sha = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
-    let status = run_git(workspace, &["status", "--porcelain"])?;
-    let dirty = git_dirty_from_status(status.as_deref());
-    Ok(Some(GitFacts {
-        branch: Some(branch),
-        short_sha,
-        dirty,
-    }))
+    Ok(
+        run_git(workspace, &["status", "--porcelain=v2", "--branch", "-z"])?
+            .as_deref()
+            .and_then(parse_git_facts),
+    )
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -157,7 +178,7 @@ impl SessionPlugin {
 
     #[tool(
         tags(query, discovery, read_only),
-        summary = "Inspect the current runtime environment: working directory, git state, shell, OS, and architecture."
+        summary = "Inspect the runtime workspace, git state, shell, platform, and available host CLIs."
     )]
     async fn environment(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = context.workspace_root.to_string();
@@ -185,7 +206,20 @@ impl SessionPlugin {
                 "Git session environment inspection task failed",
                 &error,
             ))
-        })??;
+        })?;
+        let mut git_error = None;
+        let facts = match facts {
+            Ok(facts) => facts,
+            Err(error) => {
+                let detail = agena_failure::diagnostic::format_error_chain_with_context(
+                    "Git environment facts are unavailable",
+                    &error,
+                );
+                lines.push(detail.clone());
+                git_error = Some(detail);
+                None
+            }
+        };
         if let Some(facts) = facts {
             git_branch = facts.branch;
             git_short_sha = facts.short_sha;
@@ -218,6 +252,14 @@ impl SessionPlugin {
             "OS: {} {}",
             std::env::consts::OS,
             std::env::consts::ARCH
+        ));
+        let cli_inventory =
+            agena_runtime_tools::cli_tools::discover(Path::new(&workspace_root), false)
+                .await
+                .map_err(|error| PluginError::internal_error(&error))?;
+        lines.push(format!(
+            "Available host CLIs: {}. Detailed usage: session.executables.",
+            cli_inventory.available_names().join(", ")
         ));
         let catalog = match self.inner.host() {
             Ok(host) => match host.list_tools().await {
@@ -252,11 +294,13 @@ impl SessionPlugin {
         let payload = serde_json::json!({
             "tool_runtime_build": build,
             "tool_catalog": catalog,
+            "cli_tools": cli_inventory.compact(),
             "workspace_root": workspace_root,
             "git_branch": git_branch,
             "git_short_sha": git_short_sha,
             "git_dirty": git_dirty,
             "git_status_known": git_dirty.is_some(),
+            "git_error": git_error,
             "shell": shell,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
@@ -266,6 +310,97 @@ impl SessionPlugin {
             "environment facts",
             lines.join("\n"),
             Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
+    }
+
+    #[tool(
+        tags(query, discovery, read_only),
+        summary = "Inspect installed modern CLIs, their task-specific usage, and optional versions.",
+        help = "Resolves tools from the Agena server PATH and workspace, including fd/fdfind and bat/batcat aliases. Does not install tools or read interactive shell startup files. Omit names for installed tools and a compact missing list; pass names to inspect specific tools. probe_versions runs bounded version commands only when 1–8 names are supplied. refresh bypasses the 15-second availability cache. Presence does not establish plugin/model dependencies or authorize execution."
+    )]
+    async fn executables(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &ExecutablesInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        if input.probe_versions && (input.names.is_empty() || input.names.len() > 8) {
+            return Err(PluginError::invalid_params(
+                "probe_versions requires 1–8 names",
+            ));
+        }
+        let names = input.names.iter().map(|name| {
+            agena_tool::cli_catalog::find(name).map(|spec| spec.name)
+                .ok_or_else(|| PluginError::invalid_params(format!("Unknown executable capability '{name}'; omit names to inspect the catalog")))
+        }).collect::<SdkResult<std::collections::BTreeSet<_>>>()?;
+        let mut inventory = agena_runtime_tools::cli_tools::discover(
+            Path::new(context.workspace_root),
+            input.refresh,
+        )
+        .await
+        .map_err(|error| PluginError::internal_error(&error))?;
+        let missing = inventory
+            .tools
+            .iter()
+            .filter(|tool| {
+                !tool.available && (names.is_empty() || names.contains(tool.name.as_str()))
+            })
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        inventory.tools.retain(|tool| {
+            if names.is_empty() {
+                tool.available
+            } else {
+                names.contains(tool.name.as_str())
+            }
+        });
+        if input.probe_versions {
+            futures_util::future::join_all(inventory.tools.iter_mut().map(|tool| {
+                agena_runtime_tools::cli_tools::probe_version(
+                    tool,
+                    Path::new(context.workspace_root),
+                )
+            }))
+            .await;
+        }
+        let available = inventory.tools.iter().filter(|tool| tool.available).count();
+        let mut lines = inventory
+            .tools
+            .iter()
+            .map(|tool| {
+                format!(
+                    "{}: {}{} — {}\n{}",
+                    tool.name,
+                    tool.executable
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "unavailable".into()),
+                    tool.version
+                        .as_ref()
+                        .map(|version| format!(" ({version})"))
+                        .unwrap_or_default(),
+                    tool.purpose,
+                    tool.guidance
+                )
+            })
+            .collect::<Vec<_>>();
+        for tool in &inventory.tools {
+            if let Some(error) = &tool.probe_error {
+                lines.push(format!("{}: {error}", tool.name));
+            }
+        }
+        if !missing.is_empty() {
+            lines.push(format!("Unavailable: {}", missing.join(", ")));
+        }
+        Ok(ToolInvokeOutput::from_parts(
+            "host executables",
+            format!("{available} available"),
+            lines.join("\n\n"),
+            Some(
+                serde_json::json!({"tools": inventory.tools, "missing": missing,
+                "checked_at_unix_ms": inventory.checked_at_unix_ms, "cache_age_ms": inventory.cache_age_ms}),
+            ),
             std::collections::BTreeMap::new(),
             Vec::new(),
         ))
@@ -418,22 +553,98 @@ mod tests {
         assert_eq!(manifest.name, "session");
         assert_eq!(
             tool_names,
-            ["get", "environment", "model", "tokens", "rename"]
+            [
+                "get",
+                "environment",
+                "executables",
+                "model",
+                "tokens",
+                "rename"
+            ]
         );
     }
 }
 
 #[cfg(test)]
 mod audit_fact_tests {
+    #[tokio::test]
+    async fn executable_query_resolves_aliases_without_version_processes() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = agena_plugin_host::sdk::ToolInvokeContext {
+            tool_name: "executables",
+            session_id: 41,
+            call_id: 1,
+            workspace_root: directory.path().to_str().unwrap(),
+        };
+        let input = super::ExecutablesInput {
+            names: vec!["fdfind".into(), "fd".into()],
+            ..Default::default()
+        };
+        let payload = super::SessionPlugin::new()
+            .executables(&context, &input)
+            .await
+            .unwrap()
+            .payload
+            .unwrap();
+        assert_eq!(payload["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["tools"][0]["name"], "fd");
+        assert!(payload["tools"][0].get("version").is_none());
+        for invalid in [
+            super::ExecutablesInput {
+                probe_versions: true,
+                ..Default::default()
+            },
+            super::ExecutablesInput {
+                names: vec!["not-a-curated-command".into()],
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                super::SessionPlugin::new()
+                    .executables(&context, &invalid)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
     #[test]
-    fn unavailable_status_is_not_reported_as_clean() {
-        assert_eq!(super::git_dirty_from_status(None), None);
-        assert_eq!(super::git_dirty_from_status(Some("")), Some(false));
+    fn actual_git_snapshot_handles_unborn_and_untracked_workspaces() {
+        let directory = tempfile::tempdir().unwrap();
+        let result = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let clean = super::git_facts(directory.path()).unwrap().unwrap();
+        assert_eq!(clean.dirty, Some(false));
+        assert!(clean.short_sha.is_none());
+        std::fs::write(directory.path().join("untracked file.txt"), "content").unwrap();
         assert_eq!(
-            super::git_dirty_from_status(Some(" M src/lib.rs\n")),
+            super::git_facts(directory.path()).unwrap().unwrap().dirty,
             Some(true)
         );
     }
+
+    #[test]
+    fn porcelain_snapshot_preserves_unknown_unborn_and_rename_facts() {
+        assert!(super::parse_git_facts("").is_none());
+        let unborn =
+            super::parse_git_facts("# branch.oid (initial)\0# branch.head main\0").unwrap();
+        assert_eq!(unborn.dirty, Some(false));
+        assert!(unborn.short_sha.is_none());
+        let dirty = super::parse_git_facts(
+            "# branch.oid 0123456789abcdef\0# branch.head main\0? new file\0",
+        )
+        .unwrap();
+        assert_eq!(dirty.short_sha.as_deref(), Some("01234567"));
+        assert_eq!(dirty.dirty, Some(true));
+        let renamed = super::parse_git_facts("# branch.oid 0123456789abcdef\0# branch.head (detached)\x002 R. fields\0# branch.oid deadbeefdeadbeef\0").unwrap();
+        assert_eq!(renamed.short_sha.as_deref(), Some("01234567"));
+        assert_eq!(renamed.branch.as_deref(), Some("HEAD"));
+    }
+
     #[tokio::test]
     async fn nongit_workspace_has_explicit_unknown_git_status() {
         let directory = tempfile::tempdir().unwrap();

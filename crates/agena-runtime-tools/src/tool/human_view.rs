@@ -2600,6 +2600,9 @@ impl BuiltinHumanRenderer {
                             ("command", "Command"),
                             ("args", "Arguments"),
                             ("file_extensions", "File extensions"),
+                            ("command_available", "Executable found"),
+                            ("executable", "Executable path"),
+                            ("running_roots", "Running project roots"),
                         ],
                     )
                 {
@@ -2789,6 +2792,15 @@ impl BuiltinHumanRenderer {
                         ("Query", Self::object_text(object, "query")),
                         ("Engine", Self::object_text(object, "engine")),
                         ("Tried", Self::object_text(object, "attempted_engines")),
+                        ("Partial", Self::object_text(object, "partial")),
+                        ("Truncated", Self::object_text(object, "truncated")),
+                        (
+                            "Effective limit",
+                            Self::object_text(object, "effective_limit"),
+                        ),
+                        ("Warnings", Self::object_text(object, "warnings")),
+                        ("Engine errors", Self::object_text(object, "engine_errors")),
+                        ("Usage", Self::object_text(object, "usage")),
                     ],
                 ) {
                     blocks.push(block);
@@ -3689,6 +3701,44 @@ impl BuiltinHumanRenderer {
                     ],
                 ));
             }
+            "fs.document" => {
+                let fields = [
+                    ("Path", Self::object_text(object, "path")),
+                    ("Converter", Self::object_text(object, "backend")),
+                    ("Extracted lines", Self::object_text(object, "total_lines")),
+                    (
+                        "Matching lines",
+                        Self::object_text(object, "matching_lines"),
+                    ),
+                    ("Truncated", Self::object_text(object, "truncated")),
+                    ("Warnings", Self::object_text(object, "warnings")),
+                ];
+                if let Some(block) =
+                    Self::details_block_if_nonempty("document-meta", "Document text", &fields)
+                {
+                    blocks.push(block);
+                }
+                if let Some(lines) = Self::object_array(object, "lines")
+                    && let Some(table) = Self::scalar_table(
+                        "document-lines",
+                        "Extracted text",
+                        lines,
+                        &[
+                            ("line", "Line"),
+                            ("text", "Text"),
+                            ("text_truncated", "Shortened"),
+                        ],
+                    )
+                {
+                    blocks.push(table);
+                }
+                if object.get("empty").and_then(Value::as_bool) == Some(true) {
+                    blocks.push(Self::markdown_block(
+                        "document-empty",
+                        "No text was extracted. A scanned PDF may require OCR.",
+                    ));
+                }
+            }
             "fs.read_many" => {
                 if let Some(files) = Self::object_array(object, "files")
                     && let Some(table) = Self::scalar_table(
@@ -3772,6 +3822,9 @@ impl BuiltinHumanRenderer {
                     ("Language", Self::object_text(object, "language")),
                     ("Pattern", Self::object_text(object, "pattern")),
                     ("Scanned files", Self::object_text(object, "scanned_files")),
+                    ("Skipped files", Self::object_text(object, "skipped_files")),
+                    ("Truncated", Self::object_text(object, "truncated")),
+                    ("Boundary", Self::object_text(object, "truncation_reason")),
                 ];
                 if let Some(block) =
                     Self::details_block_if_nonempty("ast-search-meta", "AST search", &fields)
@@ -3785,14 +3838,27 @@ impl BuiltinHumanRenderer {
                         matches,
                         &[
                             ("path", "Path"),
-                            ("line", "Line"),
-                            ("column", "Column"),
+                            ("start_line", "Line"),
+                            ("start_col", "Column"),
+                            ("text_truncated", "Shortened"),
                             ("text", "Match"),
                         ],
                     )
                 {
                     blocks.push(table);
                 }
+            }
+            "code.rewrite_ast" => {
+                blocks.extend(Self::file_mutation_blocks(
+                    "ast-rewrite",
+                    "AST rewrite",
+                    object,
+                    &[
+                        ("Applied", Self::object_text(object, "applied")),
+                        ("Language", Self::object_text(object, "language")),
+                        ("Replacements", Self::object_text(object, "replacements")),
+                    ],
+                ));
             }
             "code.syntax_tree" => {
                 let fields = [
@@ -3872,6 +3938,93 @@ impl BuiltinHumanRenderer {
                     Self::details_block_if_nonempty("environment", "Environment", &fields)
                 {
                     blocks.push(block);
+                }
+                if let Some(available) = object
+                    .get("cli_tools")
+                    .and_then(|cli| cli.get("available"))
+                    .and_then(Value::as_object)
+                {
+                    let rows = available
+                        .iter()
+                        .map(|(name, path)| serde_json::json!({"name": name, "executable": path}))
+                        .collect::<Vec<_>>();
+                    if let Some(table) = Self::scalar_table(
+                        "environment-cli-tools",
+                        "Available host CLIs",
+                        &rows,
+                        &[("name", "Tool"), ("executable", "Executable")],
+                    ) {
+                        blocks.push(table);
+                    } else {
+                        blocks.push(Self::markdown_block(
+                            "environment-cli-tools",
+                            "### Available host CLIs\nNo catalogued executables found on PATH.",
+                        ));
+                    }
+                }
+                if let Some(error) = Self::object_string(object, "git_error") {
+                    blocks.push(Self::markdown_block(
+                        "environment-git-error",
+                        format!("### Git status unavailable\n{error}"),
+                    ));
+                }
+            }
+            "session.executables" => {
+                if let Some(tools) = Self::object_array(object, "tools") {
+                    if let Some(table) = Self::scalar_table(
+                        "executables",
+                        "Host executables",
+                        tools,
+                        &[
+                            ("name", "Tool"),
+                            ("available", "Available"),
+                            ("executable", "Executable"),
+                            ("version", "Version"),
+                            ("purpose", "Purpose"),
+                            ("probe_error", "Version probe error"),
+                        ],
+                    ) {
+                        blocks.push(table);
+                    } else {
+                        blocks.push(Self::markdown_block(
+                            "executables",
+                            "### Host executables\nNo matching executables found on PATH.",
+                        ));
+                    }
+                    let guidance = tools
+                        .iter()
+                        .filter_map(Value::as_object)
+                        .filter_map(|tool| {
+                            let text = Self::object_string(tool, "guidance")?;
+                            Some((Self::object_text(tool, "name"), text))
+                        })
+                        .collect::<Vec<_>>();
+                    let fields = guidance
+                        .iter()
+                        .map(|(name, text)| (name.as_str(), text.clone()))
+                        .collect::<Vec<_>>();
+                    if let Some(block) = Self::details_block_if_nonempty(
+                        "executable-guidance",
+                        "Usage guidance",
+                        &fields,
+                    ) {
+                        blocks.push(block);
+                    }
+                }
+                if let Some(missing) = Self::object_array(object, "missing")
+                    && !missing.is_empty()
+                {
+                    blocks.push(Self::markdown_block(
+                        "executables-missing",
+                        format!(
+                            "### Unavailable\n{}",
+                            missing
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    ));
                 }
             }
             "session.model" => {
@@ -4861,7 +5014,7 @@ impl BuiltinHumanRenderer {
             value if value.starts_with("fs.") => {
                 blocks.extend(Self::specific_filesystem_blocks(value, &object));
             }
-            "code.search_ast" | "code.syntax_tree" => {
+            "code.search_ast" | "code.syntax_tree" | "code.rewrite_ast" => {
                 blocks.extend(Self::specific_code_blocks(key.as_str(), &object));
             }
             "report.findings" => blocks.extend(Self::specific_report_blocks(&object)),
@@ -5063,26 +5216,93 @@ impl BuiltinHumanRenderer {
                     results,
                     matches,
                     truncated,
+                    records,
+                    note,
+                    scan_complete,
+                    ..
                 } => {
+                    let structured = !records.is_empty();
+                    let rows = if structured {
+                        records
+                            .iter()
+                            .map(|record| {
+                                use super::payload::GrepRecord;
+                                match record {
+                                    GrepRecord::Line {
+                                        path,
+                                        line,
+                                        text,
+                                        matched,
+                                        text_truncated,
+                                    } => vec![
+                                        path.clone(),
+                                        line.to_string(),
+                                        if *matched { "match" } else { "context" }.into(),
+                                        format!(
+                                            "{text}{}",
+                                            if *text_truncated {
+                                                "… [line shortened]"
+                                            } else {
+                                                ""
+                                            }
+                                        ),
+                                    ],
+                                    GrepRecord::File { path } => vec![
+                                        path.clone(),
+                                        String::new(),
+                                        "file".into(),
+                                        String::new(),
+                                    ],
+                                    GrepRecord::Count {
+                                        path,
+                                        count,
+                                        complete,
+                                    } => vec![
+                                        path.clone(),
+                                        String::new(),
+                                        "count".into(),
+                                        format!(
+                                            "{count}{}",
+                                            if *complete { "" } else { "+ (partial)" }
+                                        ),
+                                    ],
+                                }
+                            })
+                            .map(|row| row.into_iter().map(Value::String).collect())
+                            .collect()
+                    } else {
+                        Self::grep_rows(results.as_slice())
+                    };
                     if let Some(table) = Self::table_block(
                         "matches",
-                        vec!["Path", "Line", "Column", "Match"],
-                        Self::grep_rows(results.as_slice()),
+                        if structured {
+                            vec!["Path", "Line", "Kind", "Match / count"]
+                        } else {
+                            vec!["Path", "Line", "Column", "Match"]
+                        },
+                        rows,
                     ) {
                         blocks.push(table);
                     } else {
                         blocks.push(Self::markdown_block(
                             "matches",
                             format!(
-                                "### {}\nNo lines matched.",
+                                "### {}\n{}",
                                 matches
                                     .map(|matches| format!("{matches} matches"))
-                                    .unwrap_or_else(|| "Matches".into())
+                                    .unwrap_or_else(|| "Matches".into()),
+                                if scan_complete == Some(false) {
+                                    "No matches in the searched portion; search is incomplete."
+                                } else {
+                                    "No lines matched."
+                                },
                             ),
                         ));
                     }
                     let mut status_lines = Vec::new();
-                    if matches.is_some_and(|matches| matches as usize > results.len()) {
+                    if !structured
+                        && matches.is_some_and(|matches| matches as usize > results.len())
+                    {
                         status_lines.push(format!(
                             "_Showing {} of {} matches._",
                             results.len(),
@@ -5091,6 +5311,9 @@ impl BuiltinHumanRenderer {
                     }
                     if truncated {
                         status_lines.push("_Results truncated._".to_owned());
+                    }
+                    if let Some(note) = note {
+                        status_lines.push(note);
                     }
                     if !status_lines.is_empty() {
                         blocks.push(Self::markdown_block(
@@ -5990,6 +6213,23 @@ mod tests {
                 && rows[0][0] == json!("0")
                 && rows[0][1] == json!("yes")
         )));
+    }
+
+    #[test]
+    fn structured_grep_paths_and_partial_counts_are_visible_without_parsing_colons() {
+        let blocks = BuiltinHumanRenderer::new("fs.grep").render_human(&ctx(), &RawOutput {
+            payload: Some(json!({
+                "mode":"count","scan_complete":false,"truncated":true,
+                "records":[{"kind":"count","path":"folder/a:b.txt","count":9,"complete":false}],
+                "note":"file read stopped before EOF"
+            })),
+            ..RawOutput::default()
+        }).unwrap();
+        assert!(blocks.iter().any(|block| matches!(block, ViewBlock::Table { rows, .. }
+            if rows.iter().any(|row| row.contains(&json!("folder/a:b.txt")) && row.contains(&json!("9+ (partial)"))))));
+        let rendered = serde_json::to_string(&blocks).unwrap();
+        assert!(rendered.contains("file read stopped before EOF"));
+        assert!(!rendered.contains("No lines matched"));
     }
 
     #[test]

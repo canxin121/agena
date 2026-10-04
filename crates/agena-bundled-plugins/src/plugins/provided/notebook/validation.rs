@@ -21,22 +21,12 @@ pub(super) fn normalize_cell(
     } else {
         cell.remove("outputs");
         cell.remove("execution_count");
-        if kind != "markdown" {
-            cell.remove("attachments");
-        }
     }
 }
 
 fn invalid(message: impl Into<String>) -> PluginError {
     PluginError::invalid_params(message.into())
 }
-fn multiline(value: &Value) -> bool {
-    value.is_string()
-        || value
-            .as_array()
-            .is_some_and(|items| items.iter().all(Value::is_string))
-}
-
 pub(super) fn validate(notebook: &mut Value) -> SdkResult<()> {
     if notebook.get("nbformat").and_then(Value::as_u64) != Some(4) {
         return Err(invalid("notebook.edit_cell supports nbformat 4 only"));
@@ -45,9 +35,6 @@ pub(super) fn validate(notebook: &mut Value) -> SdkResult<()> {
         .get("nbformat_minor")
         .and_then(Value::as_u64)
         .ok_or_else(|| invalid("notebook is missing nbformat_minor"))?;
-    if !notebook.get("metadata").is_some_and(Value::is_object) {
-        return Err(invalid("notebook metadata must be an object"));
-    }
     let cells = notebook
         .get_mut("cells")
         .and_then(Value::as_array_mut)
@@ -72,99 +59,22 @@ pub(super) fn validate(notebook: &mut Value) -> SdkResult<()> {
                 return Err(invalid(format!("duplicate notebook cell id: {id}")));
             }
         }
-        if !cell.get("metadata").is_some_and(Value::is_object)
-            || !cell.get("source").is_some_and(multiline)
-        {
-            return Err(invalid(format!(
-                "cell {index} requires object metadata and text source"
-            )));
-        }
-        match cell.get("cell_type").and_then(Value::as_str) {
-            Some("code") => {
-                if cell.contains_key("attachments") {
-                    return Err(invalid(format!(
-                        "code cell {index} cannot contain attachments"
-                    )));
-                }
-                if !cell
-                    .get("execution_count")
-                    .is_some_and(|v| v.is_null() || v.as_u64().is_some())
-                {
-                    return Err(invalid(format!(
-                        "code cell {index} has invalid execution_count"
-                    )));
-                }
-                let outputs = cell
-                    .get("outputs")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| invalid(format!("code cell {index} requires outputs")))?;
-                for output in outputs {
-                    let valid = match output.get("output_type").and_then(Value::as_str) {
-                        Some("stream") => {
-                            matches!(
-                                output.get("name").and_then(Value::as_str),
-                                Some("stdout" | "stderr")
-                            ) && output.get("text").is_some_and(multiline)
-                        }
-                        Some("error") => {
-                            output.get("ename").is_some_and(Value::is_string)
-                                && output.get("evalue").is_some_and(Value::is_string)
-                                && output
-                                    .get("traceback")
-                                    .and_then(Value::as_array)
-                                    .is_some_and(|items| items.iter().all(Value::is_string))
-                        }
-                        Some("display_data" | "execute_result") => {
-                            output.get("data").is_some_and(Value::is_object)
-                                && output.get("metadata").is_some_and(Value::is_object)
-                                && (output["output_type"] != "execute_result"
-                                    || output
-                                        .get("execution_count")
-                                        .is_some_and(|v| v.is_null() || v.as_u64().is_some()))
-                        }
-                        _ => false,
-                    };
-                    if !valid {
-                        return Err(invalid(format!(
-                            "code cell {index} contains an invalid output"
-                        )));
-                    }
-                }
-            }
-            Some("markdown" | "raw") => {
-                if cell.contains_key("outputs") || cell.contains_key("execution_count") {
-                    return Err(invalid(format!(
-                        "non-code cell {index} cannot contain execution fields"
-                    )));
-                }
-                if let Some(attachments) = cell.get("attachments")
-                    && (cell["cell_type"] != "markdown"
-                        || !attachments
-                            .as_object()
-                            .is_some_and(|items| items.values().all(Value::is_object)))
-                {
-                    return Err(invalid(format!(
-                        "cell {index} contains invalid attachments"
-                    )));
-                }
-            }
-            _ => return Err(invalid(format!("cell {index} has an unsupported type"))),
-        }
     }
+    // IDs entered nbformat in 4.5. Do not add unknown fields to older files.
     if minor >= 5 {
         for cell in cells {
             if cell.get("id").is_none() {
                 let id = loop {
-                    let value = uuid::Uuid::new_v4().simple().to_string();
-                    if ids.insert(value.clone()) {
-                        break value;
+                    let candidate = uuid::Uuid::new_v4().simple().to_string();
+                    if ids.insert(candidate.clone()) {
+                        break candidate;
                     }
                 };
                 cell["id"] = Value::String(id);
             }
         }
     }
-    Ok(())
+    super::schema::validate(notebook, minor)
 }
 
 struct BoundedJson {
@@ -211,6 +121,27 @@ fn serialize_bounded(notebook: &Value, limit: usize) -> SdkResult<Vec<u8>> {
 mod tests {
     use super::super::NotebookCellType;
     use super::*;
+    #[test]
+    fn official_reference_corpus_and_additional_id_invariant_agree() {
+        let corpus: Value =
+            serde_json::from_str(include_str!("schemas/reference-corpus.json")).unwrap();
+        for case in corpus["cases"].as_array().unwrap() {
+            let mut notebook = case["notebook"].clone();
+            let expected = case
+                .get("agena_valid")
+                .unwrap_or(&case["valid"])
+                .as_bool()
+                .unwrap();
+            let result = validate(&mut notebook);
+            assert_eq!(result.is_ok(), expected, "{}: {result:?}", case["name"]);
+            if expected {
+                assert_eq!(
+                    notebook, case["notebook"],
+                    "validation must preserve existing notebook data"
+                );
+            }
+        }
+    }
     #[test]
     fn byte_budget_covers_escaped_json_and_multibyte_text() {
         for value in [

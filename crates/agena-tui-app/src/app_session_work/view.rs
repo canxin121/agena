@@ -53,10 +53,10 @@ impl App {
         });
         let can_stop = self.active_run_session_id() == Some(id);
         let state = self.session_work.entry(id).or_default();
-        if let Some(Detail::Task(task)) = &state.detail {
-            if let Some(activity) = activities.iter().find(|a| &a.id == task) {
-                state.detail_activity = Some(activity.clone());
-            }
+        if let Some(Detail::Task(task)) = &state.detail
+            && let Some(activity) = activities.iter().find(|a| &a.id == task)
+        {
+            state.detail_activity = Some(activity.clone());
         }
         let expanded = state.expanded && area.height >= 6;
         let tasks_label = format!(
@@ -200,17 +200,16 @@ impl App {
                             if let Some(failure) = &activity.failure {
                                 heading.push_str(&format!("\n{}", failure.user.fallback));
                             }
-                            if activity.status == "waiting" {
-                                if let Some(next) = activity
+                            if activity.status == "waiting"
+                                && let Some(next) = activity
                                     .next_event_at_ms
                                     .and_then(chrono::DateTime::from_timestamp_millis)
-                                {
-                                    heading.push_str(&format!(
-                                        "\n{} {}",
-                                        self.i18n.text("session-work-next-wake"),
-                                        next.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S")
-                                    ));
-                                }
+                            {
+                                heading.push_str(&format!(
+                                    "\n{} {}",
+                                    self.i18n.text("session-work-next-wake"),
+                                    next.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S")
+                                ));
                             }
                         }
                         format!(

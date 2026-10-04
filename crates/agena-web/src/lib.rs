@@ -23,13 +23,19 @@ mod model;
 mod paths;
 mod run;
 mod search;
+mod search_api;
 mod spider;
 mod store;
 
 pub use browser::{
-    local_browser_endpoint, local_browser_running, local_browser_touch, shutdown_local_browser,
+    LocalBrowserLease, local_browser_endpoint, local_browser_lease, local_browser_running,
+    local_browser_touch, shutdown_local_browser,
 };
 pub use error::CrawlError;
+pub use extract::{
+    ExtractionBackend, decode_response_body, extract_page_from_body, extract_with_backend,
+    robots_allows,
+};
 pub use fetch::{
     DEFAULT_FETCH_TIMEOUT_SECS, DEFAULT_MAX_BODY_BYTES, FetchOptions, build_client,
     canonicalize_url, fetch_page, fetch_page_with_client, prepare_fetch_url, resolve_link_url,
@@ -47,6 +53,9 @@ pub use run::{
 pub use search::{
     WebSearchEngine, WebSearchOptions, WebSearchResult, normalize_web_search_engine,
     results_to_text, search_web,
+};
+pub use search_api::{
+    SearchApiOptions, SearchApiProvider, SearchApiResponse, search_api, search_domain_allowed,
 };
 pub use spider::{
     BrowserRenderOptions, LocalBrowserOptions, SpiderFetchOptions, fetch_page_with_spider,

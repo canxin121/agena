@@ -7,6 +7,7 @@ use agena_storage::MemoryDir;
 use tantivy::{
     DocAddress, Index, ReloadPolicy, TantivyDocument,
     collector::TopDocs,
+    directory::MmapDirectory,
     query::QueryParser,
     schema::{
         Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
@@ -35,14 +36,22 @@ impl MemoryIndex {
         &self,
         documents: &[MemorySearchDocument],
     ) -> Result<(), MemoryIndexError> {
-        if self.dir.exists() {
-            fs::remove_dir_all(&self.dir)?;
-        }
         fs::create_dir_all(&self.dir)?;
         let (schema, fields) = build_schema();
-        let index = Index::create_in_dir(&self.dir, schema)?;
+        let directory = MmapDirectory::open(&self.dir).map_err(tantivy::TantivyError::from)?;
+        let index = Index::open_or_create(directory, schema)?;
         register_tokenizers(&index)?;
+        let fingerprint = format!(
+            "agena-memory-v1:{}",
+            blake3::hash(&serde_json::to_vec(documents)?)
+        );
+        // The digest is committed atomically with Tantivy's segment metadata.
+        // We still read/hash source documents, so external edits remain visible.
+        if index.load_metas()?.payload.as_deref() == Some(&fingerprint) {
+            return Ok(());
+        }
         let mut writer = index.writer(15_000_000)?;
+        writer.delete_all_documents()?;
         for document in documents {
             let mut stored = TantivyDocument::new();
             stored.add_text(fields.id, document.id.clone());
@@ -57,7 +66,9 @@ impl MemoryIndex {
             stored.add_text(fields.searchable_ngrams, document.searchable_ngrams.clone());
             writer.add_document(stored)?;
         }
-        writer.commit()?;
+        let mut commit = writer.prepare_commit()?;
+        commit.set_payload(&fingerprint);
+        commit.commit()?;
         Ok(())
     }
 
@@ -66,6 +77,9 @@ impl MemoryIndex {
         query: &str,
         limit: usize,
     ) -> Result<Vec<MemorySearchDocument>, MemoryIndexError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let (_schema, fields) = build_schema();
         let index = Index::open_in_dir(&self.dir)?;
         register_tokenizers(&index)?;
@@ -103,6 +117,46 @@ impl MemoryIndex {
             results.push(document_from_hit(&document, &fields));
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn document(name: &str) -> MemorySearchDocument {
+        MemorySearchDocument::new(
+            "fixture".into(),
+            name.into(),
+            "search regression".into(),
+            None,
+            "Unicode 中文 memory".into(),
+            "fixture.md".into(),
+        )
+    }
+
+    #[test]
+    fn unchanged_sources_reuse_index_and_failed_updates_preserve_committed_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = MemoryIndex {
+            dir: dir.path().join("index"),
+        };
+        index.replace_documents(&[document("original")]).unwrap();
+        let first = fs::read(index.dir.join("meta.json")).unwrap();
+        index.replace_documents(&[document("original")]).unwrap();
+        assert_eq!(first, fs::read(index.dir.join("meta.json")).unwrap());
+        let original = Index::open_in_dir(&index.dir).unwrap();
+        let held_writer = original.writer::<TantivyDocument>(15_000_000).unwrap();
+        assert!(index.replace_documents(&[document("replacement")]).is_err());
+        assert_eq!(index.search("original", 10).unwrap().len(), 1);
+        drop(held_writer);
+        index.replace_documents(&[document("replacement")]).unwrap();
+        assert!(index.search("original", 10).unwrap().is_empty());
+        assert_eq!(index.search("replacement", 10).unwrap().len(), 1);
+        assert_eq!(index.search("中文", 10).unwrap().len(), 1);
+        assert!(index.search("replacement", 0).unwrap().is_empty());
+        index.replace_documents(&[]).unwrap();
+        assert!(index.search("replacement", 10).unwrap().is_empty());
     }
 }
 

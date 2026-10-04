@@ -1,5 +1,7 @@
 //! Static analysis of shell command shapes for permissions and tooling.
 
+mod commands;
+
 /// Parsed summary of a shell command used for policy and result handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandAnalysis {
@@ -7,6 +9,8 @@ pub struct CommandAnalysis {
     pub subcommand: Option<String>,
     pub args: Vec<String>,
     pub classification: CommandClassification,
+    /// Exit semantics are only attributable to a single, unexpanded command.
+    pub single_command: bool,
 }
 
 /// Conservative filesystem-mutation classification for a shell command.
@@ -61,12 +65,19 @@ pub fn interpret_exit_code(
         return ExitInterpretation::Success;
     }
 
+    if !analysis.single_command {
+        return ExitInterpretation::Error;
+    }
+
     match (
         analysis.primary_command.as_deref(),
         analysis.subcommand.as_deref(),
         exit_code,
     ) {
         (Some("grep" | "rg"), _, 1) | (Some("git"), Some("grep"), 1) => {
+            ExitInterpretation::NoMatches
+        }
+        (Some("jq"), _, 1 | 4) if commands::jq_exit_status(&analysis.args) => {
             ExitInterpretation::NoMatches
         }
         (Some("diff" | "cmp"), _, 1) => ExitInterpretation::DifferencesFound,
@@ -85,42 +96,7 @@ pub fn interpret_exit_code(
 /// Tokenize a shell command while preserving quoted spans and command
 /// separators used by the conservative policy parser.
 pub fn shell_tokens(command: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut single_quote = false;
-    let mut double_quote = false;
-    let mut escape = false;
-
-    for ch in command.chars() {
-        if escape {
-            current.push(ch);
-            escape = false;
-            continue;
-        }
-
-        match ch {
-            '\\' if !single_quote => escape = true,
-            '\'' if !double_quote => single_quote = !single_quote,
-            '"' if !single_quote => double_quote = !double_quote,
-            c if c.is_whitespace() && !single_quote && !double_quote => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-            }
-            ';' | '|' | '&' if !single_quote && !double_quote => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-                tokens.push(ch.to_string());
-            }
-            _ => current.push(ch),
-        }
-    }
-
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    tokens
+    commands::tokens(command)
 }
 
 /// Split shell tokens into separator-delimited command segments.
@@ -144,48 +120,11 @@ pub fn command_segments(tokens: &[String]) -> Vec<&[String]> {
 /// Extract the executable, Git subcommand, and arguments from the first
 /// command segment after simple environment assignments/wrappers.
 pub fn first_command(tokens: &[String]) -> (Option<String>, Option<String>, Vec<String>) {
-    let Some(segment) = command_segments(tokens).into_iter().next() else {
-        return (None, None, Vec::new());
-    };
-    let mut index = 0;
-    while index < segment.len() && is_assignment(segment[index].as_str()) {
-        index += 1;
-    }
-    while index < segment.len() && is_command_wrapper(segment[index].as_str()) {
-        index += 1;
-    }
-    let Some(primary) = segment.get(index).cloned() else {
-        return (None, None, Vec::new());
-    };
-    let args = segment.iter().skip(index + 1).cloned().collect::<Vec<_>>();
-    let subcommand = if primary == "git" {
-        args.iter().find(|arg| !arg.starts_with('-')).cloned()
-    } else {
-        None
-    };
-    (Some(primary), subcommand, args)
+    commands::first_command(tokens)
 }
 
 fn is_separator(token: &str) -> bool {
-    matches!(token, ";" | "|" | "&")
-}
-
-fn is_assignment(token: &str) -> bool {
-    let Some((name, _value)) = token.split_once('=') else {
-        return false;
-    };
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-        && name
-            .chars()
-            .next()
-            .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
-}
-
-fn is_command_wrapper(token: &str) -> bool {
-    matches!(token, "env" | "command" | "builtin" | "nohup" | "exec")
+    matches!(token, "\0;" | "\0|" | "\0&")
 }
 
 /// Detect a shell output-redirection operator outside quotes.
@@ -341,6 +280,9 @@ pub fn analyze_command(command: &str) -> CommandAnalysis {
         subcommand,
         args,
         classification,
+        single_command: command_segments(&tokens).len() == 1
+            && !tokens.iter().any(|token| is_separator(token))
+            && !commands::has_uninspected_syntax(command),
     }
 }
 
@@ -704,7 +646,7 @@ fn classify_command(command: &str, tokens: &[String]) -> CommandClassification {
     if segments.is_empty() {
         return CommandClassification::Unknown;
     }
-    let mut saw_unknown = false;
+    let mut saw_unknown = commands::has_uninspected_syntax(command);
     for segment in segments {
         match classify_segment(segment) {
             CommandClassification::Mutating { reason } => {
@@ -725,6 +667,9 @@ fn classify_segment(tokens: &[String]) -> CommandClassification {
     let (Some(primary), subcommand, args) = first_command(tokens) else {
         return CommandClassification::Unknown;
     };
+    if let Some(classification) = commands::classify(&primary, subcommand.as_deref(), &args) {
+        return classification;
+    }
     if is_obvious_write_command(primary.as_str(), subcommand.as_deref(), args.as_slice()) {
         return CommandClassification::Mutating {
             reason: format!("invokes mutating command '{primary}'"),

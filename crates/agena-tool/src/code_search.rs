@@ -5,13 +5,12 @@
 //! request validation, filesystem traversal, and stable result values.
 
 use std::{
-    fs::File,
     io::Read as _,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
-use ast_grep_core::Pattern;
+use ast_grep_config::{GlobalRules, RuleConfig, SerializableRuleConfig};
 use ast_grep_language::{Language as AstGrepLanguage, LanguageExt, SupportLang};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -175,6 +174,7 @@ impl CodeLanguage {
 pub struct StructuralSearchRequest {
     pub path: PathBuf,
     pub pattern: String,
+    pub rule: Option<serde_json::Value>,
     pub language: Option<CodeLanguage>,
     pub limit: Option<u32>,
 }
@@ -208,6 +208,7 @@ pub struct StructuralCodeMatch {
     pub end_line: usize,
     pub end_col: usize,
     pub text: String,
+    pub text_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -217,6 +218,7 @@ pub struct SyntaxTreeResult {
     pub language: String,
     pub root_kind: String,
     pub has_error: bool,
+    pub truncated: bool,
     pub tree: SyntaxNodeView,
 }
 
@@ -229,6 +231,7 @@ pub struct SyntaxNodeView {
     pub end_line: usize,
     pub end_col: usize,
     pub text_preview: String,
+    pub children_truncated: bool,
     pub children: Vec<SyntaxNodeView>,
 }
 
@@ -237,6 +240,8 @@ pub struct SyntaxNodeView {
 pub enum CodeSearchError {
     #[error("{0}")]
     InvalidParameters(String),
+    #[error("structural search exhausted its source-byte budget")]
+    SourceBudget,
     #[error("failed to read {path}: {source}")]
     Read {
         path: String,
@@ -254,20 +259,19 @@ pub fn search_ast(
 ) -> Result<StructuralSearchResult, CodeSearchError> {
     let root = resolve_input_path(workspace_root, request.path.as_path());
     let language = resolve_code_language(&root, request.language, "search_ast")?;
-    let pattern = Pattern::try_new(request.pattern.as_str(), language).map_err(|error| {
-        CodeSearchError::InvalidParameters(
-            agena_failure::diagnostic::format_error_chain_with_context(
-                "invalid structural search pattern",
-                &error,
-            ),
-        )
-    })?;
-    let limit = request.limit.unwrap_or(20).clamp(1, 100) as usize;
+    let config = compile_rule(language, &request.pattern, request.rule.as_ref(), None)?;
+    let limit = request.limit.unwrap_or(20);
+    if !(1..=100).contains(&limit) {
+        return Err(CodeSearchError::InvalidParameters(
+            "limit must be between 1 and 100".into(),
+        ));
+    }
+    let limit = limit as usize;
     let started_at = Instant::now();
     let discovery = collect_language_files(&root, language, started_at);
     let mut scanned_files = 0;
     let mut skipped_files = discovery.skipped_entries;
-    let mut searched_bytes = 0_u64;
+    let mut remaining_bytes = MAX_STRUCTURAL_TOTAL_BYTES;
     let mut truncation_reason = discovery.truncation_reason.or_else(|| {
         discovery.first_skipped_error.map(|error| {
             format!(
@@ -278,7 +282,7 @@ pub fn search_ast(
     });
     let mut matches = Vec::new();
 
-    for path in discovery.files {
+    'files: for path in discovery.files {
         if started_at.elapsed() >= MAX_STRUCTURAL_DURATION {
             truncation_reason = Some(format!(
                 "structural search reached the {} second time limit",
@@ -286,8 +290,15 @@ pub fn search_ast(
             ));
             break;
         }
-        let source = match read_source_bounded(&path) {
+        let source = match read_source_with_budget(&path, &mut remaining_bytes) {
             Ok(source) => source,
+            Err(CodeSearchError::SourceBudget) => {
+                truncation_reason = Some(format!(
+                    "structural search reached the {} MiB content budget",
+                    MAX_STRUCTURAL_TOTAL_BYTES / 1024 / 1024
+                ));
+                break;
+            }
             Err(error) if root.is_dir() => {
                 skipped_files += 1;
                 if truncation_reason.is_none() {
@@ -300,17 +311,17 @@ pub fn search_ast(
             }
             Err(error) => return Err(error),
         };
-        if searched_bytes.saturating_add(source.len() as u64) > MAX_STRUCTURAL_TOTAL_BYTES {
-            truncation_reason = Some(format!(
-                "structural search reached the {} MiB content budget",
-                MAX_STRUCTURAL_TOTAL_BYTES / 1024 / 1024
-            ));
-            break;
-        }
-        searched_bytes = searched_bytes.saturating_add(source.len() as u64);
         scanned_files += 1;
         let ast = language.ast_grep(&source);
-        for node in ast.root().find_all(pattern.clone()) {
+        for node in ast.root().find_all(&config.matcher) {
+            if matches.len() >= limit {
+                truncation_reason = Some(format!("additional AST matches exceed limit {limit}"));
+                break 'files;
+            }
+            if started_at.elapsed() >= MAX_STRUCTURAL_DURATION {
+                truncation_reason = Some("structural search reached its time limit".into());
+                break 'files;
+            }
             let start = node.start_pos();
             let end = node.end_pos();
             matches.push(StructuralCodeMatch {
@@ -320,13 +331,8 @@ pub fn search_ast(
                 end_line: end.line() + 1,
                 end_col: end.column(&node) + 1,
                 text: truncate_for_output(node.text().into_owned(), 400),
+                text_truncated: node.text().trim().len() > 400,
             });
-            if matches.len() >= limit {
-                break;
-            }
-        }
-        if matches.len() >= limit {
-            break;
         }
     }
 
@@ -337,6 +343,93 @@ pub fn search_ast(
         truncated: truncation_reason.is_some(),
         truncation_reason,
         matches,
+    })
+}
+
+mod rewrite;
+pub use rewrite::{StructuralRewritePlan, plan_rewrite};
+
+struct CompiledRule {
+    matcher: ast_grep_config::RuleCore,
+    fixer: Vec<ast_grep_config::Fixer>,
+}
+
+fn compile_rule(
+    language: SupportLang,
+    pattern: &str,
+    rule: Option<&serde_json::Value>,
+    replacement: Option<&str>,
+) -> Result<CompiledRule, CodeSearchError> {
+    if pattern.trim().is_empty() == rule.is_none() {
+        return Err(CodeSearchError::InvalidParameters(
+            "provide exactly one of pattern or rule".into(),
+        ));
+    }
+    if pattern.len() > 16 * 1024 || replacement.is_some_and(|text| text.len() > 16 * 1024) {
+        return Err(CodeSearchError::InvalidParameters(
+            "pattern and replacement are limited to 16 KiB each".into(),
+        ));
+    }
+    let rule = rule
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({"pattern":pattern}));
+    fn bounded(value: &serde_json::Value, depth: usize, nodes: &mut usize) -> bool {
+        *nodes += 1;
+        if depth > 16 || *nodes > 512 {
+            return false;
+        }
+        match value {
+            serde_json::Value::Array(items) => {
+                items.iter().all(|value| bounded(value, depth + 1, nodes))
+            }
+            serde_json::Value::Object(items) => {
+                items.values().all(|value| bounded(value, depth + 1, nodes))
+            }
+            _ => true,
+        }
+    }
+    if !rule.is_object()
+        || !bounded(&rule, 0, &mut 0)
+        || serde_json::to_vec(&rule).map_or(true, |s| s.len() > 16 * 1024)
+    {
+        return Err(CodeSearchError::InvalidParameters(
+            "rule must be an object within 16 KiB, 16 levels and 512 values".into(),
+        ));
+    }
+    let input = serde_json::json!({"language":language, "rule":rule, "fix":replacement});
+    let serialized: SerializableRuleConfig<SupportLang> =
+        serde_json::from_value(input).map_err(|error| {
+            CodeSearchError::InvalidParameters(format!("invalid ast-grep rule: {error}"))
+        })?;
+    // Search accepts broad patterns such as $A, matching the existing simple
+    // pattern API. Full rule-config validation additionally validates fix vars.
+    if replacement.is_none() {
+        let matcher = serialized
+            .get_matcher(&GlobalRules::default())
+            .map_err(|error| {
+                CodeSearchError::InvalidParameters(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "invalid ast-grep rule",
+                        &error,
+                    ),
+                )
+            })?;
+        return Ok(CompiledRule {
+            matcher,
+            fixer: Vec::new(),
+        });
+    }
+    let config = RuleConfig::try_from(serialized, &GlobalRules::default()).map_err(|error| {
+        CodeSearchError::InvalidParameters(
+            agena_failure::diagnostic::format_error_chain_with_context(
+                "invalid ast-grep rule or replacement",
+                &error,
+            ),
+        )
+    })?;
+    Ok(CompiledRule {
+        matcher: config.matcher,
+        fixer: config.fixer,
     })
 }
 
@@ -361,13 +454,23 @@ pub fn syntax_tree(
             language: display_language(language).to_string(),
         })?;
     let root = tree.root_node();
-    let max_depth = request.max_depth.unwrap_or(2).clamp(1, 6);
+    let max_depth = request.max_depth.unwrap_or(2);
+    if !(1..=6).contains(&max_depth) {
+        return Err(CodeSearchError::InvalidParameters(
+            "max_depth must be between 1 and 6".into(),
+        ));
+    }
+    let tree = syntax_node_view(root, &source, 0, max_depth, &mut 512);
+    fn clipped(node: &SyntaxNodeView) -> bool {
+        node.children_truncated || node.children.iter().any(clipped)
+    }
     Ok(SyntaxTreeResult {
         path: display_path(workspace_root, &path),
         language: display_language(language).to_string(),
         root_kind: root.kind().to_string(),
         has_error: root.has_error(),
-        tree: syntax_node_view(root, &source, 0, max_depth),
+        truncated: clipped(&tree),
+        tree,
     })
 }
 
@@ -462,6 +565,7 @@ fn collect_language_files(
     builder
         .follow_links(false)
         .standard_filters(true)
+        .sort_by_file_path(|left, right| left.cmp(right))
         .threads(1)
         .filter_entry(|entry| {
             entry.depth() == 0
@@ -517,13 +621,13 @@ fn collect_language_files(
             continue;
         }
         if infer_support_lang(entry.path()).is_some_and(|detected| detected == language) {
-            files.push(entry.into_path());
             if files.len() >= MAX_STRUCTURAL_FILES {
                 truncation_reason = Some(format!(
                     "structural discovery reached the {MAX_STRUCTURAL_FILES} file limit"
                 ));
                 break;
             }
+            files.push(entry.into_path());
         }
     }
     files.sort();
@@ -536,14 +640,28 @@ fn collect_language_files(
 }
 
 fn read_source_bounded(path: &Path) -> Result<String, CodeSearchError> {
-    let file = File::open(path).map_err(|source| CodeSearchError::Read {
-        path: path.display().to_string(),
-        source,
-    })?;
+    let mut budget = MAX_STRUCTURAL_TOTAL_BYTES;
+    read_source_with_budget(path, &mut budget)
+}
+
+fn read_source_with_budget(path: &Path, remaining: &mut u64) -> Result<String, CodeSearchError> {
+    let mut file =
+        crate::file_io::open_regular_file(path).map_err(|source| CodeSearchError::Read {
+            path: path.display().to_string(),
+            source,
+        })?;
     let metadata = file.metadata().map_err(|source| CodeSearchError::Read {
         path: path.display().to_string(),
         source,
     })?;
+    if metadata.len() > MAX_SOURCE_FILE_BYTES {
+        return Err(CodeSearchError::InvalidParameters(
+            "source exceeds the 8 MiB limit".into(),
+        ));
+    }
+    if metadata.len() > *remaining {
+        return Err(CodeSearchError::SourceBudget);
+    }
     let capacity = usize::try_from(metadata.len().min(MAX_SOURCE_FILE_BYTES)).map_err(|error| {
         CodeSearchError::InvalidParameters(
             agena_failure::diagnostic::format_error_chain_with_context(
@@ -556,18 +674,32 @@ fn read_source_bounded(path: &Path) -> Result<String, CodeSearchError> {
         )
     })?;
     let mut bytes = Vec::with_capacity(capacity);
-    file.take(MAX_SOURCE_FILE_BYTES.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|source| CodeSearchError::Read {
-            path: path.display().to_string(),
-            source,
-        })?;
-    if bytes.len() as u64 > MAX_SOURCE_FILE_BYTES {
-        return Err(CodeSearchError::InvalidParameters(format!(
-            "source file exceeds the {} MiB structural-search limit: {}",
-            MAX_SOURCE_FILE_BYTES / 1024 / 1024,
-            path.display()
-        )));
+    let limit = (*remaining).min(MAX_SOURCE_FILE_BYTES);
+    let outcome = (&mut file)
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes);
+    // Charge reads even if UTF-8 decoding or an I/O operation fails. One
+    // boundary-probe byte distinguishes exact EOF from concurrent growth.
+    *remaining = remaining.saturating_sub(bytes.len() as u64);
+    outcome.map_err(|source| CodeSearchError::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    if bytes.len() as u64 > limit {
+        return Err(if limit < MAX_SOURCE_FILE_BYTES {
+            CodeSearchError::SourceBudget
+        } else {
+            CodeSearchError::InvalidParameters("source exceeds the 8 MiB limit".into())
+        });
+    }
+    let after = file.metadata().map_err(|source| CodeSearchError::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    if metadata.len() != after.len() || metadata.modified().ok() != after.modified().ok() {
+        return Err(CodeSearchError::InvalidParameters(
+            "source changed while reading; retry".into(),
+        ));
     }
     String::from_utf8(bytes).map_err(|error| {
         CodeSearchError::InvalidParameters(
@@ -605,7 +737,9 @@ fn syntax_node_view(
     source: &str,
     depth: u8,
     max_depth: u8,
+    remaining: &mut usize,
 ) -> SyntaxNodeView {
+    *remaining -= 1;
     let start = node.start_position();
     let end = node.end_position();
     let text_preview = truncate_for_output(
@@ -615,15 +749,23 @@ fn syntax_node_view(
             .replace('\n', "\\n"),
         120,
     );
-    let children = if depth >= max_depth {
-        Vec::new()
-    } else {
+    let mut children = Vec::new();
+    if depth < max_depth {
         let mut cursor = node.walk();
-        node.named_children(&mut cursor)
-            .take(50)
-            .map(|child| syntax_node_view(child, source, depth + 1, max_depth))
-            .collect()
-    };
+        for child in node.named_children(&mut cursor).take(50) {
+            if *remaining == 0 {
+                break;
+            }
+            children.push(syntax_node_view(
+                child,
+                source,
+                depth + 1,
+                max_depth,
+                remaining,
+            ));
+        }
+    }
+    let children_truncated = children.len() < node.named_child_count();
     SyntaxNodeView {
         kind: node.kind().to_string(),
         start_line: start.row + 1,
@@ -631,6 +773,7 @@ fn syntax_node_view(
         end_line: end.row + 1,
         end_col: end.column + 1,
         text_preview,
+        children_truncated,
         children,
     }
 }
@@ -685,6 +828,7 @@ mod tests {
             StructuralSearchRequest {
                 path: workspace.path().to_path_buf(),
                 pattern: "fn $NAME() { $$$ }".to_owned(),
+                rule: None,
                 language: Some(CodeLanguage::Rust),
                 limit: Some(20),
             },

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use redb::{
-    Database, MultimapTableHandle, ReadableDatabase, TableDefinition, TableError, TableHandle,
+    Database, MultimapTableHandle, ReadableDatabase, ReadableTable, TableDefinition, TableError,
+    TableHandle,
 };
 
 use crate::{CrawlError, StoredDocument};
@@ -14,10 +15,11 @@ const MARKDOWN_HASH_TO_ID_TABLE: TableDefinition<&str, &str> =
 const RAW_HASH_TO_ID_TABLE: TableDefinition<&str, &str> =
     TableDefinition::new("web_raw_hash_to_id");
 
-static OPEN_DATABASES: LazyLock<Mutex<HashMap<PathBuf, Arc<Database>>>> =
+static OPEN_DATABASES: LazyLock<Mutex<HashMap<PathBuf, Weak<Database>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Store of crawl metadata.
+#[derive(Clone)]
 pub struct CrawlMetadataStore {
     db: Arc<Database>,
 }
@@ -27,14 +29,22 @@ impl CrawlMetadataStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let parent = path
+            .parent()
+            .ok_or_else(|| CrawlError::InvalidInput("metadata path has no parent".into()))?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| CrawlError::InvalidInput("metadata path has no filename".into()))?;
+        let path = parent.canonicalize()?.join(name);
         let mut open = OPEN_DATABASES.lock().map_err(|_| {
             CrawlError::InvalidInput("metadata database mutex poisoned".to_string())
         })?;
-        let db = if let Some(existing) = open.get(path) {
-            Arc::clone(existing)
+        open.retain(|_, database| database.strong_count() > 0);
+        let db = if let Some(existing) = open.get(&path).and_then(Weak::upgrade) {
+            existing
         } else {
-            let created = Arc::new(Database::create(path)?);
-            open.insert(path.to_path_buf(), Arc::clone(&created));
+            let created = Arc::new(Database::create(&path)?);
+            open.insert(path, Arc::downgrade(&created));
             created
         };
         let store = Self { db };
@@ -90,8 +100,15 @@ impl CrawlMetadataStore {
         Ok(())
     }
 
-    pub fn save_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
+    pub fn save_document(
+        &self,
+        document: &StoredDocument,
+        previous: Option<&StoredDocument>,
+    ) -> Result<(), CrawlError> {
         let write_txn = self.db.begin_write()?;
+        if let Some(previous) = previous {
+            remove_owned_mappings(&write_txn, previous)?;
+        }
         {
             let mut url_to_id = write_txn.open_table(URL_TO_ID_TABLE)?;
             url_to_id.insert(document.canonical_url.as_str(), document.id.as_str())?;
@@ -110,18 +127,7 @@ impl CrawlMetadataStore {
 
     pub fn delete_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
         let write_txn = self.db.begin_write()?;
-        {
-            let mut url_to_id = write_txn.open_table(URL_TO_ID_TABLE)?;
-            url_to_id.remove(document.canonical_url.as_str())?;
-        }
-        {
-            let mut hash_to_id = write_txn.open_table(MARKDOWN_HASH_TO_ID_TABLE)?;
-            hash_to_id.remove(document.markdown_hash.as_str())?;
-        }
-        {
-            let mut raw_hash_to_id = write_txn.open_table(RAW_HASH_TO_ID_TABLE)?;
-            raw_hash_to_id.remove(document.raw_html_hash.as_str())?;
-        }
+        remove_owned_mappings(&write_txn, document)?;
         write_txn.commit()?;
         Ok(())
     }
@@ -172,6 +178,26 @@ impl CrawlMetadataStore {
     }
 }
 
+fn remove_owned_mappings(
+    transaction: &redb::WriteTransaction,
+    document: &StoredDocument,
+) -> Result<(), CrawlError> {
+    for (definition, key) in [
+        (URL_TO_ID_TABLE, document.canonical_url.as_str()),
+        (MARKDOWN_HASH_TO_ID_TABLE, document.markdown_hash.as_str()),
+        (RAW_HASH_TO_ID_TABLE, document.raw_html_hash.as_str()),
+    ] {
+        let mut table = transaction.open_table(definition)?;
+        let owned = table
+            .get(key)?
+            .is_some_and(|value| value.value() == document.id);
+        if owned {
+            table.remove(key)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +229,21 @@ mod tests {
                 "web_url_to_id".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn metadata_handles_share_aliases_and_release_the_database_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.redb");
+        let first = CrawlMetadataStore::open(&path).unwrap();
+        let second = CrawlMetadataStore::open(&dir.path().join(".").join("metadata.redb")).unwrap();
+        assert!(Arc::ptr_eq(&first.db, &second.db));
+        let weak = Arc::downgrade(&first.db);
+        drop(first);
+        assert!(weak.upgrade().is_some());
+        drop(second);
+        assert!(weak.upgrade().is_none());
+        Database::create(&path).expect("last owner must release the file lock");
     }
 
     #[test]

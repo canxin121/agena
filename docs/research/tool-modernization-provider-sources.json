@@ -1,0 +1,30 @@
+{
+  "checked_date": "2026-10-04",
+  "method": "Official documentation retrieval; no paid search request",
+  "sources": [
+    {
+      "provider": "Brave",
+      "url": "https://api-dashboard.search.brave.com/documentation/services/web-search",
+      "bytes": 110886,
+      "sha256": "72df2d3f59391992be9a0c868c1d74bb8f27771c2fe205042eaa42704cee9a4c"
+    },
+    {
+      "provider": "Tavily",
+      "url": "https://docs.tavily.com/documentation/api-reference/endpoint/search.md",
+      "bytes": 31647,
+      "sha256": "c2591c8505fc2c689638f779431fb49f90606d735700c36ec7e332a3f3de262f"
+    },
+    {
+      "provider": "Exa",
+      "url": "https://docs.exa.ai/reference/search.md",
+      "bytes": 91150,
+      "sha256": "fa3cdde97d7f39c53cc3cecba5519bb498299e7193f0542a5945b99222362d4e"
+    },
+    {
+      "provider": "SearXNG",
+      "url": "https://raw.githubusercontent.com/searxng/searxng/master/docs/dev/search_api.rst",
+      "bytes": 2687,
+      "sha256": "cf7cd0cf55cb06e2e2d4f33e022884c6046abb9c6de247ff02d204c1a5d034c9"
+    }
+  ]
+}

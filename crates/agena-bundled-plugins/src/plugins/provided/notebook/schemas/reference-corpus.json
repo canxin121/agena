@@ -1,0 +1,584 @@
+{
+  "reference": "nbformat 5.11.1",
+  "cases": [
+    {
+      "name": "v4_0_code",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 0,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_0_raw_attachment",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 0,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_1_code",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 1,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_1_raw_attachment",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 1,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_2_code",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 2,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_2_raw_attachment",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 2,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_3_code",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 3,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_3_raw_attachment",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 3,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_4_code",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 4,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_4_raw_attachment",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 4,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_5_code",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            },
+            "id": "raw-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "v4_5_raw_attachment",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "raw",
+            "metadata": {},
+            "source": "raw",
+            "attachments": {
+              "sample.txt": {
+                "text/plain": "attachment"
+              }
+            },
+            "id": "raw-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "json_mime_object",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [
+              {
+                "output_type": "display_data",
+                "metadata": {},
+                "data": {
+                  "application/vnd.plotly.v1+json": {
+                    "data": [
+                      1,
+                      2
+                    ]
+                  }
+                }
+              }
+            ],
+            "id": "fixture-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "non_json_mime_object_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [
+              {
+                "output_type": "display_data",
+                "metadata": {},
+                "data": {
+                  "text/plain": {
+                    "invalid": true
+                  }
+                }
+              }
+            ],
+            "id": "fixture-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate_tags_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {
+              "tags": [
+                "duplicate",
+                "duplicate"
+              ]
+            },
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [],
+            "id": "fixture-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty_tag_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {
+              "tags": [
+                ""
+              ]
+            },
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [],
+            "id": "fixture-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "kernelspec_missing_display_name_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+          "kernelspec": {
+            "name": "python3"
+          }
+        },
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [],
+            "id": "fixture-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown_cell_field_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [],
+            "id": "fixture-cell",
+            "unrecognized": "data"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown_notebook_field_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [],
+            "id": "fixture-cell"
+          }
+        ],
+        "unexpected": true
+      }
+    },
+    {
+      "name": "stream_name_missing_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [
+              {
+                "output_type": "stream",
+                "text": "text"
+              }
+            ],
+            "id": "fixture-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative_execution_count_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": -1,
+            "outputs": [],
+            "id": "fixture-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fractional_execution_count_invalid",
+      "valid": false,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": 1.5,
+            "outputs": [],
+            "id": "fixture-cell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate_cell_id_invalid",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [],
+            "id": "fixture-cell"
+          },
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [],
+            "id": "fixture-cell"
+          }
+        ]
+      },
+      "agena_valid": false,
+      "reason": "Agena rejects duplicate cell IDs to preserve unambiguous identity; nbformat 5.11.1 repairs them with a warning.",
+      "reference_warnings": ["DuplicateCellId"]
+    },
+    {
+      "name": "future_minor_preserves_unknown_fields_and_types",
+      "valid": true,
+      "notebook": {
+        "nbformat": 4,
+        "nbformat_minor": 6,
+        "metadata": {},
+        "cells": [
+          {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+              "print(1)\n"
+            ],
+            "execution_count": null,
+            "outputs": [
+              {
+                "output_type": "future",
+                "blob": {
+                  "value": 1
+                }
+              }
+            ],
+            "id": "fixture-cell",
+            "future": "field"
+          },
+          {
+            "cell_type": "future",
+            "metadata": {},
+            "id": "future-cell",
+            "payload": {
+              "value": 1
+            }
+          }
+        ],
+        "future": "field"
+      }
+    }
+  ]
+}

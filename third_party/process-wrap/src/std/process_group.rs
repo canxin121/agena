@@ -125,6 +125,7 @@ impl ProcessGroupChild {
 				}
 				-1 => {
 					match Errno::last() {
+						Errno::EINTR => continue,
 						Errno::ECHILD => {
 							// no more children to reap; this is a graceful exit
 							return Ok(ControlFlow::Break(parent_exit_status));

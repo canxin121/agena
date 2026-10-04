@@ -27,12 +27,21 @@ pub struct CrawlStorePruneReport {
 /// On-disk store for crawled documents.
 pub struct CrawlStore {
     dir: CrawlDir,
+    metadata: std::sync::Arc<std::sync::Mutex<Option<CrawlMetadataStore>>>,
 }
 
 impl CrawlStore {
+    #[cfg(test)]
+    pub(crate) fn for_test(path: &Path) -> Self {
+        Self {
+            dir: CrawlDir::for_test(path.to_path_buf()),
+            metadata: Default::default(),
+        }
+    }
     pub fn for_workspace(workspace_root: &Path) -> Self {
         Self {
             dir: CrawlDir::from_workspace(workspace_root),
+            metadata: Default::default(),
         }
     }
 
@@ -48,9 +57,15 @@ impl CrawlStore {
     pub fn save_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
         self.ensure_exists()?;
         let path = self.document_path(document.id.as_str());
+        let metadata = self.metadata()?;
+        let previous = if path.exists() {
+            Some(self.get_document(&document.id)?)
+        } else {
+            None
+        };
         let bytes = serde_json::to_vec_pretty(document)?;
         persist_document_atomically(&path, &bytes)?;
-        self.metadata()?.save_document(document)?;
+        metadata.save_document(document, previous.as_ref())?;
         Ok(())
     }
 
@@ -127,8 +142,11 @@ impl CrawlStore {
 
     pub fn find_by_url(&self, raw_url: &str) -> Result<Option<StoredDocument>, CrawlError> {
         let target = prepare_fetch_url(raw_url)?.to_string();
-        if let Some(id) = self.metadata()?.find_document_id_by_url(target.as_str())? {
-            return self.get_document(id.as_str()).map(Some);
+        if let Some(id) = self.metadata()?.find_document_id_by_url(target.as_str())?
+            && let Ok(document) = self.get_document(id.as_str())
+            && document.canonical_url == target
+        {
+            return Ok(Some(document));
         }
         Ok(self
             .list_documents()?
@@ -143,8 +161,10 @@ impl CrawlStore {
         if let Some(id) = self
             .metadata()?
             .find_document_id_by_markdown_hash(markdown_hash)?
+            && let Ok(document) = self.get_document(id.as_str())
+            && document.markdown_hash == markdown_hash
         {
-            return self.get_document(id.as_str()).map(Some);
+            return Ok(Some(document));
         }
         Ok(self
             .list_documents()?
@@ -153,8 +173,11 @@ impl CrawlStore {
     }
 
     pub fn find_by_raw_hash(&self, raw_hash: &str) -> Result<Option<StoredDocument>, CrawlError> {
-        if let Some(id) = self.metadata()?.find_document_id_by_raw_hash(raw_hash)? {
-            return self.get_document(id.as_str()).map(Some);
+        if let Some(id) = self.metadata()?.find_document_id_by_raw_hash(raw_hash)?
+            && let Ok(document) = self.get_document(id.as_str())
+            && document.raw_html_hash == raw_hash
+        {
+            return Ok(Some(document));
         }
         Ok(self
             .list_documents()?
@@ -177,7 +200,16 @@ impl CrawlStore {
     }
 
     fn metadata(&self) -> Result<CrawlMetadataStore, CrawlError> {
-        CrawlMetadataStore::open(self.dir.metadata_db_path().as_path())
+        let mut retained = self
+            .metadata
+            .lock()
+            .map_err(|_| CrawlError::InvalidInput("crawl metadata handle mutex poisoned".into()))?;
+        if retained.is_none() {
+            *retained = Some(CrawlMetadataStore::open(
+                self.dir.metadata_db_path().as_path(),
+            )?);
+        }
+        Ok(retained.as_ref().expect("initialized above").clone())
     }
 
     fn document_path(&self, id: &str) -> std::path::PathBuf {
@@ -242,6 +274,74 @@ fn persist_document_atomically(path: &Path, bytes: &[u8]) -> Result<(), CrawlErr
 #[cfg(test)]
 mod tests {
     use super::persist_document_atomically;
+
+    #[test]
+    fn refreshed_documents_do_not_keep_stale_hashes_or_remove_another_owners_mapping() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CrawlStore::for_test(dir.path());
+        let document = |path: &str, body: &str| {
+            let url = url::Url::parse(&format!("https://fixture.invalid/{path}")).unwrap();
+            StoredDocument::from_fetched_page(
+                crate::extract_page_from_body(
+                    &url,
+                    &url,
+                    "text/plain",
+                    200,
+                    false,
+                    false,
+                    body,
+                    None,
+                    None,
+                ),
+                0,
+                1000,
+            )
+        };
+        let old = document("one", "original text");
+        store.save_document(&old).unwrap();
+        let refreshed = document("one", "new content");
+        store.save_document(&refreshed).unwrap();
+        assert!(
+            store
+                .find_by_raw_hash(&old.raw_html_hash)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .find_by_markdown_hash(&old.markdown_hash)
+                .unwrap()
+                .is_none()
+        );
+        // Simulate interrupted publication leaving an outdated secondary index.
+        store.metadata().unwrap().save_document(&old, None).unwrap();
+        assert!(
+            store
+                .find_by_raw_hash(&old.raw_html_hash)
+                .unwrap()
+                .is_none()
+        );
+        let other = document("two", "new content");
+        store.save_document(&other).unwrap();
+        store.delete_loaded_document(&refreshed).unwrap();
+        assert_eq!(
+            store
+                .metadata()
+                .unwrap()
+                .find_document_id_by_raw_hash(&other.raw_html_hash)
+                .unwrap(),
+            Some(other.id.clone())
+        );
+        assert_eq!(
+            store
+                .find_by_markdown_hash(&other.markdown_hash)
+                .unwrap()
+                .unwrap()
+                .id,
+            other.id
+        );
+    }
 
     #[test]
     fn document_persistence_replaces_atomically_without_fixed_temp_files() {

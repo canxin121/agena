@@ -1,0 +1,39 @@
+{
+  "baseline_commit": "98c1c116",
+  "pre_audit_commit": "fe79003c",
+  "audited_source_commit": "3fc869a83b948759d843617bc6224b0edd6c6f9a",
+  "measurement": "UTF-8 bytes, not model-specific tokenizer counts",
+  "scope": "Base identity plus enabled workflow sections only; excludes provider function definitions, project guidance, user system additions and conversation history.",
+  "before": {
+    "base_utf8_bytes": 9738,
+    "with_all_workflow_sections_utf8_bytes": 16811
+  },
+  "pre_audit": {
+    "base_utf8_bytes": 4658,
+    "with_all_workflow_sections_utf8_bytes": 7493
+  },
+  "after": {
+    "base_utf8_bytes": 6288,
+    "with_all_workflow_sections_utf8_bytes": 10537
+  },
+  "historical_scope": "before, pre_audit, after and regression_budgets describe the feature prompt audit before integration of upstream Git policy. current_master_integration records the merged prompt.",
+  "regression_budgets": {
+    "base_utf8_bytes": 7500,
+    "with_all_workflow_sections_utf8_bytes": 12000
+  },
+  "current_master_integration": {
+    "upstream_commit": "68d3b9b52705ec9fa963a3a124207ca13eb9c7ea",
+    "feature_commit": "cf4984c1b96d3779c7e0e0b395d7d06b84368f1b",
+    "source_evidence": "tool-modernization-integration-validation.json",
+    "core_base_excluding_git_utf8_bytes": 6414,
+    "git_guidance_with_separator_utf8_bytes": 10084,
+    "base_including_git_utf8_bytes": 16498,
+    "all_workflow_sections_including_git_utf8_bytes": 21247,
+    "regression_budgets": {
+      "core_base_excluding_git_utf8_bytes": 7500,
+      "core_and_all_workflows_excluding_git_utf8_bytes": 12000,
+      "git_guidance_with_separator_utf8_bytes": 12000
+    }
+  },
+  "reproduce_current": "cargo test --locked -p agena-runtime-session session_prompt::tests::assembled_prompt_budget_and_heading_layout_are_bounded -- --nocapture"
+}

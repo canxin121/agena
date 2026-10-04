@@ -7,6 +7,7 @@ use std::time::Duration;
 use spider::features::chrome_common::{WaitForDelay, WaitForIdleNetwork, WaitForSelector};
 use spider::website::Website;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::task::JoinSet;
 use url::Url;
 
 pub use crate::browser::LocalBrowserOptions;
@@ -41,6 +42,7 @@ impl Default for BrowserRenderOptions {
 #[derive(Debug, Clone)]
 /// Options for spider-based fetching.
 pub struct SpiderFetchOptions {
+    pub extractor: crate::ExtractionBackend,
     pub max_body_bytes: usize,
     pub timeout: Duration,
     pub delay_ms: u64,
@@ -52,6 +54,7 @@ pub struct SpiderFetchOptions {
 impl Default for SpiderFetchOptions {
     fn default() -> Self {
         Self {
+            extractor: crate::ExtractionBackend::default(),
             max_body_bytes: crate::DEFAULT_MAX_BODY_BYTES,
             timeout: Duration::from_secs(crate::DEFAULT_FETCH_TIMEOUT_SECS),
             delay_ms: 0,
@@ -66,6 +69,11 @@ pub async fn fetch_page_with_spider(
     url: &Url,
     options: &SpiderFetchOptions,
 ) -> Result<FetchedPage, CrawlError> {
+    let _lease = options
+        .browser
+        .enabled
+        .then(crate::local_browser_lease)
+        .transpose()?;
     tracing::debug!(
         target: "agena::web",
         url = %url,
@@ -80,7 +88,11 @@ pub async fn fetch_page_with_spider(
         .with_delay(options.delay_ms)
         .with_request_timeout(Some(options.timeout))
         .with_respect_robots_txt(options.respect_robots_txt)
-        .with_user_agent(Some(options.user_agent.as_str()));
+        .with_user_agent(Some(options.user_agent.as_str()))
+        .with_max_page_bytes(Some(options.max_body_bytes.saturating_add(1) as f64))
+        .with_max_bytes_allowed(Some(options.max_body_bytes.saturating_mul(4) as u64))
+        .with_redirect_limit(10)
+        .with_ignore_sitemap(true);
     let browser_connection = browser_connection(&options.browser).await?;
     configure_browser(
         &mut website,
@@ -92,11 +104,13 @@ pub async fn fetch_page_with_spider(
         .map_err(|_| CrawlError::InvalidInput(format!("invalid crawl url '{}'", url)))?;
 
     let mut rx = website.subscribe(8);
-    let collector = tokio::spawn(async move {
-        let mut pages = Vec::new();
+    let mut collectors = JoinSet::new();
+    collectors.spawn(async move {
+        let mut first = None;
         loop {
             match rx.recv().await {
-                Ok(page) => pages.push(page),
+                Ok(page) if first.is_none() => first = Some(page),
+                Ok(_) => {}
                 Err(RecvError::Closed) => break,
                 Err(RecvError::Lagged(skipped)) => {
                     tracing::warn!(
@@ -107,38 +121,64 @@ pub async fn fetch_page_with_spider(
                 }
             }
         }
-        pages
+        first
     });
 
-    website.crawl().await;
+    let crawl = async {
+        if options.browser.enabled {
+            website.crawl().await;
+        } else {
+            website.crawl_raw().await;
+        }
+    };
+    let result = tokio::time::timeout(options.timeout, crawl).await;
     website.unsubscribe();
-    let pages = collector.await.map_err(|error| {
-        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
-            "spider page collector task failed",
-            &error,
-        ))
+    if result.is_err() {
+        collectors.shutdown().await;
+        return Err(CrawlError::InvalidInput(
+            "Spider fetch deadline exceeded".into(),
+        ));
+    }
+    let page = collectors
+        .join_next()
+        .await
+        .ok_or_else(|| CrawlError::NotFound("Spider page collector".into()))?
+        .map_err(|error| CrawlError::InvalidInput(format!("Spider collector failed: {error}")))?
+        .ok_or_else(|| CrawlError::NotFound(format!("crawl page '{url}'")))?;
+    let requested_url = url.clone();
+    let options = options.clone();
+    let backend = options.extractor;
+    let permit = PAGE_EXTRACTORS.acquire().await.map_err(|error| {
+        CrawlError::InvalidInput(format!("page extraction admission failed: {error}"))
     })?;
-    let page = pages
-        .into_iter()
-        .next()
-        .ok_or_else(|| CrawlError::NotFound(format!("crawl page '{}'", url)))?;
-    page_from_spider_page(url, page, options)
+    let (page, body) = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        page_from_spider_page(&requested_url, page, &options)
+    })
+    .await
+    .map_err(|error| CrawlError::InvalidInput(format!("page extraction failed: {error}")))??;
+    crate::extract_with_backend(page, &body, backend).await
 }
+
+static PAGE_EXTRACTORS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 fn page_from_spider_page(
     requested_url: &Url,
     page: spider::page::Page,
     options: &SpiderFetchOptions,
-) -> Result<FetchedPage, CrawlError> {
+) -> Result<(FetchedPage, String), CrawlError> {
     let final_url = canonicalize_url(page.get_url_final())?;
-    let html = page.get_html();
-    let (body, truncated) = truncate_utf8(html.as_str(), options.max_body_bytes);
+    let bytes = page.get_html_bytes_u8();
+    let truncated = page.content_truncated || bytes.len() > options.max_body_bytes;
+    let html = String::from_utf8_lossy(&bytes[..bytes.len().min(options.max_body_bytes)]);
+    let (body, unicode_clipped) = truncate_utf8(&html, options.max_body_bytes);
+    let truncated = truncated || unicode_clipped;
     let content_type = if looks_like_html(body.as_str()) {
         "text/html"
     } else {
         "text/plain"
     };
-    Ok(extract_page_from_body(
+    let extracted = extract_page_from_body(
         requested_url,
         &final_url,
         content_type,
@@ -148,7 +188,8 @@ fn page_from_spider_page(
         body.as_str(),
         None,
         None,
-    ))
+    );
+    Ok((extracted, body))
 }
 
 #[cfg(all(

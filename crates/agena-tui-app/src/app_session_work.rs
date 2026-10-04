@@ -72,7 +72,7 @@ pub(crate) enum WorkResult {
     Files(FilePage),
     Logs(BackgroundActivityLogResource),
     Diff(String, bool),
-    Control(BackgroundActivityResource),
+    Control(Box<BackgroundActivityResource>),
 }
 
 #[derive(Debug, Default)]

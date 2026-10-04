@@ -418,7 +418,7 @@ fn validate_provider_native_tool_definition_boundary(
     Ok(())
 }
 
-/// A provider-bound function is either one of the five Tool API gateway
+/// A provider-bound function is either one of the declared Tool API gateway
 /// functions or one of the runtime's closed set of control functions.
 ///
 /// The gateway rule is what keeps an execution tool from ever reaching a
@@ -435,7 +435,7 @@ fn validate_provider_bound_tool_name(name: &str) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "provider-bound tool {name:?} is not one of the five Tool API gateway functions and not a runtime control function; execution tools reach a provider only through `tools_call`"
+        "provider-bound tool {name:?} is not one of the declared Tool API gateway functions and not a runtime control function; execution tools reach a provider only through `tools_call`"
     ))
 }
 
@@ -2287,7 +2287,7 @@ mod tool_api_function_validation_tests {
             assert!(
                 error
                     .to_string()
-                    .contains("not one of the five Tool API gateway functions")
+                    .contains("not one of the declared Tool API gateway functions")
             );
         }
     }

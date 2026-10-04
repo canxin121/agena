@@ -4,6 +4,7 @@
 
 use agena_plugin_host::registry::RegisteredTool;
 use agena_plugin_host::sdk::{Plugin, PluginKey, PluginManifest};
+use agena_runtime_tools::tool::tool_registry::ToolApiBinding;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -30,7 +31,7 @@ const EFFECT_TAGS: &[&str] = &[
 pub struct CapabilityCounts {
     pub plugins: usize,
     pub tools: usize,
-    /// The four discovery handlers implemented by the `agena.tools` plugin.
+    /// The discovery handlers implemented by the `agena.tools` plugin.
     /// `tools_call` is a runtime-synthesized provider gateway definition, not
     /// an executable plugin handler and therefore is not counted here.
     pub gateway_tools: usize,
@@ -273,11 +274,7 @@ fn plugin_capability(
                 .filter(|tag| EFFECT_TAGS.contains(&tag.as_str()))
                 .cloned()
                 .collect::<Vec<_>>();
-            let gateway = key.to_string() == "agena.tools"
-                && matches!(
-                    registered.tool_name(),
-                    "list" | "search" | "help" | "tags" | "call"
-                );
+            let gateway = ToolApiBinding::from_registered_tool(registered.clone()).is_some();
             BundledToolCapability {
                 canonical_name: registered.canonical_name(),
                 gateway,
@@ -366,7 +363,7 @@ mod boundary_audit {
                 }
             }
         }
-        assert_eq!(count, 135);
+        assert_eq!(count, 138);
         assert!(
             failures.is_empty(),
             "Malformed arguments escaped validation:\n{}",

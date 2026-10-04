@@ -1,11 +1,11 @@
+use agena_process::blocking::ManagedChild as Child;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use process_control::{ChildExt as _, Control as _};
 use tempfile::TempDir;
 
 use crate::CrawlError;
@@ -57,14 +57,7 @@ impl ManagedBrowser {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        // Put the browser in its own process group so shutdown can kill the
-        // whole tree (helpers included), not just the main process.
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        let mut child = command.spawn().map_err(|err| {
+        let mut child = agena_process::blocking::spawn(command).map_err(|err| {
             CrawlError::InvalidInput(format!(
                 "failed to launch local browser '{}': {err}",
                 executable.display()
@@ -154,6 +147,7 @@ struct LocalBrowserState {
     browser: Option<ManagedBrowser>,
     last_used: Option<Instant>,
     idle_timeout: Option<Duration>,
+    active_uses: usize,
 }
 
 static LOCAL_BROWSER: LazyLock<Mutex<LocalBrowserState>> = LazyLock::new(|| {
@@ -161,6 +155,7 @@ static LOCAL_BROWSER: LazyLock<Mutex<LocalBrowserState>> = LazyLock::new(|| {
         browser: None,
         last_used: None,
         idle_timeout: None,
+        active_uses: 0,
     })
 });
 
@@ -181,6 +176,9 @@ pub fn local_browser_endpoint(options: &LocalBrowserOptions) -> Result<String, C
         let endpoint = existing.endpoint.clone();
         state.last_used = Some(Instant::now());
         state.idle_timeout = options.idle_timeout;
+        if options.idle_timeout.is_some() {
+            ensure_idle_janitor();
+        }
         return Ok(endpoint);
     }
 
@@ -229,6 +227,57 @@ pub fn local_browser_touch() -> Result<(), CrawlError> {
     Ok(())
 }
 
+/// Prevent idle auto-close during an action or rendered fetch. Explicit
+/// shutdown still takes precedence. Dropping a lease restarts the idle timer.
+pub struct LocalBrowserLease;
+
+pub fn local_browser_lease() -> Result<LocalBrowserLease, CrawlError> {
+    let mut state = LOCAL_BROWSER.lock().map_err(|error| {
+        CrawlError::InvalidInput(format!("local browser registry mutex is poisoned: {error}"))
+    })?;
+    state.active_uses += 1;
+    state.last_used = Some(Instant::now());
+    Ok(LocalBrowserLease)
+}
+
+impl Drop for LocalBrowserLease {
+    fn drop(&mut self) {
+        match LOCAL_BROWSER.lock() {
+            Ok(mut state) => {
+                state.active_uses = state.active_uses.saturating_sub(1);
+                state.last_used = Some(Instant::now());
+            }
+            Err(error) => tracing::error!(%error, "failed to release browser activity lease"),
+        }
+    }
+}
+
+fn idle_deadline_reached(state: &LocalBrowserState) -> bool {
+    state.active_uses == 0
+        && matches!((state.idle_timeout, state.last_used),
+            (Some(timeout), Some(last_used)) if last_used.elapsed() >= timeout)
+}
+
+fn shutdown_idle_browser() -> Result<bool, CrawlError> {
+    let mut state = LOCAL_BROWSER.lock().map_err(|error| {
+        CrawlError::InvalidInput(format!("local browser registry mutex is poisoned: {error}"))
+    })?;
+    // Check and remove the exact entry under one lock. A concurrent touch or
+    // replacement cannot make this close a newly active browser.
+    if !idle_deadline_reached(&state) {
+        return Ok(false);
+    }
+    let browser = state.browser.take();
+    state.last_used = None;
+    state.idle_timeout = None;
+    drop(state);
+    if let Some(mut browser) = browser {
+        browser.shutdown()?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Shut down the managed browser (if any) and remove its profile directory.
 /// Returns `true` when a running browser was closed.
 pub fn shutdown_local_browser() -> Result<bool, CrawlError> {
@@ -258,90 +307,16 @@ pub fn shutdown_local_browser() -> Result<bool, CrawlError> {
     Ok(running)
 }
 
-fn kill_browser_tree(child: &mut Child) -> Result<(), CrawlError> {
-    if child.try_wait()?.is_some() {
-        // A reaped PID may be reused. Never signal its old process group.
-        return Ok(());
-    }
-    // Signal the Unix group before its leader can disappear. Use the syscall
-    // so an already absent group (ESRCH) can be distinguished from a genuine
-    // permission/system failure; a shell utility only gives an exit code.
-    #[cfg(unix)]
-    {
-        let pid = i32::try_from(child.id()).map_err(|error| {
-            CrawlError::InvalidInput(format!("invalid managed browser process id: {error}"))
-        })?;
-        // SAFETY: spawn() creates this owned child's process group with PGID
-        // equal to its positive PID. No borrowed data or pointers cross FFI.
-        let result = unsafe { libc::kill(-pid, libc::SIGKILL) };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            // Still attempt to stop the owned main process, but never hide a
-            // real group failure just because that one process later exits.
-            let _ = child.kill();
-            return Err(CrawlError::InvalidInput(format!(
-                "failed to kill local browser process group {pid}: {error}"
-            )));
-        }
-    }
-    // The group may already be gone, or the platform has no group syscall.
-    // Child::kill also covers a still-running leader that changed its group.
-    let mut failures = Vec::new();
-    if let Err(error) = child.kill() {
-        failures.push(agena_failure::diagnostic::format_error_chain_with_context(
-            "failed to kill the local browser process",
-            &error,
-        ));
-    }
-    #[cfg(windows)]
-    {
-        match Command::new("taskkill")
-            .arg("/PID")
-            .arg(child.id().to_string())
-            .arg("/T")
-            .arg("/F")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-        {
-            Ok(status) if status.success() => {}
-            Ok(status) => failures.push(format!(
-                "failed to kill local browser process tree {}: taskkill exited with status {status}",
-                child.id()
-            )),
-            Err(error) => failures.push(
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    "failed to invoke taskkill for the local browser process tree",
-                    &error,
-                ),
-            ),
-        }
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else if matches!(child.try_wait(), Ok(Some(_))) {
-        // Natural exit can race with shutdown and make the kill commands
-        // report "not found" even though the desired state was reached.
-        Ok(())
-    } else {
-        Err(CrawlError::InvalidInput(failures.join("; ")))
-    }
-}
-
 fn shutdown_browser_process(child: &mut Child) -> Result<(), CrawlError> {
-    // Do not block forever in wait if every termination strategy failed.
-    // Drop will retry and log once the owner leaves scope.
-    kill_browser_tree(child)?;
-    child.wait().map(|_| ()).map_err(|error| {
-        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
-            "failed to wait for the managed local browser process to exit",
-            &error,
-        ))
-    })
+    child
+        .terminate(Duration::from_secs(2))
+        .map(|_| ())
+        .map_err(|error| {
+            CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
+                "failed to terminate managed browser process tree",
+                &error,
+            ))
+        })
 }
 
 fn wait_for_devtools_endpoint(
@@ -410,38 +385,15 @@ fn ensure_idle_janitor() {
             const CHECK_INTERVAL: Duration = Duration::from_secs(15);
             loop {
                 thread::sleep(CHECK_INTERVAL);
-                let should_shutdown = match LOCAL_BROWSER.lock() {
-                    Ok(state) => match (state.idle_timeout, state.last_used) {
-                        (Some(timeout), Some(last_used)) => {
-                            Some(last_used.elapsed() >= timeout)
-                        }
-                        _ => None,
-                    },
-                    Err(error) => {
-                        tracing::error!(
-                            target: "agena::web",
-                            diagnostic = %error,
-                            "failed to inspect idle managed local browser because the registry mutex is poisoned"
-                        );
-                        None
-                    }
-                }
-                .unwrap_or(false);
-                if should_shutdown {
-                    tracing::debug!(
+                if let Err(error) = shutdown_idle_browser() {
+                    tracing::error!(
                         target: "agena::web",
-                        "closing idle managed local browser"
+                        error = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to shut down the idle managed local browser",
+                            &error,
+                        ),
+                        "idle managed local browser cleanup failed"
                     );
-                    if let Err(error) = shutdown_local_browser() {
-                        tracing::error!(
-                            target: "agena::web",
-                            error = %agena_failure::diagnostic::format_error_chain_with_context(
-                                "failed to shut down the idle managed local browser",
-                                &error,
-                            ),
-                            "idle managed local browser cleanup failed"
-                        );
-                    }
                 }
             }
         });
@@ -450,8 +402,8 @@ fn ensure_idle_janitor() {
 
 fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlError> {
     if let Some(path) = configured {
-        if is_executable_candidate(path) {
-            return Ok(path.to_path_buf());
+        if let Ok(resolved) = which::which(path) {
+            return Ok(resolved);
         }
         return Err(CrawlError::InvalidInput(format!(
             "configured web.browser.executable_path '{}' is not executable",
@@ -462,8 +414,8 @@ fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlEr
     match std::env::var("AGENA_CHROME_PATH") {
         Ok(path) => {
             let path = PathBuf::from(path);
-            if is_executable_candidate(&path) {
-                return Ok(path);
+            if let Ok(resolved) = which::which(&path) {
+                return Ok(resolved);
             }
         }
         Err(std::env::VarError::NotPresent) => {}
@@ -475,35 +427,14 @@ fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlEr
     }
 
     for candidate in browser_candidates() {
-        if is_executable_candidate(Path::new(candidate)) {
-            return Ok(PathBuf::from(candidate));
+        if let Ok(resolved) = which::which(candidate) {
+            return Ok(resolved);
         }
     }
 
     Err(CrawlError::InvalidInput(
         "local browser rendering requires Chrome/Chromium; set web.browser.executable_path or AGENA_CHROME_PATH".to_string(),
     ))
-}
-
-fn is_executable_candidate(path: &Path) -> bool {
-    const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-    let Ok(mut child) = Command::new(path)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return false;
-    };
-    child
-        .controlled()
-        .time_limit(PROBE_TIMEOUT)
-        .terminate_for_timeout()
-        .wait()
-        .ok()
-        .flatten()
-        .is_some_and(process_control::ExitStatus::success)
 }
 
 fn browser_candidates() -> &'static [&'static str] {
@@ -542,29 +473,21 @@ fn browser_candidates() -> &'static [&'static str] {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
-    fn owned_process_group_shutdown_handles_immediate_and_prior_exit() {
-        use std::os::unix::process::CommandExt;
-
-        for already_exited in [false, true] {
-            let mut command = Command::new("/bin/sh");
-            command.args([
-                "-c",
-                if already_exited {
-                    "exit 0"
-                } else {
-                    "exec sleep 30"
-                },
-            ]);
-            command.process_group(0);
-            let mut child = command.spawn().expect("spawn an owned process group");
-            if already_exited {
-                child.wait().expect("reap the exited fixture");
-            }
-            shutdown_browser_process(&mut child).expect("shut down the group");
-            assert!(child.try_wait().unwrap().is_some());
-        }
+    fn idle_shutdown_requires_no_active_lease_and_an_expired_timer() {
+        let mut state = LocalBrowserState {
+            browser: None,
+            last_used: Some(Instant::now() - Duration::from_secs(5)),
+            idle_timeout: Some(Duration::from_secs(1)),
+            active_uses: 1,
+        };
+        assert!(!idle_deadline_reached(&state));
+        state.active_uses = 0;
+        assert!(idle_deadline_reached(&state));
+        state.last_used = Some(Instant::now());
+        assert!(!idle_deadline_reached(&state));
+        state.idle_timeout = None;
+        assert!(!idle_deadline_reached(&state));
     }
 
     #[test]

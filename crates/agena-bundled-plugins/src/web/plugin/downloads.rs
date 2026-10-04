@@ -28,9 +28,12 @@ pub(super) async fn transfer(
     max_bytes: u64,
     timeout: Duration,
     gate: Arc<Mutex<()>>,
+    action_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
 ) -> SdkResult<DownloadResult> {
     let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
     let worker = tokio::spawn(async move {
+        let _action_guard = action_guard;
+        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         let permit = tokio::select! {biased; _=&mut cancel_rx=>return Err(PluginError::internal("download cancelled before admission")), result=tokio::time::timeout(timeout,gate.lock_owned())=>result.map_err(|_|PluginError::internal("download timed out waiting for admission"))?};
         let _permit = permit;
         let mut state = State {
@@ -317,6 +320,7 @@ pub(super) async fn real_browser_regressions(
             65536,
             Duration::from_secs(5),
             gate.clone(),
+            None,
         )
         .await
         .unwrap();
@@ -337,7 +341,8 @@ pub(super) async fn real_browser_regressions(
             big_dir.clone(),
             4096,
             Duration::from_secs(5),
-            gate.clone()
+            gate.clone(),
+            None,
         )
         .await
         .is_err()
@@ -361,6 +366,7 @@ pub(super) async fn real_browser_regressions(
             65536,
             Duration::from_secs(5),
             g,
+            None,
         )
         .await
     });

@@ -1,4 +1,10 @@
 mod downloads;
+mod fetch_transport;
+mod playwright;
+mod rendered_fetch;
+use playwright::BrowserInteractionBackend;
+mod search_provider;
+use search_provider::WebSearchBackend;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::future::Future;
 use std::net::IpAddr;
@@ -11,8 +17,8 @@ use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebFetchCoordinator,
     WebFetchCoordinatorConfig, WebSearchEngine, WebSearchOptions, WebSearchResult, crawl_site,
-    fetch_page_with_spider, local_browser_endpoint, local_browser_running, local_browser_touch,
-    prepare_fetch_url, preview_text, results_to_text, search_web, shutdown_local_browser,
+    local_browser_endpoint, local_browser_running, local_browser_touch, prepare_fetch_url,
+    preview_text, results_to_text, search_web, shutdown_local_browser,
 };
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
@@ -77,6 +83,7 @@ pub(crate) struct WebConfig {
 #[serde(default, deny_unknown_fields)]
 /// Fetch configuration of the web plugin.
 pub struct WebFetchConfig {
+    pub extractor: agena_web::ExtractionBackend,
     #[serde(default = "default_web_fetch_enabled")]
     pub enabled: bool,
     pub request: WebRequestConfig,
@@ -87,6 +94,7 @@ impl Default for WebFetchConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            extractor: agena_web::ExtractionBackend::default(),
             request: WebRequestConfig::default(),
             cache: WebFetchCacheConfig::default(),
         }
@@ -201,6 +209,13 @@ impl Default for WebCrawlIndexingConfig {
 pub struct WebSearchConfig {
     pub default_limit: u32,
     pub max_limit: u32,
+    pub provider: WebSearchBackend,
+    /// Full API search endpoint. SearXNG requires an explicit endpoint.
+    pub endpoint: Option<String>,
+    /// Environment variable name only; credentials never belong in settings.
+    pub api_key_env: Option<String>,
+    /// Allow a configured SearXNG endpoint on a private network.
+    pub allow_private_endpoint: bool,
 }
 
 impl Default for WebSearchConfig {
@@ -208,6 +223,10 @@ impl Default for WebSearchConfig {
         Self {
             default_limit: 5,
             max_limit: 20,
+            provider: WebSearchBackend::default(),
+            endpoint: None,
+            api_key_env: None,
+            allow_private_endpoint: false,
         }
     }
 }
@@ -241,6 +260,8 @@ impl Default for WebStoreRetentionConfig {
 /// Browser settings of the web plugin.
 pub struct WebBrowserConfig {
     pub enabled: bool,
+    /// Optional mature click/fill/wait adapter; browser ownership stays native.
+    pub interaction_backend: BrowserInteractionBackend,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executable_path: Option<String>,
     pub wait: WebBrowserWaitConfig,
@@ -257,6 +278,7 @@ impl Default for WebBrowserConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            interaction_backend: BrowserInteractionBackend::default(),
             executable_path: None,
             wait: WebBrowserWaitConfig::default(),
             idle_timeout_secs: default_web_browser_idle_timeout_secs(),
@@ -314,6 +336,11 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "/fetch",
             "Fetch",
             "Controls direct page fetch operations, request throttling, and fetch cache behavior.",
+        ),
+        (
+            "/fetch/extractor",
+            "HTML Extractor",
+            "Readability (local Rust default) or optional local Trafilatura via AGENA_EXTRACT_PYTHON. No remote extraction or automatic dependency installation.",
         ),
         (
             "/fetch/enabled",
@@ -423,7 +450,27 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
         (
             "/search",
             "Search",
-            "Default and maximum limits for web search result lists.",
+            "Search backend, credentials and result limits.",
+        ),
+        (
+            "/search/provider",
+            "Search Provider",
+            "Use the free HTML engines, a configured Brave/Tavily/Exa API, or SearXNG. API failures do not silently switch providers.",
+        ),
+        (
+            "/search/endpoint",
+            "Search API Endpoint",
+            "Full search URL. Required for SearXNG; hosted providers use their official endpoint by default.",
+        ),
+        (
+            "/search/api_key_env",
+            "API Key Environment Variable",
+            "Name of the server environment variable holding the credential, never the credential itself.",
+        ),
+        (
+            "/search/allow_private_endpoint",
+            "Allow Private SearXNG Endpoint",
+            "Permit only the configured SearXNG search endpoint on a private network. Page fetching keeps its public-network policy.",
         ),
         (
             "/search/default_limit",
@@ -464,6 +511,11 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "/browser/enabled",
             "Enabled",
             "Allows rendered fetches and crawls to use a local browser.",
+        ),
+        (
+            "/browser/interaction_backend",
+            "Interaction Backend",
+            "Native CDP or optional Playwright click/fill/wait; Playwright requires AGENA_BROWSER_PYTHON with the playwright package installed.",
         ),
         (
             "/browser/executable_path",
@@ -739,6 +791,8 @@ impl BrowserActivityState {
             return Ok(false);
         }
         self.clients.lock().await.remove(target_id);
+        self.actions.lock().await.remove(target_id);
+        self.connecting.lock().await.remove(target_id);
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
         let meta = self.meta.lock().await.remove(target_id);
         self.append_log(
@@ -808,6 +862,8 @@ impl ActivitySourceAdapter for BrowserActivitySource {
             .strip_prefix("browser_")
             .unwrap_or(activity_id)
             .to_string();
+        let gate = self.state.action_gate(&target_id).await;
+        let _guard = gate.lock().await;
         let closed = self
             .state
             .close_session(
@@ -827,18 +883,18 @@ impl ActivitySourceAdapter for BrowserActivitySource {
 
 struct WebPluginState {
     config: WebConfig,
-    fetch_coordinator: WebFetchCoordinator,
+    fetch_coordinator: Arc<WebFetchCoordinator>,
     host: Arc<dyn HostClient>,
 }
 
 impl WebPluginState {
     fn new(config: WebConfig, host: Arc<dyn HostClient>) -> Self {
         Self {
-            fetch_coordinator: WebFetchCoordinator::new(WebFetchCoordinatorConfig {
+            fetch_coordinator: Arc::new(WebFetchCoordinator::new(WebFetchCoordinatorConfig {
                 cache_ttl: Duration::from_secs(config.fetch.cache.ttl_secs),
                 cache_capacity: config.fetch.cache.capacity,
                 per_host_delay: Duration::from_millis(config.fetch.request.delay_ms),
-            }),
+            })),
             config,
             host,
         }
@@ -920,6 +976,8 @@ struct CrawlFetchInput {
     use_cache: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     render_js: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extractor: Option<agena_web::ExtractionBackend>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -943,14 +1001,18 @@ struct CrawlRunInput {
 #[input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 struct CrawlWebSearchInput {
+    #[schemars(length(max = 8192))]
     query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 50))]
     max_results: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     engine: Option<WebSearchEngineSelection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 64))]
     allowed_domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 64))]
     blocked_domains: Vec<String>,
 }
 
@@ -987,7 +1049,12 @@ struct BrowserListInput {}
 struct BrowserClickInput {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
     selector: Option<String>,
+    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
+    frame_selector: Option<String>,
     /// Snapshot-local index returned by `browser_snapshot.elements[].ref`.
     /// It is valid only while the page DOM has not materially changed.
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
@@ -995,7 +1062,11 @@ struct BrowserClickInput {
     element_ref: Option<u16>,
     /// ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 128)]
     snapshot_id: Option<String>,
+    #[serde(default = "default_browser_action_timeout_ms")]
+    #[schemars(range(min = 1, max = 120000))]
+    timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -1008,16 +1079,26 @@ struct BrowserClickInput {
 struct BrowserTypeInput {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
     selector: Option<String>,
+    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
+    frame_selector: Option<String>,
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 199))]
     element_ref: Option<u16>,
     /// ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 128)]
     snapshot_id: Option<String>,
+    #[arg(max_chars = 65536)]
     text: String,
     #[serde(default)]
     press_enter: bool,
+    #[serde(default = "default_browser_action_timeout_ms")]
+    #[schemars(range(min = 1, max = 120000))]
+    timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -1030,8 +1111,14 @@ struct BrowserTypeInput {
 struct BrowserWaitInput {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
     selector: Option<String>,
+    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
+    frame_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
     text: Option<String>,
     #[serde(default = "default_browser_action_timeout_ms")]
     #[schemars(range(min = 1, max = 120000))]
@@ -1273,6 +1360,7 @@ impl WebPlugin {
         let delay = (config.browser.wait.delay_ms > 0)
             .then(|| Duration::from_millis(config.browser.wait.delay_ms));
         Ok(SpiderFetchOptions {
+            extractor: config.fetch.extractor,
             max_body_bytes: config.fetch.request.max_body_bytes as usize,
             timeout: Duration::from_secs(config.fetch.request.timeout_secs),
             delay_ms: config.fetch.request.delay_ms,
@@ -1301,6 +1389,10 @@ impl WebPlugin {
     }
 
     async fn validate_network_target(&self, url: &url::Url) -> SdkResult<()> {
+        self.state()?
+            .host
+            .require_network_permission(url.to_string())
+            .await?;
         validate_public_network_target(url).await
     }
 
@@ -1317,51 +1409,56 @@ impl WebPlugin {
     async fn browser_preflight_redirects(&self, initial: &url::Url) -> SdkResult<Vec<String>> {
         const MAX_REDIRECTS: usize = 10;
         let timeout = Duration::from_secs(self.config()?.fetch.request.timeout_secs);
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout)
-            .build()
-            .map_err(|error| {
-                plugin_internal_error_with_context(
-                    "browser redirect preflight setup failed",
-                    &error,
-                )
-            })?;
-        let mut current = initial.clone();
-        let mut checked = Vec::new();
-        for _ in 0..=MAX_REDIRECTS {
-            self.validate_network_target(&current).await?;
-            checked.push(current.to_string());
-            let response = client.head(current.clone()).send().await.map_err(|error| {
-                plugin_internal_error_with_context(
-                    format!("browser redirect preflight failed for {current}").as_str(),
-                    &error,
-                )
-            })?;
-            if !response.status().is_redirection() {
-                return Ok(checked);
-            }
-            let location = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .ok_or_else(|| {
-                    PluginError::internal(format!(
-                        "browser redirect from {current} had no Location header"
-                    ))
-                })?
-                .to_str()
-                .map_err(|error| {
+        let preflight = async {
+            let mut current = initial.clone();
+            let mut checked = Vec::new();
+            for _ in 0..=MAX_REDIRECTS {
+                self.validate_network_target(&current).await?;
+                let addresses = resolve_public_network_target(&current).await?;
+                let client = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(timeout)
+                    .no_proxy()
+                    .resolve_to_addrs(current.host_str().expect("validated host"), &addresses)
+                    .build()
+                    .map_err(|error| PluginError::internal_error(&error))?;
+                checked.push(current.to_string());
+                let response = client.head(current.clone()).send().await.map_err(|error| {
                     plugin_internal_error_with_context(
-                        format!("browser redirect from {current} had an invalid Location header")
-                            .as_str(),
+                        format!("browser redirect preflight failed for {current}").as_str(),
                         &error,
                     )
                 })?;
-            current = resolve_browser_redirect(&current, location)?;
-        }
-        Err(PluginError::internal(format!(
-            "browser redirect preflight exceeded {MAX_REDIRECTS} hops"
-        )))
+                if !response.status().is_redirection() {
+                    return Ok(checked);
+                }
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .ok_or_else(|| {
+                        PluginError::internal(format!(
+                            "browser redirect from {current} had no Location header"
+                        ))
+                    })?
+                    .to_str()
+                    .map_err(|error| {
+                        plugin_internal_error_with_context(
+                            format!(
+                                "browser redirect from {current} had an invalid Location header"
+                            )
+                            .as_str(),
+                            &error,
+                        )
+                    })?;
+                current = resolve_browser_redirect(&current, location)?;
+            }
+            Err(PluginError::internal(format!(
+                "browser redirect preflight exceeded {MAX_REDIRECTS} hops"
+            )))
+        };
+        tokio::time::timeout(timeout, preflight)
+            .await
+            .map_err(|_| PluginError::internal("browser redirect preflight deadline exceeded"))?
     }
 
     fn local_browser_options(&self) -> SdkResult<LocalBrowserOptions> {
@@ -1394,9 +1491,11 @@ impl WebPlugin {
     where
         F: std::future::Future<Output = SdkResult<T>>,
     {
+        self.require_browser_owner(context, target).await?;
         let gate = self.browser_state.action_gate(target).await;
         let _guard = gate.lock().await;
         self.require_browser_owner(context, target).await?;
+        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         action.await
     }
 
@@ -1570,7 +1669,22 @@ impl WebPlugin {
         }
 
         let endpoint = self.browser_endpoint().await?;
-        let client = CdpClient::connect(endpoint.as_str(), Some(target_id), events).await?;
+        let host = self.state()?.host.clone();
+        let policy: BrowserRequestPolicy = Arc::new(move |url, _| {
+            let host = host.clone();
+            Box::pin(async move {
+                if agena_plugin_host::sdk::host_api::current_host_callback_context().is_none() {
+                    return Err("browser network authorization requires an active tool call".into());
+                }
+                host.require_network_permission(url.clone())
+                    .await
+                    .map_err(|error| error.diagnostic_message().to_owned())?;
+                authorize_browser_document_request(&url).await
+            })
+        });
+        let client =
+            CdpClient::connect_with_policy(endpoint.as_str(), Some(target_id), events, policy)
+                .await?;
         client.enable_navigation_interception().await?;
         self.browser_state
             .clients
@@ -1578,6 +1692,54 @@ impl WebPlugin {
             .await
             .insert(target_id.to_string(), client.clone());
         Ok(client)
+    }
+
+    fn validate_browser_frame(
+        &self,
+        frame: Option<&str>,
+        element_ref: Option<u16>,
+    ) -> SdkResult<()> {
+        if let Some(frame) = frame {
+            if frame.trim().is_empty() || element_ref.is_some() {
+                return Err(PluginError::invalid_params(
+                    "frame_selector requires a nonempty CSS iframe selector and cannot be combined with snapshot refs",
+                ));
+            }
+            if self.config()?.browser.interaction_backend != BrowserInteractionBackend::Playwright {
+                return Err(PluginError::invalid_params(
+                    "frame_selector requires browser.interaction_backend=playwright",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn playwright_action(
+        &self,
+        request: playwright::Request<'_>,
+    ) -> SdkResult<serde_json::Value> {
+        // Downloads change browser-level CDP behavior; prevent bridge attach
+        // while a native download holds that lease.
+        let _download_guard = self.browser_download_lock.lock().await;
+        let _native = self.browser_client(Some(request.target_id)).await?;
+        _native.refresh_callback_context()?;
+        let endpoint = self.browser_endpoint().await?;
+        let context_id = self
+            .browser_state
+            .meta
+            .lock()
+            .await
+            .get(request.target_id)
+            .and_then(|meta| meta.browser_context_id.clone())
+            .ok_or_else(|| {
+                PluginError::invalid_params("owned browser context is unavailable; reopen the page")
+            })?;
+        let scoped = playwright::Request {
+            endpoint: &endpoint,
+            context_id: &context_id,
+            ..request
+        };
+        playwright::run(&scoped).await
     }
 
     async fn forget_browser_client(&self, target_id: &str) {
@@ -1750,6 +1912,17 @@ impl WebPlugin {
         use_cache: bool,
         render_js: bool,
     ) -> SdkResult<FetchedPage> {
+        self.fetch_page_with_extractor(url, use_cache, render_js, self.config()?.fetch.extractor)
+            .await
+    }
+
+    async fn fetch_page_with_extractor(
+        &self,
+        url: &url::Url,
+        use_cache: bool,
+        render_js: bool,
+        extractor: agena_web::ExtractionBackend,
+    ) -> SdkResult<FetchedPage> {
         let state = self.state()?;
         if !state.config.fetch.enabled {
             return Err(PluginError::internal(
@@ -1757,36 +1930,72 @@ impl WebPlugin {
             ));
         }
         state
+            .host
+            .require_network_permission(url.to_string())
+            .await?;
+        // Alternate per-call extractors must not pollute the configured cache.
+        let use_cache = use_cache && extractor == state.config.fetch.extractor;
+        let page = state
             .fetch_coordinator
             .fetch_or_cached(url, render_js, use_cache, || async {
-                self.validate_network_target(url).await?;
-                let options = self.spider_fetch_options(render_js)?;
-                let page = fetch_page_with_spider(url, &options)
-                    .await
-                    .map_err(crawl_error_to_plugin)?;
-                let final_url = url::Url::parse(page.canonical_url.as_str()).map_err(|error| {
-                    plugin_internal_error_with_context("invalid final fetch URL", &error)
-                })?;
-                // Spider follows HTTP redirects internally. Do not return a response
-                // whose final destination would fail the same network policy.
-                self.validate_network_target(&final_url).await?;
-                Ok(page)
+                let mut options = self.spider_fetch_options(render_js)?;
+                options.extractor = extractor;
+                if render_js {
+                    rendered_fetch::fetch(self, url, &options).await
+                } else {
+                    let source = fetch_transport::fetch(url, &options, |target| async move {
+                        state
+                            .host
+                            .require_network_permission(target.to_string())
+                            .await?;
+                        state.fetch_coordinator.wait_for_url_host(&target).await;
+                        resolve_public_network_target(&target).await
+                    })
+                    .await?;
+                    fetch_transport::extract(source, url.clone(), extractor).await
+                }
             })
-            .await
+            .await?;
+        if !page.final_url.is_empty() {
+            state
+                .host
+                .require_network_permission(page.final_url.clone())
+                .await?;
+        }
+        Ok(page)
     }
 
     #[tool(
         summary = "Fetch one web page and inspect its actual content.",
         help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
-        tags(read_only)
+        tags(network, read_only)
     )]
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         let config = self.config()?;
         let render_js = input.render_js.unwrap_or(config.browser.enabled);
-        let page = self.fetch_page(&url, input.use_cache, render_js).await?;
-        let payload =
-            serde_json::to_value(&page).map_err(|err| PluginError::internal_error(&err))?;
+        let page = self
+            .fetch_page_with_extractor(
+                &url,
+                input.use_cache,
+                render_js,
+                input.extractor.unwrap_or(config.fetch.extractor),
+            )
+            .await?;
+        let mut returned = page.clone();
+        let original_text_bytes = returned.markdown.len();
+        let original_links = returned.links.len();
+        returned.markdown = agena_web::preview_text(&returned.markdown, 16_000);
+        returned.links.truncate(32);
+        for link in &mut returned.links {
+            *link = agena_web::preview_text(link, 2048);
+        }
+        let mut payload =
+            serde_json::to_value(&returned).map_err(|err| PluginError::internal_error(&err))?;
+        payload["available_markdown_bytes"] = serde_json::json!(original_text_bytes);
+        payload["available_link_count"] = serde_json::json!(original_links);
+        payload["output_truncated"] =
+            serde_json::json!(returned.markdown != page.markdown || returned.links != page.links);
         let text = format_fetched_page(&page, input.prompt.as_deref());
         Ok(ToolInvokeOutput::from_parts(
             format!("web fetch {}", url),
@@ -1805,7 +2014,7 @@ impl WebPlugin {
 
     #[tool(
         summary = "Crawl a site and cache indexed pages locally.",
-        tags(discovery, mutate)
+        tags(network, discovery, mutate)
     )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
         let start_url =
@@ -1814,6 +2023,7 @@ impl WebPlugin {
         let _guard = self.crawl_lock.lock().await;
         let config = self.config()?;
         let options = CrawlRunOptions {
+            extraction_backend: config.fetch.extractor,
             max_pages: clamp_limit(
                 input.max_pages,
                 config.crawl.defaults.max_pages as usize,
@@ -1859,10 +2069,11 @@ impl WebPlugin {
 
     #[tool(
         summary = "Find candidate public-web pages to fetch.",
-        help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
-        tags(discovery, read_only)
+        help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured search provider (HTML, Brave, Tavily, Exa or SearXNG). Explicit bing/duckduckgo/baidu selects that HTML engine. API providers return at most 20 results and report failures without switching providers. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
+        tags(network, discovery, read_only)
     )]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
+        search_provider::validate_input(input)?;
         let query = input.query.as_str();
         let config = self.config()?;
         let limit = clamp_limit(
@@ -1870,6 +2081,11 @@ impl WebPlugin {
             config.search.default_limit as usize,
             config.search.max_limit as usize,
         );
+        if matches!(input.engine, None | Some(WebSearchEngineSelection::Auto))
+            && config.search.provider != WebSearchBackend::Html
+        {
+            return self.search_with_provider(input, limit).await;
+        }
         let engines = search_engines(input.engine);
         let explicit_engine = !matches!(input.engine, None | Some(WebSearchEngineSelection::Auto));
         let mut attempted_engines = Vec::new();
@@ -1938,6 +2154,7 @@ impl WebPlugin {
     ) -> SdkResult<ToolInvokeOutput> {
         let owner = browser_owner(context)?;
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
+        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         self.validate_network_target(&url).await?;
         self.ensure_browser_activity_source().await?;
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
@@ -2064,9 +2281,42 @@ impl WebPlugin {
             }
             return Err(error);
         }
-        self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
-            .await?;
-        let snapshot = self.ensure_browser_final_url(target_id.as_str()).await?;
+        let ready = async {
+            self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
+                .await?;
+            self.ensure_browser_final_url(target_id.as_str()).await
+        }
+        .await;
+        let snapshot = match ready {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                match self
+                    .browser_state
+                    .close_session(
+                        &target_id,
+                        "Browser open failed.",
+                        self.state()?.host.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Err(PluginError::internal(format!(
+                            "{}; additionally, failed to close the incomplete browser target",
+                            error.diagnostic_message()
+                        )));
+                    }
+                    Err(cleanup) => {
+                        return Err(PluginError::internal(format!(
+                            "{}; additionally, browser target cleanup failed: {}",
+                            error.diagnostic_message(),
+                            cleanup.diagnostic_message()
+                        )));
+                    }
+                }
+                return Err(error);
+            }
+        };
         Ok(ToolInvokeOutput::from_parts(
             format!("Open browser · {title_target}"),
             browser_snapshot_summary(&snapshot),
@@ -2134,6 +2384,7 @@ impl WebPlugin {
                 "The managed browser is not running. Use browser_open to start it.",
                 Some(serde_json::json!({
                     "browser_running": false,
+                    "interaction_backend": self.config()?.browser.interaction_backend,
                     "sessions": [],
                 })),
                 std::collections::BTreeMap::new(),
@@ -2171,6 +2422,7 @@ impl WebPlugin {
             format!("{} managed browser page target(s).", sessions.len()),
             Some(serde_json::json!({
                 "browser_running": true,
+                "interaction_backend": self.config()?.browser.interaction_backend,
                 "sessions": sessions,
             })),
             std::collections::BTreeMap::new(),
@@ -2307,10 +2559,12 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserSessionInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.require_browser_owner(context, &input.session_id)
-            .await?;
         let snapshot = self
-            .browser_snapshot_value(input.session_id.as_str())
+            .with_browser_action(
+                context,
+                &input.session_id,
+                self.browser_snapshot_value(&input.session_id),
+            )
             .await?;
         let text = format_browser_snapshot(&snapshot);
         Ok(ToolInvokeOutput::from_parts(
@@ -2336,6 +2590,7 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserClickInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.validate_browser_frame(input.frame_selector.as_deref(), input.element_ref)?;
         let target = browser_element_expression(
             input.selector.as_deref(),
             input.element_ref,
@@ -2345,8 +2600,31 @@ impl WebPlugin {
             "(() => {{ const el = {target}; if (!el) return {{ok:false,error:'browser element not found'}}; if (el.disabled) return {{ok:false,error:'element is disabled'}}; el.scrollIntoView({{block:'center'}}); el.focus(); el.click(); return {{ok:true}}; }})()"
         );
         self.with_browser_action(context, input.session_id.as_str(), async {
-            let client = self.browser_client(Some(input.session_id.as_str())).await?;
-            let result = client.evaluate(expression.as_str()).await?;
+            let result = if self.config()?.browser.interaction_backend
+                == BrowserInteractionBackend::Playwright
+            {
+                self.playwright_action(playwright::Request {
+                    endpoint: "",
+                    context_id: "",
+                    target_id: &input.session_id,
+                    action: "click",
+                    selector: input.selector.as_deref(),
+                    frame_selector: input.frame_selector.as_deref(),
+                    element_expression: input.element_ref.map(|_| target.as_str()),
+                    text: None,
+                    press_enter: false,
+                    timeout_ms: input.timeout_ms,
+                })
+                .await?
+            } else {
+                let client = self.browser_client(Some(input.session_id.as_str())).await?;
+                tokio::time::timeout(
+                    Duration::from_millis(input.timeout_ms),
+                    client.evaluate(expression.as_str()),
+                )
+                .await
+                .map_err(|_| PluginError::internal("browser click timed out"))??
+            };
             ensure_browser_action(&result)?;
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
@@ -2370,6 +2648,7 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserTypeInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.validate_browser_frame(input.frame_selector.as_deref(), input.element_ref)?;
         let expression = browser_type_expression(
             input.selector.as_deref(),
             input.element_ref,
@@ -2378,8 +2657,36 @@ impl WebPlugin {
             input.press_enter,
         )?;
         self.with_browser_action(context, input.session_id.as_str(), async {
-            let client = self.browser_client(Some(input.session_id.as_str())).await?;
-            let result = client.evaluate(expression.as_str()).await?;
+            let result = if self.config()?.browser.interaction_backend
+                == BrowserInteractionBackend::Playwright
+            {
+                let target = browser_element_expression(
+                    input.selector.as_deref(),
+                    input.element_ref,
+                    input.snapshot_id.as_deref(),
+                )?;
+                self.playwright_action(playwright::Request {
+                    endpoint: "",
+                    context_id: "",
+                    target_id: &input.session_id,
+                    action: "fill",
+                    selector: input.selector.as_deref(),
+                    frame_selector: input.frame_selector.as_deref(),
+                    element_expression: input.element_ref.map(|_| target.as_str()),
+                    text: Some(&input.text),
+                    press_enter: input.press_enter,
+                    timeout_ms: input.timeout_ms,
+                })
+                .await?
+            } else {
+                let client = self.browser_client(Some(input.session_id.as_str())).await?;
+                tokio::time::timeout(
+                    Duration::from_millis(input.timeout_ms),
+                    client.evaluate(expression.as_str()),
+                )
+                .await
+                .map_err(|_| PluginError::internal("browser type timed out"))??
+            };
             ensure_browser_action(&result)?;
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
@@ -2403,19 +2710,36 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserWaitInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.validate_browser_frame(input.frame_selector.as_deref(), None)?;
         if input.selector.is_some() && input.text.is_some() {
             return Err(PluginError::invalid_params(
                 "browser_wait accepts selector or text, not both",
             ));
         }
         self.with_browser_action(context, input.session_id.as_str(), async {
-            self.wait_for_browser_condition(
-                input.session_id.as_str(),
-                input.selector.as_deref(),
-                input.text.as_deref(),
-                input.timeout_ms,
-            )
-            .await?;
+            if self.config()?.browser.interaction_backend == BrowserInteractionBackend::Playwright {
+                self.playwright_action(playwright::Request {
+                    endpoint: "",
+                    context_id: "",
+                    target_id: &input.session_id,
+                    action: "wait",
+                    selector: input.selector.as_deref(),
+                    frame_selector: input.frame_selector.as_deref(),
+                    element_expression: None,
+                    text: input.text.as_deref(),
+                    press_enter: false,
+                    timeout_ms: input.timeout_ms,
+                })
+                .await?;
+            } else {
+                self.wait_for_browser_condition(
+                    input.session_id.as_str(),
+                    input.selector.as_deref(),
+                    input.text.as_deref(),
+                    input.timeout_ms,
+                )
+                .await?;
+            }
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
                 .await?;
@@ -2524,6 +2848,13 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserDownloadInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        let action_guard = self
+            .browser_state
+            .action_gate(&input.session_id)
+            .await
+            .lock_owned()
+            .await;
+        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         self.require_browser_owner(context, &input.session_id)
             .await?;
         const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
@@ -2551,6 +2882,7 @@ impl WebPlugin {
             MAX_DOWNLOAD_BYTES,
             Duration::from_millis(input.timeout_ms),
             Arc::clone(&self.browser_download_lock),
+            Some(action_guard),
         )
         .await?;
         let filename = result
@@ -2647,6 +2979,10 @@ impl WebPlugin {
         let engine_url = url::Url::parse(engine.permission_url())
             .map_err(|err| PluginError::internal_error(&err))?;
         let state = self.state()?;
+        state
+            .host
+            .require_network_permission(engine_url.to_string())
+            .await?;
         state.fetch_coordinator.wait_for_url_host(&engine_url).await;
         self.validate_network_target(&engine_url).await?;
         let config = &state.config;
@@ -2669,6 +3005,18 @@ impl WebPlugin {
 }
 
 async fn validate_public_network_target(url: &url::Url) -> SdkResult<()> {
+    resolve_public_network_target(url).await.map(|_| ())
+}
+
+async fn resolve_public_network_target(url: &url::Url) -> SdkResult<Vec<std::net::SocketAddr>> {
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(PluginError::invalid_params(
+            "web requests require HTTP(S) without URL credentials",
+        ));
+    }
     let host = url
         .host_str()
         .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
@@ -2676,26 +3024,33 @@ async fn validate_public_network_target(url: &url::Url) -> SdkResult<()> {
         .port_or_known_default()
         .ok_or_else(|| PluginError::invalid_params("web URL has no known port"))?;
 
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|error| {
-            plugin_internal_error_with_context(format!("failed to resolve {host}").as_str(), &error)
-        })?
-        .map(|address| address.ip())
-        .collect::<BTreeSet<_>>();
+    let addresses: BTreeSet<std::net::SocketAddr> = match url.host() {
+        Some(url::Host::Ipv4(ip)) => [std::net::SocketAddr::new(ip.into(), port)]
+            .into_iter()
+            .collect(),
+        Some(url::Host::Ipv6(ip)) => [std::net::SocketAddr::new(ip.into(), port)]
+            .into_iter()
+            .collect(),
+        _ => tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|error| {
+                plugin_internal_error_with_context("failed to resolve fetch host", &error)
+            })?
+            .collect(),
+    };
     if addresses.is_empty() {
         return Err(PluginError::internal(format!(
             "DNS resolution returned no addresses for {host}"
         )));
     }
-    for address in addresses {
-        if !is_public_address(address) {
+    for address in &addresses {
+        if !is_public_address(address.ip()) {
             return Err(PluginError::invalid_params(format!(
                 "web URL host `{host}` resolves to non-public address `{address}`"
             )));
         }
     }
-    Ok(())
+    Ok(addresses.into_iter().collect())
 }
 
 type CdpSocket =
@@ -2727,18 +3082,57 @@ struct NavigationDecision {
 const CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+type BrowserRequestPolicy = Arc<
+    dyn Fn(String, bool) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync,
+>;
+
+type BrowserCallbackContext =
+    Arc<std::sync::Mutex<Option<agena_plugin_host::sdk::host_api::HostCallbackContext>>>;
+struct CdpAuthorization {
+    policy: BrowserRequestPolicy,
+    context: BrowserCallbackContext,
+}
+
 #[derive(Clone)]
 struct CdpClient {
     commands: mpsc::Sender<CdpCommandRequest>,
     navigation_interception_enabled: Arc<OnceLock<()>>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
+    callback_context: BrowserCallbackContext,
 }
 
 impl CdpClient {
+    fn refresh_callback_context(&self) -> SdkResult<()> {
+        if let Some(context) = agena_plugin_host::sdk::host_api::current_host_callback_context() {
+            *self
+                .callback_context
+                .lock()
+                .map_err(|_| PluginError::internal("browser callback context lock poisoned"))? =
+                Some(context);
+        }
+        Ok(())
+    }
     async fn connect(
         endpoint: &str,
         target_id: Option<&str>,
         events: Option<mpsc::Sender<CdpEvent>>,
+    ) -> SdkResult<Self> {
+        Self::connect_with_policy(
+            endpoint,
+            target_id,
+            events,
+            Arc::new(|url, _| {
+                Box::pin(async move { authorize_browser_document_request(&url).await })
+            }),
+        )
+        .await
+    }
+
+    async fn connect_with_policy(
+        endpoint: &str,
+        target_id: Option<&str>,
+        events: Option<mpsc::Sender<CdpEvent>>,
+        policy: BrowserRequestPolicy,
     ) -> SdkResult<Self> {
         let (mut socket, _) = tokio::time::timeout(
             CDP_CONNECT_TIMEOUT,
@@ -2776,6 +3170,9 @@ impl CdpClient {
         let (commands, command_receiver) = mpsc::channel(32);
         let navigation_interception_enabled = Arc::new(OnceLock::new());
         let navigation_errors = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+        let callback_context = Arc::new(std::sync::Mutex::new(
+            agena_plugin_host::sdk::host_api::current_host_callback_context(),
+        ));
         tokio::spawn(run_cdp_connection(
             socket,
             session_id,
@@ -2783,12 +3180,17 @@ impl CdpClient {
             command_receiver,
             Arc::clone(&navigation_errors),
             events,
+            CdpAuthorization {
+                policy,
+                context: callback_context.clone(),
+            },
         ));
 
         Ok(Self {
             commands,
             navigation_interception_enabled,
             navigation_errors,
+            callback_context,
         })
     }
 
@@ -2833,6 +3235,10 @@ impl CdpClient {
         // Every CDP exchange is browser activity: restart the idle auto-close
         // timer so a session mid-flight is never torn down underneath us.
         local_browser_touch().map_err(crawl_error_to_plugin)?;
+        // Tokio tasks do not inherit task-local host authority. Refresh it on
+        // each foreground command and echo it for intercepted requests. The
+        // host rejects an expired authority; no background workspace fallback.
+        self.refresh_callback_context()?;
         if let Some(error) = self.take_navigation_error() {
             return Err(PluginError::internal(error));
         }
@@ -2994,6 +3400,7 @@ async fn run_cdp_connection(
     mut commands: mpsc::Receiver<CdpCommandRequest>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
     events: Option<mpsc::Sender<CdpEvent>>,
+    authorization: CdpAuthorization,
 ) {
     let (mut sink, mut source) = socket.split();
     // At most sixteen authorization checks can be active, so one result slot
@@ -3001,9 +3408,15 @@ async fn run_cdp_connection(
     let (decisions, mut decision_receiver) = mpsc::channel::<NavigationDecision>(16);
     let authorization_slots = Arc::new(Semaphore::new(16));
     let mut pending = BTreeMap::<u64, PendingCdpCommand>::new();
+    let mut checks = tokio::task::JoinSet::new();
 
     loop {
         tokio::select! {
+            result = checks.join_next(), if !checks.is_empty() => {
+                if let Some(Err(error)) = result {
+                    push_navigation_error(&navigation_errors, format!("browser request authorization worker failed: {error}"));
+                }
+            }
             command = commands.recv() => {
                 let Some(command) = command else {
                     if let Err(error) = sink.close().await {
@@ -3018,6 +3431,10 @@ async fn run_cdp_connection(
                     break;
                 };
                 let id = next_id;
+                pending.retain(|_, command| match command {
+                    PendingCdpCommand::Caller { response, .. } => !response.is_closed(),
+                    PendingCdpCommand::Interception { .. } => true,
+                });
                 next_id = next_id.saturating_add(1);
                 match send_cdp_request(
                     &mut sink,
@@ -3227,13 +3644,22 @@ async fn run_cdp_connection(
                     }
                     continue;
                 };
-                tokio::spawn(async move {
+                let policy = authorization.policy.clone();
+                let context = match authorization.context.lock() {
+                    Ok(context) => context.clone(),
+                    Err(_) => { push_navigation_error(&navigation_errors, "browser callback context lock poisoned".into()); break; }
+                };
+                checks.spawn(async move {
                     let _authorization_slot = authorization_slot;
-                    let result = if !is_document {
-                        Ok(())
-                    } else {
-                        authorize_browser_document_request(url.as_str()).await
+                    let authorized = async {
+                        let operation = policy(url.clone(), is_document);
+                        match context {
+                            Some(context) => agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(context, operation).await,
+                            None => operation.await,
+                        }
                     };
+                    let result = tokio::time::timeout(CDP_COMMAND_TIMEOUT, authorized).await
+                        .unwrap_or_else(|_| Err("browser request authorization timed out".into()));
                     if let Err(error) = decisions
                         .send(NavigationDecision {
                             request_id,
@@ -3616,10 +4042,14 @@ fn is_public_address(address: IpAddr) -> bool {
                 && address.octets()[0] < 224
         }
         IpAddr::V6(address) => {
+            if let Some(mapped) = address.to_ipv4_mapped() {
+                return is_public_address(mapped.into());
+            }
             !address.is_loopback()
                 && !address.is_unique_local()
                 && !address.is_unicast_link_local()
                 && !address.is_unspecified()
+                && !address.is_multicast()
         }
     }
 }
@@ -3645,6 +4075,36 @@ struct PluginPageFetcher<'a> {
 }
 
 impl CrawlPageFetcher for PluginPageFetcher<'_> {
+    fn authorize_cached<'a>(
+        &'a self,
+        requested_url: &'a url::Url,
+        document: &'a agena_web::StoredDocument,
+    ) -> Pin<Box<dyn Future<Output = Result<(), agena_web::CrawlError>> + Send + 'a>> {
+        Box::pin(async move {
+            let state = self.plugin.state().map_err(|error| {
+                agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
+            })?;
+            // Legacy documents have no final URL; do not infer it from an HTML
+            // canonical hint, which need not be the transport destination.
+            if document.final_url.is_empty() {
+                return Err(agena_web::CrawlError::InvalidInput(
+                    "cached document predates transport URL tracking; crawl with use_cache=false"
+                        .into(),
+                ));
+            }
+            for url in [requested_url.as_str(), &document.url, &document.final_url] {
+                state
+                    .host
+                    .require_network_permission(url.to_owned())
+                    .await
+                    .map_err(|error| {
+                        agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
+                    })?;
+            }
+            Ok(())
+        })
+    }
+
     fn fetch_page<'a>(
         &'a self,
         url: &'a url::Url,
@@ -3681,6 +4141,17 @@ fn parse_web_config(value: serde_json::Value) -> SdkResult<WebConfig> {
 }
 
 fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
+    if web.fetch.request.max_body_bytes > 32 * 1024 * 1024 || web.fetch.request.timeout_secs > 120 {
+        return Err(PluginError::invalid_params(
+            "fetch.request allows at most 32 MiB and 120 seconds",
+        ));
+    }
+    if web.crawl.limits.max_pages > 1000 || web.crawl.limits.max_depth > 16 {
+        return Err(PluginError::invalid_params(
+            "crawl limits allow at most 1000 pages and depth 16",
+        ));
+    }
+    search_provider::validate_config(&web.search)?;
     for (label, value) in [
         ("crawl.defaults.max_pages", web.crawl.defaults.max_pages),
         ("crawl.limits.max_pages", web.crawl.limits.max_pages),
@@ -3797,6 +4268,17 @@ fn format_fetched_page(page: &FetchedPage, focus: Option<&str>) -> String {
         "Rendered: {}",
         if page.rendered { "yes" } else { "no" }
     ));
+    lines.push(format!("Final URL: {}", page.final_url));
+    lines.push(format!(
+        "Extractor: {}",
+        match page.extraction_backend {
+            agena_web::ExtractionBackend::Readability => "readability",
+            agena_web::ExtractionBackend::Trafilatura => "trafilatura",
+        }
+    ));
+    for warning in &page.warnings {
+        lines.push(format!("Warning: {warning}"));
+    }
     if let Some(etag) = &page.etag {
         lines.push(format!("ETag: {etag}"));
     }
@@ -3946,6 +4428,10 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
         output.failure_count,
         output.total_documents
     )];
+    lines.push(format!(
+        "Fetch attempts: {}. Discovered URLs: {}. Partial/truncated: {}.",
+        output.attempted_count, output.discovered_count, output.truncated
+    ));
     for document in &output.documents {
         lines.push(format!(
             "- {} [{} chunk(s), depth {}] {}",
@@ -3966,22 +4452,7 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
 }
 
 fn domain_allowed(url: &str, allow: &[String], block: &[String]) -> bool {
-    let host = url::Url::parse(url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-        .unwrap_or_default();
-    if !allow.is_empty() && !allow.iter().any(|domain| host_matches(&host, domain)) {
-        return false;
-    }
-    if block.iter().any(|domain| host_matches(&host, domain)) {
-        return false;
-    }
-    true
-}
-
-fn host_matches(host: &str, pattern: &str) -> bool {
-    let pattern = pattern.trim().to_ascii_lowercase();
-    !pattern.is_empty() && (host == pattern || host.ends_with(&format!(".{pattern}")))
+    agena_web::search_domain_allowed(url, allow, block)
 }
 
 #[cfg(test)]
@@ -4004,6 +4475,7 @@ mod tests {
     async fn cdp_commands_fail_instead_of_waiting_forever_for_a_response() {
         let (commands, _requests) = tokio::sync::mpsc::channel(1);
         let client = CdpClient {
+            callback_context: Default::default(),
             commands,
             navigation_interception_enabled: Arc::new(OnceLock::new()),
             navigation_errors: Arc::new(std::sync::Mutex::new(VecDeque::new())),
@@ -4096,6 +4568,9 @@ mod tests {
         assert!(!is_public_address(Ipv4Addr::LOCALHOST.into()));
         assert!(!is_public_address(Ipv4Addr::new(10, 0, 0, 1).into()));
         assert!(!is_public_address(Ipv6Addr::LOCALHOST.into()));
+        assert!(!is_public_address("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_public_address("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(!is_public_address("ff02::1".parse().unwrap()));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Dynamic per-session system prompt sections.
 //!
 //! Agena execution tools are not declared in the model-visible function
-//! protocol: the model only sees the five `agena.tools` gateway functions and
+//! protocol: the model only sees the declared Tool API gateway functions and
 //! discovers execution tools through them. Workflow-relevant decision
 //! semantics therefore cannot live only inside tool descriptions; they must
 //! also be injected into the system prompt. This module detects which
@@ -9,10 +9,8 @@
 //! matching sections, which `crate::identity::system_prompt_with_sections`
 //! inserts immediately after `# Plan, ask, and delegate`.
 //!
-//! The sections mirror Claude Code decision semantics: a strong default
-//! toward planning and delegation with explicit exceptions, rather than a
-//! neutral when-to-use list, because models respond more reliably to a
-//! prefer-unless-simple anchor.
+//! Each section preserves the corresponding tool workflow while keeping
+//! schemas and detailed usage in live tool help.
 //!
 //! Environment facts are intentionally not injected here: they are served on
 //! demand by the `session.environment` tool because they can change
@@ -25,80 +23,113 @@ use crate::tool::tool_registry::compact_tool_call_name;
 use super::SessionManager;
 use super::merge_system_prompts;
 
-/// Plan decision semantics injected when the `agena.plan` tools are available.
-pub(crate) fn render_planning_section() -> String {
-    r#"# Planning
-
-Prefer using `plan.set` for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply:
-- New feature implementation
-- Multiple valid approaches exist
-- Changes affect existing behavior or structure
-- An architectural decision is needed
-- The change will likely touch more than 2-3 files
-- Requirements are unclear and need exploration
-- You would otherwise ask the user to clarify the approach — use `plan.set` instead
-
-Only skip planning for simple tasks: single-line or few-line fixes, adding a single function with clear requirements, tasks with very specific detailed instructions, or pure research/read-only work. If unsure whether to plan, err on the side of planning.
-
-`plan.set` never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` to `plan.set` or `plan.phase` only when the user has already declared that the plan or change needs no approval AND trusted plan configuration permits unreviewed activation; the runtime rejects an unauthorized waiver. Never default to it. Plan reviews are revision-bound; after concurrent edits, read and review the new version.
-
-While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools — delegating parallel exploration to `tasks.run` when the scope spans multiple areas — clarify requirements with `ask`, and refine the plan with `plan.edit` (which never requests approval and never changes phase). When the plan is complete, call `plan.review` to request user approval."#
-        .to_string()
+/// Keep workflow advice usable even when only part of a plugin is enabled.
+fn render_planning_section(tool_names: &[String]) -> String {
+    let has = |name: &str| tool_names.iter().any(|tool| tool == name);
+    let mut paragraphs = vec![
+        "# Planning",
+        "Plan non-trivial implementation: new features, architectural choices, uncertain requirements, or coordinated changes. Skip formal planning for small clear fixes and pure research. Explore and refine the plan before requesting review.",
+    ];
+    if has("plan.set") {
+        if has("plan.review") || has("plan.phase") {
+            paragraphs.push("Prefer `plan.set` to record the plan. It returns without waiting for the user. With `request_approval: true` (default), creating or replacing a plan puts it in the planning phase and blocks mutating work.");
+            if has("plan.review") {
+                paragraphs.push("Call `plan.review` for approval before implementation.");
+            } else {
+                paragraphs.push("Use `plan.phase` with `phase: active` to request the required approval before implementation.");
+            }
+        } else {
+            paragraphs.push("`plan.set` normally saves a plan in the planning phase, which blocks mutating work. A review tool is unavailable: keep new plans in prose unless unreviewed activation is authorized and permitted by trusted configuration. Do not create a blocking plan without a way to approve it. Existing planning-phase restrictions still apply.");
+        }
+    } else if has("plan.review") {
+        paragraphs.push("Use `plan.review` to request approval of the current saved plan when it needs approval. It can suspend the turn until the user responds.");
+    }
+    if has("plan.set") || has("plan.phase") {
+        paragraphs.push("Use `request_approval: false` only with prior user authorization AND trusted configuration allowing it; never change configuration to bypass review.");
+    }
+    if has("plan.review") || has("plan.phase") {
+        paragraphs.push("Pending reviews bind to a revision. If the saved plan changes during review, inspect the current version and request review again when required; an old approval cannot authorize that changed version.");
+    }
+    if has("plan.edit") {
+        paragraphs.push("`plan.edit` updates step/check progress and notes without changing the phase or requesting approval. Ordinary progress updates to an active plan do not require another review.");
+    }
+    if has("plan.phase") {
+        paragraphs.push("Use `plan.phase` for phase changes and completion. For completion, finish required steps/checks first. Transitions within an already approved plan need no new review; other transitions follow its live help and current phase.");
+    }
+    paragraphs.join("\n\n")
 }
 
 /// Ask decision semantics injected when `agena.interaction.ask` is available.
 ///
 /// The ask tool is named first-class in the system prompt so the model knows
 /// it exists, but its contract is never embedded: the live input contract is
-/// served by `tools_help`. The five `agena.tools` gateway functions stay the
+/// served by `tools_help`. The declared Tool API gateway functions stay the
 /// only protocol surface; this section just names the tool and its decision
 /// semantics, exactly like `session.rename` and `plan.set` are named directly
 /// in other sections.
-pub(crate) fn render_asking_section() -> String {
-    r#"# Asking the user
+fn render_asking_section(has_plan_review: bool) -> String {
+    let mut section = r#"# Asking the user
 
-`interaction.ask` is a first-class tool for decisions that are genuinely the user's to make. Its name is known, so do not search for it — read its live contract with `tools_help` before the first call, then invoke it through `tools_call`.
-
-Every question needs at least two genuinely distinct options — a single option carries no decision. While the user answers, your turn suspends; it resumes with their answers as a tool result and your working state preserved, so continue the same task. If the runtime rejects the call, read the correction and retry; the live `tools_help` for `interaction.ask` remains authoritative for anything unclear.
-
-Use `interaction.ask` when you are blocked on a decision that is genuinely the user's to make: a preference, a direction choice, a decision with no reasonable default, requirements so ambiguous that guessing could waste real work, or authorization for a specific dangerous action. This includes discarding changes, rewriting Git history, and choosing whether to squash before an authorized push. Prefer asking up front, before doing work a wrong guess would redo; mid-task, ask at a genuine fork instead of guessing. When you do ask, ask all necessary clarifying questions at once.
-
-Proceed without asking when a sensible default exists, when you can verify the answer yourself, or when the choice is small and reversible, within the user's authorization. Reuse authorization already given for the same action and scope. Never use `interaction.ask` for a generic "should I proceed?" or to seek plan approval — that is `plan.review`'s job; approval for a concrete risky operation belongs in `interaction.ask`.
+Use `interaction.ask` for a decision the user must make with no reasonable default, or authorization for a specific dangerous action. This includes discarding changes, rewriting Git history, and choosing whether to squash before an authorized push. Read its live help first; include at least two distinct choices and bundle related questions. Ask before a wrong assumption would cause substantial rework. Your turn suspends until answers arrive, then continue the same task. Read and repair rejected input. Reuse authorization already given for the same action and scope. Do not ask whether to proceed with already authorized work or use this tool for plan approval.
 
 Use the tool for every question; do not end your turn with a plain-text question. Wait for its result before the dependent action. A timeout, cancellation, or empty answer is not approval: continue only independent, already-authorized work and report any remaining blocker."#
-        .to_string()
+        .to_string();
+    if has_plan_review {
+        section.push_str(" Use `plan.review` for plan approval.");
+    }
+    section
 }
 
 /// Delegation decision semantics injected when the `agena.tasks` tools are
-/// available: an active trigger paired with restraint, mirroring Claude Code.
-pub(crate) fn render_delegating_section() -> String {
+/// available: bounded independent work with retained responsibility.
+fn render_delegating_section() -> String {
     r#"# Delegating work
 
-Reach for `tasks.run` when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. Attach `commands` that match the task (for example an explore command for exploration, a read-only review command for review). For a single-fact lookup where you already know the file, symbol, or value, search directly. Once you have delegated a search, do not also run it yourself — wait for the result.
+Use `tasks.run` for bounded independent work, a suitable available command/subagent, or exploration that benefits from returning conclusions. Give concrete scope and checks, attach relevant `commands`, keep concurrency low, and verify results. Handle simple lookups yourself; do not redo delegated work or delegate your responsibility for understanding it.
 
-By default `tasks.run` waits synchronously for the delegated task and returns its final result; set `run_in_background: true` to launch it in the background instead — the background discipline (immediate return, `system_notification`) is covered by `# Background execution`. Do small tasks yourself instead of delegating them; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; keep the number of concurrent subtasks low. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result."#
+Default execution waits for the task's result. Use `run_in_background: true` when other useful work can proceed; completion follows the background notification rules below."#
         .to_string()
 }
 
-/// Background-execution discipline injected when any tool that can launch
-/// background work is available (`shell.run` and friends, `tasks.run`,
-/// `monitor.start`): a background launch returns immediately, the session is
-/// *notified* when the work settles (the `system_notification` part), and the
-/// model must never poll — mirroring Claude Code's Monitor/task-notification
-/// contract.
-pub(crate) fn render_background_section() -> String {
-    r#"# Background execution
-
-`shell.run` and `tasks.run` with `run_in_background: true` start work that continues while the session moves on. The tool returns immediately with a handle; the work keeps running in the background. When the operation settles — completes, fails, times out, or is cancelled — you are notified with a `system_notification` message describing the outcome. The result is also written onto the operation's own transcript part.
-
-`monitor.start` is a continuous background listener: each event is delivered as its own `system_notification` message (with a per-event sequence), so you will be notified on every event — keep working, do not poll or sleep, and do not repeatedly call `monitor.start`/`shell.list` to check for new events.
-
-`cron.create` schedules a recurring wake. Every fire is persisted as a typed `system_notification`; if you are active, it waits for the current provider/tool part to finish and is handed to you at the next safe part boundary. AI-created schedules retain the assistant run that created them instead of opening a new run. Always pass the IANA timezone from `<environment_context>` (for example `Asia/Shanghai`); cron wall-clock fields are evaluated in that timezone, while returned timestamps remain explicit RFC 3339 instants. Jobs are session-only and expire after seven days.
-
-Never poll: do not repeatedly call `shell.run`/`tasks.run` status or read logs just to wait for completion. After launching background work, continue with other useful work (or end your turn) and wait for the `system_notification`. When a `system_notification` arrives mid-task, act on it: incorporate the outcome into your ongoing work and report it when relevant. When it arrives after you finished a turn, pick up where you left off.
-
-Interactive terminals are different: `shell.run` with `tty: true` retains a live terminal, which may be waiting for input rather than completing. Read its incremental output and screen, then use `shell.write` with the returned `process_id` to type or send keys. Input is exact: `\r` means Enter and `\u0003` means Ctrl-C. Empty `chars` or `shell.logs` may perform a bounded read to observe a prompt; this is allowed interactive I/O, not repeated completion polling. Omit `since_seq` on `shell.write` to consume unread output, or pass an explicit cursor for replay/paging. A quiet period or yield deadline is not process exit. Use `shell.resize` for terminal dimensions and `shell.signal`/`shell.stop` for interruption/cleanup. Declare the effects of subsequent input just as for the launch. Never resend an entire input blindly after a partial-write error."#
-        .to_string()
+/// Notification and terminal advice mentions only available execution tools.
+fn render_background_section(tool_names: &[String]) -> String {
+    let has = |name: &str| tool_names.iter().any(|tool| tool == name);
+    let mut paragraphs = vec!["# Background execution".to_owned()];
+    let launchers = ["shell.run", "tasks.run"]
+        .into_iter()
+        .filter(|name| has(name))
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>();
+    if !launchers.is_empty() {
+        paragraphs.push(format!("{} with `run_in_background: true` return a handle and later deliver a `system_notification` on completion, failure, timeout or cancellation.", launchers.join(" and ")));
+    }
+    if has("monitor.start") {
+        paragraphs.push("`monitor.start` listens for events; each event has a sequence and arrives as a `system_notification`. A monitor can end on source exit, timeout, cancellation or session end. Do not restart it just to check for events.".to_owned());
+        if has("monitor.stop") {
+            paragraphs.push("Use `monitor.stop` when monitoring is no longer needed.".to_owned());
+        }
+    }
+    if has("cron.create") {
+        paragraphs.push("`cron.create` schedules wakes as `system_notification` messages at safe turn boundaries and retains the originating assistant run. Use the IANA timezone from `<environment_context>`; returned timestamps are explicit RFC 3339 instants. Jobs are session-only and expire after seven days.".to_owned());
+    }
+    paragraphs.push("Continue useful work while waiting. If only a future notification remains, end the current turn with the work still pending; resume from the notification even after an earlier turn ended. Waiting is not task completion: inspect the outcome and verify results before claiming success. Never poll status/logs or sleep merely to wait for completion or events. Bounded output/log reads are appropriate for a concrete diagnosis or missing result details.".to_owned());
+    if has("shell.run") && has("shell.write") {
+        paragraphs.push(r#"Interactive terminals use `shell.run` with `tty: true` and the returned `process_id`. Read incremental output, then send exact input with `shell.write`: `\r` is Enter, `\u0003` is Ctrl-C. Empty `chars` may perform a bounded read to observe a prompt; interactive I/O is allowed. Omit `since_seq` to consume unread output, or pass a cursor for replay. Silence/yield is not process exit. Declare subsequent effects and never resend a whole input after a partial write."#.to_owned());
+        let controls = ["shell.resize", "shell.signal", "shell.stop"]
+            .into_iter()
+            .filter(|name| has(name))
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>();
+        if !controls.is_empty() {
+            paragraphs.push(format!("Available terminal lifecycle controls: {}. Read their live help for dimensions, interruption or cleanup.", controls.join(", ")));
+        }
+    } else if has("shell.run") {
+        paragraphs.push("Use non-interactive commands when no terminal input tool is available; do not launch an interactive program that needs later keystrokes.".to_owned());
+    }
+    if has("shell.run") && has("shell.logs") {
+        paragraphs.push("Use bounded `shell.logs` reads for diagnostics or to observe an interactive prompt, not as a completion wait loop.".to_owned());
+    }
+    paragraphs.join("\n\n")
 }
 
 /// Whether the available tool set can launch background work, so the
@@ -113,30 +144,34 @@ fn wants_background_section(tool_names: &[String]) -> bool {
     has_shell || has_tasks || has_monitor || has_cron
 }
 
+fn workflow_sections(tool_names: &[String]) -> Vec<String> {
+    let has = |name: &str| tool_names.iter().any(|tool| tool == name);
+    let mut sections = Vec::new();
+    if ["plan.set", "plan.review", "plan.edit", "plan.phase"]
+        .into_iter()
+        .any(has)
+    {
+        sections.push(render_planning_section(tool_names));
+    }
+    if has("interaction.ask") {
+        sections.push(render_asking_section(has("plan.review")));
+    }
+    if has("tasks.run") {
+        sections.push(render_delegating_section());
+    }
+    if wants_background_section(tool_names) {
+        sections.push(render_background_section(tool_names));
+    }
+    sections
+}
+
 impl SessionManager {
     fn assemble_system_prompt_for_tool_names(
         &self,
         tool_names: Vec<String>,
         user_system: Option<&str>,
     ) -> String {
-        let has_plan = tool_names.iter().any(|name| name == "plan.set");
-        let has_ask = tool_names.iter().any(|name| name == "interaction.ask");
-        let has_tasks = tool_names.iter().any(|name| name == "tasks.run");
-
-        let mut sections = Vec::new();
-        if has_plan {
-            sections.push(render_planning_section());
-        }
-        if has_ask {
-            sections.push(render_asking_section());
-        }
-        if has_tasks {
-            sections.push(render_delegating_section());
-        }
-        if wants_background_section(&tool_names) {
-            sections.push(render_background_section());
-        }
-
+        let sections = workflow_sections(&tool_names);
         let base = crate::identity::system_prompt_with_sections(&sections);
         merge_system_prompts(Some(base.as_str()), user_system).unwrap_or(base)
     }
@@ -204,94 +239,222 @@ impl SessionManager {
 mod tests {
     use super::*;
 
-    #[test]
-    fn planning_section_anchors_on_prefer_unless_simple() {
-        let section = render_planning_section();
-        assert!(section.contains("# Planning"));
-        assert!(section.contains("Prefer using `plan.set`"));
-        assert!(section.contains("unless they are simple"));
-        assert!(section.contains("err on the side of planning"));
-        assert!(section.contains("use `plan.set` instead"));
-        assert!(section.contains("call `plan.review` to request user approval"));
-        assert!(section.contains("request_approval"));
-        assert!(section.contains("has already declared"));
+    const WORKFLOW_TOOLS: &[&str] = &[
+        "plan.set",
+        "plan.review",
+        "plan.edit",
+        "plan.phase",
+        "interaction.ask",
+        "tasks.run",
+        "shell.run",
+        "shell.write",
+        "shell.logs",
+        "shell.resize",
+        "shell.signal",
+        "shell.stop",
+        "monitor.start",
+        "monitor.stop",
+        "cron.create",
+    ];
+
+    fn names(tools: &[&str]) -> Vec<String> {
+        tools.iter().map(|name| (*name).to_owned()).collect()
     }
 
     #[test]
-    fn asking_section_names_tool_and_carries_red_line() {
-        let section = render_asking_section();
-        assert!(section.contains("# Asking the user"));
-        assert!(section.contains("interaction.ask"));
-        assert!(section.contains("genuinely the user's to make"));
-        assert!(section.contains("tools_help"));
-        assert!(!section.contains("\"questions\""));
-        assert!(section.contains("your turn suspends"));
-        assert!(section.contains("Never use `interaction.ask`"));
+    fn workflow_capability_matrix_never_advertises_unavailable_tools() {
+        let cases: &[&[&str]] = &[
+            &[],
+            &["fs.read"],
+            &["cron.list"],
+            &["monitor.stop"],
+            &["cron.create"],
+            &["monitor.start"],
+            &["monitor.start", "monitor.stop"],
+            &["tasks.run"],
+            &["shell.run"],
+            &["shell.run", "shell.logs"],
+            &["shell.run", "shell.write"],
+            &["shell.run", "shell.write", "shell.resize"],
+            &["shell.run", "shell.write", "shell.signal"],
+            &["shell.run", "shell.write", "shell.stop"],
+            &["shell.run", "shell.write", "shell.logs"],
+            &["plan.set"],
+            &["plan.review"],
+            &["plan.edit"],
+            &["plan.phase"],
+            &["plan.set", "plan.review"],
+            &["plan.set", "plan.phase"],
+            &["interaction.ask"],
+            &["interaction.ask", "plan.review"],
+            WORKFLOW_TOOLS,
+        ];
+        for available in cases {
+            let sections = workflow_sections(&names(available));
+            let rendered = sections.join("\n\n");
+            for tool in WORKFLOW_TOOLS {
+                if !available.contains(tool) {
+                    assert!(
+                        !rendered.contains(tool),
+                        "{tool} advertised with {available:?}"
+                    );
+                }
+            }
+            let wants_background = ["cron.create", "monitor.start", "tasks.run", "shell.run"]
+                .iter()
+                .any(|name| available.contains(name));
+            assert_eq!(
+                rendered.contains("# Background execution"),
+                wants_background,
+                "{available:?}"
+            );
+            let wants_terminal =
+                available.contains(&"shell.run") && available.contains(&"shell.write");
+            assert_eq!(
+                rendered.contains("tty: true"),
+                wants_terminal,
+                "{available:?}"
+            );
+            assert_eq!(
+                rendered.contains("# Asking the user"),
+                available.contains(&"interaction.ask")
+            );
+            assert_eq!(
+                rendered.contains("# Delegating work"),
+                available.contains(&"tasks.run")
+            );
+            if sections.is_empty() {
+                assert_eq!(
+                    crate::identity::system_prompt_with_sections(&sections),
+                    crate::identity::system_prompt()
+                );
+            }
+        }
     }
 
     #[test]
-    fn delegating_section_reaches_for_parallel_work_and_keeps_conclusions() {
-        let section = render_delegating_section();
-        assert!(section.contains("# Delegating work"));
-        assert!(section.contains("Reach for `tasks.run`"));
-        assert!(section.contains("keep the conclusion, not the file dumps"));
-        assert!(section.contains("wait for the result"));
-        assert!(section.contains("Do small tasks yourself"));
-        assert!(section.contains("Never delegate understanding"));
+    fn partial_plan_capabilities_keep_approval_and_progress_distinct() {
+        let set_only = workflow_sections(&names(&["plan.set"])).join("\n\n");
+        assert!(set_only.contains("keep new plans in prose"));
+        assert!(set_only.contains("Existing planning-phase restrictions still apply"));
+        assert!(!set_only.contains("plan.review"));
+        let with_phase = workflow_sections(&names(&["plan.set", "plan.phase"])).join("\n\n");
+        assert!(with_phase.contains("`plan.phase` with `phase: active`"));
+        assert!(!with_phase.contains("review tool is unavailable"));
+        assert!(!with_phase.contains("plan.review"));
+        let full = workflow_sections(&names(&[
+            "plan.set",
+            "plan.review",
+            "plan.edit",
+            "plan.phase",
+        ]))
+        .join("\n\n");
+        for rule in [
+            "creating or replacing a plan puts it in the planning phase",
+            "prior user authorization AND trusted configuration",
+            "Pending reviews bind to a revision",
+            "changes during review",
+            "Ordinary progress updates to an active plan do not require another review",
+            "For completion, finish required steps/checks first",
+        ] {
+            assert!(full.contains(rule), "planning rule: {rule}");
+        }
     }
 
     #[test]
-    fn delegating_section_specifies_the_background_decision_rule() {
-        let section = render_delegating_section();
-        assert!(section.contains("waits synchronously"));
-        assert!(section.contains("`run_in_background: true`"));
-        assert!(section.contains("covered by `# Background execution`"));
+    fn workflow_sections_preserve_wait_and_interactive_io_obligations() {
+        let sections = workflow_sections(&names(WORKFLOW_TOOLS));
+        let asking = &sections[1];
+        for rule in [
+            "interaction.ask",
+            "at least two distinct choices",
+            "turn suspends",
+            "already authorized work",
+            "plan.review",
+            "specific dangerous action",
+            "same action and scope",
+            "Use the tool for every question",
+            "A timeout, cancellation, or empty answer is not approval",
+        ] {
+            assert!(asking.contains(rule), "asking rule: {rule}");
+        }
+        let delegation = &sections[2];
+        for rule in [
+            "tasks.run",
+            "bounded independent work",
+            "commands",
+            "verify results",
+            "do not redo delegated work",
+            "waits for the task",
+            "run_in_background: true",
+        ] {
+            assert!(delegation.contains(rule), "delegation rule: {rule}");
+        }
+        let background = &sections[3];
+        for rule in [
+            "system_notification",
+            "Never poll",
+            "end the current turn with the work still pending",
+            "resume from the notification",
+            "Waiting is not task completion",
+            "concrete diagnosis",
+            "each event has a sequence",
+            "source exit",
+            "IANA timezone",
+            "RFC 3339",
+            "originating assistant run",
+            "seven days",
+            "since_seq",
+            "partial write",
+            "Silence/yield is not process exit",
+            "interactive I/O is allowed",
+        ] {
+            assert!(background.contains(rule), "background rule: {rule}");
+        }
+        assert!(background.contains(r#"`\r` is Enter"#));
+        assert!(background.contains(r#"`\u0003` is Ctrl-C"#));
     }
 
     #[test]
-    fn background_section_forbids_polling_and_announces_notification() {
-        let section = render_background_section();
-        assert!(section.contains("# Background execution"));
-        assert!(section.contains("`run_in_background: true`"));
-        assert!(section.contains("system_notification"));
-        assert!(section.contains("Never poll"));
-        assert!(section.contains("wait for the `system_notification`"));
-    }
-
-    #[test]
-    fn background_section_announces_monitor_per_event_events() {
-        let section = render_background_section();
-        assert!(section.contains("`monitor.start` is a continuous background listener"));
-        assert!(section.contains("notified on every event"));
-        assert!(section.contains("do not poll or sleep"));
-    }
-
-    #[test]
-    fn background_section_announces_cron_scheduled_jobs() {
-        let section = render_background_section();
-        assert!(section.contains("`cron.create` schedules a recurring wake"));
-        assert!(section.contains("next safe part boundary"));
-        assert!(section.contains("retain the assistant run that created them"));
-        assert!(section.contains("Jobs are session-only and expire after seven days"));
-    }
-
-    #[test]
-    fn monitor_start_alone_injects_the_background_section() {
-        assert!(super::wants_background_section(&[
-            "monitor.start".to_owned()
-        ]));
-        assert!(!super::wants_background_section(&[
-            "monitor.stop".to_owned()
-        ]));
-        assert!(!super::wants_background_section(&["read".to_owned()]));
-    }
-
-    #[test]
-    fn cron_create_injects_the_background_section() {
-        assert!(super::wants_background_section(&["cron.create".to_owned()]));
-        assert!(!super::wants_background_section(&["cron.list".to_owned()]));
-        assert!(!super::wants_background_section(&[
-            "cron.history".to_owned()
-        ]));
+    fn assembled_prompt_budget_and_heading_layout_are_bounded() {
+        let sections = workflow_sections(&names(WORKFLOW_TOOLS));
+        let prompt = crate::identity::system_prompt_with_sections(&sections);
+        // Budget necessary decision guidance; schemas remain in live help.
+        assert!(
+            prompt.len() <= 12_000 + crate::identity::AGENA_GIT_WORKFLOW_PROMPT.trim().len() + 2,
+            "assembled prompt grew to {} bytes",
+            prompt.len()
+        );
+        assert!(!prompt.contains("\n\n\n"));
+        let mut headings = std::collections::HashSet::new();
+        let lines = prompt.lines().collect::<Vec<_>>();
+        for (index, line) in lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("# "))
+        {
+            assert!(headings.insert(*line), "duplicate heading: {line}");
+            assert!(index == 0 || lines[index - 1].is_empty());
+            assert!(lines[index + 1].is_empty());
+        }
+        assert_eq!(sections.len(), 4);
+        let mut position = 0;
+        for heading in [
+            "# Planning",
+            "# Asking the user",
+            "# Delegating work",
+            "# Background execution",
+            "# Git and file recovery",
+            "# Communication and delivery",
+        ] {
+            let next = prompt.find(heading).unwrap();
+            assert!(next > position, "out-of-order section {heading}");
+            position = next;
+        }
+        println!(
+            "prompt bytes: base={}, all_workflows={}",
+            crate::identity::system_prompt().len(),
+            prompt.len()
+        );
     }
 }

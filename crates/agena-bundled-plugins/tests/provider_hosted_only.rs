@@ -29,7 +29,7 @@ fn input_for(name: &str) -> Value {
 fn manifest_exposes_exactly_32_hosted_tools() {
     let manifest = agena_bundled_plugins::bundled_capability_manifest();
     assert_eq!(manifest.counts.execution_tools, 131);
-    assert_eq!(manifest.counts.gateway_tools, 4);
+    assert_eq!(manifest.counts.gateway_tools, 7);
     let all = manifest
         .plugins
         .iter()

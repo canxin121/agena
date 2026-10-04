@@ -26,12 +26,17 @@ impl MemoryIndex {
         &self,
         documents: &[MemorySearchDocument],
     ) -> Result<(), MemoryIndexError> {
-        if self.dir.exists() {
-            fs::remove_dir_all(&self.dir)?;
-        }
         fs::create_dir_all(&self.dir)?;
         let bytes = serde_json::to_vec(documents)?;
-        fs::write(self.dir.join(INDEX_FILE), bytes)?;
+        let target = self.dir.join(INDEX_FILE);
+        if fs::read(&target).is_ok_and(|current| current == bytes) {
+            return Ok(());
+        }
+        use std::io::Write as _;
+        let mut staged = tempfile::NamedTempFile::new_in(&self.dir)?;
+        staged.write_all(&bytes)?;
+        staged.as_file().sync_all()?;
+        staged.persist(target).map_err(|error| error.error)?;
         Ok(())
     }
 

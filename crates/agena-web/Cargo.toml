@@ -7,15 +7,18 @@ rust-version.workspace = true
 
 [dependencies]
 agena-failure = { workspace = true }
+agena-process = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 crw-extract = { workspace = true }
+encoding_rs = { workspace = true }
 governor = { workspace = true }
 moka = { workspace = true }
-process_control = { workspace = true }
 reqwest = { workspace = true, features = ["rustls"] }
 redb = { workspace = true }
+robotstxt = { workspace = true }
+schemars = { workspace = true }
 scraper = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -28,6 +31,7 @@ tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 urlencoding = { workspace = true }
+which = { workspace = true }
 
 [lints]
 workspace = true

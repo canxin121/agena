@@ -32,7 +32,7 @@ impl WorkflowPlugin {
             "agena.session" => {
                 return matches!(
                     input.tool_name(),
-                    "get" | "environment" | "model" | "tokens" | "rename"
+                    "get" | "environment" | "executables" | "model" | "tokens" | "rename"
                 );
             }
             "agena.interaction" => return matches!(input.tool_name(), "ask" | "notify"),
@@ -62,50 +62,11 @@ impl WorkflowPlugin {
     pub(in crate::plugins::provided::workflow) fn is_probably_read_only_shell(
         command: &str,
     ) -> bool {
-        let trimmed = command.trim();
-        if trimmed.is_empty() {
-            return true;
-        }
-        if trimmed.contains('>')
-            || trimmed.contains(">>")
-            || trimmed.contains("<<")
-            || trimmed.contains("rm ")
-            || trimmed.contains("mv ")
-            || trimmed.contains("cp ")
-            || trimmed.contains("chmod ")
-            || trimmed.contains("chown ")
-            || trimmed.contains("touch ")
-            || trimmed.contains(';')
-            || trimmed.contains("&&")
-            || trimmed.contains("||")
-        {
-            return false;
-        }
-        let Some(tokens) = shlex::split(trimmed) else {
-            return false;
-        };
-        let Some(command_name) = tokens.first().map(String::as_str) else {
-            return true;
-        };
-        match command_name {
-            "cat" | "sed" | "grep" | "rg" | "ls" | "find" | "pwd" | "head" | "tail" | "wc"
-            | "stat" | "tree" | "readlink" | "realpath" | "file" | "echo" => true,
-            "git" => matches!(
-                tokens.get(1).map(String::as_str),
-                Some(
-                    "status"
-                        | "diff"
-                        | "show"
-                        | "log"
-                        | "branch"
-                        | "rev-parse"
-                        | "remote"
-                        | "ls-files"
-                        | "grep"
-                )
-            ),
-            _ => false,
-        }
+        command.trim().is_empty()
+            || matches!(
+                agena_tool::shell_analysis::analyze_command(command).classification,
+                agena_tool::shell_analysis::CommandClassification::ReadOnly
+            )
     }
 
     pub(in crate::plugins::provided::workflow) fn command_text_for_policy(

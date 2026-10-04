@@ -1,7 +1,9 @@
-use globset::{Glob, GlobMatcher};
+use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
+#[cfg(test)]
+mod benchmark;
 use std::time::{Duration, Instant};
 
-use crate::part::GlobToolInput;
+use crate::part::{GlobKind, GlobToolInput};
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
@@ -13,10 +15,20 @@ const DEFAULT_MATCHES: usize = 200;
 const MAX_MATCHES: usize = 1_000;
 const MAX_VISITED_ENTRIES: usize = 100_000;
 const MAX_SCAN_DURATION: Duration = Duration::from_secs(10);
+const MAX_RESULT_BYTES: usize = 256 * 1024;
+
+#[derive(Default)]
+struct ScanOptions<'a> {
+    kind: GlobKind,
+    exclude: GlobSet,
+    cancel: Option<&'a tokio_util::sync::CancellationToken>,
+}
+
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &GlobToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    executor.ensure_not_cancelled()?;
     let base_path = input
         .path
         .as_deref()
@@ -56,8 +68,33 @@ pub(super) fn execute(
     }
     let include_ignored =
         effective_include_ignored(input.include_ignored, &base_path, executor.workspace_root());
-    let (matched_paths, stop_reason) =
-        collect_matches(&base_path, &matcher, offset, limit, include_ignored)?;
+    let mut exclude = GlobSetBuilder::new();
+    if input.exclude.len() > 32 {
+        return Err(ToolError::invalid_input(
+            "glob accepts at most 32 exclusions",
+        ));
+    }
+    for pattern in &input.exclude {
+        if pattern.is_empty() || pattern.len() > 4096 {
+            return Err(ToolError::invalid_input(
+                "exclude globs must contain 1–4096 bytes",
+            ));
+        }
+        exclude.add(Glob::new(pattern)?);
+    }
+    let options = ScanOptions {
+        kind: input.kind,
+        exclude: exclude.build()?,
+        cancel: executor.cancellation_token(),
+    };
+    let (matched_paths, stop_reason) = collect_matches(
+        &base_path,
+        &matcher,
+        offset,
+        limit,
+        include_ignored,
+        &options,
+    )?;
     let truncated = stop_reason.is_some();
     let mut matches = matched_paths
         .iter()
@@ -115,14 +152,19 @@ fn collect_matches(
     offset: usize,
     limit: usize,
     include_ignored: bool,
+    options: &ScanOptions<'_>,
 ) -> Result<(Vec<std::path::PathBuf>, Option<String>), ToolError> {
     let started = Instant::now();
     let mut matches = Vec::with_capacity(limit.min(DEFAULT_MATCHES));
     let mut skipped_matches = 0_usize;
     let mut skipped_errors = 0_usize;
     let mut first_skipped_error = None;
+    let mut result_bytes = 0;
 
     for (entry_index, entry) in walk_builder(base_path, include_ignored).build().enumerate() {
+        if options.cancel.is_some_and(|token| token.is_cancelled()) {
+            return Err(ToolError::Cancelled);
+        }
         if entry_index >= MAX_VISITED_ENTRIES {
             return Ok((
                 matches,
@@ -160,6 +202,12 @@ fn collect_matches(
         if entry.path() == base_path {
             continue;
         }
+        let kind = entry.file_type();
+        if (options.kind == GlobKind::File && !kind.is_some_and(|kind| kind.is_file()))
+            || (options.kind == GlobKind::Directory && !kind.is_some_and(|kind| kind.is_dir()))
+        {
+            continue;
+        }
 
         let relative = entry.path().strip_prefix(base_path).map_err(|err| {
             ToolError::invalid_input(format!(
@@ -169,7 +217,7 @@ fn collect_matches(
         })?;
 
         let relative_norm = normalize_path_for_display(relative);
-        if matcher.is_match(&relative_norm) {
+        if matcher.is_match(&relative_norm) && !options.exclude.is_match(&relative_norm) {
             if skipped_matches < offset {
                 skipped_matches += 1;
                 continue;
@@ -179,6 +227,17 @@ fn collect_matches(
                     matches,
                     Some(glob_stop_reason(
                         "result page limit reached",
+                        skipped_errors,
+                        first_skipped_error.as_deref(),
+                    )),
+                ));
+            }
+            result_bytes += entry.path().to_string_lossy().len() * 6 + 4;
+            if result_bytes > MAX_RESULT_BYTES {
+                return Ok((
+                    matches,
+                    Some(glob_stop_reason(
+                        "result-byte limit reached",
                         skipped_errors,
                         first_skipped_error.as_deref(),
                     )),
@@ -216,7 +275,40 @@ mod tests {
 
     use globset::Glob;
 
-    use super::collect_matches;
+    use super::{ScanOptions, collect_matches};
+
+    #[test]
+    fn glob_kind_exclusions_and_cancellation_preserve_pagination() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("folder")).unwrap();
+        fs::write(root.path().join("folder/a.rs"), "fixture").unwrap();
+        fs::write(root.path().join("b.rs"), "fixture").unwrap();
+        let matcher = Glob::new("**").unwrap().compile_matcher();
+        let mut options = ScanOptions {
+            kind: crate::part::GlobKind::Directory,
+            ..ScanOptions::default()
+        };
+        let (paths, reason) =
+            collect_matches(root.path(), &matcher, 0, 1, false, &options).unwrap();
+        assert_eq!(paths, [root.path().join("folder")]);
+        assert!(reason.is_none());
+        options.kind = crate::part::GlobKind::File;
+        options.exclude = globset::GlobSetBuilder::new()
+            .add(Glob::new("folder/**").unwrap())
+            .build()
+            .unwrap();
+        let (paths, reason) =
+            collect_matches(root.path(), &matcher, 0, 1, false, &options).unwrap();
+        assert_eq!(paths, [root.path().join("b.rs")]);
+        assert!(reason.is_none());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        options.cancel = Some(&cancel);
+        assert!(matches!(
+            collect_matches(root.path(), &matcher, 0, 1, false, &options),
+            Err(super::ToolError::Cancelled)
+        ));
+    }
 
     #[test]
     fn glob_pages_deterministically_and_skips_heavy_directories_by_default() {
@@ -237,9 +329,11 @@ mod tests {
         let matcher = Glob::new("**/*.rs").expect("glob").compile_matcher();
 
         let (first, first_stop_reason) =
-            collect_matches(&root, &matcher, 0, 2, false).expect("first page");
+            collect_matches(&root, &matcher, 0, 2, false, &ScanOptions::default())
+                .expect("first page");
         let (second, second_stop_reason) =
-            collect_matches(&root, &matcher, 2, 2, false).expect("second page");
+            collect_matches(&root, &matcher, 2, 2, false, &ScanOptions::default())
+                .expect("second page");
         assert_eq!(
             first
                 .iter()
@@ -263,7 +357,8 @@ mod tests {
         );
         assert_eq!(second_stop_reason, None);
 
-        let (all, _) = collect_matches(&root, &matcher, 0, 10, true).expect("ignored paths");
+        let (all, _) = collect_matches(&root, &matcher, 0, 10, true, &ScanOptions::default())
+            .expect("ignored paths");
         assert_eq!(all.len(), 5);
         fs::remove_dir_all(root).expect("remove glob fixture");
     }

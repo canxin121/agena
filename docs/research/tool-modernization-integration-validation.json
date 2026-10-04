@@ -1,0 +1,292 @@
+{
+  "checked_at_utc": "2026-10-04T13:26:26.286425+00:00",
+  "branch": "integrate/tool-modernization-master",
+  "worktree": "/Volumes/Rc20/Projects/agena-tool-modernization-master",
+  "integration": {
+    "upstream_tip": "68d3b9b52705ec9fa963a3a124207ca13eb9c7ea",
+    "feature_tip": "cf4984c1b96d3779c7e0e0b395d7d06b84368f1b",
+    "merge_base": "98c1c116a382625f7a8873fc2cdafa0621a0af89",
+    "upstream_commits_since_base": 10,
+    "feature_commits_since_base": 15,
+    "strategy": "Preserve both histories in a merge commit; publish with a normal fast-forward push."
+  },
+  "validated_source_git_objects": {
+    "crates": "7a6451ff51afe238ab75f9139edea9c1fed0a652",
+    "tools": "2cbb0c0c053fb36d641543c9597e1a5df839c381",
+    "third_party": "f0a429dad9e0f6f2b9f09b39f36e8c295dadad77",
+    "packages": "93a10cdf32acb9fa3db10ffbe32f86559cf8fdf5",
+    "apps": "3f238417d73736997dc9948c55743578a9f4b5a5",
+    "examples": "f104a2229b3f98c1295378418dc0638a2e8aa2bb",
+    "scripts": "4e040aabbe42542ddb4073b9990d5bd61fda2fb2",
+    "Cargo.toml": "3c23be4eec81c95c199ae92118770310147306b3",
+    "Cargo.lock": "5c166bcfea76bad4d8e0a5eb296b0c4bbd42c062",
+    ".cargo": "47cca5f860e874aca058f4f272a9542b62af2dd9",
+    ".bun-version": "085c0f2666ace5b88d67bf565bbe30fbe054e551"
+  },
+  "source_identity_scope": "These Git tree/blob IDs identify all source and build inputs checked by this run. Documentation-only evidence additions are excluded to avoid a self-referential commit ID.",
+  "platform": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "release": "25.6.0"
+  },
+  "build_environment": {
+    "CARGO_TARGET_DIR": "/Volumes/Rc20/Projects/agena-tool-modernization/target",
+    "bun_version": "1.3.14",
+    "python_version": "3.13"
+  },
+  "agena_connectors_used": false,
+  "agena_service_started": false,
+  "live_model_calls": false,
+  "catalog": {
+    "bundled_commands": 14,
+    "execution_tools": 131,
+    "gateway_tools": 7,
+    "plugins": 22,
+    "tools": 138,
+    "provider_functions_including_synthesized_tools_call": 8
+  },
+  "prompt_sizes": {
+    "upstream_commit": "68d3b9b52705ec9fa963a3a124207ca13eb9c7ea",
+    "feature_commit": "cf4984c1b96d3779c7e0e0b395d7d06b84368f1b",
+    "source_evidence": "tool-modernization-integration-validation.json",
+    "core_base_excluding_git_utf8_bytes": 6414,
+    "git_guidance_with_separator_utf8_bytes": 10084,
+    "base_including_git_utf8_bytes": 16498,
+    "all_workflow_sections_including_git_utf8_bytes": 21247,
+    "regression_budgets": {
+      "core_base_excluding_git_utf8_bytes": 7500,
+      "core_and_all_workflows_excluding_git_utf8_bytes": 12000,
+      "git_guidance_with_separator_utf8_bytes": 12000
+    }
+  },
+  "preservation": {
+    "upstream_changed_paths": 141,
+    "feature_changed_paths": 175,
+    "upstream_only_paths": 124,
+    "upstream_only_paths_byte_identical": 121,
+    "upstream_lint_followups": [
+      "crates/agena-tui-app/src/app_session_work.rs",
+      "crates/agena-tui-app/src/app_session_work/requests.rs",
+      "crates/agena-tui-app/src/app_session_work/view.rs"
+    ],
+    "lint_changes": "Box the large WorkResult::Control payload; convert three equivalent nested conditions to let-chains. No lint suppression.",
+    "overlapping_paths_reviewed": [
+      "crates/agena-bundled-plugins/generated/bundled-capability-identities.json",
+      "crates/agena-bundled-plugins/generated/tools-reference.md",
+      "crates/agena-bundled-plugins/src/plugins/provided/fs.rs",
+      "crates/agena-bundled-plugins/src/plugins/provided/workflow/workflow_runtime.rs",
+      "crates/agena-bundled-plugins/tests/human_rendering.rs",
+      "crates/agena-bundled-plugins/tests/tool_correctness.rs",
+      "crates/agena-runtime-contracts/src/identity/mod.rs",
+      "crates/agena-runtime-contracts/src/part/tool.rs",
+      "crates/agena-runtime-session/src/session/manager/session_prompt.rs",
+      "crates/agena-runtime-session/src/session/processor/run.rs",
+      "crates/agena-runtime-tools/src/tool/apply_patch.rs",
+      "crates/agena-runtime-tools/src/tool/executor/executor_core.rs",
+      "crates/agena-runtime-tools/src/tool/human_view.rs",
+      "crates/agena-runtime-tools/src/tool/payload.rs",
+      "crates/agena-runtime-tools/src/tool/tests.rs",
+      "crates/agena-runtime-tools/src/tool/tool_registry.rs",
+      "crates/agena-tool/src/lib.rs"
+    ],
+    "git_guidance_path": "crates/agena-runtime-contracts/src/identity/git_workflow.md",
+    "git_guidance_sha256": "e52af20d921502a79b27a41f21002652a194f36bcc2d250a07e2a21122f00823",
+    "git_guidance_byte_identical_to_upstream": true,
+    "conversation_instruction_injection_preserved_in_sync_and_async_paths": true,
+    "removed_persistent_inverse_patch_undo_not_reintroduced": true
+  },
+  "checks": [
+    {
+      "name": "workspace-tests",
+      "command": "cargo test --locked --workspace --no-fail-fast",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-workspace-tests-final.log",
+          "bytes": 338720,
+          "sha256": "b67ee1509033878e5109689cf0c9c28703641ee961a91ff51cad81af0b35c0f0"
+        }
+      ],
+      "passed": 3190,
+      "failed": 0,
+      "ignored": 12,
+      "test_targets": 154
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D warnings",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-clippy-final.log",
+          "bytes": 1527,
+          "sha256": "948e6d801acf479777b1549a17f70a77cd4f398b70e6760d6765db69f64a1bd9"
+        }
+      ]
+    },
+    {
+      "name": "format",
+      "command": "cargo fmt --all -- --check",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-fmt.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "name": "assembled-prompt-measurement",
+      "command": "Re-run the assembled_prompt_budget_and_heading_layout_are_bounded test in the workspace-built agena_runtime_session libtest binary with --nocapture",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-prompt-size.log",
+          "bytes": 268,
+          "sha256": "afb7944d8f4b7f9384d35580f085e5483485fd717e19dd950056a87211baf4f7"
+        }
+      ],
+      "passed": 1
+    },
+    {
+      "name": "refactor-tools",
+      "command": "uv run --offline --no-project --python 3.13 python -m unittest discover -s scripts/refactors/tests",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-refactor-tests.log",
+          "bytes": 103,
+          "sha256": "55253b339af866b6cbab614327c6b64ebd71dde58950eaa1157f4547f183b04d"
+        }
+      ],
+      "passed": 5
+    },
+    {
+      "name": "failure-semantics-invariants",
+      "command": "uv run --offline --no-project --python 3.13 python scripts/refactors/check-refactor-invariants.py --manifest scripts/refactors/failure-semantics-invariants.json",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-invariants.log",
+          "bytes": 42,
+          "sha256": "2ae7cbe2fd579cb6183ebdabe6c5036adeb606bed31988a9e41e7eb18524e974"
+        }
+      ],
+      "passed": 19
+    },
+    {
+      "name": "target-manifest-consistency",
+      "command": "uv run --offline --no-project --python 3.13 python scripts/agena/verify-target-coverage.py",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-target-coverage.log",
+          "bytes": 207,
+          "sha256": "bb5a24eb3e627a93e4ac1939108616d5cc0f9d79468b7014a3afdaada73547d3"
+        }
+      ]
+    },
+    {
+      "name": "runtime-capabilities",
+      "command": "uv run --offline --no-project --python 3.13 python scripts/ci/verify-runtime-capabilities.py",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-runtime-capabilities.log",
+          "bytes": 2942,
+          "sha256": "c29af1904de4b5a1f523b6cc695a06f35dbdcefd6b2454d4ab60ae95361e772d"
+        }
+      ],
+      "passed": 2
+    },
+    {
+      "name": "web-dependencies",
+      "command": "bun install --frozen-lockfile",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-web-install-bun1314.log",
+          "bytes": 96,
+          "sha256": "775e6e257626bd6f0b104f7d6b6270b55f88bd02c8e724745f5288c9e591aa10"
+        }
+      ],
+      "working_directory": "packages/agena-web",
+      "bun_version": "1.3.14"
+    },
+    {
+      "name": "web-tests",
+      "command": "bun test",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-web-tests-bun1314.log",
+          "bytes": 62804,
+          "sha256": "84fbb566a16344009fa239edf7233d0da983470df602fddb36407997bf1263af"
+        }
+      ],
+      "working_directory": "packages/agena-web",
+      "bun_version": "1.3.14",
+      "passed": 593,
+      "failed": 0,
+      "test_files": 192
+    },
+    {
+      "name": "web-checks-and-production-build",
+      "command": "bun run build",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-web-build-bun1314.log",
+          "bytes": 33296,
+          "sha256": "66ca5a96c843088a2674f26346e84e5c850d3ac789d8019c77e4d3b3098765ca"
+        }
+      ],
+      "working_directory": "packages/agena-web",
+      "bun_version": "1.3.14",
+      "checks": [
+        "imports",
+        "settings-i18n",
+        "vue-tsc",
+        "vite-build"
+      ]
+    },
+    {
+      "name": "generated-reference-and-identities",
+      "command": "cargo run --locked -p agena-bundled-plugins --example generate_tools_reference; cargo run --locked -p agena-bundled-plugins --example generate_capability_identity_snapshot",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-integration-generators.log",
+          "bytes": 8399,
+          "sha256": "cef536ee60f7bbb07179917cbfb814d84447e52034e852a51460cb29ad1e61b3"
+        }
+      ],
+      "byte_identical": true,
+      "artifacts": [
+        {
+          "path": "crates/agena-bundled-plugins/generated/tools-reference.md",
+          "bytes": 265872,
+          "sha256": "ff548851aab3c94d7737cc52241a057acc456b6e89c881f3e2913ebf3012df55"
+        },
+        {
+          "path": "crates/agena-bundled-plugins/generated/bundled-capability-identities.json",
+          "bytes": 81733,
+          "sha256": "a262c0058b15d27aae1564f95a49c464ec63c39f9e66aca065c5886ff74afb63"
+        }
+      ]
+    }
+  ],
+  "retained_initial_clippy_failure": {
+    "path": "/tmp/agena-integration-clippy.log",
+    "bytes": 19101,
+    "sha256": "8e70b16ca932dae2d3c2c0aa225617fe55fa42131a3d8ffe9f7e751fe7aafe18"
+  },
+  "evidence_note": "Log paths refer to local validation artifacts and may be temporary; bytes and SHA-256 are recorded for provenance. Older feature-validation JSON files retain their original source scope.",
+  "limitations": [
+    "Validation ran on macOS arm64; target-manifest verification is not cross-platform execution.",
+    "The 12 intentional workspace skips remain; optional browser/document/extraction fixtures and benchmarks were not rerun for integration.",
+    "No real provider/model requests or prompt A/B task-success measurements were performed.",
+    "Existing macOS compact-unwind-size linker warnings for large debug binaries remain unsuppressed."
+  ]
+}

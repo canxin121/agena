@@ -257,6 +257,7 @@ dependencies = [
  "agena-memory-index",
  "agena-plugin-host",
  "agena-plugin-sdk",
+ "agena-process",
  "agena-provider",
  "agena-runtime-config",
  "agena-runtime-contracts",
@@ -272,10 +273,11 @@ dependencies = [
  "futures-util",
  "hex",
  "ignore",
+ "jsonschema",
  "libc",
  "notify",
  "portable-atomic",
- "process_control",
+ "regex",
  "reqwest 0.13.4",
  "schemars",
  "serde",
@@ -288,6 +290,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "which",
  "yaml_serde",
 ]
 
@@ -462,11 +465,13 @@ dependencies = [
  "portable-atomic",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
  "tracing",
  "url",
+ "which",
 ]
 
 [[package]]
@@ -542,9 +547,11 @@ name = "agena-memory-index"
 version = "0.1.0"
 dependencies = [
  "agena-storage",
+ "blake3",
  "serde",
  "serde_json",
  "tantivy",
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
 ]
@@ -715,6 +722,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "process-wrap",
+ "tempfile",
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
@@ -1085,6 +1093,7 @@ dependencies = [
  "agena-tool",
  "base64 0.22.1",
  "blake3",
+ "bytes",
  "chrono",
  "content_inspector",
  "fs4",
@@ -1102,7 +1111,7 @@ dependencies = [
  "parking_lot",
  "path-clean",
  "portable-atomic",
- "process_control",
+ "rayon",
  "regex",
  "schemars",
  "sea-orm",
@@ -1198,9 +1207,11 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-plugin-contracts",
+ "ast-grep-config",
  "ast-grep-core",
  "ast-grep-language",
  "ignore",
+ "libc",
  "schemars",
  "serde",
  "serde_json",
@@ -1439,16 +1450,19 @@ name = "agena-web"
 version = "0.1.0"
 dependencies = [
  "agena-failure",
+ "agena-process",
  "base64 0.22.1",
  "blake3",
  "chrono",
  "crw-extract",
+ "encoding_rs",
  "governor",
  "libc",
  "moka",
- "process_control",
  "redb",
  "reqwest 0.13.4",
+ "robotstxt",
+ "schemars",
  "scraper",
  "serde",
  "serde_json",
@@ -1462,6 +1476,7 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+ "which",
 ]
 
 [[package]]
@@ -1691,6 +1706,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "ast-grep-config"
+version = "0.44.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76e37f6e24443d0ae712e50b9a0ae079d9e03a40ca4324e5cf27a89bb71ae182"
+dependencies = [
+ "ast-grep-core",
+ "bit-set 0.10.0",
+ "globset",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_regex",
+ "serde_yaml",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -1930,12 +1962,6 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
-
-[[package]]
-name = "attr_alias"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f648697f71a7eddd152c1ae26151f580c69635bfcb747574886317877ccf1a5a"
 
 [[package]]
 name = "auto_encoder"
@@ -7653,16 +7679,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "process_control"
-version = "5.2.0"
-dependencies = [
- "attr_alias",
- "libc",
- "signal-hook",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "prometheus"
 version = "0.14.0"
 dependencies = [
@@ -8566,6 +8582,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "robotstxt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbc52377db80e3fec3a2c748ca603b8b6cacdd34ff89ff4b742a635361d4b4a7"
+
+[[package]]
 name = "ron"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9205,6 +9227,19 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
 ]
 
 [[package]]
@@ -11638,6 +11673,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"

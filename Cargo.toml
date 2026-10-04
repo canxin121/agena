@@ -251,12 +251,13 @@ lru = "0.18.2"
 libc = "0.2.186"
 lsp-types = "0.97.0"
 mime_guess = "2.0.5"
+encoding_rs = "0.8.35"
+robotstxt = "0.3.0"
 merge = "0.2.0"
 moka = { version = "0.12.15", features = ["future"] }
 mockito = "1.7.2"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 path-clean = "1.0.1"
-process_control = "5.2.0"
 process-wrap = { version = "9.1.0", features = ["tokio1"] }
 ratatui = "0.30.2"
 ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
@@ -298,6 +299,8 @@ unicode-width = "0.2.2"
 urlencoding = "2.1.3"
 tantivy = "0.26.1"
 ast-grep-core = "0.44.1"
+ast-grep-config = "0.44.1"
+rayon = "1.12.0"
 ast-grep-language = { version = "0.44.1", default-features = false, features = [
     "tree-sitter-bash",
     "tree-sitter-c",
@@ -393,7 +396,6 @@ nix-0-31 = { package = "nix", path = "third_party/nix-0.31" }
 prometheus = { path = "third_party/prometheus" }
 portable-pty = { path = "third_party/portable-pty" }
 process-wrap = { path = "third_party/process-wrap" }
-process_control = { path = "third_party/process-control" }
 fs4 = { path = "third_party/fs4" }
 getrandom-0-3 = { package = "getrandom", path = "third_party/getrandom-0.3" }
 getrandom = { path = "third_party/getrandom-0.4" }

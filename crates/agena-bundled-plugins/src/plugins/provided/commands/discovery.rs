@@ -515,17 +515,29 @@ fn discovery_diagnostic(path: PathBuf, diagnostic: String) -> DiscoveryDiagnosti
 }
 
 fn read_text_file_bounded(path: &Path, max_bytes: usize) -> DiscoveryResult<String> {
-    let file = std::fs::File::open(path)?;
+    let file = agena_tool::file_io::open_regular_file(path)?;
     let metadata = file.metadata()?;
     let capacity = usize::try_from(metadata.len().min(max_bytes as u64)).unwrap_or(max_bytes);
     let mut bytes = Vec::with_capacity(capacity);
-    file.take((max_bytes as u64).saturating_add(1))
+    (&file)
+        .take((max_bytes as u64).saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() > max_bytes {
         return Err(DiscoveryError::ResourceTooLarge {
             path: path.display().to_string(),
             limit: max_bytes,
         });
+    }
+    let after = file.metadata()?;
+    if after.len() != bytes.len() as u64
+        || metadata.len() != after.len()
+        || metadata.modified().ok() != after.modified().ok()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "command resource changed while reading",
+        )
+        .into());
     }
     String::from_utf8(bytes).map_err(|_| DiscoveryError::ResourceNotText {
         path: path.display().to_string(),

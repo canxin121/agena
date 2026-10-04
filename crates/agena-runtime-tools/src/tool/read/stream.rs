@@ -25,7 +25,7 @@ pub(super) fn read_page(
     limit: usize,
     cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<Page, ToolError> {
-    let file = fs::File::open(path)?;
+    let file = agena_tool::file_io::open_regular_file(path)?;
     let before = file.metadata()?;
     if !before.is_file() {
         return Err(ToolError::invalid_input(

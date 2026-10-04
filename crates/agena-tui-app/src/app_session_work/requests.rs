@@ -218,14 +218,13 @@ impl App {
             }
             Ok(WorkResult::Control(activity)) => {
                 if self.transcript.session_id == Some(id) {
-                    if let Some(execution) = self.transcript.execution.as_mut() {
-                        if let Some(row) = execution
+                    if let Some(execution) = self.transcript.execution.as_mut()
+                        && let Some(row) = execution
                             .background_activities
                             .iter_mut()
                             .find(|row| row.id == activity.id)
-                        {
-                            *row = activity;
-                        }
+                    {
+                        *row = *activity;
                     }
                     self.request_refresh(id, false);
                 }
@@ -281,7 +280,7 @@ impl App {
             .await
             .map_err(crate::UiFailure::internal)
             .and_then(|r| {
-                r.map(WorkResult::Control)
+                r.map(|activity| WorkResult::Control(Box::new(activity)))
                     .map_err(crate::UiFailure::internal)
             });
             let _ = tx

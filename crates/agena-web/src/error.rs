@@ -3,6 +3,11 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 /// Error from the web crawl subsystem.
 pub enum CrawlError {
+    #[error("{provider} search failed: {message}")]
+    SearchProvider {
+        provider: &'static str,
+        message: String,
+    },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("http error: {0}")]

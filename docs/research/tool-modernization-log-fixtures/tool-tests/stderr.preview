@@ -1,0 +1,4 @@
+    Finished `test` profile [unoptimized] target(s) in 2.69s
+     Running unittests src/lib.rs (target/debug/deps/agena_tool-0351d7d0f823366f)
+
+[1 successful test/progress rows folded; exact bytes retained in raw log.]

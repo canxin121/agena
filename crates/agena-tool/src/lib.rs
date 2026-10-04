@@ -510,6 +510,17 @@ fn tool_result_fragment(
                 None => format_count(matches as usize, "matches"),
             });
         }
+        "code.rewrite_ast" => {
+            if let Some(count) = object.get("replacements").and_then(value_as_u64) {
+                let status =
+                    if object.get("applied").and_then(serde_json::Value::as_bool) == Some(true) {
+                        "applied"
+                    } else {
+                        "preview"
+                    };
+                return Some(format!("{} replacements · {status}", count));
+            }
+        }
         "code.syntax_tree" => {
             let language = object
                 .get("language")
@@ -813,6 +824,17 @@ fn tool_result_fragment(
                 .and_then(value_as_u64)
             {
                 return Some(format!("loaded · {}", format_bytes(size)));
+            }
+        }
+        "fs.document" => {
+            if let Some(lines) = object.get("matching_lines").and_then(value_as_u64) {
+                let boundary =
+                    if object.get("truncated").and_then(serde_json::Value::as_bool) == Some(true) {
+                        " · truncated"
+                    } else {
+                        ""
+                    };
+                return Some(format!("{lines} matching lines{boundary}"));
             }
         }
         "fs.read_many" => {
@@ -2318,6 +2340,8 @@ fn tool_action_label(tool_name: &str) -> String {
         "fs.stat" => "Inspect file".to_owned(),
         "code.search_ast" => "Search AST".to_owned(),
         "code.syntax_tree" => "Inspect syntax tree".to_owned(),
+        "code.rewrite_ast" => "Rewrite AST".to_owned(),
+        "fs.document" => "Read document".to_owned(),
         "shell.run" | "shell" => "Run process".to_owned(),
         "shell.list" => "List processes".to_owned(),
         "shell.logs" => "Show process logs".to_owned(),
@@ -2497,6 +2521,8 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
     }
     let preferred: &[&str] = if key.ends_with("code.search_ast") {
         &["pattern", "path", "language"]
+    } else if key.ends_with("code.rewrite_ast") {
+        &["path", "pattern", "replacement", "apply"]
     } else if key.ends_with("code.syntax_tree") {
         &["path", "language"]
     } else if key.ends_with("report.findings") {
@@ -3982,7 +4008,9 @@ mod tool_title_tests {
     }
 }
 
+pub mod cli_catalog;
 pub mod code_search;
+pub mod file_io;
 pub mod provider_tools;
 pub mod shell;
 pub mod shell_analysis;

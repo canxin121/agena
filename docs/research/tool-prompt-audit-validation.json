@@ -1,0 +1,219 @@
+{
+  "checked_on": "2026-10-04",
+  "validated_source_commit": "3fc869a83b948759d843617bc6224b0edd6c6f9a",
+  "pre_audit_commit": "fe79003c",
+  "branch": "feat/tool-modernization",
+  "worktree": "/Volumes/Rc20/Projects/agena-tool-modernization",
+  "platform": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "release": "25.6.0"
+  },
+  "agena_connectors_used": false,
+  "agena_service_started": false,
+  "live_model_calls": false,
+  "catalog": {
+    "bundled_commands": 14,
+    "execution_tools": 131,
+    "gateway_tools": 7,
+    "plugins": 22,
+    "tools": 138,
+    "provider_functions_including_synthesized_tools_call": 8
+  },
+  "prompt_sizes": {
+    "baseline_commit": "98c1c116",
+    "pre_audit_commit": "fe79003c",
+    "audited_source_commit": "3fc869a83b948759d843617bc6224b0edd6c6f9a",
+    "measurement": "UTF-8 bytes, not model-specific tokenizer counts",
+    "scope": "Base identity plus enabled workflow sections only; excludes provider function definitions, project guidance, user system additions and conversation history.",
+    "before": {
+      "base_utf8_bytes": 9738,
+      "with_all_workflow_sections_utf8_bytes": 16811
+    },
+    "pre_audit": {
+      "base_utf8_bytes": 4658,
+      "with_all_workflow_sections_utf8_bytes": 7493
+    },
+    "after": {
+      "base_utf8_bytes": 6288,
+      "with_all_workflow_sections_utf8_bytes": 10537
+    },
+    "regression_budgets": {
+      "base_utf8_bytes": 7500,
+      "with_all_workflow_sections_utf8_bytes": 12000
+    },
+    "reproduce_current": "cargo test --locked -p agena-runtime-session session_prompt::tests::assembled_prompt_budget_and_heading_layout_are_bounded -- --nocapture"
+  },
+  "checks": [
+    {
+      "name": "workspace-tests",
+      "command": "cargo test --locked --workspace --no-fail-fast",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-workspace-tests.log",
+          "bytes": 333596,
+          "sha256": "9ee3e5eaf2e8ca2e036bf26f202f0856790b07ae5883e078f17cc3f0998bd586"
+        }
+      ],
+      "test_targets": 154,
+      "passed": 3172,
+      "failed": 0,
+      "ignored": 12
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D warnings",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-clippy.log",
+          "bytes": 2907,
+          "sha256": "324986753dc411d9155e4311287e627c44093d19390f2a7f93d3e988cca610d6"
+        }
+      ]
+    },
+    {
+      "name": "prompt-schema-and-gateway-classification",
+      "command": "cargo test --locked -p agena-bundled-plugins --lib prompt_contract_tests -- --nocapture",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-contract-tests.log",
+          "bytes": 1436,
+          "sha256": "79fb04631f095af2f9f74eb7c126140a78f16b15689b6edabe6751bc62cf0fbf"
+        }
+      ],
+      "passed": 3
+    },
+    {
+      "name": "assembled-prompt-measurement",
+      "command": "Re-run the assembled_prompt_budget_and_heading_layout_are_bounded test in the workspace-built agena_runtime_session libtest binary with --nocapture",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-size.log",
+          "bytes": 267,
+          "sha256": "94d7fc2d380757edbfb06805df04b7eaf9aa334017bcba8d132a0f9f685e7dfb"
+        }
+      ],
+      "passed": 1
+    },
+    {
+      "name": "format",
+      "command": "cargo fmt --all -- --check",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-fmt.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "name": "refactor-tools",
+      "command": "uv run --offline --no-project --python 3.13 python -m unittest discover -s scripts/refactors/tests",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-refactor-tests-python313.log",
+          "bytes": 103,
+          "sha256": "71df5e506ce2275cd506a815a7f6b75723293c4d2d07526a4898a448644ddb14"
+        }
+      ],
+      "passed": 5
+    },
+    {
+      "name": "failure-semantics-invariants",
+      "command": "uv run --offline --no-project --python 3.13 python scripts/refactors/check-refactor-invariants.py --manifest scripts/refactors/failure-semantics-invariants.json",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-invariants.log",
+          "bytes": 42,
+          "sha256": "2ae7cbe2fd579cb6183ebdabe6c5036adeb606bed31988a9e41e7eb18524e974"
+        }
+      ],
+      "passed": 19
+    },
+    {
+      "name": "target-manifest-consistency",
+      "command": "uv run --offline --no-project --python 3.13 python scripts/agena/verify-target-coverage.py",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-target-coverage.log",
+          "bytes": 207,
+          "sha256": "bb5a24eb3e627a93e4ac1939108616d5cc0f9d79468b7014a3afdaada73547d3"
+        }
+      ]
+    },
+    {
+      "name": "runtime-capabilities",
+      "command": "uv run --offline --no-project --python 3.13 python scripts/ci/verify-runtime-capabilities.py",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-runtime-capabilities.log",
+          "bytes": 688,
+          "sha256": "f078e21581e6836f66b1169d112c3530e245c719c4017fbf286ea55da468aacb"
+        }
+      ],
+      "passed": 2
+    },
+    {
+      "name": "generated-reference-and-identities",
+      "status": "passed",
+      "commands": [
+        "cargo run --locked -p agena-bundled-plugins --example generate_tools_reference",
+        "cargo run --locked -p agena-bundled-plugins --example generate_capability_identity_snapshot"
+      ],
+      "artifacts": [
+        {
+          "path": "crates/agena-bundled-plugins/generated/tools-reference.md",
+          "bytes": 265051,
+          "sha256": "9158309c5368e20b0f60bf5ed972c133bf1552728d37984f732defbae0966628"
+        },
+        {
+          "path": "crates/agena-bundled-plugins/generated/bundled-capability-identities.json",
+          "bytes": 81733,
+          "sha256": "ba94f69eecbd23383f76aebda2aa9efc117b924b5fc8b2b19a2c0ff5a9c38a86"
+        }
+      ],
+      "compared_byte_for_byte": true
+    }
+  ],
+  "focused_coverage": {
+    "workflow_capability_matrix_cases": 24,
+    "examples_parsed_from_actual_prompt": true,
+    "gateway_and_execution_input_schemas_validated": true,
+    "named_core_execution_tools_checked_against_real_manifests": true,
+    "catalog_and_reference_classification_checked_against_runtime": true,
+    "actual_plan_fixture_checks_approved_progress_completion_and_replacement": true
+  },
+  "earlier_attempts": [
+    {
+      "issue": "The draft added read example used path instead of the required file_path. The production-schema test rejected it. The example was repaired before the successful workspace run.",
+      "classification": "audit draft error, not a pre-existing product example"
+    },
+    {
+      "issue": "Default Python 3.9.6 lacks zip(strict=True), producing three refactor-script failures. Re-run with the cached CI-version Python 3.13 passed all five tests; no script behavior was changed.",
+      "logs": [
+        {
+          "path": "/tmp/agena-prompt-audit-refactor-tests.log",
+          "bytes": 2558,
+          "sha256": "d0bd040b9e2ccf1d0a335ee572ae18f9ea9db99668d30c95c75b8429861047c4"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Deterministic schemas, capability assembly and runtime fixtures do not measure sampled model tool-use success.",
+    "No live model A/B comparison, provider-tokenizer measurement or total request-token claim.",
+    "The updated real-provider E2E gateway expectation was compiled but its model-driving main was not executed.",
+    "Twelve workspace tests remain deliberately ignored as in the modernization report; optional browser/document fixtures were not rerun for these prompt changes.",
+    "macOS arm64 validation; target-manifest verification does not establish cross-platform execution.",
+    "The workspace linker retained its existing macOS compact-unwind-size warning; Clippy with warnings denied passed."
+  ]
+}

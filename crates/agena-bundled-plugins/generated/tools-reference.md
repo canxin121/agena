@@ -6,20 +6,20 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 135 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 138 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
-- The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
-- Tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.
+- The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
+- Execution-tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.
 
 ## Table of Contents
 
 - [`agena.chatgpt`](#agenachatgpt) — OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (11 tools)
 - [`agena.claude`](#agenaclaude) — Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback. (9 tools)
-- [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (2 tools)
+- [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
-- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (8 tools)
+- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (9 tools)
 - [`agena.gemini`](#agenagemini) — Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (12 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
@@ -29,7 +29,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
-- [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (5 tools)
+- [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (6 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell command execution and background process tools. (7 tools)
 - [`agena.snapshot`](#agenasnapshot) — Managed snapshot tools backed by Rift or git worktree. (3 tools)
@@ -1789,9 +1789,132 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 ## agena.code
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.0` · **Tools** 3
 
 Structured code search and syntax inspection tools.
+
+### rewrite_ast
+
+`agena.code.rewrite_ast` · **Summary**: Preview or apply a revision-checked ast-grep rewrite in one file.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Defaults to apply=false: returns a bounded unified diff, replacement count and before_sha256 without writing. Repeat with apply=true and expected_sha256 from the reviewed preview to publish. Provide exactly one pattern or structured rule and a replacement template (metavariables supported; empty deletes). Requires valid UTF-8 source, at most 8 MiB/file and 100 non-overlapping matches; rejects parse errors, unknown replacement variables, stale revisions and partial plans. Same file locks and publication checks as fs.replace; no directory-wide rewrite.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `apply` | `boolean` | — | `false` | False previews; true publishes after checking expected_sha256. |
+| `expected_sha256` | `string / null` | — | — |  |
+| `language` | `CodeLanguage / null` | — | — |  |
+| `path` | `string` | ✓ | — |  |
+| `pattern` | `string / null` | — | — |  |
+| `replacement` | `string` | ✓ | — | ast-grep replacement template. Empty text deletes matched nodes. |
+| `rule` | `any` | — | — | Structured ast-grep rule; the same shape as search_ast.rule. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "CodeLanguage": {
+      "description": "Language of a code search target.",
+      "enum": [
+        "auto",
+        "bash",
+        "c",
+        "cpp",
+        "csharp",
+        "css",
+        "dart",
+        "elixir",
+        "go",
+        "haskell",
+        "hcl",
+        "html",
+        "java",
+        "javascript",
+        "json",
+        "lua",
+        "markdown",
+        "nix",
+        "php",
+        "python",
+        "ruby",
+        "rust",
+        "solidity",
+        "swift",
+        "tsx",
+        "typescript",
+        "yaml"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "apply": {
+      "default": false,
+      "description": "False previews; true publishes after checking expected_sha256.",
+      "type": "boolean",
+      "x-agena-order": "000005"
+    },
+    "expected_sha256": {
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "language": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CodeLanguage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000003"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "pattern": {
+      "maxLength": 16384,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "replacement": {
+      "description": "ast-grep replacement template. Empty text deletes matched nodes.",
+      "maxLength": 16384,
+      "type": "string",
+      "x-agena-order": "000002"
+    },
+    "rule": {
+      "description": "Structured ast-grep rule; the same shape as search_ast.rule.",
+      "x-agena-order": "000002"
+    }
+  },
+  "required": [
+    "path",
+    "replacement"
+  ],
+  "type": "object",
+  "x-agena-relations": [
+    "exactly_one_of: `pattern`, `rule`"
+  ]
+}
+```
 
 ### search_ast
 
@@ -1802,7 +1925,7 @@ Structured code search and syntax inspection tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.
+> Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly. Provide exactly one of pattern or a structured ast-grep rule object; relational/composite rules are supported. Rule bounds: 16 KiB, 16 levels, 512 values. Search returns at most 100 matches, explicitly marks incomplete scans, and flags shortened text previews. Use rewrite_ast to preview a single-file structural edit.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1810,7 +1933,8 @@ Structured code search and syntax inspection tools.
 | `language` | `CodeLanguage / null` | — | — |  |
 | `limit` | `integer / null` | — | — |  |
 | `path` | `string` | ✓ | — |  |
-| `pattern` | `string` | ✓ | — |  |
+| `pattern` | `string / null` | — | — | Simple ast-grep pattern; provide exactly one of pattern or rule. |
+| `rule` | `any` | — | — | Structured ast-grep rule object (kind, pattern, all/any/not, inside/has, etc.). |
 
 **Input schema**:
 ```json
@@ -1861,16 +1985,17 @@ Structured code search and syntax inspection tools.
           "type": "null"
         }
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "limit": {
       "format": "uint32",
-      "minimum": 0,
+      "maximum": 100,
+      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
     },
     "path": {
       "minLength": 1,
@@ -1878,16 +2003,27 @@ Structured code search and syntax inspection tools.
       "x-agena-order": "000000"
     },
     "pattern": {
+      "description": "Simple ast-grep pattern; provide exactly one of pattern or rule.",
+      "maxLength": 16384,
       "minLength": 1,
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "x-agena-order": "000001"
+    },
+    "rule": {
+      "description": "Structured ast-grep rule object (kind, pattern, all/any/not, inside/has, etc.).",
+      "x-agena-order": "000002"
     }
   },
   "required": [
-    "path",
-    "pattern"
+    "path"
   ],
-  "type": "object"
+  "type": "object",
+  "x-agena-relations": [
+    "exactly_one_of: `pattern`, `rule`"
+  ]
 }
 ```
 
@@ -1900,7 +2036,7 @@ Structured code search and syntax inspection tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension.
+> Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension. The preview has at most 512 nodes, 50 children per node and max_depth 1–6 (default 2); children_truncated and truncated report omitted descendants. Source files are limited to 8 MiB.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1962,13 +2098,13 @@ Structured code search and syntax inspection tools.
     },
     "max_depth": {
       "format": "uint8",
-      "maximum": 255,
-      "minimum": 0,
+      "maximum": 6,
+      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000001"
     },
     "path": {
       "minLength": 1,
@@ -2639,7 +2775,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 ## agena.fs
 
-**Version** `0.1.0` · **Tools** 8
+**Version** `0.1.0` · **Tools** 9
 
 Filesystem command tools for read/search and explicit edits.
 
@@ -2678,6 +2814,95 @@ Filesystem command tools for read/search and explicit edits.
 }
 ```
 
+### document
+
+`agena.fs.document` · **Summary**: Extract or search text in one local PDF/Office document.
+
+**Tags**: `query` `filesystem` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Supported formats: pdf, docx, pptx, xlsx. backend=auto prefers pdftotext for PDFs and otherwise uses selected local MarkItDown converters. MarkItDown needs a Python environment with its format extras; set AGENA_DOCUMENT_PYTHON to that interpreter, or install in the host python3 environment. No dependency installation, plugins, audio/image transcription or remote document service is enabled. Supply pattern to search extracted lines (fixed_strings defaults true); start_line is 1-based, max_lines 1–500. Outputs include source_sha256, extraction warnings, line counts and explicit truncation. Source limit 32 MiB; conversion 30 seconds / 2 MiB per output stream; displayed records 128 KiB. Empty text can indicate a scanned PDF needing OCR. Extracted lines are not source page numbers.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `backend` | `Backend` | — | `auto` |  |
+| `fixed_strings` | `boolean` | — | `true` |  |
+| `ignore_case` | `boolean` | — | `false` |  |
+| `max_lines` | `integer` | — | `100` |  |
+| `path` | `string` | ✓ | — |  |
+| `pattern` | `string / null` | — | — |  |
+| `start_line` | `integer` | — | `1` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Backend": {
+      "enum": [
+        "auto",
+        "pdftotext",
+        "markitdown"
+      ],
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "backend": {
+      "$ref": "#/$defs/Backend",
+      "default": "auto"
+    },
+    "fixed_strings": {
+      "default": true,
+      "type": "boolean",
+      "x-agena-order": "000003"
+    },
+    "ignore_case": {
+      "default": false,
+      "type": "boolean",
+      "x-agena-order": "000004"
+    },
+    "max_lines": {
+      "default": 100,
+      "format": "uint",
+      "maximum": 500,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000003"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "pattern": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "start_line": {
+      "default": 1,
+      "format": "uint",
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000002"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
 ### glob
 
 `agena.fs.glob` · **Summary**: Find paths with glob patterns.
@@ -2687,12 +2912,14 @@ Filesystem command tools for read/search and explicit edits.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.
+> Use `glob` for focused path discovery before reading or editing files. Use kind=file/directory/all and exclude globs to narrow results. Results are paginated (default 200, maximum 1000); scans are cancellable, bounded to 100,000 entries / 10 seconds between I/O, and 256 KiB of paths. Pagination is deterministic for an unchanged directory tree. Ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `exclude` | `array<string>` | — | — | Exclude matching base-path-relative globs. Exclusions win. |
 | `include_ignored` | `boolean` | — | `false` | Include dependency, VCS, and build-output directories that are skipped<br>by default (`.git`, `node_modules`, `target`, `dist`, and caches). |
+| `kind` | `GlobKind` | — | `all` | Filter by path kind; defaults to both files and directories. |
 | `limit` | `integer / null` | — | — | Maximum paths to return. Defaults to 200 and cannot exceed 1000. |
 | `offset` | `integer / null` | — | — | Number of matching paths to skip before returning results. |
 | `path` | `string / null` | — | — | Optional base path. Defaults to the workspace root. |
@@ -2701,13 +2928,42 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "GlobKind": {
+      "description": "Filter by path kind; defaults to both files and directories.",
+      "enum": [
+        "all",
+        "file",
+        "directory"
+      ],
+      "type": "string",
+      "x-agena-order": "000005"
+    }
+  },
+  "additionalProperties": false,
   "description": "Input of the glob tool.",
   "properties": {
+    "exclude": {
+      "description": "Exclude matching base-path-relative globs. Exclusions win.",
+      "items": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-agena-order": "000006"
+    },
     "include_ignored": {
       "default": false,
       "description": "Include dependency, VCS, and build-output directories that are skipped\nby default (`.git`, `node_modules`, `target`, `dist`, and caches).",
       "type": "boolean",
       "x-agena-order": "000004"
+    },
+    "kind": {
+      "$ref": "#/$defs/GlobKind",
+      "default": "all",
+      "description": "Filter by path kind; defaults to both files and directories."
     },
     "limit": {
       "description": "Maximum paths to return. Defaults to 200 and cannot exceed 1000.",
@@ -2754,42 +3010,161 @@ Filesystem command tools for read/search and explicit edits.
 
 ### grep
 
-`agena.fs.grep` · **Summary**: Search file contents with regex.
+`agena.fs.grep` · **Summary**: Search text with ripgrep, returning lines, paths, or counts.
 
 **Tags**: `query` `filesystem` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated.
+> Use regex or fixed_strings with case=sensitive/insensitive/smart. Pattern whitespace is significant. mode=content returns structured lines with optional before_context/after_context (0–20); files returns each matching path once; count returns matching-line counts per file, omitting zeroes. max_results is global (1–500): lines for content, files otherwise, never a per-file count cap. include and includes are ORed relative-path globs; exclude wins. Hidden/ignored paths follow ripgrep rules unless explicitly targeted or include_ignored=true. Search is bounded to 32 MiB/file, 256 MiB total, 25,000 files, 100,000 entries, 20 seconds between I/O/callbacks, and 256 KiB of records. Lines over 4 KiB are visibly shortened; lines beyond the 2 MiB search buffer may be skipped. scan_complete distinguishes an incomplete scan from clipped display text; partial counts are lower bounds. Files mode stops at its first match. Binary data detected while scanning is excluded. Narrow path or filters if truncated; use fs.read for nearby lines. Blocking filesystem I/O itself has no hard deadline.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `after_context` | `integer` | — | `0` | Context lines after each match (0–20); content mode only. |
+| `before_context` | `integer` | — | `0` | Context lines before each match (0–20); content mode only. |
+| `case` | `GrepCase` | — | `sensitive` | Sensitive by default; smart ignores case for patterns without uppercase. |
+| `exclude` | `array<string>` | — | — | Exclude relative-path globs; exclusions override all includes. |
+| `fixed_strings` | `boolean` | — | `false` | Treat pattern literally instead of as a regex. |
 | `include` | `string / null` | — | — | Optional glob filter applied before matching lines. |
 | `include_ignored` | `boolean` | — | `false` | Include hidden and ignored files that are skipped by default according<br>to ripgrep-compatible ignore rules. |
+| `includes` | `array<string>` | — | — | Additional include globs, ORed with `include`. An empty set includes all. |
+| `max_results` | `integer / null` | — | — | Global matching-line limit in content mode, matching-file limit otherwise.<br>Defaults to 500; 1–500. Context lines do not consume this limit. |
+| `mode` | `GrepMode` | — | `content` | Content, matching file paths, or matching-line counts per file. |
 | `path` | `string / null` | — | — | Optional target: a directory to search recursively, or a single file.<br>Defaults to the workspace root. |
-| `pattern` | `string` | ✓ | — | Regex pattern to search for. |
+| `pattern` | `string` | ✓ | — | Regex or fixed string to search for. Whitespace is significant. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "GrepCase": {
+      "description": "Sensitive by default; smart ignores case for patterns without uppercase.",
+      "oneOf": [
+        {
+          "enum": [
+            "sensitive",
+            "insensitive"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "smart",
+          "description": "Ignore case unless the pattern contains an uppercase character.",
+          "type": "string"
+        }
+      ],
+      "x-agena-order": "000005"
+    },
+    "GrepMode": {
+      "description": "Content, matching file paths, or matching-line counts per file.",
+      "oneOf": [
+        {
+          "enum": [
+            "content"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "files",
+          "description": "Return each matching file once, stopping at its first matching line.",
+          "type": "string"
+        },
+        {
+          "const": "count",
+          "description": "Count matching lines per file, omitting files without matches.",
+          "type": "string"
+        }
+      ],
+      "x-agena-order": "000006"
+    }
+  },
+  "additionalProperties": false,
   "description": "Input of the grep tool.",
   "properties": {
+    "after_context": {
+      "default": 0,
+      "description": "Context lines after each match (0–20); content mode only.",
+      "format": "uint32",
+      "maximum": 20,
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000010"
+    },
+    "before_context": {
+      "default": 0,
+      "description": "Context lines before each match (0–20); content mode only.",
+      "format": "uint32",
+      "maximum": 20,
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000009"
+    },
+    "case": {
+      "$ref": "#/$defs/GrepCase",
+      "default": "sensitive",
+      "description": "Sensitive by default; smart ignores case for patterns without uppercase."
+    },
+    "exclude": {
+      "description": "Exclude relative-path globs; exclusions override all includes.",
+      "items": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-agena-order": "000008"
+    },
+    "fixed_strings": {
+      "default": false,
+      "description": "Treat pattern literally instead of as a regex.",
+      "type": "boolean",
+      "x-agena-order": "000004"
+    },
     "include": {
       "description": "Optional glob filter applied before matching lines.",
+      "maxLength": 1024,
       "minLength": 1,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000001"
     },
     "include_ignored": {
       "default": false,
       "description": "Include hidden and ignored files that are skipped by default according\nto ripgrep-compatible ignore rules.",
       "type": "boolean",
       "x-agena-order": "000003"
+    },
+    "includes": {
+      "description": "Additional include globs, ORed with `include`. An empty set includes all.",
+      "items": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-agena-order": "000007"
+    },
+    "max_results": {
+      "description": "Global matching-line limit in content mode, matching-file limit otherwise.\nDefaults to 500; 1–500. Context lines do not consume this limit.",
+      "format": "uint32",
+      "maximum": 500,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000011"
+    },
+    "mode": {
+      "$ref": "#/$defs/GrepMode",
+      "default": "content",
+      "description": "Content, matching file paths, or matching-line counts per file."
     },
     "path": {
       "description": "Optional target: a directory to search recursively, or a single file.\nDefaults to the workspace root.",
@@ -2798,10 +3173,11 @@ Filesystem command tools for read/search and explicit edits.
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000000"
     },
     "pattern": {
-      "description": "Regex pattern to search for.",
+      "description": "Regex or fixed string to search for. Whitespace is significant.",
+      "maxLength": 16384,
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
@@ -4219,9 +4595,9 @@ LSP read-only observability and navigation tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `character` | `integer` | ✓ | — |  |
+| `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
-| `line` | `integer` | ✓ | — |  |
+| `line` | `integer` | ✓ | — | Zero-based source line. |
 
 **Input schema**:
 ```json
@@ -4229,6 +4605,7 @@ LSP read-only observability and navigation tools.
   "description": "Input of the LSP definition tool.",
   "properties": {
     "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4240,6 +4617,7 @@ LSP read-only observability and navigation tools.
       "x-agena-order": "000000.000000"
     },
     "line": {
+      "description": "Zero-based source line.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4297,9 +4675,9 @@ LSP read-only observability and navigation tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `character` | `integer` | ✓ | — |  |
+| `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
-| `line` | `integer` | ✓ | — |  |
+| `line` | `integer` | ✓ | — | Zero-based source line. |
 
 **Input schema**:
 ```json
@@ -4307,6 +4685,7 @@ LSP read-only observability and navigation tools.
   "description": "Input of the LSP hover tool.",
   "properties": {
     "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4318,6 +4697,7 @@ LSP read-only observability and navigation tools.
       "x-agena-order": "000000.000000"
     },
     "line": {
+      "description": "Zero-based source line.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4344,10 +4724,10 @@ LSP read-only observability and navigation tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `character` | `integer` | ✓ | — |  |
+| `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
 | `include_declaration` | `boolean` | — | `true` |  |
-| `line` | `integer` | ✓ | — |  |
+| `line` | `integer` | ✓ | — | Zero-based source line. |
 
 **Input schema**:
 ```json
@@ -4355,6 +4735,7 @@ LSP read-only observability and navigation tools.
   "description": "Input of the LSP references tool.",
   "properties": {
     "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4371,6 +4752,7 @@ LSP read-only observability and navigation tools.
       "x-agena-order": "000001"
     },
     "line": {
+      "description": "Zero-based source line.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4388,11 +4770,14 @@ LSP read-only observability and navigation tools.
 
 ### servers
 
-`agena.lsp.servers` · **Summary**: List configured language servers.
+`agena.lsp.servers` · **Summary**: List configured language servers and executable availability.
 
 **Tags**: `query` `lsp` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
+
+**Help**:
+> Checks each command against its configured PATH from the workspace root without executing it; command_available=null means lookup was inconclusive. Presence does not guarantee successful initialization. Relative commands can resolve differently in individual project roots. running_roots lists initialized instances. Extension-specific servers take priority over catch-all servers; ties use lexical server name.
 
 **Input schema**:
 ```json
@@ -4988,7 +5373,7 @@ Continuous-stream background monitoring tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`, or it ends when the session does.
+> Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`; it can also end on source exit/disconnection, timeout, cancellation or session end.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5359,7 +5744,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Plan-level phase transitions between `planning`, `active`, `blocked`, `completed`, and `cancelled`, with optional `autorun` and (for `completed`) `summary`. Transitions into `active`, `blocked`, or `completed` require user approval by default: pass `request_approval: true` (or omit it) to route them through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply them directly. To complete a plan with steps, mark the required steps/checks `completed` via `plan.edit` first, then call this tool separately with `phase: completed`.
+> Plan-level phase transitions between `planning`, `active`, `blocked`, `completed`, and `cancelled`, with optional `autorun` and (for `completed`) `summary`. Transitions into `active`, `blocked`, or `completed` request approval by default only when the current phase is not already approved (`active`, `blocked`, or `completed`). Leave `request_approval` omitted or true for normal transitions; an already approved plan does not request another review for progress or completion. Passing `request_approval: false` requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; never change settings to bypass approval. To complete a plan with steps, mark the required steps/checks `completed` via `plan.edit` first, then call this tool separately with `phase: completed`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5367,7 +5752,7 @@ Plan orchestration and plan-autorun tools.
 | `autorun` | `boolean / null` | — | — | Whether an approved active plan should keep running automatically. |
 | `expected_revision` | `string / null` | — | — | Optional revision from plan.get; mismatches never overwrite newer state. |
 | `phase` | `WorkflowPlanPhase / null` | — | — | Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`. |
-| `request_approval` | `boolean / null` | — | — | Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval. |
+| `request_approval` | `boolean / null` | — | — | Whether to request user approval for this plan-level phase change. Defaults to true: transitions into active/blocked/completed request approval only when the current phase is not already approved (active/blocked/completed). Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`. |
 | `summary` | `string / null` | — | — | Optional completion summary. This is only applied when `phase` is `completed`. |
 
 **Input schema**:
@@ -5386,7 +5771,7 @@ Plan orchestration and plan-autorun tools.
     }
   },
   "additionalProperties": false,
-  "description": "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requires user approval by default: pass `request_approval: true` (or omit it) to route it through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply it directly. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`.",
+  "description": "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requests review only when the current phase is not already approved (`active`, `blocked`, or `completed`). Leave `request_approval` omitted or true for normal transitions. Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; never change settings to bypass approval. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`.",
   "properties": {
     "autorun": {
       "description": "Whether an approved active plan should keep running automatically.",
@@ -5417,7 +5802,7 @@ Plan orchestration and plan-autorun tools.
       "x-agena-order": "000001"
     },
     "request_approval": {
-      "description": "Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval.",
+      "description": "Whether to request user approval for this plan-level phase change. Defaults to true: transitions into active/blocked/completed request approval only when the current phase is not already approved (active/blocked/completed). Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`.",
       "type": [
         "boolean",
         "null"
@@ -5446,13 +5831,13 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> This is the only plan tool that requests user approval and may pause for the user. It reviews the current saved plan and, when the user approves, moves it from `planning` to `active`. Call it after creating or refining the plan with `plan.set` / `plan.edit`. If the user leaves feedback or rejects, the plan stays in `planning` so you can revise it and propose again.
+> Request user approval of the current saved plan; this may pause for the user. The plan.phase tool also requests review for transitions that need approval. It reviews the current saved plan and, when the user approves, moves it from `planning` to `active`. Call it after creating or refining the plan with `plan.set` / `plan.edit`. If the user leaves feedback or rejects, the plan stays in `planning` so you can revise it and propose again.
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
-  "description": "Request user approval of the current saved plan. This is the only plan tool that can pause for the user.",
+  "description": "Request user approval of the current saved plan to make it active. This can pause for the user; plan.phase can also request review for transitions that need approval.",
   "properties": {},
   "type": "object"
 }
@@ -5467,7 +5852,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only when the user has already declared that the plan can be created directly without approval — the plan then becomes active immediately. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `ask`.
+> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation` — the plan then becomes active immediately. Never change settings to bypass approval. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `interaction.ask` when available, replace the plan content with `plan.set`, and update progress/notes with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `interaction.ask`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5476,7 +5861,7 @@ Plan orchestration and plan-autorun tools.
 | `document_markdown` | `string / null` | — | — |  |
 | `expected_revision` | `string / null` | — | — | Optional revision from plan.get; mismatches never overwrite newer state. |
 | `objective` | `string` | ✓ | — |  |
-| `request_approval` | `boolean / null` | — | — | Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately. |
+| `request_approval` | `boolean / null` | — | — | Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; the plan then becomes active immediately. Never change settings to bypass approval. |
 | `steps` | `array<WorkflowPlanStepInput>` | — | — | Ordered plan steps. Each step item uses `title`; nested checks use `text`. |
 | `title` | `string / null` | — | — |  |
 
@@ -5570,7 +5955,7 @@ Plan orchestration and plan-autorun tools.
     }
   },
   "additionalProperties": false,
-  "description": "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which you should only do when the user has already declared the plan needs no approval.",
+  "description": "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`.",
   "properties": {
     "autorun": {
       "type": [
@@ -5599,7 +5984,7 @@ Plan orchestration and plan-autorun tools.
       "x-agena-order": "000001"
     },
     "request_approval": {
-      "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately.",
+      "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; the plan then becomes active immediately. Never change settings to bypass approval.",
       "type": [
         "boolean",
         "null"
@@ -5738,13 +6123,13 @@ Structured review and verification findings.
 
 ## agena.session
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.0` · **Tools** 6
 
 Inspect and manage the current runtime session and its environment, model, and token state.
 
 ### environment
 
-`agena.session.environment` · **Summary**: Inspect the current runtime environment: working directory, git state, shell, OS, and architecture.
+`agena.session.environment` · **Summary**: Inspect the runtime workspace, git state, shell, platform, and available host CLIs.
 
 **Tags**: `query` `discovery` `read_only`
 
@@ -5755,6 +6140,57 @@ Inspect and manage the current runtime session and its environment, model, and t
 {
   "additionalProperties": false,
   "properties": {},
+  "type": "object"
+}
+```
+
+### executables
+
+`agena.session.executables` · **Summary**: Inspect installed modern CLIs, their task-specific usage, and optional versions.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Resolves tools from the Agena server PATH and workspace, including fd/fdfind and bat/batcat aliases. Does not install tools or read interactive shell startup files. Omit names for installed tools and a compact missing list; pass names to inspect specific tools. probe_versions runs bounded version commands only when 1–8 names are supplied. refresh bypasses the 15-second availability cache. Presence does not establish plugin/model dependencies or authorize execution.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `names` | `array<string>` | — | `[]` | Curated tool names or aliases. Empty lists installed tools and missing names. |
+| `probe_versions` | `boolean` | — | `false` | Explicitly run bounded version probes. Requires 1–8 named tools. |
+| `refresh` | `boolean` | — | `false` | Bypass the 15-second availability cache after installing/changing tools. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "names": {
+      "default": [],
+      "description": "Curated tool names or aliases. Empty lists installed tools and missing names.",
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-agena-order": "000000"
+    },
+    "probe_versions": {
+      "default": false,
+      "description": "Explicitly run bounded version probes. Requires 1–8 named tools.",
+      "type": "boolean",
+      "x-agena-order": "000001"
+    },
+    "refresh": {
+      "default": false,
+      "description": "Bypass the 15-second availability cache after installing/changing tools.",
+      "type": "boolean",
+      "x-agena-order": "000002"
+    }
+  },
   "type": "object"
 }
 ```
@@ -7516,7 +7952,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `tool` | `ToolApiStringBatch` | ✓ | — | One exact execution-tool name, or a non-empty array of exact names, to<br>inspect. Use names returned by `tools_list` or `tools_search`. |
+| `tool` | `ToolApiStringBatch` | ✓ | — | One exact execution-tool name, or a non-empty array of exact names, to<br>inspect. Use exact names known from the prompt/context or returned by<br>`tools_list` or `tools_search`; known names need no preliminary search.<br>This help checks current availability and supplies the live contract. |
 
 **Input schema**:
 ```json
@@ -7536,7 +7972,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
           "type": "array"
         }
       ],
-      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use names returned by `tools_list` or `tools_search`.",
+      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use exact names known from the prompt/context or returned by\n`tools_list` or `tools_search`; known names need no preliminary search.\nThis help checks current availability and supplies the live contract.",
       "x-agena-order": "000000"
     }
   },
@@ -7544,7 +7980,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
   "properties": {
     "tool": {
       "$ref": "#/$defs/ToolApiStringBatch",
-      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use names returned by `tools_list` or `tools_search`."
+      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use exact names known from the prompt/context or returned by\n`tools_list` or `tools_search`; known names need no preliminary search.\nThis help checks current availability and supplies the live contract."
     }
   },
   "required": [
@@ -7651,7 +8087,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### plugins_list
 
-`agena.tools.plugins_list` · **Summary**: Enumerate one or many selected plugins with version, summary, tags, and tool count.
+`agena.tools.plugins_list` · **Tool API gateway handler** · **Summary**: Enumerate one or many selected plugins with version, summary, tags, and tool count.
 
 **Tags**: `query` `discovery` `read_only`
 
@@ -7746,7 +8182,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### plugins_search
 
-`agena.tools.plugins_search` · **Summary**: Search loaded plugins with one or many queries and optional multi-plugin scope.
+`agena.tools.plugins_search` · **Tool API gateway handler** · **Summary**: Search loaded plugins with one or many queries and optional multi-plugin scope.
 
 **Tags**: `query` `discovery` `read_only`
 
@@ -7851,7 +8287,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### plugins_tags
 
-`agena.tools.plugins_tags` · **Summary**: List plugin tags across one plugin or a batch of plugin targets.
+`agena.tools.plugins_tags` · **Tool API gateway handler** · **Summary**: List plugin tags across one plugin or a batch of plugin targets.
 
 **Tags**: `query` `discovery` `read_only`
 
@@ -8119,16 +8555,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `frame_selector` | `string / null` | — | — | Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs). |
 | `ref` | `integer / null` | — | — | Snapshot-local index returned by `browser_snapshot.elements[].ref`.<br>It is valid only while the page DOM has not materially changed. |
 | `selector` | `string / null` | — | — |  |
 | `session_id` | `string` | ✓ | — |  |
 | `snapshot_id` | `string / null` | — | — | ID of the snapshot that supplied ref. Required with ref; stale refs are rejected. |
+| `timeout_ms` | `integer` | — | `30000` |  |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "maxLength": 4096,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "ref": {
       "description": "Snapshot-local index returned by `browser_snapshot.elements[].ref`.\nIt is valid only while the page DOM has not materially changed.",
       "format": "uint16",
@@ -8138,15 +8585,16 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "selector": {
+      "maxLength": 4096,
       "minLength": 1,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
@@ -8155,11 +8603,20 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "snapshot_id": {
       "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
+      "maxLength": 128,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
+    },
+    "timeout_ms": {
+      "default": 30000,
+      "format": "uint64",
+      "maximum": 120000,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000005"
     }
   },
   "required": [
@@ -8413,22 +8870,33 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `frame_selector` | `string / null` | — | — | Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs). |
 | `press_enter` | `boolean` | — | `false` |  |
 | `ref` | `integer / null` | — | — |  |
 | `selector` | `string / null` | — | — |  |
 | `session_id` | `string` | ✓ | — |  |
 | `snapshot_id` | `string / null` | — | — | ID of the snapshot that supplied ref. Required with ref; stale refs are rejected. |
 | `text` | `string` | ✓ | — |  |
+| `timeout_ms` | `integer` | — | `30000` |  |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "maxLength": 4096,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "press_enter": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "ref": {
       "format": "uint16",
@@ -8438,15 +8906,16 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "selector": {
+      "maxLength": 4096,
       "minLength": 1,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
@@ -8455,15 +8924,25 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "snapshot_id": {
       "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
+      "maxLength": 128,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
     },
     "text": {
+      "maxLength": 65536,
       "type": "string",
-      "x-agena-order": "000004"
+      "x-agena-order": "000003"
+    },
+    "timeout_ms": {
+      "default": 30000,
+      "format": "uint64",
+      "maximum": 120000,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000007"
     }
   },
   "required": [
@@ -8485,6 +8964,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `frame_selector` | `string / null` | — | — | Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs). |
 | `selector` | `string / null` | — | — |  |
 | `session_id` | `string` | ✓ | — |  |
 | `text` | `string / null` | — | — |  |
@@ -8495,13 +8975,23 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 {
   "additionalProperties": false,
   "properties": {
-    "selector": {
-      "minLength": 1,
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "maxLength": 4096,
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000001"
+    },
+    "selector": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
@@ -8509,6 +8999,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "x-agena-order": "000000"
     },
     "text": {
+      "maxLength": 4096,
       "minLength": 1,
       "type": [
         "string",
@@ -8522,7 +9013,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "maximum": 120000,
       "minimum": 1,
       "type": "integer",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     }
   },
   "required": [
@@ -8536,7 +9027,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.crawl` · **Summary**: Crawl a site and cache indexed pages locally.
 
-**Tags**: `discovery` `mutate`
+**Tags**: `network` `discovery` `mutate`
 
 **Runtime**: streaming `buffered`
 
@@ -8608,7 +9099,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.fetch` · **Summary**: Fetch one web page and inspect its actual content.
 
-**Tags**: `read_only`
+**Tags**: `network` `read_only`
 
 **Runtime**: streaming `buffered`
 
@@ -8618,6 +9109,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `extractor` | `ExtractionBackend / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
 | `render_js` | `boolean / null` | — | — |  |
 | `url` | `string` | ✓ | — |  |
@@ -8626,8 +9118,28 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ExtractionBackend": {
+      "enum": [
+        "readability",
+        "trafilatura"
+      ],
+      "type": "string"
+    }
+  },
   "additionalProperties": false,
   "properties": {
+    "extractor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExtractionBackend"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000004"
+    },
     "prompt": {
       "minLength": 1,
       "type": [
@@ -8664,12 +9176,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.search` · **Summary**: Find candidate public-web pages to fetch.
 
-**Tags**: `discovery` `read_only`
+**Tags**: `network` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.
+> Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured search provider (HTML, Brave, Tavily, Exa or SearXNG). Explicit bing/duckduckgo/baidu selects that HTML engine. API providers return at most 20 results and report failures without switching providers. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8700,6 +9212,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "items": {
         "type": "string"
       },
+      "maxItems": 64,
       "type": "array",
       "x-agena-order": "000003"
     },
@@ -8707,6 +9220,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "items": {
         "type": "string"
       },
+      "maxItems": 64,
       "type": "array",
       "x-agena-order": "000004"
     },
@@ -8723,7 +9237,8 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "max_results": {
       "format": "uint32",
-      "minimum": 0,
+      "maximum": 50,
+      "minimum": 1,
       "type": [
         "integer",
         "null"
@@ -8731,6 +9246,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "x-agena-order": "000001"
     },
     "query": {
+      "maxLength": 8192,
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"

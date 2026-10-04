@@ -271,10 +271,11 @@ fn format_uri_range(uri: &Uri, range: &Range) -> String {
 }
 
 fn uri_display(uri: &Uri) -> String {
-    let raw = uri.to_string();
-    raw.strip_prefix("file://")
-        .map(str::to_string)
-        .unwrap_or(raw)
+    url::Url::parse(uri.as_str())
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| uri.to_string())
 }
 
 fn display_path(path: &Path, executor: &ToolExecutor) -> String {
@@ -324,7 +325,21 @@ async fn sync_document(
     path: &Path,
     uri: &Uri,
 ) -> Result<agena_lsp::DocumentReceipt, agena_lsp::LspError> {
-    let file = tokio::fs::File::open(path).await?;
+    if !tokio::fs::metadata(path).await?.is_file() {
+        return Err(agena_lsp::LspError::Protocol(
+            "LSP target must be a regular file".into(),
+        ));
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let file = options.open(path).await?;
+    if !file.metadata().await?.is_file() {
+        return Err(agena_lsp::LspError::Protocol(
+            "LSP target changed to a non-regular file".into(),
+        ));
+    }
     let initial_capacity = match file.metadata().await {
         Ok(metadata) => match usize::try_from(metadata.len().min(MAX_LSP_DOCUMENT_BYTES)) {
             Ok(capacity) => capacity,
@@ -397,4 +412,23 @@ fn language_id_for_path(path: &Path) -> String {
         _ => "plaintext",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    #[test]
+    fn local_uri_display_decodes_spaces_unicode_and_literal_hashes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("中文 file #1.rs");
+        let uri: Uri = url::Url::from_file_path(&path)
+            .unwrap()
+            .as_str()
+            .parse()
+            .unwrap();
+        assert_eq!(uri_display(&uri), path.display().to_string());
+        let external: Uri = "untitled:buffer-1".parse().unwrap();
+        assert_eq!(uri_display(&external), "untitled:buffer-1");
+    }
 }

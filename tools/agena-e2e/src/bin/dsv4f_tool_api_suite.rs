@@ -21,7 +21,7 @@ use std::{
     time::Duration,
 };
 
-use agena_domain::{ModelRef, PermissionReplyKind};
+use agena_domain::{ModelRef, PermissionReplyKind, ToolApiFunction};
 use agena_runtime::{
     RuntimeBootstrapRequest, RuntimeToolExecutionService, SessionExecutionCommandService,
     SessionExecutionControl, SessionQueryService, SessionRunOptions,
@@ -202,19 +202,14 @@ async fn assert_tool_api_surface(tools: &dyn RuntimeToolExecutionService) -> any
     let specs = tools.available_tool_api_definitions().await;
     let mut names = specs.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
     names.sort();
-    let expected = [
-        "tools_call",
-        "tools_help",
-        "tools_list",
-        "tools_search",
-        "tools_tags",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect::<Vec<_>>();
+    let mut expected = ToolApiFunction::ALL
+        .into_iter()
+        .map(|function| function.function_name().to_owned())
+        .collect::<Vec<_>>();
+    expected.sort();
     ensure!(
         names == expected,
-        "Cline model surface must contain only the five Tool API functions, found {names:?}"
+        "Cline model surface must contain only the declared Tool API functions, found {names:?}"
     );
     Ok(())
 }

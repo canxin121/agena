@@ -64,6 +64,9 @@ fn sample_payload(tool: &str) -> Value {
             "loaded_paths": ["src/main.rs"],
             "truncated": false
         }),
+        "fs.document" => {
+            json!({"path":"report.pdf","backend":"markitdown","total_lines":10,"matching_lines":1,"truncated":false,"lines":[{"line":2,"text":"Fixture needle","text_truncated":false}]})
+        }
         "fs.read_many" => json!({
             "files": [{
                 "path": "src/lib.rs",
@@ -116,8 +119,11 @@ fn sample_payload(tool: &str) -> Value {
             "language": "rust",
             "pattern": "fn $NAME()",
             "scanned_files": 4,
-            "matches": [{"path": "src/lib.rs", "line": 7, "text": "fn render()"}]
+            "matches": [{"path": "src/lib.rs", "start_line": 7, "start_col": 1, "text": "fn render()", "text_truncated":false}]
         }),
+        "code.rewrite_ast" => {
+            json!({"path":"src/lib.rs","language":"rust","applied":false,"replacements":1,"before_sha256":"before","after_sha256":"after","diff":"@@ -1 +1 @@\n-old\n+new","diff_truncated":false})
+        }
         "code.syntax_tree" => json!({
             "path": "src/lib.rs",
             "language": "rust",
@@ -250,7 +256,14 @@ fn sample_payload(tool: &str) -> Value {
         }),
         "session.environment" => json!({
             "workspace_root": "/workspace", "git_branch": "main", "git_short_sha": "abc123", "git_dirty": true,
-            "shell": "/bin/zsh", "os": "macos", "arch": "aarch64"
+            "shell": "/bin/zsh", "os": "macos", "arch": "aarch64",
+            "cli_tools": {"available": {"rg": "/usr/bin/rg"}, "cache_age_ms": 0, "versions_probed": false}
+        }),
+        "session.executables" => json!({
+            "tools": [{"name": "rg", "available": true, "executable": "/usr/bin/rg",
+                "version": "ripgrep 15.1.0", "purpose": "Text search", "guidance": "Use rg -n for lines or rg -l for filenames."},
+                {"name": "fd", "available": false, "purpose": "File discovery"}],
+            "missing": ["fd"], "checked_at_unix_ms": 1, "cache_age_ms": 0
         }),
         "session.get" | "session.rename" => json!({
             "session": {"id": 42, "title": "Release", "parent_id": null, "root_id": 42, "is_subagent": false}
@@ -404,6 +417,10 @@ fn sample_input(tool: &str) -> Value {
             json!({"patch": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch"})
         }
         "fs.glob" | "fs.grep" => json!({"pattern": "TODO", "path": "src"}),
+        "fs.document" => json!({"path":"report.pdf","pattern":"revenue"}),
+        "code.rewrite_ast" => {
+            json!({"path":"src/lib.rs","pattern":"old($A)","replacement":"new($A)"})
+        }
         "code.search_ast" => json!({"pattern": "fn $NAME()", "path": "src", "language": "rust"}),
         "code.syntax_tree" => json!({"path": "src/lib.rs", "language": "rust"}),
         "shell.run" => json!({"command": "cargo test"}),
@@ -673,7 +690,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
         }
     }
 
-    assert_eq!(checked, 131);
+    assert_eq!(checked, manifest.counts.execution_tools);
 }
 
 #[test]
@@ -714,7 +731,7 @@ fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
         }
     }
 
-    assert_eq!(checked, 131);
+    assert_eq!(checked, manifest.counts.execution_tools);
 }
 
 #[test]
@@ -749,7 +766,7 @@ fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
         }
     }
 
-    assert_eq!(checked, 131);
+    assert_eq!(checked, manifest.counts.execution_tools);
 }
 
 #[test]
@@ -850,7 +867,7 @@ fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
         }
     }
 
-    assert_eq!(checked, 131);
+    assert_eq!(checked, manifest.counts.execution_tools);
 }
 
 #[test]
@@ -2075,7 +2092,12 @@ fn every_tool_has_compact_tables_and_preserves_its_raw_payload() {
 
 #[test]
 fn file_mutations_show_diffs_and_keep_checksums_in_raw_details() {
-    for name in ["fs.write", "fs.replace", "notebook.edit_cell"] {
+    for name in [
+        "fs.write",
+        "fs.replace",
+        "notebook.edit_cell",
+        "code.rewrite_ast",
+    ] {
         let preview =
             agena_runtime_tools::file_diff_preview("src/main.rs", Some("old\n"), Some("new\n"));
         let raw = RawOutput {

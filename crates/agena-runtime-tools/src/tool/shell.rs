@@ -62,6 +62,21 @@ pub async fn execute(
     let mut child = agena_process::spawn(command).map_err(ShellError::Spawn)?;
     let stdout_handle = child.stdout().take().map(spawn_drain);
     let stderr_handle = child.stderr().take().map(spawn_drain);
+    struct DrainGuard(Vec<tokio::task::AbortHandle>);
+    impl Drop for DrainGuard {
+        fn drop(&mut self) {
+            for reader in &self.0 {
+                reader.abort();
+            }
+        }
+    }
+    let _drains = DrainGuard(
+        stdout_handle
+            .iter()
+            .chain(stderr_handle.iter())
+            .map(tokio::task::JoinHandle::abort_handle)
+            .collect(),
+    );
 
     let timeout = async {
         match request.timeout_ms {
@@ -373,7 +388,7 @@ mod tests {
 
         let result = execute(&request, Some(&cancellation)).await;
 
-        assert!(matches!(result, Err(ShellError::Cancelled)));
+        assert!(matches!(result, Err(ShellError::Cancelled)), "{result:?}");
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "cancellation took {:?}",
@@ -416,7 +431,7 @@ mod tests {
 
         let result = execute(&request, Some(&cancellation)).await;
 
-        assert!(matches!(result, Err(ShellError::Cancelled)));
+        assert!(matches!(result, Err(ShellError::Cancelled)), "{result:?}");
         let pid = std::fs::read_to_string(&pid_path)
             .expect("shell should publish descendant pid before cancellation")
             .trim()

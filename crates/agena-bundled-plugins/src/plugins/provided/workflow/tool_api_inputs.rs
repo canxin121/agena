@@ -20,7 +20,9 @@ impl ToolApiStringBatch {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolApiHelpInput {
     /// One exact execution-tool name, or a non-empty array of exact names, to
-    /// inspect. Use names returned by `tools_list` or `tools_search`.
+    /// inspect. Use exact names known from the prompt/context or returned by
+    /// `tools_list` or `tools_search`; known names need no preliminary search.
+    /// This help checks current availability and supplies the live contract.
     pub tool: ToolApiStringBatch,
 }
 

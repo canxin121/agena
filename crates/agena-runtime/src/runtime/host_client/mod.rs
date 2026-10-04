@@ -1219,14 +1219,25 @@ impl HostClient for RuntimeHostClient {
             |executor| executor.lsp_registry().cloned(),
             "lsp registry is not enabled in this runtime",
         )?;
-        let specs = registry.server_specs().await;
+        let specs = registry
+            .server_statuses()
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?;
         let servers = specs
             .into_iter()
-            .map(|spec| HostLspServer {
-                name: spec.name,
-                command: spec.command,
-                args: spec.args,
-                file_extensions: spec.file_extensions,
+            .map(|status| HostLspServer {
+                name: status.spec.name,
+                command: status.spec.command,
+                args: status.spec.args,
+                file_extensions: status.spec.file_extensions,
+                root_markers: status.spec.root_markers,
+                command_available: status.command_available,
+                executable: status.executable.map(|path| path.display().to_string()),
+                running_roots: status
+                    .running_roots
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
             })
             .collect();
         Ok(HostLspListServersResponse { servers })

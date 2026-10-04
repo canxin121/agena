@@ -22,13 +22,23 @@ impl Fixture {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().canonicalize().unwrap();
         let mut config = PluginsConfig::default();
-        for name in ["agena.fs", "agena.notebook", "agena.memory", "agena.report"] {
+        for name in [
+            "agena.fs",
+            "agena.notebook",
+            "agena.memory",
+            "agena.report",
+            "agena.code",
+        ] {
             config
                 .list
                 .insert(name.into(), ConfiguredPlugin::static_default());
         }
         let plugins = PluginHost::new(PluginHostBuildConfig {
             static_plugins: vec![
+                StaticPluginRegistration::new(
+                    "agena.code".parse().unwrap(),
+                    agena_bundled_plugins::tool::new_code_plugin(),
+                ),
                 StaticPluginRegistration::new(
                     "agena.fs".parse().unwrap(),
                     agena_bundled_plugins::tool::new_fs_plugin(),
@@ -232,7 +242,7 @@ fn notebook(cell_type: &str) -> Value {
         cell["outputs"] = json!([{"output_type":"stream","name":"stdout","text":["old\n"]}]);
         cell["execution_count"] = json!(1);
     }
-    if cell_type == "markdown" {
+    if matches!(cell_type, "markdown" | "raw") {
         cell["attachments"] = json!({"image.png":{"image/png":"aGVsbG8="}});
     }
     json!({"cells":[cell],"metadata":{"kernelspec":{"name":"python3","display_name":"Python"}},"nbformat":4,"nbformat_minor":5})
@@ -258,8 +268,14 @@ async fn audit_notebook_all_type_conversions_preserve_metadata_and_invalidate_ex
                 assert!(cell.get("outputs").is_none(), "{before}->{after}: {cell}");
                 assert!(cell.get("execution_count").is_none());
             }
-            if after != "markdown" {
+            if after == "code" || before == "code" {
                 assert!(cell.get("attachments").is_none());
+            } else {
+                assert_eq!(
+                    cell["attachments"],
+                    notebook(before)["cells"][0]["attachments"],
+                    "{before}->{after}: attachments must survive"
+                );
             }
         }
     }
@@ -737,4 +753,91 @@ async fn audit_binary_fs_read_is_a_local_reference_not_an_implicit_model_upload(
         attachment.source,
         agena_domain::AttachmentSource::LocalPath { .. }
     )));
+}
+
+#[tokio::test]
+async fn audit_ast_rules_and_revision_checked_rewrite_through_plugin_dispatch() {
+    let f = Fixture::new().await;
+    let original = "console.log(1); function demo() { console.log(2); }\n";
+    f.write("code.js", original);
+    let rule = json!({"all":[{"pattern":"console.log($A)"}, {"inside":{"kind":"function_declaration","stopBy":"end"}}]});
+    let results = f
+        .call(
+            "code.search_ast",
+            json!({"path":"code.js","rule":rule,"limit":1}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(results["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(results["truncated"], false);
+    assert!(
+        f.call(
+            "code.search_ast",
+            json!({"path":"code.js","pattern":"console.log($A)","rule":rule})
+        )
+        .await
+        .is_err()
+    );
+    let preview = f
+        .call(
+            "code.rewrite_ast",
+            json!({"path":"code.js","rule":rule,"replacement":"logger.info($A)"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.read("code.js"), original);
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["replacements"], 1);
+    assert!(
+        f.call(
+            "code.rewrite_ast",
+            json!({"path":"code.js","rule":rule,"replacement":"logger.info($A)","apply":true})
+        )
+        .await
+        .is_err()
+    );
+    let applied = f.call("code.rewrite_ast", json!({"path":"code.js","rule":rule,"replacement":"logger.info($A)","apply":true,"expected_sha256":preview["before_sha256"]})).await.unwrap();
+    assert_eq!(applied["applied"], true);
+    assert_eq!(
+        f.read("code.js"),
+        "console.log(1); function demo() { logger.info(2); }\n"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires AGENA_DOCUMENT_PYTHON with MarkItDown extras and AGENA_DOCUMENT_FIXTURE_DIR; see tools/document_adapter_fixtures.py"]
+async fn audit_local_documents_with_real_markitdown() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("AGENA_DOCUMENT_FIXTURE_DIR").expect("fixture directory"),
+    );
+    let f = Fixture::new().await;
+    for extension in ["pdf", "docx", "pptx", "xlsx"] {
+        let path = format!("test.{extension}");
+        std::fs::copy(directory.join(&path), f.root.path().join(&path)).unwrap();
+        let result = f
+            .call(
+                "fs.document",
+                json!({"path":path,"backend":"markitdown","pattern":"Fixture needle"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["backend"], "markitdown");
+        assert_eq!(result["conversion_complete"], true);
+        assert!(
+            !result["lines"].as_array().unwrap().is_empty(),
+            "{extension}: {result}"
+        );
+        assert_eq!(result["source_sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(result["truncated"], false);
+        if extension != "pdf" {
+            assert!(
+                result["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|line| line["text"].as_str().unwrap().contains("中文")),
+                "Unicode was lost for {extension}"
+            );
+        }
+    }
 }

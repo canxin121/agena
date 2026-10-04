@@ -1,6 +1,6 @@
 //! Shared implementation for provider-backed tools that remain ordinary Agena tools.
 //!
-//! The outer model only sees Agena's five Tool API gateway functions. These
+//! The outer model only sees Agena's declared Tool API gateway functions. These
 //! helpers call official provider endpoints, normalize provider-reported usage,
 //! retain continuation state, and persist binary-redacted response receipts.
 

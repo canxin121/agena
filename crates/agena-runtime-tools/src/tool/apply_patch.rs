@@ -372,27 +372,35 @@ fn commit_operation(op: &PreparedPatchOp) -> std::io::Result<()> {
             ensure_parent(absolute)?;
             crate::atomic_create_file(absolute, content.as_bytes(), None)
         }
-        PreparedPatchOp::Delete { absolute, .. } => fs::remove_file(absolute),
+        PreparedPatchOp::Delete {
+            absolute, original, ..
+        } => remove_revision(absolute, original),
         PreparedPatchOp::Update {
-            absolute, updated, ..
-        } => crate::atomic_replace_file(absolute, updated.as_bytes()),
-        PreparedPatchOp::Move {
-            source,
-            target,
+            absolute,
             updated,
+            original,
             ..
-        } if source == target => crate::atomic_replace_file(source, updated.as_bytes()),
+        } => replace_revision(absolute, updated, original),
         PreparedPatchOp::Move {
             source,
             target,
             updated,
+            original,
+            ..
+        } if source == target => replace_revision(source, updated, original),
+        PreparedPatchOp::Move {
+            source,
+            target,
+            updated,
+            original,
             permissions,
             ..
         } => {
             ensure_parent(target)?;
+            crate::verify_file_contents(source, original.as_bytes())?;
             crate::atomic_create_file(target, updated.as_bytes(), Some(permissions.clone()))?;
-            if let Err(error) = fs::remove_file(source) {
-                return match fs::remove_file(target) {
+            if let Err(error) = remove_revision(source, original) {
+                return match remove_revision(target, updated) {
                     Ok(()) => Err(error),
                     Err(cleanup_error) => Err(std::io::Error::other(format!(
                         "could not remove move source ({error}) and could not clean up staged target ({cleanup_error})"
@@ -402,6 +410,17 @@ fn commit_operation(op: &PreparedPatchOp) -> std::io::Result<()> {
             Ok(())
         }
     }
+}
+
+fn replace_revision(path: &Path, updated: &str, expected: &str) -> std::io::Result<()> {
+    crate::atomic_replace_file_with_check(path, updated.as_bytes(), || {
+        crate::verify_file_contents(path, expected.as_bytes())
+    })
+}
+
+fn remove_revision(path: &Path, expected: &str) -> std::io::Result<()> {
+    crate::verify_file_contents(path, expected.as_bytes())?;
+    fs::remove_file(path)
 }
 
 fn rollback_operations(ops: &[PreparedPatchOp], committed: &[usize]) -> Vec<String> {
@@ -416,7 +435,9 @@ fn rollback_operations(ops: &[PreparedPatchOp], committed: &[usize]) -> Vec<Stri
 
 fn rollback_operation(op: &PreparedPatchOp) -> std::io::Result<()> {
     match op {
-        PreparedPatchOp::Add { absolute, .. } => fs::remove_file(absolute),
+        PreparedPatchOp::Add {
+            absolute, content, ..
+        } => remove_revision(absolute, content),
         PreparedPatchOp::Delete {
             absolute,
             original,
@@ -427,24 +448,30 @@ fn rollback_operation(op: &PreparedPatchOp) -> std::io::Result<()> {
             crate::atomic_create_file(absolute, original.as_bytes(), Some(permissions.clone()))
         }
         PreparedPatchOp::Update {
-            absolute, original, ..
-        } => crate::atomic_replace_file(absolute, original.as_bytes()),
-        PreparedPatchOp::Move {
-            source,
-            target,
+            absolute,
             original,
+            updated,
             ..
-        } if source == target => crate::atomic_replace_file(source, original.as_bytes()),
+        } => replace_revision(absolute, original, updated),
         PreparedPatchOp::Move {
             source,
             target,
             original,
+            updated,
+            ..
+        } if source == target => replace_revision(source, original, updated),
+        PreparedPatchOp::Move {
+            source,
+            target,
+            original,
+            updated,
             permissions,
             ..
         } => {
             ensure_parent(source)?;
+            crate::verify_file_contents(target, updated.as_bytes())?;
             crate::atomic_create_file(source, original.as_bytes(), Some(permissions.clone()))?;
-            fs::remove_file(target)
+            remove_revision(target, updated)
         }
     }
 }
@@ -538,7 +565,7 @@ fn ensure_parent(path: &Path) -> Result<(), std::io::Error> {
 }
 
 fn read_patch_target(path: &Path) -> Result<String, ToolError> {
-    let file = fs::File::open(path)?;
+    let file = agena_tool::file_io::open_regular_file(path)?;
     let mut bytes = Vec::with_capacity(
         file.metadata()
             .ok()
@@ -614,6 +641,47 @@ mod tests {
             "old first\n"
         );
         assert!(!directory.path().join("blocked/new.txt").exists());
+    }
+
+    #[test]
+    fn external_edits_after_preparation_survive_update_delete_and_move() {
+        for operation in [
+            "*** Update File: file.txt\n@@\n-old\n+new",
+            "*** Delete File: file.txt",
+            "*** Update File: file.txt\n*** Move to: moved.txt\n@@\n-old\n+new",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("file.txt");
+            std::fs::write(&path, "old\n").unwrap();
+            let patch = format!("*** Begin Patch\n{operation}\n*** End Patch");
+            let prepared = prepare_operations(parse_patch(&patch).unwrap(), |path| {
+                directory.path().join(path)
+            })
+            .unwrap();
+            std::fs::write(&path, "external edit\n").unwrap();
+            let error = commit_operations(&prepared).unwrap_err();
+            assert!(error.to_string().contains("revision conflict"), "{error}");
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "external edit\n");
+            assert!(!directory.path().join("moved.txt").exists());
+        }
+    }
+
+    #[test]
+    fn rollback_reports_conflict_and_preserves_a_later_external_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("file.txt");
+        std::fs::write(&path, "old\n").unwrap();
+        let patch = "*** Begin Patch\n*** Update File: file.txt\n@@\n-old\n+new\n*** End Patch";
+        let prepared = prepare_operations(parse_patch(patch).unwrap(), |path| {
+            directory.path().join(path)
+        })
+        .unwrap();
+        commit_operations(&prepared).unwrap();
+        std::fs::write(&path, "external edit\n").unwrap();
+        let failures = super::rollback_operations(&prepared, &[0]);
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].contains("revision conflict"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "external edit\n");
     }
 
     #[test]

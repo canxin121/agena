@@ -4,7 +4,7 @@ Objective: implement the improvements established by the tool-alternatives inves
 
 Implementation worktree: `/Volumes/Rc20/Projects/agena-tool-modernization`; branch: `feat/tool-modernization`; source baseline: `98c1c116`. Research commit `a0e2c53e` was incorporated as `f5383449`. Do not use Agena connector tools for this work. There are no applicable AGENTS files at initialization. Work is performed without delegated agents.
 
-The current requirement table and the final validation section are authoritative. The phase narratives below retain intermediate measurements and failures as an audit trail; their earlier pending-work statements describe those phases, not the final disposition. Research inventory: 22 plugins / 135 definitions. Implemented catalog: 22 plugins / 138 definitions / 134 execution tools / 4 gateways.
+The current requirement table and the follow-up prompt audit at the end are authoritative. The phase narratives below retain intermediate measurements and failures as an audit trail; their earlier pending-work statements describe those phases, not the final disposition. Research inventory: 22 plugins / 135 definitions. The corrected implemented catalog is **22 plugins / 138 definitions / 131 execution tools / 7 manifest gateway handlers**, plus runtime-synthesized `tools_call` for **8 provider-facing gateway functions**. Earlier 134/4, 133/4 and 132/4 classifications in this ledger mistakenly counted the three `plugins_*` gateway handlers as execution tools; those historical statements do not mean tools were removed in the follow-up.
 
 | Requirement | Required evidence | Current status |
 | --- | --- | --- |
@@ -19,10 +19,10 @@ The current requirement table and the final validation section are authoritative
 | Read/write/patch/notebook | Revision/publication contracts, batch bounds and notebook compatibility | Implemented; regular-file reads, observed-change/budget checks, staged revision validation, official nbformat schemas; external writers remain nontransactional |
 | Shell/process/monitor/snapshot lifecycle | Shared lifecycle and effect contracts, actual defect fixes, regression tests | Implemented; bounded shared collection, descendant cleanup, verified Darwin zombie handling and recoverable line framing; 20 parallel runtime-tools rounds pass |
 | Memory, discovery, stateful and hosted tools | Inventory-wide disposition and affected correctness/contract tests | Audited; unchanged Tantivy indexes reused, committed results preserved on contention, discovery reads bounded, state/hosted contracts retained |
-| Concise and formatted prompts | Reduced byte budget, retained behavior/format obligations, modern-tool guidance | Implemented; base 4,658 / all sections 7,493 UTF-8 bytes; 16 source-backed behavior scenarios; no sampled-model success claim |
+| Concise and formatted prompts | Reduced byte budget, usable call contracts, capability-aware workflow guidance | Audited and repaired; base 6,288 / all sections 10,537 UTF-8 bytes; production-schema examples, 24 capability combinations and real plan-state fixture; no sampled-model success claim |
 | Optional analysis/display/log tools | Explicit candidate disposition, exact raw-output recovery, preserved status/diagnostics | Complete; curated optional CLI tiers and offline measured log experiment; no transparent output proxy |
 | Generated contracts and documentation | Consistent schemas/reference/identity/configuration and usage docs | Complete; both generator examples reproduce the committed reference and identity snapshot byte for byte |
-| Final validation | Targeted tests, workspace fmt/tests/clippy and invariant/capability gates | Complete on macOS; 3,167 workspace tests pass, 12 deliberate skips; all-target Clippy, fmt, invariants, capabilities and generated comparisons pass |
+| Final validation | Targeted tests, workspace fmt/tests/clippy and invariant/capability gates | Complete on macOS for the prompt follow-up source; 3,172 workspace tests pass, 12 deliberate skips; all-target Clippy, fmt, invariants, capabilities and generated comparisons pass |
 
 Initial authoritative findings: core text search already uses ripgrep libraries; glob and grep use sorted serial discovery; AST uses ast-grep; search scrapes HTML; browser uses custom CDP; session.environment does not report host CLI availability. Workflow and shell analysis currently maintain separate read-only command lists. No implementation requirement is marked complete by these findings alone.
 
@@ -239,7 +239,7 @@ The initial `tool-alternatives.md` is a historical source/benchmark snapshot. Th
 
 ## Prompt behavior review and measured log experiment
 
-The final base prompt is 4,658 UTF-8 bytes versus 9,738; all workflow sections total 7,493 versus 16,811. Measurements are in `tool-modernization-prompt-size.json`. No tokenizer-count or model-task-success claim follows from these byte counts. A small addition names local `fs.document` extraction and revision-bound AST rewrite preview; detailed flags remain in live help and the CLI catalog.
+At modernization completion, before the follow-up usability audit, the base prompt was 4,658 UTF-8 bytes versus 9,738; all workflow sections totaled 7,493 versus 16,811. The follow-up below restores necessary guidance, and `tool-modernization-prompt-size.json` now preserves all three versions. No tokenizer-count or model-task-success claim follows from these byte counts. The modernization addition names local `fs.document` extraction and revision-bound AST rewrite preview; detailed flags remain in live help and the CLI catalog.
 
 The following scenario review goes beyond formatting/obligation checks by mapping intended decisions to the exercised execution contracts. It is a source-backed scenario review with deterministic runtime tests, not sampled model responses or a paid model benchmark.
 
@@ -279,7 +279,7 @@ Crawl metadata updates now remove secondary URL/content-hash entries owned by th
 The final Playwright and rendered Chrome fixtures pass on the corrected process implementation. They validate actionability, Unicode/redaction, snapshot refs, iframe selection, context ownership, interception, rendered HTTP status, output bounds and timeout/cancellation cleanup. These local tests start isolated Chrome and fixture HTTP servers, never an Agena service or Agena connector.
 
 
-## Final validation and completion
+## Modernization validation before the prompt follow-up
 
 Source validation covers commit `53b5c95ad2962f74107650a2defe9f9c4e69c4d1` (later changes in the completion commit are documentation and the already exercised offline experiment). Machine-readable commands, log paths, hashes, results and limitations are retained in `tool-modernization-validation.json`.
 
@@ -300,3 +300,49 @@ Source validation covers commit `53b5c95ad2962f74107650a2defe9f9c4e69c4d1` (late
 The twelve default-suite skips comprise two optional browser fixtures, the optional MarkItDown fixture, three search/glob benchmarks, the optional Trafilatura comparison and five documentation examples. Browser fixtures were executed explicitly as recorded above; document, extraction and benchmark evidence is retained in the earlier phase artifacts. No frontend source or build configuration changed, so frontend-specific suites were not rerun. The workspace test linker emitted the existing macOS compact-unwind-size warning for the large `e2e_probe` debug example; Clippy with warnings denied passed. It was not suppressed by disabling unwind support.
 
 All requirements in the current table have an implementation, deliberate retention/optional-integration decision, and recorded evidence. Work remains on the independent branch/worktree; no merge or push was performed. This completion does not claim universal speed gains, production service quality, model task-success improvements, a complete browser sandbox, tested Windows/big-endian execution, live Poppler validation or atomic cooperation from arbitrary external file writers.
+
+## Follow-up: 系统提示词可用性审计（2026-10-04）
+
+用户要求详细检查提示词是否精简过头。本轮对照 `98c1c116` 的原文、`fe79003c` 的压缩版本，以及实际网关 schema、计划状态机、后台通知、项目指引注入和输出截断路径。修复源码提交为 `3fc869a83b948759d843617bc6224b0edd6c6f9a`，仍在本 worktree / branch 内；没有调用 Agena 连接器、启动 Agena 服务或发起真实模型请求。
+
+结论：压缩确实删弱了几条必要指引，也引入了一个计划审批语义错误；此外还发现了此前就存在的 help 矛盾和目录分类问题。已补齐调用、恢复和工作流决策信息，详细参数继续由实时 help 提供。
+
+| 检查项 | 发现及来源 | 修复后的行为 | 证据 |
+| --- | --- | --- | --- |
+| 普通工具与直接函数的区别 | 压缩后只说“通过网关执行”，未再明确普通工具名只能作为参数值 | 明确 `fs.read` 等不是直接函数；网关不得嵌入 `tools_call` | 基础 prompt；真实 manifest 中的工具名检查 |
+| 最小调用结构 | 压缩删除了原先 `{tool, input}` 的明确结构，缺少可直接理解的完整示例 | 加入先读 help、再传 `{"tool":"fs.read","input":{"file_path":"src/main.rs"}}` 的示例；说明不能传 JSON 字符串或额外包裹层 | 测试从实际 prompt 提取 JSON，验证网关 schema 和 `fs.read` schema；四种错误结构被拒绝 |
+| 已知工具是否仍要搜索 | 既有矛盾：主提示词允许直接 help，但网关描述和 help 字段要求名字来自 list/search | 已知精确名字可以直接 help 验证当前可用性；未知或不可用才返回 discovery；复用完整且仍在上下文中的 contract | 网关描述、输入说明和生成文档一致 |
+| 用户要求列举能力 | “默认不枚举全目录”缺少明确例外，可能误伤工具清单问题 | 用户要 inventory 时允许 `tools_list`，日常任务仍按需搜索 | 基础 prompt 与网关 inventory 说明对齐 |
+| 修改计划后的审批 | 压缩版本把“审批期间发生并发变更要重新读/审”写成“已批准计划修改后再审批” | 普通步骤进度更新和已批准计划的完成无需再审批；替换计划重新进入 planning；审批期间的旧版本不能覆盖新版本 | 真实内存 host fixture 覆盖审批→进度→完成→替换；旧审批冲突测试继续通过 |
+| 计划 help 与状态机 | 既有文案漏掉可信配置条件，还称只有 `plan.review` 能等待审批；`plan.edit` 也被误描述为通用内容改写入口 | `request_approval: false` 同时要求用户授权与可信配置；`plan.phase` 也可触发所需审批；正文/步骤结构用 `plan.set`，状态/备注用 `plan.edit` | 与实际 `invoke_plan_*`、revision 检查和 schema 对照；生成参考同步 |
+| 只有部分计划工具 | 既有逻辑只看 `plan.set` 是否存在，就推荐可能不存在的 review/edit | 可用时优先 `plan.review`，仅有 `plan.phase` 时用其激活审批；两种审批入口都缺失时指导用文字计划，保留已有 planning 限制 | `plan.set` 单独、set+phase、set+review、edit/phase/review 单独等组合测试 |
+| 等待后台通知 | 压缩删掉了“没有其他工作时结束当前轮次等待通知”，可能诱发轮询或误报完成 | 明确当前轮次可以结束但工作仍 pending；通知到达后继续，读取结果并验证；允许有具体诊断目的的有限日志读取 | 动态 prompt 回归与既有通知/生命周期测试 |
+| 部分后台能力 | 既有实现只要启用任一后台入口，就同时推荐 shell、tasks、monitor、cron | 分能力拼装段落，仅命名实际可用的工作流工具；monitor 可因退出/超时等结束 | 24 组能力组合检查；manifest/运行时分类交叉验证 |
+| 交互终端 | 压缩后的“Never poll”和交互读输出之间缺少足够区分；生命周期工具也可能未启用 | 只有 run+write 同时可用才指导 PTY；保留精确按键、空 `chars` 读取、`since_seq`、静默不等于退出、部分写入不可整体重发 | 能力组合及终端义务回归；原有终端运行时测试 |
+| 失败、并发与输出不完整 | 原提示词多为“读错误后重试”，不足以区分恢复动作 | 未知工具重新发现；错误参数按嵌入 help 修正；写操作超时先核对结果；revision 冲突重读；空结果与失败分开，截断后按游标或缩小范围继续 | 基础 prompt，与既有网关/文件/输出边界测试共同验证 |
+| 任务范围、项目指引与授权 | 压缩省掉了问答/审阅不随意改代码、运行时已注入根指引等说明 | 补回任务范围和完成验证；解释根/嵌套指引来源与截断提醒；已有范围内的授权无需重复索取 | 基础 prompt 与项目指引注入源码对照 |
+| 网关目录分类 | 既有静态目录漏算三个 `plugins_*`；部分注释和真实模型 E2E 期望仍硬编码五个入口 | 静态目录和参考文档复用运行时分类；实际 131 个执行工具、7 个 manifest 网关、包含合成 call 后 8 个协议函数 | 枚举真实 manifest 与 `ToolApiFunction::ALL` 比较；工具总数仍为 138 |
+| 现代工具选择 | `rg/fd/jq/ast-grep`、本地文档、AST 预览及 revision 检查在压缩后仍存在 | 保留可用性检查、缺失时回退、遵循用户命令/项目工具链、不为升级工具隐式安装；补明 shell 的 reads/writes/network 效果字段 | 核心工具名与真实 manifest 交叉验证；既有选择/效果测试 |
+
+审计过程中补充的第一版示例误用了 `path`，生产 schema 测试因缺少必填 `file_path` 真实失败。该草稿错误在成功的全工作区验证前已修正；这不是原版本中已存在的示例错误。用真实 schema 校验示例比仅断言 prompt 包含某个工具名更能发现这类问题。
+
+| 计量范围 | 精简前 `98c1c116` | 压缩版 `fe79003c` | 本轮修复 | 相对精简前 |
+| --- | ---: | ---: | ---: | ---: |
+| 基础系统提示词 | 9,738 | 4,658 | 6,288 | 减少 35.4% |
+| 基础 + 全部工作流段落 | 16,811 | 7,493 | 10,537 | 减少 37.3% |
+
+单位为 UTF-8 字节。只计身份提示词与工作流段落，不含 provider 函数定义、项目指引、用户追加 system 或对话历史；不能据此推算实际输入 token 或模型成功率。字节上限调整为基础 7,500 / 全工作流 12,000，留出必要解释空间。运行时仍按实际工具集合拼装工作流段落。
+
+| 本轮验证 | 结果 |
+| --- | --- |
+| 工作区 `cargo test --locked --workspace --no-fail-fast` | 3,172 通过，0 失败，12 项按原配置跳过；154 个报告目标 |
+| `cargo clippy --locked --workspace --all-targets -- -D warnings` | 通过 |
+| fmt 与 diff 空白检查 | 通过 |
+| 新增/修订的重点验证 | 实际 prompt JSON/schema；四种错误调用结构；真实工具名；24 组能力组合；计划审批/进度/完成/替换；全部网关的 manifest/文档/运行时分类一致性 |
+| 生成参考与 identity 快照 | 两个 Cargo generator 产物逐字节一致；未使用 `agena inspect` |
+| Python 3.13 辅助门禁 | 5 项 refactor 工具测试、19 项不变量检查、目标清单检查均通过 |
+| Runtime crypto/auth 门禁 | 通过，包含两项 HTTPS client construction 测试 |
+
+机器可读证据、源码提交、日志摘要和 SHA-256 见 [tool-prompt-audit-validation.json](tool-prompt-audit-validation.json)；三个版本的长度与计量范围见 [tool-modernization-prompt-size.json](tool-modernization-prompt-size.json)。先前完整实施验证保留在原 JSON 中，并明确标注目录计数修正。本轮默认系统 Python 因不支持 `zip(strict=True)` 造成的脚本失败日志也被保留；改用本机已缓存的 CI Python 3.13 后通过，没有修改脚本来掩盖问题。
+
+这些证据能确认提示词示例符合当前接口、条件拼装不会推荐未启用的工作流工具、审批指引符合实际状态机。尚未做真实模型 A/B 任务成功率比较；也没有为了本轮 prompt 修改重跑选装浏览器/文档工具实机测试。真实 provider E2E 中的网关预期已更新并通过编译，其发起模型请求的 main 没有运行。macOS linker 的既有 compact-unwind-size 提醒仍保留，未通过关闭 unwind 隐藏。

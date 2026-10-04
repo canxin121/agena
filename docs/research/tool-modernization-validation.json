@@ -184,5 +184,12 @@
     "Revision comparison and rename do not transact with arbitrary external writers.",
     "Workspace test linking emitted the existing macOS oversized compact-unwind warning for e2e_probe; workspace Clippy with warnings denied passed.",
     "No frontend source or build configuration changed; frontend-specific suites were not rerun."
-  ]
+  ],
+  "follow_up_prompt_audit": "tool-prompt-audit-validation.json",
+  "catalog_correction": {
+    "explanation": "The catalog above preserves the originally reported classification. Three plugins_* gateway handlers were incorrectly counted as execution tools in that report. The follow-up audit aligns the manifest/docs with the existing runtime classifier; no tools were removed.",
+    "execution_tools": 131,
+    "manifest_gateway_handlers": 7,
+    "provider_functions_including_synthesized_tools_call": 8
+  }
 }

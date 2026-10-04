@@ -245,6 +245,7 @@ mod app_provider_text;
 mod app_session_events;
 mod app_session_helpers;
 mod app_session_interactive;
+mod app_session_work;
 mod app_settings;
 mod app_settings_choices;
 mod app_settings_helpers;

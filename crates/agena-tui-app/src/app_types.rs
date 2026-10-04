@@ -438,6 +438,9 @@ pub struct App {
     pub(super) btw_sessions: BTreeMap<i64, crate::app_btw::BtwState>,
     pub(super) btw_focus: Option<i64>,
     pub(super) btw_area: ratatui::layout::Rect,
+    pub(super) session_work: BTreeMap<i64, crate::app_session_work::SessionWorkState>,
+    pub(super) work_focus: Option<i64>,
+    pub(super) work_area: ratatui::layout::Rect,
     pub(super) inline_plans: BTreeMap<i64, crate::app_plan_inline::InlinePlanState>,
     pub(super) plan_focus: Option<i64>,
     pub(super) plan_area: ratatui::layout::Rect,
@@ -628,6 +631,12 @@ pub(super) enum AppMessage {
     PlanAutorunToggled {
         request_id: u64,
         result: UiResult<bool>,
+    },
+    SessionWorkLoaded {
+        session_id: i64,
+        request_id: u64,
+        channel: u8,
+        result: UiResult<crate::app_session_work::WorkResult>,
     },
     InlinePlanLoaded {
         session_id: i64,

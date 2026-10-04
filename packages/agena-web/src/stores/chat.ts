@@ -1,3 +1,4 @@
+import type { SessionActivity } from '@/types/activity'
 import { defineStore } from 'pinia'
 import { useBtwStore } from './btw'
 import { computed, onScopeDispose, ref } from 'vue'
@@ -128,6 +129,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // config.  The composer status line needs agent/task/permission/activity
   // fields that are not part of the model picker configuration.
   const sessionExecutionBySession = ref<Record<string, NonNullable<chatApi.AgenaExecutionState['execution']>>>({})
+  const backgroundActivitiesBySession = ref<Record<string, SessionActivity[]>>({})
   const backgroundActivityKindsBySession = ref<Record<string, string[]>>({})
   sessionRunConfigBySession.value = loadSessionRunConfigMap(STORAGE_RUN_CONFIG)
   const runConfigPersister = createSessionRunConfigPersister(STORAGE_RUN_CONFIG, () => sessionRunConfigBySession.value)
@@ -966,6 +968,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
       [sid]: [...st.backgroundActivityKinds],
     }
 
+    backgroundActivitiesBySession.value[sid] = st.backgroundActivities
+
     const execution = st.execution
     if (execution && typeof execution === 'object') {
       sessionExecutionBySession.value = {
@@ -1350,6 +1354,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     {
       const next = { ...sessionExecutionBySession.value }
       delete next[sid]
+      delete backgroundActivitiesBySession.value[sid]
       sessionExecutionBySession.value = next
     }
     clearMessagesHydrated(sid)
@@ -1969,6 +1974,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     selectedSessionExecution,
     getSessionExecution,
     sessionBackgroundActivityKinds,
+    sessionBackgroundActivities: (sid: string) => backgroundActivitiesBySession.value[sid] || [],
+    refreshExecutionStatus,
     sessionErrorBySession,
     sessionRunConfigBySession,
     attentionBySession,
@@ -2053,6 +2060,7 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
       const sid = selectedSessionId()
       if (property === 'selectedSessionId') return sid
       if (property === 'selectedSession') return target.getSessionById(sid)
+      if (property === 'selectedSessionState') return target.getSessionById(sid)?.state || { kind: 'ready', data: {} }
       if (property === 'selectedSessionDirectory') return target.getSessionDirectory(sid)
       if (property === 'messages') return target.getMessagesForSession(sid)
       if (property === 'messagesLoading') return sid === target.selectedSessionId ? target.messagesLoading : false

@@ -516,7 +516,7 @@ describe('TUI-parity part presentation', () => {
     expect(attachmentSource).toContain('buildWorkspaceRawFileUrl')
     expect(attachmentSource).toContain('data:')
 
-    const headerSource = readFileSync(new URL('../src/components/chat/ChatHeader.vue', import.meta.url), 'utf8')
+    const headerSource = readFileSync(new URL('../src/components/chat/SessionWorkSection.vue', import.meta.url), 'utf8')
     expect(headerSource).not.toContain('AttentionPanel')
   })
 

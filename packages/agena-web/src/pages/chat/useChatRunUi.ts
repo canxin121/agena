@@ -99,6 +99,7 @@ type MessageLike = {
 
 type ChatLike = {
   selectedSessionId: string | null
+  selectedSessionExecution?: { provider_retry?: { attempt: number; next_at_ms: number; message: string } | null } | null
   selectedSessionState?: SessionState | null
   selectedSessionUsage?: CanonicalSessionUsage | null
   messages: MessageLike[]
@@ -225,7 +226,10 @@ export function useChatRunUi(opts: {
   })
 
   const retryStatus = computed<RetryStatus | null>(() => {
-    return null
+    const retry = chat.selectedSessionExecution?.provider_retry
+    return canonicalRunActive.value && retry
+      ? { type: 'retry', attempt: retry.attempt, message: retry.message, next: retry.next_at_ms }
+      : null
   })
 
   const retryNowMs = ref(Date.now())
@@ -243,7 +247,7 @@ export function useChatRunUi(opts: {
     retryNowMs.value = Date.now()
     retryTimer = window.setInterval(() => {
       retryNowMs.value = Date.now()
-    }, 200)
+    }, 1000)
   }
 
   watch(
@@ -415,10 +419,7 @@ export function useChatRunUi(opts: {
   })
 
   const sessionEnded = computed(() => {
-    return (
-      !canonicalRunActive.value &&
-      (stateKind.value === 'ready' || stateKind.value === 'failed')
-    )
+    return !canonicalRunActive.value && (stateKind.value === 'ready' || stateKind.value === 'failed')
   })
 
   const aborting = ref(false)

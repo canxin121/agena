@@ -98,6 +98,9 @@ impl App {
             btw_sessions: BTreeMap::new(),
             btw_focus: None,
             btw_area: Default::default(),
+            session_work: BTreeMap::new(),
+            work_focus: None,
+            work_area: Default::default(),
             inline_plans: BTreeMap::new(),
             plan_focus: None,
             plan_area: Default::default(),
@@ -373,6 +376,7 @@ impl App {
         self.refresh_activities_panel_if_due(now);
         self.refresh_hub_if_due();
         self.heal_plan_display_refresh();
+        self.heal_session_work();
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);
         }

@@ -3,6 +3,7 @@ import test, { after } from 'node:test'
 import { createServer } from 'vite'
 import { fileURLToPath } from 'node:url'
 import { createPinia, disposePinia, setActivePinia } from 'pinia'
+import { computed, createApp, ref } from 'vue'
 import { createRevalidator } from '../src/lib/revalidation'
 import { ensureBrowserTestRuntime } from './testRuntime'
 
@@ -12,6 +13,9 @@ const vite = await createServer({
 })
 after(() => vite.close())
 const { useChatStore } = (await vite.ssrLoadModule('/src/stores/chat.ts')) as typeof import('../src/stores/chat')
+const { workspacePaneContextKey } = (await vite.ssrLoadModule(
+  '/src/app/workspace/workspacePaneContext.ts',
+)) as typeof import('../src/app/workspace/workspacePaneContext')
 const pause = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const deferred = <T>() => {
   let resolve!: (value: T) => void
@@ -69,6 +73,32 @@ async function withChat(run: (chat: ReturnType<typeof useChatStore>) => Promise<
     globalThis.fetch = original
   }
 }
+
+test('execution state follows its own workspace pane instead of the globally selected session', async () =>
+  withChat(async (chat) => {
+    chat.cacheSessions([
+      { id: '7', version: 10, state: { kind: 'ready', data: {} } },
+      { id: '8', version: 10, state: { kind: 'running', data: { workflow: 'tool_pending' } } },
+    ])
+    chat.selectedSessionId = '7'
+    const sessionId = ref('8')
+    const app = createApp({ render: () => null })
+    app.provide(workspacePaneContextKey, {
+      windowId: computed(() => 'pane-test'),
+      isFocused: computed(() => false),
+      route: computed(() => ({
+        query: { sessionId: sessionId.value },
+      })) as import('../src/app/workspace/workspacePaneContext').WorkspacePaneContext['route'],
+      navigate: async () => {},
+    })
+    const pane = app.runWithContext(() => useChatStore())
+    assert.equal(chat.selectedSessionState.kind, 'ready')
+    assert.equal(pane.selectedSessionState.kind, 'running')
+    sessionId.value = '7'
+    assert.equal(pane.selectedSessionState.kind, 'ready')
+    sessionId.value = '9'
+    assert.equal(pane.selectedSessionState.kind, 'ready')
+  }))
 
 test('invalidation during a read produces one trailing read, without a sliding debounce', async () => {
   let calls = 0

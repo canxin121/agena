@@ -24,6 +24,14 @@ mod transcript_render;
 mod transcript_text;
 mod transcript_tool_summary;
 
+/// Render a workspace patch with the same gutters, colors and wrapping as a
+/// file-edit operation in the transcript.
+pub fn render_diff_document(text: &str, width: u16) -> Vec<RenderedLine> {
+    let mut out = Vec::new();
+    transcript_aux::push_expanded_diff_text(&mut out, "", text, width);
+    out
+}
+
 pub(super) use self::transcript_aux::*;
 pub(super) use self::transcript_diff::*;
 pub use self::transcript_render::*;

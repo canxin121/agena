@@ -23,7 +23,6 @@ import {
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import ChatRuntimeStatusOverlay from '@/components/chat/ChatRuntimeStatusOverlay.vue'
-import ChatHeader from '@/components/chat/ChatHeader.vue'
 import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
 import AttachProjectDialog from '@/components/chat/AttachProjectDialog.vue'
@@ -38,6 +37,9 @@ import { hasDisplayableAssistantError } from './assistantError'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
 import { useBtwStore } from '@/stores/btw'
 
+const SessionWorkSection = defineAsyncComponent(() => import('@/components/chat/SessionWorkSection.vue'))
+const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
+const messageListRef = ref<InstanceType<typeof MessageList> | null>(null)
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
 const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
 const btw = useBtwStore()
@@ -169,7 +171,6 @@ const {
   // Header actions.
   canAbort,
   retryCountdownLabel,
-  retryNextLabel,
   abortRun,
 
   // Composer action menu.
@@ -491,6 +492,7 @@ void sessionActionsMenuRef
                   </p>
                 </div>
                 <MessageList
+                  ref="messageListRef"
                   :is-compact-layout="ui.isCompactLayout"
                   :is-compact-touch="ui.isCompactTouch"
                   :selected-session-id="chat.selectedSessionId"
@@ -536,6 +538,24 @@ void sessionActionsMenuRef
                 />
               </div>
               <div class="chat-column" data-session-sections="true">
+                <SessionWorkSection
+                  v-if="chat.selectedSessionId"
+                  :key="chat.selectedSessionId"
+                  :session-id="chat.selectedSessionId"
+                  :can-abort="canAbort"
+                  :aborting="aborting"
+                  :retry="retryStatus"
+                  :countdown="retryCountdownLabel"
+                  @stop="abortRun"
+                  @reveal-request="messageListRef?.revealRequest($event)"
+                />
+                <WorkspaceChangesSection
+                  v-if="chat.selectedSessionId"
+                  :key="chat.selectedSessionId + ':files'"
+                  :session-id="chat.selectedSessionId"
+                  :directory="sessionDirectory || ''"
+                  :busy="currentPhase !== 'idle'"
+                />
                 <PlanSection
                   v-if="ctx.planVisible.value"
                   v-model:expanded="ctx.planViewerOpen.value"
@@ -634,15 +654,6 @@ void sessionActionsMenuRef
         >
           <div class="chat-column flex flex-col min-h-0 h-full" :class="ui.isCompactLayout ? 'py-2' : 'py-3'">
             <div class="relative flex flex-1 flex-col min-h-0">
-              <ChatHeader
-                :session-id="chat.selectedSessionId"
-                :can-abort="canAbort"
-                :retry-status="retryStatus"
-                :retry-countdown-label="retryCountdownLabel"
-                :retry-next-label="retryNextLabel"
-                :mobile-pointer="ui.isCompactTouch"
-                @abort="abortRun"
-              />
               <div v-if="failedAttachmentDraft" role="status" class="mb-2 rounded border border-border p-2 text-sm">
                 <p>{{ t('chat.attachments.failedDraftSaved') }}</p>
                 <p class="text-xs text-muted-foreground">

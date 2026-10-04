@@ -183,6 +183,7 @@ impl App {
     }
 
     fn collapse_btw_for_plan(&mut self, id: i64) {
+        self.collapse_session_work(id);
         self.collapse_btw(id);
         self.btw_focus = None;
     }

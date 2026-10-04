@@ -100,6 +100,7 @@ impl App {
         }
         self.btw_sessions.insert(session_id, state);
         self.collapse_inline_plan(session_id);
+        self.collapse_session_work(session_id);
         self.current_route = Route::Main;
         self.focus = Focus::Transcript;
         self.btw_focus = Some(session_id);
@@ -270,6 +271,7 @@ impl App {
                 state.expanded = !state.expanded;
                 if state.expanded {
                     self.collapse_inline_plan(id);
+                    self.collapse_session_work(id);
                 }
                 if !state.expanded {
                     self.btw_focus = None;

@@ -178,6 +178,22 @@ impl App {
             .height
             .saturating_sub(composer_height)
             .saturating_sub(6);
+        let headers = self.inline_plan_height(1)
+            + self.btw_inline_height(1)
+            + u16::from(self.transcript.session_id.is_some());
+        let section_space = section_space.max(
+            headers.min(
+                area.height
+                    .saturating_sub(composer_height)
+                    .saturating_sub(3),
+            ),
+        );
+        // Accessories reserve one header; expanding any section collapses
+        // the others, so the editor and transcript always keep their budget.
+        let work_height = self.session_work_height(
+            section_space.saturating_sub(self.inline_plan_height(1) + self.btw_inline_height(1)),
+        );
+        let section_space = section_space.saturating_sub(work_height);
         // Keep a collapsed BTW header reachable while a plan is expanded.
         let plan_height =
             self.inline_plan_height(section_space.saturating_sub(self.btw_inline_height(1)));
@@ -185,7 +201,8 @@ impl App {
         let vertical = split_vertical_sections(
             area,
             &[
-                VerticalSectionSize::Flexible(if btw_height > 0 { 4 } else { 8 }),
+                VerticalSectionSize::Flexible(0),
+                VerticalSectionSize::Fixed(work_height),
                 VerticalSectionSize::Fixed(plan_height),
                 VerticalSectionSize::Fixed(btw_height),
                 VerticalSectionSize::Fixed(composer_height),
@@ -193,9 +210,14 @@ impl App {
         );
 
         let transcript_host_area = vertical[0];
-        let plan_area = vertical[1];
-        let btw_area = vertical[2];
-        let composer = vertical[3];
+        let work_area = vertical[1];
+        let plan_area = vertical[2];
+        let btw_area = vertical[3];
+        let composer = vertical[4];
+        if work_area.height < 6 && self.work_focus.is_some() {
+            self.work_focus = None;
+            self.focus = Focus::Composer;
+        }
         if plan_area.height < 5
             && self.plan_focus.is_some()
             && self.plan_focus == self.transcript.session_id
@@ -235,6 +257,7 @@ impl App {
 
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
+        self.render_session_work(frame, work_area);
         self.render_inline_plan(frame, plan_area);
         self.render_btw_inline(frame, btw_area);
     }

@@ -587,6 +587,7 @@ onMounted(focusPendingInteraction)
     ref="rootEl"
     class="min-w-0 border-y border-border/55 py-3 outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
     data-transcript-interaction-part="true"
+    :data-interaction-request-id="requestId"
     data-transcript-chrome="true"
     :tabindex="hasKeyboardControls ? -1 : 0"
     :data-transcript-interaction-kind="isPermission ? 'permission' : isReviewDecision ? 'review' : 'ask-user'"

@@ -39,6 +39,12 @@ impl App {
             AppMessage::PlanAutorunToggled { request_id, result } => {
                 self.handle_plan_autorun_toggled(request_id, result)
             }
+            AppMessage::SessionWorkLoaded {
+                session_id,
+                request_id,
+                channel,
+                result,
+            } => self.handle_session_work_loaded(session_id, request_id, channel, result),
             AppMessage::InlinePlanLoaded {
                 session_id,
                 request_id,

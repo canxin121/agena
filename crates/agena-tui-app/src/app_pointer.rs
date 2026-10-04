@@ -15,6 +15,11 @@ impl App {
         {
             self.plan_focus = None;
         }
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && !self.work_area.contains((mouse.column, mouse.row).into())
+        {
+            self.work_focus = None;
+        }
         if let Some(action) = self.pointer_targets.action(mouse) {
             self.cancel_active_pointer_gesture();
             self.cancel_surface_selection();
@@ -86,6 +91,7 @@ impl App {
                     }
                 }
                 "session-token-usage" => self.open_usage_dashboard(),
+                name if name.starts_with("work-") => self.handle_session_work_action(name),
                 "plan" => self.open_plan_viewer(),
                 name if name.starts_with("plan-") => self.handle_inline_plan_action(name),
                 "btw" => self.open_btw(""),
@@ -166,6 +172,7 @@ impl App {
             PointerAction::FocusList(panel) => {
                 self.focus_pointer_list(panel);
             }
+            PointerAction::NamedIndex("work-row", index) => self.handle_work_row(index),
             PointerAction::NamedIndex("plugin-tab", index) => {
                 if let Route::PluginWorkbench(dialog) = &mut self.current_route
                     && let Some(tab) = agena_tui_plugin_workbench::PluginDetailTab::ALL.get(index)

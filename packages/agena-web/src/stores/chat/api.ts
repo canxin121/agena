@@ -1,3 +1,4 @@
+import type { SessionActivity } from '@/types/activity'
 // Agena REST API client for the chat subsystem.
 //
 // All endpoints live under /api/v1. Ids are numeric; timestamps are RFC3339
@@ -103,8 +104,9 @@ export type AgenaExecutionState = {
   /// Server-projected background activities for this session. This is the
   /// single session-scoped projection shared with composer footers; the web
   /// must not rebuild it from the global activity list.
-  background_activities?: JsonValue[] | null
+  background_activities?: SessionActivity[] | null
   execution?: {
+    provider_retry?: { attempt: number; max_retries: number; next_at_ms: number; message: string }
     agent_id?: string
     model_provider_id?: string | null
     model_adapter_id?: string | null
@@ -192,6 +194,7 @@ export type SessionExecutionStatus = {
   usage?: AgenaExecutionState['usage']
   /** Server-projected background activity kinds (lowercased, id-free). */
   backgroundActivityKinds: string[]
+  backgroundActivities: SessionActivity[]
 }
 
 export type CancellationResult = 'cancellation_requested' | 'already_terminal' | 'not_found' | 'execution_mismatch'
@@ -1296,6 +1299,7 @@ export async function getSessionExecutionStatus(sessionId: string): Promise<Sess
     execution: state.execution,
     usage: state.usage,
     backgroundActivityKinds,
+    backgroundActivities: raw.background_activities || [],
   }
 }
 

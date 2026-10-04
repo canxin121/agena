@@ -2,6 +2,7 @@ impl App {
     pub(crate) fn open_session(&mut self, session_id: i64, title: String) {
         self.btw_focus = None;
         self.plan_focus = None;
+        self.work_focus = None;
         // Opening any other session while a side conversation is active
         // discards the ephemeral side (codex's
         // `side_thread_to_discard_after_switch` rule). Switching into the side
@@ -304,8 +305,10 @@ impl App {
         if live.session_deleted {
             self.btw_sessions.remove(&session_id);
             self.inline_plans.remove(&session_id);
+            self.session_work.remove(&session_id);
             if self.plan_focus == Some(session_id) {
                 self.plan_focus = None;
+                self.work_focus = None;
             }
             if self.btw_focus == Some(session_id) {
                 self.btw_focus = None;

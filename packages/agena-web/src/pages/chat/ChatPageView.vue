@@ -38,7 +38,6 @@ import { useBtwStore } from '@/stores/btw'
 
 const SessionWorkSection = defineAsyncComponent(() => import('@/components/chat/SessionWorkSection.vue'))
 const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
-const messageListRef = ref<InstanceType<typeof MessageList> | null>(null)
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
 const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
 const btw = useBtwStore()
@@ -480,7 +479,6 @@ void sessionActionsMenuRef
                   </p>
                 </div>
                 <MessageList
-                  ref="messageListRef"
                   :is-compact-layout="ui.isCompactLayout"
                   :is-compact-touch="ui.isCompactTouch"
                   :selected-session-id="chat.selectedSessionId"
@@ -532,7 +530,6 @@ void sessionActionsMenuRef
                   :session-id="chat.selectedSessionId"
                   :retry="retryStatus"
                   :countdown="retryCountdownLabel"
-                  @reveal-request="messageListRef?.revealRequest($event)"
                 />
                 <WorkspaceChangesSection
                   v-if="chat.selectedSessionId"

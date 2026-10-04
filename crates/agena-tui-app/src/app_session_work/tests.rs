@@ -49,6 +49,36 @@ async fn tool_execution_stays_out_of_accessories_and_resolved_retry_collapses() 
     assert!(!normal.contains(&app.i18n.text("session-work-waiting")));
     assert!(!normal.contains(&app.i18n.text("session-work-stop")));
 
+    if let agena_api::resource::SessionState::Running { requests, .. } =
+        &mut app.transcript.execution.as_mut().unwrap().session.state
+    {
+        requests.push(agena_api::resource::PendingInteractiveRequestResource {
+            session_id: 7,
+            parent_session_id: None,
+            task_id: None,
+            request: agena_api::resource::PendingInteractiveRequest::Permission {
+                request: agena_api::resource::PermissionRequest {
+                    request_id: "permission-7".into(),
+                    session_id: Some(7),
+                    action: agena_api::resource::PermissionActionResource::Tool {
+                        tool_name: "fs.write".into(),
+                        qualifier: None,
+                    },
+                    related_actions: Vec::new(),
+                    requested_actions: Vec::new(),
+                    reason: "write the requested file".into(),
+                    explanation: String::new(),
+                    source: None,
+                    scope: None,
+                    operator: None,
+                    trace: Vec::new(),
+                    created_at: chrono::Utc::now(),
+                },
+            },
+        });
+    }
+    assert!(!render(&mut app, &mut terminal).contains(&app.i18n.text("session-work-requests")));
+
     app.transcript
         .execution
         .as_mut()

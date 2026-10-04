@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive } from 'vue'
+import { computed, reactive } from 'vue'
 import { RiCheckLine, RiLoader4Line, RiSparkling2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -85,26 +85,6 @@ const durableInteractionRequestIds = computed(() => {
   }
   return ids
 })
-
-async function revealRequest(requestId: string) {
-  const owner = props.selectedSessionId
-  for (const block of props.renderBlocks) {
-    for (const part of block.displayParts) {
-      if (!partInteractionRequestIds(part).includes(requestId)) continue
-      const visible = replyVisibility(String(block.message.info.id))
-      visible.count = block.displayParts.length
-      emit('partToggle', part, true)
-    }
-  }
-  await nextTick()
-  if (owner !== props.selectedSessionId) return
-  const target = [
-    ...document.querySelectorAll<HTMLElement>('[data-transcript-interaction-part][data-interaction-request-id]'),
-  ].find((node) => node.dataset.interactionRequestId === requestId)
-  target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  target?.focus({ preventScroll: true })
-}
-defineExpose({ revealRequest })
 
 const pendingInteractionFallback = computed(() =>
   pendingInteractionPartSource(props.pendingAttention, durableInteractionRequestIds.value),

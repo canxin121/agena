@@ -32,11 +32,6 @@ impl App {
             .as_ref()
             .map(|e| e.background_activities.clone())
             .unwrap_or_default();
-        let requests = self
-            .transcript
-            .execution
-            .as_ref()
-            .map_or(0, |e| e.session.state.pending_interactive_requests().len());
         let retry = self
             .transcript
             .execution
@@ -62,7 +57,6 @@ impl App {
                 .as_ref()
                 .map_or_else(|| "…".to_owned(), |f| f.total_files.to_string())
         );
-        let request_label = format!("{} {requests}", self.i18n.text("session-work-requests"));
         let status_label = retry.as_ref().map(|retry| {
             format!(
                 "↻ {} · {}s",
@@ -74,9 +68,6 @@ impl App {
             if expanded { "▾ F6" } else { "▸ F6" },
             PointerAction::Named("work-toggle"),
         )];
-        if requests > 0 {
-            buttons.push((&request_label, PointerAction::Named("work-request")));
-        }
         if let Some(label) = &status_label {
             buttons.push((label, PointerAction::Named("work-status")));
         }

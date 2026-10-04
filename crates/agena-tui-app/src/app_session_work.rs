@@ -278,14 +278,6 @@ impl App {
         let Some(id) = self.transcript.session_id else {
             return;
         };
-        if action == "work-request" {
-            self.collapse_session_work(id);
-            self.focus = Focus::Transcript;
-            if let Some(kind) = self.current_session_pending_interactive_kind() {
-                self.open_pending_interactive_overlay_for_kind(kind);
-            }
-            return;
-        }
         if action == "work-control-primary" {
             let task = self.session_work.get(&id).and_then(|s| {
                 if let Some(Detail::Task(task)) = &s.detail {
@@ -449,7 +441,6 @@ impl App {
             KeyCode::Char('m') => "work-more-diff",
             KeyCode::Char('n') => "work-next",
             KeyCode::Char('p') => "work-prev",
-            KeyCode::Char('o') => "work-request",
             KeyCode::Char('x') => "work-control-primary",
             KeyCode::Enter => {
                 let index = self

@@ -3,10 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { apiJson } from '@/lib/api'
-import { sessionStateIsBusy, sessionStateNeedsAttention, sessionStateRequests } from '@/types/chat'
+import { sessionStateIsBusy } from '@/types/chat'
 import { activityIsActive, mergeActivityLog, type ActivityLog, type SessionActivity } from '@/types/activity'
 import { useVisibleResource } from '@/pages/chat/useVisibleResource'
-import { attentionRequestId } from '@/pages/chat/transcriptPartPresentation'
 import SessionSection from './SessionSection.vue'
 import Button from '@/components/ui/Button.vue'
 
@@ -15,7 +14,6 @@ const props = defineProps<{
   retry?: { attempt: number; message: string; next: number } | null
   countdown?: string
 }>()
-defineEmits<{ revealRequest: [id: string] }>()
 const { t } = useI18n()
 const chat = useChatStore()
 const expanded = ref(false)
@@ -28,32 +26,13 @@ const activities = computed(() => chat.sessionBackgroundActivities(props.session
 // coalesces this with SSE-driven refreshes; hidden tabs suspend the heartbeat.
 useVisibleResource<boolean>({
   key: computed(() =>
-    sessionStateIsBusy(chat.selectedSessionState) ||
-    sessionStateNeedsAttention(chat.selectedSessionState) ||
-    activities.value.length
-      ? props.sessionId
-      : '',
+    sessionStateIsBusy(chat.selectedSessionState) || activities.value.length ? props.sessionId : '',
   ),
   interval: () => 2500,
   load: async (sid) => {
     await chat.refreshExecutionStatus(sid)
     return true
   },
-})
-const requests = computed(() => sessionStateRequests(chat.selectedSessionState))
-const attentionId = computed(() => attentionRequestId(chat.selectedAttention?.payload))
-const pendingSummary = computed(() => {
-  const counts = { permission: 0, review: 0, question: 0 }
-  for (const request of requests.value) {
-    if (!request || typeof request !== 'object' || Array.isArray(request)) continue
-    if (request.kind === 'permission') counts.permission++
-    else if (request.input_kind === 'review') counts.review++
-    else counts.question++
-  }
-  return Object.entries(counts)
-    .filter(([, count]) => count)
-    .map(([kind, count]) => t(`chat.sessionWork.${kind}`, { count }))
-    .join(' · ')
 })
 const logKey = computed(() => (expanded.value && selected.value ? `${props.sessionId}/${selected.value.id}` : ''))
 const logs = useVisibleResource<ActivityLog>({
@@ -97,21 +76,16 @@ async function control(activity: SessionActivity, action: string) {
 
 <template>
   <div
-    v-if="requests.length || retry"
+    v-if="retry"
     class="my-3 rounded-lg border border-border/60 px-3 py-2 text-xs"
     data-transcript-chrome="true"
     aria-live="polite"
   >
-    <div class="flex min-w-0 flex-wrap items-center gap-2">
-      <Button v-if="attentionId" size="sm" variant="secondary" @click="$emit('revealRequest', attentionId)">{{
-        t('chat.sessionWork.resolve')
-      }}</Button>
-      <span v-if="pendingSummary" class="font-medium">{{ pendingSummary }}</span>
-      <span v-else-if="retry" class="font-medium"
-        >{{ t('chat.sessionWork.retry', { attempt: retry.attempt }) }} · {{ countdown }}</span
-      >
-    </div>
-    <p v-if="retry?.message" class="mt-1 line-clamp-3 break-words text-muted-foreground">{{ retry.message }}</p>
+    <p class="font-medium">
+      {{ t('chat.sessionWork.retry', { attempt: retry.attempt })
+      }}<template v-if="countdown"> · {{ countdown }}</template>
+    </p>
+    <p v-if="retry.message" class="mt-1 line-clamp-3 break-words text-muted-foreground">{{ retry.message }}</p>
   </div>
   <SessionSection
     v-if="activities.length || selected"

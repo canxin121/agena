@@ -5,6 +5,11 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 impl App {
     pub(crate) fn handle_surface_pointer(&mut self, mouse: MouseEvent) -> bool {
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && !self.btw_area.contains((mouse.column, mouse.row).into())
+        {
+            self.btw_focus = None;
+        }
         if let Some(action) = self.pointer_targets.action(mouse) {
             self.cancel_active_pointer_gesture();
             self.cancel_surface_selection();
@@ -78,6 +83,7 @@ impl App {
                 "session-token-usage" => self.open_usage_dashboard(),
                 "plan" => self.open_plan_viewer(),
                 "btw" => self.open_btw(""),
+                name if name.starts_with("btw-") => self.handle_btw_action(name),
                 "side" => self.handle_side_command(""),
                 "side-parent" => self.open_parent_session(),
                 "activities" => self.open_activities_panel(),

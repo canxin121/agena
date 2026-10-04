@@ -36,6 +36,9 @@ impl App {
     }
 
     fn build_context_help(&self) -> HelpOverlay {
+        if self.btw_has_focus() {
+            return self.help_for_editor(self.i18n.text("btw-title"), true);
+        }
         if let Some(overlay) = self.overlay.as_ref() {
             return self.help_for_overlay(overlay);
         }
@@ -82,7 +85,6 @@ impl App {
                 HelpPreset::ActionPane,
                 ui_text::t(&self.i18n, "context-help-context-activities"),
             ),
-            Route::Btw(_) => self.help_for(HelpPreset::ActionPane, self.i18n.text("btw-title")),
             Route::PlanViewer(_) => self.help_for(
                 HelpPreset::ActionPane,
                 ui_text::t(&self.i18n, "context-help-context-plan-viewer"),

@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { useBtwStore } from './btw'
 import { computed, onScopeDispose, ref } from 'vue'
 
 import * as chatApi from './chat/api'
@@ -1306,6 +1307,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function forgetSession(sid: string) {
+    useBtwStore().clear(sid)
     deletedSessions.add(sid)
     messageRevalidators.get(sid)?.dispose()
     statusRevalidators.get(sid)?.dispose()

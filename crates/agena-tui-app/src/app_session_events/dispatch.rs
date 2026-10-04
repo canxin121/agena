@@ -28,9 +28,11 @@ impl App {
                 }
                 self.handle_activities_cleared(request_id, result.is_ok_and(|ok| ok));
             }
-            AppMessage::BtwUpdated { request_id, answer } => {
-                self.handle_btw_updated(request_id, answer)
-            }
+            AppMessage::BtwUpdated {
+                session_id,
+                request_id,
+                answer,
+            } => self.handle_btw_updated(session_id, request_id, answer),
             AppMessage::PlanViewerLoaded { request_id, result } => {
                 self.handle_plan_viewer_loaded(request_id, result)
             }

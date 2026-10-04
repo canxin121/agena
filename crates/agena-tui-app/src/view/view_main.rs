@@ -174,16 +174,30 @@ impl App {
 
     fn render_main_content(&mut self, frame: &mut Frame, area: Rect) {
         let composer_height = self.composer_height(area.width, area.height);
+        let btw_height = self.btw_inline_height(
+            area.height
+                .saturating_sub(composer_height)
+                .saturating_sub(6),
+        );
         let vertical = split_vertical_sections(
             area,
             &[
-                VerticalSectionSize::Flexible(8),
+                VerticalSectionSize::Flexible(if btw_height > 0 { 4 } else { 8 }),
+                VerticalSectionSize::Fixed(btw_height),
                 VerticalSectionSize::Fixed(composer_height),
             ],
         );
 
         let transcript_host_area = vertical[0];
-        let composer = vertical[1];
+        let btw_area = vertical[1];
+        let composer = vertical[2];
+        if btw_area.height < 7
+            && self.btw_focus.is_some()
+            && self.btw_focus == self.transcript.session_id
+        {
+            self.btw_focus = None;
+            self.focus = Focus::Composer;
+        }
         let transcript_footer_height =
             self.transcript_footer_height(transcript_host_area.width, transcript_host_area.height);
 
@@ -209,6 +223,7 @@ impl App {
 
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
+        self.render_btw_inline(frame, btw_area);
     }
 
     pub(crate) fn route_footer_height(&self, width: u16, total_height: u16) -> u16 {
@@ -221,7 +236,6 @@ impl App {
                 | Route::SessionModelChooser(_)
                 | Route::Timeline(_)
                 | Route::PlanViewer(_)
-                | Route::Btw(_)
                 | Route::Hub(_)
         ) {
             return 0;

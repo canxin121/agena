@@ -7,8 +7,7 @@ impl App {
             return !matches!(overlay, Overlay::Confirm(_) | Overlay::Permission(_));
         }
         match &self.current_route {
-            Route::Main => self.focus == Focus::Composer,
-            Route::Btw(state) => state.accepts_input(),
+            Route::Main => self.focus == Focus::Composer || self.btw_has_focus(),
             Route::Usage(_)
             | Route::Activities(_)
             | Route::PlanViewer(_)
@@ -33,6 +32,12 @@ impl App {
         if self.context_help.is_some() {
             return;
         }
+        if self.btw_has_focus() {
+            if let Some(state) = self.btw_focus.and_then(|id| self.btw_sessions.get_mut(&id)) {
+                state.input.insert_str(&text);
+            }
+            return;
+        }
         let mut pending_session_search_request: Option<(SessionViewMode, Option<i64>, String)> =
             None;
         let mut pending_path_browser_refresh = None;
@@ -45,12 +50,6 @@ impl App {
             let mut handled_route = false;
             match &mut self.current_route {
                 Route::Main => {}
-                Route::Btw(state) => {
-                    if state.accepts_input() {
-                        state.input.insert_str(text.as_str());
-                    }
-                    handled_route = true;
-                }
                 Route::Usage(_)
                 | Route::Activities(_)
                 | Route::PlanViewer(_)

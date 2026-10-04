@@ -1,80 +1,131 @@
 import { describe, expect, test } from 'bun:test'
-import { effectScope, ref } from 'vue'
+import { effectScope } from 'vue'
 import { parseBtwFrame, askBtw, type BtwAnswer } from '../src/pages/chat/btwRequest'
-import { useBtw } from '../src/pages/chat/useBtw'
+import { useBtw, BTW_HISTORY_LIMIT } from '../src/pages/chat/btwState'
 
 function fixture() {
-  const open = ref(true)
-  const sessionId = ref<string | null>('7')
   const calls: Array<{
     sessionId: string
     question: string
     signal: AbortSignal
     update: (answer: BtwAnswer) => void
     finish: () => void
+    fail: (error: Error) => void
   }> = []
   const scope = effectScope()
   const state = scope.run(() =>
     useBtw(
-      () => [open.value, sessionId.value],
       (sessionId, question, signal, update) =>
-        new Promise<void>((finish) => {
-          calls.push({ sessionId, question, signal, update, finish })
-        }),
+        new Promise<void>((finish, fail) => calls.push({ sessionId, question, signal, update, finish, fail })),
     ),
   )!
-  return { open, sessionId, calls, scope, state }
+  async function submit(id: string, question: string) {
+    state.open(id)
+    state.sessions.get(id)!.draft = question
+    return state.submit(id)
+  }
+  return { calls, scope, state, submit }
 }
 
-describe('BTW request ownership', () => {
-  test('sending twice starts one independent request; closing discards late answers', async () => {
+describe('BTW session ownership', () => {
+  test('switching sessions and hiding the answer preserve the running request and history', async () => {
     const f = fixture()
-    const done = f.state.submit('  a question  ')
-    await f.state.submit('duplicate')
-    expect(f.calls.length).toBe(1)
-    expect(f.calls[0]!.question).toBe('a question')
-    f.calls[0]!.update({ text: 'partial', done: false })
-    expect(f.state.markdown.value).toBe('partial')
-    f.open.value = false
-    expect(f.calls[0]!.signal.aborted).toBe(true)
-    f.calls[0]!.update({ text: 'too late', done: true })
+    const first = f.submit('7', '  first question  ')
+    f.state.sessions.get('7')!.expanded = false
+    const second = f.submit('9', 'second question')
+    expect(f.calls[0]!.signal.aborted).toBe(false)
+    expect(f.calls[0]!.question).toBe('first question')
+    f.calls[0]!.update({ text: '**first answer**', done: true })
     f.calls[0]!.finish()
-    await done
-    expect(f.state.markdown.value).toBe('')
-    expect(f.state.loading.value).toBe(false)
+    f.calls[1]!.update({ text: 'second answer', done: true })
+    f.calls[1]!.finish()
+    await Promise.all([first, second])
+    f.state.open('7')
+    expect(f.state.sessions.get('7')!.exchanges[0]!.markdown).toBe('**first answer**')
+    expect(f.state.sessions.get('9')!.exchanges[0]!.markdown).toBe('second answer')
+    expect(f.calls.length).toBe(2)
     f.scope.stop()
   })
 
-  test('stop preserves the visible partial answer and stale completion cannot replace a newer question', async () => {
+  test('duplicate submission keeps the next draft and starts only one request per session', async () => {
     const f = fixture()
-    const first = f.state.submit('first')
-    f.calls[0]!.update({ text: 'partial first', done: false })
-    f.state.stop()
-    expect(f.state.markdown.value).toBe('partial first')
-    const second = f.state.submit('second')
-    f.calls[1]!.update({ text: 'second answer', done: false })
-    f.calls[0]!.update({ text: 'stale', done: true, error: 'stale error' })
+    const first = f.submit('7', 'first')
+    await f.submit('7', 'next draft')
+    expect(f.calls.length).toBe(1)
+    expect(f.state.sessions.get('7')!.draft).toBe('next draft')
     f.calls[0]!.finish()
     await first
-    expect(f.state.markdown.value).toBe('second answer')
-    expect(f.state.loading.value).toBe(true)
-    expect(f.state.error.value).toBe('')
+    f.scope.stop()
+  })
+
+  test('stopping preserves partial Markdown; a late answer cannot replace a newer question', async () => {
+    const f = fixture()
+    const first = f.submit('7', 'first')
+    f.calls[0]!.update({ text: 'partial', done: false })
+    f.state.stop('7')
+    expect(f.calls[0]!.signal.aborted).toBe(true)
+    const second = f.submit('7', 'second')
+    f.calls[0]!.update({ text: 'late', done: true, error: 'stale error' })
+    f.calls[0]!.finish()
+    await first
+    const entries = f.state.sessions.get('7')!.exchanges
+    expect(entries[0]!.markdown).toBe('partial')
+    expect(entries[0]!.status).toBe('stopped')
+    expect(entries[1]!.status).toBe('running')
+    expect(entries[1]!.error).toBe('')
+    f.calls[1]!.update({ text: 'new', done: true })
+    f.calls[1]!.finish()
+    await second
+    expect(entries[1]!.markdown).toBe('new')
+    f.scope.stop()
+  })
+
+  test('clearing one session cancels only its request and discards late responses after reopening', async () => {
+    const f = fixture()
+    const first = f.submit('7', 'first')
+    const second = f.submit('9', 'second')
+    f.state.clear('7')
+    f.state.open('7')
+    f.calls[0]!.update({ text: 'late', done: true })
+    expect(f.state.sessions.get('7')!.exchanges.length).toBe(0)
+    expect(f.calls[0]!.signal.aborted).toBe(true)
+    expect(f.calls[1]!.signal.aborted).toBe(false)
+    f.scope.stop()
+    expect(f.calls[1]!.signal.aborted).toBe(true)
+    for (const call of f.calls) call.finish()
+    await Promise.all([first, second])
+  })
+
+  test('failed requests preserve received content and can be followed by a new question', async () => {
+    const f = fixture()
+    const first = f.submit('7', 'first')
+    f.calls[0]!.update({ text: 'partial', done: false })
+    f.calls[0]!.fail(new Error('network failed'))
+    await first
+    expect(f.state.sessions.get('7')!.exchanges[0]!.status).toBe('failed')
+    expect(f.state.sessions.get('7')!.exchanges[0]!.markdown).toBe('partial')
+    const second = f.submit('7', 'retry')
     f.calls[1]!.finish()
     await second
     f.scope.stop()
   })
 
-  test('navigation and component disposal abort only their own request', async () => {
+  test('history is bounded and old answers are collapsed without being re-requested', async () => {
     const f = fixture()
-    const first = f.state.submit('first')
-    f.sessionId.value = '9'
-    expect(f.calls[0]!.signal.aborted).toBe(true)
-    const second = f.state.submit('second')
-    expect(f.calls[1]!.sessionId).toBe('9')
+    for (let n = 0; n < BTW_HISTORY_LIMIT + 2; n++) {
+      const done = f.submit('7', `question ${n}`)
+      f.calls[n]!.update({ text: `answer ${n}`, done: true })
+      f.calls[n]!.finish()
+      await done
+    }
+    const entries = f.state.sessions.get('7')!.exchanges
+    expect(entries.length).toBe(BTW_HISTORY_LIMIT)
+    expect(entries[0]!.question).toBe('question 2')
+    expect(entries[0]!.expanded).toBe(false)
+    expect(entries.at(-1)!.expanded).toBe(true)
+    f.state.open('7')
+    expect(f.calls.length).toBe(BTW_HISTORY_LIMIT + 2)
     f.scope.stop()
-    expect(f.calls[1]!.signal.aborted).toBe(true)
-    for (const call of f.calls) call.finish()
-    await Promise.all([first, second])
   })
 })
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { createFailedAttachmentDraftSlot } from './chat/failedAttachmentDrafts'
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RiScissorsLine } from '@remixicon/vue'
@@ -13,6 +13,7 @@ import { apiJson } from '@/lib/api'
 import { promptForText } from '@/lib/appTextPrompt'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useChatStore } from '@/stores/chat'
+import { useBtwStore } from '@/stores/btw'
 import * as chatApi from '@/stores/chat/api'
 import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
@@ -70,8 +71,6 @@ import {
 
 type ComposerActionItem = { id: string; label: string; description?: string; icon?: Component; disabled?: boolean }
 
-const BtwDialog = defineAsyncComponent(() => import('@/components/chat/BtwDialog.vue'))
-
 type OptionMenuExpose = {
   containsTarget?: (target: Node | null) => boolean
   focusSearch?: () => void
@@ -99,6 +98,7 @@ type OutgoingMessagePart =
 const route = useRoute()
 const router = useRouter()
 const chat = useChatStore()
+const btw = useBtwStore()
 watch(
   () => chat.selectedSessionId,
   (sid, _previous, onCleanup) => {
@@ -277,9 +277,6 @@ const pageRef = ref<HTMLElement | null>(null)
 const composerBarRef = ref<HTMLElement | null>(null)
 const transcriptSearchInputRef = ref<HTMLInputElement | null>(null)
 const planViewerOpen = ref(false)
-const btwOpen = ref(false)
-const btwQuestion = ref('')
-const btwSessionId = ref<string | null>(null)
 const sideBusy = ref(false)
 const sideParentId = computed(() => {
   const context = asRecord(chat.getSessionExecution(chat.selectedSessionId)?.conversation)
@@ -287,17 +284,13 @@ const sideParentId = computed(() => {
   return context.mode === 'side' && Number.isSafeInteger(parent) && parent > 0 ? String(parent) : null
 })
 function openBtw(question = '') {
-  if (!chat.selectedSessionId) return
-  btwSessionId.value = chat.selectedSessionId
-  btwQuestion.value = question
-  btwOpen.value = true
+  const sessionId = chat.selectedSessionId
+  if (!sessionId) return
+  btw.open(sessionId, question)
+  void nextTick(() => {
+    if (chat.selectedSessionId === sessionId) scrollToBottom('smooth')
+  })
 }
-watch(
-  () => chat.selectedSessionId,
-  () => {
-    btwOpen.value = false
-  },
-)
 async function openSide(question = '') {
   const parent = chat.selectedSessionId
   if (!parent || sideBusy.value) return
@@ -2601,6 +2594,5 @@ onBeforeUnmount(() => {
 
 <template>
   <ChatPageView :ctx="viewCtx" />
-  <BtwDialog v-if="btwOpen" v-model:open="btwOpen" :session-id="btwSessionId" :initial-question="btwQuestion" />
   <PlanViewerDialog v-model:open="planViewerOpen" :session-id="chat.selectedSessionId" />
 </template>

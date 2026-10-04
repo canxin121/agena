@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, isRef, ref, unref } from 'vue'
+import { computed, defineAsyncComponent, isRef, ref, unref } from 'vue'
 import { useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
@@ -36,6 +36,10 @@ import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
 import { hasDisplayableAssistantError } from './assistantError'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
+import { useBtwStore } from '@/stores/btw'
+
+const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
+const btw = useBtwStore()
 
 // This view is template-only: it takes a context bag from ChatPage.
 // Keep it "dumb" so we can aggressively split ChatPage logic into composables.
@@ -516,6 +520,12 @@ void sessionActionsMenuRef
                 @copySessionError="handleCopySessionError"
                 @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
                 @set-activity-page-size="ctx.setTranscriptPartPageSize"
+              />
+
+              <BtwSection
+                v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
+                :key="chat.selectedSessionId"
+                :session-id="chat.selectedSessionId"
               />
 
               <div v-if="overlayReservePx > 0" :style="{ height: `${overlayReservePx}px` }" aria-hidden="true" />

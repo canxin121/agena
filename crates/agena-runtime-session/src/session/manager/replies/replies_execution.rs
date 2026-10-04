@@ -1540,6 +1540,7 @@ impl SessionManager {
             // its parts under the same marker, so a tool-calling reply persists
             // as exactly one assistant run holding all its parts.
             let run = SessionRunRequest {
+                retry_registry: self.retry_registry.clone(),
                 session_id: session.id,
                 model: options.model.clone(),
                 completion,

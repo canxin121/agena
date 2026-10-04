@@ -21,6 +21,7 @@ const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 
 #[derive(Clone)]
 pub(crate) struct SessionRunRequest {
+    pub retry_registry: retry::RetryRegistry,
     pub session_id: i64,
     pub model: ModelRef,
     pub completion: CompletionRequest,
@@ -94,6 +95,7 @@ pub struct SessionProcessor {
 
 mod helpers;
 mod parts;
+pub(crate) mod retry;
 mod run;
 mod tool_call_helpers;
 mod tool_calls;

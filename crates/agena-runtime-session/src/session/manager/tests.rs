@@ -2959,6 +2959,7 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
         .expect("start run marker");
 
     let run = SessionRunRequest {
+        retry_registry: Default::default(),
         session_id: session.id,
         model: ModelRef::new("fake", "fake-model"),
         completion: CompletionRequest {

@@ -1204,6 +1204,8 @@ pub struct ActiveExecutionResource {
 /// Execution context of a session: agent, access, and permission configuration.
 pub struct SessionExecutionContextResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_retry: Option<agena_domain::ProviderRetryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<agena_domain::SessionConversation>,
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]

@@ -191,7 +191,7 @@ pub use prompt_compaction::{
     PromptCompactionTrigger,
 };
 pub use prompt_tokens::PromptTokenUsageSnapshot;
-pub use provider_retry::{ProviderRetryEvent, ProviderRetryResolvedEvent};
+pub use provider_retry::{ProviderRetryEvent, ProviderRetryResolvedEvent, ProviderRetryStatus};
 pub use reasoning::AssistantReasoningField;
 pub use role::Role;
 pub use session_conversation::{ConversationMode, SessionConversation};

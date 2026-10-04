@@ -798,6 +798,7 @@ mod interaction_part_routing_tests {
             automation: None,
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
+                provider_retry: None,
                 conversation: None,
                 agent_id: "test".to_owned(),
                 selected_permission: Default::default(),
@@ -2164,6 +2165,7 @@ mod session_activity_state_machine_tests {
             automation: None,
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
+                provider_retry: None,
                 conversation: None,
                 agent_id: "test".to_owned(),
                 selected_permission: Default::default(),

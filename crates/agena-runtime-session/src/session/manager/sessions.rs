@@ -789,6 +789,10 @@ fn interrupted_subtask_failure() -> agena_failure::Failure {
 
 #[async_trait::async_trait]
 impl agena_runtime::SessionExecutionControl for SessionManager {
+    async fn provider_retry(&self, session_id: i64) -> Option<agena_domain::ProviderRetryStatus> {
+        self.retry_registry.snapshot(session_id)
+    }
+
     async fn active_execution(&self, session_id: i64) -> Option<agena_domain::ExecutionLifecycle> {
         SessionManager::active_execution(self, session_id).await
     }

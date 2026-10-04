@@ -78,6 +78,11 @@ pub struct RuntimeSnapshotStatus {
 #[async_trait]
 /// Control interface for session execution.
 pub trait SessionExecutionControl: Send + Sync {
+    /// Current provider backoff, cleared as soon as the stream progresses.
+    async fn provider_retry(&self, _session_id: i64) -> Option<agena_domain::ProviderRetryStatus> {
+        None
+    }
+
     /// Returns the current registry-backed lifecycle, if an execution exists.
     async fn active_execution(&self, session_id: i64) -> Option<ExecutionLifecycle>;
 

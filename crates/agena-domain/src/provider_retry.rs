@@ -2,6 +2,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AssistantReplyId, ExecutionId};
 
+/// Ephemeral, queryable retry state. Never restored after a server restart.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderRetryStatus {
+    pub attempt: u32,
+    pub max_retries: u32,
+    pub next_at_ms: i64,
+    /// Human-facing reason, without provider diagnostics or request payloads.
+    pub message: String,
+}
+
 /// A retryable provider failure observed while streaming a completion.
 ///
 /// The runtime broadcasts this live (never persisted to the event log) so a

@@ -538,6 +538,7 @@ pub struct SessionManager {
     workspace_id: tokio::sync::OnceCell<i64>,
     execution: ArcSwap<SessionManagerState>,
     execution_registry: Arc<ExecutionRegistry>,
+    retry_registry: super::processor::retry::RetryRegistry,
     session_mutations: session_mutation::SessionMutationCoordinator,
     /// Sessions whose abandoned-run reconciliation has already succeeded in
     /// this process. `get_session` reconciles a session once (plus its
@@ -1406,6 +1407,7 @@ impl SessionManager {
             workspace_id: tokio::sync::OnceCell::new(),
             execution: ArcSwap::from(self.execution.load_full()),
             execution_registry: Arc::clone(&self.execution_registry),
+            retry_registry: self.retry_registry.clone(),
             session_mutations: self.session_mutations.clone(),
             reconciled_sessions: Arc::clone(&self.reconciled_sessions),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
@@ -1464,6 +1466,7 @@ impl SessionManager {
             workspace_id: tokio::sync::OnceCell::new(),
             execution: ArcSwap::from_pointee(state),
             execution_registry: Arc::new(ExecutionRegistry::new()),
+            retry_registry: Default::default(),
             session_mutations: session_mutation::SessionMutationCoordinator::new(),
             reconciled_sessions: Arc::new(Mutex::new(HashSet::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),

@@ -183,6 +183,7 @@ impl SessionProcessor {
         mut run: SessionRunRequest,
         provider_registry: &ProviderRegistry,
     ) -> Result<SessionRunResult, AppError> {
+        let retry = run.retry_registry.track(run.session_id);
         let processor_span = tracing::info_span!(
             "session.processor_turn",
             session_id = run.session_id,
@@ -270,6 +271,9 @@ impl SessionProcessor {
                 None => next_event.await,
             };
             let Some(item) = next else { break };
+            if !matches!(&item, Ok(CompletionStreamEvent::ProviderRetry { .. })) {
+                retry.clear();
+            }
             match item {
                 Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
                     visible_text.push_str(delta.as_str());
@@ -541,7 +545,15 @@ impl SessionProcessor {
                     self.append_reasoning_delta(&run, &mut parts, part_id, delta.as_str())
                         .await?;
                 }
-                Ok(CompletionStreamEvent::ProviderRetry { .. }) => {}
+                Ok(CompletionStreamEvent::ProviderRetry {
+                    attempt,
+                    max_retries,
+                    delay_ms,
+                    message,
+                    ..
+                }) => {
+                    retry.update(attempt, max_retries, delay_ms, &message);
+                }
                 Err(err) => {
                     provider_err = Some(err.into());
                     break;
@@ -552,6 +564,7 @@ impl SessionProcessor {
         // websocket) before transcript finalization. Cancellation must not
         // keep an idle HTTP body alive while SQLite events are being written.
         drop(stream);
+        retry.clear();
 
         // If the cancel token tripped, the loop above broke without an
         // explicit provider error. Surface a synthetic terminal error so

@@ -2827,15 +2827,26 @@ impl BuiltinHumanRenderer {
                     }
                 }
             }
-            "web.fetch" => {
+            "web.fetch" | "web.read" => {
                 if let Some(block) = Self::details_block_if_nonempty(
                     "web-fetch-meta",
                     "Fetched page",
                     &[
                         ("Title", Self::object_text(object, "title")),
                         ("URL", Self::object_text(object, "url")),
+                        ("Final URL", Self::object_text(object, "final_url")),
                         ("Canonical URL", Self::object_text(object, "canonical_url")),
                         ("HTTP status", Self::object_text(object, "status")),
+                        ("Content", Self::object_text(object, "content_status")),
+                        (
+                            "Characters shown",
+                            Self::object_text(object, "returned_chars"),
+                        ),
+                        (
+                            "Available characters",
+                            Self::object_text(object, "total_chars"),
+                        ),
+                        ("More content at", Self::object_text(object, "next_offset")),
                         ("Content type", Self::object_text(object, "content_type")),
                         ("Rendered", Self::object_text(object, "rendered")),
                         ("Truncated", Self::object_text(object, "truncated")),
@@ -2857,6 +2868,97 @@ impl BuiltinHumanRenderer {
                         "No links found.",
                     ));
                 }
+                if let Some(warnings) = object.get("warnings").and_then(Value::as_array) {
+                    blocks.push(Self::string_list_block(
+                        "web-fetch-warnings",
+                        "Page notes",
+                        Some(warnings),
+                        "No page notes.",
+                    ));
+                }
+            }
+            "web.fetch_many" => {
+                if let Some(block) = Self::details_block_if_nonempty(
+                    "web-batch-summary",
+                    "Read pages",
+                    &[
+                        ("Pages", Self::object_text(object, "unique_url_count")),
+                        ("Readable", Self::object_text(object, "usable_count")),
+                        ("Partial", Self::object_text(object, "partial")),
+                    ],
+                ) {
+                    blocks.push(block);
+                }
+                let results = Self::object_array(object, "results")
+                    .cloned()
+                    .unwrap_or_default();
+                let rows: Vec<Value> = results.iter().map(|result| serde_json::json!({
+                    "url":result["url"], "title":result["page"]["title"], "status":result["page"]["status"],
+                    "content":result["page"]["content_status"], "usable":result["usable"], "error":result["error"]
+                })).collect();
+                if let Some(table) = Self::scalar_table(
+                    "web-batch-pages",
+                    "Pages",
+                    &rows,
+                    &[
+                        ("title", "Title"),
+                        ("url", "URL"),
+                        ("status", "HTTP"),
+                        ("content", "Content"),
+                        ("usable", "Readable"),
+                        ("error", "Error"),
+                    ],
+                ) {
+                    blocks.push(table);
+                }
+                for (index, result) in results.iter().enumerate() {
+                    if let Some(markdown) = result["page"]["markdown"].as_str() {
+                        blocks.push(Self::markdown_block(
+                            format!("web-batch-content-{index}"),
+                            Self::bounded_generic_text(markdown),
+                        ));
+                    }
+                }
+                if blocks.is_empty() {
+                    blocks.push(Self::markdown_block(
+                        "web-batch-pages",
+                        "No pages returned.",
+                    ));
+                }
+            }
+            "web.query" => {
+                let results = Self::object_array(object, "results")
+                    .cloned()
+                    .unwrap_or_default();
+                let rows: Vec<Value> = results.iter().map(|result| serde_json::json!({
+                    "title":result["hit"]["title"], "url":result["hit"]["url"], "preview":result["hit"]["preview"], "fetched_at":result["fetched_at"]
+                })).collect();
+                if let Some(table) = Self::scalar_table(
+                    "web-query-results",
+                    "Stored page matches",
+                    &rows,
+                    &[
+                        ("title", "Title"),
+                        ("url", "URL"),
+                        ("preview", "Passage"),
+                        ("fetched_at", "Fetched"),
+                    ],
+                ) {
+                    blocks.push(table);
+                }
+                if let Some(block) = Self::details_block_if_nonempty(
+                    "web-query-summary",
+                    "Local crawl index",
+                    &[("Omitted", Self::object_text(object, "omitted_count"))],
+                ) {
+                    blocks.push(block);
+                }
+                if blocks.is_empty() {
+                    blocks.push(Self::markdown_block(
+                        "web-query-results",
+                        "No matching stored pages.",
+                    ));
+                }
             }
             "web.crawl" => {
                 if let Some(block) = Self::details_block_if_nonempty(
@@ -2868,6 +2970,7 @@ impl BuiltinHumanRenderer {
                         ("Rendered", Self::object_text(object, "rendered")),
                         ("Indexed", Self::object_text(object, "stored_count")),
                         ("Cached", Self::object_text(object, "cached_count")),
+                        ("Concurrency", Self::object_text(object, "concurrency")),
                         (
                             "Exact duplicates",
                             Self::object_text(object, "duplicate_count"),
@@ -2921,6 +3024,21 @@ impl BuiltinHumanRenderer {
                                 .join("\n")
                         ),
                     ));
+                }
+                if let Some(errors) = Self::object_array(object, "page_errors")
+                    && let Some(table) = Self::scalar_table(
+                        "web-crawl-page-errors",
+                        "Pages needing attention",
+                        errors,
+                        &[
+                            ("url", "URL"),
+                            ("reason", "Reason"),
+                            ("status", "HTTP"),
+                            ("content_status", "Content"),
+                        ],
+                    )
+                {
+                    blocks.push(table);
                 }
             }
             _ => {}

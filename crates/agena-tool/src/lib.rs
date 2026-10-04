@@ -606,7 +606,7 @@ fn tool_result_fragment(
                 return Some(fragment);
             }
         }
-        "web.search" | "web.crawl" => {
+        "web.search" | "web.crawl" | "web.query" | "web.fetch_many" => {
             if let Some(fragment) = web_result_fragment(key, object) {
                 return Some(fragment);
             }
@@ -872,7 +872,7 @@ fn tool_result_fragment(
                 return Some(normalize_tool_title(mime));
             }
         }
-        "web.fetch" | "web_fetch" | "claude.cloud_web_fetch" => {
+        "web.fetch" | "web.read" | "web_fetch" | "claude.cloud_web_fetch" => {
             if let Some(status) = object.get("status").and_then(value_as_u64) {
                 return Some(format!("HTTP {status}"));
             }
@@ -1934,7 +1934,7 @@ fn web_result_fragment(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
     match key {
-        "web.search" => {
+        "web.search" | "web.query" => {
             let count = object
                 .get("results")
                 .and_then(serde_json::Value::as_array)
@@ -1950,6 +1950,10 @@ fn web_result_fragment(
             }
             Some(parts.join(" · "))
         }
+        "web.fetch_many" => object
+            .get("usable_count")
+            .and_then(value_as_u64)
+            .map(|count| format!("{count} readable pages")),
         "web.crawl" => {
             let mut parts = Vec::new();
             for (field, label) in [
@@ -2369,6 +2373,9 @@ fn tool_action_label(tool_name: &str) -> String {
         "interaction.ask" | "ask_user" => "Ask user".to_owned(),
         "interaction.notify" => "Send notification".to_owned(),
         "web.fetch" | "web_fetch" => "Fetch page".to_owned(),
+        "web.fetch_many" => "Read pages".to_owned(),
+        "web.read" => "Continue reading page".to_owned(),
+        "web.query" => "Search crawled pages".to_owned(),
         "web.search"
         | "web_search"
         | "chatgpt.cloud_web_search"
@@ -2546,7 +2553,10 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
         &["file_path", "path", "notebook_path", "name"]
     } else if key.ends_with("fs.grep") || key.ends_with("fs.glob") {
         &["pattern", "path", "include"]
-    } else if key.ends_with("web.search") || key.ends_with("web_search") {
+    } else if key.ends_with("web.search")
+        || key.ends_with("web.query")
+        || key.ends_with("web_search")
+    {
         &["query", "q", "prompt"]
     } else if key.ends_with("web.fetch")
         || key.ends_with("web.crawl")

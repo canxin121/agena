@@ -100,7 +100,11 @@ impl WebFetchCoordinator {
             return Ok(hit);
         }
         let page = fetch().await?;
-        if use_cache && (200..300).contains(&page.status) && !page.truncated {
+        if use_cache
+            && (200..300).contains(&page.status)
+            && !page.truncated
+            && page.content_status == crate::PageContentStatus::Readable
+        {
             self.fetch_cache.insert(cache_key, page.clone()).await;
         }
         Ok(page)
@@ -169,5 +173,49 @@ mod tests {
     fn rendered_and_plain_fetches_have_distinct_cache_keys() {
         let url = url::Url::parse("https://example.test/docs").expect("URL");
         assert_ne!(fetch_cache_key(&url, false), fetch_cache_key(&url, true));
+    }
+
+    #[tokio::test]
+    async fn successful_http_challenges_and_shells_are_not_cached() {
+        use super::*;
+        let coordinator = WebFetchCoordinator::new(WebFetchCoordinatorConfig {
+            cache_ttl: Duration::from_secs(10),
+            cache_capacity: 4,
+            per_host_delay: Duration::from_millis(1),
+        });
+        let url = url::Url::parse("https://fixture.invalid/").unwrap();
+        for status in [
+            crate::PageContentStatus::Blocked,
+            crate::PageContentStatus::RequiresJavascript,
+            crate::PageContentStatus::Empty,
+            crate::PageContentStatus::TooComplex,
+        ] {
+            coordinator
+                .fetch_or_cached(&url, false, true, || async {
+                    let mut page = crate::extract_page_from_body(
+                        &url,
+                        &url,
+                        "text/plain",
+                        200,
+                        false,
+                        false,
+                        "placeholder",
+                        None,
+                        None,
+                    );
+                    page.content_status = status;
+                    Ok::<_, ()>(page)
+                })
+                .await
+                .unwrap();
+            assert!(
+                coordinator
+                    .fetch_or_cached(&url, false, true, || async {
+                        Err::<crate::FetchedPage, _>(())
+                    })
+                    .await
+                    .is_err()
+            );
+        }
     }
 }

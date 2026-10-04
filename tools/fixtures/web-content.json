@@ -1,0 +1,130 @@
+[
+  {
+    "name": "article",
+    "facts": [
+      "Helsinki",
+      "42 kilometres",
+      "2026-10-04",
+      "中文"
+    ],
+    "noise": [
+      "NOISE_ADVERTISEMENT"
+    ],
+    "html": "<html lang=\"en\"><head><title>Harbor article</title></head><body><nav>Home | About | NOISE_ADVERTISEMENT</nav><main><article><h1>Harbor survey</h1><p>The Helsinki harbor survey was completed on 2026-10-04. The research team measured 42 kilometres of shoreline using a consistent survey method.</p><p>This article explains the field methods and preserves multilingual observations: 中文内容 and coastal measurements. The observations cover the northern and eastern shore with independent checkpoints.</p><p>All measurements describe this controlled fixture and do not represent a real-world survey. The tabulated values were reviewed by two researchers before publication.</p></article></main><aside>NOISE_ADVERTISEMENT Buy unrelated products here.</aside><footer>Copyright and contact links.</footer></body></html>"
+  },
+  {
+    "name": "documentation",
+    "facts": [
+      "CACHE_TTL",
+      "300",
+      "cache.get",
+      "retry budget"
+    ],
+    "noise": [
+      "NOISE_PROMO"
+    ],
+    "html": "<html><head><title>Cache API guide</title></head><body><nav>NOISE_PROMO Subscribe for offers</nav><main><h1>Cache API guide</h1><p>The cache stores successful reads until the configured lifetime ends. Set CACHE_TTL to 300 seconds for this example. Failures are never inserted into the cache.</p><pre><code>let result = cache.get(\"key\");</code></pre><h2>Request options</h2><table><tr><th>Option</th><th>Meaning</th></tr><tr><td>retry budget</td><td>Two attempts at most</td></tr></table><p>When the request times out, the client reports the real status and the caller decides whether to retry. This preserves accurate diagnostics for repeated failures and prevents silent extra requests.</p></main><footer>Copyright fixture</footer></body></html>"
+  },
+  {
+    "name": "discussion",
+    "facts": [
+      "QUESTION_MARKER",
+      "ANSWER_MARKER",
+      "UTF-8",
+      "中文"
+    ],
+    "noise": [
+      "NOISE_BANNER"
+    ],
+    "html": "<html><head><title>Unicode discussion</title></head><body><header>NOISE_BANNER seasonal sale</header><main><h1>Unicode discussion</h1><article><h2>QUESTION_MARKER</h2><p>How should the service handle UTF-8 text that contains Chinese characters and emoji? The stream might end in the middle of a multi-byte character, so the response needs a visible truncation indicator.</p><section class=\"comments\"><h2>ANSWER_MARKER</h2><p>Decode only a complete prefix and preserve the remaining bytes until the next read. 中文内容 must remain intact, and the result should distinguish an incomplete preview from an input error.</p></section></article></main><footer>Contact fixture moderators</footer></body></html>"
+  },
+  {
+    "name": "split-forum",
+    "url": "https://fixture.example/thread",
+    "facts": [
+      "QUESTION_SPLIT",
+      "ANSWER_ONE",
+      "ANSWER_TWO",
+      "中文参数",
+      "cache.invalidate"
+    ],
+    "noise": [
+      "NOISE_SIDEBAR"
+    ],
+    "html": "<html><head><title>Cache failure discussion</title></head><body><nav>NOISE_SIDEBAR</nav><main><h1>QUESTION_SPLIT</h1><article class=\"question\"><p>How can a cache distinguish an unavailable remote service from an empty lookup? It is important that Unicode parameters and structured diagnostics remain available to the caller when the backend response is incomplete.</p></article><article class=\"answer\"><h2>ANSWER_ONE</h2><p>The first response explains the protocol: a cache miss is a successful query without a stored result, while an unavailable remote service is an execution error. Keep 中文参数 intact and report the error code rather than inventing an empty success.</p><pre><code>cache.invalidate(\"key\");</code></pre></article><article class=\"answer\"><h2>ANSWER_TWO</h2><p>The second response explains retries: retain the original request deadline, count every attempted request, and surface a visible partial-result indicator. A caller should inspect the actual state before repeating a timed-out mutation.</p></article></main><aside>NOISE_SIDEBAR</aside></body></html>"
+  },
+  {
+    "name": "technical-structure",
+    "html": "<html><body><nav>NAV_NOISE</nav><main><h1>Client guide</h1><section><h2>Generic signature</h2><pre><code class=\"language-rust\">pub fn spawn&lt;F&gt;(future: F)\nwhere F: Future + Send + 'static {\n    let message = \"中文正文\";\n}</code></pre><h2>Runtime limits</h2><table><thead><tr><th>Option</th><th>Value</th></tr></thead><tbody><tr><td>MAX_PAGES</td><td>25</td></tr></tbody></table><p>Keep both sections for API compatibility.</p></section></main><footer>FOOTER_NOISE</footer></body></html>",
+    "url": "https://fixture.example/article",
+    "facts": [
+      "Generic signature",
+      "F: Future + Send + 'static",
+      "中文正文",
+      "MAX_PAGES",
+      "25"
+    ],
+    "noise": [
+      "NAV_NOISE",
+      "FOOTER_NOISE"
+    ]
+  },
+  {
+    "name": "short-main",
+    "html": "<html><body><nav>NAV_NOISE</nav><main><h1>Version</h1><p>Current release: 2.7.1</p></main><footer>FOOTER_NOISE</footer></body></html>",
+    "url": "https://fixture.example/article",
+    "facts": [
+      "Current release: 2.7.1"
+    ],
+    "noise": [
+      "NAV_NOISE",
+      "FOOTER_NOISE"
+    ]
+  },
+  {
+    "name": "relative-links",
+    "html": "<html><head><base href=\"https://docs.example.com/v2/\"></head><body><main><h1>Migration</h1><p>Read the <a href=\"../guide?a=1&amp;b=2\">upgrade guide</a> before applying changes. The rollout requires two steps and a compatibility check.</p><img src=\"diagrams/start.svg\" alt=\"Architecture diagram\"></main></body></html>",
+    "url": "https://fixture.example/article",
+    "facts": [
+      "upgrade guide",
+      "Architecture diagram"
+    ],
+    "noise": []
+  },
+  {
+    "name": "nested-table",
+    "html": "<html><body><main><h1>HTTP status matrix</h1><table><tr><th>Region</th><th>Details</th></tr><tr><td>Singapore</td><td><table><tr><td>retry_after</td><td>60 seconds</td></tr></table></td></tr></table><p>Only retry requests that are safe to repeat; this nested table contains the per-region policy.</p></main></body></html>",
+    "url": "https://fixture.example/article",
+    "facts": [
+      "Singapore",
+      "retry_after",
+      "60 seconds"
+    ],
+    "noise": []
+  },
+  {
+    "name": "chinese-forum",
+    "html": "<html><body><main><article><h1>如何限制抓取并发？</h1><p>问题：必须保留全部回答，不能只选最长的一篇。</p></article><article><h2>回答一</h2><p>设置并发上限为四，同时保留主机级限流。</p></article><article><h2>回答二</h2><p>每个请求都应有截止时间，并在调用取消时回收浏览器上下文。</p></article></main></body></html>",
+    "url": "https://fixture.example/article",
+    "facts": [
+      "问题：必须保留全部回答",
+      "回答一",
+      "设置并发上限为四",
+      "回答二",
+      "回收浏览器上下文"
+    ],
+    "noise": []
+  },
+  {
+    "name": "math-and-details",
+    "html": "<html><body><main><h1>Algorithm</h1><p>The reciprocal score is <math><semantics><mrow><mi>x</mi></mrow><annotation encoding=\"application/x-tex\">1 / (60 + rank)</annotation></semantics></math>.</p><details><summary>Derivation</summary><p>Each source contributes at most once.</p></details><pre><code>literal = \"```\"\n    indented_code = True</code></pre></main></body></html>",
+    "url": "https://fixture.example/article",
+    "facts": [
+      "1 / (60 + rank)",
+      "Derivation",
+      "Each source contributes at most once.",
+      "indented_code"
+    ],
+    "noise": []
+  }
+]

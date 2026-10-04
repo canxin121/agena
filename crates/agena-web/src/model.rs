@@ -2,6 +2,17 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use text_splitter::MarkdownSplitter;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PageContentStatus {
+    #[default]
+    Readable,
+    Empty,
+    RequiresJavascript,
+    Blocked,
+    TooComplex,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// A fetched web page.
 pub struct FetchedPage {
@@ -19,6 +30,10 @@ pub struct FetchedPage {
     pub rendered: bool,
     #[serde(default)]
     pub extraction_backend: crate::ExtractionBackend,
+    #[serde(default)]
+    pub extraction_strategy: String,
+    #[serde(default)]
+    pub content_status: PageContentStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
     pub raw_html_hash: String,
@@ -53,6 +68,10 @@ pub struct StoredDocument {
     pub rendered: bool,
     #[serde(default)]
     pub extraction_backend: crate::ExtractionBackend,
+    #[serde(default)]
+    pub extraction_strategy: String,
+    #[serde(default)]
+    pub content_status: PageContentStatus,
     pub hash: String,
     pub raw_html_hash: String,
     pub markdown_hash: String,
@@ -92,6 +111,31 @@ pub struct CrawlSearchHit {
 }
 
 impl StoredDocument {
+    pub fn into_fetched_page(self) -> FetchedPage {
+        FetchedPage {
+            url: self.url,
+            final_url: self.final_url,
+            canonical_url: self.canonical_url,
+            title: self.title,
+            markdown: self.markdown,
+            content_type: self.content_type,
+            status: self.status,
+            truncated: self.truncated,
+            rendered: self.rendered,
+            extraction_backend: self.extraction_backend,
+            extraction_strategy: self.extraction_strategy,
+            content_status: self.content_status,
+            raw_html_hash: self.raw_html_hash,
+            etag: self.etag,
+            last_modified: self.last_modified,
+            links: self.links,
+            warnings: vec![format!(
+                "Stored crawl document fetched at {}; it may be older than the live page.",
+                self.fetched_at
+            )],
+        }
+    }
+
     pub fn from_fetched_page(page: FetchedPage, depth: u32, max_chunk_chars: usize) -> Self {
         let markdown_hash = blake3::hash(page.markdown.as_bytes()).to_hex().to_string();
         let hash = markdown_hash.clone();
@@ -118,6 +162,8 @@ impl StoredDocument {
             truncated: page.truncated,
             rendered: page.rendered,
             extraction_backend: page.extraction_backend,
+            extraction_strategy: page.extraction_strategy,
+            content_status: page.content_status,
             hash,
             raw_html_hash: page.raw_html_hash,
             markdown_hash,

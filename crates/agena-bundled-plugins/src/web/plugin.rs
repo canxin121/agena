@@ -1,3 +1,4 @@
+mod content;
 mod downloads;
 mod fetch_transport;
 mod playwright;
@@ -156,6 +157,7 @@ pub struct WebCrawlConfig {
 /// Default crawl settings of the web plugin.
 pub struct WebCrawlDefaultsConfig {
     pub max_pages: u32,
+    pub concurrency: u32,
     pub max_depth: u32,
     pub same_host_only: bool,
 }
@@ -164,6 +166,7 @@ impl Default for WebCrawlDefaultsConfig {
     fn default() -> Self {
         Self {
             max_pages: 10,
+            concurrency: 4,
             max_depth: 1,
             same_host_only: true,
         }
@@ -175,6 +178,7 @@ impl Default for WebCrawlDefaultsConfig {
 /// Crawl limits of the web plugin.
 pub struct WebCrawlLimitsConfig {
     pub max_pages: u32,
+    pub concurrency: u32,
     pub max_depth: u32,
 }
 
@@ -182,6 +186,7 @@ impl Default for WebCrawlLimitsConfig {
     fn default() -> Self {
         Self {
             max_pages: 100,
+            concurrency: 8,
             max_depth: 4,
         }
     }
@@ -409,6 +414,16 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "/crawl/defaults",
             "Defaults",
             "Default crawl options used when callers omit them.",
+        ),
+        (
+            "/crawl/defaults/concurrency",
+            "Concurrent Pages",
+            "Default simultaneous page reads per crawl (1–8).",
+        ),
+        (
+            "/crawl/limits/concurrency",
+            "Maximum Concurrent Pages",
+            "Upper bound on crawl concurrency, at most 8.",
         ),
         (
             "/crawl/defaults/max_pages",
@@ -917,6 +932,7 @@ impl ActivitySourceAdapter for BrowserActivitySource {
 struct WebPluginState {
     config: WebConfig,
     fetch_coordinator: Arc<WebFetchCoordinator>,
+    snapshots: agena_web::PageSnapshots,
     host: Arc<dyn HostClient>,
 }
 
@@ -928,6 +944,7 @@ impl WebPluginState {
                 cache_capacity: config.fetch.cache.capacity,
                 per_host_delay: Duration::from_millis(config.fetch.request.delay_ms),
             })),
+            snapshots: agena_web::PageSnapshots::default(),
             config,
             host,
         }
@@ -1008,9 +1025,14 @@ struct CrawlFetchInput {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     use_cache: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser.
     render_js: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extractor: Option<agena_web::ExtractionBackend>,
+    /// Initial Unicode-character preview. Default 8000, maximum 24000; use web.read for continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 24000))]
+    max_chars: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -1027,7 +1049,62 @@ struct CrawlRunInput {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     use_cache: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser.
     render_js: Option<bool>,
+    /// Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 8))]
+    concurrency: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
+#[serde(deny_unknown_fields)]
+struct FetchManyInput {
+    /// One to eight known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order.
+    #[schemars(length(min = 1, max = 8))]
+    urls: Vec<String>,
+    /// In-flight page reads, default 4, maximum 8. Per-host pacing still applies.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 8))]
+    concurrency: Option<u32>,
+    /// Per-page Unicode-character preview, default 4000, maximum 8000. Continue each page with web.read.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 8000))]
+    max_chars: Option<u32>,
+    #[serde(default = "default_true")]
+    use_cache: bool,
+    /// Omit for HTTP first with conditional rendering when browser.enabled; false forces HTTP; true forces browser.
+    #[serde(default)]
+    render_js: Option<bool>,
+    #[serde(default)]
+    extractor: Option<agena_web::ExtractionBackend>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
+#[input(trim("page_id"), non_empty("page_id"))]
+#[serde(deny_unknown_fields)]
+struct ReadPageInput {
+    /// Immutable snapshot handle returned by fetch, fetch_many, or query. Expires after 15 minutes or memory eviction.
+    page_id: String,
+    /// Unicode character offset from next_offset; default 0. No network refetch.
+    #[serde(default)]
+    offset: usize,
+    /// Characters to return, default 8000, maximum 24000.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 24000))]
+    max_chars: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
+#[input(trim("query"), non_empty("query"))]
+#[serde(deny_unknown_fields)]
+struct QueryCrawlInput {
+    /// Search the local crawl index; does not search the public web or refresh stored pages.
+    #[schemars(length(min = 1, max = 4096))]
+    query: String,
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 20))]
+    max_results: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -1940,16 +2017,6 @@ impl WebPlugin {
         Ok(snapshot)
     }
 
-    async fn fetch_page(
-        &self,
-        url: &url::Url,
-        use_cache: bool,
-        render_js: bool,
-    ) -> SdkResult<FetchedPage> {
-        self.fetch_page_with_extractor(url, use_cache, render_js, self.config()?.fetch.extractor)
-            .await
-    }
-
     async fn fetch_page_with_extractor(
         &self,
         url: &url::Url,
@@ -1972,6 +2039,11 @@ impl WebPlugin {
         let page = state
             .fetch_coordinator
             .fetch_or_cached(url, render_js, use_cache, || async {
+                static FETCHES: Semaphore = Semaphore::const_new(8);
+                let _permit = FETCHES
+                    .acquire()
+                    .await
+                    .map_err(|error| PluginError::internal_error(&error))?;
                 let mut options = self.spider_fetch_options(render_js)?;
                 options.extractor = extractor;
                 if render_js {
@@ -2001,53 +2073,158 @@ impl WebPlugin {
 
     #[tool(
         summary = "Fetch one web page and inspect its actual content.",
-        help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
+        help = "Read actual page evidence after search. Markdown preserves main content, sibling articles, code, tables and resolved links. Returns content_status, extraction_strategy, final_url, warnings, page_id and next_offset. max_chars defaults to 8000 (maximum 24000); continue long pages with web.read without refetching. prompt adds relevant excerpts from the full snapshot. Use fetch_many for independent known URLs. Omit render_js for HTTP first and one JavaScript-shell browser retry when browser.enabled; false forces HTTP, true forces an isolated browser. One shared fetch deadline includes admission, HTTP, rendering and extraction. Blocked/empty/partial pages are not reusable cache entries. Read statuses before using the text as evidence.",
         tags(network, read_only)
     )]
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
+        let max_chars = content::bounded(input.max_chars, 8000, 24000, "max_chars")?;
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
-        let config = self.config()?;
-        let render_js = input.render_js.unwrap_or(config.browser.enabled);
         let page = self
-            .fetch_page_with_extractor(
-                &url,
-                input.use_cache,
-                render_js,
-                input.extractor.unwrap_or(config.fetch.extractor),
-            )
+            .fetch_selected(&url, input.use_cache, input.render_js, input.extractor)
             .await?;
-        let mut returned = page.clone();
-        let original_text_bytes = returned.markdown.len();
-        let original_links = returned.links.len();
-        returned.markdown = agena_web::preview_text(&returned.markdown, 16_000);
-        returned.links.truncate(32);
-        for link in &mut returned.links {
-            *link = agena_web::preview_text(link, 2048);
-        }
-        let mut payload =
-            serde_json::to_value(&returned).map_err(|err| PluginError::internal_error(&err))?;
-        payload["available_markdown_bytes"] = serde_json::json!(original_text_bytes);
-        payload["available_link_count"] = serde_json::json!(original_links);
-        payload["output_truncated"] =
-            serde_json::json!(returned.markdown != page.markdown || returned.links != page.links);
-        let text = format_fetched_page(&page, input.prompt.as_deref());
+        self.page_output(page, input.prompt.as_deref(), max_chars)
+            .await
+    }
+
+    #[tool(
+        summary = "Read several independent web pages concurrently.",
+        help = "Fetch 1–8 known URLs concurrently (default concurrency 4, maximum 8), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).",
+        tags(network, read_only)
+    )]
+    async fn invoke_fetch_many(&self, input: &FetchManyInput) -> SdkResult<ToolInvokeOutput> {
+        let urls = content::unique_urls(&input.urls)?;
+        let concurrency = content::bounded(input.concurrency, 4, 8, "concurrency")?;
+        let max_chars = content::bounded(input.max_chars, 4000, 8000, "max_chars")?;
+        let results = content::batch(urls, concurrency, |raw| async move {
+            let result = async {
+                let url = prepare_fetch_url(&raw).map_err(crawl_error_to_plugin)?;
+                let page = self.fetch_selected(&url, input.use_cache, input.render_js, input.extractor).await?;
+                let usable = (200..300).contains(&page.status) && !page.truncated && page.content_status == agena_web::PageContentStatus::Readable;
+                let output = self.page_output(page, None, max_chars).await?;
+                Ok::<_, PluginError>((output, usable))
+            }.await;
+            match result {
+                Ok((output, usable)) => (serde_json::json!({"url":raw,"ok":true,"usable":usable,"page":output.payload}), output.output_text, usable),
+                Err(error) => {
+                    tracing::warn!(url = %raw, diagnostic = %error.diagnostic_message(), "batch page failed");
+                    let message = &error.failure.user.fallback;
+                    (serde_json::json!({"url":raw,"ok":false,"usable":false,"error_kind":error.kind,"error":message,"failure_id":error.failure.id}), format!("URL: {raw}\n{message}"), false)
+                }
+            }
+        }).await;
+        let usable = results.iter().filter(|entry| entry.2).count();
+        let text = results
+            .iter()
+            .map(|entry| entry.1.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+        let payload = serde_json::json!({"input_count":input.urls.len(),"unique_url_count":results.len(),"concurrency":concurrency,"usable_count":usable,"partial":usable < results.len(),"results":results.into_iter().map(|entry| entry.0).collect::<Vec<_>>()});
         Ok(ToolInvokeOutput::from_parts(
-            format!("web fetch {}", url),
-            format!(
-                "{} · HTTP {}{}",
-                page.title,
-                page.status,
-                if page.truncated { " · truncated" } else { "" }
-            ),
+            "web fetch_many",
+            format!("{usable} readable page(s)"),
             text,
             Some(payload),
-            std::collections::BTreeMap::new(),
+            BTreeMap::new(),
+            Vec::new(),
+        ))
+    }
+
+    #[tool(
+        summary = "Continue reading an immutable fetched-page snapshot.",
+        help = "Use page_id and next_offset returned by fetch, fetch_many or query. Returns a contiguous slice of the same extracted Markdown without refetching; offset counts Unicode characters, not bytes. max_chars defaults to 8000, maximum 24000. next_offset=null means the end of available extracted text, not necessarily a complete source: inspect truncated and content_status. Snapshots expire after 15 minutes and share a 32 MiB memory budget; if evicted, fetch the URL or query the crawl index again. Revalidates requested and final URL permissions.",
+        tags(network, read_only)
+    )]
+    async fn invoke_read(&self, input: &ReadPageInput) -> SdkResult<ToolInvokeOutput> {
+        let max_chars = content::bounded(input.max_chars, 8000, 24000, "max_chars")?;
+        let page = self
+            .state()?
+            .snapshots
+            .get(&input.page_id)
+            .await
+            .map_err(crawl_error_to_plugin)?;
+        self.authorize_page(&page).await?;
+        self.slice_output(&input.page_id, &page, input.offset, max_chars, None)
+    }
+
+    #[tool(
+        summary = "Find evidence in locally crawled pages and obtain readable snapshots.",
+        help = "Search the index populated by web.crawl, without new network requests. max_results defaults to 5, maximum 20. Hits include source URL, stored fetch time, chunk preview, page_id, and read_offset for web.read. Stored content may be stale; refetch its URL when freshness matters. Permissions are revalidated before exposing each hit; denied hits are omitted and counted. This searches stored documents only; use web.search to discover public pages.",
+        tags(network, read_only)
+    )]
+    async fn invoke_query(&self, input: &QueryCrawlInput) -> SdkResult<ToolInvokeOutput> {
+        if input.query.trim().is_empty() || input.query.chars().count() > 4096 {
+            return Err(PluginError::invalid_params(
+                "query must contain 1–4096 characters",
+            ));
+        }
+        let limit = content::bounded(input.max_results, 5, 20, "max_results")?;
+        let hits = {
+            let _guard = self.crawl_lock.lock().await;
+            let store = self.store()?;
+            let query = input.query.clone();
+            let permit = crate::BLOCKING_PLUGIN_WORKERS
+                .acquire()
+                .await
+                .map_err(|error| PluginError::internal_error(&error))?;
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                agena_web::ensure_index_exists(&store)?;
+                store
+                    .search(&query, limit)?
+                    .into_iter()
+                    .map(|hit| store.get_document(&hit.id).map(|document| (hit, document)))
+                    .collect::<Result<Vec<_>, agena_web::CrawlError>>()
+            })
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?
+            .map_err(crawl_error_to_plugin)?
+        };
+        let mut results = Vec::new();
+        let mut omitted_count = 0usize;
+        for (hit, document) in hits {
+            if document.truncated
+                || !(200..300).contains(&document.status)
+                || document.content_status != agena_web::PageContentStatus::Readable
+            {
+                omitted_count += 1;
+                continue;
+            }
+            let fetched_at = document.fetched_at;
+            let read_offset = document
+                .chunks
+                .get(hit.chunk_index as usize)
+                .and_then(|chunk| document.markdown.find(chunk))
+                .map(|byte| document.markdown[..byte].chars().count())
+                .unwrap_or(0);
+            let page = document.into_fetched_page();
+            if self.authorize_page(&page).await.is_err() {
+                omitted_count += 1;
+                continue;
+            }
+            let page_id = self
+                .state()?
+                .snapshots
+                .insert(page)
+                .await
+                .map_err(crawl_error_to_plugin)?;
+            results.push(serde_json::json!({"hit":hit,"fetched_at":fetched_at,"page_id":page_id,"read_offset":read_offset}));
+        }
+        let payload = serde_json::json!({"results":results,"omitted_count":omitted_count,"source":"local_crawl_index"});
+        let text = serde_json::to_string_pretty(&payload)
+            .map_err(|error| PluginError::internal_error(&error))?;
+        Ok(ToolInvokeOutput::from_parts(
+            "web query",
+            format!("{} local hit(s)", results.len()),
+            text,
+            Some(payload),
+            BTreeMap::new(),
             Vec::new(),
         ))
     }
 
     #[tool(
         summary = "Crawl a site and cache indexed pages locally.",
+        help = "Traverse links breadth first with bounded concurrency (default 4, maximum 8; also capped by config). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.",
         tags(network, discovery, mutate)
     )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
@@ -2058,6 +2235,13 @@ impl WebPlugin {
         let config = self.config()?;
         let options = CrawlRunOptions {
             extraction_backend: config.fetch.extractor,
+            concurrency: content::bounded(
+                input.concurrency,
+                config.crawl.defaults.concurrency,
+                8,
+                "concurrency",
+            )?
+            .min(config.crawl.limits.concurrency as usize),
             max_pages: clamp_limit(
                 input.max_pages,
                 config.crawl.defaults.max_pages as usize,
@@ -2071,7 +2255,8 @@ impl WebPlugin {
                 .same_host_only
                 .unwrap_or(config.crawl.defaults.same_host_only),
             use_cache: input.use_cache,
-            render_js: input.render_js.unwrap_or(config.browser.enabled),
+            render_js: input.render_js == Some(true),
+            allow_rendered_cache: input.render_js.is_none() && config.browser.enabled,
             document_cache_ttl: Duration::from_secs(config.crawl.indexing.document_cache_ttl_secs),
             max_chunk_chars: config.crawl.indexing.chunk_chars as usize,
             near_duplicate_hamming_distance: config.crawl.indexing.near_duplicate_hamming_distance,
@@ -2080,7 +2265,10 @@ impl WebPlugin {
                 max_total_bytes: config.store.retention.max_bytes,
             }),
         };
-        let fetcher = PluginPageFetcher { plugin: self };
+        let fetcher = PluginPageFetcher {
+            plugin: self,
+            render_js: input.render_js,
+        };
         let report = crawl_site(&start_url, &store, &options, &fetcher)
             .await
             .map_err(crawl_error_to_plugin)?;
@@ -4061,6 +4249,7 @@ fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
 
 struct PluginPageFetcher<'a> {
     plugin: &'a WebPlugin,
+    render_js: Option<bool>,
 }
 
 impl CrawlPageFetcher for PluginPageFetcher<'_> {
@@ -4098,11 +4287,11 @@ impl CrawlPageFetcher for PluginPageFetcher<'_> {
         &'a self,
         url: &'a url::Url,
         use_cache: bool,
-        render_js: bool,
+        _render_js: bool,
     ) -> Pin<Box<dyn Future<Output = Result<FetchedPage, agena_web::CrawlError>> + Send + 'a>> {
         Box::pin(async move {
             self.plugin
-                .fetch_page(url, use_cache, render_js)
+                .fetch_selected(url, use_cache, self.render_js, None)
                 .await
                 .map_err(|error| {
                     agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
@@ -4133,6 +4322,14 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
     if web.fetch.request.max_body_bytes > 32 * 1024 * 1024 || web.fetch.request.timeout_secs > 120 {
         return Err(PluginError::invalid_params(
             "fetch.request allows at most 32 MiB and 120 seconds",
+        ));
+    }
+    if !(1..=8).contains(&web.crawl.limits.concurrency)
+        || web.crawl.defaults.concurrency == 0
+        || web.crawl.defaults.concurrency > web.crawl.limits.concurrency
+    {
+        return Err(PluginError::invalid_params(
+            "crawl concurrency requires 1 <= defaults.concurrency <= limits.concurrency <= 8",
         ));
     }
     if web.crawl.limits.max_pages > 1000 || web.crawl.limits.max_depth > 16 {
@@ -4228,7 +4425,10 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
 fn format_fetched_page(page: &FetchedPage, focus: Option<&str>) -> String {
     let mut lines = vec![format!("Title: {}", page.title)];
     lines.push(format!("URL: {}", page.canonical_url));
-    lines.push(format!("Status: {}", page.status));
+    lines.push(format!(
+        "Status: {} · Content: {:?} · Strategy: {}",
+        page.status, page.content_status, page.extraction_strategy
+    ));
     lines.push(format!(
         "Rendered: {}",
         if page.rendered { "yes" } else { "no" }
@@ -4270,7 +4470,7 @@ fn format_fetched_page(page: &FetchedPage, focus: Option<&str>) -> String {
             }
         }
     } else {
-        lines.push(preview_text(page.markdown.as_str(), 4000));
+        lines.push(page.markdown.clone());
     }
     lines.join("\n")
 }
@@ -4378,6 +4578,16 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
         lines.push(format!(
             "- {} [{} chunk(s), depth {}] {}",
             document.title, document.chunk_count, document.depth, document.url
+        ));
+    }
+    lines.push(format!(
+        "Concurrency: {}. Search these documents with web.query, then continue with web.read.",
+        output.concurrency
+    ));
+    for error in &output.page_errors {
+        lines.push(format!(
+            "- Failed {}: {} (HTTP {:?}, content {:?})",
+            error.url, error.reason, error.status, error.content_status
         ));
     }
     if !output.failures.is_empty() {

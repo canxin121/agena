@@ -1,7 +1,8 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use chrono::Utc;
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -15,10 +16,13 @@ use crate::{
 pub struct CrawlRunOptions {
     pub extraction_backend: crate::ExtractionBackend,
     pub max_pages: usize,
+    pub concurrency: usize,
     pub max_depth: u32,
     pub same_host_only: bool,
     pub use_cache: bool,
     pub render_js: bool,
+    /// Automatic mode may reuse either complete HTTP or rendered documents.
+    pub allow_rendered_cache: bool,
     pub document_cache_ttl: Duration,
     pub max_chunk_chars: usize,
     pub near_duplicate_hamming_distance: u32,
@@ -30,10 +34,12 @@ impl Default for CrawlRunOptions {
         Self {
             extraction_backend: crate::ExtractionBackend::default(),
             max_pages: 10,
+            concurrency: 4,
             max_depth: 1,
             same_host_only: true,
             use_cache: true,
             render_js: false,
+            allow_rendered_cache: false,
             document_cache_ttl: Duration::from_secs(24 * 60 * 60),
             max_chunk_chars: 1800,
             near_duplicate_hamming_distance: 3,
@@ -49,6 +55,8 @@ impl Default for CrawlRunOptions {
 /// Report of a crawl run.
 pub struct CrawlRunReport {
     pub start_url: String,
+    pub concurrency: usize,
+    pub page_errors: Vec<CrawlPageError>,
     pub engine: String,
     pub rendered: bool,
     #[serde(default)]
@@ -70,8 +78,22 @@ pub struct CrawlRunReport {
     pub failures: Vec<agena_failure::UserProblem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A bounded, inspectable failure without transport diagnostics or credentials.
+pub struct CrawlPageError {
+    pub url: String,
+    pub reason: String,
+    pub status: Option<u16>,
+    pub content_status: Option<crate::PageContentStatus>,
+}
+
+enum Retrieved {
+    Cached(StoredDocument),
+    Fetched(FetchedPage),
+}
+
 /// Fetcher used by a crawl run.
-pub trait CrawlPageFetcher {
+pub trait CrawlPageFetcher: Sync {
     /// Revalidate access before exposing stored content, including its actual
     /// transport destination. This also runs on a document-cache hit.
     fn authorize_cached<'a>(
@@ -96,9 +118,13 @@ pub async fn crawl_site(
     options: &CrawlRunOptions,
     fetcher: &impl CrawlPageFetcher,
 ) -> Result<CrawlRunReport, CrawlError> {
-    if options.max_pages == 0 || options.max_pages > 1000 || options.max_depth > 16 {
+    if options.max_pages == 0
+        || options.max_pages > 1000
+        || options.max_depth > 16
+        || !(1..=8).contains(&options.concurrency)
+    {
         return Err(CrawlError::InvalidInput(
-            "crawl requires 1–1000 pages and depth at most 16".into(),
+            "crawl requires 1–1000 pages, depth at most 16, and concurrency 1–8".into(),
         ));
     }
     let max_urls = options.max_pages.saturating_mul(32).clamp(128, 32_000);
@@ -108,6 +134,8 @@ pub async fn crawl_site(
     let mut seen_urls = HashSet::from([start_url.to_string()]);
     let mut documents = Vec::new();
     let mut failures = Vec::new();
+    let mut page_errors = Vec::new();
+    let mut rendered_count = 0usize;
     let mut stored_count = 0usize;
     let mut cached_count = 0usize;
     let mut duplicate_count = 0usize;
@@ -115,74 +143,67 @@ pub async fn crawl_site(
     let mut known_simhashes = store
         .list_documents()?
         .into_iter()
-        .map(|document| document.simhash)
-        .collect::<Vec<_>>();
+        .map(|document| (document.id, document.simhash))
+        .collect::<HashMap<_, _>>();
 
-    while let Some((url, depth)) = queue.pop_front() {
-        if attempted_count + cached_count >= options.max_pages {
+    while !queue.is_empty() {
+        let remaining = options
+            .max_pages
+            .saturating_sub(attempted_count + cached_count);
+        if remaining == 0 {
             truncated = true;
             break;
         }
-
-        if options.use_cache
-            && let Some(existing) = store.find_by_url(url.as_str())?
-            && document_matches_render_mode(&existing, options.render_js)
-            && existing.extraction_backend == options.extraction_backend
-            && !existing.final_url.is_empty()
-            && is_document_fresh(&existing, options.document_cache_ttl)
-            && !existing.truncated
-            && (200..300).contains(&existing.status)
+        // Reserve every slot before dispatch; failures and cache hits consume
+        // the same page budget. Batches stay within one BFS depth and results
+        // are processed in discovery order, independent of network timing.
+        let depth = queue.front().expect("nonempty queue").1;
+        let mut batch = Vec::new();
+        while batch.len() < remaining.min(options.concurrency)
+            && queue.front().is_some_and(|entry| entry.1 == depth)
         {
-            if let Err(err) = fetcher.authorize_cached(&url, &existing).await {
-                attempted_count += 1;
-                tracing::warn!(diagnostic = %err, "cached crawl page authorization failed");
-                failures.push(crawl_page_failure().into());
-                continue;
-            }
-            if depth < options.max_depth {
-                enqueue_document_links(
-                    start_url,
-                    &existing,
-                    depth,
-                    options.same_host_only,
-                    &mut queue,
-                    &mut seen_urls,
-                    max_urls,
-                    &mut truncated,
-                );
-            }
-            cached_count += 1;
-            documents.push(existing.summary());
-            continue;
+            let (url, depth) = queue.pop_front().expect("checked front");
+            let cached = if options.use_cache {
+                store.find_by_url(url.as_str())?
+            } else {
+                None
+            };
+            let cached = cached.filter(|existing| {
+                (document_matches_render_mode(existing, options.render_js)
+                    || (options.allow_rendered_cache && existing.rendered))
+                    && existing.extraction_backend == options.extraction_backend
+                    && !existing.extraction_strategy.is_empty()
+                    && !existing.final_url.is_empty()
+                    && is_document_fresh(existing, options.document_cache_ttl)
+                    && !existing.truncated
+                    && existing.content_status == crate::PageContentStatus::Readable
+                    && (200..300).contains(&existing.status)
+            });
+            batch.push(async move {
+                let result = if let Some(existing) = cached {
+                    fetcher
+                        .authorize_cached(&url, &existing)
+                        .await
+                        .map(|()| Retrieved::Cached(existing))
+                        .map_err(|error| ("authorization_denied", error))
+                } else {
+                    fetcher
+                        .fetch_page(&url, options.use_cache, options.render_js)
+                        .await
+                        .map(Retrieved::Fetched)
+                        .map_err(|error| ("fetch_failed", error))
+                };
+                (url, depth, result)
+            });
         }
-
-        attempted_count += 1;
-        match fetcher
-            .fetch_page(&url, options.use_cache, options.render_js)
-            .await
-        {
-            Ok(page) => {
-                if !(200..300).contains(&page.status) {
-                    let failure = crawl_page_failure();
-                    tracing::warn!(
-                        failure_id = %failure.id,
-                        url = %url,
-                        http_status = page.status,
-                        "crawl page returned an unsuccessful HTTP status"
-                    );
-                    failures.push(failure.into());
-                    continue;
-                }
-                truncated |= page.truncated;
-                if page.truncated {
-                    // A partial extraction must not become a reusable document.
-                    failures.push(crawl_page_failure().into());
-                    continue;
-                }
+        // These futures run in the caller's task. Dropping the crawl drops all
+        // in-flight work and preserves task-local host authority.
+        for (url, depth, result) in join_all(batch).await {
+            if let Ok(Retrieved::Cached(existing)) = result {
                 if depth < options.max_depth {
-                    enqueue_links(
+                    enqueue_document_links(
                         start_url,
-                        &page,
+                        &existing,
                         depth,
                         options.same_host_only,
                         &mut queue,
@@ -191,45 +212,112 @@ pub async fn crawl_site(
                         &mut truncated,
                     );
                 }
-                let document =
-                    StoredDocument::from_fetched_page(page.clone(), depth, options.max_chunk_chars);
-                if store
-                    .find_by_raw_hash(document.raw_html_hash.as_str())?
-                    .is_some()
-                {
-                    duplicate_count += 1;
-                    continue;
-                }
-                if store
-                    .find_by_markdown_hash(document.markdown_hash.as_str())?
-                    .is_some()
-                {
-                    duplicate_count += 1;
-                    continue;
-                }
-                if is_near_duplicate(
-                    document.simhash,
-                    &known_simhashes,
-                    options.near_duplicate_hamming_distance,
-                ) {
-                    near_duplicate_count += 1;
-                    continue;
-                }
-
-                store.save_document(&document)?;
-                known_simhashes.push(document.simhash);
-                stored_count += 1;
-                documents.push(document.summary());
+                rendered_count += usize::from(existing.rendered);
+                cached_count += 1;
+                documents.push(existing.summary());
+                continue;
             }
-            Err(err) => {
-                let failure = crawl_page_failure();
-                tracing::warn!(
-                    failure_id = %failure.id,
-                    url = %url,
-                    diagnostic = %err,
-                    "crawl page fetch failed"
-                );
-                failures.push(failure.into());
+            attempted_count += 1;
+            match result {
+                Ok(Retrieved::Fetched(page)) => {
+                    if !(200..300).contains(&page.status)
+                        || page.content_status != crate::PageContentStatus::Readable
+                        || page.truncated
+                    {
+                        page_errors.push(CrawlPageError {
+                            url: url.to_string(),
+                            reason: if page.truncated {
+                                "incomplete"
+                            } else if !(200..300).contains(&page.status) {
+                                "http_error"
+                            } else {
+                                "unreadable"
+                            }
+                            .into(),
+                            status: Some(page.status),
+                            content_status: Some(page.content_status),
+                        });
+                        truncated |= page.truncated;
+                        let failure = crawl_page_failure();
+                        tracing::warn!(
+                            failure_id = %failure.id,
+                            url = %url,
+                            http_status = page.status,
+                        "crawl page is not reusable content"
+                        );
+                        failures.push(failure.into());
+                        continue;
+                    }
+                    rendered_count += usize::from(page.rendered);
+                    if depth < options.max_depth {
+                        enqueue_links(
+                            start_url,
+                            &page,
+                            depth,
+                            options.same_host_only,
+                            &mut queue,
+                            &mut seen_urls,
+                            max_urls,
+                            &mut truncated,
+                        );
+                    }
+                    let document = StoredDocument::from_fetched_page(
+                        page.clone(),
+                        depth,
+                        options.max_chunk_chars,
+                    );
+                    // A refresh of the same document must replace old text and
+                    // timestamps even when its hash is unchanged or similar.
+                    let refreshing = known_simhashes.contains_key(&document.id);
+                    if !refreshing
+                        && store
+                            .find_by_raw_hash(document.raw_html_hash.as_str())?
+                            .is_some()
+                    {
+                        duplicate_count += 1;
+                        continue;
+                    }
+                    if !refreshing
+                        && store
+                            .find_by_markdown_hash(document.markdown_hash.as_str())?
+                            .is_some()
+                    {
+                        duplicate_count += 1;
+                        continue;
+                    }
+                    if !refreshing
+                        && is_near_duplicate(
+                            document.simhash,
+                            known_simhashes.values().copied(),
+                            options.near_duplicate_hamming_distance,
+                        )
+                    {
+                        near_duplicate_count += 1;
+                        continue;
+                    }
+
+                    store.save_document(&document)?;
+                    known_simhashes.insert(document.id.clone(), document.simhash);
+                    stored_count += 1;
+                    documents.push(document.summary());
+                }
+                Ok(Retrieved::Cached(_)) => unreachable!("cache handled above"),
+                Err((reason, err)) => {
+                    page_errors.push(CrawlPageError {
+                        url: url.to_string(),
+                        reason: reason.into(),
+                        status: None,
+                        content_status: None,
+                    });
+                    let failure = crawl_page_failure();
+                    tracing::warn!(
+                        failure_id = %failure.id,
+                        url = %url,
+                        diagnostic = %err,
+                        "crawl page fetch failed"
+                    );
+                    failures.push(failure.into());
+                }
             }
         }
     }
@@ -242,8 +330,17 @@ pub async fn crawl_site(
     let total_documents = store.list_documents()?.len();
     Ok(CrawlRunReport {
         start_url: start_url.to_string(),
-        engine: if options.render_js { "browser" } else { "http" }.to_string(),
-        rendered: options.render_js,
+        concurrency: options.concurrency,
+        page_errors,
+        engine: if rendered_count == 0 {
+            "http"
+        } else if options.render_js {
+            "browser"
+        } else {
+            "http+browser"
+        }
+        .to_string(),
+        rendered: rendered_count > 0,
         attempted_count,
         discovered_count: seen_urls.len(),
         truncated,
@@ -288,7 +385,7 @@ pub fn ensure_index_exists(store: &CrawlStore) -> Result<(), CrawlError> {
 }
 
 pub fn document_matches_render_mode(document: &StoredDocument, render_js: bool) -> bool {
-    !render_js || document.rendered
+    document.rendered == render_js
 }
 
 fn is_document_fresh(document: &StoredDocument, ttl: Duration) -> bool {
@@ -298,10 +395,12 @@ fn is_document_fresh(document: &StoredDocument, ttl: Duration) -> bool {
     Utc::now() - document.fetched_at <= ttl
 }
 
-fn is_near_duplicate(candidate: u64, existing: &[u64], max_distance: u32) -> bool {
-    existing
-        .iter()
-        .any(|value| simhash::hamming_distance(candidate, *value) <= max_distance)
+fn is_near_duplicate(
+    candidate: u64,
+    mut existing: impl Iterator<Item = u64>,
+    max_distance: u32,
+) -> bool {
+    existing.any(|value| simhash::hamming_distance(candidate, value) <= max_distance)
 }
 
 #[allow(clippy::too_many_arguments)]

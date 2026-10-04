@@ -115,6 +115,41 @@ async fn run_fixture() {
     assert_eq!(source.final_url.path(), "/page");
     assert!(source.body.contains("RENDERED_MARKER 中文"));
     assert_eq!(contexts(&observer).await, before);
+    let requested = url("/page");
+    let attempts = AtomicUsize::new(0);
+    let page =
+        super::super::content::select_fetch(None, true, Duration::from_secs(15), |rendered| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            let endpoint = &endpoint;
+            let requested = &requested;
+            let options = &options;
+            let policy = policy.clone();
+            async move {
+                let source = if rendered {
+                    render(endpoint, requested, options, policy).await?
+                } else {
+                    fetch_transport::fetch(requested, options, |_| async { Ok(vec![address]) })
+                        .await?
+                };
+                let mut page =
+                    fetch_transport::extract(source, requested.clone(), options.extractor).await?;
+                page.rendered = rendered;
+                Ok(page)
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(page.rendered);
+    assert_eq!(page.content_status, agena_web::PageContentStatus::Readable);
+    assert!(
+        page.markdown
+            .replace("\\_", "_")
+            .contains("RENDERED_MARKER 中文"),
+        "{}",
+        page.markdown
+    );
+    assert_eq!(contexts(&observer).await, before);
     assert_eq!(
         render(&endpoint, &url("/missing"), &options, policy.clone())
             .await

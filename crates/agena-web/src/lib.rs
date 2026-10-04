@@ -24,6 +24,7 @@ mod paths;
 mod run;
 mod search;
 mod search_api;
+mod snapshots;
 mod spider;
 mod store;
 
@@ -43,12 +44,13 @@ pub use fetch::{
 pub use fetch_coordinator::{WebFetchCoordinator, WebFetchCoordinatorConfig};
 pub use index::{rebuild_search_index, search_documents};
 pub use model::{
-    CrawlDocumentSummary, CrawlSearchHit, FetchedPage, StoredDocument, chunk_markdown, preview_text,
+    CrawlDocumentSummary, CrawlSearchHit, FetchedPage, PageContentStatus, StoredDocument,
+    chunk_markdown, preview_text,
 };
 pub use paths::{CrawlDir, workspace_key};
 pub use run::{
-    CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, crawl_site, document_matches_render_mode,
-    ensure_index_exists,
+    CrawlPageError, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, crawl_site,
+    document_matches_render_mode, ensure_index_exists,
 };
 pub use search::{
     WebSearchEngine, WebSearchOptions, WebSearchResult, normalize_web_search_engine,
@@ -57,6 +59,7 @@ pub use search::{
 pub use search_api::{
     SearchApiOptions, SearchApiProvider, SearchApiResponse, search_api, search_domain_allowed,
 };
+pub use snapshots::{PageSlice, PageSnapshots, page_slice};
 pub use spider::{
     BrowserRenderOptions, LocalBrowserOptions, SpiderFetchOptions, fetch_page_with_spider,
 };

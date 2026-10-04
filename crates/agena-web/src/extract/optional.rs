@@ -27,7 +27,10 @@ pub async fn extract_with_backend(
             maximum_bytes: MAX_SOURCE_BYTES,
         });
     }
-    if backend == ExtractionBackend::Trafilatura && super::looks_like_html(html) {
+    if backend == ExtractionBackend::Trafilatura
+        && page.content_status == crate::PageContentStatus::Readable
+        && super::is_html_response(&page.content_type, html)
+    {
         let operation = async {
             let _permit = EXTRACTORS.acquire().await.map_err(|error| {
                 CrawlError::InvalidInput(format!("extractor admission failed: {error}"))
@@ -77,8 +80,9 @@ pub async fn extract_with_backend(
                     "HTML extraction timed out, including admission/startup".into(),
                 )
             })??;
-        page.extraction_backend = backend;
+        page.extraction_strategy = "python_trafilatura".into();
     }
+    page.extraction_backend = backend;
     let (text, clipped) = super::truncate_utf8(&page.markdown, MAX_TEXT_BYTES);
     page.markdown = text;
     if clipped {

@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 128,
+    "execution_tools": 131,
     "gateway_tools": 7,
     "plugins": 21,
-    "tools": 135
+    "tools": 138
   },
   "plugins": [
     {
@@ -2060,9 +2060,9 @@
         {
           "canonical_name": "agena.web.crawl",
           "conditional": null,
-          "definition_identity": "a1d50cebda340d0edb0bc4ae7c44cc2f2b925a333699af28606d3d29a721abbe",
+          "definition_identity": "36447893836764428b8f8ed9bf5090335633b947ab18689ff905619ed2d5c579",
           "gateway": false,
-          "input_schema_sha256": "fc17dc394ff452db1897d80f4618c7b72b1b2740154ec0e7e08e383e69cdb962",
+          "input_schema_sha256": "ff4b767d3a11dca36205a6e447acf06f5200730ccf5fff3a1effa78ddc1742de",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2073,9 +2073,45 @@
         {
           "canonical_name": "agena.web.fetch",
           "conditional": null,
-          "definition_identity": "043708c651e130cf498ca793cf2339a667f3129885fa78cfa322ca0ae1eea68c",
+          "definition_identity": "a37ecd32a1ba1e813ebc621244ebc6919687105630b55885f4f5465d3844596c",
           "gateway": false,
-          "input_schema_sha256": "9de0c4d09c204f74f5902488eb7abe1389fe8aa77dc7b0aa8ac9b5554a852ccd",
+          "input_schema_sha256": "529b35b45d6b5aa6727ce9e4da1ca6ef5d838b18baf28d665736541d6564d31e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.fetch_many",
+          "conditional": null,
+          "definition_identity": "0c7d4c079eafc7fb7475a80a3d83af22c55f1a85425293b18e13b166b7d16173",
+          "gateway": false,
+          "input_schema_sha256": "70afbd87606f42484a34b8d65d2e739c145ed8016f0ebcebde9442d265a714ee",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.query",
+          "conditional": null,
+          "definition_identity": "e82bef8a7def9fd633a3a89e5ec901ec009a957f55a3e82bb5e4b2b67ba5edf2",
+          "gateway": false,
+          "input_schema_sha256": "d384234a2ab83c5db729ab55bce4113b60b9e3f5b3b8cf3b6a80c222b86e85cf",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.read",
+          "conditional": null,
+          "definition_identity": "bbee940c1cefabe9cdc2f35d51896d7c50b01fc4325a0f72f777217f8be38f97",
+          "gateway": false,
+          "input_schema_sha256": "5ebb5c85ac6e325989ff8b7bbc8c13d4dbfdece7a2d8e040e8cd2cb446f2eb37",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",

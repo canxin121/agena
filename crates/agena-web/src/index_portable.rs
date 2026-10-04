@@ -127,6 +127,8 @@ mod tests {
             truncated: false,
             rendered: false,
             extraction_backend: crate::ExtractionBackend::default(),
+            extraction_strategy: String::new(),
+            content_status: crate::PageContentStatus::default(),
             hash: String::new(),
             raw_html_hash: String::new(),
             markdown_hash: String::new(),

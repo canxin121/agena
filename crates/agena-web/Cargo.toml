@@ -11,7 +11,10 @@ agena-process = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
-crw-extract = { workspace = true }
+dom_smoothie = { workspace = true }
+dom_query = { workspace = true }
+htmd = { workspace = true }
+futures-util = { workspace = true }
 encoding_rs = { workspace = true }
 governor = { workspace = true }
 moka = { workspace = true }

@@ -358,8 +358,15 @@ fn sample_payload(tool: &str) -> Value {
         "tasks.output" => {
             json!({"task": task.clone(), "chunks": [{"role": "assistant", "text": "done"}], "next_cursor": 1, "has_more": true})
         }
-        "web.fetch" => {
+        "web.fetch" | "web.read" => {
             json!({"url": "https://example.test", "status": 200, "cached": false, "truncated": false, "summary": "Example page", "markdown": "# Example"})
+        }
+        "web.fetch_many" => json!({"unique_url_count":2,"usable_count":1,"partial":true,"results":[
+            {"url":"https://example.test", "ok":true,"usable":true,"page":{"title":"Guide","status":200,"content_status":"readable","markdown":"# Guide"}},
+            {"url":"https://missing.test","ok":false,"usable":false,"error":"Request timed out"}
+        ]}),
+        "web.query" => {
+            json!({"omitted_count":0,"results":[{"hit":{"title":"Guide","url":"https://example.test","preview":"A relevant passage"},"fetched_at":"2026-10-05T00:00:00Z","page_id":"fixture","read_offset":10}]})
         }
         "web.search" => {
             json!({"query": "Agena", "backend": "default", "results": [{"title": "Guide", "url": "https://example.test", "snippet": "Docs"}]})

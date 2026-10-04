@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **21 plugins and 135 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **21 plugins and 138 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
@@ -34,7 +34,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.shell`](#agenashell) — Shell command execution and background process tools. (7 tools)
 - [`agena.tasks`](#agenatasks) — Delegated subtask orchestration tools. (7 tools)
 - [`agena.tools`](#agenatools) — Tool API discovery functions. The runtime resolves tools_call directly to its execution target. (7 tools)
-- [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (13 tools)
+- [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (16 tools)
 
 ## agena.chatgpt
 
@@ -8414,7 +8414,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ## agena.web
 
-**Version** `0.1.0` · **Tools** 13
+**Version** `0.1.0` · **Tools** 16
 
 Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.
 
@@ -8905,12 +8905,16 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Runtime**: streaming `buffered`
 
+**Help**:
+> Traverse links breadth first with bounded concurrency (default 4, maximum 8; also capped by config). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.
+
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `concurrency` | `integer / null` | — | — | Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency. |
 | `max_depth` | `integer / null` | — | — |  |
 | `max_pages` | `integer / null` | — | — |  |
-| `render_js` | `boolean / null` | — | — |  |
+| `render_js` | `boolean / null` | — | — | Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser. |
 | `same_host_only` | `boolean / null` | — | — |  |
 | `start_url` | `string` | ✓ | — |  |
 | `use_cache` | `boolean` | — | — |  |
@@ -8920,6 +8924,17 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 {
   "additionalProperties": false,
   "properties": {
+    "concurrency": {
+      "description": "Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency.",
+      "format": "uint32",
+      "maximum": 8,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
     "max_depth": {
       "format": "uint32",
       "minimum": 0,
@@ -8939,6 +8954,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "x-agena-order": "000001"
     },
     "render_js": {
+      "description": "Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser.",
       "type": [
         "boolean",
         "null"
@@ -8978,14 +8994,15 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.
+> Read actual page evidence after search. Markdown preserves main content, sibling articles, code, tables and resolved links. Returns content_status, extraction_strategy, final_url, warnings, page_id and next_offset. max_chars defaults to 8000 (maximum 24000); continue long pages with web.read without refetching. prompt adds relevant excerpts from the full snapshot. Use fetch_many for independent known URLs. Omit render_js for HTTP first and one JavaScript-shell browser retry when browser.enabled; false forces HTTP, true forces an isolated browser. One shared fetch deadline includes admission, HTTP, rendering and extraction. Blocked/empty/partial pages are not reusable cache entries. Read statuses before using the text as evidence.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `extractor` | `ExtractionBackend / null` | — | — |  |
+| `max_chars` | `integer / null` | — | — | Initial Unicode-character preview. Default 8000, maximum 24000; use web.read for continuation. |
 | `prompt` | `string / null` | — | — |  |
-| `render_js` | `boolean / null` | — | — |  |
+| `render_js` | `boolean / null` | — | — | Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser. |
 | `url` | `string` | ✓ | — |  |
 | `use_cache` | `boolean` | — | — |  |
 
@@ -9014,6 +9031,17 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       ],
       "x-agena-order": "000004"
     },
+    "max_chars": {
+      "description": "Initial Unicode-character preview. Default 8000, maximum 24000; use web.read for continuation.",
+      "format": "uint32",
+      "maximum": 24000,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
     "prompt": {
       "minLength": 1,
       "type": [
@@ -9023,6 +9051,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "x-agena-order": "000001"
     },
     "render_js": {
+      "description": "Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser.",
       "type": [
         "boolean",
         "null"
@@ -9041,6 +9070,214 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
   },
   "required": [
     "url"
+  ],
+  "type": "object"
+}
+```
+
+### fetch_many
+
+`agena.web.fetch_many` · **Summary**: Read several independent web pages concurrently.
+
+**Tags**: `network` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Fetch 1–8 known URLs concurrently (default concurrency 4, maximum 8), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `concurrency` | `integer / null` | — | `null` | In-flight page reads, default 4, maximum 8. Per-host pacing still applies. |
+| `extractor` | `ExtractionBackend / null` | — | `null` |  |
+| `max_chars` | `integer / null` | — | `null` | Per-page Unicode-character preview, default 4000, maximum 8000. Continue each page with web.read. |
+| `render_js` | `boolean / null` | — | `null` | Omit for HTTP first with conditional rendering when browser.enabled; false forces HTTP; true forces browser. |
+| `urls` | `array<string>` | ✓ | — | One to eight known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order. |
+| `use_cache` | `boolean` | — | `true` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ExtractionBackend": {
+      "enum": [
+        "readability",
+        "trafilatura"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "concurrency": {
+      "default": null,
+      "description": "In-flight page reads, default 4, maximum 8. Per-host pacing still applies.",
+      "format": "uint32",
+      "maximum": 8,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "extractor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExtractionBackend"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "max_chars": {
+      "default": null,
+      "description": "Per-page Unicode-character preview, default 4000, maximum 8000. Continue each page with web.read.",
+      "format": "uint32",
+      "maximum": 8000,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "render_js": {
+      "default": null,
+      "description": "Omit for HTTP first with conditional rendering when browser.enabled; false forces HTTP; true forces browser.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "urls": {
+      "description": "One to eight known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order.",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8,
+      "minItems": 1,
+      "type": "array",
+      "x-agena-order": "000000"
+    },
+    "use_cache": {
+      "default": true,
+      "type": "boolean",
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "urls"
+  ],
+  "type": "object"
+}
+```
+
+### query
+
+`agena.web.query` · **Summary**: Find evidence in locally crawled pages and obtain readable snapshots.
+
+**Tags**: `network` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Search the index populated by web.crawl, without new network requests. max_results defaults to 5, maximum 20. Hits include source URL, stored fetch time, chunk preview, page_id, and read_offset for web.read. Stored content may be stale; refetch its URL when freshness matters. Permissions are revalidated before exposing each hit; denied hits are omitted and counted. This searches stored documents only; use web.search to discover public pages.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `max_results` | `integer / null` | — | `null` |  |
+| `query` | `string` | ✓ | — | Search the local crawl index; does not search the public web or refresh stored pages. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "max_results": {
+      "default": null,
+      "format": "uint32",
+      "maximum": 20,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "query": {
+      "description": "Search the local crawl index; does not search the public web or refresh stored pages.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "type": "object"
+}
+```
+
+### read
+
+`agena.web.read` · **Summary**: Continue reading an immutable fetched-page snapshot.
+
+**Tags**: `network` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use page_id and next_offset returned by fetch, fetch_many or query. Returns a contiguous slice of the same extracted Markdown without refetching; offset counts Unicode characters, not bytes. max_chars defaults to 8000, maximum 24000. next_offset=null means the end of available extracted text, not necessarily a complete source: inspect truncated and content_status. Snapshots expire after 15 minutes and share a 32 MiB memory budget; if evicted, fetch the URL or query the crawl index again. Revalidates requested and final URL permissions.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `max_chars` | `integer / null` | — | `null` | Characters to return, default 8000, maximum 24000. |
+| `offset` | `integer` | — | `0` | Unicode character offset from next_offset; default 0. No network refetch. |
+| `page_id` | `string` | ✓ | — | Immutable snapshot handle returned by fetch, fetch_many, or query. Expires after 15 minutes or memory eviction. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "max_chars": {
+      "default": null,
+      "description": "Characters to return, default 8000, maximum 24000.",
+      "format": "uint32",
+      "maximum": 24000,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "offset": {
+      "default": 0,
+      "description": "Unicode character offset from next_offset; default 0. No network refetch.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000001"
+    },
+    "page_id": {
+      "description": "Immutable snapshot handle returned by fetch, fetch_many, or query. Expires after 15 minutes or memory eviction.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "page_id"
   ],
   "type": "object"
 }

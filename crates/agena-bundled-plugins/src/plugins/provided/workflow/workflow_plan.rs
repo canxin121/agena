@@ -1346,7 +1346,7 @@ impl WorkflowPlugin {
         let output_text = if Self::is_review_feedback_decision(&decision) {
             Self::plan_output_text(
                 format!(
-                    "Plan review decision: {decision}. The user left feedback instead of picking an option; revise the plan to address it (for example with plan.edit, then propose it again via plan.review or plan.phase) and propose it again."
+                    "Plan review decision: {decision}. The user left feedback instead of picking an option; revise the plan content with plan.set or update progress/notes with plan.edit, then request review again via plan.review or an applicable plan.phase transition."
                 )
                 .as_str(),
                 &plan,

@@ -190,3 +190,52 @@ async fn two_edits_of_one_revision_cannot_both_commit() {
     let (a, b) = tokio::join!(plugin.edit(&a), plugin.edit(&b));
     assert_ne!(a.is_ok(), b.is_ok());
 }
+
+#[tokio::test]
+async fn progress_and_completion_keep_approval_but_replacing_a_plan_requires_review() {
+    let (_dir, plugin, host) = fixture(false).await;
+    create(&plugin).await;
+    let p = plugin.clone();
+    let review = tokio::spawn(async move { p.review(&PlanReviewInput::default()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(2), host.entered.notified())
+        .await
+        .unwrap();
+    host.answer.add_permits(1);
+    review.await.unwrap().unwrap();
+
+    plugin
+        .edit(&PlanEditInput::parse_input(json!({"step":1,"status":"completed"})).unwrap())
+        .await
+        .unwrap();
+    let current = plugin
+        .get(&PlanGetInput::default())
+        .await
+        .unwrap()
+        .payload
+        .unwrap();
+    assert_eq!(current["plan"]["phase"], "active");
+    // No second approval is queued: if completion asks again it times out.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        plugin.phase(&PlanPhaseInput::parse_input(json!({"phase":"completed"})).unwrap()),
+    )
+    .await
+    .expect("approved plan completion must not wait for another review")
+    .unwrap();
+    let current = plugin
+        .get(&PlanGetInput::default())
+        .await
+        .unwrap()
+        .payload
+        .unwrap();
+    assert_eq!(current["plan"]["phase"], "completed");
+
+    create(&plugin).await;
+    let current = plugin
+        .get(&PlanGetInput::default())
+        .await
+        .unwrap()
+        .payload
+        .unwrap();
+    assert_eq!(current["plan"]["phase"], "planning");
+}

@@ -109,7 +109,7 @@ pub(crate) struct WorkflowPlanStepInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 #[schemars(
-    description = "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which you should only do when the user has already declared the plan needs no approval."
+    description = "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`."
 )]
 pub(crate) struct PlanSetInput {
     /// Optional revision from plan.get; mismatches never overwrite newer state.
@@ -128,7 +128,7 @@ pub(crate) struct PlanSetInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) autorun: Option<bool>,
     #[schemars(
-        description = "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately."
+        description = "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; the plan then becomes active immediately. Never change settings to bypass approval."
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request_approval: Option<bool>,
@@ -180,7 +180,7 @@ pub(crate) struct PlanEditInput {
 #[input(trim("summary"))]
 #[serde(default, deny_unknown_fields)]
 #[schemars(
-    description = "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requires user approval by default: pass `request_approval: true` (or omit it) to route it through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply it directly. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`."
+    description = "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requests review only when the current phase is not already approved (`active`, `blocked`, or `completed`). Leave `request_approval` omitted or true for normal transitions. Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; never change settings to bypass approval. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`."
 )]
 pub(crate) struct PlanPhaseInput {
     /// Optional revision from plan.get; mismatches never overwrite newer state.
@@ -192,7 +192,7 @@ pub(crate) struct PlanPhaseInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) phase: Option<WorkflowPlanPhase>,
     #[schemars(
-        description = "Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval."
+        description = "Whether to request user approval for this plan-level phase change. Defaults to true: transitions into active/blocked/completed request approval only when the current phase is not already approved (active/blocked/completed). Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`."
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request_approval: Option<bool>,
@@ -211,7 +211,7 @@ pub(crate) struct PlanPhaseInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default)]
 #[serde(default, deny_unknown_fields)]
 #[schemars(
-    description = "Request user approval of the current saved plan. This is the only plan tool that can pause for the user."
+    description = "Request user approval of the current saved plan to make it active. This can pause for the user; plan.phase can also request review for transitions that need approval."
 )]
 pub(crate) struct PlanReviewInput {}
 use super::{Deserialize, JsonSchema, Serialize};

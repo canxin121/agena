@@ -9,8 +9,8 @@
 This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 138 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
-- The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
-- Tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.
+- The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
+- Execution-tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.
 
 ## Table of Contents
 
@@ -5373,7 +5373,7 @@ Continuous-stream background monitoring tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`, or it ends when the session does.
+> Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`; it can also end on source exit/disconnection, timeout, cancellation or session end.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5744,7 +5744,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Plan-level phase transitions between `planning`, `active`, `blocked`, `completed`, and `cancelled`, with optional `autorun` and (for `completed`) `summary`. Transitions into `active`, `blocked`, or `completed` require user approval by default: pass `request_approval: true` (or omit it) to route them through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply them directly. To complete a plan with steps, mark the required steps/checks `completed` via `plan.edit` first, then call this tool separately with `phase: completed`.
+> Plan-level phase transitions between `planning`, `active`, `blocked`, `completed`, and `cancelled`, with optional `autorun` and (for `completed`) `summary`. Transitions into `active`, `blocked`, or `completed` request approval by default only when the current phase is not already approved (`active`, `blocked`, or `completed`). Leave `request_approval` omitted or true for normal transitions; an already approved plan does not request another review for progress or completion. Passing `request_approval: false` requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; never change settings to bypass approval. To complete a plan with steps, mark the required steps/checks `completed` via `plan.edit` first, then call this tool separately with `phase: completed`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5752,7 +5752,7 @@ Plan orchestration and plan-autorun tools.
 | `autorun` | `boolean / null` | — | — | Whether an approved active plan should keep running automatically. |
 | `expected_revision` | `string / null` | — | — | Optional revision from plan.get; mismatches never overwrite newer state. |
 | `phase` | `WorkflowPlanPhase / null` | — | — | Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`. |
-| `request_approval` | `boolean / null` | — | — | Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval. |
+| `request_approval` | `boolean / null` | — | — | Whether to request user approval for this plan-level phase change. Defaults to true: transitions into active/blocked/completed request approval only when the current phase is not already approved (active/blocked/completed). Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`. |
 | `summary` | `string / null` | — | — | Optional completion summary. This is only applied when `phase` is `completed`. |
 
 **Input schema**:
@@ -5771,7 +5771,7 @@ Plan orchestration and plan-autorun tools.
     }
   },
   "additionalProperties": false,
-  "description": "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requires user approval by default: pass `request_approval: true` (or omit it) to route it through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply it directly. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`.",
+  "description": "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requests review only when the current phase is not already approved (`active`, `blocked`, or `completed`). Leave `request_approval` omitted or true for normal transitions. Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; never change settings to bypass approval. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`.",
   "properties": {
     "autorun": {
       "description": "Whether an approved active plan should keep running automatically.",
@@ -5802,7 +5802,7 @@ Plan orchestration and plan-autorun tools.
       "x-agena-order": "000001"
     },
     "request_approval": {
-      "description": "Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval.",
+      "description": "Whether to request user approval for this plan-level phase change. Defaults to true: transitions into active/blocked/completed request approval only when the current phase is not already approved (active/blocked/completed). Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`.",
       "type": [
         "boolean",
         "null"
@@ -5831,13 +5831,13 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> This is the only plan tool that requests user approval and may pause for the user. It reviews the current saved plan and, when the user approves, moves it from `planning` to `active`. Call it after creating or refining the plan with `plan.set` / `plan.edit`. If the user leaves feedback or rejects, the plan stays in `planning` so you can revise it and propose again.
+> Request user approval of the current saved plan; this may pause for the user. The plan.phase tool also requests review for transitions that need approval. It reviews the current saved plan and, when the user approves, moves it from `planning` to `active`. Call it after creating or refining the plan with `plan.set` / `plan.edit`. If the user leaves feedback or rejects, the plan stays in `planning` so you can revise it and propose again.
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
-  "description": "Request user approval of the current saved plan. This is the only plan tool that can pause for the user.",
+  "description": "Request user approval of the current saved plan to make it active. This can pause for the user; plan.phase can also request review for transitions that need approval.",
   "properties": {},
   "type": "object"
 }
@@ -5852,7 +5852,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only when the user has already declared that the plan can be created directly without approval — the plan then becomes active immediately. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `ask`.
+> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation` — the plan then becomes active immediately. Never change settings to bypass approval. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `interaction.ask` when available, replace the plan content with `plan.set`, and update progress/notes with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `interaction.ask`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -5861,7 +5861,7 @@ Plan orchestration and plan-autorun tools.
 | `document_markdown` | `string / null` | — | — |  |
 | `expected_revision` | `string / null` | — | — | Optional revision from plan.get; mismatches never overwrite newer state. |
 | `objective` | `string` | ✓ | — |  |
-| `request_approval` | `boolean / null` | — | — | Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately. |
+| `request_approval` | `boolean / null` | — | — | Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; the plan then becomes active immediately. Never change settings to bypass approval. |
 | `steps` | `array<WorkflowPlanStepInput>` | — | — | Ordered plan steps. Each step item uses `title`; nested checks use `text`. |
 | `title` | `string / null` | — | — |  |
 
@@ -5955,7 +5955,7 @@ Plan orchestration and plan-autorun tools.
     }
   },
   "additionalProperties": false,
-  "description": "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which you should only do when the user has already declared the plan needs no approval.",
+  "description": "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`.",
   "properties": {
     "autorun": {
       "type": [
@@ -5984,7 +5984,7 @@ Plan orchestration and plan-autorun tools.
       "x-agena-order": "000001"
     },
     "request_approval": {
-      "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately.",
+      "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; the plan then becomes active immediately. Never change settings to bypass approval.",
       "type": [
         "boolean",
         "null"
@@ -7952,7 +7952,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `tool` | `ToolApiStringBatch` | ✓ | — | One exact execution-tool name, or a non-empty array of exact names, to<br>inspect. Use names returned by `tools_list` or `tools_search`. |
+| `tool` | `ToolApiStringBatch` | ✓ | — | One exact execution-tool name, or a non-empty array of exact names, to<br>inspect. Use exact names known from the prompt/context or returned by<br>`tools_list` or `tools_search`; known names need no preliminary search.<br>This help checks current availability and supplies the live contract. |
 
 **Input schema**:
 ```json
@@ -7972,7 +7972,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
           "type": "array"
         }
       ],
-      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use names returned by `tools_list` or `tools_search`.",
+      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use exact names known from the prompt/context or returned by\n`tools_list` or `tools_search`; known names need no preliminary search.\nThis help checks current availability and supplies the live contract.",
       "x-agena-order": "000000"
     }
   },
@@ -7980,7 +7980,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
   "properties": {
     "tool": {
       "$ref": "#/$defs/ToolApiStringBatch",
-      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use names returned by `tools_list` or `tools_search`."
+      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use exact names known from the prompt/context or returned by\n`tools_list` or `tools_search`; known names need no preliminary search.\nThis help checks current availability and supplies the live contract."
     }
   },
   "required": [
@@ -8087,7 +8087,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### plugins_list
 
-`agena.tools.plugins_list` · **Summary**: Enumerate one or many selected plugins with version, summary, tags, and tool count.
+`agena.tools.plugins_list` · **Tool API gateway handler** · **Summary**: Enumerate one or many selected plugins with version, summary, tags, and tool count.
 
 **Tags**: `query` `discovery` `read_only`
 
@@ -8182,7 +8182,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### plugins_search
 
-`agena.tools.plugins_search` · **Summary**: Search loaded plugins with one or many queries and optional multi-plugin scope.
+`agena.tools.plugins_search` · **Tool API gateway handler** · **Summary**: Search loaded plugins with one or many queries and optional multi-plugin scope.
 
 **Tags**: `query` `discovery` `read_only`
 
@@ -8287,7 +8287,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### plugins_tags
 
-`agena.tools.plugins_tags` · **Summary**: List plugin tags across one plugin or a batch of plugin targets.
+`agena.tools.plugins_tags` · **Tool API gateway handler** · **Summary**: List plugin tags across one plugin or a batch of plugin targets.
 
 **Tags**: `query` `discovery` `read_only`
 

@@ -92,8 +92,8 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 134,
-    "gateway_tools": 4,
+    "execution_tools": 131,
+    "gateway_tools": 7,
     "plugins": 22,
     "tools": 138
   },
@@ -1341,9 +1341,9 @@
         {
           "canonical_name": "agena.plan.phase",
           "conditional": null,
-          "definition_identity": "00c7a78c165ae8271ca385c348ec391a8a9ed14fa4829a5d56dd5c79ae9e7354",
+          "definition_identity": "ef573e2473cdb18b0f38d7b54792f1758eff28d687b0046c2cfdb675806d4d9a",
           "gateway": false,
-          "input_schema_sha256": "1b682054b14363877cfbadb3365ceecedb39463ce27d13c5a46aa00da8e67492",
+          "input_schema_sha256": "193be21f82840c5eab0693155bddc208469876c6ca4f04a466562f2a9ce6f6ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1354,9 +1354,9 @@
         {
           "canonical_name": "agena.plan.review",
           "conditional": null,
-          "definition_identity": "4fdab0165b0e29d4b8b872f2cd80bff777400d8c2edd821ebc2f98f72ab08255",
+          "definition_identity": "e25cf32added4579755c0fa1b6b4f129c8a42fe8733abe3524ca85daf49fb7db",
           "gateway": false,
-          "input_schema_sha256": "0ba25f43e5bbeb87c528931652239a7730a11bccb455d03c89dddaeb07b447e1",
+          "input_schema_sha256": "e20237506f227a75dd998e38e97ba66899fc220dc58ba86db9206ae9e5081694",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1367,9 +1367,9 @@
         {
           "canonical_name": "agena.plan.set",
           "conditional": null,
-          "definition_identity": "4fcb6961e7f9ce8d9cdb2af33fdd835a00274e0a3e6733c9b5f591115f6cfa11",
+          "definition_identity": "ced954f7f32e06dfa4e837db7bfe0c8447753e66bb8f5a9776175b4b693b8df7",
           "gateway": false,
-          "input_schema_sha256": "252cff84114a79eeb48e09abf4a4a1cb7420a1da59b4dbc7475f9236fd51d655",
+          "input_schema_sha256": "b927fbdacff74f8448b152546680c8ae6a6110eb3e17f34084acaa7484e1ede3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1868,9 +1868,9 @@
         {
           "canonical_name": "agena.tools.help",
           "conditional": null,
-          "definition_identity": "d9717a89703cb1589b3e4bf37832290935f8161ab8382ec7bd4c86c98739ff21",
+          "definition_identity": "1888c44438306c2674a9bec859693120b9644bf8a022a8d80565859901a15af4",
           "gateway": true,
-          "input_schema_sha256": "c2350a87b363fce42e7f2a1689410ad75afe998a800fd4a1dbf1cc3c64a41d3d",
+          "input_schema_sha256": "ad98e9416c3244c2415ca9cc4dfed86aac3b14e0c23e503f44a9560886b99704",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1895,7 +1895,7 @@
           "canonical_name": "agena.tools.plugins_list",
           "conditional": null,
           "definition_identity": "60d8b54783120ce526e11393372cd75242f4f88e3193978b56ed22e4d59ccc22",
-          "gateway": false,
+          "gateway": true,
           "input_schema_sha256": "bbc51f324fc615e89d5f73ea7158e68ec1970b9cff990addf2c1c179641789bd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
@@ -1908,7 +1908,7 @@
           "canonical_name": "agena.tools.plugins_search",
           "conditional": null,
           "definition_identity": "7799eab0ac78238c737ce3dc2a22cbe0e83667b5ad9fcb3e4d1bf72e092943b9",
-          "gateway": false,
+          "gateway": true,
           "input_schema_sha256": "581a43961a2f556fa3f2f20f5906abbff1793f17321875b7fc17f7b3f42e9a1e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
@@ -1921,7 +1921,7 @@
           "canonical_name": "agena.tools.plugins_tags",
           "conditional": null,
           "definition_identity": "7f8c0a5def9faefafdf8a5bb1a8d2325415dd0c8df25d5aeab9d0411a7ca3549",
-          "gateway": false,
+          "gateway": true,
           "input_schema_sha256": "3a6b06ee77f83d09d4bc954571e1a7facabd2e12220d3355a6a9d027b8a9b318",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [

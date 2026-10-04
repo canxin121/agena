@@ -691,7 +691,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
         }
     }
 
-    assert_eq!(checked, 134);
+    assert_eq!(checked, manifest.counts.execution_tools);
 }
 
 #[test]
@@ -732,7 +732,7 @@ fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
         }
     }
 
-    assert_eq!(checked, 134);
+    assert_eq!(checked, manifest.counts.execution_tools);
 }
 
 #[test]
@@ -767,7 +767,7 @@ fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
         }
     }
 
-    assert_eq!(checked, 134);
+    assert_eq!(checked, manifest.counts.execution_tools);
 }
 
 #[test]
@@ -868,7 +868,7 @@ fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
         }
     }
 
-    assert_eq!(checked, 134);
+    assert_eq!(checked, manifest.counts.execution_tools);
 }
 
 #[test]

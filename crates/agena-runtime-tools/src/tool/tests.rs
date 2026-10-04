@@ -978,7 +978,7 @@ async fn snapshot_internal_dispatch_does_not_depend_on_public_tool_registration(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn only_five_gateway_functions_are_provider_visible() {
+async fn only_fixture_gateways_and_synthesized_call_are_provider_visible() {
     let workspace_root = std::env::current_dir().expect("resolve test workspace");
     let mut plugins_config = PluginsConfig::default();
     plugins_config.list.insert(

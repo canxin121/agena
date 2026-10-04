@@ -364,7 +364,7 @@ impl ToolExecutor {
     }
 
     /// Return every ordinary execution tool visible to this session. There is
-    /// no direct/deferred/hidden exposure tier; only the five Tool API handlers
+    /// no direct/deferred/hidden exposure tier; only the declared Tool API handlers
     /// are excluded because they are protocol functions rather than targets.
     pub async fn detailed_execution_tools_async(&self) -> Vec<crate::tool::ExecutionTool> {
         self.detailed_tools_async()
@@ -390,7 +390,7 @@ impl ToolExecutor {
     }
 
     /// The only functions ever declared through an AI provider's official
-    /// function/tool protocol are the five stable agena.tools gateway handlers.
+    /// function/tool protocol are the declared Tool API gateway functions.
     pub fn available_tool_api_bindings(&self) -> Vec<ToolApiBinding> {
         let mut tools = self
             .available_registered_tools()

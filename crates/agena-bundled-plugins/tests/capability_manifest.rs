@@ -18,11 +18,12 @@ fn bundled_manifest_separates_gateway_and_execution_tools() {
         .count();
 
     assert_eq!(manifest.counts.tools, tool_count);
-    assert_eq!(manifest.counts.gateway_tools, 4);
-    assert_eq!(gateway_count, 4);
+    let expected_gateway_count = agena_domain::ToolApiFunction::ALL.len() - 1;
+    assert_eq!(manifest.counts.gateway_tools, expected_gateway_count);
+    assert_eq!(gateway_count, expected_gateway_count);
     assert_eq!(
         manifest.counts.execution_tools,
-        manifest.counts.tools.saturating_sub(4)
+        manifest.counts.tools - expected_gateway_count
     );
     for (plugin_id, canonical_name) in [
         ("agena.chatgpt", "agena.chatgpt.cloud_web_search"),

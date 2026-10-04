@@ -1,6 +1,6 @@
 //! Complete persisted configuration for one provider model route.
 //!
-//! Provider routes only decide how the five fixed Agena Tool API gateway
+//! Provider routes only decide how the declared Agena Tool API gateway
 //! functions are transported. Ordinary execution tools never become provider
 //! declarations, and provider-service capabilities live in ordinary plugins
 //! such as `agena.chatgpt`.

@@ -489,6 +489,36 @@ async fn audit_report_empty_findings_still_has_a_valid_outcome_summary() {
 }
 
 #[tokio::test]
+async fn audit_patch_absolute_paths_do_not_rebind_relative_paths() {
+    let f = Fixture::new().await;
+    f.write("shared.txt", "session workspace\n");
+    let other = tempfile::tempdir().unwrap();
+    let other_path = other.path().canonicalize().unwrap().join("shared.txt");
+    std::fs::write(&other_path, "other worktree\n").unwrap();
+
+    f.patch(&format!(
+        "*** Update File: {}\n@@\n-other worktree\n+edited other worktree",
+        other_path.display()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(f.read("shared.txt"), "session workspace\n");
+    assert_eq!(
+        std::fs::read_to_string(&other_path).unwrap(),
+        "edited other worktree\n"
+    );
+
+    f.patch("*** Update File: shared.txt\n@@\n-session workspace\n+edited session workspace")
+        .await
+        .unwrap();
+    assert_eq!(f.read("shared.txt"), "edited session workspace\n");
+    assert_eq!(
+        std::fs::read_to_string(&other_path).unwrap(),
+        "edited other worktree\n"
+    );
+}
+
+#[tokio::test]
 async fn audit_git_recovers_patch_and_external_edits_without_touching_unrelated_work() {
     let f = Fixture::new().await;
     // Isolated Git commands model the prompted workflow, not a runtime

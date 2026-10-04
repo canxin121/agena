@@ -277,7 +277,6 @@ dependencies = [
  "libc",
  "notify",
  "portable-atomic",
- "process_control",
  "regex",
  "reqwest 0.13.4",
  "schemars",
@@ -548,9 +547,11 @@ name = "agena-memory-index"
 version = "0.1.0"
 dependencies = [
  "agena-storage",
+ "blake3",
  "serde",
  "serde_json",
  "tantivy",
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
 ]
@@ -1092,6 +1093,7 @@ dependencies = [
  "agena-tool",
  "base64 0.22.1",
  "blake3",
+ "bytes",
  "chrono",
  "content_inspector",
  "fs4",
@@ -1109,7 +1111,6 @@ dependencies = [
  "parking_lot",
  "path-clean",
  "portable-atomic",
- "process_control",
  "rayon",
  "regex",
  "schemars",
@@ -1961,12 +1962,6 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
-
-[[package]]
-name = "attr_alias"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f648697f71a7eddd152c1ae26151f580c69635bfcb747574886317877ccf1a5a"
 
 [[package]]
 name = "auto_encoder"
@@ -7681,16 +7676,6 @@ dependencies = [
  "tokio",
  "tracing",
  "windows 0.62.2",
-]
-
-[[package]]
-name = "process_control"
-version = "5.2.0"
-dependencies = [
- "attr_alias",
- "libc",
- "signal-hook",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

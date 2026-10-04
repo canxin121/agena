@@ -33,12 +33,11 @@ fn probe_git_backend(workspace: &Path) -> SnapshotBackendSupport {
         };
     }
 
-    let output = match command_output(
-        Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .current_dir(workspace),
-        SNAPSHOT_PROBE_TIMEOUT,
-    ) {
+    let mut command = Command::new("git");
+    command
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(workspace);
+    let output = match command_output(command, SNAPSHOT_PROBE_TIMEOUT) {
         Ok(output) => output,
         Err(error) => {
             return SnapshotBackendSupport {
@@ -95,11 +94,28 @@ fn probe_rift_backend() -> SnapshotBackendSupport {
 }
 
 fn probe_command_presence(command: &str, args: &[&str], label: &str) -> Result<(), String> {
-    match command_output(Command::new(command).args(args), SNAPSHOT_PROBE_TIMEOUT) {
-        Ok(_) => Ok(()),
+    let mut probe = Command::new(command);
+    probe.args(args);
+    match command_output(probe, SNAPSHOT_PROBE_TIMEOUT) {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(format!(
+            "{label} `{command}` probe exited with {}; backend is unavailable",
+            output.status
+        )),
         Err(error) if error.kind() == ErrorKind::NotFound => {
             Err(format!("{label} `{command}` was not found on PATH"))
         }
         Err(error) => Err(format!("failed to start {label} `{command}`: {error}")),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn unsuccessful_executable_is_not_a_usable_snapshot_backend() {
+        let error = probe_command_presence("sh", &["-c", "exit 7"], "fixture").unwrap_err();
+        assert!(error.contains("7"));
+        assert!(probe_command_presence("sh", &["-c", "exit 0"], "fixture").is_ok());
     }
 }

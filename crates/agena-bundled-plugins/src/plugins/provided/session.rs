@@ -17,7 +17,6 @@ use agena_plugin_host::sdk::host_api::{
 use agena_plugin_host::sdk::{
     InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
-use process_control::{ChildExt as _, Control as _};
 
 pub(crate) const SESSION_PLUGIN_ID: &str = "agena.session";
 
@@ -50,7 +49,8 @@ struct GitFacts {
 
 fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
     const MAX_GIT_FACT_BYTES: usize = 4 * 1024 * 1024;
-    let child = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(workspace)
@@ -60,61 +60,25 @@ fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")
         .env("GPG_TTY", "")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                "start Git while inspecting the session environment",
-                &error,
-            ))
-        })?;
-    let mut retained = 0_usize;
-    let truncated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let capture_truncated = truncated.clone();
-    let stderr_truncated = truncated.clone();
-    let mut stderr_retained = 0_usize;
-    let output = child
-        .controlled_with_output()
-        .stdout_filter(move |chunk: &[u8]| {
-            if retained.saturating_add(chunk.len()) <= MAX_GIT_FACT_BYTES {
-                retained += chunk.len();
-                Ok(true)
-            } else {
-                retained = MAX_GIT_FACT_BYTES;
-                capture_truncated.store(true, std::sync::atomic::Ordering::Relaxed);
-                Ok(false)
-            }
-        })
-        .stderr_filter(move |chunk: &[u8]| {
-            if stderr_retained.saturating_add(chunk.len()) <= MAX_GIT_FACT_BYTES {
-                stderr_retained += chunk.len();
-                Ok(true)
-            } else {
-                stderr_truncated.store(true, std::sync::atomic::Ordering::Relaxed);
-                Ok(false)
-            }
-        })
-        .time_limit(Duration::from_secs(15))
-        .terminate_for_timeout()
-        .wait()
-        .map_err(|error| {
-            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                "wait for Git while inspecting the session environment",
-                &error,
-            ))
-        })?
-        .ok_or_else(|| {
-            PluginError::timeout_with_public_detail(
+        .stdin(Stdio::null());
+    let output = match agena_process::blocking::output(
+        command,
+        Duration::from_secs(15),
+        MAX_GIT_FACT_BYTES,
+    ) {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+            tracing::warn!(arguments = ?args, "Git inspection output exceeded its budget; facts remain unknown");
+            return Ok(None);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+            return Err(PluginError::timeout_with_public_detail(
                 "Git session environment inspection timed out after 15 seconds",
                 "Git inspection timed out after 15 seconds.",
-            )
-        })?;
-    if truncated.load(std::sync::atomic::Ordering::Relaxed) {
-        tracing::warn!(arguments = ?args, "Git inspection output exceeded its budget; facts remain unknown");
-        return Ok(None);
-    }
+            ));
+        }
+        Err(error) => return Err(PluginError::internal_error(&error)),
+    };
     if !output.status.success() {
         tracing::debug!(
             arguments = ?args,

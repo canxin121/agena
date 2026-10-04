@@ -1,6 +1,6 @@
 //! Managed process trees for synchronous launchers running on blocking workers.
 use std::io;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Output};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
@@ -12,6 +12,7 @@ use process_wrap::std::{ChildWrapper, CommandWrap};
 #[derive(Debug)]
 pub struct ManagedChild {
     inner: Box<dyn ChildWrapper>,
+    initial_id: Option<u32>,
     tree_killed: bool,
 }
 
@@ -21,8 +22,10 @@ pub fn spawn(command: Command) -> io::Result<ManagedChild> {
     wrapped.wrap(ProcessSession);
     #[cfg(windows)]
     wrapped.wrap(JobObject);
+    let inner = wrapped.spawn()?;
     Ok(ManagedChild {
-        inner: wrapped.spawn()?,
+        initial_id: Some(inner.id()),
+        inner,
         tree_killed: false,
     })
 }
@@ -44,7 +47,7 @@ impl ManagedChild {
         }
         match self.inner.start_kill() {
             Ok(()) => {}
-            Err(error) if super::process_tree_is_absent(&error) => {}
+            Err(error) if super::process_tree_is_finished(&error, self.initial_id) => {}
             Err(error) => return Err(error),
         }
         self.tree_killed = true;
@@ -69,6 +72,22 @@ impl ManagedChild {
     }
 }
 
+/// Bounded synchronous collection using the async managed process-tree and
+/// pipe policy. A dedicated thread avoids nesting Tokio on the caller's
+/// thread. Pipe readers never outlive the operation.
+pub fn output(command: Command, timeout: Duration, maximum_bytes: usize) -> io::Result<Output> {
+    std::thread::Builder::new()
+        .name("agena-process-output".into())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(super::output(command.into(), timeout, maximum_bytes))
+        })?
+        .join()
+        .map_err(|_| io::Error::other("managed output worker panicked"))?
+}
+
 impl Drop for ManagedChild {
     fn drop(&mut self) {
         if let Err(error) = self.terminate(Duration::from_secs(2)) {
@@ -80,6 +99,44 @@ impl Drop for ManagedChild {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn zombie_group_cleanup_preserves_real_permission_failures() {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30");
+        let mut child = spawn(command).unwrap();
+        let group = child.initial_id.unwrap() as libc::pid_t;
+        let permission_error = io::Error::from_raw_os_error(libc::EPERM);
+        // A live member must never turn a genuine EPERM into success.
+        assert!(!super::super::process_tree_is_finished(
+            &permission_error,
+            child.initial_id
+        ));
+        assert!(!super::super::process_tree_is_finished(
+            &permission_error,
+            None
+        ));
+
+        // Deliberately bypass ManagedChild's idempotence flag to exercise the
+        // OS condition: leave the directly owned group leader unreaped.
+        child.inner.start_kill().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !crate::unix::zombie_only_group(group).unwrap() {
+            assert!(Instant::now() < deadline, "leader must become a zombie");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(super::super::process_tree_is_finished(
+            &permission_error,
+            child.initial_id
+        ));
+        child
+            .start_kill()
+            .expect("all-zombie group is already dead");
+        let status = child.terminate(Duration::from_secs(2)).unwrap();
+        assert!(!status.success());
+        child.start_kill().expect("repeated cleanup is idempotent");
+    }
 
     #[test]
     fn observing_an_exited_leader_cleans_up_descendants() {

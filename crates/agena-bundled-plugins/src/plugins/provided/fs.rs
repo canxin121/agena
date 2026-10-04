@@ -466,7 +466,11 @@ impl FsPlugin {
                     if !metadata.is_file() {
                         return Err(PluginError::invalid_params("not a regular file"));
                     }
-                    let (preview, returned_bytes, file_truncated) = read_utf8_prefix(&target, remaining, path)?;
+                    // Reserve source bytes even if UTF-8 validation or a
+                    // concurrent-change check fails after reading them.
+                    let reserved = remaining.min(usize::try_from(metadata.len()).unwrap_or(usize::MAX));
+                    remaining -= reserved;
+                    let (preview, returned_bytes, file_truncated) = read_utf8_prefix(&target, reserved, path)?;
                     Ok((metadata.len(), preview, returned_bytes, file_truncated))
                 })();
                 match read {
@@ -475,7 +479,6 @@ impl FsPlugin {
                         let hash = (!file_truncated).then(|| sha256_bytes(preview.as_bytes()));
                         entries.push(serde_json::json!({"path":path,"status":"read","bytes":bytes,
                             "returned_bytes":returned_bytes,"truncated":file_truncated,"sha256":hash,"content":preview}));
-                        remaining = remaining.saturating_sub(returned_bytes);
                         truncated |= file_truncated;
                         succeeded += 1;
                     }
@@ -755,14 +758,34 @@ fn read_utf8_prefix(
     max_bytes: usize,
     display_path: &str,
 ) -> SdkResult<(String, usize, bool)> {
+    read_utf8_prefix_checked(path, max_bytes, display_path, || {})
+}
+
+fn read_utf8_prefix_checked(
+    path: &Path,
+    max_bytes: usize,
+    display_path: &str,
+    after_read: impl FnOnce(),
+) -> SdkResult<(String, usize, bool)> {
     let mut file = agena_tool::file_io::open_regular_file(path).map_err(fs_error)?;
     let metadata = file.metadata().map_err(fs_error)?;
     let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
     file.by_ref()
-        .take(max_bytes as u64)
+        .take(max_bytes.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
         .map_err(fs_error)?;
-    let truncated = metadata.len() > bytes.len() as u64;
+    after_read();
+    let after = file.metadata().map_err(fs_error)?;
+    if metadata.len() != after.len()
+        || metadata.modified().ok() != after.modified().ok()
+        || bytes.len() as u64 != metadata.len().min(max_bytes.saturating_add(1) as u64)
+    {
+        return Err(PluginError::invalid_params(
+            "read_many source changed while reading; retry",
+        ));
+    }
+    let truncated = bytes.len() > max_bytes;
+    bytes.truncate(max_bytes);
     let valid_bytes = match std::str::from_utf8(&bytes) {
         Ok(_) => bytes.as_slice(),
         Err(error) if truncated && error.error_len().is_none() => &bytes[..error.valid_up_to()],
@@ -780,6 +803,23 @@ fn read_utf8_prefix(
         .expect("valid UTF-8 prefix was checked above")
         .to_string();
     Ok((text, valid_bytes.len(), truncated))
+}
+
+#[cfg(test)]
+#[test]
+fn read_many_does_not_issue_a_complete_revision_after_observed_growth() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("changing.txt");
+    std::fs::write(&path, "before").unwrap();
+    let result = read_utf8_prefix_checked(&path, 100, "changing.txt", || {
+        std::fs::write(&path, "before and after").unwrap();
+    });
+    assert!(
+        result
+            .unwrap_err()
+            .diagnostic_message()
+            .contains("changed while reading")
+    );
 }
 
 fn verify_expected_hash(path: &Path, expected: &str) -> SdkResult<()> {

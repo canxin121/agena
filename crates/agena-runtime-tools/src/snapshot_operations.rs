@@ -308,12 +308,11 @@ fn create_backend_error(
     ))
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<process_control::Output, SnapshotOperationError> {
-    let output = command_output(
-        Command::new("git").args(args).current_dir(cwd),
-        SNAPSHOT_COMMAND_TIMEOUT,
-    )
-    .map_err(|error| operation_error(format!("git {args:?}: {error}")))?;
+fn git(cwd: &Path, args: &[&str]) -> Result<std::process::Output, SnapshotOperationError> {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(cwd);
+    let output = command_output(command, SNAPSHOT_COMMAND_TIMEOUT)
+        .map_err(|error| operation_error(format!("git {args:?}: {error}")))?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -328,16 +327,15 @@ fn rift(
     cwd: &Path,
     db_path: &Path,
     args: &[&str],
-) -> Result<process_control::Output, SnapshotOperationError> {
-    let output = command_output(
-        Command::new(snapshot_rift_binary())
-            .arg("--database")
-            .arg(db_path)
-            .args(args)
-            .current_dir(cwd),
-        SNAPSHOT_COMMAND_TIMEOUT,
-    )
-    .map_err(|error| operation_error(format!("rift {args:?}: {error}")))?;
+) -> Result<std::process::Output, SnapshotOperationError> {
+    let mut command = Command::new(snapshot_rift_binary());
+    command
+        .arg("--database")
+        .arg(db_path)
+        .args(args)
+        .current_dir(cwd);
+    let output = command_output(command, SNAPSHOT_COMMAND_TIMEOUT)
+        .map_err(|error| operation_error(format!("rift {args:?}: {error}")))?;
     if output.status.success() {
         return Ok(output);
     }

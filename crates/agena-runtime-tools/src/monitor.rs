@@ -34,7 +34,7 @@ use thiserror::Error;
 use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_util::codec::{FramedRead, LinesCodec};
+use tokio_util::codec::{Decoder, FramedRead, LinesCodec, LinesCodecError};
 use uuid::Uuid;
 
 use agena_domain::{ProcessEvent, ProcessStatus, ProcessStream, ProcessSummary};
@@ -791,6 +791,24 @@ async fn run_monitor(
         ))
     });
 
+    // The registry can abort this runner during shutdown. Scope its readers
+    // as well, even if a descendant retains a pipe after the child is killed.
+    struct ReaderGuard(Vec<tokio::task::AbortHandle>);
+    impl Drop for ReaderGuard {
+        fn drop(&mut self) {
+            for reader in &self.0 {
+                reader.abort();
+            }
+        }
+    }
+    let _readers = ReaderGuard(
+        stdout_task
+            .iter()
+            .chain(stderr_task.iter())
+            .map(tokio::task::JoinHandle::abort_handle)
+            .collect(),
+    );
+
     let mut abort_rx = abort_rx;
 
     let timeout_sleep = if persistent {
@@ -1178,6 +1196,27 @@ fn mark_failed(state: &MonitorState, reason: String) {
     }
 }
 
+// A malformed line is a recoverable record, not a transport error. FramedRead
+// pauses after Decoder::Error and may wait for another read even when the next
+// complete line is already buffered and a long-lived process is now silent.
+struct MonitorLinesCodec(LinesCodec);
+
+impl Decoder for MonitorLinesCodec {
+    type Item = Result<String, LinesCodecError>;
+    type Error = std::io::Error;
+
+    fn decode(&mut self, bytes: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        Ok(self.0.decode(bytes).transpose())
+    }
+
+    fn decode_eof(
+        &mut self,
+        bytes: &mut bytes::BytesMut,
+    ) -> Result<Option<Self::Item>, Self::Error> {
+        Ok(self.0.decode_eof(bytes).transpose())
+    }
+}
+
 async fn stream_lines<R>(
     state: Arc<MonitorState>,
     reader: R,
@@ -1191,22 +1230,11 @@ async fn stream_lines<R>(
 {
     let mut reader = FramedRead::new(
         reader,
-        LinesCodec::new_with_max_length(READER_LINE_BYTE_CAP),
+        MonitorLinesCodec(LinesCodec::new_with_max_length(READER_LINE_BYTE_CAP)),
     );
-    let mut resume_after_decoder_error = false;
-    loop {
-        match reader.next().await {
-            // FramedRead returns one transitional `None` after a decoder
-            // error. LinesCodec itself remains recoverable and discards the
-            // rest of the overlong line, so poll it again instead of treating
-            // that transitional value as pipe EOF.
-            None if resume_after_decoder_error => {
-                resume_after_decoder_error = false;
-                continue;
-            }
-            None => break,
-            Some(Ok(line)) => {
-                resume_after_decoder_error = false;
+    while let Some(event) = reader.next().await {
+        match event {
+            Ok(Ok(line)) => {
                 state
                     .last_activity_ms
                     .store(Utc::now().timestamp_millis(), Ordering::Release);
@@ -1238,15 +1266,29 @@ async fn stream_lines<R>(
                 }
                 push_event(&state, stream, line);
             }
-            Some(Err(error)) => {
-                resume_after_decoder_error = true;
+            Ok(Err(LinesCodecError::MaxLineLengthExceeded)) => {
                 push_event(
                     &state,
                     ProcessStream::Stderr,
                     format!(
-                        "background output line was discarded after exceeding the {READER_LINE_BYTE_CAP}-byte UTF-8 line limit: {error}"
+                        "background output line was discarded after exceeding the {READER_LINE_BYTE_CAP}-byte UTF-8 line limit"
                     ),
                 );
+            }
+            Ok(Err(error)) => push_event(
+                &state,
+                ProcessStream::Stderr,
+                format!(
+                    "background output line was discarded because it is not valid UTF-8: {error}"
+                ),
+            ),
+            Err(error) => {
+                push_event(
+                    &state,
+                    ProcessStream::Stderr,
+                    format!("background output pipe read failed: {error}"),
+                );
+                break;
             }
         }
     }
@@ -1307,6 +1349,38 @@ fn build_command(command: &str) -> Command {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn malformed_lines_resume_buffered_records_without_more_input_or_eof() {
+        use tokio::io::AsyncWriteExt;
+        let mut input = vec![b'x'; READER_LINE_BYTE_CAP + 100];
+        input.extend_from_slice(b"\nREADY\n\xff\nAFTER\n");
+        let (mut writer, reader) = tokio::io::duplex(input.len());
+        writer.write_all(&input).await.unwrap();
+        let mut lines = FramedRead::with_capacity(
+            reader,
+            MonitorLinesCodec(LinesCodec::new_with_max_length(READER_LINE_BYTE_CAP)),
+            input.len(),
+        );
+        // Keep writer alive and silent: all records must come from the first
+        // read. Returning Decoder::Error would stall after the oversized line.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            assert!(matches!(
+                lines.next().await,
+                Some(Ok(Err(LinesCodecError::MaxLineLengthExceeded)))
+            ));
+            assert_eq!(lines.next().await.unwrap().unwrap().unwrap(), "READY");
+            assert!(matches!(
+                lines.next().await,
+                Some(Ok(Err(LinesCodecError::Io(_))))
+            ));
+            assert_eq!(lines.next().await.unwrap().unwrap().unwrap(), "AFTER");
+        })
+        .await
+        .expect("buffered records must not wait for another pipe read");
+        drop(writer);
+        assert!(lines.next().await.is_none());
+    }
 
     fn process_exists(pid: i32) -> bool {
         // SAFETY: signal 0 only checks existence/permission.
@@ -1440,7 +1514,7 @@ mod tests {
         params.quiet_period_ms = Some(50);
         let id = registry.start(params).expect("start").summary.process_id;
         let read = wait_for_terminal(registry, id).await;
-        assert_eq!(read.status, ProcessStatus::Exited);
+        assert_eq!(read.status, ProcessStatus::Exited, "{read:?}");
         assert_eq!(read.completion_reason.as_deref(), Some("quiet_period"));
     }
 
@@ -1510,6 +1584,8 @@ mod tests {
             "head -c 100000 /dev/zero | LC_ALL=C tr '\\000' x; printf '\\nREADY\\n'; exec sleep 30",
         );
         params.success_pattern = Some("^READY$".to_string());
+        // This exercises framing, not a two-second host scheduling deadline.
+        params.timeout_ms = Some(10_000);
         let id = registry.start(params).expect("start").summary.process_id;
         let read = wait_for_terminal(registry, id).await;
 

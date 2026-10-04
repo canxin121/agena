@@ -10,6 +10,8 @@ use std::time::Duration;
 
 pub mod blocking;
 pub mod pty;
+#[cfg(unix)]
+mod unix;
 
 #[cfg(windows)]
 use process_wrap::tokio::JobObject;
@@ -19,7 +21,9 @@ use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
 
-fn process_tree_is_absent(error: &io::Error) -> bool {
+fn process_tree_is_finished(error: &io::Error, initial_id: Option<u32>) -> bool {
+    #[cfg(not(target_os = "macos"))]
+    let _ = initial_id;
     if matches!(
         error.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
@@ -32,6 +36,19 @@ fn process_tree_is_absent(error: &io::Error) -> bool {
     // termination failure after the direct child has been reaped.
     #[cfg(unix)]
     if error.raw_os_error() == Some(libc::ESRCH) {
+        return true;
+    }
+
+    // Darwin can retain an all-zombie group after the leader is reaped and
+    // report EPERM instead of ESRCH. Accept that only after bounded metadata
+    // inspection proves no live members remain; errors preserve the original
+    // failure. The initial ID survives Tokio clearing Child::id() after exit.
+    #[cfg(target_os = "macos")]
+    if error.raw_os_error() == Some(libc::EPERM)
+        && let Some(group) = initial_id.and_then(|id| libc::pid_t::try_from(id).ok())
+        && group > 1
+        && matches!(unix::zombie_only_group(group), Ok(true))
+    {
         return true;
     }
 
@@ -55,8 +72,11 @@ pub fn wrap_command(command: Command) -> CommandWrap {
 
 /// Spawn a configured Tokio command as one managed process tree.
 pub fn spawn(command: Command) -> io::Result<ManagedChild> {
+    let inner = wrap_command(command).spawn()?;
     Ok(ManagedChild {
-        inner: wrap_command(command).spawn()?,
+        initial_id: inner.id(),
+        inner,
+        tree_killed: false,
     })
 }
 
@@ -201,6 +221,8 @@ async fn output_inner(
 #[derive(Debug)]
 pub struct ManagedChild {
     inner: Box<dyn ChildWrapper>,
+    initial_id: Option<u32>,
+    tree_killed: bool,
 }
 
 impl ManagedChild {
@@ -230,13 +252,20 @@ impl ManagedChild {
 
     /// Request immediate termination of the entire process tree.
     pub fn start_kill(&mut self) -> io::Result<()> {
+        if self.tree_killed {
+            return Ok(());
+        }
         match self.inner.start_kill() {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.tree_killed = true;
+                Ok(())
+            }
             Err(error)
-                if process_tree_is_absent(&error)
+                if process_tree_is_finished(&error, self.initial_id)
                     && matches!(self.inner.try_wait(), Ok(Some(_))) =>
             {
                 // Killing an already-reaped process tree is idempotent.
+                self.tree_killed = true;
                 Ok(())
             }
             Err(error) => Err(error),
@@ -265,7 +294,12 @@ impl ManagedChild {
                 // The direct child may exit on SIGTERM while a descendant in
                 // the same group ignores it. A final group/job kill closes
                 // that race; an already-empty group simply returns ESRCH.
-                self.start_kill()?;
+                self.start_kill().map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!("cleanup after graceful leader exit failed: {error}"),
+                    )
+                })?;
                 Ok(status)
             }
             Err(timeout_error) => {
@@ -280,7 +314,9 @@ impl ManagedChild {
                     }
                     io::Error::other(diagnostic)
                 })?;
-                self.inner.wait().await.map_err(|wait_error| {
+                tokio::time::timeout(Duration::from_secs(2), self.inner.wait()).await
+                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "process tree was killed but reaping exceeded two seconds"))?
+                    .map_err(|wait_error| {
                     io::Error::other(format!(
                         "failed to reap the force-killed process tree: {wait_error}; graceful termination timeout: {timeout_error}"
                     ))
@@ -294,8 +330,8 @@ impl Drop for ManagedChild {
     fn drop(&mut self) {
         // The wrapper translates this to killpg(2) or TerminateJobObject,
         // unlike Tokio's raw Child kill-on-drop which only targets one PID.
-        if let Err(error) = self.inner.start_kill()
-            && !process_tree_is_absent(&error)
+        if let Err(error) = self.start_kill()
+            && !process_tree_is_finished(&error, self.initial_id)
         {
             tracing::error!(
                 error = %error,

@@ -383,7 +383,11 @@ mod tests {
             .find(|tool| tool.name == "pdftotext")
             .unwrap();
         probe_version(tool, root.path()).await;
-        assert_eq!(tool.version.as_deref(), Some("pdftotext fixture 1"));
+        assert_eq!(
+            tool.version.as_deref(),
+            Some("pdftotext fixture 1"),
+            "{tool:?}"
+        );
         script(&path, "#!/bin/sh\nexit 7\n", 0o755);
         tool.version = None;
         probe_version(tool, root.path()).await;

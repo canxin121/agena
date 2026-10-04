@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use redb::{
-    Database, MultimapTableHandle, ReadableDatabase, TableDefinition, TableError, TableHandle,
+    Database, MultimapTableHandle, ReadableDatabase, ReadableTable, TableDefinition, TableError,
+    TableHandle,
 };
 
 use crate::{CrawlError, StoredDocument};
@@ -99,8 +100,15 @@ impl CrawlMetadataStore {
         Ok(())
     }
 
-    pub fn save_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
+    pub fn save_document(
+        &self,
+        document: &StoredDocument,
+        previous: Option<&StoredDocument>,
+    ) -> Result<(), CrawlError> {
         let write_txn = self.db.begin_write()?;
+        if let Some(previous) = previous {
+            remove_owned_mappings(&write_txn, previous)?;
+        }
         {
             let mut url_to_id = write_txn.open_table(URL_TO_ID_TABLE)?;
             url_to_id.insert(document.canonical_url.as_str(), document.id.as_str())?;
@@ -119,18 +127,7 @@ impl CrawlMetadataStore {
 
     pub fn delete_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
         let write_txn = self.db.begin_write()?;
-        {
-            let mut url_to_id = write_txn.open_table(URL_TO_ID_TABLE)?;
-            url_to_id.remove(document.canonical_url.as_str())?;
-        }
-        {
-            let mut hash_to_id = write_txn.open_table(MARKDOWN_HASH_TO_ID_TABLE)?;
-            hash_to_id.remove(document.markdown_hash.as_str())?;
-        }
-        {
-            let mut raw_hash_to_id = write_txn.open_table(RAW_HASH_TO_ID_TABLE)?;
-            raw_hash_to_id.remove(document.raw_html_hash.as_str())?;
-        }
+        remove_owned_mappings(&write_txn, document)?;
         write_txn.commit()?;
         Ok(())
     }
@@ -179,6 +176,26 @@ impl CrawlMetadataStore {
             .get(raw_hash)?
             .map(|value| value.value().to_string()))
     }
+}
+
+fn remove_owned_mappings(
+    transaction: &redb::WriteTransaction,
+    document: &StoredDocument,
+) -> Result<(), CrawlError> {
+    for (definition, key) in [
+        (URL_TO_ID_TABLE, document.canonical_url.as_str()),
+        (MARKDOWN_HASH_TO_ID_TABLE, document.markdown_hash.as_str()),
+        (RAW_HASH_TO_ID_TABLE, document.raw_html_hash.as_str()),
+    ] {
+        let mut table = transaction.open_table(definition)?;
+        let owned = table
+            .get(key)?
+            .is_some_and(|value| value.value() == document.id);
+        if owned {
+            table.remove(key)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

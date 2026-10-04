@@ -22,7 +22,6 @@ import {
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
-import ChatRuntimeStatusOverlay from '@/components/chat/ChatRuntimeStatusOverlay.vue'
 import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
 import AttachProjectDialog from '@/components/chat/AttachProjectDialog.vue'
@@ -277,7 +276,6 @@ function handleAttachProjectFromPanel() {
   openProjectAttachDialog()
 }
 
-const overlayReservePx = ref(0)
 // A classic scrollbar reserves space in the transcript. Reserve that same
 // space beside the composer so their shared column aligns on every platform.
 const scrollbarGutter = ref(0)
@@ -285,14 +283,6 @@ useResizeObserver(scrollEl, () => {
   const element = scrollEl.value
   scrollbarGutter.value = element ? Math.max(0, element.offsetWidth - element.clientWidth) : 0
 })
-
-function handleOverlayReserve(px: number) {
-  if (!Number.isFinite(px) || px <= 0) {
-    overlayReservePx.value = 0
-    return
-  }
-  overlayReservePx.value = Math.max(0, Math.floor(px))
-}
 
 // Resolve popover anchors to the trigger button element.
 // This keeps desktop popups aligned with the button that opened them.
@@ -568,8 +558,6 @@ void sessionActionsMenuRef
                 />
               </div>
 
-              <div v-if="overlayReservePx > 0" :style="{ height: `${overlayReservePx}px` }" aria-hidden="true" />
-
               <div ref="bottomEl" class="h-px w-full" aria-hidden="true" />
             </div>
           </div>
@@ -632,15 +620,6 @@ void sessionActionsMenuRef
             >
               <RiArrowDownDoubleLine class="h-4 w-4" />
             </IconButton>
-          </div>
-
-          <div
-            v-if="chat.selectedSessionId && !ui.isSessionSwitcherOpen && !composerFullscreenActive"
-            class="pointer-events-none absolute inset-x-0 bottom-2 z-30"
-          >
-            <div class="chat-column">
-              <ChatRuntimeStatusOverlay :is-compact-touch="ui.isCompactTouch" @reserve-change="handleOverlayReserve" />
-            </div>
           </div>
         </div>
       </template>

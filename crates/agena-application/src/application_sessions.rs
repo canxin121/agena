@@ -459,12 +459,19 @@ impl Application {
         session_id: i64,
         at_message_id: Option<i64>,
         title: Option<String>,
+        conversation_mode: Option<agena_domain::ConversationMode>,
         expected_version: Option<i64>,
     ) -> Result<SessionExecutionResource, ApplicationError> {
+        if conversation_mode == Some(agena_domain::ConversationMode::Btw) {
+            return Err(ApplicationError::bad_request(
+                "Use the BTW endpoint to start a temporary question.",
+            ));
+        }
         let outcome = self
             .session_execution_services()?
             .commands
             .fork_session(SessionForkRequest {
+                conversation_mode,
                 session_id,
                 at_message_id,
                 title,

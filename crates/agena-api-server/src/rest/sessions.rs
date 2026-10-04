@@ -429,6 +429,7 @@ pub async fn fork_session(
                 session_id,
                 request.at_message_id,
                 request.title,
+                request.conversation_mode,
                 if_match_version(&headers)?,
             )
             .await?,

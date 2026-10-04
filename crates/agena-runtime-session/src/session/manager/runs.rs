@@ -332,10 +332,29 @@ impl SessionManager {
         // marker plus one `text` content part per submitted payload (the same
         // shape `drain_steer_input` writes). Parts carry no separate activity
         // identity; presentation identities are derived when queried.
-        let user_parts = input_parts
+        let mut user_parts = input_parts
             .iter()
             .map(|part| new_part_from_content("text", PartRole::User, part, PartState::Completed))
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some(conversation) = &session.runtime.execution.conversation
+            && !session
+                .parts()
+                .iter()
+                .any(|part| part.origin_session_id == session.id && part.role == PartRole::User)
+        {
+            user_parts.insert(
+                0,
+                agena_storage::store::NewPart {
+                    kind: "text".to_owned(),
+                    role: PartRole::User,
+                    content: serde_json::json!({ "text": conversation.boundary_notice() }),
+                    summary: None,
+                    visibility: agena_storage::store::PartVisibility::Ai,
+                    parent_part_id: None,
+                    state: PartState::Completed,
+                },
+            );
+        }
         let submit_outcome = self
             .store
             .submit_user_run_for_execution(

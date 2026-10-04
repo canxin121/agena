@@ -159,6 +159,23 @@ pub struct NotificationSubscription {
     task: Option<JoinHandle<()>>,
 }
 
+pub struct BtwSubscription {
+    rx: mpsc::Receiver<Result<agena_api::resource::BtwAnswer, ClientError>>,
+    task: JoinHandle<()>,
+}
+
+impl BtwSubscription {
+    pub async fn recv(&mut self) -> Option<Result<agena_api::resource::BtwAnswer, ClientError>> {
+        self.rx.recv().await
+    }
+}
+
+impl Drop for BtwSubscription {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 /// Snapshot-plus-live attachment to one server-owned session.
 ///
 /// The live subscription is established before the snapshot is read. Changes
@@ -1943,6 +1960,64 @@ impl AgenaClient {
         })
     }
 
+    pub async fn ask_btw(
+        &self,
+        session_id: i64,
+        request: agena_api::resource::BtwRequest,
+    ) -> Result<BtwSubscription, ClientError> {
+        let body = serde_json::to_value(request)?;
+        let response = self
+            .send_request(
+                reqwest::Method::POST,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/btw")),
+                Some(&body),
+                Some("text/event-stream"),
+            )
+            .await?;
+        if !response.status().is_success() {
+            return self
+                .parse_json::<agena_api::resource::BtwAnswer>(response)
+                .await
+                .and_then(|_| Err(ClientError::Protocol("Expected a BTW stream".into())));
+        }
+        let (tx, rx) = mpsc::channel(2);
+        let task = tokio::spawn(async move {
+            let reader = StreamReader::new(response.bytes_stream().map_err(std::io::Error::other));
+            let mut frames = FramedRead::new(
+                reader,
+                SseDecoder::<String>::with_max_size(MAX_SSE_EVENT_BYTES),
+            );
+            loop {
+                let frame = tokio::select! {
+                    _ = tx.closed() => return,
+                    frame = tokio::time::timeout(std::time::Duration::from_secs(60), frames.next()) => frame,
+                };
+                let result = match frame {
+                    Ok(Some(Ok(SseFrame::Event(event)))) if event.name == "btw" => {
+                        serde_json::from_str::<agena_api::resource::BtwAnswer>(&event.data)
+                            .map_err(ClientError::Decode)
+                    }
+                    Ok(Some(Ok(SseFrame::Comment(_) | SseFrame::Retry(_)))) => continue,
+                    Ok(Some(Ok(SseFrame::Event(_)))) => {
+                        Err(ClientError::Protocol("Unexpected BTW event".into()))
+                    }
+                    Ok(Some(Err(error))) => Err(ClientError::Protocol(format!(
+                        "Invalid BTW stream: {error}"
+                    ))),
+                    Ok(None) => Err(ClientError::Protocol(
+                        "BTW stream ended before completion".into(),
+                    )),
+                    Err(_) => Err(ClientError::Transport("BTW stream stalled".into())),
+                };
+                let done = result.as_ref().map_or(true, |answer| answer.done);
+                if tx.send(result).await.is_err() || done {
+                    return;
+                }
+            }
+        });
+        Ok(BtwSubscription { rx, task })
+    }
+
     /// Escape hatch: run any [`Command`] over REST where a dedicated route
     /// already exists.
     pub async fn command(&self, cmd: Command) -> Result<CommandResult, ClientError> {
@@ -2034,6 +2109,7 @@ impl AgenaClient {
                 .await?,
             )),
             Command::ForkSession(ForkSessionParams {
+                conversation_mode,
                 session_id,
                 at_message_id,
                 title,
@@ -2043,6 +2119,7 @@ impl AgenaClient {
                     serde_json::json!({
                         "at_message_id": at_message_id,
                         "title": title,
+                        "conversation_mode": conversation_mode,
                     }),
                 )
                 .await?,

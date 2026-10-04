@@ -467,9 +467,86 @@ impl ExecutorBackedFsAdapter {
 
 struct TestSessionContext {
     session_id: Option<i64>,
+    conversation: Option<agena_domain::SessionConversation>,
+}
+
+#[tokio::test]
+async fn btw_capability_is_read_only_before_hooks_and_cannot_be_approved_away() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = PluginsConfig::default();
+    for id in ["agena.fs", "agena.shell"] {
+        config
+            .list
+            .insert(id.into(), ConfiguredPlugin::static_default());
+    }
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![
+            StaticPluginRegistration::new("agena.fs".parse().unwrap(), ExecutorBackedFsAdapter),
+            StaticPluginRegistration::new(
+                "agena.shell".parse().unwrap(),
+                ExecutorBackedShellAdapter,
+            ),
+        ],
+        config,
+        workspace_root: root.path().into(),
+        agena_version: "test".into(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .unwrap();
+    let normal = ToolExecutor::new(
+        root.path(),
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        plugins,
+        None,
+        None,
+        None,
+    );
+    let btw = normal
+        .for_session_context_async(&TestSessionContext {
+            session_id: Some(2),
+            conversation: Some(agena_domain::SessionConversation {
+                mode: agena_domain::ConversationMode::Btw,
+                parent_session_id: 1,
+            }),
+        })
+        .await;
+    let names = btw
+        .available_execution_tools()
+        .into_iter()
+        .map(|tool| tool.canonical_name())
+        .collect::<Vec<_>>();
+    assert!(names.iter().any(|name| name == "agena.fs.read"));
+    assert!(!names.iter().any(|name| name.starts_with("agena.shell.")));
+    let write = ToolInvocation::new("shell.run", StructuredObject::default());
+    assert!(matches!(
+        btw.prepare_invocation(&write, 2, 1).await,
+        Err(ToolError::CapabilityUnavailable(_))
+    ));
+    assert!(matches!(
+        btw.collect_permission_checks_for_invocation_in_session(&write, Some(2))
+            .await,
+        Err(ToolError::CapabilityUnavailable(_))
+    ));
+    assert!(
+        normal
+            .available_execution_tools()
+            .iter()
+            .any(|tool| tool.canonical_name() == "agena.shell.run"),
+        "scoping BTW must not restrict the parent"
+    );
 }
 
 impl crate::ToolSessionContext for TestSessionContext {
+    fn conversation(&self) -> Option<&agena_domain::SessionConversation> {
+        self.conversation.as_ref()
+    }
     fn session_id(&self) -> Option<i64> {
         self.session_id
     }
@@ -1122,9 +1199,11 @@ async fn session_scoped_dynamic_tools_are_stable_per_turn_and_isolated_across_se
         None,
     );
     let session_a = TestSessionContext {
+        conversation: None,
         session_id: Some(101),
     };
     let session_b = TestSessionContext {
+        conversation: None,
         session_id: Some(202),
     };
 

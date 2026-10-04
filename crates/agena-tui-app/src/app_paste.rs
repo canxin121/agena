@@ -8,6 +8,7 @@ impl App {
         }
         match &self.current_route {
             Route::Main => self.focus == Focus::Composer,
+            Route::Btw(state) => state.accepts_input(),
             Route::Usage(_)
             | Route::Activities(_)
             | Route::PlanViewer(_)
@@ -44,6 +45,12 @@ impl App {
             let mut handled_route = false;
             match &mut self.current_route {
                 Route::Main => {}
+                Route::Btw(state) => {
+                    if state.accepts_input() {
+                        state.input.insert_str(text.as_str());
+                    }
+                    handled_route = true;
+                }
                 Route::Usage(_)
                 | Route::Activities(_)
                 | Route::PlanViewer(_)

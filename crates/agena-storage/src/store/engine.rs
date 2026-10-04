@@ -47,6 +47,7 @@ pub enum SessionChange {
     SessionDeleted {
         session_id: i64,
         workspace_id: i64,
+        temporary: bool,
     },
 }
 
@@ -518,6 +519,21 @@ pub trait PersistenceEngine: Send + Sync {
         at_part_id: i64,
         title: String,
         rewind: bool,
+        now_ms: i64,
+    ) -> Result<SessionMeta, StoreError> {
+        self.fork_session_with_config(session_id, at_part_id, title, rewind, None, now_ms)
+            .await
+    }
+
+    /// Fork and install execution config in the same transaction, before the
+    /// child can be observed or executed.
+    async fn fork_session_with_config(
+        &self,
+        session_id: i64,
+        at_part_id: i64,
+        title: String,
+        rewind: bool,
+        config_json: Option<serde_json::Value>,
         now_ms: i64,
     ) -> Result<SessionMeta, StoreError>;
 

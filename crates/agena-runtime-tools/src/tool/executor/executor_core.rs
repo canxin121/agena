@@ -8,6 +8,7 @@ impl ToolExecutor {
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     ) -> Self {
         Self {
+            conversation: None,
             workspace_root: workspace_root.into(),
             principal,
             allowed_tool_names: None,
@@ -48,6 +49,7 @@ impl ToolExecutor {
         session_context: &C,
     ) -> Self {
         let mut scoped = self.clone();
+        scoped.conversation = session_context.conversation().cloned();
         scoped.plugin_scope = session_context
             .session_id()
             .map(agena_plugin_host::PluginScopeKey::session);
@@ -354,9 +356,22 @@ impl ToolExecutor {
     }
 
     pub(crate) fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
-        self.allowed_tool_names
+        (!self
+            .conversation
             .as_ref()
-            .is_none_or(|allowed| allowed.contains(entry.canonical_name().as_str()))
+            .is_some_and(|context| context.is_read_only())
+            || crate::tool::is_tool_api_handler(entry)
+            || agena_plugin_host::sdk::ToolTag::is_read_only(&entry.effective_tags()))
+            && self
+                .allowed_tool_names
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(entry.canonical_name().as_str()))
+    }
+
+    pub fn conversation_instruction(&self) -> Option<String> {
+        self.conversation
+            .as_ref()
+            .map(|context| context.instruction())
     }
 
     pub async fn detailed_tools_async(&self) -> Vec<RegisteredTool> {

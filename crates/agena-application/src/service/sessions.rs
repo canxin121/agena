@@ -31,6 +31,7 @@ impl ApplicationService {
         }
         use agena_api::queries::SessionListBucket;
         let storage_query = SessionListQuery {
+            temporary_only: false,
             workspace_id: query.workspace_id,
             parent_id: query.parent_id,
             roots_only: query.roots,

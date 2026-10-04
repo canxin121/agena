@@ -378,9 +378,16 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
     BuiltInCommand {
         action: "side",
         slash: "/side",
-        aliases: &["btw", "aside"],
-        usage: None,
+        aliases: &["aside"],
+        usage: Some("[question]"),
         summary_key: "command-side-summary",
+    },
+    BuiltInCommand {
+        action: "btw",
+        slash: "/btw",
+        aliases: &[],
+        usage: Some("[question]"),
+        summary_key: "command-btw-summary",
     },
 ];
 
@@ -2688,7 +2695,8 @@ mod tests {
         assert_eq!(usage_of("download"), Some("<workspace-path>"));
         assert_eq!(usage_of("export"), Some("[path]"));
         assert_eq!(usage_of("settings"), None);
-        assert_eq!(usage_of("side"), None);
+        assert_eq!(usage_of("side"), Some("[question]"));
+        assert_eq!(usage_of("btw"), Some("[question]"));
     }
 
     #[test]

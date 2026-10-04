@@ -111,6 +111,7 @@ impl SessionUserRunRequest {
 #[derive(Debug, Clone)]
 /// Request to fork a session.
 pub struct SessionForkRequest {
+    pub conversation_mode: Option<agena_domain::ConversationMode>,
     pub session_id: i64,
     pub at_message_id: Option<i64>,
     pub title: Option<String>,

@@ -1086,6 +1086,16 @@ export default {
     },
   },
   chat: {
+    btw: {
+      title: 'BTW · 临时只读问答',
+      description: '主会话继续运行。可只读查询，结果单独显示，不写入主会话。',
+      placeholder: '想顺便问什么？',
+      send: '提问',
+      stop: '停止',
+      loading: '正在回答…',
+      returnToParent: 'Side · 返回原会话',
+      sideDescription: '带上当前上下文，打开独立的工作分支',
+    },
     toolDetails: {
       copyDiff: '复制 diff',
       diffChangeA: '新增',
@@ -3086,6 +3096,7 @@ export default {
   'command-rewind-summary': '选择一条用户消息，撤回它及其后的全部历史并创建新分支',
   'command-sessions-summary': '打开会话切换器',
   'command-settings-summary': '打开统一设置工作台，管理模型、权限、插件、运行时、会话、界面与诊断',
+  'command-btw-summary': '主会话继续运行。可只读查询，结果单独显示，不写入主会话。',
   'command-side-summary': '打开分叉的侧问会话，不打断当前运行',
   'command-status-summary': '显示当前会话、执行、工作区与界面状态',
   'command-timeline-summary': '为当前或选中的会话打开可搜索的事件时间线',

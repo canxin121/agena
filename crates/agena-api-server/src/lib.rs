@@ -417,6 +417,10 @@ pub fn router(state: AppState) -> Router {
                 post(rest::fork_session),
             )
             .route(
+                "/api/v1/sessions/{session_id}/btw",
+                post(rest::ask_btw).layer(DefaultBodyLimit::max(32 * 1024)),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/cancel",
                 post(rest::cancel_run),
             )
@@ -546,6 +550,7 @@ mod background_task_tests;
 
 #[cfg(all(test, feature = "http"))]
 mod router_contract_tests {
+    mod conversations;
     mod realtime_consistency;
     use std::collections::{BTreeMap, VecDeque};
 
@@ -2546,6 +2551,7 @@ mod router_contract_tests {
 
         let CommandResult::Execution(fork) = client
             .command(Command::ForkSession(ForkSessionParams {
+                conversation_mode: None,
                 session_id: source.id,
                 at_message_id: Some(first.run_id),
                 title: Some("message fork".to_owned()),
@@ -2564,6 +2570,7 @@ mod router_contract_tests {
 
         let CommandResult::Execution(full) = client
             .command(Command::ForkSession(ForkSessionParams {
+                conversation_mode: None,
                 session_id: source.id,
                 at_message_id: None,
                 title: None,
@@ -2651,6 +2658,7 @@ mod router_contract_tests {
         let streaming_original = store.load(streaming.id).await.unwrap();
         let CommandResult::Execution(branch) = client
             .command(Command::ForkSession(ForkSessionParams {
+                conversation_mode: None,
                 session_id: streaming.id,
                 at_message_id: None,
                 title: None,

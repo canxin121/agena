@@ -818,6 +818,7 @@ impl PersistenceEngine for InMemoryEngine {
             .map(str::to_lowercase);
         let mut summaries: Vec<SessionSummary> = sessions
             .values()
+            .filter(|meta| meta.is_temporary() == query.temporary_only)
             .filter(|meta| query.workspace_id.is_none_or(|ws| meta.workspace_id == ws))
             .filter(|meta| {
                 query
@@ -863,7 +864,7 @@ impl PersistenceEngine for InMemoryEngine {
                     .count() as i64;
                 let child_session_count = sessions
                     .values()
-                    .filter(|other| other.parent_id == Some(meta.id))
+                    .filter(|other| other.parent_id == Some(meta.id) && !other.is_temporary())
                     .count() as i64;
                 let last_message_at_ms = membership
                     .get(&meta.id)
@@ -960,7 +961,7 @@ impl PersistenceEngine for InMemoryEngine {
             .count() as i64;
         let child_session_count = sessions
             .values()
-            .filter(|other| other.parent_id == Some(meta.id))
+            .filter(|other| other.parent_id == Some(meta.id) && !other.is_temporary())
             .count() as i64;
         let last_message_at_ms = membership
             .get(&meta.id)
@@ -1000,7 +1001,7 @@ impl PersistenceEngine for InMemoryEngine {
         for workspace_id in &wanted {
             counts.insert(*workspace_id, 0);
         }
-        for meta in sessions.values() {
+        for meta in sessions.values().filter(|meta| !meta.is_temporary()) {
             if let Some(count) = counts.get_mut(&meta.workspace_id) {
                 *count += 1;
             }
@@ -1024,7 +1025,7 @@ impl PersistenceEngine for InMemoryEngine {
                     .count() as i64;
                 let child_session_count = sessions
                     .values()
-                    .filter(|other| other.parent_id == Some(meta.id))
+                    .filter(|other| other.parent_id == Some(meta.id) && !other.is_temporary())
                     .count() as i64;
                 let last_message_at_ms = membership
                     .get(&meta.id)
@@ -2072,12 +2073,13 @@ impl PersistenceEngine for InMemoryEngine {
         Ok(removed)
     }
 
-    async fn fork_session(
+    async fn fork_session_with_config(
         &self,
         session_id: i64,
         at_part_id: i64,
         title: String,
         rewind: bool,
+        config_json: Option<Value>,
         _now_ms: i64,
     ) -> Result<SessionMeta, StoreError> {
         let parent = self.session_meta(session_id).await?;
@@ -2112,7 +2114,7 @@ impl PersistenceEngine for InMemoryEngine {
             cutoff_part_id: Some(at_part_id),
             title,
             task_id: None,
-            config_json: parent.config_json.clone(),
+            config_json: config_json.or(parent.config_json.clone()),
             provider_anchors_json: None,
         };
         let child_meta = self.create_session(child).await?;

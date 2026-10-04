@@ -116,7 +116,7 @@ export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, Json
   return asRecord(error.bodyJson)
 }
 
-export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+export async function apiResponse(url: string, init?: RequestInit): Promise<Response> {
   const authHeaders = buildActiveUiAuthHeaders()
   const authTokenVersion = readUiAuthTokenVersion()
   const resp = await fetch(apiUrl(url), {
@@ -125,7 +125,7 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
     credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
     headers: {
       ...(init?.headers ?? {}),
-      accept: 'application/json',
+      ...(!hasHeader(init?.headers, 'accept') ? { accept: 'application/json' } : {}),
       ...(authHeaders.authorization && !hasHeader(init?.headers, 'authorization') ? authHeaders : {}),
     },
   })
@@ -165,7 +165,11 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw err
   }
 
-  return (await resp.json()) as T
+  return resp
+}
+
+export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  return (await (await apiResponse(url, init)).json()) as T
 }
 
 export async function apiText(url: string, init?: RequestInit): Promise<string> {

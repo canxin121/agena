@@ -153,7 +153,11 @@ impl SessionManager {
             .into_iter()
             .map(|tool| compact_tool_call_name(&tool.canonical_name()))
             .collect::<Vec<_>>();
-        let base = self.assemble_system_prompt_for_tool_names(tool_names, user_system);
+        let mut base = self.assemble_system_prompt_for_tool_names(tool_names, user_system);
+        if let Some(instruction) = scoped_executor.conversation_instruction() {
+            base.push_str("\n\n");
+            base.push_str(&instruction);
+        }
         let guidance = scoped_executor.project_instruction_section(&[]);
         if guidance.is_empty() {
             base
@@ -180,7 +184,11 @@ impl SessionManager {
             .into_iter()
             .map(|tool| compact_tool_call_name(&tool.canonical_name()))
             .collect::<Vec<_>>();
-        let base = self.assemble_system_prompt_for_tool_names(tool_names, user_system);
+        let mut base = self.assemble_system_prompt_for_tool_names(tool_names, user_system);
+        if let Some(instruction) = scoped_executor.conversation_instruction() {
+            base.push_str("\n\n");
+            base.push_str(&instruction);
+        }
         let guidance = scoped_executor.project_instruction_section(&[]);
         if guidance.is_empty() {
             base

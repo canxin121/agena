@@ -186,6 +186,7 @@ mod tests {
     #[test]
     fn execution_status_uses_provider_adapter_and_model() {
         let execution = SessionExecutionContextResource {
+            conversation: None,
             agent_id: "agena".to_owned(),
             selected_permission: Default::default(),
             effective_permission: Default::default(),

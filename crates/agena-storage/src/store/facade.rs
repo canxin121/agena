@@ -431,6 +431,14 @@ pub trait SessionStore: Send + Sync {
         title: String,
     ) -> Result<i64, StoreError>;
 
+    async fn fork_with_config(
+        &self,
+        session_id: i64,
+        at_part_id: i64,
+        title: String,
+        config: Value,
+    ) -> Result<i64, StoreError>;
+
     /// Rewind the session at a part (fork with an exclusive cutoff; the
     /// cutoff part belongs to the parent only).
     async fn rewind(
@@ -810,7 +818,7 @@ impl NotificationBus {
 
 impl SessionChange {
     /// The session a change belongs to (used by the bus to fan out).
-    fn session_id(&self) -> i64 {
+    pub fn session_id(&self) -> i64 {
         match self {
             Self::PartAdded { session_id, .. }
             | Self::PartUpdated { session_id, .. }
@@ -1771,6 +1779,31 @@ where
         Ok(meta.id)
     }
 
+    async fn fork_with_config(
+        &self,
+        session_id: i64,
+        at_part_id: i64,
+        title: String,
+        config: Value,
+    ) -> Result<i64, StoreError> {
+        let meta = self
+            .engine
+            .fork_session_with_config(
+                session_id,
+                at_part_id,
+                title,
+                false,
+                Some(config),
+                self.now(),
+            )
+            .await?;
+        self.bus.emit(SessionChange::SessionMetaUpdated {
+            session_id: meta.id,
+            meta: meta.clone(),
+        });
+        Ok(meta.id)
+    }
+
     async fn rewind(
         &self,
         session_id: i64,
@@ -1961,6 +1994,7 @@ where
             removed_memberships.push((
                 *deleted_id,
                 view.meta.workspace_id,
+                view.meta.is_temporary(),
                 view.parts
                     .into_iter()
                     .map(|part| part.part_id)
@@ -1968,8 +2002,8 @@ where
             ));
         }
         self.engine.delete_session(session_id).await?;
-        removed_memberships.sort_by_key(|(deleted_id, _, _)| *deleted_id);
-        for (deleted_id, workspace_id, part_ids) in removed_memberships {
+        removed_memberships.sort_by_key(|(deleted_id, _, _, _)| *deleted_id);
+        for (deleted_id, workspace_id, temporary, part_ids) in removed_memberships {
             self.memory.clear_streaming_session(deleted_id);
             self.memory.invalidate(deleted_id);
             for part_id in part_ids {
@@ -1981,6 +2015,7 @@ where
             self.bus.emit(SessionChange::SessionDeleted {
                 session_id: deleted_id,
                 workspace_id,
+                temporary,
             });
         }
         Ok(())
@@ -2876,7 +2911,8 @@ mod tests {
             *seen.lock().unwrap(),
             vec![SessionChange::SessionDeleted {
                 session_id,
-                workspace_id: 1
+                workspace_id: 1,
+                temporary: false,
             }]
         );
     }
@@ -3978,16 +4014,24 @@ mod tests {
                 .await
         }
 
-        async fn fork_session(
+        async fn fork_session_with_config(
             &self,
             session_id: i64,
             at_part_id: i64,
             title: String,
             rewind: bool,
+            config_json: Option<Value>,
             now_ms: i64,
         ) -> Result<SessionMeta, StoreError> {
             self.inner
-                .fork_session(session_id, at_part_id, title, rewind, now_ms)
+                .fork_session_with_config(
+                    session_id,
+                    at_part_id,
+                    title,
+                    rewind,
+                    config_json,
+                    now_ms,
+                )
                 .await
         }
 

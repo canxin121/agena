@@ -644,6 +644,34 @@ void sessionActionsMenuRef
                 @removeAttachment="removeAttachment"
               >
                 <template #status>
+                  <span v-if="chat.selectedSessionId" class="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      class="pointer-events-auto min-h-8 touch-manipulation rounded px-2 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                      :title="t('chat.btw.description')"
+                      @click.stop="ctx.openBtw()"
+                    >
+                      /btw
+                    </button>
+                    <button
+                      v-if="ctx.sideParentId.value"
+                      type="button"
+                      class="pointer-events-auto min-h-8 touch-manipulation rounded px-2 text-primary hover:bg-secondary/50"
+                      @click.stop="ctx.returnFromSide"
+                    >
+                      {{ t('chat.btw.returnToParent') }}
+                    </button>
+                    <button
+                      v-else
+                      type="button"
+                      class="pointer-events-auto min-h-8 touch-manipulation rounded px-2 text-muted-foreground hover:bg-secondary/50 hover:text-foreground disabled:opacity-50"
+                      :disabled="ctx.sideBusy.value"
+                      :title="t('chat.btw.sideDescription')"
+                      @click.stop="ctx.openSide()"
+                    >
+                      /side
+                    </button>
+                  </span>
                   <span class="flex items-center gap-1">
                     <button
                       ref="modelTriggerRef"

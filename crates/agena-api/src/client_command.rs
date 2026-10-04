@@ -99,6 +99,7 @@ client_command_actions! {
     Background => "background", "/background";
     Plan => "plan", "/plan";
     Side => "side", "/side";
+    Btw => "btw", "/btw";
 }
 
 impl Serialize for ClientCommandAction {

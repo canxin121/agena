@@ -858,7 +858,7 @@ mod tests {
             provider_state: None,
         };
         let state = serde_json::json!({"anthropic_thinking_blocks": [{"type": "thinking", "thinking": text, "signature": "sig"}]});
-        let record = round_record_from_parts(&[part.clone()], Some(&state), &[]);
+        let record = round_record_from_parts(std::slice::from_ref(&part), Some(&state), &[]);
         assert!(!record.to_string().contains(text));
         let sources = vec![
             agena_runtime_contracts::provider_state::ReasoningTextSource::from_content(

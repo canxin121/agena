@@ -289,7 +289,7 @@ impl SessionManager {
         if session.is_subagent() {
             session.runtime.execution.capability_denied_tool_names =
                 crate::session::manager::runs::non_recursive_subtask_capability_denials();
-        } else {
+        } else if session.runtime.execution.conversation.is_none() {
             session.runtime.execution.permission_ceiling = Default::default();
             session
                 .runtime

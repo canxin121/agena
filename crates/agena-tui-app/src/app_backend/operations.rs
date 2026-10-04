@@ -197,9 +197,10 @@ pub(crate) async fn fork_session(
     application: &TuiBackend,
     session_id: i64,
     title: Option<String>,
+    conversation_mode: Option<agena_domain::ConversationMode>,
 ) -> Result<SessionExecutionResource> {
     application
-        .fork_session(session_id, title)
+        .fork_session(session_id, title, conversation_mode)
         .await
         .context("failed to fork session")
 }

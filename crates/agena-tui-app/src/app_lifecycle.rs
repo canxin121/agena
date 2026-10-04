@@ -159,6 +159,7 @@ impl App {
             pending_ui_action: None,
             current_lineage: None,
             side_sessions: HashMap::new(),
+            fork_pending: false,
             next_usage_request_id: 0,
             next_hub_request_id: 0,
             active_subscription: None,

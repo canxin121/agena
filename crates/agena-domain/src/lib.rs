@@ -71,6 +71,7 @@ mod prompt_tokens;
 mod provider_retry;
 mod reasoning;
 mod role;
+mod session_conversation;
 mod session_cost;
 mod session_state;
 mod session_summary;
@@ -193,6 +194,7 @@ pub use prompt_tokens::PromptTokenUsageSnapshot;
 pub use provider_retry::{ProviderRetryEvent, ProviderRetryResolvedEvent};
 pub use reasoning::AssistantReasoningField;
 pub use role::Role;
+pub use session_conversation::{ConversationMode, SessionConversation};
 pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
 pub use session_state::{
     SessionLifecycleState, SessionRelationKind, SessionStateKind, SubtaskStatus, WorkflowState,

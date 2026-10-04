@@ -2196,3 +2196,12 @@ tool-detail-metadata = 元数据
 hub-section-search = 搜索结果
 hub-page-next = → 下一页（第 { $page } 页）
 hub-page-previous = ← 上一页（第 { $page } 页）
+
+command-btw-summary = 主会话继续运行。可只读查询，结果单独显示，不写入主会话。
+btw-title = BTW · 临时只读问答
+btw-description = 主会话继续运行。可只读查询，结果单独显示，不写入主会话。
+btw-send = 提问
+btw-stop = 停止
+btw-loading = 正在回答…
+side-return = Side · 返回原会话
+btw-footer = Enter 提问 · PgUp/PgDn 滚动 · Ctrl+C 停止 · Esc 关闭

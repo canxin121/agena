@@ -710,7 +710,7 @@ impl ProcessorPartIdAllocator {
     }
 }
 
-fn store_error(error: StoreError) -> AppError {
+pub(crate) fn store_error(error: StoreError) -> AppError {
     match error {
         StoreError::NotFound(message) => AppError::Internal(message),
         StoreError::InvalidState(message)
@@ -1328,6 +1328,7 @@ fn apply_meta_runtime(
                 ))
             })?;
         runtime.execution.selection = config.selection;
+        runtime.execution.conversation = config.conversation;
         runtime.execution.permission_ceiling = config.permission_ceiling;
         runtime.execution.capability_denied_tool_names = config.capability_denied_tool_names;
         runtime.execution.effective_workspace_root = config.effective_workspace_root;
@@ -1341,6 +1342,8 @@ fn apply_meta_runtime(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct PersistedExecutionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<agena_domain::SessionConversation>,
     #[serde(default, skip_serializing_if = "ExecutionSelection::is_empty")]
     pub selection: ExecutionSelection,
     #[serde(
@@ -1356,7 +1359,8 @@ pub(crate) struct PersistedExecutionConfig {
 
 impl PersistedExecutionConfig {
     pub fn is_empty(&self) -> bool {
-        self.selection.is_empty()
+        self.conversation.is_none()
+            && self.selection.is_empty()
             && self.permission_ceiling.is_empty()
             && self.capability_denied_tool_names.is_empty()
             && self.effective_workspace_root.is_none()
@@ -1367,6 +1371,7 @@ impl From<&crate::session::model::SessionExecutionContext> for PersistedExecutio
     fn from(execution: &crate::session::model::SessionExecutionContext) -> Self {
         Self {
             selection: execution.selection.clone(),
+            conversation: execution.conversation.clone(),
             permission_ceiling: execution.permission_ceiling.clone(),
             capability_denied_tool_names: execution.capability_denied_tool_names.clone(),
             effective_workspace_root: execution.effective_workspace_root.clone(),

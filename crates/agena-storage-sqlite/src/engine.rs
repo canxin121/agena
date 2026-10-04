@@ -598,6 +598,14 @@ fn session_state_projection_sql() -> String {
 
 fn session_list_filter(query: &SessionListQuery) -> (String, Vec<Value>) {
     let mut where_clauses = Vec::new();
+    where_clauses.push(
+        if query.temporary_only {
+            "json_extract(s.config_json, '$.conversation.mode') = 'btw'"
+        } else {
+            "json_extract(s.config_json, '$.conversation.mode') IS NOT 'btw'"
+        }
+        .to_owned(),
+    );
     let mut values: Vec<Value> = Vec::new();
     if let Some(workspace_id) = query.workspace_id {
         where_clauses.push("s.workspace_id = ?".to_owned());
@@ -1266,7 +1274,7 @@ impl PersistenceEngine for SqliteEngine {
              (SELECT COUNT(*) FROM agena_session_parts sp \
                JOIN agena_parts p ON p.part_id = sp.part_id \
                WHERE sp.session_id = s.id AND p.kind = 'run') AS message_count, \
-             (SELECT COUNT(*) FROM agena_sessions c WHERE c.parent_id = s.id) \
+             (SELECT COUNT(*) FROM agena_sessions c WHERE c.parent_id = s.id AND json_extract(c.config_json, '$.conversation.mode') IS NOT 'btw') \
                AS child_session_count, \
              (SELECT MAX(p.created_at_ms) FROM agena_session_parts sp \
                JOIN agena_parts p ON p.part_id = sp.part_id \
@@ -1307,7 +1315,7 @@ impl PersistenceEngine for SqliteEngine {
         let placeholders = vec!["?"; workspace_ids.len()].join(", ");
         let projection = session_state_projection_sql();
         let rows = self.db().query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            format!("SELECT workspace_id, COUNT(*) AS total, SUM(parent_id IS NULL) AS roots, SUM(pinned) AS pinned, SUM(state IN ('running', 'creating')) AS running, SUM(state IN ('awaiting_interaction', 'failed')) AS attention FROM (SELECT s.workspace_id, s.parent_id, s.pinned, {projection} AS state FROM agena_sessions s WHERE s.is_subagent = 0 AND s.workspace_id IN ({placeholders})) GROUP BY workspace_id"),
+            format!("SELECT workspace_id, COUNT(*) AS total, SUM(parent_id IS NULL) AS roots, SUM(pinned) AS pinned, SUM(state IN ('running', 'creating')) AS running, SUM(state IN ('awaiting_interaction', 'failed')) AS attention FROM (SELECT s.workspace_id, s.parent_id, s.pinned, {projection} AS state FROM agena_sessions s WHERE s.is_subagent = 0 AND json_extract(s.config_json, '$.conversation.mode') IS NOT 'btw' AND s.workspace_id IN ({placeholders})) GROUP BY workspace_id"),
             workspace_ids.iter().copied().map(Value::from),
         )).await.map_err(map_db_err)?;
         let mut result = workspace_ids
@@ -1409,7 +1417,7 @@ impl PersistenceEngine for SqliteEngine {
                  (SELECT COUNT(*) FROM agena_session_parts sp \
                    JOIN agena_parts p ON p.part_id = sp.part_id \
                    WHERE sp.session_id = s.id AND p.kind = 'run') AS message_count, \
-                 (SELECT COUNT(*) FROM agena_sessions c WHERE c.parent_id = s.id) \
+                 (SELECT COUNT(*) FROM agena_sessions c WHERE c.parent_id = s.id AND json_extract(c.config_json, '$.conversation.mode') IS NOT 'btw') \
                    AS child_session_count, \
                  (SELECT MAX(p.created_at_ms) FROM agena_session_parts sp \
                    JOIN agena_parts p ON p.part_id = sp.part_id \
@@ -1441,7 +1449,7 @@ impl PersistenceEngine for SqliteEngine {
                 DatabaseBackend::Sqlite,
                 format!(
                     "SELECT workspace_id, COUNT(*) AS count FROM agena_sessions \
-                     WHERE workspace_id IN ({placeholders}) GROUP BY workspace_id"
+                     WHERE json_extract(config_json, '$.conversation.mode') IS NOT 'btw' AND workspace_id IN ({placeholders}) GROUP BY workspace_id"
                 ),
                 values,
             ))
@@ -1467,7 +1475,7 @@ impl PersistenceEngine for SqliteEngine {
                  (SELECT COUNT(*) FROM agena_session_parts sp \
                    JOIN agena_parts p ON p.part_id = sp.part_id \
                    WHERE sp.session_id = s.id AND p.kind = 'run') AS message_count, \
-                     (SELECT COUNT(*) FROM agena_sessions c WHERE c.parent_id = s.id) \
+                     (SELECT COUNT(*) FROM agena_sessions c WHERE c.parent_id = s.id AND json_extract(c.config_json, '$.conversation.mode') IS NOT 'btw') \
                        AS child_session_count, \
                      (SELECT MAX(p.created_at_ms) FROM agena_session_parts sp \
                        JOIN agena_parts p ON p.part_id = sp.part_id \
@@ -2770,12 +2778,13 @@ impl PersistenceEngine for SqliteEngine {
         .await
     }
 
-    async fn fork_session(
+    async fn fork_session_with_config(
         &self,
         session_id: i64,
         at_part_id: i64,
         title: String,
         rewind: bool,
+        config_json: Option<serde_json::Value>,
         now_ms: i64,
     ) -> Result<SessionMeta, StoreError> {
         let db = self.db();
@@ -2815,7 +2824,7 @@ impl PersistenceEngine for SqliteEngine {
                     cutoff_part_id: Some(at_part_id),
                     title,
                     task_id: None,
-                    config_json: parent.config_json.clone(),
+                    config_json: config_json.or(parent.config_json.clone()),
                     provider_anchors_json: None,
                 };
                 let child_id = create_session_tx(txn, child).await?;

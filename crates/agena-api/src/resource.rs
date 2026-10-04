@@ -10,10 +10,12 @@ use std::collections::BTreeMap;
 
 mod activity;
 mod auth;
+mod conversation;
 mod interaction;
 mod notification;
 pub use activity::*;
 pub use auth::*;
+pub use conversation::*;
 pub use interaction::*;
 pub use notification::*;
 
@@ -1201,6 +1203,8 @@ pub struct ActiveExecutionResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Execution context of a session: agent, access, and permission configuration.
 pub struct SessionExecutionContextResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<agena_domain::SessionConversation>,
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub selected_permission: PermissionConfigResource,

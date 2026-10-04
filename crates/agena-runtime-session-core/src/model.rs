@@ -456,6 +456,8 @@ pub struct SessionRuntimeState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Execution context of a session.
 pub struct SessionExecutionContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<agena_domain::SessionConversation>,
     /// Process-local carrier for plugin scope routing. This is deliberately
     /// excluded from persisted execution config; the owning Session binds its
     /// current id after creation/hydration.
@@ -494,7 +496,8 @@ pub struct SessionExecutionContext {
 
 impl SessionExecutionContext {
     pub fn is_empty(&self) -> bool {
-        self.selection.is_empty()
+        self.conversation.is_none()
+            && self.selection.is_empty()
             && self.effective_permission.is_empty()
             && self.permission_ceiling.is_empty()
             && self.capability_denied_tool_names.is_empty()
@@ -503,6 +506,9 @@ impl SessionExecutionContext {
 }
 
 impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
+    fn conversation(&self) -> Option<&agena_domain::SessionConversation> {
+        self.conversation.as_ref()
+    }
     fn session_id(&self) -> Option<i64> {
         self.scope_session_id
     }

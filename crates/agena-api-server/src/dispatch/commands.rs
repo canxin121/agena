@@ -106,12 +106,13 @@ pub async fn dispatch_command(
             ))
         }
         Command::ForkSession(ForkSessionParams {
+            conversation_mode,
             session_id,
             at_message_id,
             title,
         }) => Ok(execution_command_result(
             state
-                .fork_session(session_id, at_message_id, title, None)
+                .fork_session(session_id, at_message_id, title, conversation_mode, None)
                 .await?,
         )),
         Command::ListSessionTree(ListSessionTreeParams { root_id }) => {

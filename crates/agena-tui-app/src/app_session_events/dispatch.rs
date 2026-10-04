@@ -28,6 +28,9 @@ impl App {
                 }
                 self.handle_activities_cleared(request_id, result.is_ok_and(|ok| ok));
             }
+            AppMessage::BtwUpdated { request_id, answer } => {
+                self.handle_btw_updated(request_id, answer)
+            }
             AppMessage::PlanViewerLoaded { request_id, result } => {
                 self.handle_plan_viewer_loaded(request_id, result)
             }
@@ -236,11 +239,13 @@ impl App {
                 self.handle_turn_cancelled(session_id, result)
             }
             AppMessage::StatusLineUpdated { output } => self.handle_status_line_updated(output),
-            AppMessage::SideSessionOpened {
-                session_id,
+            AppMessage::ForkCreated {
                 parent_id,
+                side,
+                submit_draft,
+                result,
             } => {
-                self.handle_side_session_opened(session_id, parent_id);
+                self.handle_fork_created(parent_id, side, submit_draft, result);
             }
         }
     }
@@ -274,9 +279,16 @@ impl App {
 
     /// True when the current transcript is an open side conversation.
     pub(crate) fn current_session_is_side(&self) -> bool {
-        self.transcript
-            .session_id
-            .is_some_and(|session_id| self.side_sessions.contains_key(&session_id))
+        self.transcript.session_id.is_some_and(|session_id| {
+            self.side_sessions.contains_key(&session_id)
+                || self.transcript.execution.as_ref().is_some_and(|execution| {
+                    execution
+                        .execution
+                        .conversation
+                        .as_ref()
+                        .is_some_and(|context| context.mode == agena_domain::ConversationMode::Side)
+                })
+        })
     }
 
     /// True when the current transcript is the parent of an open side

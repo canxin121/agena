@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { createFailedAttachmentDraftSlot } from './chat/failedAttachmentDrafts'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RiScissorsLine } from '@remixicon/vue'
@@ -69,6 +69,8 @@ import {
 } from '@/lib/chatActivity'
 
 type ComposerActionItem = { id: string; label: string; description?: string; icon?: Component; disabled?: boolean }
+
+const BtwDialog = defineAsyncComponent(() => import('@/components/chat/BtwDialog.vue'))
 
 type OptionMenuExpose = {
   containsTarget?: (target: Node | null) => boolean
@@ -275,6 +277,46 @@ const pageRef = ref<HTMLElement | null>(null)
 const composerBarRef = ref<HTMLElement | null>(null)
 const transcriptSearchInputRef = ref<HTMLInputElement | null>(null)
 const planViewerOpen = ref(false)
+const btwOpen = ref(false)
+const btwQuestion = ref('')
+const btwSessionId = ref<string | null>(null)
+const sideBusy = ref(false)
+const sideParentId = computed(() => {
+  const context = asRecord(chat.getSessionExecution(chat.selectedSessionId)?.conversation)
+  const parent = Number(context.parent_session_id)
+  return context.mode === 'side' && Number.isSafeInteger(parent) && parent > 0 ? String(parent) : null
+})
+function openBtw(question = '') {
+  if (!chat.selectedSessionId) return
+  btwSessionId.value = chat.selectedSessionId
+  btwQuestion.value = question
+  btwOpen.value = true
+}
+watch(
+  () => chat.selectedSessionId,
+  () => {
+    btwOpen.value = false
+  },
+)
+async function openSide(question = '') {
+  const parent = chat.selectedSessionId
+  if (!parent || sideBusy.value) return
+  sideBusy.value = true
+  try {
+    const created = await chat.forkSession(parent, { conversation_mode: 'side' })
+    if (!created?.id) throw new Error('The server did not return a side conversation')
+    // A slow fork must not pull the user out of a session they navigated to.
+    if (chat.selectedSessionId === parent) await chat.selectSession(created.id)
+    if (question.trim()) await chat.sendMessage(created.id, { text: question.trim() })
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    sideBusy.value = false
+  }
+}
+function returnFromSide() {
+  if (sideParentId.value) void chat.selectSession(sideParentId.value)
+}
 
 const modelTriggerRef = ref<HTMLElement | null>(null)
 const thinkingTriggerRef = ref<HTMLElement | null>(null)
@@ -1847,8 +1889,13 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       return
     }
     case 'fork':
-    case 'side':
       await handleForkSession()
+      return
+    case 'side':
+      await openSide(args)
+      return
+    case 'btw':
+      openBtw(args)
       return
     case 'children': {
       if (!sid) {
@@ -2493,6 +2540,11 @@ const viewCtx = {
   composerStatusExtra,
   composerBottomLeftStatus,
   composerBottomRightStatus,
+  openBtw,
+  openSide,
+  returnFromSide,
+  sideParentId,
+  sideBusy,
   openPlanViewer: () => {
     planViewerOpen.value = true
   },
@@ -2552,5 +2604,6 @@ onBeforeUnmount(() => {
 
 <template>
   <ChatPageView :ctx="viewCtx" />
+  <BtwDialog v-if="btwOpen" v-model:open="btwOpen" :session-id="btwSessionId" :initial-question="btwQuestion" />
   <PlanViewerDialog v-model:open="planViewerOpen" :session-id="chat.selectedSessionId" />
 </template>

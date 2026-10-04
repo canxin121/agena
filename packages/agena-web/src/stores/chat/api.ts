@@ -1179,7 +1179,7 @@ export async function rewindSession(sessionId: string, atMessageId: number): Pro
 /** POST /api/v1/sessions/{id}/fork — clone history into a child session. */
 export async function forkSession(
   sessionId: string,
-  opts?: { at_message_id?: number; title?: string },
+  opts?: { at_message_id?: number; title?: string; conversation_mode?: 'side' },
 ): Promise<Session> {
   const body: JsonValue = {}
   if (opts?.at_message_id !== undefined) {
@@ -1188,6 +1188,7 @@ export async function forkSession(
     }
     ;(body as JsonObject).at_message_id = opts.at_message_id
   }
+  if (opts?.conversation_mode) (body as JsonObject).conversation_mode = opts.conversation_mode
   const title = typeof opts?.title === 'string' ? opts.title.trim() : ''
   if (title) (body as JsonObject).title = title
   const created = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`, {

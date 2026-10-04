@@ -1091,6 +1091,17 @@ export default {
     },
   },
   chat: {
+    btw: {
+      title: 'BTW · read-only question',
+      description:
+        'Ask separately while the main conversation continues. Read-only tools; no changes to the main conversation.',
+      placeholder: 'What would you like to ask?',
+      send: 'Ask',
+      stop: 'Stop',
+      loading: 'Answering…',
+      returnToParent: 'Side · return to parent',
+      sideDescription: 'Open a separate branch with the current context',
+    },
     toolDetails: {
       copyDiff: 'Copy diff',
       diffChangeA: 'Added',
@@ -3098,6 +3109,8 @@ export default {
   'command-sessions-summary': 'Open the session switcher',
   'command-settings-summary':
     'Open the unified settings workbench for models, permissions, plugins, runtime, sessions, interface, and diagnostics',
+  'command-btw-summary':
+    'Ask separately while the main conversation continues. Read-only tools; no changes to the main conversation.',
   'command-side-summary': 'Open a forked side conversation without disturbing the current run',
   'command-status-summary': 'Show the current session, execution, workspace, and interface status',
   'command-timeline-summary': 'Open a searchable event timeline for the current or selected session',

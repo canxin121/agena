@@ -27,6 +27,9 @@ pub use provider_state::PartProviderState;
 /// Session state needed by tool execution, kept as a neutral port so neither
 /// the tool executor nor session core depends on the other's implementation.
 pub trait ToolSessionContext {
+    fn conversation(&self) -> Option<&agena_domain::SessionConversation> {
+        None
+    }
     /// Runtime-only session identity used to select plugin-scoped capability
     /// overlays. Implementations backed by portable policy/config values may
     /// leave this absent; callers then see only global plugin capabilities.

@@ -19,6 +19,7 @@
 
 mod application;
 mod application_config;
+mod application_conversations;
 mod application_models;
 mod application_plugins;
 mod application_provider_studio;

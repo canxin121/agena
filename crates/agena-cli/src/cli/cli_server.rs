@@ -1842,6 +1842,7 @@ impl AgenaCli {
         let result = server
             .client
             .command(Command::ForkSession(ForkSessionParams {
+                conversation_mode: None,
                 session_id: args.session_id,
                 at_message_id: args.at_message,
                 title: args.title,

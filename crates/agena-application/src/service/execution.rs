@@ -335,6 +335,7 @@ impl ApplicationService {
             automation: session_automation_resource(&scheduler_jobs, session_id),
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
+                conversation: context.conversation,
                 agent_id: context.agent_id,
                 selected_permission: permission_config_resource_from_domain(
                     &context.selected_permission,

@@ -1108,6 +1108,89 @@ async fn one_checkpoint_updates_only_the_named_part_revision() {
 }
 
 #[tokio::test]
+async fn conversation_permissions_survive_refresh_and_recovery_removes_only_btw() {
+    use agena_domain::{
+        ConversationMode, PathAccessModes, PathPermissionConfig, PermissionConfig, PermissionMode,
+    };
+    let manager = test_manager().await;
+    let parent = create(&manager, "parent").await;
+    let parent = append_message(
+        &manager,
+        parent,
+        Role::User,
+        vec![TypedContent::Text(text_content("main task"))],
+    )
+    .await;
+    let permission = PermissionConfig {
+        path: Some(PathPermissionConfig {
+            workspace: Some(PathAccessModes {
+                read: Some(PermissionMode::Allow),
+                write: Some(PermissionMode::Allow),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    manager
+        .set_session_permission(parent.id, permission.clone())
+        .await
+        .unwrap();
+    let loaded = manager.get_session(parent.id).await.unwrap();
+    assert_eq!(loaded.runtime().execution.selection.permission, permission);
+    let mut children = Vec::new();
+    for mode in [ConversationMode::Side, ConversationMode::Btw] {
+        let mut child = manager
+            .fork_session(agena_runtime::SessionForkRequest {
+                session_id: parent.id,
+                at_message_id: None,
+                title: None,
+                conversation_mode: Some(mode),
+                expected_version: None,
+            })
+            .await
+            .unwrap();
+        manager.refresh_execution_policy(&mut child, manager.execution_state().as_ref());
+        assert_eq!(
+            child
+                .runtime()
+                .execution
+                .conversation
+                .as_ref()
+                .unwrap()
+                .mode,
+            mode
+        );
+        if mode == ConversationMode::Btw {
+            assert_eq!(
+                child
+                    .runtime()
+                    .execution
+                    .permission_ceiling
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .workspace
+                    .as_ref()
+                    .unwrap()
+                    .write,
+                Some(PermissionMode::Deny)
+            );
+        }
+        children.push(child.id);
+    }
+    manager.reconcile_interrupted_executions().await.unwrap();
+    let store = manager.session_store();
+    assert!(store.load(parent.id).await.is_ok());
+    assert!(store.load(children[0]).await.is_ok());
+    assert!(store.load(children[1]).await.is_err());
+    let visible = store
+        .list_session_summaries(Default::default())
+        .await
+        .unwrap();
+    assert_eq!(visible.len(), 2);
+}
+
+#[tokio::test]
 async fn fork_renders_the_shared_prefix_without_copying_parts() {
     let manager = test_manager().await;
     let session = create(&manager, "fork source").await;
@@ -1171,6 +1254,7 @@ async fn default_manager_fork_includes_the_complete_last_message() {
 
     let child = manager
         .fork_session(agena_runtime::SessionForkRequest {
+            conversation_mode: None,
             session_id: session.id,
             at_message_id: None,
             title: Some("default fork child".to_owned()),
@@ -1211,6 +1295,7 @@ async fn default_manager_fork_includes_the_complete_last_message() {
 
     let explicit = manager
         .fork_session(agena_runtime::SessionForkRequest {
+            conversation_mode: None,
             session_id: session.id,
             at_message_id: session
                 .parts()
@@ -1423,6 +1508,7 @@ async fn default_fork_includes_parts_appended_after_the_last_run_marker() {
     let before = manager.session_store().load(session.id).await.unwrap();
     let child = manager
         .fork_session(crate::SessionForkRequest {
+            conversation_mode: None,
             session_id: session.id,
             at_message_id: None,
             title: None,

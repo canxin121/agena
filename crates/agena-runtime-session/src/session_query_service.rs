@@ -145,6 +145,7 @@ pub enum SessionProjectedPartDetail {
 #[derive(Debug, Clone)]
 /// Execution context of a session.
 pub struct SessionExecutionContext {
+    pub conversation: Option<agena_domain::SessionConversation>,
     pub workflow_state: WorkflowState,
     pub agent_id: String,
     pub selected_permission: PermissionConfig,
@@ -371,6 +372,7 @@ mod tests {
             _session_id: i64,
         ) -> Result<super::SessionExecutionContext, SessionQueryError> {
             Ok(super::SessionExecutionContext {
+                conversation: None,
                 workflow_state: agena_domain::WorkflowState::Quiescent,
                 agent_id: agena_runtime_contracts::identity::AGENA_AGENT_ID.to_owned(),
                 selected_permission: agena_domain::PermissionConfig::default(),

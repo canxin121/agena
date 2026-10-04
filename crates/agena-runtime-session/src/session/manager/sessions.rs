@@ -23,6 +23,25 @@ impl SessionManager {
         for session_id in self.store.in_flight_session_ids().await? {
             self.reconcile_session_on_open(session_id).await?;
         }
+        let store = self.session_store();
+        for session in store
+            .list_session_summaries(agena_storage::store::SessionListQuery {
+                temporary_only: true,
+                ..Default::default()
+            })
+            .await
+            .map_err(crate::session::store::store_error)?
+        {
+            if !matches!(
+                self.active_execution(session.id).await,
+                Some(agena_domain::ExecutionLifecycle::Active { .. })
+            ) {
+                store
+                    .delete(session.id)
+                    .await
+                    .map_err(crate::session::store::store_error)?;
+            }
+        }
         self.prune_orphaned_tool_output().await;
         Ok(())
     }
@@ -645,10 +664,7 @@ impl SessionManager {
         session.runtime.execution.selection.permission = permission;
         session.runtime.execution.effective_permission =
             self.resolve_effective_session_permission(&session, &state);
-        let persisted = match self
-            .persist_session_changes(session, Vec::new(), None, state.clone())
-            .await
-        {
+        let persisted = match self.store.persist_execution_config(session).await {
             Ok(persisted) => persisted,
             Err(error) => {
                 let mut permissions = recover_write(

@@ -68,6 +68,7 @@ pub(crate) fn server_error_from_store(error: agena_storage::store::StoreError) -
 
 mod activities;
 mod auth;
+mod conversations;
 mod git;
 mod marketplace;
 mod memory;
@@ -90,6 +91,7 @@ pub use workspaces::*;
 
 pub use activities::*;
 pub use auth::*;
+pub use conversations::*;
 pub use git::*;
 pub use marketplace::*;
 pub use memory::*;
@@ -186,6 +188,8 @@ pub struct UsageStatsHttpQuery {
 #[serde(default, deny_unknown_fields)]
 /// Body of a session fork request.
 pub struct SessionForkRequestBody {
+    #[serde(default)]
+    pub conversation_mode: Option<agena_domain::ConversationMode>,
     /// Fork point. `None` clones the entire history; otherwise clones
     /// every event up to and including the last one tied to this message id.
     #[serde(default)]

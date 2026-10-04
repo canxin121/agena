@@ -87,6 +87,15 @@ impl ToolExecutor {
         }
         let model_tool_name = invocation_name(invocation).to_owned();
         let definition = self.invocation_definition(invocation);
+        if self
+            .conversation
+            .as_ref()
+            .is_some_and(|context| context.is_read_only())
+        {
+            // Reject the capability before tool-before hooks or shell
+            // preparation can observe a mutation request.
+            self.authorize_invocation(invocation)?;
+        }
         let plugin_name = self.invocation_plugin_name_for(invocation);
         if definition.is_none() {
             let mut prepared_invocation = invocation.clone();

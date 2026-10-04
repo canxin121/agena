@@ -1071,10 +1071,8 @@ fn preferred_option_row(
     0
 }
 
-/// Renders the full User Input overlay from its TUI-owned request projection
-/// and presentation state. Domain reply construction and Runtime effects stay
-/// in the App adapter.
-pub(crate) fn markdown_lines(markdown: &str) -> Vec<Line<'static>> {
+/// Shared sanitized Markdown lines for user input, plans and temporary answers.
+pub fn markdown_lines(markdown: &str) -> Vec<Line<'static>> {
     let markdown = markdown.trim();
     if markdown.is_empty() {
         return vec![Line::from("")];

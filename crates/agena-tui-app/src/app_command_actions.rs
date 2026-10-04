@@ -94,6 +94,7 @@ impl App {
             }
             ClientCommandAction::Plan => self.open_plan_viewer(),
             ClientCommandAction::Side => self.handle_side_command(args),
+            ClientCommandAction::Btw => self.open_btw(args),
         }
     }
 
@@ -215,24 +216,18 @@ impl App {
     /// fork so the user can start working in it. The parent session is
     /// untouched and keeps running. `/branch` is an alias.
     pub(crate) fn handle_fork_command(&mut self, _args: &str) {
-        self.open_fork(ForkKind::Fork);
+        self.open_fork(ForkKind::Fork, "");
     }
 
-    /// `/side` is `/fork` plus the side-conversation identity: the fork is
-    /// registered in `side_sessions` (footer indicator, already-open gate,
-    /// marker dropped on navigation) while the main session keeps running in
-    /// the background — the only difference from plain `/fork`. `/btw` and
-    /// `/aside` are aliases.
-    pub(crate) fn handle_side_command(&mut self, _args: &str) {
-        self.open_fork(ForkKind::Side);
+    /// Open a durable side branch; only new instructions belong to its task.
+    pub(crate) fn handle_side_command(&mut self, args: &str) {
+        self.open_fork(ForkKind::Side, args);
     }
 
-    /// Shared `/fork` / `/side` implementation: fork the current session with
-    /// full history (`ForkSession`, `at_message_id: None`) and open the fork
-    /// through the normal session-created path so the composer is ready for
-    /// the user's next message. The fork itself is a permanent child session;
-    /// side tracking only affects the TUI identity.
-    fn open_fork(&mut self, kind: ForkKind) {
+    fn open_fork(&mut self, kind: ForkKind, question: &str) {
+        if self.fork_pending {
+            return;
+        }
         let Some(parent_id) = self
             .transcript
             .session_id
@@ -245,56 +240,79 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, key));
             return;
         };
-        if kind == ForkKind::Side && !self.side_sessions.is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-side-already-open"));
-            return;
-        }
         let title = match kind {
             ForkKind::Fork => ui_text::default_session_title(&self.i18n),
             ForkKind::Side => format!("side: {}", ui_text::default_session_title(&self.i18n)),
         };
         let track_as_side = kind == ForkKind::Side;
+        let mode = track_as_side.then_some(agena_domain::ConversationMode::Side);
+        let submit_draft = (!question.trim().is_empty()).then(|| ComposerDraft {
+            document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                text: question.trim().to_owned(),
+            }]),
+        });
+        self.fork_pending = true;
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let forked =
-                crate::app_backend::operations::fork_session(&application, parent_id, Some(title))
-                    .await;
-            match forked {
-                Ok(state) => {
-                    let session_id = state.session.id;
-                    // Register the side conversation before the open result
-                    // routes the UI into the fork, so the open_session switch
-                    // keeps the side marker (same-channel ordering).
-                    if track_as_side {
-                        let _ = tx
-                            .send(AppMessage::SideSessionOpened {
-                                session_id,
-                                parent_id,
-                            })
-                            .await;
-                    }
-                    let _ = tx
-                        .send(AppMessage::SessionCreated {
-                            submit_draft: None,
-                            pending_message_id: None,
-                            model_stack: None,
-                            result: Ok(state.session),
-                        })
-                        .await;
-                }
-                Err(err) => {
-                    let _ = tx
-                        .send(AppMessage::SessionCreated {
-                            submit_draft: None,
-                            pending_message_id: None,
-                            model_stack: None,
-                            result: Err(crate::UiFailure::internal(err)),
-                        })
-                        .await;
-                }
-            }
+            let forked = crate::app_backend::operations::fork_session(
+                &application,
+                parent_id,
+                Some(title),
+                mode,
+            )
+            .await;
+            let _ = tx
+                .send(AppMessage::ForkCreated {
+                    parent_id,
+                    side: track_as_side,
+                    submit_draft,
+                    result: forked.map_err(crate::UiFailure::internal),
+                })
+                .await;
         });
+    }
+
+    pub(crate) fn handle_fork_created(
+        &mut self,
+        parent_id: i64,
+        side: bool,
+        draft: Option<ComposerDraft>,
+        result: crate::UiResult<agena_api::resource::SessionExecutionResource>,
+    ) {
+        self.fork_pending = false;
+        let state = match result {
+            Ok(state) => state,
+            Err(error) => {
+                self.flash_error(error.to_string());
+                if self.transcript.session_id == Some(parent_id)
+                    && self.composer.text().is_empty()
+                    && self.composer_items.is_empty()
+                    && let Some(draft) = draft
+                {
+                    self.set_draft_for_slot(crate::DraftSlot::Session(parent_id), draft);
+                    self.restore_draft_for_slot(crate::DraftSlot::Session(parent_id));
+                }
+                return;
+            }
+        };
+        self.request_sessions(false);
+        let id = state.session.id;
+        if self.transcript.session_id != Some(parent_id) {
+            if let Some(draft) = draft {
+                self.set_draft_for_slot(crate::DraftSlot::Session(id), draft);
+            }
+            return;
+        }
+        if side {
+            self.handle_side_session_opened(id, parent_id);
+        }
+        self.open_session(id, state.session.title.clone());
+        self.apply_transcript_execution(state);
+        self.focus = Focus::Composer;
+        if let Some(draft) = draft {
+            self.request_submit_message_with_pending(id, draft, None);
+        }
     }
 
     pub(crate) fn handle_commit_command(&mut self, args: &str) {

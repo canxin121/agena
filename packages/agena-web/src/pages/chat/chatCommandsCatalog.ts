@@ -63,6 +63,7 @@ export const CLIENT_COMMAND_ACTIONS = [
   'background',
   'plan',
   'side',
+  'btw',
 ] as const
 
 export type ClientCommandAction = (typeof CLIENT_COMMAND_ACTIONS)[number]

@@ -1663,11 +1663,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   // ─── fork ─────────────────────────────────────────────────────────────────
 
-  async function forkSession(sessionId: string, opts?: { at_message_id?: number }) {
+  async function forkSession(sessionId: string, opts?: { at_message_id?: number; conversation_mode?: 'side' }) {
     const sid = (sessionId || '').trim()
     if (!sid) return null
-    const atMessageId = opts?.at_message_id
-    const created = await chatApi.forkSession(sid, atMessageId != null ? { at_message_id: atMessageId } : undefined)
+    const created = await chatApi.forkSession(sid, opts)
     upsertSessionCache(created)
     scheduleSessionsRefresh(1200)
     return created

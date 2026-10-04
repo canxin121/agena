@@ -202,6 +202,8 @@ pub struct RewindSessionParams {
 /// at (and includes) the last event tied to that message id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkSessionParams {
+    #[serde(default)]
+    pub conversation_mode: Option<agena_domain::ConversationMode>,
     pub session_id: i64,
     #[serde(default)]
     pub at_message_id: Option<i64>,

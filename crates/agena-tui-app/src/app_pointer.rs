@@ -77,6 +77,9 @@ impl App {
                 }
                 "session-token-usage" => self.open_usage_dashboard(),
                 "plan" => self.open_plan_viewer(),
+                "btw" => self.open_btw(""),
+                "side" => self.handle_side_command(""),
+                "side-parent" => self.open_parent_session(),
                 "activities" => self.open_activities_panel(),
                 "history" => self.open_prompt_history_search(),
                 "approval" => self.maybe_auto_open_pending_interactive_overlay(),

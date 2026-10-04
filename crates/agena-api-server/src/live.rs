@@ -6,8 +6,9 @@
 //! replay, or a global sequence.
 
 use portable_atomic::AtomicU64;
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 #[cfg(any(feature = "ws", feature = "sse"))]
 use agena_api::Scope;
@@ -85,8 +86,12 @@ fn subscribe_with_queue_capacity(
     let (raw_change_tx, mut raw_change_rx) = mpsc::channel(capacity);
     let dropped = Arc::new(AtomicU64::new(0));
     let change_dropped = Arc::clone(&dropped);
+    let visibility = SessionVisibility::default();
+    let change_visibility = visibility.clone();
     let store_subscription = store.subscribe_all(Arc::new(move |change| {
-        if !change_visible_to_user(&change) {
+        if !change_visible_to_user(&change)
+            || change_visibility.known_change_visible(&change) == Some(false)
+        {
             return;
         }
         match raw_change_tx.try_send(change) {
@@ -104,14 +109,25 @@ fn subscribe_with_queue_capacity(
             let item = tokio::select! {
                 _ = tx.closed() => break,
                 change = raw_change_rx.recv() => match change {
-                    Some(change) => project_change(&projection_state, change)
-                        .await
-                        .map(LiveItem::SessionChanged),
+                    Some(change) => {
+                        if !visibility.change_visible(store.as_ref(), &change).await {
+                            continue;
+                        }
+                        let Some(change) = project_change(&projection_state, change).await else {
+                            continue;
+                        };
+                        Some(LiveItem::SessionChanged(change))
+                    }
                     None => None,
                 },
                 signal = signal_subscription.recv() => match signal {
                     Some(RuntimeLiveSignalItem::Signal(signal)) => {
-                        Some(LiveItem::RuntimeSignal(project_signal(signal)))
+                        let signal = project_signal(signal);
+                        if let Some(session_id) = signal.session_id
+                            && !visibility.session_visible(store.as_ref(), session_id).await {
+                            continue;
+                        }
+                        Some(LiveItem::RuntimeSignal(signal))
                     }
                     Some(RuntimeLiveSignalItem::Lagged(skipped)) => {
                         Some(LiveItem::Lagged(skipped))
@@ -134,6 +150,83 @@ fn subscribe_with_queue_capacity(
         _store_subscription: store_subscription,
         projection_task,
     })
+}
+
+/// Cache classification per connection, so streamed parts do not trigger a
+/// database query per token. The bound also covers very long-lived clients.
+#[derive(Clone, Default)]
+struct SessionVisibility {
+    visible: Arc<Mutex<HashMap<i64, bool>>>,
+}
+
+impl SessionVisibility {
+    fn remember(&self, session_id: i64, visible: bool) {
+        let mut cache = self
+            .visible
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if cache.len() >= 4096 && !cache.contains_key(&session_id) {
+            cache.clear();
+        }
+        cache.insert(session_id, visible);
+    }
+
+    fn cached(&self, session_id: i64) -> Option<bool> {
+        self.visible
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&session_id)
+            .copied()
+    }
+
+    async fn session_visible(&self, store: &dyn SessionStore, session_id: i64) -> bool {
+        if let Some(visible) = self.cached(session_id) {
+            return visible;
+        }
+        // An empty membership selection reads metadata without loading the
+        // transcript, including when a client connects halfway through BTW.
+        match store.load_part_ids(session_id, &[]).await {
+            Ok(view) => {
+                let visible = !view.meta.is_temporary();
+                self.remember(session_id, visible);
+                visible
+            }
+            Err(agena_storage::store::StoreError::NotFound(_)) => false,
+            Err(error) => {
+                tracing::warn!(session_id, %error, "could not classify live session visibility");
+                false
+            }
+        }
+    }
+
+    // Filter known temporary changes before the bounded projection queue.
+    // In particular, deleting a long inherited history must not flood every
+    // UI subscriber with thousands of invisible membership removals.
+    fn known_change_visible(&self, change: &SessionChange) -> Option<bool> {
+        let session_id = change.session_id();
+        match change {
+            SessionChange::SessionMetaUpdated { meta, .. } => {
+                let visible = !meta.is_temporary();
+                self.remember(session_id, visible);
+                Some(visible)
+            }
+            SessionChange::SessionDeleted { temporary, .. } => {
+                self.visible
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .remove(&session_id);
+                Some(!temporary)
+            }
+            _ => self.cached(session_id),
+        }
+    }
+
+    async fn change_visible(&self, store: &dyn SessionStore, change: &SessionChange) -> bool {
+        match self.known_change_visible(change) {
+            Some(visible) => visible,
+            None => self.session_visible(store, change.session_id()).await,
+        }
+    }
 }
 
 fn change_visible_to_user(change: &SessionChange) -> bool {
@@ -469,6 +562,7 @@ async fn project_change(state: &AppState, change: SessionChange) -> Option<Sessi
         SessionChange::SessionDeleted {
             session_id,
             workspace_id,
+            ..
         } => SessionChangeResource::SessionDeleted {
             session_id,
             workspace_id,

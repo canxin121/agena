@@ -526,14 +526,11 @@ pub struct App {
     pub(super) pending_refresh: Option<(i64, bool)>,
     pub(super) pending_ui_action: Option<UiAction>,
     pub(super) current_lineage: Option<CurrentLineageState>,
-    /// Open side conversations: side session id -> the parent session it was
-    /// forked from. A side conversation is `/fork` plus a transient side
-    /// identity: the fork itself is a permanent child session with full
-    /// history, tracked here only while the TUI treats it as an open side
-    /// conversation (`/side`; the user is switched into it to
-    /// chat while the parent run keeps going). The entry is dropped when
-    /// navigation leaves the side conversation or its parent.
+    /// Navigation hints for recently opened sides, keyed by child session.
+    /// Durable identity and the return target also come from the execution's
+    /// conversation context, so reopening a side retains its behavior.
     pub(super) side_sessions: HashMap<i64, i64>,
+    pub(super) fork_pending: bool,
     /// Monotonic id for usage dashboard loads. Keeping it on the app prevents
     /// a late response from an older, closed dashboard matching a newly
     /// opened dashboard that is also on its first request.
@@ -632,6 +629,10 @@ pub(super) enum AppMessage {
     ActivitiesCleared {
         request_id: u64,
         result: UiResult<bool>,
+    },
+    BtwUpdated {
+        request_id: u64,
+        answer: agena_api::resource::BtwAnswer,
     },
     PlanViewerLoaded {
         request_id: u64,
@@ -824,10 +825,11 @@ pub(super) enum AppMessage {
     StatusLineUpdated {
         output: Option<String>,
     },
-    /// A `/side` fork was created and the user was switched into it.
-    SideSessionOpened {
-        session_id: i64,
+    ForkCreated {
         parent_id: i64,
+        side: bool,
+        submit_draft: Option<ComposerDraft>,
+        result: UiResult<SessionExecutionResource>,
     },
 }
 
@@ -1007,6 +1009,7 @@ pub(super) enum Route {
     Usage(UsageDashboardState),
     Activities(ActivitiesState),
     PlanViewer(PlanViewerState),
+    Btw(crate::app_btw::BtwState),
     SettingsStudio(SettingsStudioOverlay),
     ClientVersionsStudio(SettingsStudioOverlay),
     PermissionStudio(PermissionStudioOverlay),

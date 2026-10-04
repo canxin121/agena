@@ -618,6 +618,7 @@ pub(super) struct CloudToolAdapterGate {
 #[derive(Clone)]
 /// Executor that runs tools with permissions.
 pub struct ToolExecutor {
+    pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
     pub(super) principal: ExecutionPrincipal,
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,

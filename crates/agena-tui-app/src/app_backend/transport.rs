@@ -2091,10 +2091,12 @@ impl TuiBackend {
         &self,
         session_id: i64,
         title: Option<String>,
+        conversation_mode: Option<agena_domain::ConversationMode>,
     ) -> Result<SessionExecutionResource> {
         let result = self
             .client()
             .command(Command::ForkSession(ForkSessionParams {
+                conversation_mode,
                 session_id,
                 at_message_id: None,
                 title,

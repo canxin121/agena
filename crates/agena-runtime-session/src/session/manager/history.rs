@@ -52,7 +52,53 @@ impl SessionManager {
         let title = request
             .title
             .unwrap_or_else(|| format!("Fork of {}", source.title));
-        let child_id = self.store.fork(source.id, at_part_id, title).await?;
+        let child_id = if let Some(mode) = request.conversation_mode {
+            let mut config =
+                crate::session::store::PersistedExecutionConfig::from(&source.runtime.execution);
+            config.conversation = Some(agena_domain::SessionConversation {
+                mode,
+                parent_session_id: source.id,
+            });
+            // A fork of a read-only temporary answer must retain that ceiling.
+            if source
+                .runtime
+                .execution
+                .conversation
+                .as_ref()
+                .is_some_and(|context| context.is_read_only())
+            {
+                config
+                    .conversation
+                    .as_mut()
+                    .expect("assigned conversation")
+                    .mode = agena_domain::ConversationMode::Btw;
+            }
+            if config
+                .conversation
+                .as_ref()
+                .is_some_and(|context| context.is_read_only())
+            {
+                let path = config
+                    .permission_ceiling
+                    .path
+                    .get_or_insert_with(Default::default);
+                for access in [&mut path.workspace, &mut path.external] {
+                    access.get_or_insert_with(Default::default).write =
+                        Some(agena_domain::PermissionMode::Deny);
+                }
+                for access in path.rules.values_mut() {
+                    access.write = Some(agena_domain::PermissionMode::Deny);
+                }
+            }
+            let config = serde_json::to_value(config)
+                .map_err(|error| AppError::Internal(error.to_string()))?;
+            self.session_store()
+                .fork_with_config(source.id, at_part_id, title, config)
+                .await
+                .map_err(crate::session::store::store_error)?
+        } else {
+            self.store.fork(source.id, at_part_id, title).await?
+        };
         self.store.load_session(child_id).await
     }
 
@@ -801,6 +847,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
         self.refresh_execution_policy(&mut session, state.as_ref());
         let runtime = session.runtime();
         Ok(agena_runtime::SessionExecutionContext {
+            conversation: runtime.execution.conversation.clone(),
             workflow_state: session.workflow_state(),
             agent_id: crate::identity::AGENA_AGENT_ID.to_string(),
             selected_permission: runtime.execution.selection.permission.clone(),

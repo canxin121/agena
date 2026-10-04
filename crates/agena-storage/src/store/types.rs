@@ -558,6 +558,16 @@ pub struct SessionMeta {
     pub updated_at_ms: i64,
 }
 
+impl SessionMeta {
+    pub fn is_temporary(&self) -> bool {
+        self.config_json
+            .as_ref()
+            .and_then(|config| config.pointer("/conversation/mode"))
+            .and_then(Value::as_str)
+            == Some("btw")
+    }
+}
+
 /// Atomic patch for user-editable session metadata.
 ///
 /// Keeping all fields in one patch ensures a multi-field update advances the
@@ -658,6 +668,8 @@ pub struct SessionCursor {
 /// `(updated_at_ms, id)` cursor.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionListQuery {
+    /// Internal recovery scan. Ordinary navigation excludes temporary BTW sessions.
+    pub temporary_only: bool,
     pub workspace_id: Option<i64>,
     /// Restrict to direct children of this session.
     pub parent_id: Option<i64>,

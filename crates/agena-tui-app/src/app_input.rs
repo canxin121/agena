@@ -16,6 +16,15 @@ impl App {
         }
 
         let global_action = resolve_tui_key(KeyContext::Global, key);
+        // A temporary question owns its stop key. Never let Ctrl+C in its
+        // window reach the parent's execution or the global quit sequence.
+        if global_action == Some(KeyAction::Interrupt)
+            && matches!(self.current_route, Route::Btw(_))
+        {
+            self.last_ctrl_c_at = None;
+            self.handle_route_key(key);
+            return;
+        }
         if prompt_history_preempts_global_interrupt(self.prompt_history_search.is_some(), key) {
             self.handle_prompt_history_search_key(key);
             return;
@@ -276,6 +285,7 @@ impl App {
             Route::Usage(dialog) => self.handle_usage_dashboard_key(key, dialog),
             Route::Activities(dialog) => self.handle_activities_key(key, dialog),
             Route::PlanViewer(dialog) => self.handle_plan_viewer_key(key, dialog),
+            Route::Btw(dialog) => self.handle_btw_key(key, dialog),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
             Route::ClientVersionsStudio(dialog) => {
                 self.handle_client_versions_studio_overlay_key(key, dialog)

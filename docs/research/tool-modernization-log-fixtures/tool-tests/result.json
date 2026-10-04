@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "agena-tool",
+    "--lib"
+  ],
+  "returncode": 0,
+  "streams": {
+    "stdout": {
+      "raw_bytes": 6606,
+      "preview_bytes": 192,
+      "folded_lines": 78,
+      "raw_sha256": "190a444a4da354304b5278ffa2cdf19dad1a850b3f762cfed370458b0b25bb7e",
+      "preview_sha256": "597f8806c092165cf7c10bbb38863e66e2994af2489cfe2a1831adf2e6015a16"
+    },
+    "stderr": {
+      "raw_bytes": 242,
+      "preview_bytes": 219,
+      "folded_lines": 1,
+      "raw_sha256": "b3fb0b99878345c54942c980fb0e7e57be960b2fcf588ffd97410c79d5d9dfac",
+      "preview_sha256": "79ecbb12030ffc455962e98eeaf1817046a482bf363d6534d8226da843f54018"
+    }
+  },
+  "scope": "Cargo/libtest presentation experiment only; raw streams retained. No RTK binary, tokenizer or model task-success measurement."
+}

@@ -54,3 +54,7 @@ Extension-specific servers take precedence over catch-all servers. Ties use lexi
 Input positions are zero-based lines and UTF-16 code-unit offsets, as required by the default LSP position encoding. Returned display locations are one-based; file URIs are decoded to local paths, including spaces and Unicode. Diagnostics retain the existing document-version/freshness contract: empty pending or stale results do not certify that a file is clean.
 
 Validation uses embedded ast-grep tests, the real plugin dispatch path, and a local Python stdio LSP fixture. No Agena service or connector, paid provider, or external language server is required for these tests. Live language-server semantic quality still depends on the configured server and project.
+
+## Optional semantic service
+
+[Serena](https://github.com/oraios/serena) can be configured through Agena's existing MCP connection mechanism when a project needs its symbol-oriented editing or navigation workflow. It is an explicit external service, with its own language-server processes and project configuration; Agena does not install it, start it, or route requests to it automatically. Avoid running redundant servers for the same project without a concrete benefit. Returned edits still require the normal workspace permissions and review. No live Serena quality or performance comparison was performed for this change; embedded AST rewriting and root-aware LSP remain the default paths.

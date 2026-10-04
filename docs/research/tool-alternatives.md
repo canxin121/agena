@@ -2,6 +2,8 @@
 
 调查日期：2026-10-04。源码基线：`740b54df4107ade81242a335c49bca590c52c1cd`。调查分支：`research/tool-alternatives`。独立 worktree：`/Volumes/Rc20/Projects/agena-tool-alternatives`。
 
+**后续实施入口：** 本文保留最初的调研基线与候选比较；独立 `feat/tool-modernization` 分支中的实际接入、缺陷修复、最终候选取舍和验证状态见[实施台账](tool-modernization-progress.md)。以下“当前实现”和 135 个定义均指调查基线，实施后的目录为 138 个定义。
+
 本次只做源码调查、第三方官方资料核对和独立 CLI 基准测量，没有改动产品实现，没有安装候选工具，没有调用任何 Agena tools。目录中的脚本只运行 `git`、`rg`、`grep`、`fd`、`find`，不启动 Agena。
 
 **建议先做工具选择与能力发现，再做有证据的实现替换。** `fs.grep` 已经采用 ripgrep 核心库，`code.search_ast` 已经采用 ast-grep，网页抓取和记忆检索也已经复用第三方库。最明确的改进是让 AI 在 shell 中选对命令、给内置搜索补齐有用参数，以及评估成熟浏览器后端和正式搜索 API。

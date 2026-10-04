@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "-c",
+    "import sys;print('test sample::passing ... ok');print('warning: preserve this warning', file=sys.stderr);print('error: synthetic failure \u4e2d\u6587', file=sys.stderr);sys.exit(7)"
+  ],
+  "returncode": 7,
+  "streams": {
+    "stdout": {
+      "raw_bytes": 28,
+      "preview_bytes": 76,
+      "folded_lines": 1,
+      "raw_sha256": "23e510e3b9b5976099847fc11d2fe907d01195316f9235af2a26582ea1aa6546",
+      "preview_sha256": "ca3263534676199ee2507ceb50b653e28d04c32aac811e6d638f451e98d51b94"
+    },
+    "stderr": {
+      "raw_bytes": 63,
+      "preview_bytes": 63,
+      "folded_lines": 0,
+      "raw_sha256": "137ce8b716900c9a2f16c9999e302f2c6bc65ea9dbd03de1def650fefc6b36d0",
+      "preview_sha256": "137ce8b716900c9a2f16c9999e302f2c6bc65ea9dbd03de1def650fefc6b36d0"
+    }
+  },
+  "scope": "Cargo/libtest presentation experiment only; raw streams retained. No RTK binary, tokenizer or model task-success measurement."
+}

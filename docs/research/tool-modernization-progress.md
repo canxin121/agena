@@ -4,23 +4,25 @@ Objective: implement the improvements established by the tool-alternatives inves
 
 Implementation worktree: `/Volumes/Rc20/Projects/agena-tool-modernization`; branch: `feat/tool-modernization`; source baseline: `98c1c116`. Research commit `a0e2c53e` was incorporated as `f5383449`. Do not use Agena connector tools for this work. There are no applicable AGENTS files at initialization. Work is performed without delegated agents.
 
+The current requirement table and the final validation section are authoritative. The phase narratives below retain intermediate measurements and failures as an audit trail; their earlier pending-work statements describe those phases, not the final disposition. Research inventory: 22 plugins / 135 definitions. Implemented catalog: 22 plugins / 138 definitions / 134 execution tools / 4 gateways.
+
 | Requirement | Required evidence | Current status |
 | --- | --- | --- |
-| Modern CLI availability and routing | Runtime PATH-aware discovery, accurate identity/availability, bounded optional probes, deterministic tests; modern CLI scenarios from every research table row accounted for | In progress |
-| Unified command effects and exit semantics | Shared classification for runtime/workflow; executable/subcommand/flag/quoting cases; no automatic rewrites; meaningful regression tests | In progress |
-| Grep/glob completeness, output control and performance | Literal/case/context/output/filter controls; explicit truncation; bounded and cancellable work; equivalent-result benchmarks including in-process implementations | Implemented and equivalence-tested; serial glob retained after optimized profiling |
-| AST and language-server improvements | Structural rules/rewrites and language-server availability/use; revision-safe changes; integration tests and documented optional semantic backend | Implemented; local fixtures, real plugin dispatch, changed-crate tests and Clippy pass |
-| Search providers | Working configurable structured providers and self-hosted option; credentials and network effects; deterministic HTTP fixtures and error/limit tests | Implemented and fixture-validated; live relevance/latency not measured |
-| Browser modernization | Functional mature optional backend with session/permission/download ownership; real browser behavior and lifecycle checks | Implemented; Playwright and native Chrome fixtures, lifecycle regressions, changed-crate tests and Clippy pass |
-| Fetch/crawl/extraction | Existing third-party stack audited; working optional quality backends where useful; bounded output, cancellation and representative fixtures | Pending |
-| Local document content | Functional local format conversion/search adapter, capability discovery, clear missing dependencies, fixture-based validation | Implemented; real MarkItDown PDF/Office fixtures and plugin dispatch pass; Poppler branch not live-tested |
-| Read/write/patch/notebook | Existing revision/publication contracts preserved, discovered defects fixed, batch and notebook compatibility validated | Publication checks and notebook schema compatibility implemented; remaining read/write audit in progress |
-| Shell/process/monitor/snapshot lifecycle | Audit and fix actual defects; modern tools remain within existing lifecycle/effect contracts; lifecycle regressions | Pending |
-| Memory, discovery, stateful and hosted tools | Inventory-wide audit, retained engines justified by evidence, affected correctness/contract tests passing | Pending |
-| Concise, formatted and effective prompts | Reduced assembled prompt budget while retaining actual behavioral requirements, modern-tool guidance, clear headings, no redundant tool schemas; behavior/format/budget checks | Implemented; deterministic obligations/format/byte-budget tests pass; no model task-success evaluation yet |
-| Optional analysis/display/log tools | Each investigated candidate has a deliberate integration/routing disposition; lossless raw-output recovery and accurate diagnostics; measured output reduction if enabled | Pending |
-| Generated contracts and user documentation | Regenerated tool schemas/reference/identity artifacts, configuration and usage docs, consistent public surfaces | Pending |
-| Final validation | Appropriate targeted tests, workspace fmt/tests/clippy and repository invariant gates, frontend gates if affected; final evidence audit covers every row | Pending |
+| Modern CLI availability and routing | Runtime PATH-aware discovery, accurate identity/availability, bounded optional probes, deterministic tests; candidates accounted for | Implemented; actual PATH, aliases, cache, unset PATH, probe errors and candidate guidance tested |
+| Unified command effects and exit semantics | Shared runtime/workflow classification; executable/subcommand/flag/quoting cases; no automatic rewrites | Implemented; command-shape and no-match/failure regressions pass; not a complete shell parser |
+| Grep/glob completeness, output control and performance | Match/context/output/filter controls, visible truncation, bounded/cancellable work, equivalent-result benchmarks | Implemented and equivalence-tested; persistent Rayon search pool; serial glob retained after optimized profiling |
+| AST and language-server improvements | Structural rules/rewrites, root-aware servers, revision checks, documented optional semantic backend | Implemented; local LSP fixtures, real plugin dispatch, stale/overlap/output-bound regressions pass |
+| Search providers | Configurable structured and self-hosted providers; credentials/network effects; HTTP fixtures | Implemented; Brave/Tavily/Exa/SearXNG fixture-validated; live relevance/latency unmeasured |
+| Browser modernization | Functional optional mature backend; session/permission/download ownership; actual browser tests | Implemented; native Chrome and optional Playwright; attached-target request checks have documented sandbox limits |
+| Fetch/crawl/extraction | Audited third-party stack, useful extraction options, bounded output/cancellation and fixtures | Implemented; pinned bounded HTTP, managed rendered contexts, optional local Trafilatura; representative local fixtures pass |
+| Local document content | Local conversion/search adapter, discovery, missing-dependency errors and format fixtures | Implemented; MarkItDown PDF/Office fixtures and plugin dispatch pass; Poppler not live-tested |
+| Read/write/patch/notebook | Revision/publication contracts, batch bounds and notebook compatibility | Implemented; regular-file reads, observed-change/budget checks, staged revision validation, official nbformat schemas; external writers remain nontransactional |
+| Shell/process/monitor/snapshot lifecycle | Shared lifecycle and effect contracts, actual defect fixes, regression tests | Implemented; bounded shared collection, descendant cleanup, verified Darwin zombie handling and recoverable line framing; 20 parallel runtime-tools rounds pass |
+| Memory, discovery, stateful and hosted tools | Inventory-wide disposition and affected correctness/contract tests | Audited; unchanged Tantivy indexes reused, committed results preserved on contention, discovery reads bounded, state/hosted contracts retained |
+| Concise and formatted prompts | Reduced byte budget, retained behavior/format obligations, modern-tool guidance | Implemented; base 4,658 / all sections 7,493 UTF-8 bytes; 16 source-backed behavior scenarios; no sampled-model success claim |
+| Optional analysis/display/log tools | Explicit candidate disposition, exact raw-output recovery, preserved status/diagnostics | Complete; curated optional CLI tiers and offline measured log experiment; no transparent output proxy |
+| Generated contracts and documentation | Consistent schemas/reference/identity/configuration and usage docs | Complete; both generator examples reproduce the committed reference and identity snapshot byte for byte |
+| Final validation | Targeted tests, workspace fmt/tests/clippy and invariant/capability gates | Complete on macOS; 3,167 workspace tests pass, 12 deliberate skips; all-target Clippy, fmt, invariants, capabilities and generated comparisons pass |
 
 Initial authoritative findings: core text search already uses ripgrep libraries; glob and grep use sorted serial discovery; AST uses ast-grep; search scrapes HTML; browser uses custom CDP; session.environment does not report host CLI availability. Workflow and shell analysis currently maintain separate read-only command lists. No implementation requirement is marked complete by these findings alone.
 
@@ -64,9 +66,9 @@ AGENA_SEARCH_BENCH_OUTPUT=docs/research/tool-modernization-search-benchmark.json
 - Foundation rerun: `cargo test --locked -p agena-tool -p agena-runtime-tools -p agena-bundled-plugins --no-fail-fast` passed 444 tests, with the benchmark intentionally ignored. This includes 160 runtime-tools tests, 72 tool tests and 212 bundled unit/integration tests. Formatter, diff-whitespace and Clippy (`--all-targets -- -D warnings`) checks passed for those three crates.
 - Generated reference and identity snapshots now record 22 plugins, 136 definitions, 132 execution tools and 4 gateways. The original research's 135 remains its baseline count.
 
-## Next implementation and audit work
+## Historical next-work checkpoint after the foundation
 
-The earlier table's pending areas remain mandatory; none is satisfied merely by the CLI catalog. In particular, finish validation of structured search providers and implement a functional optional mature browser backend, local document adapters, AST rule/rewrite extensions and fetch/extraction options. Account for optional analysis/display tools deliberately, retaining raw logs and exit codes for any compression experiment.
+At the foundation checkpoint, the remaining areas were not satisfied merely by the CLI catalog. In particular, finish validation of structured search providers and implement a functional optional mature browser backend, local document adapters, AST rule/rewrite extensions and fetch/extraction options. Account for optional analysis/display tools deliberately, retaining raw logs and exit codes for any compression experiment.
 
 Publication-time revision checks and nbformat reference validation have been added; the remaining file audit is still required. Even a final comparison cannot make arbitrary external writers participate in the sidecar-lock protocol; state that boundary honestly.
 
@@ -145,7 +147,7 @@ See `../structural-code-tools.md` for invocation examples and operational bounda
 - Ten initial AST tests, one rewrite publication test, and the real plugin dispatch test passed. A later additional test covers invalid UTF-8 charging the shared read budget. All eight LSP tests passed, including an actual Python stdio peer proving per-root initialization, canonical aliases, twelve-way startup deduplication, configuration replacement and child cleanup while client handles remain retained. No external LSP service or Agena connector was called.
 - The first combined run passed 471 tests across bundled/tool/runtime-tools/LSP (three benchmarks intentionally ignored). After the read-budget fix, all 464 bundled/tool/runtime-tools tests passed (three benchmarks ignored); the unchanged LSP suite had already passed all eight tests, for 472 passing tests across this phase. Clippy passed for LSP, tool, runtime-tools, bundled-plugins and runtime with all targets and `-D warnings`. A Clippy module-placement finding in a test was fixed. Generated references/identity snapshots now contain 22 plugins, 137 definitions, 133 execution tools and 4 gateways. No final workspace-wide pass is claimed.
 
-The full modernization goal remains active. Browser, document conversion, fetch/extraction, remaining file/process/stateful audits, optional analysis/log-tool disposition, prompt behavior evaluation and final workspace/invariant validation remain required; the original inventory table above is authoritative.
+At the semantic phase checkpoint, browser, document conversion, fetch/extraction, the remaining file/process/stateful audits, optional analysis/log-tool disposition, prompt review and final validation were still outstanding. Their later disposition is recorded below.
 
 
 ## Local PDF/Office extraction and search
@@ -159,7 +161,7 @@ The semantic-tools phase was committed as `98dd42b8`. `fs.document` now supplies
 - MarkItDown 0.1.8 was installed only in `/tmp/agena-document-adapter-env` for verification. The ignored real-plugin test passed for all four formats, including Unicode in DOCX/PPTX/XLSX. `tools/document_adapter_fixtures.py` reproducibly creates the inputs; fixture outputs are in `/tmp/agena-document-adapter-fixtures`. No Agena service, connector or hosted conversion was called. Poppler was absent, so its branch has not had a live conversion test.
 - Three dedicated document tests passed. The first broad run exposed a stale filesystem-manifest name expectation and a missing completed-title result fact for the new tool; both were fixed. All 153 bundled unit tests and all 11 human rendering tests then passed. Every other target in the broad bundled/runtime-tools/tool run passed, including 164 runtime-tools tests and 78 tool tests. This totals 467 passing tests across those targets after the corrections, plus the opt-in real-converter test. Clippy passed for all three crates with all targets and `-D warnings`. Generated references and identities now have 22 plugins, 138 definitions, 134 execution tools and four gateways.
 
-The full goal remains active. Browser modernization, fetch/crawl/extraction, remaining file/process/stateful audits, optional analysis/log-tool disposition, prompt behavior evaluation and final workspace/invariant validation still require work.
+At the document phase checkpoint, browser, fetch/crawl/extraction, the remaining lifecycle/state audits, optional tooling, prompt review and final validation were still outstanding. Later sections record their implementation.
 
 
 ## Optional Playwright interactions and browser/process lifecycle
@@ -174,7 +176,7 @@ The document phase was committed as `0a0dc9fa`. The browser now has an explicit 
 - Playwright 1.58.0 was installed only in the temporary validation environment. Real Chrome fixtures passed covered-click rejection, Unicode/password fill and omission, valid/stale snapshot refs, delayed visibility, iframe input/strict selection, context retention/scope, and continued native navigation interception. A separate real native test printed evidence for screenshots, independent caller cookies, GUID-based download completion, in-flight download limits and dropped-caller cleanup. No user browser session, Agena connector or hosted browser service was used. The bridge preserves existing document-request interception; this is not a new browser sandbox or complete interception of all subresources.
 - Validation: 254 tests passed across process/web/bundled unit, integration and doc targets (two optional dependency tests ignored in that default run). The real browser fixtures ran explicitly as described above; after adding iframe inputs, the expanded Playwright fixture and three regenerated-contract tests passed. Clippy passed for all three crates, all targets, with `-D warnings`. The catalog remains 22 plugins / 138 definitions / 134 execution tools / 4 gateways. No final workspace-wide pass is claimed.
 
-The fetch audit has identified two concrete next fixes: `Website::crawl()` selects a Chrome path under the compiled Spider feature even when the caller did not request JS, and the current Spider body limit is applied after collection. Ordinary HTTP transport needs explicit bounded streaming/redirect authorization, and crawler attempts/discovery need budgets independent of successful document counts. Optional Trafilatura extraction, remaining file/process/stateful audits, CLI/log disposition, prompt behavior evaluation and final validation remain required. The full goal remains active.
+At the browser phase checkpoint, the fetch audit identified two concrete next fixes: `Website::crawl()` selects a Chrome path under the compiled Spider feature even when the caller did not request JS, and the current Spider body limit is applied after collection. Ordinary HTTP transport needs explicit bounded streaming/redirect authorization, and crawler attempts/discovery need budgets independent of successful document counts. Optional Trafilatura extraction, remaining file/process/stateful audits, CLI/log disposition, prompt behavior evaluation and final validation remain required. Later sections record the resulting changes.
 
 ## Bounded HTTP, extraction alternatives and crawl caches
 
@@ -184,4 +186,117 @@ Ordinary product fetches now use checked reqwest streaming; each initial/redirec
 - Trafilatura is an explicit optional local HTML adapter; readability stays default. No runtime installation or hosted transfer. Sources are registered in `tool-modernization-extraction-sources.json`; three authored fixtures and all six outputs are inspectable in `tool-modernization-extraction-fixtures.json`. Trafilatura's forum omission/duplication precludes claiming universally better extraction; single observed timings are not a performance benchmark.
 - Extracted text and standalone previews have separate output budgets and visible truncation. The alternate per-call extractor bypasses the configured cache. Errors/truncated bodies are not reused as successful pages/documents; crawl attempts and discovery are bounded even when every child request fails.
 - Stored document cache hits now require current network permission, including the actual final destination; old entries without that destination are refetched. Database handles use canonical paths and weak registry entries with per-store retention, releasing locks when the last store disappears. Moka's weighted 64 MiB eviction accounting and periodically pruned host rate-limit keys bound retained coordination state, without claiming a strict heap limit.
-- Initial extended suites passed 159 bundled unit tests and 28 web unit tests, with optional fixtures ignored; the real Trafilatura comparison passed separately. The final phase run passed 259 tests across both crates and their integration/doc targets (three optional tests ignored). Clippy passed for both crates with all targets and `-D warnings`; generated contracts were refreshed without changing the 138-definition count. Rendered transport permission/lifecycle validation is still pending; HTTP connection pinning must not be generalized to Chromium.
+- Initial extended suites passed 159 bundled unit tests and 28 web unit tests, with optional fixtures ignored; the real Trafilatura comparison passed separately. The final phase run passed 259 tests across both crates and their integration/doc targets (three optional tests ignored). Clippy passed for both crates with all targets and `-D warnings`; generated contracts were refreshed without changing the 138-definition count. Rendered transport validation was still outstanding at that checkpoint and is completed in the later sections; HTTP connection pinning must not be generalized to Chromium.
+
+## Rendered fetch and remaining lifecycle audit
+
+Ordinary HTTP/extraction was committed as `6844a297`. The rendered product path now uses a disposable managed CDP context instead of Spider's separate navigation path. The attached page intercepts document and HTTP subresource requests before continuation, performs host permission/public-DNS checks, checks robots for documents, and disables service workers and downloads in that context. A dedicated root connection owns `disposeOnDetach`, including cancellation during target creation. Two renders may run concurrently, with an overall deadline, bounded DOM capture, explicit HTTP status, and observed resource-data limits. Spider remains available as a library adapter; the product no longer mistakes its compiled Chrome feature for a request to render.
+
+A real local Chrome fixture validates JS-produced content, redirect and subresource denial before the denied endpoint is contacted, real 404 status, Unicode byte clipping, timeout and cancellation cleanup. CDP policy workers now explicitly echo the foreground call's host callback context, since Tokio does not inherit task-local authority; interactive native/Playwright commands refresh it. The host remains responsible for rejecting expired authority. Native HEAD preflight also pins approved DNS addresses, disables environment proxies and shares one total deadline. IPv4-mapped private IPv6 addresses and multicast IPv6 are rejected.
+
+These are attached-target request checks, not a complete browser network sandbox: Chromium resolves hostnames independently, and arbitrary workers, WebSockets, WebRTC and browser-internal traffic are outside the stated guarantee. Resource-data events and captured DOM budgets do not impose a strict browser heap/network ceiling. The ordinary HTTP connection-pinning guarantee must not be generalized to Chromium.
+
+- Snapshot Git/Rift commands and session Git inspection now reuse `agena-process` bounded output and process-tree termination. The synchronous bridge runs the async collector on a dedicated thread, avoiding nested Tokio runtimes and detached pipe readers. Nonzero backend probes are unavailable, and oversized machine output is rejected rather than interpreted as a complete inventory. `process_control` is no longer a runtime dependency.
+- Monitor readers have an abort-on-drop guard tied to the runner. Existing terminal tests cover owned sessions, launch cancellation, partial writes, bounded output, sandbox wrapping and dropped callers. Existing monitor tests cover reserved identity/replay, success/failure patterns, quiet periods, registry drop and descendant cleanup. The first broad audit run found one intermittent quiet-period failure; its diagnostics and failed reproduction runs were retained. The corrections and final green run are recorded below.
+- `fs.read_many` now rechecks observed file size/mtime after reading and uses a boundary-probe byte. Failed decoding/change checks consume their source reservation; they cannot repeatedly spend the same batch budget or return a complete revision after observed growth. Command/skill resource reading uses the shared regular-file opener and checks observed changes. Existing staged-write, patch rollback, notebook schema and revision tests remain applicable; external writers still cannot be made transactional by a comparison plus rename.
+- Memory keeps Tantivy. Repeated queries still inspect source documents, but unchanged content digests reuse the committed index. Rebuilds use Tantivy's writer transaction and commit the digest with its segment metadata, preserving the previous searchable index if an update cannot obtain the writer lock. A regression validates unchanged metadata, writer contention, replacement, deletion, Chinese recall and zero-result limits. The portable JSON backend publishes atomically and skips identical bytes; big-endian execution has not been performed.
+
+## Candidate disposition: implementation versus optional task tooling
+
+The initial `tool-alternatives.md` is a historical source/benchmark snapshot. This table records what was actually chosen; listing a CLI is not a claim that it is installed in the Agena service's PATH, that it is universally faster, or that its use overrides permissions.
+
+| Candidate or family | Final integration/disposition | Reason and operational boundary |
+| --- | --- | --- |
+| ripgrep / `rg` | Embedded libraries retained and enhanced; preferred shell guidance and PATH discovery | Literal/case/context/files/count controls, deterministic bounded Rayon search; measured gains remain workload-dependent |
+| `fd` / `fdfind`, `rg --files`, Git tracked-file search | Preferred task-specific CLI routing; embedded glob retained | Git scope excludes untracked files; serial glob retained after equivalent-result optimized profiling |
+| ast-grep, Tree-sitter, LSP | Embedded structured rules/rewrite plus root-aware external LSP routing | Preview/revision-required publication and bounded AST output; LSP symbol meaning is distinct from text matching |
+| Serena | Existing optional MCP integration, documented in `../structural-code-tools.md`; no competing default LSP owner | Symbol editing/navigation may justify an explicit external service; current root-aware LSP and AST rewriting cover the implemented requirements |
+| Semgrep / Comby | Semgrep discoverable as an optional rule tool; no second default rewrite engine | ast-grep covers the implemented structural-rewrite requirement; add specialized rules only for a concrete task, with their runtime/effect costs |
+| `jq`, Mike Farah `yq`, `xan`, `qsv`, DuckDB | Curated discovery and usage guidance | Structural JSON/YAML/CSV/SQL operations; verify incompatible yq identity, command effects and project requirements |
+| `sd` | Optional discovered CLI; writes retain normal effects | Simple replacement convenience; built-in revision checks and AST rewrites remain the default publication routes |
+| `uv`, `just`, Hyperfine | Optional task/development tools with explicit guidance | Respect lockfiles and existing recipes; uv may install/download, just executes commands, benchmarks require equivalent results |
+| `xh`, HTTPie, `gh` | Optional HTTP/platform workflows | Better task interfaces, not proof of lower network latency; preserve authentication and operation authorization |
+| tokei / scc, dust / duf, procs | Optional analysis/inspection CLI catalog | Machine output, explicit scope and platform support; no unsupported universal performance claim |
+| bat, eza, delta, Difftastic | Display/review tier, not automatic model-output replacements | Disable decoration/pagers; Difftastic output is not an applicable patch; plain bounded output remains preferred |
+| fzf / zoxide | Explicit interactive tier | Model tasks use known cwd/paths; history and interactive selection are not implicit dependencies |
+| Watchexec | Optional CLI inside the existing shell/monitor lifecycle | File-change events differ from periodic monitoring; retain Agena ownership, notifications and stop semantics |
+| RTK / targeted log filtering | Experimental catalog tier; reproducible offline filtering experiment only | Exact raw streams and actual exit status retained; no transparent command wrapper in the product |
+| Brave / Tavily / Exa / SearXNG | Functional configurable structured search adapters | Explicit provider, bounded results, credentials in environment; deterministic HTTP fixtures; paid relevance/latency unmeasured |
+| Playwright | Functional optional interaction backend over owned CDP contexts | Actionability/strict locators/iframe support; preserves native ownership and snapshot/download contracts |
+| agent-browser / playwright-cli / Playwright MCP | Optional discovered CLI or existing MCP boundary | Avoid a competing default browser session owner; use explicit isolated sessions when that workflow is selected |
+| Chrome DevTools MCP | Existing optional MCP boundary for specialized tracing/network diagnostics | Use an explicitly configured debugging session; no second default browser owner or implicitly launched Node service |
+| Spider / readability | Library adapter retained; checked HTTP and owned CDP are product transports; readability remains default | Audit uncovered transport and cancellation/policy reasons to change orchestration rather than replace every extraction engine |
+| Trafilatura | Functional explicit local extractor | Three inspectable article/documentation/forum fixtures; no general-quality claim or silent fallback |
+| Crawl4AI / Firecrawl | Explicit external MCP/service option; no new default dependency/service | Current adapters cover the verified fetch/render/extraction requirements; additional deployment, licensing and hosted-data behavior need a concrete task benefit |
+| MarkItDown / Poppler | Functional local `fs.document` conversion/search adapter | Real PDF/Office MarkItDown fixtures passed; Poppler path exists but was not live-run on this host |
+| Docling / ripgrep-all | Optional discovered document tools | OCR/layout and multi-format archive search are distinct tasks; heavyweight models/converters are not installed implicitly |
+| nbformat | Official schemas embedded; Python reference validation in development | Preserve notebook revisions and attachments without starting Python for every cell edit |
+| Tantivy | Retained with content-aware transactional reuse | Avoid rebuilding unchanged memory indexes; no speculative vector-database migration |
+| Git worktree / Rift | Retained managed snapshot backends with corrected lifecycle/probes | No replacement of version-control semantics merely to choose a newer CLI |
+| plan / tasks / cron / settings / interaction / report | Retained Agena state protocols; audited against existing failure/concurrency tests | Delayed plan approvals bind revisions; task admission/cancel failures retain state; scheduling is session-aware; saved settings survive reload failure |
+| commands / tools discovery / MCP | Retained contract/resource/connection protocols | Bounded discovery, regular-file reads, exact schemas, reconnect cleanup and structured content are not equivalent to shell aliases |
+| chatgpt / claude / gemini hosted tools | Existing 32 wrappers retained and fixture-validated | Vendor-hosted files/containers remain separate from local workspace; returned client actions are not executed locally |
+
+## Prompt behavior review and measured log experiment
+
+The final base prompt is 4,658 UTF-8 bytes versus 9,738; all workflow sections total 7,493 versus 16,811. Measurements are in `tool-modernization-prompt-size.json`. No tokenizer-count or model-task-success claim follows from these byte counts. A small addition names local `fs.document` extraction and revision-bound AST rewrite preview; detailed flags remain in live help and the CLI catalog.
+
+The following scenario review goes beyond formatting/obligation checks by mapping intended decisions to the exercised execution contracts. It is a source-backed scenario review with deterministic runtime tests, not sampled model responses or a paid model benchmark.
+
+| Situation | Expected model decision | Runtime evidence/limit |
+| --- | --- | --- |
+| Search a literal containing regex punctuation | `fs.grep` fixed-string mode or `rg -F`; narrow paths | Grep equivalence/control fixtures and command parsing |
+| Search produces no matches | Treat simple rg exit 1 as an empty result | Exit interpretation tests; pipeline/compound failures remain errors |
+| Need only matching filenames or counts | Use files/count mode without fetching every matching line | Structured grep tests preserve complete counts and visible truncation |
+| Preferred CLI absent or named `fdfind` | Discover actual runtime PATH, resolve alias or use fallback | PATH/alias/cache/unset-PATH tests; no implicit executable probe |
+| User supplies an existing script/toolchain | Preserve command and project semantics | Prompt explicitly disallows modernization-only rewriting/installation |
+| Need YAML or CSV fields | Choose identified structural parser; avoid regex/comma splitting | Catalog identifies yq variants and CSV parsers; availability/effects stay explicit |
+| Search symbol references or rewrite code structure | Choose LSP or AST; preview then revision-bound apply | Root-routing, rule-only dispatch, stale-revision and overlap tests |
+| PDF/Office source | Local document adapter if text is sufficient; inspect layout separately | Four real formats; extraction does not imply OCR/visual correctness |
+| `fd -x`, `rg --pre`, yq `-i`, AST `-U` | Do not assume read-only from executable name | Shared command-effects regression cases |
+| Changed file after preview/read | Refresh and replan publication | Batch growth, stale-revision, staged-publication and rollback-conflict tests |
+| Known versus unknown tool | Read known live help; focused search for unknown owner/capability | Real gateway discovery/dispatch fixtures; no catalog enumeration required |
+| JavaScript-heavy page or covered button | Render explicitly / choose optional Playwright | Real Chrome render and actionability fixtures; timeout/denial remains visible |
+| Cached URL after policy change | Recheck permission before exposing cached content | Cached-document authorization regression |
+| High-volume logs | Bound preview and preserve original diagnostics/exit status | Explicit filtering experiment; no transparent RTK proxy |
+| Background task still running | Use notifications and retained handle/cursor; silence is not exit | Terminal/monitor lifecycle and dynamic-prompt contracts |
+| Hosted tool returns a local/client action | Respect vendor boundary; do not execute that action | Synthetic provider fixtures for all hosted operation families |
+
+`tools/experiment_log_summary.py` ran an actual `cargo test --locked -p agena-tool --lib` and retained raw stdout/stderr, preview files, hashes, argv and real return code under `tool-modernization-log-fixtures/tool-tests/`. The 78-success-test sample went from 6,606 to 192 stdout bytes; combined streams went from 6,848 to 411 bytes (about 94.0% shorter). A separate intentionally failing subprocess retained code 7 and byte-identical warning/error stderr. The tiny failure stdout became larger because the folding notice costs bytes. These samples are deliberately not an RTK product benchmark, general log-quality guarantee, tokenizer measurement or cost estimate. All unknown lines remain visible, and raw output remains the authority for diagnostics.
+
+
+## Final lifecycle corrections and reproducible regressions
+
+The broad concurrent audit identified two independent failures; isolated green reruns were insufficient:
+
+1. Darwin can return `EPERM` when a process group contains only zombies. The shared process layer now retains the original group identity and reuses bounded process metadata inspection from the PTY implementation. An error is accepted only after proving no live group members remain. Live-member and unknown-group permission failures remain errors. Both synchronous and asynchronous cleanup share the check; successful kill is idempotent, force-kill reaping is bounded, and vendored group wait loops retry `EINTR`.
+2. A `LinesCodec` length error put `FramedRead` in a paused state. Even polling past its transitional `None` could wait for another pipe read while a complete `READY` record was already buffered. The monitor now represents malformed/oversized lines as recoverable records, retaining the mature codec's discard behavior without entering the transport-error state. Actual pipe errors are reported separately. A deterministic open-and-silent duplex fixture verifies recovery of buffered valid lines after both oversized and invalid-UTF-8 lines without waiting for EOF or more bytes.
+
+After both fixes, 20 consecutive full parallel runtime-tools rounds passed: 167 tests per round, with three deliberate benchmark skips. The process suite has nine passing tests, including real all-zombie cleanup and preservation of genuine permission errors. Earlier failing stress logs were retained alongside the corrected evidence; the added ten-second oversized-line fixture deadline is not the fix for the decoder stall.
+
+Crawl metadata updates now remove secondary URL/content-hash entries owned by the replaced document. Deleting a duplicate does not remove another document's mapping, and every secondary-index hit is checked against the loaded document, including interrupted-publication stale entries. The refreshed-hash/duplicate-ownership regression passes.
+
+The final Playwright and rendered Chrome fixtures pass on the corrected process implementation. They validate actionability, Unicode/redaction, snapshot refs, iframe selection, context ownership, interception, rendered HTTP status, output bounds and timeout/cancellation cleanup. These local tests start isolated Chrome and fixture HTTP servers, never an Agena service or Agena connector.
+
+
+## Final validation and completion
+
+Source validation covers commit `53b5c95ad2962f74107650a2defe9f9c4e69c4d1` (later changes in the completion commit are documentation and the already exercised offline experiment). Machine-readable commands, log paths, hashes, results and limitations are retained in `tool-modernization-validation.json`.
+
+| Final check | Result |
+| --- | --- |
+| `cargo test --locked --workspace --no-fail-fast` | 3,167 passed, 0 failed, 12 ignored across 154 reported unit/integration/doc-test targets |
+| `cargo clippy --locked --workspace --all-targets -- -D warnings` | Passed |
+| `cargo fmt --all -- --check` and diff whitespace check | Passed |
+| Concurrent process/monitor regression reproduction | 20 complete runtime-tools rounds; 167 passed and 3 opt-in benchmark skips in every round |
+| Real optional Playwright and rendered Chrome fixtures | Both passed, with printed behavior evidence |
+| Real native Chrome snapshot/screenshot/context/download fixture | Passed, with secret omission, stale refs, separate cookies, GUID completion, in-flight limits and cancellation evidence |
+| Python refactor tools / failure-semantics invariants | 5 tests and 19 invariant checks passed |
+| Universal target manifest consistency | Passed; this is manifest verification, not cross-platform execution |
+| Runtime crypto/auth capability gate | Passed, including both real HTTPS client-construction tests |
+| Reference / capability identity generator examples | Both outputs are byte-identical to committed artifacts; 22 plugins / 138 definitions |
+| Offline log experiment artifact integrity | Every raw/preview byte count and SHA-256 matches; success code 0 and intentional failure code 7 retained |
+
+The twelve default-suite skips comprise two optional browser fixtures, the optional MarkItDown fixture, three search/glob benchmarks, the optional Trafilatura comparison and five documentation examples. Browser fixtures were executed explicitly as recorded above; document, extraction and benchmark evidence is retained in the earlier phase artifacts. No frontend source or build configuration changed, so frontend-specific suites were not rerun. The workspace test linker emitted the existing macOS compact-unwind-size warning for the large `e2e_probe` debug example; Clippy with warnings denied passed. It was not suppressed by disabling unwind support.
+
+All requirements in the current table have an implementation, deliberate retention/optional-integration decision, and recorded evidence. Work remains on the independent branch/worktree; no merge or push was performed. This completion does not claim universal speed gains, production service quality, model task-success improvements, a complete browser sandbox, tested Windows/big-endian execution, live Poppler validation or atomic cooperation from arbitrary external file writers.

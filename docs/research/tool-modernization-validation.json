@@ -1,0 +1,188 @@
+{
+  "checked_on": "2026-10-04",
+  "validated_source_commit": "53b5c95ad2962f74107650a2defe9f9c4e69c4d1",
+  "branch": "feat/tool-modernization",
+  "worktree": "/Volumes/Rc20/Projects/agena-tool-modernization",
+  "platform": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "release": "25.6.0"
+  },
+  "agena_connectors_used": false,
+  "agena_service_started": false,
+  "catalog": {
+    "plugins": 22,
+    "definitions": 138,
+    "execution_tools": 134,
+    "gateways": 4
+  },
+  "checks": [
+    {
+      "name": "workspace-tests",
+      "command": "cargo test --locked --workspace --no-fail-fast",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-workspace-tests-verified.log",
+          "bytes": 333309,
+          "sha256": "0de80c277fe7cf69ef5493e124a33ea6ff58e8cdb45c8c1e36d696ff50236210"
+        }
+      ],
+      "test_targets": 154,
+      "passed": 3167,
+      "failed": 0,
+      "ignored": 12
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D warnings",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-workspace-clippy-final.log",
+          "bytes": 7815,
+          "sha256": "5fc5f479dc25d5afa2ad59ebe5e2ffc208cb90af259054f0389c6d38ca11b6bd"
+        }
+      ]
+    },
+    {
+      "name": "format",
+      "command": "cargo fmt --all -- --check",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-fmt-final.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "name": "concurrent-process-monitor-regressions",
+      "command": "Run the final runtime-tools test binary with RUST_MIN_STACK=8388608 and default libtest concurrency, 20 times",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-process-monitor-stress-final.log",
+          "bytes": 322871,
+          "sha256": "f648516b8bfa13813e4666af2314f64f787f64497b3db1f3b03ee5931e930ad4"
+        }
+      ],
+      "rounds": 20,
+      "passed_per_round": 167,
+      "ignored_per_round": 3
+    },
+    {
+      "name": "real-playwright-and-rendered-chrome",
+      "command": "AGENA_BROWSER_PYTHON=/tmp/agena-document-adapter-env/bin/python cargo test --locked -p agena-bundled-plugins --lib real_ -- --ignored --nocapture --test-threads=1",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-browser-final.log",
+          "bytes": 2002,
+          "sha256": "26df13bf6a9571ed1c231339d76991f3b9a2bb589efcc2b32d8e613aef4973d9"
+        }
+      ],
+      "passed": 2
+    },
+    {
+      "name": "real-native-chrome",
+      "command": "cargo test --locked -p agena-bundled-plugins --lib cdp_client_can_create_attach_evaluate_and_capture -- --nocapture",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-final-native-browser.stdout",
+          "bytes": 196,
+          "sha256": "be443d31134c614b3dcc826919d33362f9c182cc13becd683ce9b9853bac111b"
+        },
+        {
+          "path": "/tmp/agena-modernization-final-native-browser.stderr",
+          "bytes": 1040,
+          "sha256": "8eeaddc7f57274a257c88804e3add132c74902512f066671528431f1ed0cc42f"
+        }
+      ],
+      "passed": 1
+    },
+    {
+      "name": "refactor-and-target-gates",
+      "command": "Python 3.13: unittest discover -s scripts/refactors/tests; check-refactor-invariants.py --manifest scripts/refactors/failure-semantics-invariants.json; scripts/agena/verify-target-coverage.py",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-gates-verified.log",
+          "bytes": 352,
+          "sha256": "fdb0be9f81c91502ff73661ab70c855991013c1e912678b254050633db68ee50"
+        }
+      ],
+      "refactor_tests": 5,
+      "invariants": 19
+    },
+    {
+      "name": "runtime-capabilities",
+      "command": "uv run --no-project --python 3.13 python scripts/ci/verify-runtime-capabilities.py",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-final-capabilities.stdout",
+          "bytes": 368,
+          "sha256": "b325494bd645036f8a2b71008a14740630ce118ab7bc4d51e2b1b7f884018e72"
+        },
+        {
+          "path": "/tmp/agena-modernization-final-capabilities.stderr",
+          "bytes": 320,
+          "sha256": "00cdc75491945e8d2127cb667c8246eb4106e5e0ccdabdc0d7c80c28dd0e6556"
+        }
+      ],
+      "runtime_tests": 2
+    },
+    {
+      "name": "tool-reference",
+      "command": "cargo run --locked -p agena-bundled-plugins --example generate_tools_reference",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-final-tool-reference.stdout",
+          "bytes": 263421,
+          "sha256": "43427a335a6b85c4f9fc0320e180042bad29700df4c6b3c5ace0bc4c67d53ca1"
+        },
+        {
+          "path": "/tmp/agena-modernization-final-tool-reference.stderr",
+          "bytes": 519,
+          "sha256": "7d6525925f1f6bb6cc27fe187f09b164041501593a7ac5cc0bd5752fef53d178"
+        }
+      ],
+      "comparison": "byte-identical to committed generated artifact",
+      "artifact": "crates/agena-bundled-plugins/generated/tools-reference.md"
+    },
+    {
+      "name": "identities",
+      "command": "cargo run --locked -p agena-bundled-plugins --example generate_capability_identity_snapshot",
+      "status": "passed",
+      "logs": [
+        {
+          "path": "/tmp/agena-modernization-final-identities.stdout",
+          "bytes": 81736,
+          "sha256": "501555501d5702c745928249e8d371c0c115251843c2293b347bcb3d066e0008"
+        },
+        {
+          "path": "/tmp/agena-modernization-final-identities.stderr",
+          "bytes": 531,
+          "sha256": "5c54aa53ad013a62fae5f769559463c2837c8b8f4be507648de623fd6d641ccd"
+        }
+      ],
+      "comparison": "byte-identical to committed generated artifact",
+      "artifact": "crates/agena-bundled-plugins/generated/bundled-capability-identities.json"
+    }
+  ],
+  "earlier_phase_evidence": "See tool-modernization-progress.md and the committed source/benchmark/reference fixture files.",
+  "limits": [
+    "Local macOS validation; Windows and big-endian execution not performed.",
+    "Optional Poppler conversion path not live-run; real MarkItDown formats validated in the document phase.",
+    "No live paid-search relevance/latency comparison or sampled-model task-success benchmark.",
+    "Search timings are workload-specific warm-cache observations; no uniform speedup is established.",
+    "Browser attached-target checks are not a complete network sandbox or Chromium memory/network bound.",
+    "Revision comparison and rename do not transact with arbitrary external writers.",
+    "Workspace test linking emitted the existing macOS oversized compact-unwind warning for e2e_probe; workspace Clippy with warnings denied passed.",
+    "No frontend source or build configuration changed; frontend-specific suites were not rerun."
+  ]
+}

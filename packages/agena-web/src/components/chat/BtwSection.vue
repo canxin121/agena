@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFileCopyLine, RiLoader4Line } from '@remixicon/vue'
+import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFileCopyLine } from '@remixicon/vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useBtwStore } from '@/stores/btw'
+import SessionSection from './SessionSection.vue'
 
 const MarkdownRenderer = defineAsyncComponent(() => import('@/components/markdown/MarkdownRenderer.vue'))
 const props = defineProps<{ sessionId: string }>()
@@ -38,25 +39,14 @@ function handleKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <section
+  <SessionSection
     v-if="state"
-    class="my-3 min-w-0 rounded-lg border border-border/60 bg-secondary/10"
-    :aria-label="t('chat.btw.title')"
-    data-transcript-chrome="true"
+    title="BTW"
+    v-model:expanded="state.expanded"
+    :summary="[t('chat.btw.inlineHint'), state.exchanges.length || ''].filter(Boolean).join(' · ')"
+    :busy="loading"
   >
-    <header class="flex min-h-9 items-center gap-2 px-2">
-      <button
-        type="button"
-        class="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded px-1 text-left text-xs hover:bg-secondary/50"
-        :aria-expanded="state.expanded"
-        @click="state.expanded = !state.expanded"
-      >
-        <component :is="state.expanded ? RiArrowDownSLine : RiArrowRightSLine" class="h-4 w-4 shrink-0" />
-        <span class="font-mono font-semibold">BTW</span>
-        <span class="truncate text-muted-foreground">{{ t('chat.btw.inlineHint') }}</span>
-        <RiLoader4Line v-if="loading" class="h-3.5 w-3.5 shrink-0 animate-spin" :aria-label="t('chat.btw.loading')" />
-        <span v-else-if="state.exchanges.length" class="text-muted-foreground">{{ state.exchanges.length }}</span>
-      </button>
+    <template #actions>
       <IconButton
         class="h-7 w-7"
         :tooltip="t('chat.btw.clear')"
@@ -65,8 +55,8 @@ function handleKeydown(event: KeyboardEvent) {
       >
         <RiCloseLine class="h-3.5 w-3.5" />
       </IconButton>
-    </header>
-    <div v-if="state.expanded" class="space-y-3 border-t border-border/50 px-3 py-3">
+    </template>
+    <div class="space-y-3">
       <article v-for="entry in state.exchanges" :key="entry.id" class="min-w-0">
         <div class="flex items-start gap-2">
           <button
@@ -130,5 +120,5 @@ function handleKeydown(event: KeyboardEvent) {
         }}</Button>
       </form>
     </div>
-  </section>
+  </SessionSection>
 </template>

@@ -16,7 +16,7 @@ use std::cell::{Cell, RefCell};
 pub struct PlanViewerPresentation {
     scroll: Cell<u16>,
     max_scroll: Cell<u16>,
-    content: RefCell<Option<(String, Vec<Line<'static>>)>>,
+    content: RefCell<Option<(String, u16, Vec<Line<'static>>)>>,
 }
 
 impl Default for PlanViewerPresentation {
@@ -58,6 +58,35 @@ pub fn render_plan_viewer(
     loading: bool,
     error: Option<&str>,
     i18n: &I18n,
+) {
+    render_plan_viewer_with_document(
+        frame,
+        area,
+        presentation,
+        summary,
+        markdown,
+        autorun,
+        loading,
+        error,
+        i18n,
+        |text, _| markdown_lines(text),
+    );
+}
+
+/// The application supplies its shared transcript Markdown renderer so inline
+/// and fullscreen plans have identical formatting without a crate cycle.
+#[allow(clippy::too_many_arguments)]
+pub fn render_plan_viewer_with_document(
+    frame: &mut Frame,
+    area: Rect,
+    presentation: &PlanViewerPresentation,
+    summary: Option<&str>,
+    markdown: Option<&str>,
+    autorun: Option<bool>,
+    loading: bool,
+    error: Option<&str>,
+    i18n: &I18n,
+    render_document: impl Fn(&str, u16) -> Vec<Line<'static>>,
 ) {
     let title = format!(
         "{}{}",
@@ -115,9 +144,13 @@ pub fn render_plan_viewer(
     if let Some(markdown) = markdown.filter(|s| !s.trim().is_empty()) {
         if content
             .as_ref()
-            .is_none_or(|(previous, _)| previous != markdown)
+            .is_none_or(|(previous, width, _)| previous != markdown || *width != body.width)
         {
-            *content = Some((markdown.to_owned(), markdown_lines(markdown)));
+            *content = Some((
+                markdown.to_owned(),
+                body.width,
+                render_document(markdown, body.width),
+            ));
         }
     } else {
         *content = None;
@@ -127,7 +160,7 @@ pub fn render_plan_viewer(
             format!("✗ {error}"),
             Style::default().fg(danger_color()),
         ))]
-    } else if let Some((_, lines)) = content.as_ref() {
+    } else if let Some((_, _, lines)) = content.as_ref() {
         lines.clone()
     } else {
         vec![Line::from(Span::styled(

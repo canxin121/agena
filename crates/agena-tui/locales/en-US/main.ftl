@@ -348,6 +348,7 @@ overlay-plan-steps = steps={$steps}
 overlay-plan-preview-heading = Preview
 plan-viewer-refresh = Refresh
 plan-viewer-title = Plan
+plan-inline-footer = Tab/Esc input · j/k scroll · r refresh · f expand
 plan-viewer-empty = No plan yet.
 plan-viewer-loading = Loading plan
 plan-viewer-footer = ↑/↓/PgUp/PgDn scroll · r refresh · a autorun · q close

@@ -98,6 +98,9 @@ impl App {
             btw_sessions: BTreeMap::new(),
             btw_focus: None,
             btw_area: Default::default(),
+            inline_plans: BTreeMap::new(),
+            plan_focus: None,
+            plan_area: Default::default(),
             route_stack: Vec::new(),
             overlay: None,
             overlay_stack: Vec::new(),
@@ -181,7 +184,6 @@ impl App {
             transcript_text_object_pending: None,
             transcript_search_forward: true,
             last_ctrl_c_at: None,
-            plan_display_refresh: None,
             double_esc_window,
             terminal_integration: TerminalIntegrationState::default(),
         };

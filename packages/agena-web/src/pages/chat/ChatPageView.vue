@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, isRef, ref, unref } from 'vue'
-import { useWindowSize } from '@vueuse/core'
+import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
   RiArrowDownLine,
@@ -39,6 +39,7 @@ import { resolveComposerToolbarLayout } from './composerToolbarLayout'
 import { useBtwStore } from '@/stores/btw'
 
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
+const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
 const btw = useBtwStore()
 
 // This view is template-only: it takes a context bag from ChatPage.
@@ -276,6 +277,13 @@ function handleAttachProjectFromPanel() {
 }
 
 const overlayReservePx = ref(0)
+// A classic scrollbar reserves space in the transcript. Reserve that same
+// space beside the composer so their shared column aligns on every platform.
+const scrollbarGutter = ref(0)
+useResizeObserver(scrollEl, () => {
+  const element = scrollEl.value
+  scrollbarGutter.value = element ? Math.max(0, element.offsetWidth - element.clientWidth) : 0
+})
 
 function handleOverlayReserve(px: number) {
   if (!Number.isFinite(px) || px <= 0) {
@@ -457,76 +465,88 @@ void sessionActionsMenuRef
             @scroll="handleScroll"
             @wheel="handleWheel"
           >
-            <div ref="contentEl" class="chat-message-column py-3">
-              <div v-if="chat.messages.length" class="min-h-8 px-2 pb-2" data-transcript-chrome="true">
-                <button
-                  v-if="!chat.selectedHistory.exhausted || loadingOlder"
-                  type="button"
-                  class="flex min-h-7 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-wait"
-                  :disabled="loadingOlder"
-                  @click="ctx.loadOlderHistory"
-                >
-                  <RiLoader4Line v-if="loadingOlder" class="h-3.5 w-3.5 animate-spin" />
-                  <RiArrowUpLine v-else class="h-3.5 w-3.5" />
-                  {{ t(loadingOlder ? 'chat.messages.loadingOlder' : 'chat.messages.loadOlder') }}
-                </button>
-                <span v-else class="px-2 text-[11px] text-muted-foreground">{{ t('chat.messages.historyStart') }}</span>
-                <p
-                  v-if="chat.historyErrorBySession[chat.selectedSessionId || '']"
-                  role="alert"
-                  class="px-2 text-xs text-destructive"
-                >
-                  {{ chat.historyErrorBySession[chat.selectedSessionId || ''] }}
-                </p>
+            <div ref="contentEl" class="min-w-0 py-3">
+              <div class="chat-message-column">
+                <div v-if="chat.messages.length" class="min-h-8 px-2 pb-2" data-transcript-chrome="true">
+                  <button
+                    v-if="!chat.selectedHistory.exhausted || loadingOlder"
+                    type="button"
+                    class="flex min-h-7 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-wait"
+                    :disabled="loadingOlder"
+                    @click="ctx.loadOlderHistory"
+                  >
+                    <RiLoader4Line v-if="loadingOlder" class="h-3.5 w-3.5 animate-spin" />
+                    <RiArrowUpLine v-else class="h-3.5 w-3.5" />
+                    {{ t(loadingOlder ? 'chat.messages.loadingOlder' : 'chat.messages.loadOlder') }}
+                  </button>
+                  <span v-else class="px-2 text-[11px] text-muted-foreground">{{
+                    t('chat.messages.historyStart')
+                  }}</span>
+                  <p
+                    v-if="chat.historyErrorBySession[chat.selectedSessionId || '']"
+                    role="alert"
+                    class="px-2 text-xs text-destructive"
+                  >
+                    {{ chat.historyErrorBySession[chat.selectedSessionId || ''] }}
+                  </p>
+                </div>
+                <MessageList
+                  :is-compact-layout="ui.isCompactLayout"
+                  :is-compact-touch="ui.isCompactTouch"
+                  :selected-session-id="chat.selectedSessionId"
+                  :messages-loading="chat.messagesLoading"
+                  :messages-error="chat.messagesError"
+                  :session-error="timelineSessionError"
+                  :render-blocks="renderBlocks"
+                  :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
+                  :loading-older="loadingOlder"
+                  :activity-page-size="chat.transcriptPartPageSize"
+                  :fold-loading-by-key="chat.foldLoadingByKey"
+                  :fold-error-by-key="chat.foldErrorByKey"
+                  :show-timestamps="showTimestamps"
+                  :format-time="formatTime"
+                  :copied-message-id="copiedMessageId"
+                  :revert-busy-message-id="revertBusyMessageId"
+                  :is-streaming-assistant-message="isStreamingAssistantMessage"
+                  :show-assistant-placeholder="showAssistantPlaceholder"
+                  :session-ended="sessionEnded"
+                  :retry-status="retryStatus"
+                  :current-phase="currentPhase"
+                  :awaiting-assistant="awaitingAssistant"
+                  :activity-collapse-signal="activityCollapseSignal"
+                  :is-part-expanded="transcriptPartExpanded"
+                  :is-node-selected="isTranscriptNodeSelected"
+                  :is-node-search-match="isTranscriptNodeSearchMatch"
+                  :optimistic-user="optimisticUser"
+                  :show-optimistic-user="showOptimisticUser"
+                  :pending-attention="chat.selectedAttention"
+                  :open-mobile-sidebar="() => ui.setSessionSwitcherOpen(true)"
+                  @fork="handleForkFromMessage"
+                  @revert="handleRevertFromMessage"
+                  @copy="handleCopyMessage"
+                  @part-toggle="setTranscriptPartExpanded"
+                  @fold-expand="loadFoldedActivity"
+                  @reveal-parts="ctx.preparePartReveal"
+                  @node-select="selectTranscriptNode"
+                  @copySessionError="handleCopySessionError"
+                  @clearSessionError="
+                    chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined
+                  "
+                  @set-activity-page-size="ctx.setTranscriptPartPageSize"
+                />
               </div>
-              <MessageList
-                :is-compact-layout="ui.isCompactLayout"
-                :is-compact-touch="ui.isCompactTouch"
-                :selected-session-id="chat.selectedSessionId"
-                :messages-loading="chat.messagesLoading"
-                :messages-error="chat.messagesError"
-                :session-error="timelineSessionError"
-                :render-blocks="renderBlocks"
-                :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
-                :loading-older="loadingOlder"
-                :activity-page-size="chat.transcriptPartPageSize"
-                :fold-loading-by-key="chat.foldLoadingByKey"
-                :fold-error-by-key="chat.foldErrorByKey"
-                :show-timestamps="showTimestamps"
-                :format-time="formatTime"
-                :copied-message-id="copiedMessageId"
-                :revert-busy-message-id="revertBusyMessageId"
-                :is-streaming-assistant-message="isStreamingAssistantMessage"
-                :show-assistant-placeholder="showAssistantPlaceholder"
-                :session-ended="sessionEnded"
-                :retry-status="retryStatus"
-                :current-phase="currentPhase"
-                :awaiting-assistant="awaitingAssistant"
-                :activity-collapse-signal="activityCollapseSignal"
-                :is-part-expanded="transcriptPartExpanded"
-                :is-node-selected="isTranscriptNodeSelected"
-                :is-node-search-match="isTranscriptNodeSearchMatch"
-                :optimistic-user="optimisticUser"
-                :show-optimistic-user="showOptimisticUser"
-                :pending-attention="chat.selectedAttention"
-                :open-mobile-sidebar="() => ui.setSessionSwitcherOpen(true)"
-                @fork="handleForkFromMessage"
-                @revert="handleRevertFromMessage"
-                @copy="handleCopyMessage"
-                @part-toggle="setTranscriptPartExpanded"
-                @fold-expand="loadFoldedActivity"
-                @reveal-parts="ctx.preparePartReveal"
-                @node-select="selectTranscriptNode"
-                @copySessionError="handleCopySessionError"
-                @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
-                @set-activity-page-size="ctx.setTranscriptPartPageSize"
-              />
-
-              <BtwSection
-                v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
-                :key="chat.selectedSessionId"
-                :session-id="chat.selectedSessionId"
-              />
+              <div class="chat-column" data-session-sections="true">
+                <PlanSection
+                  v-if="ctx.planVisible.value"
+                  v-model:expanded="ctx.planViewerOpen.value"
+                  :state="ctx.planViewer"
+                />
+                <BtwSection
+                  v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
+                  :key="chat.selectedSessionId"
+                  :session-id="chat.selectedSessionId"
+                />
+              </div>
 
               <div v-if="overlayReservePx > 0" :style="{ height: `${overlayReservePx}px` }" aria-hidden="true" />
 
@@ -609,6 +629,7 @@ void sessionActionsMenuRef
         <div
           ref="composerBarRef"
           class="h-full flex flex-col min-h-0 bg-background/85 backdrop-blur ios-keyboard-safe-area"
+          :style="{ paddingInlineEnd: `${scrollbarGutter}px` }"
           :data-keyboard-avoid="composerFullscreenActive ? 'resize' : 'shift'"
         >
           <div class="chat-column flex flex-col min-h-0 h-full" :class="ui.isCompactLayout ? 'py-2' : 'py-3'">

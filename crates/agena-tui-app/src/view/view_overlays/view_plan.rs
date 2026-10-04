@@ -9,7 +9,7 @@ impl App {
         area: Rect,
         state: &crate::PlanViewerState,
     ) {
-        agena_tui::plan_viewer::render_plan_viewer(
+        agena_tui::plan_viewer::render_plan_viewer_with_document(
             frame,
             area,
             &state.presentation,
@@ -19,6 +19,7 @@ impl App {
             state.loading,
             state.error.as_deref(),
             &self.i18n,
+            crate::app_plan_inline::render_plan_document,
         );
     }
 }

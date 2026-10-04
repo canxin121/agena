@@ -99,6 +99,7 @@ impl App {
             self.submit_btw(session_id, &mut state);
         }
         self.btw_sessions.insert(session_id, state);
+        self.collapse_inline_plan(session_id);
         self.current_route = Route::Main;
         self.focus = Focus::Transcript;
         self.btw_focus = Some(session_id);
@@ -267,6 +268,9 @@ impl App {
             }
             "btw-toggle" => {
                 state.expanded = !state.expanded;
+                if state.expanded {
+                    self.collapse_inline_plan(id);
+                }
                 if !state.expanded {
                     self.btw_focus = None;
                 }
@@ -323,6 +327,12 @@ impl App {
             available.min(13)
         } else {
             available.min(1)
+        }
+    }
+
+    pub(crate) fn collapse_btw(&mut self, session_id: i64) {
+        if let Some(state) = self.btw_sessions.get_mut(&session_id) {
+            state.expanded = false;
         }
     }
 

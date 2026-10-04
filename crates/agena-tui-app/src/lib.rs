@@ -237,6 +237,7 @@ mod app_permission_display;
 mod app_permission_helpers;
 mod app_permission_studio;
 mod app_permissions;
+mod app_plan_inline;
 mod app_plan_viewer;
 mod app_pointer;
 mod app_provider_runtime;

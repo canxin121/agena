@@ -348,6 +348,7 @@ overlay-plan-steps = 步骤={$steps}
 overlay-plan-preview-heading = 预览
 plan-viewer-refresh = 刷新
 plan-viewer-title = 计划
+plan-inline-footer = Tab/Esc 返回输入 · j/k 滚动 · r 刷新 · f 全屏
 plan-viewer-empty = 暂无计划。
 plan-viewer-loading = 正在加载计划
 plan-viewer-footer = ↑/↓/PgUp/PgDn 滚动 · r 刷新 · a 自动运行 · q 关闭

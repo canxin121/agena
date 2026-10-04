@@ -10,6 +10,11 @@ impl App {
         {
             self.btw_focus = None;
         }
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && !self.plan_area.contains((mouse.column, mouse.row).into())
+        {
+            self.plan_focus = None;
+        }
         if let Some(action) = self.pointer_targets.action(mouse) {
             self.cancel_active_pointer_gesture();
             self.cancel_surface_selection();
@@ -82,6 +87,7 @@ impl App {
                 }
                 "session-token-usage" => self.open_usage_dashboard(),
                 "plan" => self.open_plan_viewer(),
+                name if name.starts_with("plan-") => self.handle_inline_plan_action(name),
                 "btw" => self.open_btw(""),
                 name if name.starts_with("btw-") => self.handle_btw_action(name),
                 "side" => self.handle_side_command(""),

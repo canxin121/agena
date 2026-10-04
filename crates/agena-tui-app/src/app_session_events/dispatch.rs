@@ -39,9 +39,11 @@ impl App {
             AppMessage::PlanAutorunToggled { request_id, result } => {
                 self.handle_plan_autorun_toggled(request_id, result)
             }
-            AppMessage::PlanDisplayRefreshed { session_id, result } => {
-                self.handle_plan_display_refreshed(session_id, result)
-            }
+            AppMessage::InlinePlanLoaded {
+                session_id,
+                request_id,
+                result,
+            } => self.handle_inline_plan_loaded(session_id, request_id, result),
             AppMessage::UsageStatsLoaded { request_id, result } => {
                 self.handle_usage_stats_loaded(request_id, result)
             }

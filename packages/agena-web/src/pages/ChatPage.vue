@@ -46,7 +46,8 @@ import {
   previousComposerWordBoundary,
 } from './chat/composerWordNavigation'
 import { useComposerPromptHistory } from './chat/composerPromptHistory'
-import PlanViewerDialog from '@/components/chat/PlanViewerDialog.vue'
+import { useSessionPlan } from './chat/useSessionPlan'
+import { buildPlanToolInvocationRequest } from './chat/planViewerRequest'
 import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
@@ -276,7 +277,6 @@ const speedPickerQuery = ref('')
 const pageRef = ref<HTMLElement | null>(null)
 const composerBarRef = ref<HTMLElement | null>(null)
 const transcriptSearchInputRef = ref<HTMLInputElement | null>(null)
-const planViewerOpen = ref(false)
 const sideBusy = ref(false)
 const sideParentId = computed(() => {
   const context = asRecord(chat.getSessionExecution(chat.selectedSessionId)?.conversation)
@@ -1336,7 +1336,7 @@ const transcriptVim = useChatTranscriptVim({
       toasts.push('info', String(t('chat.planViewer.requiresSession')))
       return
     }
-    planViewerOpen.value = true
+    openPlanViewer()
   },
   togglePart: setTranscriptPartExpanded,
   isPartExpanded: transcriptPartExpanded,
@@ -1359,13 +1359,35 @@ const {
   closeSearch: closeTranscriptSearch,
 } = transcriptVim
 
-// The TUI receives these four values from its server-backed execution and
-// plugin display projections.  Keep the Web values as computed projections as
-// well; do not infer them from the paged transcript.
-const planProgress = ref('')
-let planRequest: { sessionId: string; controller: AbortController } | null = null
-let planRefreshTimer: number | null = null
-let planPollTimer: number | null = null
+// A single session-owned read feeds both the inline document and progress chip.
+const {
+  viewer: planViewer,
+  expanded: planViewerOpen,
+  visible: planVisible,
+} = useSessionPlan(
+  () => chat.selectedSessionId,
+  () => currentPhase.value !== 'idle',
+  () => [chat.messages.length, currentPhase.value],
+  async (sessionId, tool, input, signal) => {
+    const body = buildPlanToolInvocationRequest(sessionId, tool, input)
+    if (!body) throw new Error(String(t('chat.planViewer.requiresSession')))
+    return await apiJson<Record<string, JsonValue>>('/api/v1/plugins/tools/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    })
+  },
+)
+
+function openPlanViewer() {
+  const sessionId = chat.selectedSessionId
+  if (!sessionId) return
+  planViewerOpen.value = true
+  void nextTick(() => {
+    if (chat.selectedSessionId === sessionId) scrollToBottom('smooth')
+  })
+}
 
 function formatBackgroundActivitySummary(kinds: string[]): string {
   const normalized = Array.isArray(kinds)
@@ -1382,77 +1404,6 @@ function formatBackgroundActivitySummary(kinds: string[]): string {
     })
     .filter(Boolean)
     .join(' · ')
-}
-
-async function refreshPlanProgress() {
-  const sid = commandSessionId()
-  if (planRequest?.sessionId === sid) return
-  planRequest?.controller.abort()
-  planRequest = null
-  if (!sid) {
-    planProgress.value = ''
-    return
-  }
-  const controller = new AbortController()
-  planRequest = { sessionId: sid, controller }
-  const timeout = window.setTimeout(() => controller.abort(), 30_000)
-  try {
-    const response = await apiJson<JsonValue>('/api/v1/plugins/tools/invoke', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        plugin_id: 'agena.plan',
-        tool: 'get',
-        input: { view: 'summary' },
-        session_id: Number(sid),
-      }),
-    })
-    if (controller.signal.aborted || chat.selectedSessionId !== sid) return
-    const payload = asRecord(asRecord(response).payload as JsonValue)
-    const plan = asRecord(payload.plan as JsonValue)
-    const steps = Array.isArray(plan.steps) ? plan.steps : []
-    if (!steps.length && !String(plan.title || plan.slug || '').trim()) {
-      planProgress.value = ''
-      return
-    }
-    const completed = steps.filter((step) => {
-      const status = String(asRecord(step).status || '')
-        .trim()
-        .toLowerCase()
-      return status === 'completed' || status === 'skipped'
-    }).length
-    const phase = String(plan.phase || '')
-      .trim()
-      .toLowerCase()
-    const symbol =
-      phase === 'completed'
-        ? '✓'
-        : phase === 'blocked'
-          ? '⚠'
-          : phase === 'cancelled'
-            ? '✕'
-            : phase === 'planning'
-              ? '⏳'
-              : '▶'
-    planProgress.value = [symbol, steps.length ? `${completed}/${steps.length}` : '', plan.autorun === true ? '↻' : '']
-      .filter(Boolean)
-      .join(' ')
-  } catch {
-    // Plan status is cosmetic; a plugin restart must not affect chat input.
-    if (!controller.signal.aborted && chat.selectedSessionId === sid) planProgress.value = ''
-  } finally {
-    window.clearTimeout(timeout)
-    if (planRequest?.controller === controller) planRequest = null
-  }
-}
-
-function schedulePlanProgressRefresh() {
-  if (planRefreshTimer !== null) return
-  planRefreshTimer = window.setTimeout(() => {
-    planRefreshTimer = null
-    void refreshPlanProgress()
-  }, 180)
 }
 
 const composerStatusExtra = computed(() => {
@@ -1472,11 +1423,7 @@ const composerBottomLeftStatus = computed(() => {
   return formatBackgroundActivitySummary(activity.snapshot[sid]?.kinds || [])
 })
 
-const composerBottomRightStatus = computed(() => planProgress.value)
-
-watch(() => [chat.selectedSessionId, chat.messages.length, currentPhase.value] as const, schedulePlanProgressRefresh, {
-  immediate: true,
-})
+const composerBottomRightStatus = computed(() => planViewer.snapshot.value?.progress || '')
 
 function handleSessionActionRequest(actionId: string) {
   switch (actionId) {
@@ -1935,7 +1882,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       return
     case 'plan':
       if (!sid) toasts.push('info', String(t('chat.planViewer.requiresSession')))
-      else planViewerOpen.value = true
+      else openPlanViewer()
       return
   }
 }
@@ -2274,10 +2221,6 @@ onMounted(async () => {
   await modelSelection.loadProvidersAndModels()
   modelSelection.applySessionSelection()
   await loadCommands()
-  planPollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'hidden') return
-    void refreshPlanProgress()
-  }, 5000)
   navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
 
   commandPointerHandler = (event: MouseEvent | TouchEvent) => {
@@ -2535,9 +2478,10 @@ const viewCtx = {
   composerBottomRightStatus,
   returnFromSide,
   sideParentId,
-  openPlanViewer: () => {
-    planViewerOpen.value = true
-  },
+  openPlanViewer,
+  planViewer,
+  planViewerOpen,
+  planVisible,
 
   // Send/stop.
   sessionUsage,
@@ -2568,15 +2512,6 @@ onBeforeUnmount(() => {
   // the next focus change fetch the same transcript again and discard data
   // the user already loaded.  The store is intentionally kept until the app
   // lifecycle ends (or an explicit cache reset is requested).
-  planRequest?.controller.abort()
-  if (planRefreshTimer !== null) {
-    window.clearTimeout(planRefreshTimer)
-    planRefreshTimer = null
-  }
-  if (planPollTimer !== null) {
-    window.clearInterval(planPollTimer)
-    planPollTimer = null
-  }
   if (commandPointerHandler) {
     document.removeEventListener('pointerdown', commandPointerHandler, true)
     commandPointerHandler = null
@@ -2594,5 +2529,4 @@ onBeforeUnmount(() => {
 
 <template>
   <ChatPageView :ctx="viewCtx" />
-  <PlanViewerDialog v-model:open="planViewerOpen" :session-id="chat.selectedSessionId" />
 </template>

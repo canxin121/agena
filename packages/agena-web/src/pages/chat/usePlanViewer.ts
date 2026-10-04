@@ -1,6 +1,7 @@
 import { onScopeDispose, ref, watch } from 'vue'
 import type { JsonValue } from '@/types/json'
 import type { PlanTool, PlanToolInput } from './planViewerRequest'
+import { planDocument, readPlanSnapshot, type PlanSnapshot } from './planSnapshot'
 
 type PlanResponse = Record<string, JsonValue>
 type InvokePlan = (
@@ -17,6 +18,7 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
   const markdown = ref('')
   const error = ref('')
   const autorun = ref<boolean | null>(null)
+  const snapshot = ref<PlanSnapshot | null>(null)
   let generation = 0
   let read: AbortController | undefined
   let write: AbortController | undefined
@@ -29,19 +31,17 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
     read = controller
     loading.value = true
     error.value = ''
+    const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
       const response = await invoke(sessionId, 'get', { view: 'full' }, controller.signal)
-      if (owner !== generation) return
-      markdown.value = typeof response.output_text === 'string' ? response.output_text.trim() : ''
-      const payload = response.payload
-      const plan = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload.plan : null
-      autorun.value =
-        plan && typeof plan === 'object' && !Array.isArray(plan) && typeof plan.autorun === 'boolean'
-          ? plan.autorun
-          : null
+      if (owner !== generation || controller.signal.aborted) return
+      snapshot.value = readPlanSnapshot(response)
+      markdown.value = snapshot.value ? planDocument(response) : ''
+      autorun.value = snapshot.value?.autorun ?? null
     } catch (reason) {
       if (owner === generation) error.value = reason instanceof Error ? reason.message : String(reason)
     } finally {
+      clearTimeout(timeout)
       if (owner === generation) {
         loading.value = false
         read = undefined
@@ -57,14 +57,16 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
     write = controller
     toggling.value = true
     error.value = ''
+    const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
       await invoke(sessionId, 'phase', { autorun: !autorun.value }, controller.signal)
-      if (owner !== generation) return
+      if (owner !== generation || controller.signal.aborted) return
       toggling.value = false
       await refresh()
     } catch (reason) {
       if (owner === generation) error.value = reason instanceof Error ? reason.message : String(reason)
     } finally {
+      clearTimeout(timeout)
       if (owner === generation) {
         toggling.value = false
         write = undefined
@@ -80,6 +82,7 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
     loading.value = toggling.value = false
     markdown.value = error.value = ''
     autorun.value = null
+    snapshot.value = null
   }
 
   watch(
@@ -91,5 +94,5 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
     { immediate: true, flush: 'sync' },
   )
   onScopeDispose(invalidate)
-  return { loading, toggling, markdown, error, autorun, refresh, toggleAutorun }
+  return { loading, toggling, markdown, error, autorun, snapshot, refresh, toggleAutorun }
 }

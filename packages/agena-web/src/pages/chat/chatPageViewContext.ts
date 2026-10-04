@@ -9,6 +9,7 @@ import type { AttentionEvent, MessageEntry, MessageFold } from '@/types/chat'
 import type { Command } from './useChatCommands'
 import type { ComposerExpose } from './composerInput'
 import type { JsonObject } from '@/types/json'
+import type { usePlanViewer } from './usePlanViewer'
 
 type DynamicRecord = JsonObject
 
@@ -238,6 +239,9 @@ export type ChatPageViewContext = {
   returnFromSide: () => void
   sideParentId: ComputedRef<string | null>
   openPlanViewer: () => void
+  planViewer: ReturnType<typeof usePlanViewer>
+  planViewerOpen: Ref<boolean>
+  planVisible: ComputedRef<boolean>
   composerStatusExtra: MaybeRef<string>
 
   sessionUsage: MaybeRef<SessionUsageLike | null>

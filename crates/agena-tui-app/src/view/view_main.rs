@@ -174,23 +174,35 @@ impl App {
 
     fn render_main_content(&mut self, frame: &mut Frame, area: Rect) {
         let composer_height = self.composer_height(area.width, area.height);
-        let btw_height = self.btw_inline_height(
-            area.height
-                .saturating_sub(composer_height)
-                .saturating_sub(6),
-        );
+        let section_space = area
+            .height
+            .saturating_sub(composer_height)
+            .saturating_sub(6);
+        // Keep a collapsed BTW header reachable while a plan is expanded.
+        let plan_height =
+            self.inline_plan_height(section_space.saturating_sub(self.btw_inline_height(1)));
+        let btw_height = self.btw_inline_height(section_space.saturating_sub(plan_height));
         let vertical = split_vertical_sections(
             area,
             &[
                 VerticalSectionSize::Flexible(if btw_height > 0 { 4 } else { 8 }),
+                VerticalSectionSize::Fixed(plan_height),
                 VerticalSectionSize::Fixed(btw_height),
                 VerticalSectionSize::Fixed(composer_height),
             ],
         );
 
         let transcript_host_area = vertical[0];
-        let btw_area = vertical[1];
-        let composer = vertical[2];
+        let plan_area = vertical[1];
+        let btw_area = vertical[2];
+        let composer = vertical[3];
+        if plan_area.height < 5
+            && self.plan_focus.is_some()
+            && self.plan_focus == self.transcript.session_id
+        {
+            self.plan_focus = None;
+            self.focus = Focus::Composer;
+        }
         if btw_area.height < 7
             && self.btw_focus.is_some()
             && self.btw_focus == self.transcript.session_id
@@ -223,6 +235,7 @@ impl App {
 
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
+        self.render_inline_plan(frame, plan_area);
         self.render_btw_inline(frame, btw_area);
     }
 
@@ -930,6 +943,14 @@ impl App {
     /// Text for the composer's bottom-right chip: plan progress contributed
     /// by the planning plugin as a declarative display contribution.
     pub(crate) fn composer_plan_progress_part(&self) -> Option<String> {
+        if let Some(data) = self
+            .transcript
+            .session_id
+            .and_then(|id| self.inline_plans.get(&id))
+            .and_then(|state| state.data.as_ref())
+        {
+            return (!data.summary.is_empty()).then(|| data.summary.clone());
+        }
         let session_id = self.transcript.session_id?;
         let expected_id = format!("plan:{session_id}");
         crate::app_backend::plugin_effects::plugin_display_contributions(&self.application)

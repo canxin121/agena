@@ -95,7 +95,7 @@ impl App {
             return;
         }
 
-        if self.handle_btw_input(key) {
+        if self.handle_btw_input(key) || self.handle_inline_plan_key(key) {
             return;
         }
 

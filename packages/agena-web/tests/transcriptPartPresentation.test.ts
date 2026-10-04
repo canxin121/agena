@@ -496,10 +496,7 @@ describe('TUI-parity part presentation', () => {
     expect(interactionSource).toContain('permission.replyReason')
     expect(interactionSource).toContain('isReviewDecision')
 
-    const planViewerSource = readFileSync(
-      new URL('../src/components/chat/PlanViewerDialog.vue', import.meta.url),
-      'utf8',
-    )
+    const planViewerSource = readFileSync(new URL('../src/components/chat/PlanSection.vue', import.meta.url), 'utf8')
     expect(planViewerSource).toContain('data-plan-state-viewer="true"')
     expect(planViewerSource).toContain('Plan approval decisions')
     expect(planViewerSource).not.toContain('replyQuestion')

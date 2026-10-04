@@ -22,26 +22,6 @@ pub(crate) fn plugin_display_contributions(
         .unwrap_or_default()
 }
 
-/// Re-publish the durable plan's passive display contribution.
-pub(crate) async fn refresh_plan_display(
-    application: &super::TuiBackend,
-    session_id: i64,
-) -> Result<bool> {
-    let response = application
-        .invoke_plugin_tool(
-            "agena.plan",
-            "get",
-            serde_json::json!({ "view": "summary" }),
-            Some(session_id),
-        )
-        .await?;
-    Ok(response
-        .payload
-        .as_ref()
-        .and_then(|payload| payload.get("plan"))
-        .is_some_and(|plan| !plan.is_null()))
-}
-
 pub(crate) fn plugin_host_notifications(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostNotification> {

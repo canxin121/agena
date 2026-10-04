@@ -1,0 +1,21 @@
+{
+  "checked_on": "2026-10-04",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/ast-grep/ast-grep/0.44.1/crates/config/src/rule_core.rs",
+      "bytes": 21230,
+      "sha256": "88b3829cb02973234830e470e9c195b24c6646717fb543e390dac7fbf51351b6"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/ast-grep/ast-grep/0.44.1/crates/config/src/rule_config.rs",
+      "bytes": 27788,
+      "sha256": "4dfeffa3c17e17c950bef6bf220250eab9ae407ab2e6a3bf4c7e9f62f19f0073"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/ast-grep/ast-grep/0.44.1/crates/config/src/fixer.rs",
+      "bytes": 10650,
+      "sha256": "41d9689e9aa905a8957b9edb9a7b1b6c57660032899bf3ea11b47641e4cd8b3d"
+    }
+  ],
+  "implementation": "ast-grep-config 0.44.1 via Cargo.lock; JSON rule objects only; no external YAML rule files are loaded"
+}

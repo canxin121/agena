@@ -1549,6 +1549,15 @@ pub struct HostLspServer {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_extensions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
+    /// File-system lookup only; does not certify startup or language support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_available: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub root_markers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

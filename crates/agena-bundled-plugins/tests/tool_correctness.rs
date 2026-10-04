@@ -22,13 +22,23 @@ impl Fixture {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().canonicalize().unwrap();
         let mut config = PluginsConfig::default();
-        for name in ["agena.fs", "agena.notebook", "agena.memory", "agena.report"] {
+        for name in [
+            "agena.fs",
+            "agena.notebook",
+            "agena.memory",
+            "agena.report",
+            "agena.code",
+        ] {
             config
                 .list
                 .insert(name.into(), ConfiguredPlugin::static_default());
         }
         let plugins = PluginHost::new(PluginHostBuildConfig {
             static_plugins: vec![
+                StaticPluginRegistration::new(
+                    "agena.code".parse().unwrap(),
+                    agena_bundled_plugins::tool::new_code_plugin(),
+                ),
                 StaticPluginRegistration::new(
                     "agena.fs".parse().unwrap(),
                     agena_bundled_plugins::tool::new_fs_plugin(),
@@ -607,4 +617,53 @@ async fn audit_binary_fs_read_is_a_local_reference_not_an_implicit_model_upload(
         attachment.source,
         agena_domain::AttachmentSource::LocalPath { .. }
     )));
+}
+
+#[tokio::test]
+async fn audit_ast_rules_and_revision_checked_rewrite_through_plugin_dispatch() {
+    let f = Fixture::new().await;
+    let original = "console.log(1); function demo() { console.log(2); }\n";
+    f.write("code.js", original);
+    let rule = json!({"all":[{"pattern":"console.log($A)"}, {"inside":{"kind":"function_declaration","stopBy":"end"}}]});
+    let results = f
+        .call(
+            "code.search_ast",
+            json!({"path":"code.js","rule":rule,"limit":1}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(results["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(results["truncated"], false);
+    assert!(
+        f.call(
+            "code.search_ast",
+            json!({"path":"code.js","pattern":"console.log($A)","rule":rule})
+        )
+        .await
+        .is_err()
+    );
+    let preview = f
+        .call(
+            "code.rewrite_ast",
+            json!({"path":"code.js","rule":rule,"replacement":"logger.info($A)"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.read("code.js"), original);
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["replacements"], 1);
+    assert!(
+        f.call(
+            "code.rewrite_ast",
+            json!({"path":"code.js","rule":rule,"replacement":"logger.info($A)","apply":true})
+        )
+        .await
+        .is_err()
+    );
+    let applied = f.call("code.rewrite_ast", json!({"path":"code.js","rule":rule,"replacement":"logger.info($A)","apply":true,"expected_sha256":preview["before_sha256"]})).await.unwrap();
+    assert_eq!(applied["applied"], true);
+    assert_eq!(
+        f.read("code.js"),
+        "console.log(1); function demo() { logger.info(2); }\n"
+    );
 }

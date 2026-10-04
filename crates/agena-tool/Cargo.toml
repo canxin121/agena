@@ -12,6 +12,7 @@ agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-plugin-contracts = { workspace = true }
 ast-grep-core = { workspace = true }
+ast-grep-config = { workspace = true }
 ast-grep-language = { workspace = true }
 ignore = { workspace = true }
 libc = { workspace = true }

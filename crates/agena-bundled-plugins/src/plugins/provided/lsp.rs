@@ -146,6 +146,10 @@ struct LspServerSummary {
     command: String,
     args: Vec<String>,
     file_extensions: Vec<String>,
+    executable: Option<String>,
+    command_available: Option<bool>,
+    root_markers: Vec<String>,
+    running_roots: Vec<String>,
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -175,7 +179,8 @@ impl LspPlugin {
 
     #[tool(
         tags(query, lsp, discovery, read_only),
-        summary = "List configured language servers."
+        summary = "List configured language servers and executable availability.",
+        help = "Checks each command against its configured PATH from the workspace root without executing it; command_available=null means lookup was inconclusive. Presence does not guarantee successful initialization. Relative commands can resolve differently in individual project roots. running_roots lists initialized instances. Extension-specific servers take priority over catch-all servers; ties use lexical server name."
     )]
     async fn dispatch_servers(&self) -> SdkResult<ToolInvokeOutput> {
         let HostLspListServersResponse { servers } = self.host()?.lsp_list_servers().await?;
@@ -187,6 +192,10 @@ impl LspPlugin {
                     command: server.command,
                     args: server.args,
                     file_extensions: server.file_extensions,
+                    executable: server.executable,
+                    command_available: server.command_available,
+                    root_markers: server.root_markers,
+                    running_roots: server.running_roots,
                 })
                 .collect(),
         };

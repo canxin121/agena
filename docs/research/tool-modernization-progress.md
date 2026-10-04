@@ -8,8 +8,8 @@ Implementation worktree: `/Volumes/Rc20/Projects/agena-tool-modernization`; bran
 | --- | --- | --- |
 | Modern CLI availability and routing | Runtime PATH-aware discovery, accurate identity/availability, bounded optional probes, deterministic tests; modern CLI scenarios from every research table row accounted for | In progress |
 | Unified command effects and exit semantics | Shared classification for runtime/workflow; executable/subcommand/flag/quoting cases; no automatic rewrites; meaningful regression tests | In progress |
-| Grep/glob completeness, output control and performance | Literal/case/context/output/filter controls; explicit truncation; bounded and cancellable work; equivalent-result benchmarks including in-process implementations | Grep controls, bounded persistent parallelism and equivalence benchmarks implemented; glob profiling in progress |
-| AST and language-server improvements | Structural rules/rewrites and language-server availability/use; revision-safe changes; integration tests and documented optional semantic backend | Pending |
+| Grep/glob completeness, output control and performance | Literal/case/context/output/filter controls; explicit truncation; bounded and cancellable work; equivalent-result benchmarks including in-process implementations | Implemented and equivalence-tested; serial glob retained after optimized profiling |
+| AST and language-server improvements | Structural rules/rewrites and language-server availability/use; revision-safe changes; integration tests and documented optional semantic backend | Implemented; local fixtures, real plugin dispatch, changed-crate tests and Clippy pass |
 | Search providers | Working configurable structured providers and self-hosted option; credentials and network effects; deterministic HTTP fixtures and error/limit tests | Implemented and fixture-validated; live relevance/latency not measured |
 | Browser modernization | Functional mature optional backend with session/permission/download ownership; real browser behavior and lifecycle checks | Pending |
 | Fetch/crawl/extraction | Existing third-party stack audited; working optional quality backends where useful; bounded output, cancellation and representative fixtures | Pending |
@@ -116,4 +116,33 @@ The implementation now uses a dedicated persistent Rayon pool, limited to four t
 
 `tool-modernization-search-benchmark-pool-release.json` and `tool-modernization-search-benchmark-pool-repository.json` retain all 21 samples, corpus/result hashes and equality checks. Results are mixed: no uniform speedup claim is supported. Do not compare absolute timings across separate runs as controlled measurements. The dedicated pool avoids the thread churn of the prototype and caps aggregate worker threads across concurrent searches; sorted discovery and bounded merge remain deliberate constraints.
 
-The AST audit found that reaching its match limit currently stops without marking incomplete results. The LSP registry also selects overlapping extensions using HashMap iteration and caches clients only by server name despite resolving multiple project roots. These defects remain to be repaired alongside the pending AST/LSP extensions.
+The parallel search phase was committed as `c3550adf`. The subsequently discovered AST truncation and LSP routing defects have been repaired in the semantic-tools phase below.
+
+
+## Glob profiling and deliberate serial traversal
+
+The optimized ignored benchmark `tool::glob::benchmark::repository_glob_equivalence_benchmark` compares the legacy walk/filter loop with the bounded implementation on the current worktree's `crates/`, using normal ignore rules. It verifies every returned path and page-completeness flag on every iteration, with two warmups and 21 alternating rounds.
+
+| Workload | Records | Legacy median | Enhanced median |
+| --- | ---: | ---: | ---: |
+| Rust paths, offset 0 / limit 200 | 200 | 2.654 ms | 2.538 ms |
+| Rust paths, offset 1,000 / limit 1,000 | 240 | 14.203 ms | 13.961 ms |
+| No matching path | 0 | 15.317 ms | 15.683 ms |
+
+`tool-modernization-glob-benchmark.json` retains the samples and limitations. These small mixed differences do not establish a speedup or regression. Keep sorted serial discovery for stable bounded pagination: parallel traversal would need to collect/sort more of the tree before safely returning the first page. Filesystem/load/cache isolation and cross-platform measurements were not performed.
+
+## AST rules, rewrite planning and language-server correctness
+
+See `../structural-code-tools.md` for invocation examples and operational boundaries. The official ast-grep 0.44.1 rule/fixer implementation is now embedded alongside the existing core/language crates. Retrieved source hashes are in `tool-modernization-semantic-sources.json`.
+
+- `code.search_ast` accepts exactly one pattern or structured rule, with bounded rule size/depth/node count. Broad simple patterns remain compatible. Composite/relational rules use the upstream parser/matcher. Search discovers one additional result before claiming truncation, marks shortened text, and sorts file discovery before its limits. Failed I/O/UTF-8 reads consume the global content budget; per-file reservation and limited reads enforce the remaining budget (plus a boundary-probe byte). Observed changes while reading are rejected.
+- `code.syntax_tree` adds a 512-node total cap, retains the 50-child and depth limits, and explicitly marks omitted descendants. Oversized files are rejected before content allocation.
+- `code.rewrite_ast` defaults to a no-write preview containing an exact-source diff and revision hash. Applying requires that hash, uses the shared file lock/staged publication/check, and reports file-change effects only if a write occurred. It rejects overlapping edits, undefined replacement variables, parse errors, stale revisions, more than 100 matches, and output over 8 MiB. It intentionally accepts only one file. As with other publication helpers, a noncooperating external writer can race the final comparison/rename interval.
+- The real plugin route exposed an optional-field validator defect: a rule-only request was wrongly required to provide a nonempty pattern. The input contract now requires nonemptiness only when the optional field is present; the regression passes through the actual PluginHost/ToolExecutor JSON boundary.
+- LSP routing gives explicit extensions priority over catch-all servers and resolves ties by server name. Client/startup caches use server plus canonical root; a changed specification drains its old instances. Existing startup locks and shutdown gates remain in force.
+- `lsp.servers` inspects configured PATH commands using the existing mature `which` dependency, without executing them, and reports running roots. Discovery runs on a blocking worker and is explicitly a file-presence check, not initialization/semantic readiness. Windows per-server PATHEXT overrides report unknown rather than guessing.
+- LSP position help now states zero-based UTF-16 input semantics; local URI display correctly decodes spaces, Unicode and literal hashes. AST human rendering uses the actual start-line/start-column fields; rewrite results render a preview/application state and diff.
+- Ten initial AST tests, one rewrite publication test, and the real plugin dispatch test passed. A later additional test covers invalid UTF-8 charging the shared read budget. All eight LSP tests passed, including an actual Python stdio peer proving per-root initialization, canonical aliases, twelve-way startup deduplication, configuration replacement and child cleanup while client handles remain retained. No external LSP service or Agena connector was called.
+- The first combined run passed 471 tests across bundled/tool/runtime-tools/LSP (three benchmarks intentionally ignored). After the read-budget fix, all 464 bundled/tool/runtime-tools tests passed (three benchmarks ignored); the unchanged LSP suite had already passed all eight tests, for 472 passing tests across this phase. Clippy passed for LSP, tool, runtime-tools, bundled-plugins and runtime with all targets and `-D warnings`. A Clippy module-placement finding in a test was fixed. Generated references/identity snapshots now contain 22 plugins, 137 definitions, 133 execution tools and 4 gateways. No final workspace-wide pass is claimed.
+
+The full modernization goal remains active. Browser, document conversion, fetch/extraction, remaining file/process/stateful audits, optional analysis/log-tool disposition, prompt behavior evaluation and final workspace/invariant validation remain required; the original inventory table above is authoritative.

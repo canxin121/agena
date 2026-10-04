@@ -1,4 +1,6 @@
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
+#[cfg(test)]
+mod benchmark;
 use std::time::{Duration, Instant};
 
 use crate::part::{GlobKind, GlobToolInput};

@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 132,
+    "execution_tools": 133,
     "gateway_tools": 4,
     "plugins": 22,
-    "tools": 136
+    "tools": 137
   },
   "plugins": [
     {
@@ -386,11 +386,23 @@
       "id": "agena.code",
       "tools": [
         {
+          "canonical_name": "agena.code.rewrite_ast",
+          "conditional": null,
+          "definition_identity": "4df31d2678e053de11b5b8b61adcfa69d5384c19bdae1ec47eee7198aad6de6d",
+          "gateway": false,
+          "input_schema_sha256": "081bbfc6170db49a07102c57bf8851f0bab8bdcf6381131ecf637ca4cebf1827",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "filesystem"
+          ]
+        },
+        {
           "canonical_name": "agena.code.search_ast",
           "conditional": null,
-          "definition_identity": "169d374a879cfc87f2ea9b5eb5f3042fd2241962b4d6bdc23eab532ed2cb4e14",
+          "definition_identity": "a52ae8d832364e2432d17f50f9083b624e9583724591b5f42b7cd815ceea2348",
           "gateway": false,
-          "input_schema_sha256": "c491c9d400048de4b904463c27b108317e315c5d0cb7e8caf1f8a1915ab9f574",
+          "input_schema_sha256": "87dceba173826933be74b5a52d27f8f08e314ad7337283a14b8d0d100ffe7641",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -402,9 +414,9 @@
         {
           "canonical_name": "agena.code.syntax_tree",
           "conditional": null,
-          "definition_identity": "57502a52636e06e8ccd60489ea554fad792882287656c201a53bd6809e6f9b65",
+          "definition_identity": "0e8826099ca1842fcfeb40fce3452d2adf63c2d4dab8d7a493e9a126882635c9",
           "gateway": false,
-          "input_schema_sha256": "f2f98184c2ba880bba7daae840ff4e455ffbcf639d0f74abb959cad11c1aa7d8",
+          "input_schema_sha256": "98433ca6ce9990981de1b992d009f30cdc017a10b7acd0b6a3bfc6f548e2fc6a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -926,9 +938,9 @@
         {
           "canonical_name": "agena.lsp.definition",
           "conditional": null,
-          "definition_identity": "6d66d3e93582da8028b8c283d25788d7da171cffc98edfe7c0cc0f1bb62f8cc7",
+          "definition_identity": "8ed52f6ffd7541040cb8e4880e67c20776c26f63662e59dda32729cd3b63c99e",
           "gateway": false,
-          "input_schema_sha256": "ac4a287658d18ca598e791d7d4f3cc30c30c2e70c1b30d433a4e369ab9a34649",
+          "input_schema_sha256": "bf790bd4c29dbd67f5f820e948fbd5b79ec5d76a51edcaa9ca4d4b4dd019b24b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -954,9 +966,9 @@
         {
           "canonical_name": "agena.lsp.hover",
           "conditional": null,
-          "definition_identity": "80c7091d7786c2312929b783aa4baadc1c135c30df5f8529501f94f7b12decdb",
+          "definition_identity": "9638f51aa66b5672d58eca00af9b63019d93242dc2cfcaec4d9fb85cb5c3f769",
           "gateway": false,
-          "input_schema_sha256": "4cbbd3b35c7031c0564ee650624a1a4d6436683db872c52f1a216f7ae3216991",
+          "input_schema_sha256": "d350f1729168ad13af041701ae4b5125a80544e7abe40d22c0b3e22b82526857",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -968,9 +980,9 @@
         {
           "canonical_name": "agena.lsp.references",
           "conditional": null,
-          "definition_identity": "d75a6ee99b2ac269c4803fbdd7b18a9b05da9755d9d84a7549e98f5f84fc8c01",
+          "definition_identity": "914ab2d9e1740468b3560abdadfa36690c96f3ec499f468cfdfd54c695dc0976",
           "gateway": false,
-          "input_schema_sha256": "8ec934ada1c4d97cd23d9712274e2ebd998a09845fe0e01d53fa908c7becadf6",
+          "input_schema_sha256": "0bc42fddbae53700824c6db8f1ea8b889a37caa062de8ebbf2db2ec19220cfc4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -982,7 +994,7 @@
         {
           "canonical_name": "agena.lsp.servers",
           "conditional": null,
-          "definition_identity": "366af0d86ec6474fd9527b9c57ba40bba443f07bcba94ed70b8e07228560f567",
+          "definition_identity": "ef256b7b4edda16afb1112669b3791569f7020f06120209b63f1d8ead4a3d989",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",

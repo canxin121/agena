@@ -117,8 +117,11 @@ fn sample_payload(tool: &str) -> Value {
             "language": "rust",
             "pattern": "fn $NAME()",
             "scanned_files": 4,
-            "matches": [{"path": "src/lib.rs", "line": 7, "text": "fn render()"}]
+            "matches": [{"path": "src/lib.rs", "start_line": 7, "start_col": 1, "text": "fn render()", "text_truncated":false}]
         }),
+        "code.rewrite_ast" => {
+            json!({"path":"src/lib.rs","language":"rust","applied":false,"replacements":1,"before_sha256":"before","after_sha256":"after","diff":"@@ -1 +1 @@\n-old\n+new","diff_truncated":false})
+        }
         "code.syntax_tree" => json!({
             "path": "src/lib.rs",
             "language": "rust",
@@ -412,6 +415,9 @@ fn sample_input(tool: &str) -> Value {
             json!({"patch": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch"})
         }
         "fs.glob" | "fs.grep" => json!({"pattern": "TODO", "path": "src"}),
+        "code.rewrite_ast" => {
+            json!({"path":"src/lib.rs","pattern":"old($A)","replacement":"new($A)"})
+        }
         "code.search_ast" => json!({"pattern": "fn $NAME()", "path": "src", "language": "rust"}),
         "code.syntax_tree" => json!({"path": "src/lib.rs", "language": "rust"}),
         "shell.run" => json!({"command": "cargo test"}),
@@ -681,7 +687,7 @@ fn every_bundled_execution_tool_has_a_non_json_human_fallback() {
         }
     }
 
-    assert_eq!(checked, 132);
+    assert_eq!(checked, 133);
 }
 
 #[test]
@@ -722,7 +728,7 @@ fn every_bundled_execution_tool_has_a_tool_specific_human_projection() {
         }
     }
 
-    assert_eq!(checked, 132);
+    assert_eq!(checked, 133);
 }
 
 #[test]
@@ -757,7 +763,7 @@ fn every_bundled_execution_tool_has_a_typed_empty_state_projection() {
         }
     }
 
-    assert_eq!(checked, 132);
+    assert_eq!(checked, 133);
 }
 
 #[test]
@@ -858,7 +864,7 @@ fn every_bundled_execution_tool_has_a_human_initial_and_completed_title() {
         }
     }
 
-    assert_eq!(checked, 132);
+    assert_eq!(checked, 133);
 }
 
 #[test]
@@ -2083,7 +2089,12 @@ fn every_tool_has_compact_tables_and_preserves_its_raw_payload() {
 
 #[test]
 fn file_mutations_show_diffs_and_keep_checksums_in_raw_details() {
-    for name in ["fs.write", "fs.replace", "notebook.edit_cell"] {
+    for name in [
+        "fs.write",
+        "fs.replace",
+        "notebook.edit_cell",
+        "code.rewrite_ast",
+    ] {
         let preview =
             agena_runtime_tools::file_diff_preview("src/main.rs", Some("old\n"), Some("new\n"));
         let raw = RawOutput {

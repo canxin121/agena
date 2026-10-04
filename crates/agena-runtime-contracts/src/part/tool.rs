@@ -799,7 +799,9 @@ impl Default for CronHistoryToolInput {
 pub struct LspPositionToolInput {
     #[arg(trim, non_empty)]
     pub file_path: String,
+    /// Zero-based source line.
     pub line: u32,
+    /// Zero-based UTF-16 code-unit offset within the line (LSP default encoding).
     pub character: u32,
 }
 

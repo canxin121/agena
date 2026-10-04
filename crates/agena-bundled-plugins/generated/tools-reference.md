@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 136 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 137 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -16,7 +16,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 - [`agena.chatgpt`](#agenachatgpt) — OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (11 tools)
 - [`agena.claude`](#agenaclaude) — Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback. (9 tools)
-- [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (2 tools)
+- [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (8 tools)
@@ -1789,9 +1789,132 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 ## agena.code
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.0` · **Tools** 3
 
 Structured code search and syntax inspection tools.
+
+### rewrite_ast
+
+`agena.code.rewrite_ast` · **Summary**: Preview or apply a revision-checked ast-grep rewrite in one file.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Defaults to apply=false: returns a bounded unified diff, replacement count and before_sha256 without writing. Repeat with apply=true and expected_sha256 from the reviewed preview to publish. Provide exactly one pattern or structured rule and a replacement template (metavariables supported; empty deletes). Requires valid UTF-8 source, at most 8 MiB/file and 100 non-overlapping matches; rejects parse errors, unknown replacement variables, stale revisions and partial plans. Same file locks and publication checks as fs.replace; no directory-wide rewrite.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `apply` | `boolean` | — | `false` | False previews; true publishes after checking expected_sha256. |
+| `expected_sha256` | `string / null` | — | — |  |
+| `language` | `CodeLanguage / null` | — | — |  |
+| `path` | `string` | ✓ | — |  |
+| `pattern` | `string / null` | — | — |  |
+| `replacement` | `string` | ✓ | — | ast-grep replacement template. Empty text deletes matched nodes. |
+| `rule` | `any` | — | — | Structured ast-grep rule; the same shape as search_ast.rule. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "CodeLanguage": {
+      "description": "Language of a code search target.",
+      "enum": [
+        "auto",
+        "bash",
+        "c",
+        "cpp",
+        "csharp",
+        "css",
+        "dart",
+        "elixir",
+        "go",
+        "haskell",
+        "hcl",
+        "html",
+        "java",
+        "javascript",
+        "json",
+        "lua",
+        "markdown",
+        "nix",
+        "php",
+        "python",
+        "ruby",
+        "rust",
+        "solidity",
+        "swift",
+        "tsx",
+        "typescript",
+        "yaml"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "apply": {
+      "default": false,
+      "description": "False previews; true publishes after checking expected_sha256.",
+      "type": "boolean",
+      "x-agena-order": "000005"
+    },
+    "expected_sha256": {
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "language": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CodeLanguage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000003"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "pattern": {
+      "maxLength": 16384,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "replacement": {
+      "description": "ast-grep replacement template. Empty text deletes matched nodes.",
+      "maxLength": 16384,
+      "type": "string",
+      "x-agena-order": "000002"
+    },
+    "rule": {
+      "description": "Structured ast-grep rule; the same shape as search_ast.rule.",
+      "x-agena-order": "000002"
+    }
+  },
+  "required": [
+    "path",
+    "replacement"
+  ],
+  "type": "object",
+  "x-agena-relations": [
+    "exactly_one_of: `pattern`, `rule`"
+  ]
+}
+```
 
 ### search_ast
 
@@ -1802,7 +1925,7 @@ Structured code search and syntax inspection tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.
+> Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly. Provide exactly one of pattern or a structured ast-grep rule object; relational/composite rules are supported. Rule bounds: 16 KiB, 16 levels, 512 values. Search returns at most 100 matches, explicitly marks incomplete scans, and flags shortened text previews. Use rewrite_ast to preview a single-file structural edit.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1810,7 +1933,8 @@ Structured code search and syntax inspection tools.
 | `language` | `CodeLanguage / null` | — | — |  |
 | `limit` | `integer / null` | — | — |  |
 | `path` | `string` | ✓ | — |  |
-| `pattern` | `string` | ✓ | — |  |
+| `pattern` | `string / null` | — | — | Simple ast-grep pattern; provide exactly one of pattern or rule. |
+| `rule` | `any` | — | — | Structured ast-grep rule object (kind, pattern, all/any/not, inside/has, etc.). |
 
 **Input schema**:
 ```json
@@ -1861,16 +1985,17 @@ Structured code search and syntax inspection tools.
           "type": "null"
         }
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "limit": {
       "format": "uint32",
-      "minimum": 0,
+      "maximum": 100,
+      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
     },
     "path": {
       "minLength": 1,
@@ -1878,16 +2003,27 @@ Structured code search and syntax inspection tools.
       "x-agena-order": "000000"
     },
     "pattern": {
+      "description": "Simple ast-grep pattern; provide exactly one of pattern or rule.",
+      "maxLength": 16384,
       "minLength": 1,
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "x-agena-order": "000001"
+    },
+    "rule": {
+      "description": "Structured ast-grep rule object (kind, pattern, all/any/not, inside/has, etc.).",
+      "x-agena-order": "000002"
     }
   },
   "required": [
-    "path",
-    "pattern"
+    "path"
   ],
-  "type": "object"
+  "type": "object",
+  "x-agena-relations": [
+    "exactly_one_of: `pattern`, `rule`"
+  ]
 }
 ```
 
@@ -1900,7 +2036,7 @@ Structured code search and syntax inspection tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension.
+> Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension. The preview has at most 512 nodes, 50 children per node and max_depth 1–6 (default 2); children_truncated and truncated report omitted descendants. Source files are limited to 8 MiB.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1962,13 +2098,13 @@ Structured code search and syntax inspection tools.
     },
     "max_depth": {
       "format": "uint8",
-      "maximum": 255,
-      "minimum": 0,
+      "maximum": 6,
+      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000001"
     },
     "path": {
       "minLength": 1,
@@ -4370,9 +4506,9 @@ LSP read-only observability and navigation tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `character` | `integer` | ✓ | — |  |
+| `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
-| `line` | `integer` | ✓ | — |  |
+| `line` | `integer` | ✓ | — | Zero-based source line. |
 
 **Input schema**:
 ```json
@@ -4380,6 +4516,7 @@ LSP read-only observability and navigation tools.
   "description": "Input of the LSP definition tool.",
   "properties": {
     "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4391,6 +4528,7 @@ LSP read-only observability and navigation tools.
       "x-agena-order": "000000.000000"
     },
     "line": {
+      "description": "Zero-based source line.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4448,9 +4586,9 @@ LSP read-only observability and navigation tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `character` | `integer` | ✓ | — |  |
+| `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
-| `line` | `integer` | ✓ | — |  |
+| `line` | `integer` | ✓ | — | Zero-based source line. |
 
 **Input schema**:
 ```json
@@ -4458,6 +4596,7 @@ LSP read-only observability and navigation tools.
   "description": "Input of the LSP hover tool.",
   "properties": {
     "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4469,6 +4608,7 @@ LSP read-only observability and navigation tools.
       "x-agena-order": "000000.000000"
     },
     "line": {
+      "description": "Zero-based source line.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4495,10 +4635,10 @@ LSP read-only observability and navigation tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `character` | `integer` | ✓ | — |  |
+| `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
 | `include_declaration` | `boolean` | — | `true` |  |
-| `line` | `integer` | ✓ | — |  |
+| `line` | `integer` | ✓ | — | Zero-based source line. |
 
 **Input schema**:
 ```json
@@ -4506,6 +4646,7 @@ LSP read-only observability and navigation tools.
   "description": "Input of the LSP references tool.",
   "properties": {
     "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4522,6 +4663,7 @@ LSP read-only observability and navigation tools.
       "x-agena-order": "000001"
     },
     "line": {
+      "description": "Zero-based source line.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
@@ -4539,11 +4681,14 @@ LSP read-only observability and navigation tools.
 
 ### servers
 
-`agena.lsp.servers` · **Summary**: List configured language servers.
+`agena.lsp.servers` · **Summary**: List configured language servers and executable availability.
 
 **Tags**: `query` `lsp` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
+
+**Help**:
+> Checks each command against its configured PATH from the workspace root without executing it; command_available=null means lookup was inconclusive. Presence does not guarantee successful initialization. Relative commands can resolve differently in individual project roots. running_roots lists initialized instances. Extension-specific servers take priority over catch-all servers; ties use lexical server name.
 
 **Input schema**:
 ```json

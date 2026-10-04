@@ -1,3 +1,6 @@
+mod rewrite;
+use rewrite::{CodeRewriteInput, invoke_rewrite};
+
 use std::path::Path;
 
 use agena_macros::ToolInput;
@@ -17,14 +20,21 @@ pub(crate) struct CodePlugin;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
+#[input(exactly_one_of("pattern", "rule"), non_empty_if_present("pattern"))]
 struct CodeSearchAstInput {
     #[arg(trim, non_empty)]
     path: String,
-    #[arg(trim, non_empty)]
-    pattern: String,
+    /// Simple ast-grep pattern; provide exactly one of pattern or rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 16384)]
+    pattern: Option<String>,
+    /// Structured ast-grep rule object (kind, pattern, all/any/not, inside/has, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rule: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<CodeLanguage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(minimum = 1, maximum = 100)]
     limit: Option<u32>,
 }
 
@@ -36,6 +46,7 @@ struct CodeSyntaxTreeInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<CodeLanguage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(minimum = 1, maximum = 6)]
     max_depth: Option<u8>,
 }
 
@@ -49,7 +60,7 @@ impl CodePlugin {
     #[tool(
         tags(query, filesystem, discovery, read_only),
         summary = "Search code structurally with ast-grep.",
-        help = "Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly."
+        help = "Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly. Provide exactly one of pattern or a structured ast-grep rule object; relational/composite rules are supported. Rule bounds: 16 KiB, 16 levels, 512 values. Search returns at most 100 matches, explicitly marks incomplete scans, and flags shortened text previews. Use rewrite_ast to preview a single-file structural edit."
     )]
     async fn dispatch_search_ast(
         &self,
@@ -63,7 +74,7 @@ impl CodePlugin {
     #[tool(
         tags(query, filesystem, discovery, read_only),
         summary = "Inspect a parsed syntax tree.",
-        help = "Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension."
+        help = "Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension. The preview has at most 512 nodes, 50 children per node and max_depth 1–6 (default 2); children_truncated and truncated report omitted descendants. Source files are limited to 8 MiB."
     )]
     async fn dispatch_syntax_tree(
         &self,
@@ -74,16 +85,31 @@ impl CodePlugin {
         run_code_blocking(move || Self::invoke_syntax_tree(&workspace_root, input)).await
     }
 
+    #[tool(
+        tags(mutate, filesystem),
+        summary = "Preview or apply a revision-checked ast-grep rewrite in one file.",
+        help = "Defaults to apply=false: returns a bounded unified diff, replacement count and before_sha256 without writing. Repeat with apply=true and expected_sha256 from the reviewed preview to publish. Provide exactly one pattern or structured rule and a replacement template (metavariables supported; empty deletes). Requires valid UTF-8 source, at most 8 MiB/file and 100 non-overlapping matches; rejects parse errors, unknown replacement variables, stale revisions and partial plans. Same file locks and publication checks as fs.replace; no directory-wide rewrite."
+    )]
+    async fn dispatch_rewrite_ast(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: CodeRewriteInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let workspace = context.workspace_root.to_owned();
+        run_code_blocking(move || invoke_rewrite(Path::new(&workspace), input)).await
+    }
+
     fn invoke_search_ast(
         workspace_root: &str,
         input: CodeSearchAstInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let title = format!("Search AST · {}", input.pattern);
+        let title = format!("Search AST · {}", input.path);
         let result = search_ast(
             Path::new(workspace_root),
             StructuralSearchRequest {
                 path: input.path.into(),
-                pattern: input.pattern,
+                pattern: input.pattern.unwrap_or_default(),
+                rule: input.rule,
                 language: input.language,
                 limit: input.limit,
             },

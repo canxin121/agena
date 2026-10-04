@@ -2600,6 +2600,9 @@ impl BuiltinHumanRenderer {
                             ("command", "Command"),
                             ("args", "Arguments"),
                             ("file_extensions", "File extensions"),
+                            ("command_available", "Executable found"),
+                            ("executable", "Executable path"),
+                            ("running_roots", "Running project roots"),
                         ],
                     )
                 {
@@ -3781,6 +3784,9 @@ impl BuiltinHumanRenderer {
                     ("Language", Self::object_text(object, "language")),
                     ("Pattern", Self::object_text(object, "pattern")),
                     ("Scanned files", Self::object_text(object, "scanned_files")),
+                    ("Skipped files", Self::object_text(object, "skipped_files")),
+                    ("Truncated", Self::object_text(object, "truncated")),
+                    ("Boundary", Self::object_text(object, "truncation_reason")),
                 ];
                 if let Some(block) =
                     Self::details_block_if_nonempty("ast-search-meta", "AST search", &fields)
@@ -3794,14 +3800,27 @@ impl BuiltinHumanRenderer {
                         matches,
                         &[
                             ("path", "Path"),
-                            ("line", "Line"),
-                            ("column", "Column"),
+                            ("start_line", "Line"),
+                            ("start_col", "Column"),
+                            ("text_truncated", "Shortened"),
                             ("text", "Match"),
                         ],
                     )
                 {
                     blocks.push(table);
                 }
+            }
+            "code.rewrite_ast" => {
+                blocks.extend(Self::file_mutation_blocks(
+                    "ast-rewrite",
+                    "AST rewrite",
+                    object,
+                    &[
+                        ("Applied", Self::object_text(object, "applied")),
+                        ("Language", Self::object_text(object, "language")),
+                        ("Replacements", Self::object_text(object, "replacements")),
+                    ],
+                ));
             }
             "code.syntax_tree" => {
                 let fields = [
@@ -4957,7 +4976,7 @@ impl BuiltinHumanRenderer {
             value if value.starts_with("fs.") => {
                 blocks.extend(Self::specific_filesystem_blocks(value, &object));
             }
-            "code.search_ast" | "code.syntax_tree" => {
+            "code.search_ast" | "code.syntax_tree" | "code.rewrite_ast" => {
                 blocks.extend(Self::specific_code_blocks(key.as_str(), &object));
             }
             "report.findings" => blocks.extend(Self::specific_report_blocks(&object)),

@@ -59,6 +59,7 @@ sha2 = { workspace = true }
 [dev-dependencies]
 agena-api = { workspace = true }
 axum = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

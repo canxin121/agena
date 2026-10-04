@@ -15,7 +15,7 @@ crw-extract = { workspace = true }
 encoding_rs = { workspace = true }
 governor = { workspace = true }
 moka = { workspace = true }
-reqwest = { workspace = true, features = ["rustls"] }
+reqwest = { workspace = true, features = ["rustls", "cookies"] }
 redb = { workspace = true }
 robotstxt = { workspace = true }
 schemars = { workspace = true }

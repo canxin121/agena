@@ -3,8 +3,11 @@ mod fetch_transport;
 mod playwright;
 mod rendered_fetch;
 use playwright::BrowserInteractionBackend;
+mod search_aggregate;
 mod search_provider;
+mod search_selection;
 use search_provider::WebSearchBackend;
+use search_selection::WebSearchEngineSelection;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::future::Future;
 use std::net::IpAddr;
@@ -209,6 +212,12 @@ impl Default for WebCrawlIndexingConfig {
 pub struct WebSearchConfig {
     pub default_limit: u32,
     pub max_limit: u32,
+    /// Default candidate budget for each HTML engine, independent of the final limit.
+    pub default_results_per_engine: u32,
+    pub max_results_per_engine: u32,
+    /// Default page budget for each HTML engine, including its first page.
+    pub default_pages_per_engine: u32,
+    pub max_pages_per_engine: u32,
     pub provider: WebSearchBackend,
     /// Full API search endpoint. SearXNG requires an explicit endpoint.
     pub endpoint: Option<String>,
@@ -223,6 +232,10 @@ impl Default for WebSearchConfig {
         Self {
             default_limit: 5,
             max_limit: 20,
+            default_results_per_engine: 10,
+            max_results_per_engine: 50,
+            default_pages_per_engine: 1,
+            max_pages_per_engine: 5,
             provider: WebSearchBackend::default(),
             endpoint: None,
             api_key_env: None,
@@ -474,13 +487,33 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
         ),
         (
             "/search/default_limit",
-            "Default Limit",
-            "Number of web search results returned when callers omit a limit.",
+            "Default Output Limit",
+            "Final result limit when max_results is omitted (default 5). Independent of HTML retrieval budgets.",
         ),
         (
             "/search/max_limit",
-            "Max Limit",
-            "Largest number of web search results a caller may request.",
+            "Max Output Limit",
+            "Largest final result limit a caller may request (default 20, ceiling 50). Does not trigger extra HTML pages.",
+        ),
+        (
+            "/search/default_results_per_engine",
+            "Default Candidates Per Engine",
+            "Distinct candidates to collect from each HTML engine before domain filtering (default 10). Independent of the final result limit.",
+        ),
+        (
+            "/search/max_results_per_engine",
+            "Max Candidates Per Engine",
+            "Largest candidate budget callers may request for each HTML engine (default and ceiling 50).",
+        ),
+        (
+            "/search/default_pages_per_engine",
+            "Default Pages Per Engine",
+            "Search result pages to fetch from each HTML engine, including its first page (default 1). Stops earlier at the candidate budget or a page with no new URLs.",
+        ),
+        (
+            "/search/max_pages_per_engine",
+            "Max Pages Per Engine",
+            "Largest page budget callers may request for each HTML engine (default and ceiling 5). API providers do not use HTML budgets.",
         ),
         (
             "/store",
@@ -1003,10 +1036,29 @@ struct CrawlRunInput {
 struct CrawlWebSearchInput {
     #[schemars(length(max = 8192))]
     query: String,
+    /// Maximum total results after domain filtering, URL deduplication and ranking.
+    /// Default 5, capped by search.max_limit (default 20). Does not increase HTML retrieval budgets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 50))]
     max_results: Option<u32>,
+    /// HTML only: distinct candidates to collect per engine before domain filtering.
+    /// Default 10 (configurable); independent of max_results and capped by search.max_results_per_engine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 50))]
+    max_results_per_engine: Option<u32>,
+    /// HTML only: maximum pages per engine, including the first page; not a starting page or offset.
+    /// Default 1 (configurable), capped by search.max_pages_per_engine. Stops early when the candidate
+    /// budget is reached or a page has no new URLs. Increase both HTML budgets for deeper retrieval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 5))]
+    max_pages_per_engine: Option<u32>,
+    /// Omit or use auto for the configured provider. HTML auto searches all eight engines concurrently.
+    /// Use one name or a comma-separated list, e.g. "baidu,google", to query only those free HTML
+    /// websites concurrently, overriding the configured API provider. Names: duckduckgo, bing, baidu,
+    /// yandex, google, yahoo, brave, naver. Case and surrounding spaces are ignored; duplicates run
+    /// once, in first-occurrence order. auto must stand alone; empty or unknown names are errors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>", length(min = 1, max = 256))]
     engine: Option<WebSearchEngineSelection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(max = 64))]
@@ -1154,24 +1206,6 @@ struct BrowserDownloadInput {
 
 const fn default_browser_action_timeout_ms() -> u64 {
     30_000
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum WebSearchEngineSelection {
-    Auto,
-    Bing,
-    #[serde(rename = "duckduckgo")]
-    DuckDuckGo,
-    Baidu,
-}
-
-#[derive(Debug, Serialize)]
-struct CrawlWebSearchOutput {
-    query: String,
-    engine: String,
-    attempted_engines: Vec<String>,
-    results: Vec<WebSearchResult>,
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -2069,77 +2103,37 @@ impl WebPlugin {
 
     #[tool(
         summary = "Find candidate public-web pages to fetch.",
-        help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured search provider (HTML, Brave, Tavily, Exa or SearXNG). Explicit bing/duckduckgo/baidu selects that HTML engine. API providers return at most 20 results and report failures without switching providers. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
+        help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines; source is the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Verification, consent and JavaScript-only pages are source failures. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
         tags(network, discovery, read_only)
     )]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
         search_provider::validate_input(input)?;
         let query = input.query.as_str();
         let config = self.config()?;
-        let limit = clamp_limit(
-            input.max_results,
-            config.search.default_limit as usize,
-            config.search.max_limit as usize,
-        );
-        if matches!(input.engine, None | Some(WebSearchEngineSelection::Auto))
+        let limits = search_aggregate::HtmlSearchLimits::from_input(input, &config.search);
+        if input
+            .engine
+            .as_ref()
+            .is_none_or(WebSearchEngineSelection::is_auto)
             && config.search.provider != WebSearchBackend::Html
         {
-            return self.search_with_provider(input, limit).await;
-        }
-        let engines = search_engines(input.engine);
-        let explicit_engine = !matches!(input.engine, None | Some(WebSearchEngineSelection::Auto));
-        let mut attempted_engines = Vec::new();
-        let mut failures = Vec::new();
-        let mut successful_engines = 0;
-        let mut selected_engine = WebSearchEngineSelection::Auto.label().to_string();
-        let mut results = Vec::new();
-
-        for engine in engines {
-            attempted_engines.push(engine.to_string());
-            match self.search_with_engine(query, limit, engine, input).await {
-                Ok(engine_results) => {
-                    successful_engines += 1;
-                    if explicit_engine || !engine_results.is_empty() {
-                        selected_engine = engine.to_string();
-                        results = engine_results;
-                        break;
-                    }
-                }
-                Err(err) if explicit_engine => return Err(err),
-                Err(err) => {
-                    failures.push(format!("{engine}: {err}"));
-                }
+            if input.max_results_per_engine.is_some() || input.max_pages_per_engine.is_some() {
+                return Err(PluginError::invalid_params(
+                    "max_results_per_engine and max_pages_per_engine require HTML search; select an explicit engine or configure search.provider=html",
+                ));
             }
+            return self.search_with_provider(input, limits.max_results).await;
         }
-
-        ensure_search_available(successful_engines, &failures)?;
-
-        let output = CrawlWebSearchOutput {
-            query: query.to_string(),
-            engine: selected_engine,
-            attempted_engines,
-            results,
-        };
-        let mut text = format_web_search(&output);
-        if !failures.is_empty() {
-            text.push_str(&format!(
-                "\nSearch partially degraded: {} source(s) failed.",
-                failures.len()
-            ));
-        }
-        let summary = format!("{} results · {}", output.results.len(), output.engine);
-        let mut payload =
-            serde_json::to_value(output).map_err(|err| PluginError::internal_error(&err))?;
-        payload["partial"] = serde_json::json!(!failures.is_empty());
-        payload["engine_errors"] = serde_json::json!(failures);
-        Ok(ToolInvokeOutput::from_parts(
-            format!("web search {query}"),
-            summary,
-            text,
-            Some(payload),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
+        search_aggregate::search(
+            input,
+            limits,
+            Duration::from_secs(config.fetch.request.timeout_secs),
+            |engine, source_limit, max_pages| {
+                self.search_with_engine(query, source_limit, max_pages, engine)
+            },
+        )
+        .await?
+        .into_tool_output()
     }
 
     #[tool(
@@ -2973,8 +2967,8 @@ impl WebPlugin {
         &self,
         query: &str,
         limit: usize,
+        max_pages: usize,
         engine: WebSearchEngine,
-        input: &CrawlWebSearchInput,
     ) -> SdkResult<Vec<WebSearchResult>> {
         let engine_url = url::Url::parse(engine.permission_url())
             .map_err(|err| PluginError::internal_error(&err))?;
@@ -2989,18 +2983,13 @@ impl WebPlugin {
         let options = WebSearchOptions {
             engine,
             limit,
+            max_pages,
             timeout: Duration::from_secs(config.fetch.request.timeout_secs),
             user_agent: self.user_agent.clone(),
         };
-        Ok(search_web(query, &options)
+        search_web(query, &options)
             .await
-            .map_err(crawl_error_to_plugin)?
-            .into_iter()
-            .filter(|result| {
-                domain_allowed(&result.url, &input.allowed_domains, &input.blocked_domains)
-            })
-            .take(limit)
-            .collect())
+            .map_err(crawl_error_to_plugin)
     }
 }
 
@@ -4236,30 +4225,6 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
     Ok(())
 }
 
-fn search_engines(selection: Option<WebSearchEngineSelection>) -> Vec<WebSearchEngine> {
-    match selection {
-        Some(WebSearchEngineSelection::Bing) => vec![WebSearchEngine::Bing],
-        Some(WebSearchEngineSelection::DuckDuckGo) => vec![WebSearchEngine::DuckDuckGo],
-        Some(WebSearchEngineSelection::Baidu) => vec![WebSearchEngine::Baidu],
-        Some(WebSearchEngineSelection::Auto) | None => vec![
-            WebSearchEngine::DuckDuckGo,
-            WebSearchEngine::Bing,
-            WebSearchEngine::Baidu,
-        ],
-    }
-}
-
-impl WebSearchEngineSelection {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Bing => "bing",
-            Self::DuckDuckGo => "duckduckgo",
-            Self::Baidu => "baidu",
-        }
-    }
-}
-
 fn format_fetched_page(page: &FetchedPage, focus: Option<&str>) -> String {
     let mut lines = vec![format!("Title: {}", page.title)];
     lines.push(format!("URL: {}", page.canonical_url));
@@ -4308,29 +4273,6 @@ fn format_fetched_page(page: &FetchedPage, focus: Option<&str>) -> String {
         lines.push(preview_text(page.markdown.as_str(), 4000));
     }
     lines.join("\n")
-}
-
-fn format_web_search(output: &CrawlWebSearchOutput) -> String {
-    if output.results.is_empty() {
-        if output.engine == "auto" {
-            return format!(
-                "No web search result(s) for '{}' via auto. Tried: {}.",
-                output.query,
-                output.attempted_engines.join(", ")
-            );
-        }
-        return format!(
-            "No web search result(s) for '{}' via {}.",
-            output.query, output.engine
-        );
-    }
-    format!(
-        "Found {} web search result(s) for '{}' via {}.\n\nThese are candidate links, not final evidence. For questions that need real facts, comparisons, or latest information, fetch 1-3 of the most relevant URLs before answering. If you already know what to extract, use fetch with `prompt`.\n\n{}",
-        output.results.len(),
-        output.query,
-        output.engine,
-        results_to_text(&output.results)
-    )
 }
 
 fn focused_page_excerpts(markdown: &str, focus: &str) -> Vec<String> {

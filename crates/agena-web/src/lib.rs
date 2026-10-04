@@ -28,7 +28,8 @@ mod spider;
 mod store;
 
 pub use browser::{
-    local_browser_endpoint, local_browser_running, local_browser_touch, shutdown_local_browser,
+    LocalBrowserLease, local_browser_endpoint, local_browser_lease, local_browser_running,
+    local_browser_touch, shutdown_local_browser,
 };
 pub use error::CrawlError;
 pub use fetch::{

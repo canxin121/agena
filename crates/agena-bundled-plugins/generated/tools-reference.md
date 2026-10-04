@@ -8555,16 +8555,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `frame_selector` | `string / null` | — | — | Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs). |
 | `ref` | `integer / null` | — | — | Snapshot-local index returned by `browser_snapshot.elements[].ref`.<br>It is valid only while the page DOM has not materially changed. |
 | `selector` | `string / null` | — | — |  |
 | `session_id` | `string` | ✓ | — |  |
 | `snapshot_id` | `string / null` | — | — | ID of the snapshot that supplied ref. Required with ref; stale refs are rejected. |
+| `timeout_ms` | `integer` | — | `30000` |  |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "maxLength": 4096,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "ref": {
       "description": "Snapshot-local index returned by `browser_snapshot.elements[].ref`.\nIt is valid only while the page DOM has not materially changed.",
       "format": "uint16",
@@ -8574,15 +8585,16 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "selector": {
+      "maxLength": 4096,
       "minLength": 1,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
@@ -8591,11 +8603,20 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "snapshot_id": {
       "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
+      "maxLength": 128,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
+    },
+    "timeout_ms": {
+      "default": 30000,
+      "format": "uint64",
+      "maximum": 120000,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000005"
     }
   },
   "required": [
@@ -8849,22 +8870,33 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `frame_selector` | `string / null` | — | — | Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs). |
 | `press_enter` | `boolean` | — | `false` |  |
 | `ref` | `integer / null` | — | — |  |
 | `selector` | `string / null` | — | — |  |
 | `session_id` | `string` | ✓ | — |  |
 | `snapshot_id` | `string / null` | — | — | ID of the snapshot that supplied ref. Required with ref; stale refs are rejected. |
 | `text` | `string` | ✓ | — |  |
+| `timeout_ms` | `integer` | — | `30000` |  |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "maxLength": 4096,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "press_enter": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "ref": {
       "format": "uint16",
@@ -8874,15 +8906,16 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "selector": {
+      "maxLength": 4096,
       "minLength": 1,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
@@ -8891,15 +8924,25 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "snapshot_id": {
       "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
+      "maxLength": 128,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
     },
     "text": {
+      "maxLength": 65536,
       "type": "string",
-      "x-agena-order": "000004"
+      "x-agena-order": "000003"
+    },
+    "timeout_ms": {
+      "default": 30000,
+      "format": "uint64",
+      "maximum": 120000,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000007"
     }
   },
   "required": [
@@ -8921,6 +8964,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `frame_selector` | `string / null` | — | — | Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs). |
 | `selector` | `string / null` | — | — |  |
 | `session_id` | `string` | ✓ | — |  |
 | `text` | `string / null` | — | — |  |
@@ -8931,13 +8975,23 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 {
   "additionalProperties": false,
   "properties": {
-    "selector": {
-      "minLength": 1,
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "maxLength": 4096,
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000001"
+    },
+    "selector": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
@@ -8945,6 +8999,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "x-agena-order": "000000"
     },
     "text": {
+      "maxLength": 4096,
       "minLength": 1,
       "type": [
         "string",
@@ -8958,7 +9013,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "maximum": 120000,
       "minimum": 1,
       "type": "integer",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     }
   },
   "required": [

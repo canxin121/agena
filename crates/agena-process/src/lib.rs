@@ -8,6 +8,7 @@ use std::io;
 use std::process::{ExitStatus, Output, Stdio};
 use std::time::Duration;
 
+pub mod blocking;
 pub mod pty;
 
 #[cfg(windows)]
@@ -15,7 +16,7 @@ use process_wrap::tokio::JobObject;
 #[cfg(unix)]
 use process_wrap::tokio::ProcessSession;
 use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
 
 fn process_tree_is_absent(error: &io::Error) -> bool {
@@ -82,12 +83,37 @@ where
 /// timeout. Both streams continue to be drained after reaching the limit so a
 /// noisy child cannot deadlock on a full pipe.
 pub async fn output(
+    command: Command,
+    deadline: Duration,
+    maximum_bytes_per_stream: usize,
+) -> io::Result<Output> {
+    output_inner(command, None, deadline, maximum_bytes_per_stream).await
+}
+
+/// Send structured input over stdin instead of exposing it in argv. Input
+/// delivery and process completion share the same deadline; stdout/stderr are
+/// drained concurrently. Callers bound the request size before invoking this.
+pub async fn output_with_input(
+    command: Command,
+    input: &[u8],
+    deadline: Duration,
+    maximum_bytes_per_stream: usize,
+) -> io::Result<Output> {
+    output_inner(command, Some(input), deadline, maximum_bytes_per_stream).await
+}
+
+async fn output_inner(
     mut command: Command,
+    input: Option<&[u8]>,
     deadline: Duration,
     maximum_bytes_per_stream: usize,
 ) -> io::Result<Output> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if input.is_some() {
+        command.stdin(Stdio::piped());
+    }
     let mut child = spawn(command)?;
+    let stdin = child.stdin().take();
     let stdout = child
         .stdout()
         .take()
@@ -96,65 +122,66 @@ pub async fn output(
         .stderr()
         .take()
         .ok_or_else(|| io::Error::other("managed child stderr is unavailable"))?;
-    let mut stdout_task = tokio::spawn(read_bounded(stdout, maximum_bytes_per_stream));
-    let mut stderr_task = tokio::spawn(read_bounded(stderr, maximum_bytes_per_stream));
 
-    let status = match tokio::time::timeout(deadline, child.wait()).await {
-        Ok(result) => result?,
-        Err(timeout_error) => {
-            let termination_error = child.terminate(Duration::from_millis(100)).await.err();
-            stdout_task.abort();
-            stderr_task.abort();
-            let (stdout_join, stderr_join) = tokio::join!(stdout_task, stderr_task);
-            let mut diagnostic = format!("managed process timed out: {timeout_error}");
-            if let Some(error) = termination_error {
-                diagnostic.push_str(&format!(
-                    "; additionally, failed to terminate the timed-out process tree: {error}"
-                ));
-            }
-            for (stream, result) in [("stdout", stdout_join), ("stderr", stderr_join)] {
-                if let Err(error) = result
-                    && !error.is_cancelled()
-                {
-                    diagnostic.push_str(&format!(
-                        "; additionally, {stream} reader did not stop cleanly after abort: {error}"
-                    ));
+    // Keep all pipe futures scoped to this call. Cancellation drops them and
+    // the managed child together instead of detaching reader tasks.
+    let completion = async {
+        let (wait, write) = tokio::join!(
+            async {
+                let status = child.wait().await?;
+                // A descendant can retain stdin/out/err after its parent exits.
+                // Kill the tree before waiting for the writer or EOF readers.
+                child.start_kill()?;
+                Ok::<_, io::Error>(status)
+            },
+            async {
+                if let Some(input) = input {
+                    let mut stdin = stdin
+                        .ok_or_else(|| io::Error::other("managed child stdin is unavailable"))?;
+                    stdin.write_all(input).await?;
+                    stdin.shutdown().await?;
                 }
+                Ok::<_, io::Error>(())
             }
-            return Err(io::Error::new(io::ErrorKind::TimedOut, diagnostic));
+        );
+        let status = wait?;
+        // Failed children can close stdin early. Preserve their actual status
+        // and diagnostics; a successful child must have accepted the input.
+        if status.success() {
+            write?;
         }
+        Ok::<_, io::Error>(status)
     };
-
-    // A command can exit after leaving a descendant that still owns its pipes.
-    // End the managed process tree before waiting for EOF from both readers.
-    child.start_kill()?;
-    let reader_result = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(&mut stdout_task, &mut stderr_task)
+    let collected = tokio::time::timeout(deadline, async {
+        tokio::try_join!(
+            completion,
+            read_bounded(stdout, maximum_bytes_per_stream),
+            read_bounded(stderr, maximum_bytes_per_stream)
+        )
     })
     .await;
-    let (stdout_result, stderr_result) = match reader_result {
-        Ok(results) => results,
-        Err(timeout_error) => {
-            stdout_task.abort();
-            stderr_task.abort();
-            let (stdout_join, stderr_join) = tokio::join!(stdout_task, stderr_task);
-            let mut diagnostic = format!("process pipes did not close: {timeout_error}");
-            for (stream, result) in [("stdout", stdout_join), ("stderr", stderr_join)] {
-                if let Err(error) = result
-                    && !error.is_cancelled()
-                {
-                    diagnostic.push_str(&format!(
-                        "; additionally, {stream} reader did not stop cleanly after abort: {error}"
-                    ));
-                }
+    let (status, (stdout, stdout_exceeded), (stderr, stderr_exceeded)) = match collected {
+        Ok(Ok(result)) => result,
+        result => {
+            let error = match result {
+                Ok(Err(error)) => error,
+                Err(error) => io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("managed process timed out: {error}"),
+                ),
+                Ok(Ok(_)) => unreachable!(),
+            };
+            if let Err(termination) = child.terminate(Duration::from_millis(100)).await {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "{error}; additionally, failed to terminate process tree: {termination}"
+                    ),
+                ));
             }
-            return Err(io::Error::new(io::ErrorKind::TimedOut, diagnostic));
+            return Err(error);
         }
     };
-    let (stdout, stdout_exceeded) = stdout_result
-        .map_err(|error| io::Error::other(format!("stdout reader task failed: {error}")))??;
-    let (stderr, stderr_exceeded) = stderr_result
-        .map_err(|error| io::Error::other(format!("stderr reader task failed: {error}")))??;
 
     if stdout_exceeded || stderr_exceeded {
         return Err(io::Error::new(
@@ -280,11 +307,106 @@ impl Drop for ManagedChild {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{output, spawn};
+    use super::{output, output_with_input, spawn};
     use std::io;
     use std::process::Stdio;
     use std::time::Duration;
     use tokio::process::Command;
+
+    #[tokio::test]
+    async fn structured_input_drains_large_unicode_output_concurrently() {
+        let input = "浏览器表单😀\n".repeat(100_000).into_bytes();
+        let result = output_with_input(
+            Command::new("cat"),
+            &input,
+            Duration::from_secs(5),
+            input.len(),
+        )
+        .await
+        .expect("echo input larger than both pipes");
+        assert!(result.status.success());
+        assert_eq!(result.stdout, input);
+        assert!(result.stderr.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_child_retains_status_and_diagnostics_with_unconsumed_input() {
+        let mut command = Command::new("sh");
+        // This descendant keeps stdin open even after its parent exits.
+        command.args(["-c", "sleep 30 <&0 & printf failure >&2; exit 7"]);
+        let result = output_with_input(
+            command,
+            &vec![b'x'; 1024 * 1024],
+            Duration::from_secs(5),
+            1024,
+        )
+        .await
+        .expect("failed child should not turn into a pipe timeout");
+        assert_eq!(result.status.code(), Some(7));
+        assert_eq!(result.stderr, b"failure");
+    }
+
+    async fn assert_process_gone(pid: i32) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                // SAFETY: signal 0 only checks the positive fixture PID.
+                if unsafe { libc::kill(pid, 0) } == -1
+                    && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture process must be reaped");
+    }
+
+    #[tokio::test]
+    async fn blocked_input_timeout_and_cancellation_clean_up_the_tree() {
+        for cancel in [false, true] {
+            let fixture = tempfile::tempdir().unwrap();
+            let pid_file = fixture.path().join("child.pid");
+            let mut command = Command::new("sh");
+            command.args([
+                "-c",
+                "sleep 30 <&0 & printf '%s' $! > \"$1\"; wait",
+                "fixture",
+            ]);
+            command.arg(&pid_file);
+            let task = tokio::spawn(async move {
+                output_with_input(
+                    command,
+                    &vec![b'x'; 1024 * 1024],
+                    Duration::from_millis(500),
+                    1024,
+                )
+                .await
+            });
+            let pid = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(contents) = std::fs::read_to_string(&pid_file)
+                        && let Ok(pid) = contents.parse::<i32>()
+                    {
+                        break pid;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("fixture must start");
+            if cancel {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                assert_eq!(
+                    task.await.unwrap().unwrap_err().kind(),
+                    io::ErrorKind::TimedOut
+                );
+            }
+            assert_process_gone(pid).await;
+        }
+    }
 
     #[tokio::test]
     async fn termination_is_bounded() {

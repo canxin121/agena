@@ -298,7 +298,6 @@ fn read2(
 	err_v: &mut Vec<u8>,
 ) -> Result<()> {
 	use nix::{
-		errno::Errno,
 		libc,
 		poll::{PollFd, PollFlags, PollTimeout, poll},
 	};
@@ -354,7 +353,7 @@ fn read2(
 		let v = nonblocking as libc::c_int;
 		let res = unsafe { libc::ioctl(fd.as_raw_fd(), libc::FIONBIO, &v) };
 
-		Errno::result(res).map_err(Error::from).map(drop)
+		nix::errno::Errno::result(res).map_err(Error::from).map(drop)
 	}
 
 	#[cfg(not(target_os = "linux"))]

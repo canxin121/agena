@@ -1971,9 +1971,9 @@
         {
           "canonical_name": "agena.web.browser_click",
           "conditional": null,
-          "definition_identity": "bec95ba54431a4c4d9e386bf118bb4cb65f74139c168a76a5fed487970ff09df",
+          "definition_identity": "751599b4d143b5b514cb2784ba93fb5318c229ec5e46bb3334fca8d6b4b07f1a",
           "gateway": false,
-          "input_schema_sha256": "cf0347bd16a5a1aa44b7f8b71ff50f71281461d0339f8256cf585aed5ab3e34c",
+          "input_schema_sha256": "537f4c41d3189bb91a0ea5f9f72e4e8813d7ac62cc5134519bc83e6dcd9bba6a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2081,9 +2081,9 @@
         {
           "canonical_name": "agena.web.browser_type",
           "conditional": null,
-          "definition_identity": "44fa2ab520b6f2b5abc28608b67f3fd83bf749ae0b9991edb71bd9ccd341f356",
+          "definition_identity": "f218a20b53e965678efac2d2d68710bd3c5ad7120b8d2a017d5ac7f279615690",
           "gateway": false,
-          "input_schema_sha256": "c375533cecfb36d9e56ee2377a68fd471d270defe460cd342a2ef1af083f1496",
+          "input_schema_sha256": "1c795a6621e720e5dff5811f21d41819a50b15a3c583083d9aa51bc80ad8dcc7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2094,9 +2094,9 @@
         {
           "canonical_name": "agena.web.browser_wait",
           "conditional": null,
-          "definition_identity": "e4b93aca9f03077c4b31591603a97ec1d215e6318eeff02253f4ca0cebe5fde3",
+          "definition_identity": "d43ea334aff9a38419a966d69a519a980da78755d60c6a5f236c71b615fbb17f",
           "gateway": false,
-          "input_schema_sha256": "c67b4acf17953cf1e724c19c89fd5e5ac9126d86e96a537e94746df44710c66e",
+          "input_schema_sha256": "d7a2d24582d50e3f7b23b9804e62ffa366a94e4b507a31e6c5ba75d559fac480",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",

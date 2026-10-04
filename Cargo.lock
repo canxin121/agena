@@ -721,6 +721,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "process-wrap",
+ "tempfile",
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
@@ -1448,6 +1449,7 @@ name = "agena-web"
 version = "0.1.0"
 dependencies = [
  "agena-failure",
+ "agena-process",
  "base64 0.22.1",
  "blake3",
  "chrono",
@@ -1455,7 +1457,6 @@ dependencies = [
  "governor",
  "libc",
  "moka",
- "process_control",
  "redb",
  "reqwest 0.13.4",
  "scraper",
@@ -1471,6 +1472,7 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+ "which",
 ]
 
 [[package]]

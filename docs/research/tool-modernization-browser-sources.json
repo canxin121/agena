@@ -1,0 +1,22 @@
+{
+  "checked_on": "2026-10-04",
+  "tested_distribution": "playwright==1.58.0",
+  "sources": [
+    {
+      "url": "https://playwright.dev/python/docs/api/class-browsertype#browser-type-connect-over-cdp",
+      "bytes": 137159,
+      "sha256": "94980a65b9ae3e72a7f8574120deb1962bc5b6ce7d1a4ef865437b6370913c4c"
+    },
+    {
+      "url": "https://playwright.dev/python/docs/actionability",
+      "bytes": 42657,
+      "sha256": "e68a0db92bfa2cdaa4afdb565be0864a4487acb380fc4e369076c8fb2d7a49ce"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/playwright/v1.58.0/packages/playwright-core/src/server/chromium/chromium.ts",
+      "bytes": 19744,
+      "sha256": "c1c639c9d1fdc36232a059d6fd85bd4205fd298d69b5151c3f44e17e0010ed4d"
+    }
+  ],
+  "note": "Official CDP attachment/actionability documentation and pinned server implementation. Tests use an isolated managed Chrome profile and local DOM/download fixtures; no user browser session or external browser service is used."
+}

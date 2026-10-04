@@ -66,6 +66,11 @@ pub async fn fetch_page_with_spider(
     url: &Url,
     options: &SpiderFetchOptions,
 ) -> Result<FetchedPage, CrawlError> {
+    let _lease = options
+        .browser
+        .enabled
+        .then(crate::local_browser_lease)
+        .transpose()?;
     tracing::debug!(
         target: "agena::web",
         url = %url,

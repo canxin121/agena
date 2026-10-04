@@ -9,7 +9,7 @@ description = "Cross-platform Tokio subprocess lifecycle policy for Agena"
 [dependencies]
 portable-pty = { workspace = true }
 libc = { workspace = true }
-process-wrap = { workspace = true }
+process-wrap = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "process", "rt", "time"] }
 tracing = { workspace = true }
 
@@ -18,3 +18,6 @@ workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

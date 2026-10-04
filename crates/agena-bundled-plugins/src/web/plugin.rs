@@ -1,4 +1,6 @@
 mod downloads;
+mod playwright;
+use playwright::BrowserInteractionBackend;
 mod search_provider;
 use search_provider::WebSearchBackend;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -254,6 +256,8 @@ impl Default for WebStoreRetentionConfig {
 /// Browser settings of the web plugin.
 pub struct WebBrowserConfig {
     pub enabled: bool,
+    /// Optional mature click/fill/wait adapter; browser ownership stays native.
+    pub interaction_backend: BrowserInteractionBackend,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executable_path: Option<String>,
     pub wait: WebBrowserWaitConfig,
@@ -270,6 +274,7 @@ impl Default for WebBrowserConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            interaction_backend: BrowserInteractionBackend::default(),
             executable_path: None,
             wait: WebBrowserWaitConfig::default(),
             idle_timeout_secs: default_web_browser_idle_timeout_secs(),
@@ -497,6 +502,11 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "/browser/enabled",
             "Enabled",
             "Allows rendered fetches and crawls to use a local browser.",
+        ),
+        (
+            "/browser/interaction_backend",
+            "Interaction Backend",
+            "Native CDP or optional Playwright click/fill/wait; Playwright requires AGENA_BROWSER_PYTHON with the playwright package installed.",
         ),
         (
             "/browser/executable_path",
@@ -772,6 +782,8 @@ impl BrowserActivityState {
             return Ok(false);
         }
         self.clients.lock().await.remove(target_id);
+        self.actions.lock().await.remove(target_id);
+        self.connecting.lock().await.remove(target_id);
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
         let meta = self.meta.lock().await.remove(target_id);
         self.append_log(
@@ -841,6 +853,8 @@ impl ActivitySourceAdapter for BrowserActivitySource {
             .strip_prefix("browser_")
             .unwrap_or(activity_id)
             .to_string();
+        let gate = self.state.action_gate(&target_id).await;
+        let _guard = gate.lock().await;
         let closed = self
             .state
             .close_session(
@@ -1024,7 +1038,12 @@ struct BrowserListInput {}
 struct BrowserClickInput {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
     selector: Option<String>,
+    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
+    frame_selector: Option<String>,
     /// Snapshot-local index returned by `browser_snapshot.elements[].ref`.
     /// It is valid only while the page DOM has not materially changed.
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
@@ -1032,7 +1051,11 @@ struct BrowserClickInput {
     element_ref: Option<u16>,
     /// ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 128)]
     snapshot_id: Option<String>,
+    #[serde(default = "default_browser_action_timeout_ms")]
+    #[schemars(range(min = 1, max = 120000))]
+    timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -1045,16 +1068,26 @@ struct BrowserClickInput {
 struct BrowserTypeInput {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
     selector: Option<String>,
+    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
+    frame_selector: Option<String>,
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 199))]
     element_ref: Option<u16>,
     /// ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 128)]
     snapshot_id: Option<String>,
+    #[arg(max_chars = 65536)]
     text: String,
     #[serde(default)]
     press_enter: bool,
+    #[serde(default = "default_browser_action_timeout_ms")]
+    #[schemars(range(min = 1, max = 120000))]
+    timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
@@ -1067,8 +1100,14 @@ struct BrowserTypeInput {
 struct BrowserWaitInput {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
     selector: Option<String>,
+    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
+    frame_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 4096)]
     text: Option<String>,
     #[serde(default = "default_browser_action_timeout_ms")]
     #[schemars(range(min = 1, max = 120000))]
@@ -1431,9 +1470,11 @@ impl WebPlugin {
     where
         F: std::future::Future<Output = SdkResult<T>>,
     {
+        self.require_browser_owner(context, target).await?;
         let gate = self.browser_state.action_gate(target).await;
         let _guard = gate.lock().await;
         self.require_browser_owner(context, target).await?;
+        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         action.await
     }
 
@@ -1615,6 +1656,53 @@ impl WebPlugin {
             .await
             .insert(target_id.to_string(), client.clone());
         Ok(client)
+    }
+
+    fn validate_browser_frame(
+        &self,
+        frame: Option<&str>,
+        element_ref: Option<u16>,
+    ) -> SdkResult<()> {
+        if let Some(frame) = frame {
+            if frame.trim().is_empty() || element_ref.is_some() {
+                return Err(PluginError::invalid_params(
+                    "frame_selector requires a nonempty CSS iframe selector and cannot be combined with snapshot refs",
+                ));
+            }
+            if self.config()?.browser.interaction_backend != BrowserInteractionBackend::Playwright {
+                return Err(PluginError::invalid_params(
+                    "frame_selector requires browser.interaction_backend=playwright",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn playwright_action(
+        &self,
+        request: playwright::Request<'_>,
+    ) -> SdkResult<serde_json::Value> {
+        // Downloads change browser-level CDP behavior; prevent bridge attach
+        // while a native download holds that lease.
+        let _download_guard = self.browser_download_lock.lock().await;
+        let _native = self.browser_client(Some(request.target_id)).await?;
+        let endpoint = self.browser_endpoint().await?;
+        let context_id = self
+            .browser_state
+            .meta
+            .lock()
+            .await
+            .get(request.target_id)
+            .and_then(|meta| meta.browser_context_id.clone())
+            .ok_or_else(|| {
+                PluginError::invalid_params("owned browser context is unavailable; reopen the page")
+            })?;
+        let scoped = playwright::Request {
+            endpoint: &endpoint,
+            context_id: &context_id,
+            ..request
+        };
+        playwright::run(&scoped).await
     }
 
     async fn forget_browser_client(&self, target_id: &str) {
@@ -1981,6 +2069,7 @@ impl WebPlugin {
     ) -> SdkResult<ToolInvokeOutput> {
         let owner = browser_owner(context)?;
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
+        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         self.validate_network_target(&url).await?;
         self.ensure_browser_activity_source().await?;
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
@@ -2107,9 +2196,42 @@ impl WebPlugin {
             }
             return Err(error);
         }
-        self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
-            .await?;
-        let snapshot = self.ensure_browser_final_url(target_id.as_str()).await?;
+        let ready = async {
+            self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
+                .await?;
+            self.ensure_browser_final_url(target_id.as_str()).await
+        }
+        .await;
+        let snapshot = match ready {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                match self
+                    .browser_state
+                    .close_session(
+                        &target_id,
+                        "Browser open failed.",
+                        self.state()?.host.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Err(PluginError::internal(format!(
+                            "{}; additionally, failed to close the incomplete browser target",
+                            error.diagnostic_message()
+                        )));
+                    }
+                    Err(cleanup) => {
+                        return Err(PluginError::internal(format!(
+                            "{}; additionally, browser target cleanup failed: {}",
+                            error.diagnostic_message(),
+                            cleanup.diagnostic_message()
+                        )));
+                    }
+                }
+                return Err(error);
+            }
+        };
         Ok(ToolInvokeOutput::from_parts(
             format!("Open browser · {title_target}"),
             browser_snapshot_summary(&snapshot),
@@ -2177,6 +2299,7 @@ impl WebPlugin {
                 "The managed browser is not running. Use browser_open to start it.",
                 Some(serde_json::json!({
                     "browser_running": false,
+                    "interaction_backend": self.config()?.browser.interaction_backend,
                     "sessions": [],
                 })),
                 std::collections::BTreeMap::new(),
@@ -2214,6 +2337,7 @@ impl WebPlugin {
             format!("{} managed browser page target(s).", sessions.len()),
             Some(serde_json::json!({
                 "browser_running": true,
+                "interaction_backend": self.config()?.browser.interaction_backend,
                 "sessions": sessions,
             })),
             std::collections::BTreeMap::new(),
@@ -2350,10 +2474,12 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserSessionInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.require_browser_owner(context, &input.session_id)
-            .await?;
         let snapshot = self
-            .browser_snapshot_value(input.session_id.as_str())
+            .with_browser_action(
+                context,
+                &input.session_id,
+                self.browser_snapshot_value(&input.session_id),
+            )
             .await?;
         let text = format_browser_snapshot(&snapshot);
         Ok(ToolInvokeOutput::from_parts(
@@ -2379,6 +2505,7 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserClickInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.validate_browser_frame(input.frame_selector.as_deref(), input.element_ref)?;
         let target = browser_element_expression(
             input.selector.as_deref(),
             input.element_ref,
@@ -2388,8 +2515,31 @@ impl WebPlugin {
             "(() => {{ const el = {target}; if (!el) return {{ok:false,error:'browser element not found'}}; if (el.disabled) return {{ok:false,error:'element is disabled'}}; el.scrollIntoView({{block:'center'}}); el.focus(); el.click(); return {{ok:true}}; }})()"
         );
         self.with_browser_action(context, input.session_id.as_str(), async {
-            let client = self.browser_client(Some(input.session_id.as_str())).await?;
-            let result = client.evaluate(expression.as_str()).await?;
+            let result = if self.config()?.browser.interaction_backend
+                == BrowserInteractionBackend::Playwright
+            {
+                self.playwright_action(playwright::Request {
+                    endpoint: "",
+                    context_id: "",
+                    target_id: &input.session_id,
+                    action: "click",
+                    selector: input.selector.as_deref(),
+                    frame_selector: input.frame_selector.as_deref(),
+                    element_expression: input.element_ref.map(|_| target.as_str()),
+                    text: None,
+                    press_enter: false,
+                    timeout_ms: input.timeout_ms,
+                })
+                .await?
+            } else {
+                let client = self.browser_client(Some(input.session_id.as_str())).await?;
+                tokio::time::timeout(
+                    Duration::from_millis(input.timeout_ms),
+                    client.evaluate(expression.as_str()),
+                )
+                .await
+                .map_err(|_| PluginError::internal("browser click timed out"))??
+            };
             ensure_browser_action(&result)?;
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
@@ -2413,6 +2563,7 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserTypeInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.validate_browser_frame(input.frame_selector.as_deref(), input.element_ref)?;
         let expression = browser_type_expression(
             input.selector.as_deref(),
             input.element_ref,
@@ -2421,8 +2572,36 @@ impl WebPlugin {
             input.press_enter,
         )?;
         self.with_browser_action(context, input.session_id.as_str(), async {
-            let client = self.browser_client(Some(input.session_id.as_str())).await?;
-            let result = client.evaluate(expression.as_str()).await?;
+            let result = if self.config()?.browser.interaction_backend
+                == BrowserInteractionBackend::Playwright
+            {
+                let target = browser_element_expression(
+                    input.selector.as_deref(),
+                    input.element_ref,
+                    input.snapshot_id.as_deref(),
+                )?;
+                self.playwright_action(playwright::Request {
+                    endpoint: "",
+                    context_id: "",
+                    target_id: &input.session_id,
+                    action: "fill",
+                    selector: input.selector.as_deref(),
+                    frame_selector: input.frame_selector.as_deref(),
+                    element_expression: input.element_ref.map(|_| target.as_str()),
+                    text: Some(&input.text),
+                    press_enter: input.press_enter,
+                    timeout_ms: input.timeout_ms,
+                })
+                .await?
+            } else {
+                let client = self.browser_client(Some(input.session_id.as_str())).await?;
+                tokio::time::timeout(
+                    Duration::from_millis(input.timeout_ms),
+                    client.evaluate(expression.as_str()),
+                )
+                .await
+                .map_err(|_| PluginError::internal("browser type timed out"))??
+            };
             ensure_browser_action(&result)?;
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
@@ -2446,19 +2625,36 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserWaitInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.validate_browser_frame(input.frame_selector.as_deref(), None)?;
         if input.selector.is_some() && input.text.is_some() {
             return Err(PluginError::invalid_params(
                 "browser_wait accepts selector or text, not both",
             ));
         }
         self.with_browser_action(context, input.session_id.as_str(), async {
-            self.wait_for_browser_condition(
-                input.session_id.as_str(),
-                input.selector.as_deref(),
-                input.text.as_deref(),
-                input.timeout_ms,
-            )
-            .await?;
+            if self.config()?.browser.interaction_backend == BrowserInteractionBackend::Playwright {
+                self.playwright_action(playwright::Request {
+                    endpoint: "",
+                    context_id: "",
+                    target_id: &input.session_id,
+                    action: "wait",
+                    selector: input.selector.as_deref(),
+                    frame_selector: input.frame_selector.as_deref(),
+                    element_expression: None,
+                    text: input.text.as_deref(),
+                    press_enter: false,
+                    timeout_ms: input.timeout_ms,
+                })
+                .await?;
+            } else {
+                self.wait_for_browser_condition(
+                    input.session_id.as_str(),
+                    input.selector.as_deref(),
+                    input.text.as_deref(),
+                    input.timeout_ms,
+                )
+                .await?;
+            }
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
                 .await?;
@@ -2567,6 +2763,13 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserDownloadInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        let action_guard = self
+            .browser_state
+            .action_gate(&input.session_id)
+            .await
+            .lock_owned()
+            .await;
+        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         self.require_browser_owner(context, &input.session_id)
             .await?;
         const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
@@ -2594,6 +2797,7 @@ impl WebPlugin {
             MAX_DOWNLOAD_BYTES,
             Duration::from_millis(input.timeout_ms),
             Arc::clone(&self.browser_download_lock),
+            Some(action_guard),
         )
         .await?;
         let filename = result

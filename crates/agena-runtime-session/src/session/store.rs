@@ -1329,6 +1329,13 @@ fn apply_meta_runtime(
             })?;
         runtime.execution.selection = config.selection;
         runtime.execution.conversation = config.conversation;
+        // Lineage is authoritative after forks/rewinds. A copied config must
+        // never leave the model and UI pointing at different parent sessions.
+        if let Some(conversation) = runtime.execution.conversation.as_mut()
+            && let Some(parent_id) = meta.parent_id
+        {
+            conversation.parent_session_id = parent_id;
+        }
         runtime.execution.permission_ceiling = config.permission_ceiling;
         runtime.execution.capability_denied_tool_names = config.capability_denied_tool_names;
         runtime.execution.effective_workspace_root = config.effective_workspace_root;

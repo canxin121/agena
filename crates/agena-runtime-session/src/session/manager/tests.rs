@@ -1178,6 +1178,64 @@ async fn conversation_permissions_survive_refresh_and_recovery_removes_only_btw(
         }
         children.push(child.id);
     }
+    let fork_request = |session_id, conversation_mode| agena_runtime::SessionForkRequest {
+        session_id,
+        conversation_mode,
+        at_message_id: None,
+        title: None,
+        expected_version: None,
+    };
+    let nested = manager
+        .fork_session(fork_request(children[0], None))
+        .await
+        .unwrap();
+    let context = nested.runtime().execution.conversation.as_ref().unwrap();
+    assert_eq!(context.mode, ConversationMode::Side);
+    assert_eq!(context.parent_session_id, children[0]);
+    assert_eq!(nested.parent_id, Some(context.parent_session_id));
+    let rewind_request = |session_id| agena_runtime::SessionRewindRequest {
+        session_id,
+        at_message_id: parent
+            .parts()
+            .iter()
+            .find(|part| part.is_run_marker())
+            .unwrap()
+            .part_id,
+        expected_version: None,
+    };
+    let rewound = manager
+        .rewind_session(rewind_request(children[0]))
+        .await
+        .unwrap();
+    assert_eq!(
+        rewound
+            .runtime()
+            .execution
+            .conversation
+            .as_ref()
+            .unwrap()
+            .parent_session_id,
+        children[0]
+    );
+    assert!(
+        manager
+            .rewind_session(rewind_request(children[1]))
+            .await
+            .is_err()
+    );
+    for mode in [
+        None,
+        Some(ConversationMode::Side),
+        Some(ConversationMode::Btw),
+    ] {
+        assert!(
+            manager
+                .fork_session(fork_request(children[1], mode))
+                .await
+                .is_err(),
+            "temporary questions cannot create unowned descendants"
+        );
+    }
     manager.reconcile_interrupted_executions().await.unwrap();
     let store = manager.session_store();
     assert!(store.load(parent.id).await.is_ok());
@@ -1187,7 +1245,7 @@ async fn conversation_permissions_survive_refresh_and_recovery_removes_only_btw(
         .list_session_summaries(Default::default())
         .await
         .unwrap();
-    assert_eq!(visible.len(), 2);
+    assert_eq!(visible.len(), 4);
 }
 
 #[tokio::test]

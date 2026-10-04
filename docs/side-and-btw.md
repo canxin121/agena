@@ -48,6 +48,9 @@ failure or disconnect. Cleanup waits for execution to unwind before deleting
 storage. If shutdown interrupts cleanup, startup recovery removes the remaining
 temporary conversation; persistent side conversations survive. The public fork
 API accepts side mode but rejects attempts to create an unowned BTW session.
+Temporary questions cannot themselves be forked or rewound. Further forks of a side
+retain side mode and record their immediate parent, keeping the model boundary
+and Web/TUI return controls consistent.
 
 Read-only enforcement is applied to tool discovery and invocation, before
 tool preparation hooks, and cannot be bypassed by granting a tool approval.
@@ -65,8 +68,9 @@ startup cleanup. TUI and Web tests cover cancellation ownership, duplicate
 sends, stale updates, window closure and stream parsing, including split UTF-8.
 
 Verification on 2026-10-04: the eight affected Rust library suites passed 993
-tests, Web passed 583 tests, and the final shared-live-feed change passed the
-41-test API server suite again. The Web production build and strict Clippy
+tests, the CLI/server binary passed 101 tests, and Web passed 583 tests. The
+final nested-branch correction passed the 211-test runtime and 41-test API
+server suites again. The Web production build and strict Clippy
 checks across the affected crates and their targets passed. Browser visual
 verification was unavailable in the development environment.
 

@@ -34,6 +34,15 @@ impl SessionManager {
                 current: source.version,
             });
         }
+        let inherited_conversation = source.runtime.execution.conversation.as_ref();
+        if inherited_conversation.is_some_and(|context| context.is_read_only()) {
+            return Err(AppError::Config(
+                "Temporary BTW questions cannot be forked. Start a side conversation from the parent instead.".to_owned(),
+            ));
+        }
+        let mode = request
+            .conversation_mode
+            .or_else(|| inherited_conversation.map(|context| context.mode));
         // The public request names a message (its run-marker part id), while
         // storage forks at an inclusive part boundary. Resolve a marker to the
         // message's final member part so the fork includes the entire message,
@@ -52,27 +61,13 @@ impl SessionManager {
         let title = request
             .title
             .unwrap_or_else(|| format!("Fork of {}", source.title));
-        let child_id = if let Some(mode) = request.conversation_mode {
+        let child_id = if let Some(mode) = mode {
             let mut config =
                 crate::session::store::PersistedExecutionConfig::from(&source.runtime.execution);
             config.conversation = Some(agena_domain::SessionConversation {
                 mode,
                 parent_session_id: source.id,
             });
-            // A fork of a read-only temporary answer must retain that ceiling.
-            if source
-                .runtime
-                .execution
-                .conversation
-                .as_ref()
-                .is_some_and(|context| context.is_read_only())
-            {
-                config
-                    .conversation
-                    .as_mut()
-                    .expect("assigned conversation")
-                    .mode = agena_domain::ConversationMode::Btw;
-            }
             if config
                 .conversation
                 .as_ref()
@@ -485,6 +480,15 @@ impl SessionManager {
 
     pub async fn rewind_session(&self, request: SessionRewindRequest) -> Result<Session, AppError> {
         let source = self.store.load_session(request.session_id).await?;
+        if source
+            .runtime
+            .execution
+            .conversation
+            .as_ref()
+            .is_some_and(|context| context.is_read_only())
+        {
+            return Err(AppError::Config("Temporary BTW questions cannot be rewound. Start a new question from the parent instead.".to_owned()));
+        }
         if let Some(expected) = request.expected_version
             && source.version != expected
         {

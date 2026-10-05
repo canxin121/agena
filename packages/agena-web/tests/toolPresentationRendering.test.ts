@@ -8,6 +8,25 @@ import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { ensureBrowserTestRuntime } from './testRuntime'
 import { transcriptDiffFiles } from '../src/pages/chat/transcriptDiff'
+import { readFileSync } from 'node:fs'
+
+test('a running tool keeps its expanded sections instead of reloading them', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/components/chat/AgenaOperationPart.vue', import.meta.url)),
+    'utf8',
+  )
+
+  // A running tool bumps its revision on every streamed update. The expanded
+  // sections keep the rendered snapshot while the part is live and refresh once
+  // it settles, so the part cannot flash its content away and back while the
+  // reply keeps streaming.
+  assert.match(source, /if \(!previous \|\| !status\.value\.terminal\) return/)
+  assert.match(source, /scheduleStaleSectionRetry/)
+  assert.match(source, /async function loadSection\(section: ToolDetailSection, options: SectionLoadOptions = \{\}\)/)
+  assert.match(source, /if \(!options\.force && !sectionError\(section\) && sectionLoaded\(section\)\) return/)
+  // Only a different part may drop what is already rendered.
+  assert.equal((source.match(/sectionValues\.value = \{\}/g) || []).length, 1)
+})
 
 const vite = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),

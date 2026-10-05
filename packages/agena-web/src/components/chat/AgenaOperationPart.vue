@@ -75,13 +75,19 @@ function setSectionExpanded(section: ToolDetailSection, expanded: boolean) {
   else presentationExpanded.value = expanded
 }
 
-async function loadSection(section: ToolDetailSection) {
+type SectionLoadOptions = { force?: boolean; attempt?: number }
+
+async function loadSection(section: ToolDetailSection, options: SectionLoadOptions = {}) {
   // Presentation is part of every transcript snapshot. The other sections
-  // are deliberately fetched only after their disclosure row is opened.
-  if (section === 'presentation' || sectionLoaded(section) || sectionLoading(section)) return
+  // are deliberately fetched only after their disclosure row is opened, and a
+  // forced refresh keeps the rendered snapshot on screen until the new one
+  // arrives.
+  if (section === 'presentation' || sectionLoading(section)) return
+  if (!options.force && !sectionError(section) && sectionLoaded(section)) return
   const sessionId = String(props.sessionId || '').trim()
   const partId = String(props.part.id || '').trim()
   if (!sessionId || !partId) return
+  const attempt = options.attempt ?? 0
   const requestGeneration = partGeneration
   const controller = new AbortController()
   sectionControllers.set(section, controller)
@@ -98,6 +104,13 @@ async function loadSection(section: ToolDetailSection) {
     const revision = props.part.source.revision ?? 0
     const updatedAt = props.part.source.updatedAt ?? 0
     if (resource.revision < revision || (resource.revision === revision && resource.updated_at_ms < updatedAt)) {
+      // The tool moved on while this section was loading. While it is still
+      // streaming, retry quietly and keep the rendered snapshot instead of
+      // flashing an error into the part the reader has expanded.
+      if (!status.value.terminal && attempt < MAX_STALE_SECTION_RETRIES) {
+        scheduleStaleSectionRetry(section, attempt + 1, requestGeneration)
+        return
+      }
       throw new Error('This tool changed while loading its details. Retry this section.')
     }
     sectionValues.value = { ...sectionValues.value, [section]: resource.value }
@@ -133,7 +146,9 @@ function toggleDetails() {
 function loadVisibleSections() {
   if (props.expanded && detailsExpanded.value) {
     for (const section of toolDetailSections) {
-      if (sectionExpanded(section)) void loadSection(section)
+      // Reopening a child refreshes it, but the rendered snapshot stays on
+      // screen until the new one arrives instead of blanking the section.
+      if (sectionExpanded(section)) void loadSection(section, { force: sectionLoaded(section) })
     }
   }
 }
@@ -169,16 +184,35 @@ watch(
 
 watch([() => props.expanded, detailsExpanded], loadVisibleSections)
 
-// Details requested while a tool was running must not overwrite its completed result.
+const STALE_SECTION_RETRY_MS = 400
+const MAX_STALE_SECTION_RETRIES = 2
+
+function scheduleStaleSectionRetry(section: ToolDetailSection, attempt: number, generation: number) {
+  window.setTimeout(() => {
+    if (partGeneration !== generation || !sectionExpanded(section)) return
+    void loadSection(section, { force: true, attempt })
+  }, STALE_SECTION_RETRY_MS)
+}
+
+// A running tool bumps its revision on every streamed update. Refetching on
+// each bump dropped the rendered sections and reloaded them over and over
+// while the reply kept streaming, which is the flashing an expanded part must
+// not do. Keep the rendered snapshot while the part is live and refresh the
+// expanded sections once it settles, so a stale running snapshot still cannot
+// overwrite the completed result.
 watch(
-  () => [props.part.status, props.part.source.revision, props.part.source.updatedAt],
-  () => {
+  () => [props.part.status, props.part.source.revision, props.part.source.updatedAt] as const,
+  (next, previous) => {
+    if (!previous || !status.value.terminal) return
+    const changed = next[0] !== previous[0] || next[1] !== previous[1] || next[2] !== previous[2]
+    if (!changed) return
     partGeneration += 1
     cancelSectionRequests()
-    sectionValues.value = {}
     loadingSections.value = new Set()
-    sectionErrors.value = {}
-    loadVisibleSections()
+    if (!props.expanded || !detailsExpanded.value) return
+    for (const section of toolDetailSections) {
+      if (sectionExpanded(section)) void loadSection(section, { force: true })
+    }
   },
 )
 onBeforeUnmount(() => {

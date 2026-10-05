@@ -97,4 +97,9 @@ pub struct ProcessSummary {
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_reason: Option<String>,
+    /// Session that owns the process when the runtime knows it. Background
+    /// activities are scoped by session, so a synthesized shell or terminal
+    /// record must carry the owner instead of nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_session_id: Option<i64>,
 }

@@ -35,6 +35,10 @@ impl ActivityStore {
         }
     }
 
+    fn get(&self, id: &str) -> Option<BackgroundActivity> {
+        self.activities.get(id).cloned()
+    }
+
     fn upsert(&mut self, activity: BackgroundActivity) -> Option<BackgroundActivity> {
         let previous = self
             .activities
@@ -126,6 +130,13 @@ impl ActivityRegistry {
             ))),
             tx,
         }
+    }
+
+    /// Read one record without changing it. A source that projects a live
+    /// process needs the durable provenance the operation already stored, and
+    /// upsert replaces the whole record.
+    pub(crate) fn get(&self, id: &str) -> Option<BackgroundActivity> {
+        self.store.lock().get(id)
     }
 
     /// Insert or replace an activity and publish the corresponding event. The

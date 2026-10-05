@@ -105,13 +105,48 @@ impl std::fmt::Debug for MonitorActivityBridge {
     }
 }
 
+impl MonitorActivityBridge {
+    /// `upsert` replaces the whole record, so a record synthesized from the
+    /// live process carries forward the provenance stored by the operation
+    /// that owns the same id.
+    fn carry_forward(&self, next: BackgroundActivity) -> BackgroundActivity {
+        let previous = self.registry.get(&next.id);
+        carry_provenance_forward(next, previous.as_ref())
+    }
+}
+
+/// Carry the durable provenance of `previous` into a freshly synthesized
+/// record: the owning session, the source part and the background-operation id
+/// describe the work, not the live process reading.
+fn carry_provenance_forward(
+    mut next: BackgroundActivity,
+    previous: Option<&BackgroundActivity>,
+) -> BackgroundActivity {
+    let Some(previous) = previous else {
+        return next;
+    };
+    if next.session_id.is_none() {
+        next.session_id = previous.session_id;
+    }
+    if next.parent_session_id.is_none() {
+        next.parent_session_id = previous.parent_session_id;
+    }
+    if next.operation_id.is_none() {
+        next.operation_id = previous.operation_id.clone();
+    }
+    if next.source_part_id.is_none() {
+        next.source_part_id = previous.source_part_id;
+    }
+    next
+}
+
 impl crate::MonitorListener for MonitorActivityBridge {
     fn on_started(&self, summary: &ProcessSummary) {
-        self.registry.upsert(shell_activity(summary));
+        self.registry.upsert(self.carry_forward(shell_activity(summary)));
     }
 
     fn on_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {
-        self.registry.upsert(shell_activity(summary));
+        self.registry.upsert(self.carry_forward(shell_activity(summary)));
         if let Some(callback) = self
             .on_event
             .lock()
@@ -123,7 +158,7 @@ impl crate::MonitorListener for MonitorActivityBridge {
     }
 
     fn on_finished(&self, summary: &ProcessSummary) {
-        self.registry.upsert(shell_activity(summary));
+        self.registry.upsert(self.carry_forward(shell_activity(summary)));
         if let Some(callback) = self
             .on_finished
             .lock()
@@ -147,15 +182,26 @@ fn shell_activity(summary: &ProcessSummary) -> BackgroundActivity {
             ProcessStatus::Stopped => BackgroundActivityStatus::Stopped,
             ProcessStatus::Failed => BackgroundActivityStatus::Failed,
         },
-        title: if summary.description.trim().is_empty() {
-            format!("Run process · {}", summary.command)
-        } else {
-            format!("Run process · {}", summary.description)
+        title: {
+            let label = if summary.description.trim().is_empty() {
+                summary.command.as_str()
+            } else {
+                summary.description.as_str()
+            };
+            // An interactive terminal reads as a live terminal, not as one
+            // more background process.
+            format!(
+                "{} · {label}",
+                if summary.tty { "Terminal" } else { "Run process" }
+            )
         },
         description: summary.command.clone(),
         command: Some(summary.command.clone()),
         workdir: None,
-        session_id: None,
+        // Present when the runtime knows the owner: the activity panel is
+        // session-scoped, and a terminal session has no background operation
+        // record to supply the session otherwise.
+        session_id: summary.owner_session_id,
         parent_session_id: None,
         operation_id: None,
         source_part_id: None,
@@ -920,5 +966,59 @@ fn empty_task_logs(task_id: &str, cursor: i64) -> BackgroundActivityLogRead {
         dropped_lines: 0,
         exit_code: None,
         completion_reason: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::ProcessSummary;
+
+    fn summary(tty: bool, session: Option<i64>) -> ProcessSummary {
+        ProcessSummary {
+            process_id: "proc_live".to_string(),
+            tty,
+            command: "cargo test".to_string(),
+            description: String::new(),
+            status: ProcessStatus::Running,
+            background: true,
+            monitored: false,
+            started_at_ms: 1,
+            ended_at_ms: None,
+            buffered_lines: 0,
+            last_seq: 4,
+            dropped_lines: 0,
+            exit_code: None,
+            completion_reason: None,
+            owner_session_id: session,
+        }
+    }
+
+    #[test]
+    fn a_live_terminal_is_scoped_to_its_owning_session() {
+        let terminal = shell_activity(&summary(true, Some(7)));
+        assert_eq!(terminal.session_id, Some(7));
+        assert_eq!(terminal.title, "Terminal · cargo test");
+
+        let background = shell_activity(&summary(false, None));
+        assert_eq!(background.session_id, None);
+        assert_eq!(background.title, "Run process · cargo test");
+    }
+
+    #[test]
+    fn a_live_projection_keeps_the_operation_provenance() {
+        // The registry replaces whole records, so the live projection has to
+        // carry the durable fields the background operation already stored.
+        let mut previous = shell_activity(&summary(false, Some(7)));
+        previous.parent_session_id = Some(3);
+        previous.operation_id = Some("op_1".to_string());
+        previous.source_part_id = Some(9);
+
+        let merged = carry_provenance_forward(shell_activity(&summary(false, None)), Some(&previous));
+
+        assert_eq!(merged.session_id, Some(7));
+        assert_eq!(merged.parent_session_id, Some(3));
+        assert_eq!(merged.operation_id.as_deref(), Some("op_1"));
+        assert_eq!(merged.source_part_id, Some(9));
     }
 }

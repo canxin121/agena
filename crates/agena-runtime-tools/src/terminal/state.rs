@@ -117,6 +117,7 @@ impl State {
             dropped_lines: inner.dropped_events,
             exit_code: inner.exit_code,
             completion_reason: inner.reason.clone(),
+            owner_session_id: self.owner.session_id,
         }
     }
 

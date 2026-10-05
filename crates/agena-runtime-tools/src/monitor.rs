@@ -221,6 +221,7 @@ impl MonitorState {
             dropped_lines: self.dropped_lines.load(Ordering::Acquire),
             exit_code: inner.exit_code,
             completion_reason: inner.completion_reason.clone(),
+            owner_session_id: self.owner.as_ref().and_then(|owner| owner.session_id),
         }
     }
 }

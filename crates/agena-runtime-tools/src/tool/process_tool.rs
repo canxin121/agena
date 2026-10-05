@@ -235,6 +235,7 @@ async fn execute_background_run_async(
         call_id,
         prepared_shell_command,
         launch_provenance: _,
+        live_output: _,
     } = context;
     let reserved_process_id = session_id
         .zip(call_id)

@@ -43,7 +43,18 @@ impl ToolExecutor {
         &self,
         request: &ShellRequest,
     ) -> Result<ShellOutput, ToolError> {
-        match shell::execute(request, self.cancellation_token()).await {
+        self.execute_shell_command_with_live(request, None).await
+    }
+
+    /// Execute a foreground command and forward its output while it runs. The
+    /// returned [`ShellOutput`] stays the single source of truth for the
+    /// terminal result, so a live consumer never changes the outcome.
+    pub(crate) async fn execute_shell_command_with_live(
+        &self,
+        request: &ShellRequest,
+        live: Option<tokio::sync::mpsc::UnboundedSender<crate::tool::shell::ShellOutputChunk>>,
+    ) -> Result<ShellOutput, ToolError> {
+        match shell::execute_with_sink(request, self.cancellation_token(), live).await {
             Err(agena_tool::ShellError::Cancelled) => Err(ToolError::Cancelled),
             result => result.map_err(ToolError::from),
         }

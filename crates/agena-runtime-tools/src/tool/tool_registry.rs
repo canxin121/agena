@@ -344,6 +344,11 @@ pub struct ToolRuntimeContext {
     /// Exact assistant tool receipt for durable child work created by this
     /// invocation. Application/host calls leave this empty.
     pub launch_provenance: Option<agena_scheduler::ScheduledJobLaunchProvenance>,
+    /// Live output of a foreground process, forwarded while it still runs.
+    /// Only a streaming invocation attaches one; every other call leaves it
+    /// empty and keeps the collect-at-exit behaviour.
+    pub live_output:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::tool::shell::ShellOutputChunk>>,
 }
 
 /// Handle to a streaming tool execution.

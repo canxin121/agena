@@ -222,12 +222,104 @@ impl ToolExecutor {
         ) {
             return Ok(None);
         }
+
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
 
         let resolution = self
             .plugin_resolution_for_invocation(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
         self.check_cloud_tool_adapter(&resolution.canonical_name())?;
+
+        // Bundled tools execute inside this crate; their plugin handler is a
+        // definition-only adapter that cannot run anything. Stream a bundled
+        // foreground shell here and finalize the terminal frame exactly like the
+        // non-streaming bundled path, so live output and the final result agree.
+        if let Some(payload) =
+            ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
+        {
+            let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
+            if let ToolPayloadInput::Shell(input) = payload {
+                let stream_id = format!("bundled-shell:{session_id}:{call_id}");
+                let (chunk_tx, chunks) =
+                    tokio::sync::mpsc::channel::<agena_plugin_host::sdk::ToolStreamChunk>(64);
+                let (mut end_tx, end) = tokio::sync::oneshot::channel();
+                let executor = self.clone();
+                let cancellation = self.cancellation_token.clone();
+                let tool_name = resolution.canonical_name();
+                let invocation = invocation.clone();
+                let stream_id_for_task = stream_id.clone();
+                tokio::spawn(async move {
+                    let (live_tx, mut live_rx) = tokio::sync::mpsc::unbounded_channel::<
+                        crate::tool::shell::ShellOutputChunk,
+                    >();
+                    let forward_stream_id = stream_id_for_task.clone();
+                    let forward = tokio::spawn(async move {
+                        while let Some(chunk) = live_rx.recv().await {
+                            let sent = chunk_tx
+                                .send(agena_plugin_host::sdk::ToolStreamChunk {
+                                    stream_id: forward_stream_id.clone(),
+                                    text_delta: Some(chunk.text),
+                                    metadata: std::collections::BTreeMap::new(),
+                                })
+                                .await;
+                            if sent.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                    let context = crate::tool::ToolRuntimeContext {
+                        session_id: (session_id >= 0).then_some(session_id),
+                        call_id: (call_id >= 0).then_some(call_id),
+                        prepared_shell_command: None,
+                        launch_provenance: None,
+                        live_output: Some(live_tx),
+                    };
+                    let lifecycle = async {
+                        let execution = Box::pin(crate::tool::process_tool::execute_async(
+                            &executor, &input, context,
+                        ))
+                        .await?;
+                        executor.ensure_not_cancelled()?;
+                        executor
+                            .finalize_execution_async(
+                                &invocation,
+                                session_id,
+                                tool_name.as_str(),
+                                call_id,
+                                execution.into(),
+                            )
+                            .await
+                    };
+                    tokio::pin!(lifecycle);
+                    let result = match cancellation.as_ref() {
+                        Some(cancellation) => tokio::select! {
+                            biased;
+                            _ = end_tx.closed() => return,
+                            _ = cancellation.cancelled() => Err(ToolError::Cancelled),
+                            result = &mut lifecycle => result,
+                        },
+                        None => tokio::select! {
+                            biased;
+                            _ = end_tx.closed() => return,
+                            result = &mut lifecycle => result,
+                        },
+                    };
+                    let _ = forward.await;
+                    if end_tx.send(result).is_err() {
+                        tracing::debug!(
+                            stream_id = %stream_id_for_task,
+                            "bundled tool stream terminal-result receiver was dropped"
+                        );
+                    }
+                });
+                return Ok(Some(StreamingToolExecution {
+                    stream_id,
+                    chunks,
+                    end,
+                }));
+            }
+        }
+
         let invoke_stream = self.plugins.invoke_tool_stream(
             &resolution,
             PluginToolInvokeInput {
@@ -377,6 +469,7 @@ impl ToolExecutor {
                 call_id: (call_id >= 0).then_some(call_id),
                 prepared_shell_command,
                 launch_provenance,
+                live_output: None,
             };
             // Each built-in branch can carry a large async state machine. Keep
             // that state on the heap so an ordinary plugin call does not poll

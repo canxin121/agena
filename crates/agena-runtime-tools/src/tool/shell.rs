@@ -20,6 +20,22 @@ use super::ToolError;
 
 const MAX_CAPTURE_BYTES_PER_STREAM: usize = 8 * 1024 * 1024;
 const MAX_CONCURRENT_SHELL_WORKERS: usize = 16;
+
+/// Which pipe one live output chunk came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellOutputStream {
+    Stdout,
+    Stderr,
+}
+
+/// One chunk of output observed while the command is still running. The drain
+/// task only forwards bytes it already read, so a live consumer never adds a
+/// read or a syscall to the hot path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellOutputChunk {
+    pub stream: ShellOutputStream,
+    pub text: String,
+}
 static SHELL_WORKERS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SHELL_WORKERS)));
 
@@ -39,6 +55,17 @@ pub(crate) async fn acquire_worker_permit() -> Result<tokio::sync::OwnedSemaphor
 pub async fn execute(
     request: &ShellRequest,
     cancellation: Option<&CancellationToken>,
+) -> Result<ShellOutput, ShellError> {
+    execute_with_sink(request, cancellation, None).await
+}
+
+/// Run a foreground command and, when `live` is attached, report every chunk it
+/// produces while it is still running. The returned [`ShellOutput`] stays the
+/// single source of truth for the terminal result.
+pub async fn execute_with_sink(
+    request: &ShellRequest,
+    cancellation: Option<&CancellationToken>,
+    live: Option<tokio::sync::mpsc::UnboundedSender<ShellOutputChunk>>,
 ) -> Result<ShellOutput, ShellError> {
     validate(request)?;
 
@@ -60,8 +87,14 @@ pub async fn execute(
 
     let started = Instant::now();
     let mut child = agena_process::spawn(command).map_err(ShellError::Spawn)?;
-    let stdout_handle = child.stdout().take().map(spawn_drain);
-    let stderr_handle = child.stderr().take().map(spawn_drain);
+    let stdout_handle = child
+        .stdout()
+        .take()
+        .map(|reader| spawn_drain(reader, ShellOutputStream::Stdout, live.clone()));
+    let stderr_handle = child
+        .stderr()
+        .take()
+        .map(|reader| spawn_drain(reader, ShellOutputStream::Stderr, live.clone()));
     struct DrainGuard(Vec<tokio::task::AbortHandle>);
     impl Drop for DrainGuard {
         fn drop(&mut self) {
@@ -204,6 +237,59 @@ enum WaitOutcome {
     Cancelled,
 }
 
+#[cfg(test)]
+mod live_output_tests {
+    use super::{ShellOutputChunk, ShellOutputStream, execute_with_sink};
+    use agena_tool::ShellRequest;
+    use std::collections::HashMap;
+
+    fn request(script: &str) -> ShellRequest {
+        ShellRequest {
+            command: vec!["sh".to_string(), "-c".to_string(), script.to_string()],
+            cwd: std::env::temp_dir(),
+            env: HashMap::new(),
+            timeout_ms: Some(5_000),
+        }
+    }
+
+    #[tokio::test]
+    async fn live_chunks_arrive_before_the_command_exits() {
+        let request = request("printf 'first'; sleep 0.6; printf 'second'");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ShellOutputChunk>();
+        let running =
+            tokio::spawn(async move { execute_with_sink(&request, None, Some(tx)).await });
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a live chunk arrives while the command still runs")
+            .expect("the stream stays open");
+        assert_eq!(first.stream, ShellOutputStream::Stdout);
+        assert!(first.text.contains("first"));
+        assert!(
+            !running.is_finished(),
+            "the command must still be running when its first chunk is delivered"
+        );
+
+        let output = running
+            .await
+            .expect("the execution task joins")
+            .expect("the command completes");
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stdout.contains("second"));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_consumer_does_not_fail_the_command() {
+        let request = request("printf 'kept'");
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ShellOutputChunk>();
+        drop(rx);
+        let output = execute_with_sink(&request, None, Some(tx))
+            .await
+            .expect("a dropped live consumer never fails the command");
+        assert_eq!(output.stdout, "kept");
+    }
+}
+
 async fn terminate_process_tree(child: &mut ManagedChild) -> Result<ExitStatus, ShellError> {
     child
         .terminate(Duration::from_millis(150))
@@ -225,7 +311,11 @@ fn status_to_code(status: ExitStatus) -> i32 {
     })
 }
 
-fn spawn_drain<R>(mut reader: R) -> tokio::task::JoinHandle<io::Result<String>>
+fn spawn_drain<R>(
+    mut reader: R,
+    stream: ShellOutputStream,
+    live: Option<tokio::sync::mpsc::UnboundedSender<ShellOutputChunk>>,
+) -> tokio::task::JoinHandle<io::Result<String>>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -242,6 +332,15 @@ where
             let captured = remaining.min(read);
             captured_output.extend_from_slice(&chunk[..captured]);
             truncated |= captured < read;
+            if captured > 0
+                && let Some(live) = live.as_ref()
+            {
+                // A closed consumer must never stall or fail the command.
+                let _ = live.send(ShellOutputChunk {
+                    stream,
+                    text: String::from_utf8_lossy(&chunk[..captured]).into_owned(),
+                });
+            }
         }
         if truncated {
             captured_output.extend_from_slice(b"\n[output truncated after 8 MiB]\n");

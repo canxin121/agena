@@ -59,11 +59,18 @@ test('the rendered reply exposes left-aligned busy/retry controls even with a fi
   const busy = await render(true)
   assert.match(busy, /data-part-expand-next="true"/)
   assert.match(busy, /Loading/)
+  assert.doesNotMatch(busy, /data-part-page-size/)
   assert.equal((busy.match(/\sdisabled(?:="")?(?=\s|>)/g) || []).length, 2)
   assert.doesNotMatch(busy, /justify-end/)
   const retry = await render(false, 'Temporary failure')
   assert.match(retry, /role="alert"[^>]*>Temporary failure/)
   assert.equal((retry.match(/\sdisabled(?:="")?(?=\s|>)/g) || []).length, 0)
+  // The editable page size sits inside the expand label: lead text, then the
+  // number input, then the trailing label.
+  const leadIndex = retry.indexOf('expandNextLead')
+  const inputIndex = retry.indexOf('data-part-page-size="true"')
+  const tailIndex = retry.indexOf('expandNextTail')
+  assert.ok(leadIndex >= 0 && inputIndex > leadIndex && tailIndex > inputIndex)
 })
 
 const part = (id: number) => ({

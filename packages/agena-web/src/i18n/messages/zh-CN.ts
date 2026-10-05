@@ -1506,9 +1506,11 @@ export default {
         },
       },
       controls: {
-        expandNextCount: '再显示 {count} 个 part',
-        collectAll: '显示全部 part',
-        pageSizeInputLabel: '本次要多显示的 part 数量（1–50）',
+        expandNextCount: '再加载 {count}个 part',
+        expandNextLead: '再加载',
+        expandNextTail: '个 part',
+        collectAll: '加载全部 part',
+        pageSizeInputLabel: '本次要多加载的 part 数量（1–50）',
       },
       optimistic: {
         sending: '发送中...',

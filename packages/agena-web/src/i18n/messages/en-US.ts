@@ -1514,9 +1514,11 @@ export default {
         },
       },
       controls: {
-        expandNextCount: 'Show {count} more parts',
-        collectAll: 'Show all parts',
-        pageSizeInputLabel: 'Older parts to show (1–50)',
+        expandNextCount: 'Load {count} more parts',
+        expandNextLead: 'Load',
+        expandNextTail: 'more parts',
+        collectAll: 'Load all parts',
+        pageSizeInputLabel: 'Older parts to load (1–50)',
       },
       optimistic: {
         sending: 'sending...',

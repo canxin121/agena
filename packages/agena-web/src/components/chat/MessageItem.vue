@@ -148,11 +148,17 @@ function togglePart(part: TranscriptDisplayPart) {
   emit('partToggle', part, !props.isPartExpanded(part))
 }
 
-function revealActivitySummary(row: Extract<TranscriptRow, { kind: 'summary' }>, all = false, requestRemote = true) {
+function revealActivitySummary(
+  row: Extract<TranscriptRow, { kind: 'summary' }>,
+  all = false,
+  requestRemote = true,
+  pageSize?: number,
+) {
   if (foldLoading(row.fold)) return
   emit('revealParts')
   const current = visibility.value.count ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
-  const next = all ? Number.MAX_SAFE_INTEGER : current + Math.max(1, Math.min(activityPageSize.value, row.hiddenCount))
+  const step = Math.max(1, Math.min(pageSize ?? activityPageSize.value, row.hiddenCount))
+  const next = all ? Number.MAX_SAFE_INTEGER : current + step
   visibility.value.count = next
   const cachedCount = props.displayParts.filter((part) => part.kind !== 'lifecycle').length
   if (row.fold && requestRemote && (all || next > cachedCount)) emit('foldExpand', row.fold, all)
@@ -168,6 +174,30 @@ function handleSummaryPageSizeInput(event: Event) {
   if (input instanceof HTMLInputElement) {
     emit('setActivityPageSize', normalizeTranscriptPartPageSize(input.value))
   }
+}
+
+// The inline page-size input must page the fold with the value the user sees in
+// the same interaction; waiting for the parent prop round-trip would page with
+// the previous size.
+function inlinePageSize(scope: Element | null): number | null {
+  const input = scope instanceof HTMLInputElement ? scope : scope?.querySelector('input[data-part-page-size="true"]')
+  return input instanceof HTMLInputElement ? normalizeTranscriptPartPageSize(input.value) : null
+}
+
+function revealSummaryFromChip(event: Event, row: Extract<TranscriptRow, { kind: 'summary' }>) {
+  const size = inlinePageSize(event.currentTarget instanceof Element ? event.currentTarget : null)
+  if (size !== null) emit('setActivityPageSize', size)
+  revealActivitySummary(row, false, true, size ?? activityPageSize.value)
+}
+
+function revealSummaryFromPageSizeInput(event: Event, row: Extract<TranscriptRow, { kind: 'summary' }>) {
+  const size = inlinePageSize(event.target instanceof Element ? event.target : null)
+  if (size === null) {
+    revealSummary(row)
+    return
+  }
+  emit('setActivityPageSize', size)
+  revealActivitySummary(row, false, true, size)
 }
 
 function partNavigationText(part: TranscriptDisplayPart): string {
@@ -300,7 +330,6 @@ function partNavigationText(part: TranscriptDisplayPart): string {
         :data-message-id="messageId"
         :data-part-id="row.kind === 'part' ? row.part.id : undefined"
         :data-part-kind="row.kind === 'part' ? row.part.kind : 'activity_summary'"
-        :data-transcript-chrome="row.kind === 'summary' ? 'true' : undefined"
         :data-toggleable="row.kind === 'summary' || row.part.toggleable ? 'true' : 'false'"
         :data-copy-text="
           row.kind === 'summary'
@@ -315,49 +344,58 @@ function partNavigationText(part: TranscriptDisplayPart): string {
           v-if="row.kind === 'summary'"
           class="flex min-w-0 flex-wrap items-center gap-1 py-1"
           data-part-controls="true"
-          data-transcript-chrome="true"
         >
-          <div class="flex min-w-0 flex-wrap items-center gap-1">
-            <input
-              :value="activityPageSize"
-              type="number"
-              min="1"
-              max="50"
-              step="1"
-              class="h-6 w-11 rounded border border-border/60 bg-background/70 px-1 text-center font-mono text-[10px] outline-none focus:border-primary/60"
-              :aria-label="t('chat.messages.controls.pageSizeInputLabel')"
-              :title="t('chat.messages.controls.pageSizeInputLabel')"
-              data-part-page-size="true"
-              @change="handleSummaryPageSizeInput"
-              @keydown.enter="handleSummaryPageSizeInput"
-            />
+          <span class="inline-flex min-w-0 items-center" data-part-expand-next="true">
             <ToolbarChipButton
+              v-if="foldLoading(row.fold)"
               :tooltip="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
               :title="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
               :is-compact-touch="isCompactTouch"
-              :disabled="row.hiddenCount <= 0 || foldLoading(row.fold)"
+              disabled
               data-transcript-toggle="true"
-              data-part-expand-next="true"
-              @click.stop="revealSummary(row)"
+              data-transcript-chrome="true"
             >
-              <RiLoader4Line v-if="foldLoading(row.fold)" class="h-3 w-3 animate-spin" />
-              {{
-                foldLoading(row.fold)
-                  ? t('common.loading')
-                  : t('chat.messages.controls.expandNextCount', { count: activityPageSize })
-              }}
+              <RiLoader4Line class="h-3 w-3 animate-spin" />
+              {{ t('common.loading') }}
             </ToolbarChipButton>
-            <ToolbarChipButton
-              :tooltip="t('chat.messages.controls.collectAll')"
-              :title="t('chat.messages.controls.collectAll')"
-              :is-compact-touch="isCompactTouch"
-              :disabled="row.hiddenCount <= 0 || foldLoading(row.fold)"
-              data-part-collect-all="true"
-              @click.stop="revealSummary(row, true)"
+            <span
+              v-else
+              class="inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground transition-colors sm:h-8 sm:px-2"
+              :class="
+                row.hiddenCount <= 0 ? 'opacity-60' : 'cursor-pointer hover:bg-secondary/40 hover:text-foreground'
+              "
+              :title="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
+              data-transcript-toggle="true"
+              @click.stop="row.hiddenCount > 0 && revealSummaryFromChip($event, row)"
             >
-              {{ t('chat.messages.controls.collectAll') }}
-            </ToolbarChipButton>
-          </div>
+              <span class="min-w-0 truncate">{{ t('chat.messages.controls.expandNextLead') }}</span>
+              <input
+                :value="activityPageSize"
+                type="number"
+                min="1"
+                max="50"
+                step="1"
+                class="h-5 w-9 rounded border border-border/60 bg-background/70 px-0 text-center font-mono text-[10px] outline-none focus:border-primary/60 sm:h-6"
+                :aria-label="t('chat.messages.controls.pageSizeInputLabel')"
+                :title="t('chat.messages.controls.pageSizeInputLabel')"
+                data-part-page-size="true"
+                @click.stop
+                @change="handleSummaryPageSizeInput"
+                @keydown.enter.prevent="revealSummaryFromPageSizeInput($event, row)"
+              />
+              <span class="min-w-0 truncate">{{ t('chat.messages.controls.expandNextTail') }}</span>
+            </span>
+          </span>
+          <ToolbarChipButton
+            :tooltip="t('chat.messages.controls.collectAll')"
+            :title="t('chat.messages.controls.collectAll')"
+            :is-compact-touch="isCompactTouch"
+            :disabled="row.hiddenCount <= 0 || foldLoading(row.fold)"
+            data-part-collect-all="true"
+            @click.stop="revealSummary(row, true)"
+          >
+            {{ t('chat.messages.controls.collectAll') }}
+          </ToolbarChipButton>
           <span class="min-w-0 px-1 font-mono text-[11px] text-muted-foreground">
             {{ t('chat.messages.activity.moreCount', { count: row.hiddenCount }) }}
           </span>

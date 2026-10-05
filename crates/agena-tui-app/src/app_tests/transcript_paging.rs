@@ -100,7 +100,7 @@ fn assert_fold_visible(transcript: &mut TranscriptState, anchor: i64, hidden: u6
     assert!(rendered.lines[node.start_line].text.contains(if failed {
         "Enter to retry"
     } else {
-        "Enter: show 5"
+        "Enter: load 5"
     }));
 }
 

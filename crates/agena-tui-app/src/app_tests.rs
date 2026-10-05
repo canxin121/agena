@@ -3507,6 +3507,43 @@ mod transcript_mouse_scroll_tests {
         assert_eq!(transcript.navigation_cursor_line(), Some(bottom_cursor));
     }
 
+    /// A transcript that fits its viewport cannot scroll, so the wheel has to
+    /// keep moving the cursor until it reaches the first line instead of going
+    /// dead at the bottom edge.
+    #[test]
+    fn wheel_moves_the_cursor_when_the_transcript_fits_the_viewport() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 1,
+            document: pending_document(
+                "first paragraph\n\nsecond paragraph\n\nthird paragraph".to_string(),
+            ),
+            confirmed: false,
+        });
+
+        transcript.scroll_to_bottom(40, 20);
+        assert_eq!(transcript.viewport.top, 0);
+        assert!(transcript.viewport.follow_tail);
+        let tail = transcript.navigation_cursor_line().expect("tail cursor");
+
+        transcript.move_cursor_by_wheel(40, 20, -3);
+        let moved = transcript
+            .navigation_cursor_line()
+            .expect("wheel keeps a semantic cursor");
+        assert!(
+            moved < tail,
+            "the wheel must move the cursor when nothing scrolls"
+        );
+        assert!(!transcript.viewport.follow_tail);
+
+        transcript.move_cursor_by_wheel(40, 20, 3);
+        assert_eq!(transcript.navigation_cursor_line(), Some(tail));
+        assert!(transcript.viewport.follow_tail);
+    }
+
     #[test]
     fn scrollbar_and_half_page_motion_use_directional_edge_placement() {
         let mut transcript = TranscriptState {

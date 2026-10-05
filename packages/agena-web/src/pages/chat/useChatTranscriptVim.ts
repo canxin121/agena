@@ -193,12 +193,10 @@ export function useChatTranscriptVim(opts: {
 
   function cursorElements(): HTMLElement[] {
     const nodes = nodeElements()
-    // Fold controls are semantic UI, not transcript text. Keeping them out
-    // of the cursor model prevents a message-level fallback from landing on
-    // the synthetic "expand more" row when an assistant reply is folded.
-    const parts = nodes.filter(
-      (element) => element.dataset.transcriptNode === 'part' && element.dataset.partKind !== 'activity_summary',
-    )
+    // Part rows own the cursor model. The synthetic folded-activity row is a
+    // part row as well: it carries the "load more parts" control, so the
+    // keyboard must be able to move onto it and activate it with Enter.
+    const parts = nodes.filter((element) => element.dataset.transcriptNode === 'part')
     if (parts.length) return parts
     return nodes.filter((element) => element.dataset.transcriptNode === 'message')
   }
@@ -1059,6 +1057,28 @@ export function useChatTranscriptVim(opts: {
   function onTranscriptScroll() {
     if (scrollFollowFrame) window.cancelAnimationFrame(scrollFollowFrame)
     scrollFollowFrame = window.requestAnimationFrame(followCursorAfterScroll)
+  }
+
+  const WHEEL_CURSOR_LINES = 3
+
+  // The cursor follows the viewport while a wheel gesture scrolls the
+  // transcript. A transcript that fits its viewport never scrolls, and a
+  // viewport already parked at the edge the gesture points at cannot scroll
+  // further either, so the wheel has to move the cursor itself and stop at the
+  // first/last line instead of leaving the gesture without any effect.
+  function onTranscriptWheel(event: WheelEvent) {
+    const scroll = opts.scrollEl.value
+    if (!scroll || !event.deltaY) return
+    if (!vimActive()) return
+    if (mode.value === 'INSERT' || mode.value === 'SEARCH' || mouseSelecting) return
+
+    const direction = event.deltaY < 0 ? 'up' : 'down'
+    const maxScroll = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
+    const atEdge = direction === 'up' ? scroll.scrollTop <= 0 : scroll.scrollTop >= maxScroll - 1
+    if (maxScroll > 1 && !atEdge) return
+
+    event.preventDefault()
+    moveVisualLines(direction, WHEEL_CURSOR_LINES)
   }
 
   function samePoint(left: CursorPoint, right: CursorPoint): boolean {
@@ -2141,6 +2161,7 @@ export function useChatTranscriptVim(opts: {
     document.addEventListener('copy', onTranscriptCopy)
     document.addEventListener('click', onTranscriptClickCapture, true)
     mountedScroll?.addEventListener('scroll', onTranscriptScroll, { passive: true })
+    mountedScroll?.addEventListener('wheel', onTranscriptWheel, { passive: false })
   })
   onBeforeUnmount(() => {
     searchHighlightObserver?.disconnect()
@@ -2153,6 +2174,7 @@ export function useChatTranscriptVim(opts: {
     document.removeEventListener('copy', onTranscriptCopy)
     document.removeEventListener('click', onTranscriptClickCapture, true)
     mountedScroll?.removeEventListener('scroll', onTranscriptScroll)
+    mountedScroll?.removeEventListener('wheel', onTranscriptWheel)
     if (placementFrame) window.cancelAnimationFrame(placementFrame)
     if (scrollFollowFrame) window.cancelAnimationFrame(scrollFollowFrame)
     if (scrollSuppressionFrame) window.cancelAnimationFrame(scrollSuppressionFrame)

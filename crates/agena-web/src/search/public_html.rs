@@ -7,64 +7,33 @@ use url::Url;
 
 use super::*;
 
-fn failure(engine: WebSearchEngine, message: &str) -> CrawlError {
-    CrawlError::SearchProvider {
-        provider: engine.label(),
-        message: message.into(),
-    }
-}
-
-pub(super) async fn search(
+pub(super) fn page_url(
+    engine: WebSearchEngine,
     query: &str,
-    limit: usize,
-    options: &WebSearchOptions,
-) -> Result<Vec<WebSearchResult>, CrawlError> {
-    let engine = options.engine;
-    let origin = Url::parse(engine.permission_url())?;
-    let host = origin.host_str().unwrap_or_default().to_owned();
-    // Keep session cookies only for this call. Redirects may not escape the
-    // exact search host whose network permission the caller checked.
-    let client = reqwest::Client::builder()
-        .timeout(options.timeout)
-        .user_agent(&options.user_agent)
-        .cookie_store(true)
-        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= 5 {
-                attempt.error("search redirect limit exceeded")
-            } else if attempt.url().scheme() == "https"
-                && attempt.url().host_str() == Some(host.as_str())
-                && attempt.url().port_or_known_default() == Some(443)
-                && attempt.url().username().is_empty()
-                && attempt.url().password().is_none()
-            {
-                attempt.follow()
-            } else {
-                attempt.error("search redirect left the permitted search origin")
-            }
-        }))
-        .build()?;
-    // Use a predictable interface language without changing the query's
-    // language. The existing Chinese engines retain their request settings.
-    let mut headers = browser_headers(&options.user_agent);
-    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
-    collect_search_pages(limit, options.max_pages, |page| {
-        let client = &client;
-        let headers = headers.clone();
-        async move {
-            let url = page_url(engine, query, page)?;
-            let response = client.get(url).headers(headers).send().await?;
-            let final_url = response.url().clone();
-            let html = response_text_bounded(response).await?;
-            parse_page(engine, &html, &final_url, MAX_SEARCH_RESULTS)
-        }
-    })
-    .await
-}
-
-fn page_url(engine: WebSearchEngine, query: &str, page: usize) -> Result<Url, CrawlError> {
+    page: usize,
+) -> Result<Url, CrawlError> {
     let mut url = Url::parse(engine.permission_url())?;
     let mut params = url.query_pairs_mut();
     match engine {
+        WebSearchEngine::Bing => {
+            params
+                .append_pair("q", query)
+                .append_pair("first", &(1 + page * 10).to_string());
+        }
+        WebSearchEngine::DuckDuckGo => {
+            if page > 0 {
+                return Err(CrawlError::InvalidInput(
+                    "DuckDuckGo pagination requires the preceding page's Next form".into(),
+                ));
+            }
+            params.append_pair("q", query);
+        }
+        WebSearchEngine::Baidu => {
+            params
+                .append_pair("wd", query)
+                .append_pair("ie", "utf-8")
+                .append_pair("pn", &(page * 10).to_string());
+        }
         WebSearchEngine::Yandex => {
             params
                 .append_pair("text", query)
@@ -97,7 +66,6 @@ fn page_url(engine: WebSearchEngine, query: &str, page: usize) -> Result<Url, Cr
                 .append_pair("where", "web")
                 .append_pair("start", &(page * 15 + 1).to_string());
         }
-        _ => return Err(failure(engine, "unsupported public HTML adapter")),
     }
     drop(params);
     Ok(url)
@@ -185,13 +153,11 @@ fn result_url(engine: WebSearchEngine, raw: &str) -> Option<String> {
     normalize_result_url(&target)
 }
 
-fn parse_page(
+pub(super) fn parse_results(
     engine: WebSearchEngine,
-    html: &str,
-    final_url: &Url,
+    doc: &Html,
     limit: usize,
-) -> Result<Vec<WebSearchResult>, CrawlError> {
-    let doc = Html::parse_document(html);
+) -> Vec<WebSearchResult> {
     let (cards, titles, snippets) = match engine {
         WebSearchEngine::Yandex => (
             ".serp-item",
@@ -214,7 +180,7 @@ fn parse_page(
             ".sds-comps-text-type-headline1, .link_tit",
             ".sds-comps-text-type-body1, .link_desc",
         ),
-        _ => return Err(failure(engine, "unsupported public HTML parser")),
+        _ => return Vec::new(),
     };
     let title_selector = selector(titles);
     let snippet_selector = selector(snippets);
@@ -261,72 +227,25 @@ fn parse_page(
             break;
         }
     }
-    if !results.is_empty() {
-        return Ok(results);
-    }
+    results
+}
 
-    // Inspect actual page structure / navigation targets, not arbitrary script
-    // strings (normal Brave scripts also contain translated CAPTCHA messages).
-    let path = final_url.path();
-    if path.starts_with("/showcaptcha") || path.starts_with("/sorry") || path.contains("/captcha")
-        || doc.select(&selector(".CheckboxCaptcha, #captcha-form, form[action*='captcha'], .g-recaptcha, .anomaly-modal")).next().is_some()
-    {
-        return Err(failure(engine, "captcha_required: search website returned a verification page"));
-    }
-    if final_url
-        .host_str()
-        .is_some_and(|host| host.starts_with("consent."))
-        || doc
-            .select(&selector(
-                "form[action*='consent.google'], form[action*='consent.yahoo']",
-            ))
-            .next()
-            .is_some()
-    {
-        return Err(failure(
-            engine,
-            "consent_required: search website returned a consent page",
-        ));
-    }
-    if doc
-        .select(&selector("a[href*='/httpservice/retry/enablejs']"))
-        .next()
-        .is_some()
-        // html5ever treats noscript contents as raw text with scripting
-        // enabled, so the real Google interstitial has no selectable anchor.
-        || doc.select(&selector("noscript")).any(|el| {
-            el.text().any(|text| text.contains("/httpservice/retry/enablejs"))
-        })
-    {
-        return Err(failure(
-            engine,
-            "javascript_required: search website requires browser rendering",
-        ));
-    }
-    let empty_selector = selector(
-        ".no-results, .no-results-message, .NoResults, .serp-error, #topstuff, .api_noresult_wrap, .not_found",
-    );
-    if doc.select(&empty_selector).any(|el| {
-        let text = text_of(el).to_lowercase();
-        [
-            "no results",
-            "did not match any documents",
-            "nothing found",
-            "ничего не нашлось",
-            "没有找到",
-            "未找到",
-            "검색결과가 없습니다",
-            "검색 결과가 없습니다",
-        ]
-        .iter()
-        .any(|message| text.contains(message))
-    }) {
-        return Ok(Vec::new());
-    }
-    Err(failure(
+#[cfg(test)]
+fn parse_page(
+    engine: WebSearchEngine,
+    html: &str,
+    final_url: &Url,
+    _limit: usize,
+) -> Result<Vec<WebSearchResult>, CrawlError> {
+    status::parse_page(
         engine,
-        "unrecognized_results_page: no usable result cards or explicit empty state; website markup may have changed",
-    ))
+        &WebSearchPage {
+            final_url: final_url.clone(),
+            status: 200,
+            html: html.into(),
+            retry_after_secs: None,
+        },
+    )
 }
 
 #[cfg(test)]

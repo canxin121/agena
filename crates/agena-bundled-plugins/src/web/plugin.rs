@@ -20,9 +20,9 @@ use std::time::Duration;
 use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebFetchCoordinator,
-    WebFetchCoordinatorConfig, WebSearchEngine, WebSearchOptions, WebSearchResult, crawl_site,
-    local_browser_endpoint, local_browser_running, local_browser_touch, prepare_fetch_url,
-    preview_text, results_to_text, search_web, shutdown_local_browser,
+    WebFetchCoordinatorConfig, WebSearchCoordinator, WebSearchEngine, WebSearchOptions,
+    WebSearchResponse, crawl_site, local_browser_endpoint, local_browser_running,
+    local_browser_touch, prepare_fetch_url, preview_text, results_to_text, shutdown_local_browser,
 };
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
@@ -932,6 +932,7 @@ impl ActivitySourceAdapter for BrowserActivitySource {
 struct WebPluginState {
     config: WebConfig,
     fetch_coordinator: Arc<WebFetchCoordinator>,
+    search_coordinator: WebSearchCoordinator,
     snapshots: agena_web::PageSnapshots,
     host: Arc<dyn HostClient>,
 }
@@ -945,6 +946,9 @@ impl WebPluginState {
                 per_host_delay: Duration::from_millis(config.fetch.request.delay_ms),
             })),
             snapshots: agena_web::PageSnapshots::default(),
+            search_coordinator: WebSearchCoordinator::new(Duration::from_millis(
+                config.fetch.request.delay_ms,
+            )),
             config,
             host,
         }
@@ -2291,7 +2295,7 @@ impl WebPlugin {
 
     #[tool(
         summary = "Find candidate public-web pages to fetch.",
-        help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines; source is the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Verification, consent and JavaScript-only pages are source failures. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
+        help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines; source is the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Inspect engine_reports for per-source result counts, page counts, cache hits and structured issues. Searches to the same engine are serialized and paced; successful identical queries are reused for two minutes. Rate limits honor Retry-After and verification failures enter cooldown: respect retry_after_secs, use other working sources and avoid bursts of overlapping queries. Verification and unknown pages are failures, not empty results. A confirmed JavaScript shell gets one browser attempt per page when browser.enabled. Later-page failures preserve earlier results with partial diagnostics. Browser rendering does not solve human verification or consent. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
         tags(network, discovery, read_only)
     )]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -3157,27 +3161,47 @@ impl WebPlugin {
         limit: usize,
         max_pages: usize,
         engine: WebSearchEngine,
-    ) -> SdkResult<Vec<WebSearchResult>> {
+    ) -> SdkResult<WebSearchResponse> {
         let engine_url = url::Url::parse(engine.permission_url())
             .map_err(|err| PluginError::internal_error(&err))?;
         let state = self.state()?;
+        // Reserve a small completion margin inside the aggregate deadline so
+        // a timed-out later page can return its already collected results.
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_secs(state.config.fetch.request.timeout_secs)
+                .saturating_sub(Duration::from_millis(50));
         state
             .host
             .require_network_permission(engine_url.to_string())
             .await?;
-        state.fetch_coordinator.wait_for_url_host(&engine_url).await;
         self.validate_network_target(&engine_url).await?;
         let config = &state.config;
         let options = WebSearchOptions {
             engine,
             limit,
             max_pages,
-            timeout: Duration::from_secs(config.fetch.request.timeout_secs),
+            timeout: deadline.saturating_duration_since(tokio::time::Instant::now()),
             user_agent: self.user_agent.clone(),
         };
-        search_web(query, &options)
+        state
+            .search_coordinator
+            .search_with_renderer(
+                query,
+                &options,
+                config.browser.enabled,
+                |url, remaining| async move {
+                    rendered_fetch::search_source(self, &url, remaining)
+                        .await
+                        .map(Some)
+                        .map_err(|error| {
+                            agena_web::CrawlError::InvalidInput(
+                                error.diagnostic_message().to_owned(),
+                            )
+                        })
+                },
+            )
             .await
-            .map_err(crawl_error_to_plugin)
+            .map_err(search_error_to_plugin)
     }
 }
 
@@ -3987,10 +4011,13 @@ fn ensure_browser_action(result: &serde_json::Value) -> SdkResult<()> {
 /// introduce a separate browser/plugin execution surface.
 fn ensure_search_available(successes: usize, failures: &[String]) -> SdkResult<()> {
     if successes == 0 && !failures.is_empty() {
-        return Err(PluginError::internal(format!(
+        let mut error = PluginError::internal(format!(
             "all search engines failed; this is not an empty search result: {}",
             failures.join("; ")
-        )));
+        ));
+        error.failure.recovery = agena_failure::RecoveryDirective::ChooseAlternative;
+        error.failure.retry = agena_failure::RetryDirective::UseAlternative;
+        return Err(error);
     }
     Ok(())
 }
@@ -4245,6 +4272,16 @@ fn resolve_browser_redirect(base: &url::Url, location: &str) -> SdkResult<url::U
 
 fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
     PluginError::internal_error(&err)
+}
+
+fn search_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
+    let mut error = PluginError::internal_error(&err);
+    if let agena_web::CrawlError::SearchUnavailable { issue, .. } = &err {
+        error.diagnostic.data = Some(serde_json::json!({"search_issue": issue}));
+        error.failure.recovery = agena_failure::RecoveryDirective::ChooseAlternative;
+        error.failure.retry = agena_failure::RetryDirective::UseAlternative;
+    }
+    error
 }
 
 struct PluginPageFetcher<'a> {

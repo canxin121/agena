@@ -9,22 +9,24 @@ use std::{collections::HashSet, future::Future};
 use std::{fmt, str::FromStr};
 
 use base64::{Engine as _, engine::general_purpose};
-use reqwest::header::{
-    ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, CONNECTION, HeaderMap, HeaderValue, PRAGMA, REFERER,
-    UPGRADE_INSECURE_REQUESTS, USER_AGENT,
-};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 
 use crate::{CrawlError, canonicalize_url};
 
+mod coordinator;
 mod public_html;
+mod status;
+mod transport;
+
+pub use coordinator::{WebSearchCoordinator, WebSearchResponse};
+pub use status::{SearchIssue, SearchIssueKind, WebSearchPage};
 
 const DEFAULT_SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_SEARCH_RESULTS: usize = 50;
 const MAX_SEARCH_PAGES: usize = 5;
 const MAX_SEARCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-const BING_BASE: &str = "https://cn.bing.com/search";
+const BING_BASE: &str = "https://www.bing.com/search";
 const DDG_HTML_URL: &str = "https://html.duckduckgo.com/html/";
 const BAIDU_BASE: &str = "https://www.baidu.com/s";
 
@@ -160,75 +162,9 @@ pub async fn search_web(
     query: &str,
     options: &WebSearchOptions,
 ) -> Result<Vec<WebSearchResult>, CrawlError> {
-    let query = query.trim();
-    if query.is_empty() {
-        return Err(CrawlError::InvalidInput(
-            "search query must not be empty".to_string(),
-        ));
-    }
-    let limit = options.limit.clamp(1, MAX_SEARCH_RESULTS);
-    tracing::debug!(
-        target: "agena::web",
-        query,
-        engine = %options.engine,
-        limit,
-        max_pages = options.max_pages.clamp(1, MAX_SEARCH_PAGES),
-        "searching web"
-    );
-    tokio::time::timeout(options.timeout, async {
-        match options.engine {
-            WebSearchEngine::Bing => search_bing(query, limit, options).await,
-            WebSearchEngine::DuckDuckGo => search_duckduckgo(query, limit, options).await,
-            WebSearchEngine::Baidu => search_baidu(query, limit, options).await,
-            WebSearchEngine::Yandex
-            | WebSearchEngine::Google
-            | WebSearchEngine::Yahoo
-            | WebSearchEngine::Brave
-            | WebSearchEngine::Naver => public_html::search(query, limit, options).await,
-        }
-    })
-    .await
-    .map_err(|_| CrawlError::SearchProvider {
-        provider: options.engine.label(),
-        message: "timed out while searching the public website".into(),
-    })?
-}
-
-/// All adapters share these stopping rules; only fetching/parsing a page and
-/// translating its zero-based index into the engine's native parameters differ.
-async fn collect_search_pages<F, Fut>(
-    limit: usize,
-    max_pages: usize,
-    mut fetch_page: F,
-) -> Result<Vec<WebSearchResult>, CrawlError>
-where
-    F: FnMut(usize) -> Fut,
-    Fut: Future<Output = Result<Vec<WebSearchResult>, CrawlError>>,
-{
-    let limit = limit.clamp(1, MAX_SEARCH_RESULTS);
-    let mut results = Vec::new();
-    let mut seen = HashSet::new();
-    for page in 0..max_pages.clamp(1, MAX_SEARCH_PAGES) {
-        let before = results.len();
-        for mut result in fetch_page(page).await? {
-            let Ok(url) = canonicalize_url(&result.url) else {
-                continue;
-            };
-            result.url = url.to_string();
-            if seen.insert(result.url.clone()) {
-                results.push(result);
-                if results.len() >= limit {
-                    return Ok(results);
-                }
-            }
-        }
-        // Empty/repeated pages cannot trigger unbounded attempts to fill a
-        // result quota. The first page consumes the same budget as later pages.
-        if results.len() == before {
-            break;
-        }
-    }
-    Ok(results)
+    coordinator::search(query, options)
+        .await
+        .map(|response| response.results)
 }
 
 pub fn results_to_text(results: &[WebSearchResult]) -> String {
@@ -247,143 +183,6 @@ pub fn results_to_text(results: &[WebSearchResult]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n")
-}
-
-fn build_client(options: &WebSearchOptions) -> Result<reqwest::Client, CrawlError> {
-    reqwest::Client::builder()
-        .timeout(options.timeout)
-        .user_agent(options.user_agent.clone())
-        .build()
-        .map_err(CrawlError::from)
-}
-
-fn browser_headers(user_agent: &str) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_str(user_agent).unwrap_or_else(|_| HeaderValue::from_static("agena-web")),
-    );
-    headers.insert(
-        ACCEPT,
-        HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
-    );
-    headers.insert(
-        ACCEPT_LANGUAGE,
-        HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
-    );
-    headers.insert(CONNECTION, HeaderValue::from_static("keep-alive"));
-    headers
-}
-
-async fn response_text_bounded(mut response: reqwest::Response) -> Result<String, CrawlError> {
-    response = response.error_for_status()?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_SEARCH_RESPONSE_BYTES as u64)
-    {
-        return Err(CrawlError::ResponseTooLarge {
-            maximum_bytes: MAX_SEARCH_RESPONSE_BYTES,
-        });
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        if bytes.len().saturating_add(chunk.len()) > MAX_SEARCH_RESPONSE_BYTES {
-            return Err(CrawlError::ResponseTooLarge {
-                maximum_bytes: MAX_SEARCH_RESPONSE_BYTES,
-            });
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-async fn search_bing(
-    query: &str,
-    limit: usize,
-    options: &WebSearchOptions,
-) -> Result<Vec<WebSearchResult>, CrawlError> {
-    let client = build_client(options)?;
-    collect_search_pages(limit, options.max_pages, |page| {
-        let client = &client;
-        async move {
-            let url = format!(
-                "{}?q={}&setlang=zh-CN&ensearch=0&first={}",
-                BING_BASE,
-                urlencoding::encode(query),
-                1 + page * 10
-            );
-            let mut headers = browser_headers(options.user_agent.as_str());
-            headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-            headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
-            headers.insert(UPGRADE_INSECURE_REQUESTS, HeaderValue::from_static("1"));
-
-            let html =
-                response_text_bounded(client.get(url).headers(headers).send().await?).await?;
-            Ok(parse_bing_results(html.as_str(), MAX_SEARCH_RESULTS))
-        }
-    })
-    .await
-}
-
-async fn search_duckduckgo(
-    query: &str,
-    limit: usize,
-    options: &WebSearchOptions,
-) -> Result<Vec<WebSearchResult>, CrawlError> {
-    let client = build_client(options)?;
-    let mut headers = browser_headers(options.user_agent.as_str());
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/x-www-form-urlencoded"),
-    );
-
-    collect_search_pages(limit, options.max_pages, |page| {
-        let client = &client;
-        let headers = headers.clone();
-        async move {
-            let request = if page == 0 {
-                client
-                    .post(DDG_HTML_URL)
-                    .body(format!("q={}&kl=cn-zh", urlencoding::encode(query)))
-            } else {
-                client.get(format!(
-                    "{}?q={}&kl=cn-zh&s={}",
-                    DDG_HTML_URL,
-                    urlencoding::encode(query),
-                    page * 30
-                ))
-            };
-            let html = response_text_bounded(request.headers(headers).send().await?).await?;
-            Ok(parse_duckduckgo_results(html.as_str(), MAX_SEARCH_RESULTS))
-        }
-    })
-    .await
-}
-
-async fn search_baidu(
-    query: &str,
-    limit: usize,
-    options: &WebSearchOptions,
-) -> Result<Vec<WebSearchResult>, CrawlError> {
-    let client = build_client(options)?;
-    collect_search_pages(limit, options.max_pages, |page| {
-        let client = &client;
-        async move {
-            let url = format!(
-                "{}?wd={}&pn={}",
-                BAIDU_BASE,
-                urlencoding::encode(query),
-                page * 10
-            );
-            let mut headers = browser_headers(options.user_agent.as_str());
-            headers.insert(REFERER, HeaderValue::from_static("https://www.baidu.com/"));
-
-            let html =
-                response_text_bounded(client.get(url).headers(headers).send().await?).await?;
-            Ok(parse_baidu_results(html.as_str(), MAX_SEARCH_RESULTS))
-        }
-    })
-    .await
 }
 
 fn parse_bing_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
@@ -595,7 +394,10 @@ fn normalize_result_url(raw: &str) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    canonicalize_url(raw).ok().map(|url| url.to_string())
+    canonicalize_url(raw)
+        .ok()
+        .map(|url| url.to_string())
+        .filter(|url| url.len() <= 8192)
 }
 
 fn normalize_whitespace(value: &str) -> String {
@@ -605,9 +407,6 @@ fn normalize_whitespace(value: &str) -> String {
 fn selector(value: &str) -> Selector {
     Selector::parse(value).expect("static CSS selector parses")
 }
-
-#[cfg(test)]
-mod pagination_tests;
 
 #[cfg(test)]
 mod tests {

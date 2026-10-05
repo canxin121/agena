@@ -3,6 +3,11 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 /// Error from the web crawl subsystem.
 pub enum CrawlError {
+    #[error("{provider} search failed: {issue}")]
+    SearchUnavailable {
+        provider: &'static str,
+        issue: crate::SearchIssue,
+    },
     #[error("{provider} search failed: {message}")]
     SearchProvider {
         provider: &'static str,

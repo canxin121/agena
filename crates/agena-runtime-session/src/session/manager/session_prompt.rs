@@ -148,7 +148,7 @@ fn render_web_reading_section(tool_names: &[String]) -> String {
     let has = |name: &str| tool_names.iter().any(|tool| tool == name);
     let mut paragraphs = vec!["# Reading web evidence".to_owned()];
     if has("web.search") {
-        paragraphs.push("Use `web.search` to discover candidates. Search snippets are previews; inspect actual page content before relying on detailed factual claims.".into());
+        paragraphs.push("Use `web.search` to discover candidates. One multi-engine search already runs its selected sources concurrently; avoid bursts of overlapping searches against the same engines. Inspect `engine_reports` and `engine_errors`: unavailable/verification/rate-limited sources do not establish that no matches exist. Respect `retry_after_secs`, use working sources, and broaden a query when appropriate instead of immediately repeating blocked requests. Search snippets are previews; inspect actual page content before relying on detailed factual claims.".into());
     }
     if has("web.fetch_many") {
         paragraphs.push("Use `web.fetch_many` for independent known URLs: batch 2–8 pages, normally concurrency 4, and inspect each result. One failed source does not invalidate successful pages. Avoid launching many batches at once; per-host pacing and shared browser limits still apply.".into());
@@ -347,6 +347,8 @@ mod tests {
             "content_status",
             "untrusted evidence",
             "page budget includes failures",
+            "engine_reports",
+            "retry_after_secs",
         ] {
             assert!(prompt.contains(rule), "missing {rule}");
         }

@@ -18,7 +18,7 @@ futures-util = { workspace = true }
 encoding_rs = { workspace = true }
 governor = { workspace = true }
 moka = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "cookies"] }
+reqwest = { workspace = true, features = ["rustls", "cookies", "form"] }
 redb = { workspace = true }
 robotstxt = { workspace = true }
 schemars = { workspace = true }
@@ -38,6 +38,9 @@ which = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(target_endian = "little")'.dependencies]
 tantivy = { workspace = true }

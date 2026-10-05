@@ -10,6 +10,49 @@ fn input() -> CrawlWebSearchInput {
     serde_json::from_value(serde_json::json!({"query":"fixture"})).unwrap()
 }
 
+#[tokio::test]
+async fn partial_pagination_and_cached_sources_remain_visible_in_machine_and_model_feedback() {
+    let input: CrawlWebSearchInput =
+        serde_json::from_value(serde_json::json!({"query":"fixture","engine":"bing,baidu"}))
+            .unwrap();
+    let output = search(
+        &input,
+        limits(10),
+        Duration::from_secs(2),
+        |engine, _, _| async move {
+            Ok(WebSearchResponse {
+                results: vec![row(&format!("https://example.com/{engine}"), "Guide")],
+                warnings: if engine == Bing {
+                    vec![agena_web::SearchIssue {
+                        kind: agena_web::SearchIssueKind::RateLimited,
+                        message: "rate_limited: later page returned 429".into(),
+                        http_status: Some(429),
+                        retry_after_secs: Some(75),
+                    }]
+                } else {
+                    Vec::new()
+                },
+                pages_fetched: 1,
+                cache_hit: engine == Baidu,
+                rendered: false,
+            })
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(output.results.len(), 2);
+    assert!(output.partial);
+    let tool = output.into_tool_output().unwrap();
+    assert!(tool.output_text.contains("retry after 75s"));
+    let payload = tool.payload.unwrap();
+    assert_eq!(payload["engine_reports"][0]["status"], "partial");
+    assert_eq!(
+        payload["engine_reports"][0]["issue"]["retry_after_secs"],
+        75
+    );
+    assert_eq!(payload["engine_reports"][1]["cache_hit"], true);
+}
+
 fn limits(max_results: usize) -> HtmlSearchLimits {
     HtmlSearchLimits {
         max_results,
@@ -216,7 +259,7 @@ async fn caller_cancellation_drops_every_source_without_detached_tasks() {
             let active = &active;
             async move {
                 let _guard = Active::new(active);
-                std::future::pending().await
+                std::future::pending::<SdkResult<Vec<WebSearchResult>>>().await
             }
         },
     ));
@@ -236,13 +279,24 @@ async fn all_failed_or_timed_out_is_an_error_but_successful_empty_searches_are_v
             if engine == Baidu {
                 std::future::pending::<()>().await;
             }
-            Err(PluginError::internal("fixture failure"))
+            Err::<Vec<WebSearchResult>, _>(PluginError::internal("fixture failure"))
         },
     )
     .await
     .unwrap_err();
     let message = failed.diagnostic_message();
     assert!(message.contains("all search engines failed"));
+    assert_eq!(
+        failed.diagnostic.data.as_ref().unwrap()["engine_reports"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    assert_eq!(
+        failed.failure.recovery,
+        agena_failure::RecoveryDirective::ChooseAlternative
+    );
     for engine in WebSearchEngine::ALL {
         assert!(message.contains(engine.label()));
     }
@@ -253,7 +307,7 @@ async fn all_failed_or_timed_out_is_an_error_but_successful_empty_searches_are_v
         Duration::from_secs(1),
         |engine, _, _| async move {
             if engine == Bing {
-                Err(PluginError::internal("fixture failure"))
+                Err::<Vec<WebSearchResult>, _>(PluginError::internal("fixture failure"))
             } else {
                 Ok(Vec::new())
             }
@@ -304,7 +358,7 @@ async fn explicit_selection_only_queries_that_engine_and_preserves_its_error_kin
         assert_eq!(output.results[0].engines, [expected.as_ref()]);
 
         let error = search(&input, limits(5), Duration::from_secs(1), |_, _, _| async {
-            Err(PluginError::invalid_params("fixture policy check"))
+            Err::<Vec<WebSearchResult>, _>(PluginError::invalid_params("fixture policy check"))
         })
         .await
         .unwrap_err();
@@ -385,7 +439,7 @@ async fn explicit_csv_preserves_success_on_error_or_timeout_and_reports_all_fail
                 if timeout {
                     std::future::pending::<()>().await;
                 }
-                Err(PluginError::internal("fixture failure"))
+                Err::<Vec<WebSearchResult>, _>(PluginError::internal("fixture failure"))
             },
         )
         .await
@@ -398,7 +452,7 @@ async fn explicit_csv_preserves_success_on_error_or_timeout_and_reports_all_fail
     }
 
     let error = search(&input, limits(5), Duration::from_secs(1), |_, _, _| async {
-        Err(PluginError::internal("fixture failure"))
+        Err::<Vec<WebSearchResult>, _>(PluginError::internal("fixture failure"))
     })
     .await
     .unwrap_err();
@@ -414,7 +468,7 @@ async fn explicit_csv_preserves_success_on_error_or_timeout_and_reports_all_fail
         serde_json::from_value(serde_json::json!({"query":"fixture", "engine":"baidu,BAIDU"}))
             .unwrap();
     let error = search(&input, limits(5), Duration::from_secs(1), |_, _, _| async {
-        Err(PluginError::invalid_params("single-source failure"))
+        Err::<Vec<WebSearchResult>, _>(PluginError::invalid_params("single-source failure"))
     })
     .await
     .unwrap_err();

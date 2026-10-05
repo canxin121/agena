@@ -10,6 +10,52 @@ pub(super) async fn fetch(
     url: &url::Url,
     options: &SpiderFetchOptions,
 ) -> SdkResult<FetchedPage> {
+    tokio::time::timeout(options.timeout, async {
+        let source = fetch_source(plugin, url, options, None).await?;
+        let mut page = fetch_transport::extract(source, url.clone(), options.extractor).await?;
+        page.rendered = true;
+        Ok(page)
+    })
+    .await
+    .map_err(|_| PluginError::internal("rendered fetch deadline exceeded, including extraction"))?
+}
+
+pub(super) async fn search_source(
+    plugin: &WebPlugin,
+    url: &url::Url,
+    remaining: Duration,
+) -> SdkResult<agena_web::WebSearchPage> {
+    let mut options = plugin.spider_fetch_options(true)?;
+    options.timeout = remaining;
+    options.max_body_bytes = 4 * 1024 * 1024;
+    // Search adapters use public SERPs, not the crawl/robots policy. Every
+    // document and subresource still goes through native permission checks.
+    options.respect_robots_txt = false;
+    // Keep Chrome's own user agent when it actually executes JavaScript.
+    options.user_agent.clear();
+    options.browser.wait_timeout = options.browser.wait_timeout.min(remaining);
+    options.browser.wait_for_selector = None;
+    options.browser.delay = Some(Duration::from_millis(500));
+    let source = fetch_source(plugin, url, &options, Some(url.origin())).await?;
+    if source.truncated {
+        return Err(PluginError::internal(
+            "rendered search page exceeded its body budget",
+        ));
+    }
+    Ok(agena_web::WebSearchPage {
+        final_url: source.final_url,
+        status: source.status,
+        html: source.body,
+        retry_after_secs: None,
+    })
+}
+
+async fn fetch_source(
+    plugin: &WebPlugin,
+    url: &url::Url,
+    options: &SpiderFetchOptions,
+    search_origin: Option<url::Origin>,
+) -> SdkResult<fetch_transport::Source> {
     let operation = async {
         let _slot = RENDERS
             .acquire()
@@ -26,6 +72,7 @@ pub(super) async fn fetch(
             let pacing = pacing.clone();
             let options = config.clone();
             let robots = robots.clone();
+            let search_origin = search_origin.clone();
             Box::pin(async move {
                 let checked = async {
                     if agena_plugin_host::sdk::host_api::current_host_callback_context().is_none() {
@@ -34,6 +81,15 @@ pub(super) async fn fetch(
                         ));
                     }
                     let target = prepare_fetch_url(&raw).map_err(crawl_error_to_plugin)?;
+                    if document
+                        && search_origin
+                            .as_ref()
+                            .is_some_and(|origin| *origin != target.origin())
+                    {
+                        return Err(PluginError::invalid_params(
+                            "rendered search redirect left the selected engine origin",
+                        ));
+                    }
                     host.require_network_permission(target.to_string()).await?;
                     validate_public_network_target(&target).await?;
                     if document && options.respect_robots_txt {
@@ -72,14 +128,15 @@ pub(super) async fn fetch(
             })
         });
         let endpoint = plugin.browser_endpoint().await?;
-        let source = render(&endpoint, url, options, policy).await?;
-        let mut page = fetch_transport::extract(source, url.clone(), options.extractor).await?;
-        page.rendered = true;
-        Ok(page)
+        render(&endpoint, url, options, policy).await
     };
-    tokio::time::timeout(options.timeout, operation).await.map_err(|_| {
-        PluginError::internal("rendered fetch deadline exceeded, including admission, launch, requests and extraction")
-    })?
+    tokio::time::timeout(options.timeout, operation)
+        .await
+        .map_err(|_| {
+            PluginError::internal(
+                "rendered fetch deadline exceeded, including admission, launch and requests",
+            )
+        })?
 }
 
 async fn render(
@@ -111,7 +168,9 @@ async fn render(
         page.command("Network.enable", serde_json::json!({"maxTotalBufferSize":65536,"maxResourceBufferSize":16384})).await?;
         page.command("Network.setBypassServiceWorker", serde_json::json!({"bypass":true})).await?;
         page.command("Network.setCacheDisabled", serde_json::json!({"cacheDisabled":true})).await?;
-        page.command("Network.setUserAgentOverride", serde_json::json!({"userAgent":options.user_agent})).await?;
+        if !options.user_agent.is_empty() {
+            page.command("Network.setUserAgentOverride", serde_json::json!({"userAgent":options.user_agent})).await?;
+        }
         page.command("Fetch.enable", serde_json::json!({"patterns":[{"urlPattern":"*","requestStage":"Request"}]})).await?;
         let navigation = page.command("Page.navigate", serde_json::json!({"url":url.as_str()})).await?;
         if navigation.get("errorText").is_some() {

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
-use agena_web::{WebSearchEngine, WebSearchResult, canonicalize_url};
+use agena_web::{WebSearchEngine, WebSearchResponse, WebSearchResult, canonicalize_url};
 use futures_util::future::join_all;
 use serde::Serialize;
 
@@ -53,6 +53,19 @@ pub(super) struct HtmlSearchOutput {
     results: Vec<MergedResult>,
     partial: bool,
     engine_errors: Vec<String>,
+    engine_reports: Vec<EngineReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct EngineReport {
+    engine: String,
+    status: &'static str,
+    result_count: usize,
+    pages_fetched: usize,
+    cache_hit: bool,
+    rendered: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issue: Option<agena_web::SearchIssue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,7 +77,7 @@ struct MergedResult {
     engines: Vec<String>,
 }
 
-pub(super) async fn search<F, Fut>(
+pub(super) async fn search<F, Fut, Batch>(
     input: &CrawlWebSearchInput,
     limits: HtmlSearchLimits,
     timeout: Duration,
@@ -72,7 +85,8 @@ pub(super) async fn search<F, Fut>(
 ) -> SdkResult<HtmlSearchOutput>
 where
     F: Fn(WebSearchEngine, usize, usize) -> Fut,
-    Fut: Future<Output = SdkResult<Vec<WebSearchResult>>>,
+    Fut: Future<Output = SdkResult<Batch>>,
+    Batch: Into<WebSearchResponse>,
 {
     let selection = input
         .engine
@@ -96,10 +110,20 @@ where
             )
             .await
             .unwrap_or_else(|_| {
-                Err(PluginError::internal(format!(
-                    "{engine} search timed out after {} ms",
-                    timeout.as_millis()
-                )))
+                Err(super::search_error_to_plugin(
+                    agena_web::CrawlError::SearchUnavailable {
+                        provider: engine.label(),
+                        issue: agena_web::SearchIssue {
+                            kind: agena_web::SearchIssueKind::Timeout,
+                            message: format!(
+                                "search timed out after {} ms, including permission, DNS and queueing",
+                                timeout.as_millis()
+                            ),
+                            http_status: None,
+                            retry_after_secs: None,
+                        },
+                    },
+                ))
             })
         }
     }))
@@ -110,19 +134,61 @@ where
     let mut batches = Vec::new();
     let mut successful_engines = Vec::new();
     let mut engine_errors = Vec::new();
+    let mut engine_reports = Vec::new();
     for (engine, outcome) in engines.iter().copied().zip(outcomes) {
         match outcome {
-            Ok(results) => {
+            Ok(batch) => {
+                let batch = batch.into();
+                engine_reports.push(EngineReport {
+                    engine: engine.to_string(),
+                    status: if !batch.warnings.is_empty() {
+                        "partial"
+                    } else if batch.results.is_empty() {
+                        "empty"
+                    } else {
+                        "ok"
+                    },
+                    result_count: batch.results.len(),
+                    pages_fetched: batch.pages_fetched,
+                    cache_hit: batch.cache_hit,
+                    rendered: batch.rendered,
+                    issue: batch.warnings.first().cloned(),
+                });
+                engine_errors.extend(
+                    batch
+                        .warnings
+                        .iter()
+                        .map(|issue| format!("{engine}: {issue}")),
+                );
                 successful_engines.push(engine.to_string());
-                batches.push((engine, results));
+                batches.push((engine, batch.results));
             }
             Err(error) if engines.len() == 1 => return Err(error),
             Err(error) => {
+                engine_reports.push(EngineReport {
+                    engine: engine.to_string(),
+                    status: "unavailable",
+                    result_count: 0,
+                    pages_fetched: 0,
+                    cache_hit: false,
+                    rendered: false,
+                    issue: error
+                        .diagnostic
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("search_issue"))
+                        .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                });
                 engine_errors.push(format!("{engine}: {}", error.diagnostic_message()));
             }
         }
     }
-    super::ensure_search_available(successful_engines.len(), &engine_errors)?;
+    super::ensure_search_available(successful_engines.len(), &engine_errors).map_err(
+        |mut error| {
+            error.diagnostic.data = Some(serde_json::json!({"engine_reports": engine_reports}));
+            error
+        },
+    )?;
     Ok(HtmlSearchOutput {
         query: input.query.trim().to_owned(),
         engine: selection.label(),
@@ -132,6 +198,7 @@ where
         results: merge_results(batches, input, limits.max_results),
         partial: !engine_errors.is_empty(),
         engine_errors,
+        engine_reports,
     })
 }
 
@@ -262,7 +329,25 @@ impl HtmlSearchOutput {
                 "Search partially degraded: {}",
                 self.engine_errors.join("; ")
             ));
+            if self.results.is_empty() {
+                lines.push("No usable results were returned by the available sources. Unavailable engines did not establish that no matches exist; try another selected engine or a broader query, and respect retry_after_secs instead of immediately repeating blocked requests.".into());
+            }
         }
+        lines.push(format!(
+            "Source results before filtering: {}.",
+            self.engine_reports
+                .iter()
+                .map(|report| format!(
+                    "{}={} ({}, {} page(s){})",
+                    report.engine,
+                    report.result_count,
+                    report.status,
+                    report.pages_fetched,
+                    if report.cache_hit { ", cached" } else { "" }
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
         if !self.results.is_empty() {
             lines.push("\nSnippets are previews, not fetched-page evidence. Fetch 1-3 relevant URLs before answering factual questions; use fetch with `prompt` for focused extraction. Multiple engines finding a URL does not independently verify its contents.".into());
         }

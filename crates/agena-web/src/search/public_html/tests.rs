@@ -3,10 +3,10 @@ use WebSearchEngine::{Brave, Google, Naver, Yahoo, Yandex};
 
 /// Optional diagnostic against public websites, never an Agena tool invocation.
 #[tokio::test]
-#[ignore = "contacts five public search websites; availability depends on the network"]
+#[ignore = "contacts eight public search websites; availability depends on the network"]
 async fn live_public_html_smoke() {
     let mut available = 0;
-    for engine in [Yandex, Google, Yahoo, Brave, Naver] {
+    for engine in WebSearchEngine::ALL {
         let options = WebSearchOptions {
             engine,
             limit: 3,
@@ -185,13 +185,11 @@ fn explicit_empty_states_and_result_limits_are_respected() {
         );
     }
     assert_eq!(
-        parse_page(
+        parse_results(
             Brave,
-            include_str!("fixtures/brave.html"),
-            &Url::parse(Brave.permission_url()).unwrap(),
+            &Html::parse_document(include_str!("fixtures/brave.html")),
             1
         )
-        .unwrap()
         .len(),
         1
     );

@@ -53,7 +53,8 @@ pub use run::{
     document_matches_render_mode, ensure_index_exists,
 };
 pub use search::{
-    WebSearchEngine, WebSearchOptions, WebSearchResult, normalize_web_search_engine,
+    SearchIssue, SearchIssueKind, WebSearchCoordinator, WebSearchEngine, WebSearchOptions,
+    WebSearchPage, WebSearchResponse, WebSearchResult, normalize_web_search_engine,
     results_to_text, search_web,
 };
 pub use search_api::{

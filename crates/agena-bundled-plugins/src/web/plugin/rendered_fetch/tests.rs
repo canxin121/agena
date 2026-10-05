@@ -45,6 +45,7 @@ async fn run_fixture() {
                                 "/denied-redirect" => (302, "Location: /blocked\r\n", "".to_owned()),
                                 "/blocked" => {blocked.fetch_add(1, Ordering::SeqCst); (200,"","must never load".into())},
                                 "/script" => (200,"Content-Type: application/javascript\r\n","document.body.innerHTML='<article id=ready><h1>RENDERED_MARKER 中文</h1><p>JavaScript produced this readable local fixture with enough content for extraction.</p></article>'".into()),
+                                "/search" => (200,"",r#"<!doctype html><body><script>document.body.insertAdjacentHTML('beforeend','<ol id="b_results"><li class="b_algo"><h2><a id="ready" href="https://example.com/result">Rendered result</a></h2></li></ol>');document.body.setAttribute('data-agent',navigator.userAgent);</script></body>"#.into()),
                                 "/subresource" => (200,"","<script src='/blocked'></script>".into()),
                                 "/missing" => (404,"","<h1 id=ready>Not found</h1>".into()),
                                 "/large" => (200,"",format!("<p id=ready>{}</p>", "中文".repeat(1000))),
@@ -114,6 +115,15 @@ async fn run_fixture() {
     assert_eq!(source.status, 200);
     assert_eq!(source.final_url.path(), "/page");
     assert!(source.body.contains("RENDERED_MARKER 中文"));
+    assert_eq!(contexts(&observer).await, before);
+    let mut search_options = options.clone();
+    search_options.user_agent.clear();
+    let source = render(&endpoint, &url("/search"), &search_options, policy.clone())
+        .await
+        .unwrap();
+    assert!(source.body.contains("<ol id=\"b_results\">"));
+    assert!(source.body.contains("data-agent=\"Mozilla/"));
+    assert!(source.body.contains("Chrome/"));
     assert_eq!(contexts(&observer).await, before);
     let requested = url("/page");
     let attempts = AtomicUsize::new(0);

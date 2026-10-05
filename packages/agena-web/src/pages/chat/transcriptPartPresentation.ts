@@ -326,6 +326,10 @@ const COMMAND_INPUT_KEYS = ['command', 'cmd', 'script'] as const
  * tool that is still running can be read instead of guessed from a truncated
  * line.
  */
+function hasCommandBlock(blocks: readonly JsonRecord[]): boolean {
+  return blocks.some((block) => (stringValue(block.type) || stringValue(block.kind)) === 'command')
+}
+
 function commandMarkdownFromInput(input: JsonValue | null): string {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return ''
   const record = input as Record<string, JsonValue>
@@ -336,7 +340,7 @@ function commandMarkdownFromInput(input: JsonValue | null): string {
   return ''
 }
 
-function fencedCodeBlock(text: string, language: string): string {
+export function fencedCodeBlock(text: string, language: string): string {
   let longestFence = 0
   for (const match of text.matchAll(/`+/g)) longestFence = Math.max(longestFence, match[0].length)
   const fence = '`'.repeat(Math.max(3, longestFence + 1))
@@ -439,7 +443,7 @@ export function operationPresentation(
     toolName,
     input,
     inputMarkdown: input === null ? '' : structuredValueMarkdown(input),
-    commandMarkdown: commandMarkdownFromInput(input),
+    commandMarkdown: hasCommandBlock(presentationBlocks) ? '' : commandMarkdownFromInput(input),
     error: operationFailureMessage(operation.error ?? null),
     rawOutput,
     blocks,

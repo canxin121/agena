@@ -6,6 +6,7 @@ import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaDiffBlock from '@/components/chat/AgenaDiffBlock.vue'
 import {
   jsonArray,
+  fencedCodeBlock,
   jsonRecord,
   prettyJson,
   stringValue,
@@ -26,6 +27,9 @@ const bodyText = computed(() => {
   )
 })
 const command = computed(() => stringValue(props.block.command))
+// A command is Markdown code, not prose: render it through the shared Markdown
+// fence so the complete command stays readable and copyable.
+const commandMarkdown = computed(() => (command.value.trim() ? fencedCodeBlock(command.value, 'sh') : ''))
 const cwd = computed(() => stringValue(props.block.cwd))
 const stdout = computed(() => stringValue(props.block.stdout))
 const stderr = computed(() => stringValue(props.block.stderr))
@@ -135,7 +139,7 @@ const progressPercent = computed(() =>
 
     <div v-else-if="kind === 'command'" class="space-y-2">
       <div v-if="cwd" class="font-mono text-[10px] text-muted-foreground">{{ cwd }}</div>
-      <div class="font-mono text-xs text-foreground"><span class="text-primary">$</span> {{ command }}</div>
+      <MarkdownRenderer v-if="commandMarkdown" :content="commandMarkdown" mode="markdown" :stream="false" />
       <CodeBlock v-if="stdout" :code="stdout" lang="text" compact />
       <CodeBlock v-if="stderr" :code="stderr" lang="text" compact />
       <div v-if="exitCode !== null" class="font-mono text-[11px] text-muted-foreground">exit {{ exitCode }}</div>

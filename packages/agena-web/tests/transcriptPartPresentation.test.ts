@@ -459,6 +459,16 @@ describe('TUI-parity part presentation', () => {
     )
     expect(projected.rawOutput).toEqual(output)
     expect(projected.presentationBlocks).toEqual([block])
+    // The returned presentation block already owns the command, so the
+    // standalone running-command projection must not repeat it, and the block
+    // renders the complete command through a Markdown fence.
+    expect(projected.commandMarkdown).toBe('')
+    const operationBlock = readFileSync(
+      new URL('../src/components/chat/AgenaOperationBlock.vue', import.meta.url),
+      'utf8',
+    )
+    expect(operationBlock).toContain('fencedCodeBlock(command.value')
+    expect(operationBlock).not.toContain('{{ command }}')
   })
 
   test('does not remove raw result fields based on a plugin presentation', () => {

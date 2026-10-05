@@ -1715,16 +1715,9 @@ pub(crate) fn render_part_node(
 /// the review cursor, so the App derives row semantics from the same
 /// [`crate::interaction_view::classify_interaction_line`] arithmetic.
 ///
-/// Ask-user renders as one **continuous body** (plan + separator + every
-/// question block + a footer key-hint): the transcript cursor IS the option
-/// cursor, so the App derives row semantics from the same
-/// [`crate::interaction_view::classify_ask_user_line`] arithmetic. The body
-/// row count is pinned by [`crate::interaction_view::ask_user_body_rows`].
-///
-/// Review decision rows keep a FIXED row budget (2 rows per option, 2 per
-/// custom slot, plus header/text/preview) matching the classifier, so a
-/// rendered row always has a semantic kind and Enter/submit routing can never
-/// drift from what the user sees.
+/// Ask-user shows one question per page followed by a summary with explicit
+/// Submit/Cancel actions. The shared page classifier routes the transcript
+/// cursor to the action actually drawn under it.
 fn render_pending_interaction_body(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -1739,8 +1732,7 @@ fn render_pending_interaction_body(
         push_markdown_rule(out, "    ", width);
         render_review_decision_rows(out, request, view, width, i18n);
     } else {
-        // Ask-user: the whole body (plan + every question) in one continuous
-        // markdown-like part; the transcript cursor is the option cursor.
+        // The transcript cursor owns both option selection and page actions.
         render_ask_user_body(out, request, view, width, i18n);
     }
 }
@@ -2086,14 +2078,7 @@ fn push_interaction_editor_row(
     out.push(RenderedLine::rich(Line::from(spans)));
 }
 
-/// Ask-user continuous body: the plan body + separator, then EVERY question's
-/// block (header, muted question-text row, ONE row per option, the custom
-/// label + detail slot, an answered-preview row), then a muted footer key-hint
-/// row. No paging, no summary page, no `▸` option cursor — the transcript
-/// cursor IS the option cursor, highlighted whole-line by the App. Markers
-/// `(x)`/`[x]`/`( )`/`[ ]` track `view.answers`. The row budget matches
-/// [`crate::interaction_view::classify_ask_user_line`] via
-/// [`crate::interaction_view::ask_user_question_block_rows`].
+/// Render the current question page or the fully wrapped answer summary.
 fn render_ask_user_body(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -2101,20 +2086,71 @@ fn render_ask_user_body(
     width: u16,
     i18n: &I18n,
 ) {
-    push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
-    push_markdown_rule(out, "    ", width);
-    for (index, question) in request.questions.iter().enumerate() {
-        render_ask_user_question_block(out, request, index, question, view, width, i18n);
+    let page = view.question_page.min(request.questions.len());
+    if page == 0 {
+        push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
     }
-    // Localized footer hint: the continuous-body key contract. This row is
-    // never a submit target.
-    out.push(RenderedLine::plain(
-        format!("    {}", i18n.text("overlay-user-input-wizard-keys")),
-        Style::default().fg(agena_tui_components::theme::muted_color()),
-    ));
+    push_markdown_rule(out, "    ", width);
+    let summary = page == request.questions.len();
+    let title = if summary {
+        i18n.text("overlay-user-input-summary")
+    } else {
+        i18n.text_args("overlay-user-input-page", &agena_tui::fl_args!("current" => (page + 1) as i64, "total" => request.questions.len() as i64))
+    };
+    push_single_line(out, "    ", &title, Style::default(), width);
+    if let Some(question) = request.questions.get(page) {
+        render_ask_user_question_block(out, request, page, question, view, width, i18n);
+    } else {
+        for index in 0..request.questions.len() {
+            for line in crate::interaction_view::ask_user_summary_lines(
+                request,
+                index,
+                view.answers.get(&index),
+                width,
+            ) {
+                out.push(RenderedLine::plain(format!("    {line}"), Style::default()));
+            }
+        }
+    }
+    push_single_line(
+        out,
+        "    ",
+        &format!("‹ {}", i18n.text("overlay-user-input-previous")),
+        Style::default(),
+        width,
+    );
+    if summary {
+        push_single_line(
+            out,
+            "    ",
+            &i18n.text("overlay-user-input-submit"),
+            Style::default(),
+            width,
+        );
+        push_single_line(
+            out,
+            "    ",
+            &i18n.text("overlay-user-input-cancel"),
+            Style::default(),
+            width,
+        );
+    } else {
+        let next = if page + 1 == request.questions.len() {
+            "overlay-user-input-summary"
+        } else {
+            "overlay-user-input-next"
+        };
+        push_single_line(
+            out,
+            "    ",
+            &format!("{} ›", i18n.text(next)),
+            Style::default(),
+            width,
+        );
+    }
 }
 
-/// One ask-user question block in the continuous body: header row, muted
+/// One ask-user question block on the current page: header row, muted
 /// question-text row, ONE row per option, 2 per custom slot, and an
 /// answered-preview row — the exact budget
 /// [`crate::interaction_view::ask_user_question_block_rows`] counts. No cursor
@@ -2556,4 +2592,104 @@ pub(crate) fn thinking_collapsed_summary(
         super::super::transcript_tool_summary::activity_status_icon(status),
         concise_text(preview, 112)
     )
+}
+
+#[cfg(test)]
+mod ask_wizard_tests {
+    use super::*;
+    use crate::interaction_view::*;
+
+    #[test]
+    fn rendered_pages_match_cursor_actions_and_summary_wraps_every_answer() {
+        let request: agena_api::resource::UserInputRequest = serde_json::from_value(serde_json::json!({
+            "request_id": "ask", "session_id": 1, "title": "Survey", "body_markdown": "Context",
+            "kind": "ask_user", "source": "host", "created_at": "2026-10-05T00:00:00Z",
+            "questions": [
+                {"header": "Flavor", "question": "Pick one", "options": [{"label": "Vanilla", "description": ""}], "allow_custom": true, "multiple": false},
+                {"header": "Notes", "question": "Any details?", "options": [], "allow_custom": true, "multiple": false}
+            ]
+        })).unwrap();
+        let long_answer = format!("{} END-OF-ANSWER", "中文🙂abcdefghij".repeat(20));
+        let mut view = PendingInteractionView::default();
+        view.answers.insert(
+            0,
+            PendingInteractionAnswerView {
+                picked: vec![0],
+                custom_values: vec![],
+            },
+        );
+        view.answers.insert(
+            1,
+            PendingInteractionAnswerView {
+                picked: vec![],
+                custom_values: vec![long_answer.clone()],
+            },
+        );
+        let layouts = interaction_question_layouts(&request, &view.answers);
+        for width in [28, 80] {
+            view.summary_rows = (0..2)
+                .map(|i| ask_user_summary_lines(&request, i, view.answers.get(&i), width).len())
+                .collect();
+            for page in 0..=2 {
+                view.question_page = page;
+                view.plan_body_lines = if page == 0 {
+                    interaction_plan_body_lines(&request.body_markdown, width)
+                } else {
+                    0
+                };
+                let mut out = Vec::new();
+                render_ask_user_body(&mut out, &request, &view, width, &I18n::english());
+                assert_eq!(
+                    out.len(),
+                    ask_user_page_rows(view.plan_body_lines, &layouts, page, &view.summary_rows)
+                );
+                for (offset, row) in out.iter().enumerate() {
+                    let kind = classify_ask_user_page(
+                        &layouts,
+                        view.plan_body_lines,
+                        page,
+                        offset,
+                        false,
+                        &view.summary_rows,
+                    );
+                    match kind {
+                        InteractionLineKind::AskOption {
+                            option_index,
+                            question_index,
+                        } => assert!(row.text.contains(
+                            &request.questions[question_index].options[option_index].label
+                        )),
+                        InteractionLineKind::AskSubmit => assert!(row.text.contains("Submit")),
+                        InteractionLineKind::AskCancel => assert!(row.text.contains("Cancel")),
+                        _ => {}
+                    }
+                }
+                let text = out
+                    .iter()
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if page == 0 {
+                    assert!(!text.contains("Any details?"));
+                }
+                if page == 2 {
+                    assert!(text.contains("Vanilla") && text.contains("END-OF-ANSWER"));
+                    for row in &out {
+                        assert!(
+                            unicode_width::UnicodeWidthStr::width(row.text.as_str())
+                                <= usize::from(width),
+                            "summary overflow: {}",
+                            row.text
+                        );
+                    }
+                    let summary =
+                        ask_user_summary_lines(&request, 1, view.answers.get(&1), width).join("");
+                    assert!(
+                        summary.contains(&long_answer.replace(' ', ""))
+                            || summary.contains(&long_answer)
+                    );
+                }
+            }
+        }
+    }
 }

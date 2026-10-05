@@ -551,10 +551,7 @@ impl App {
                 let visible = width.min(end.saturating_sub(x));
                 if matches!(
                     row.kind,
-                    "btw"
-                        | "side"
-                        | "side-parent"
-                        | "session-summary"
+                    "session-summary"
                         | "session-thinking"
                         | "session-speed"
                         | "session-token-usage"
@@ -830,24 +827,6 @@ impl App {
 
     pub(crate) fn composer_status_parts(&self) -> Vec<crate::app_status_context::StatusRow> {
         let mut parts: Vec<crate::app_status_context::StatusRow> = Vec::new();
-        if self.transcript.session_id.is_some() {
-            parts.push(crate::app_status_context::StatusRow::normal(
-                "btw",
-                "/btw".to_owned(),
-            ));
-            parts.push(crate::app_status_context::StatusRow::normal(
-                if self.current_session_is_side() {
-                    "side-parent"
-                } else {
-                    "side"
-                },
-                if self.current_session_is_side() {
-                    self.i18n.text("side-return")
-                } else {
-                    "/side".to_owned()
-                },
-            ));
-        }
         parts.extend(self.current_session_status_parts());
         if self.transcript.state_loading {
             parts.push(crate::app_status_context::StatusRow::normal(

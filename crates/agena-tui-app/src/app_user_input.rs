@@ -87,6 +87,24 @@ impl App {
         if self.user_input_interactions.is_empty() {
             return;
         }
+        if self
+            .transcript
+            .interaction_views
+            .values()
+            .any(|view| view.plan_width != width)
+        {
+            self.transcript.interaction_views = self
+                .user_input_interactions
+                .iter()
+                .map(|(id, dialog)| {
+                    (
+                        id.clone(),
+                        Self::interaction_view_for(&dialog.request, &dialog.presentation, width),
+                    )
+                })
+                .collect();
+            self.transcript.invalidate_render();
+        }
         let Some(hit) = self.interaction_cursor_hit(width) else {
             return;
         };
@@ -214,7 +232,7 @@ impl App {
             return true;
         }
         if !review {
-            // Ask-user is a continuous body: the transcript cursor IS the
+            // Ask-user has one visible page: the transcript cursor IS the
             // option cursor. Left/Right, Space and Enter are owned only
             // because the cursor sits on the part; Up/Down, `e`, paging and
             // everything else fall through to the normal transcript dispatch.
@@ -311,13 +329,13 @@ impl App {
     }
 
     /// Route a key while the cursor is on an expanded pending ask-user part
-    /// (the continuous body). Up/Down and `j`/`k` are NOT owned — the
+    /// (the current page). Up/Down and `j`/`k` are NOT owned — the
     /// transcript cursor is a normal line-by-line cursor and can always leave
     /// the part (this is the two-cursor bug fix). Left/Right jump the cursor
     /// to the previous/next question's first option row; Space toggles the
     /// option under the cursor (or opens the inline custom editor on the 其他
-    /// row); Enter checks the option and submits the request, jumping to the
-    /// first unanswered question on a validation miss. `e`, Esc, PgUp/PgDn,
+    /// row); Enter confirms the answer and advances. The summary owns explicit
+    /// submit/cancel actions and jumps to the first missing answer on validation. `e`, Esc, PgUp/PgDn,
     /// Shift+Space and Ctrl+f are deliberately NOT owned: they fall through to
     /// the normal transcript dispatch.
     fn handle_ask_user_key(&mut self, key: KeyEvent) -> bool {
@@ -359,7 +377,7 @@ impl App {
     }
 
     /// Derive the ask-user row under the transcript cursor — the cursor IS the
-    /// option cursor in the continuous body. Review parts return `None`; the
+    /// option cursor on the current page. Review parts return `None`; the
     /// ask classifier maps the cursor's body offset to a concrete row kind.
     fn ask_user_cursor_hit(&mut self, width: u16) -> Option<InteractionCursorHit> {
         let node = self.transcript.current_cursor_node_cloned(width)?;
@@ -382,11 +400,13 @@ impl App {
         let editing_custom = dialog.presentation.is_editing_custom();
         let layouts =
             agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
-        let line_kind = agena_tui_transcript::classify_ask_user_line(
+        let line_kind = agena_tui_transcript::classify_ask_user_page(
             &layouts,
             view.plan_body_lines,
+            view.question_page,
             body_offset,
             editing_custom,
+            &view.summary_rows,
         );
         Some(InteractionCursorHit {
             request_id,
@@ -394,61 +414,30 @@ impl App {
         })
     }
 
-    /// Jump the transcript cursor to the previous/next question's first option
-    /// row (or its header row when the question has no options). No-op at the
-    /// first/last question, but the key is still consumed while the cursor is
-    /// on the part.
+    /// Change the page without discarding any answers. Boundaries do not wrap.
     fn ask_jump_question(
         &mut self,
         request_id: &str,
-        line_kind: agena_tui_transcript::InteractionLineKind,
+        _line_kind: agena_tui_transcript::InteractionLineKind,
         delta: isize,
     ) -> bool {
-        use agena_tui_transcript::InteractionLineKind;
-        // The current question comes from the cursor's row kind; plan,
-        // separator and footer rows sit "before Q0".
-        let current = match line_kind {
-            InteractionLineKind::AskQuestionHeader { question_index }
-            | InteractionLineKind::AskQuestionText { question_index }
-            | InteractionLineKind::AskOption { question_index, .. }
-            | InteractionLineKind::AskCustomRow { question_index }
-            | InteractionLineKind::AskCustomEditor { question_index }
-            | InteractionLineKind::AskCustomDetail { question_index }
-            | InteractionLineKind::AskAnsweredPreview { question_index } => question_index as isize,
-            _ => -1,
-        };
-        let Some(dialog) = self.user_input_interactions.get(request_id) else {
+        let Some(dialog) = self.user_input_interactions.get_mut(request_id) else {
             return false;
         };
-        let question_count = dialog.request.questions.len() as isize;
-        let target = current + delta;
-        if target < 0 || target >= question_count {
-            return true;
+        let before = (
+            dialog.presentation.screen(),
+            dialog.presentation.selected_question(),
+        );
+        dialog.presentation.move_wizard_tab(delta);
+        if before
+            != (
+                dialog.presentation.screen(),
+                dialog.presentation.selected_question(),
+            )
+        {
+            self.sync_interaction_documents();
+            self.ask_focus_page(request_id);
         }
-        let target = target as usize;
-        let Some(view) = self.transcript.interaction_views.get(request_id).cloned() else {
-            return false;
-        };
-        let layouts =
-            agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
-        let body_offset = agena_tui_transcript::ask_user_question_landing_offset(
-            view.plan_body_lines,
-            &layouts,
-            target,
-        );
-        let width = self.layout.transcript_body.width;
-        let height = self.layout.transcript_body.height;
-        let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
-            return false;
-        };
-        // `node.start_line` is 0-indexed; `move_cursor_to_visual_line_number`
-        // is 1-indexed and the body starts one row below the headline.
-        self.transcript.move_cursor_to_visual_line_number(
-            width,
-            height,
-            Some(node.start_line + 2 + body_offset),
-        );
-        self.transcript.invalidate_render();
         true
     }
 
@@ -493,106 +482,93 @@ impl App {
         }
     }
 
-    /// Enter on an ask option row checks that option and submits the whole
-    /// request when every question is answered; otherwise it does not submit
-    /// and moves the cursor to the first unanswered question. Enter on the 其他
-    /// row submits its committed custom text, or opens the inline editor when
-    /// empty. Any other row falls through to the normal Toggle dispatch (the
-    /// part collapses, exactly like review's plan-row Enter).
+    /// Answers advance to the next page; only the summary's Submit row sends.
     fn ask_enter(
         &mut self,
         request_id: &str,
         line_kind: agena_tui_transcript::InteractionLineKind,
     ) -> bool {
-        use agena_tui_transcript::InteractionLineKind;
-        if !matches!(
-            line_kind,
-            InteractionLineKind::AskOption { .. } | InteractionLineKind::AskCustomRow { .. }
-        ) {
-            return false;
+        use agena_tui_transcript::InteractionLineKind::*;
+        match line_kind {
+            AskPrevious => return self.ask_jump_question(request_id, line_kind, -1),
+            AskNext => return self.ask_jump_question(request_id, line_kind, 1),
+            AskCancel => {
+                self.cancel_active_interaction(request_id);
+                return true;
+            }
+            AskCustomRow { .. } => return self.ask_space(request_id, line_kind),
+            AskOption { .. } | AskSummary { .. } | AskSubmit => {}
+            _ => return false,
         }
         let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
             return false;
         };
         match line_kind {
-            InteractionLineKind::AskOption {
+            AskOption {
                 question_index,
                 option_index,
             } => {
                 dialog
                     .presentation
                     .commit_option_index(question_index, option_index);
+                dialog.presentation.move_wizard_tab(1);
             }
-            InteractionLineKind::AskCustomRow { question_index } => {
-                let answered = dialog
-                    .presentation
-                    .answer(question_index)
-                    .is_some_and(|draft| !draft.custom_values.is_empty());
-                if !answered {
-                    // No custom text yet: Enter opens the inline editor.
-                    if dialog.presentation.begin_custom_edit_for(question_index) {
-                        self.interaction_editing = Some(request_id.to_string());
+            AskSummary { question_index } => dialog.presentation.focus_question(question_index),
+            AskSubmit => {
+                match Self::build_structured_user_input_reply(&self.i18n, &mut dialog, None) {
+                    Ok(reply) => {
+                        self.request_user_input_reply(dialog.session_id, reply);
+                        self.sync_interaction_documents();
+                        return true;
                     }
-                    self.user_input_interactions
-                        .insert(request_id.to_string(), dialog);
-                    self.sync_interaction_documents();
-                    return true;
+                    Err(error) => self.flash_warning(error),
                 }
             }
             _ => unreachable!("guarded above"),
         }
-        match Self::build_structured_user_input_reply(&self.i18n, &mut dialog, None) {
-            Ok(reply) => {
-                let session_id = dialog.session_id;
-                self.request_user_input_reply(session_id, reply);
-                // Reply sent: the dialog stays out of the map and the views are
-                // rebuilt so the part stops rendering the pending body.
-                self.sync_interaction_documents();
-                true
-            }
-            Err(error) => {
-                // Keep the dialog so the user can correct the missing answer;
-                // `build_structured_user_input_reply` focused the first
-                // unanswered question on the miss.
-                self.flash_warning(error);
-                self.user_input_interactions
-                    .insert(request_id.to_string(), dialog);
-                self.sync_interaction_documents();
-                self.ask_focus_unanswered(request_id);
-                true
-            }
-        }
+        self.user_input_interactions
+            .insert(request_id.to_string(), dialog);
+        self.sync_interaction_documents();
+        self.ask_focus_page(request_id);
+        true
     }
 
-    /// Move the transcript cursor onto the presentation's selected question
-    /// (the first unanswered one after a validation miss), landing on its
-    /// first option row.
-    fn ask_focus_unanswered(&mut self, request_id: &str) {
+    /// Re-anchor using the part's stable key: a page change may shrink the
+    /// body enough that the previous cursor line belongs to a different part.
+    fn ask_focus_page(&mut self, request_id: &str) {
+        let Some(key) = self.pending_interaction_part_node_key(request_id) else {
+            return;
+        };
         let Some(dialog) = self.user_input_interactions.get(request_id) else {
             return;
         };
-        let target = dialog.presentation.selected_question();
-        let Some(view) = self.transcript.interaction_views.get(request_id).cloned() else {
+        let Some(view) = self.transcript.interaction_views.get(request_id) else {
             return;
         };
         let layouts =
             agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
-        let body_offset = agena_tui_transcript::ask_user_question_landing_offset(
+        let body_offset = agena_tui_transcript::ask_user_page_landing_offset(
             view.plan_body_lines,
             &layouts,
-            target,
+            view.question_page,
         );
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
-        let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
-            return;
-        };
-        self.transcript.move_cursor_to_visual_line_number(
-            width,
-            height,
-            Some(node.start_line + 2 + body_offset),
-        );
-        self.transcript.invalidate_render();
+        let start = self
+            .transcript
+            .rendered(width)
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .map(|node| node.start_line);
+        if let Some(start) = start {
+            self.transcript.move_cursor_to_visual_line_number(
+                width,
+                height,
+                Some(start + 2 + body_offset),
+            );
+            self.transcript.invalidate_render();
+        }
     }
 
     /// The transcript cursor line when it sits inside an expanded pending
@@ -720,6 +696,8 @@ impl App {
             self.interaction_editing = None;
             return false;
         };
+        let was_ask = !dialog.presentation.is_review_decision();
+        let request_key = request_id.clone();
         let effect = dialog.presentation.handle_custom_edit_key(key);
         match effect {
             agena_tui::user_input::UserInputEffect::Close => {
@@ -767,6 +745,9 @@ impl App {
             }
         }
         self.sync_interaction_documents();
+        if was_ask && self.interaction_editing.is_none() {
+            self.ask_focus_page(&request_key);
+        }
         true
     }
 

@@ -194,6 +194,7 @@ pub enum KeyAction {
     YankLine,
     Toggle,
     ToggleFavorite,
+    ToggleSessionWork,
     ExpandAll,
     Copy,
     CopyVisible,

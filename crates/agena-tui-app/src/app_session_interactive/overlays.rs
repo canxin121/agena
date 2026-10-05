@@ -73,6 +73,8 @@ impl App {
                 Some(review.selected_option().min(custom_index))
             };
             agena_tui_transcript::PendingInteractionView {
+                question_page: 0,
+                summary_rows: Vec::new(),
                 selected_option,
                 custom_text: review.custom_text(),
                 custom_draft: review.custom_input().text().to_owned(),
@@ -84,7 +86,7 @@ impl App {
                 plan_width: width,
             }
         } else {
-            let answers = presentation
+            let answers: std::collections::BTreeMap<_, _> = presentation
                 .answers()
                 .iter()
                 .map(|(index, draft)| {
@@ -97,16 +99,30 @@ impl App {
                     )
                 })
                 .collect();
-            // Ask-user is one continuous body; the whole-line cursor is the
-            // transcript cursor. The only presentation state the renderer needs
-            // is the per-question answers and which question's custom slot is
-            // showing the inline editor.
             let editing_question = if presentation.is_editing_custom() {
                 Some(presentation.selected_question())
             } else {
                 None
             };
             agena_tui_transcript::PendingInteractionView {
+                question_page: if presentation.screen()
+                    == agena_tui::user_input::QuestionFlowScreen::Review
+                {
+                    request.questions.len()
+                } else {
+                    presentation.selected_question()
+                },
+                summary_rows: (0..request.questions.len())
+                    .map(|index| {
+                        agena_tui_transcript::ask_user_summary_lines(
+                            request,
+                            index,
+                            answers.get(&index),
+                            width,
+                        )
+                        .len()
+                    })
+                    .collect(),
                 selected_option: None,
                 custom_text: String::new(),
                 custom_draft: presentation.custom_input().text().to_owned(),
@@ -114,7 +130,13 @@ impl App {
                 custom_cursor: presentation.custom_input().cursor(),
                 editing_question,
                 answers,
-                plan_body_lines,
+                plan_body_lines: if presentation.selected_question() == 0
+                    && presentation.screen() == agena_tui::user_input::QuestionFlowScreen::Question
+                {
+                    plan_body_lines
+                } else {
+                    0
+                },
                 plan_width: width,
             }
         }

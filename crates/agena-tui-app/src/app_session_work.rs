@@ -417,7 +417,12 @@ impl App {
         if !matches!(self.current_route, Route::Main) {
             return false;
         }
-        if key.code == KeyCode::F(6) {
+        if agena_tui::keymap::resolve(agena_tui::keymap::KeyContext::Main, key)
+            == Some(agena_tui::keymap::KeyAction::ToggleSessionWork)
+            && self.interaction_editing.is_none()
+            && self.prompt_history_search.is_none()
+            && !self.btw_has_focus()
+        {
             self.handle_session_work_action("work-toggle");
             return true;
         }

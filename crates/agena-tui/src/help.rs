@@ -22,6 +22,7 @@ pub enum ContextHelpPreset {
     Transcript,
     Composer,
     ComposerItems,
+    SessionWork,
     PromptHistory,
     Suggestion,
     SingleLineEditor,
@@ -125,6 +126,7 @@ pub fn preset_specs(
                 (
                     actions,
                     vec![
+                        ("Ctrl+]", "context-help-key-work-toggle"),
                         ("i", "context-help-key-insert-mode"),
                         ("Enter", "context-help-key-toggle"),
                         ("Ctrl+Shift+Enter", "context-help-key-expand-all"),
@@ -182,6 +184,7 @@ pub fn preset_specs(
                 (
                     actions,
                     vec![
+                        ("Ctrl+]", "context-help-key-work-toggle"),
                         ("/", "context-help-key-commands"),
                         ("Ctrl+A", "context-help-key-insert-content"),
                         ("Ctrl+O", "context-help-key-attach"),
@@ -345,6 +348,26 @@ pub fn preset_specs(
             vec![(actions, vec![("Esc", "context-help-key-back")])],
             tips,
         )),
+        SessionWork => Some((
+            "context-help-summary-session-work",
+            vec![(
+                actions,
+                vec![
+                    ("Ctrl+] / q", "context-help-key-work-toggle"),
+                    ("↑ / ↓ · j / k", "context-help-key-move"),
+                    ("← / →", "context-help-key-work-tabs"),
+                    ("Enter", "context-help-key-open"),
+                    ("Backspace", "context-help-key-back"),
+                    ("r", "context-help-key-refresh"),
+                    ("n / p", "context-help-key-page"),
+                    ("s", "context-help-key-work-staged"),
+                    ("m", "context-help-key-work-more"),
+                    ("x", "context-help-key-work-control"),
+                    ("Esc / Tab", "context-help-key-work-leave"),
+                ],
+            )],
+            tips,
+        )),
         UserInputQuestion => Some((
             "context-help-summary-user-input",
             vec![(
@@ -353,11 +376,9 @@ pub fn preset_specs(
                     ("↑ / ↓", "context-help-key-move"),
                     ("PageUp / PageDown", "context-help-key-page"),
                     ("Space", "context-help-key-toggle"),
-                    ("Tab / Shift+Tab", "context-help-key-next-question"),
-                    ("e", "context-help-key-custom-answer"),
-                    ("Ctrl+D", "context-help-key-clear"),
-                    ("Enter", "context-help-key-submit"),
-                    ("Ctrl+X / Esc", "context-help-key-cancel-request"),
+                    ("← / → · h / l", "context-help-key-next-question"),
+                    ("Enter", "context-help-key-answer-next"),
+                    ("Ctrl+X", "context-help-key-cancel-request"),
                 ],
             )],
             tips,
@@ -380,12 +401,10 @@ pub fn preset_specs(
             vec![(
                 selection,
                 vec![
-                    ("Tab / Shift+Tab", "context-help-key-next-question"),
+                    ("← / → · h / l", "context-help-key-next-question"),
                     ("↑ / ↓", "context-help-key-move"),
-                    ("e", "context-help-key-edit-answer"),
-                    ("Ctrl+D", "context-help-key-clear"),
-                    ("Enter", "context-help-key-submit-all"),
-                    ("Ctrl+X / Esc", "context-help-key-cancel-request"),
+                    ("Enter", "context-help-key-summary-action"),
+                    ("Ctrl+X", "context-help-key-cancel-request"),
                 ],
             )],
             tips,

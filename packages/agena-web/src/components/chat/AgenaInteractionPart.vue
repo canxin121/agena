@@ -32,6 +32,7 @@ const customDrafts = ref<string[]>([])
 const customOpen = ref<boolean[]>([])
 const rootEl = ref<HTMLElement | null>(null)
 const activeControlKey = ref('')
+const questionPage = ref(0)
 
 const interaction = computed(() => props.interaction || null)
 const permission = computed(() => props.permission || null)
@@ -45,7 +46,7 @@ const isPendingInteraction = computed(() => Boolean(permission.value?.pending ||
 const hasKeyboardControls = computed(() => isPendingInteraction.value)
 // Keep the Web layout in lockstep with the TUI: only a single, single-choice
 // question with options is the compact plan-review decision surface. Other
-// review-shaped requests still render as the continuous ask-user body so no
+// review-shaped requests still render as the ask-user flow so no
 // question is silently dropped.
 const isReviewDecision = computed(() => {
   const question = questions.value[0]
@@ -53,6 +54,21 @@ const isReviewDecision = computed(() => {
     isReview.value && questions.value.length === 1 && question && !question.multiple && question.options.length,
   )
 })
+
+const isQuestionFlow = computed(() => Boolean(interaction.value?.pending && !isReviewDecision.value))
+const isSummaryPage = computed(() => isQuestionFlow.value && questionPage.value === questions.value.length)
+const visibleQuestions = computed(() =>
+  questions.value
+    .map((question, questionIndex) => ({ question, questionIndex }))
+    .filter(({ questionIndex }) => !isQuestionFlow.value || questionIndex === questionPage.value),
+)
+
+function goToQuestionPage(index: number) {
+  if (!isQuestionFlow.value || busy.value) return
+  questionPage.value = Math.max(0, Math.min(index, questions.value.length))
+  activeControlKey.value = ''
+  focusFirstControl()
+}
 
 function answersFromReply(reply: JsonValue | null, index: number, questionId: string): string[] {
   const answers = jsonRecord(jsonRecord(reply).answers)
@@ -97,6 +113,7 @@ watch(
     selected.value = []
     customDrafts.value = []
     customOpen.value = []
+    questionPage.value = 0
     syncReplyState()
   },
   { immediate: true },
@@ -154,6 +171,7 @@ function controlKind(element: Element | null | undefined): string {
 
 function controlQuestionIndex(element: Element | null | undefined): number {
   const raw = element?.getAttribute('data-interaction-question-index') || ''
+  if (!raw) return -1
   const index = Number(raw)
   return Number.isInteger(index) && index >= 0 ? index : -1
 }
@@ -206,6 +224,7 @@ function currentQuestionIndex(target: Element | null | undefined): number {
   const targetIndex = controlQuestionIndex(target)
   if (targetIndex >= 0) return targetIndex
   if (isReviewDecision.value) return 0
+  if (isQuestionFlow.value) return isSummaryPage.value ? -1 : questionPage.value
   const firstUnanswered = answerState.value.findIndex((answer) => answer.length === 0)
   return firstUnanswered >= 0 ? firstUnanswered : questions.value.length ? 0 : -1
 }
@@ -290,10 +309,15 @@ async function replyPermission(reply: 'once' | 'always' | 'reject') {
 }
 
 async function submitAnswers() {
-  if (!props.sessionId || !requestId.value) return
+  if (!props.sessionId || !requestId.value || busy.value || !interaction.value?.pending) return
+  if (isQuestionFlow.value && !isSummaryPage.value) {
+    goToQuestionPage(questions.value.length)
+    return
+  }
   const answers = answerState.value
   if (!answers.every((answer) => answer.length > 0)) {
     toasts.push('error', t('chat.attention.toasts.pleaseAnswerAllQuestions'))
+    goToQuestionPage(answers.findIndex((answer) => !answer.length))
     return
   }
   busy.value = true
@@ -308,7 +332,7 @@ async function submitAnswers() {
 }
 
 async function rejectAnswers() {
-  if (!props.sessionId || !requestId.value) return
+  if (!props.sessionId || !requestId.value || busy.value || !interaction.value?.pending) return
   busy.value = true
   try {
     await chat.rejectQuestion(props.sessionId, requestId.value)
@@ -328,16 +352,6 @@ function openCustomEditor(index: number) {
   focusControlByKey(textareaControlKey(index))
 }
 
-function focusNextIncompleteQuestion(fromIndex: number) {
-  const nextIndex = questions.value.findIndex((_, index) => index > fromIndex && answerFor(index).length === 0)
-  if (nextIndex >= 0) {
-    nextTick(() => focusQuestionEntry(nextIndex))
-    return
-  }
-  const firstIndex = questions.value.findIndex((_, index) => answerFor(index).length === 0)
-  if (firstIndex >= 0) nextTick(() => focusQuestionEntry(firstIndex))
-}
-
 async function confirmCurrentOption(target: Element | null) {
   const index = currentQuestionIndex(target)
   if (index < 0) return
@@ -350,10 +364,10 @@ async function confirmCurrentOption(target: Element | null) {
     if (label && !isOptionChecked(index, label)) toggleOption(index, label)
   }
 
-  if (isReviewDecision.value || answerState.value.every((answer) => answer.length > 0)) {
+  if (isReviewDecision.value) {
     await submitAnswers()
   } else {
-    focusNextIncompleteQuestion(index)
+    goToQuestionPage(index + 1)
   }
 }
 
@@ -376,11 +390,16 @@ function moveArrowFocus(target: Element | null, direction: 1 | -1) {
     const controls = questionControls(index)
     const currentIndex = Math.max(0, controls.indexOf(target as HTMLElement))
     if (controls.length) {
-      if (direction > 0 && currentIndex === controls.length - 1 && index < questions.value.length - 1) {
+      if (
+        !isQuestionFlow.value &&
+        direction > 0 &&
+        currentIndex === controls.length - 1 &&
+        index < questions.value.length - 1
+      ) {
         focusQuestionEntry(index + 1)
         return
       }
-      if (direction < 0 && currentIndex === 0 && index > 0) {
+      if (!isQuestionFlow.value && direction < 0 && currentIndex === 0 && index > 0) {
         focusQuestionEntry(index - 1, true)
         return
       }
@@ -467,20 +486,18 @@ async function handleKeydown(event: KeyboardEvent) {
   const isTextEditor =
     target instanceof HTMLTextAreaElement || (target instanceof HTMLInputElement && target.type === 'text')
   if (isTextEditor) {
-    // Match the TUI custom editor: Enter submits non-empty feedback and an
-    // empty Enter closes the editor. Shift+Enter keeps the Web textarea's
-    // native multiline behavior; Ctrl+Enter is an additional explicit submit
-    // chord for users who prefer it.
+    // Enter commits this answer and advances to the next page. Only the
+    // summary can submit an ask; Shift+Enter keeps native multiline editing.
     if (key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       const index = currentQuestionIndex(control)
       if (index >= 0 && (customDrafts.value[index] || '').trim()) {
-        if (isReviewDecision.value || answerState.value.every((answer) => answer.length > 0)) {
+        if (isReviewDecision.value) {
           await submitAnswers()
         } else {
           // TUI commits the current custom answer and advances through the
           // question flow instead of attempting a partial submission.
-          focusNextIncompleteQuestion(index)
+          goToQuestionPage(index + 1)
         }
       } else if (index >= 0) {
         customOpen.value[index] = false
@@ -492,6 +509,17 @@ async function handleKeydown(event: KeyboardEvent) {
 
   if (key === 'Tab') {
     handleTab(event, target)
+    return
+  }
+  if (
+    isQuestionFlow.value &&
+    (key === 'ArrowLeft' || key === 'ArrowRight') &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey
+  ) {
+    event.preventDefault()
+    goToQuestionPage(questionPage.value + (key === 'ArrowRight' ? 1 : -1))
     return
   }
   if (key === 'ArrowUp') {
@@ -671,12 +699,29 @@ onMounted(focusPendingInteraction)
         {{ interaction.title }}
       </div>
       <MarkdownRenderer
-        v-if="interaction.bodyMarkdown"
+        v-if="interaction.bodyMarkdown && (!isQuestionFlow || questionPage === 0)"
         :content="interaction.bodyMarkdown"
         mode="markdown"
         :stream="false"
       />
-      <div v-if="hasBody && questions.length" class="my-3 border-t border-border/60" aria-hidden="true" />
+      <div
+        v-if="hasBody && questions.length && (!isQuestionFlow || questionPage === 0)"
+        class="my-3 border-t border-border/60"
+        aria-hidden="true"
+      />
+
+      <div
+        v-if="isQuestionFlow"
+        class="mb-3 text-xs font-medium text-muted-foreground"
+        aria-live="polite"
+        data-interaction-page
+      >
+        {{
+          isSummaryPage
+            ? t('chat.attention.ui.reviewAnswers')
+            : t('chat.attention.ui.questionPager', { current: questionPage + 1, total: questions.length })
+        }}
+      </div>
 
       <div v-if="isReviewDecision" class="space-y-2">
         <fieldset v-if="questions[0]" class="space-y-1">
@@ -747,12 +792,43 @@ onMounted(focusPendingInteraction)
         </div>
       </div>
 
+      <div v-else-if="isSummaryPage" class="space-y-3" data-interaction-summary>
+        <div
+          v-for="(question, questionIndex) in questions"
+          :key="question.questionId || questionIndex"
+          class="flex items-start justify-between gap-3 rounded-md border border-border/60 p-3"
+        >
+          <div class="min-w-0 text-xs">
+            <div class="font-medium break-words">{{ question.header || question.question }}</div>
+            <div
+              class="mt-1 whitespace-pre-wrap break-words"
+              :class="answerState[questionIndex]?.length ? 'text-foreground' : 'text-muted-foreground'"
+            >
+              {{ answerState[questionIndex]?.join(', ') || t('chat.attention.ui.unanswered') }}
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            :disabled="busy"
+            data-interaction-control="true"
+            data-interaction-control-kind="summary"
+            :data-interaction-control-key="`summary:${questionIndex}`"
+            :tabindex="controlTabIndex(`summary:${questionIndex}`)"
+            @focus="markControlFocus"
+            @click="goToQuestionPage(questionIndex)"
+          >
+            {{ t('chat.attention.ui.editAnswer') }}
+          </Button>
+        </div>
+      </div>
+
       <div v-else class="space-y-4">
         <div v-if="!questions.length" class="text-xs text-muted-foreground">
           {{ t('chat.attention.ui.noQuestionsAvailable') }}
         </div>
         <section
-          v-for="(question, questionIndex) in questions"
+          v-for="{ question, questionIndex } in visibleQuestions"
           :key="question.questionId || questionIndex"
           class="space-y-2"
         >
@@ -831,7 +907,44 @@ onMounted(focusPendingInteraction)
         </section>
       </div>
 
-      <div v-if="interaction.pending" class="mt-3 flex flex-wrap items-center gap-2 border-t border-border/55 pt-3">
+      <div v-if="isQuestionFlow" class="mt-3 flex items-center justify-between gap-2 border-t border-border/55 pt-3">
+        <Button
+          size="sm"
+          variant="ghost"
+          :disabled="busy || questionPage === 0"
+          data-interaction-control="true"
+          data-interaction-control-kind="navigation"
+          data-interaction-control-key="page:previous"
+          :tabindex="controlTabIndex('page:previous')"
+          @focus="markControlFocus"
+          @click="goToQuestionPage(questionPage - 1)"
+        >
+          ‹ {{ t('chat.attention.ui.previousQuestion') }}
+        </Button>
+        <Button
+          v-if="!isSummaryPage"
+          size="sm"
+          variant="outline"
+          :disabled="busy"
+          data-interaction-control="true"
+          data-interaction-control-kind="navigation"
+          data-interaction-control-key="page:next"
+          :tabindex="controlTabIndex('page:next')"
+          @focus="markControlFocus"
+          @click="goToQuestionPage(questionPage + 1)"
+        >
+          {{
+            questionPage + 1 === questions.length
+              ? t('chat.attention.ui.reviewAnswers')
+              : t('chat.attention.ui.nextQuestion')
+          }}
+          ›
+        </Button>
+      </div>
+      <div
+        v-if="interaction.pending && (isReviewDecision || isSummaryPage)"
+        class="mt-3 flex flex-wrap items-center gap-2 border-t border-border/55 pt-3"
+      >
         <Button
           size="sm"
           variant="ghost"
@@ -844,7 +957,7 @@ onMounted(focusPendingInteraction)
           @click="rejectAnswers"
         >
           <RiCloseLine class="mr-1 h-3.5 w-3.5" />
-          {{ t('chat.attention.ui.rejectQuestion') }}
+          {{ t('common.cancel') }}
         </Button>
         <Button
           size="sm"
@@ -864,7 +977,7 @@ onMounted(focusPendingInteraction)
           {{ t('chat.attention.subtitle.answerAllToEnableSend') }}
         </span>
       </div>
-      <div v-else class="mt-3 font-mono text-[10px] text-muted-foreground">
+      <div v-else-if="!interaction.pending" class="mt-3 font-mono text-[10px] text-muted-foreground">
         {{ interaction.reply ? t('chat.attention.ui.answered') : t('chat.attention.ui.awaitingUserInput') }}
       </div>
     </template>

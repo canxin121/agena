@@ -189,12 +189,7 @@ impl UserInputPresentation {
     }
 
     pub fn review_is_hidden(&self) -> bool {
-        self.questions.len() == 1
-            && self
-                .questions
-                .first()
-                .map(|question| !question.multiple)
-                .unwrap_or(false)
+        self.review_decision
     }
 
     /// Stores chat-style pre-rendered plan rows for a review-decision overlay.
@@ -587,20 +582,11 @@ impl UserInputPresentation {
             }
             Some(KeyAction::Accept) => {
                 let committed = self.commit_custom_values();
-                let should_advance = self
-                    .questions
-                    .get(self.state.selected_question())
-                    .map(|question| committed && !question.multiple)
-                    .unwrap_or(false);
-                if !should_advance {
+                if !committed {
                     return UserInputEffect::KeepOpen;
                 }
-                if self.review_is_hidden() {
-                    UserInputEffect::Submit
-                } else {
-                    self.move_tab(1);
-                    UserInputEffect::KeepOpen
-                }
+                self.move_wizard_tab(1);
+                UserInputEffect::KeepOpen
             }
             Some(KeyAction::CancelRequest) => UserInputEffect::Cancel,
             _ => {
@@ -737,27 +723,18 @@ impl UserInputPresentation {
     }
 
     fn commit_question(&mut self) -> UserInputEffect {
-        let (is_custom, multiple) = {
-            let Some(question) = self.questions.get(self.state.selected_question()) else {
-                return UserInputEffect::KeepOpen;
-            };
-            (self.selected_row_is_custom(question), question.multiple)
+        let Some(question) = self.questions.get(self.state.selected_question()) else {
+            return UserInputEffect::KeepOpen;
         };
-        if is_custom {
+        if self.selected_row_is_custom(question) {
             self.begin_custom_edit();
-            return UserInputEffect::KeepOpen;
-        }
-        if multiple {
-            self.move_tab(1);
-            return UserInputEffect::KeepOpen;
-        }
-        self.select_option();
-        if self.review_is_hidden() {
-            UserInputEffect::Submit
         } else {
-            self.move_tab(1);
-            UserInputEffect::KeepOpen
+            if !question.multiple {
+                self.select_option();
+            }
+            self.move_wizard_tab(1);
         }
+        UserInputEffect::KeepOpen
     }
 
     fn move_question(&mut self, delta: isize) {
@@ -834,32 +811,18 @@ impl UserInputPresentation {
 
     /// Question-to-question page navigation for the ask-user wizard in the
     /// transcript: like [`Self::move_tab`] but the Review/summary page is
-    /// always reachable, so even a single-question ask-user request (which
-    /// hides the review header) still reaches a submit surface.
+    /// always reachable, including for a single-question ask-user request.
     pub fn move_wizard_tab(&mut self, delta: isize) {
-        if self.questions.is_empty() {
-            self.state.clear();
-            return;
-        }
-        if self.state.screen() == QuestionFlowScreen::Review {
-            if delta < 0 {
-                self.focus_question(self.state.selected_question());
-            } else {
-                self.focus_question(0);
-            }
-            return;
-        }
-        let last_index = self.questions.len().saturating_sub(1);
-        if delta < 0 {
-            if self.state.selected_question() > 0 {
-                self.focus_question(self.state.selected_question() - 1);
-            } else {
-                self.state.focus_review(self.questions.len());
-            }
-        } else if self.state.selected_question() < last_index {
-            self.focus_question(self.state.selected_question() + 1);
+        let page = if self.screen() == QuestionFlowScreen::Review {
+            self.questions.len()
         } else {
+            self.selected_question()
+        };
+        let target = (page as isize + delta).clamp(0, self.questions.len() as isize) as usize;
+        if target == self.questions.len() {
             self.state.focus_review(self.questions.len());
+        } else {
+            self.focus_question(target);
         }
     }
 
@@ -908,7 +871,7 @@ impl UserInputPresentation {
     }
 
     /// Space on a specific option row of a specific question (the transcript
-    /// cursor IS the option cursor in the continuous ask body). Focuses the
+    /// cursor IS the option cursor on the current page). Focuses the
     /// question then toggles: a `multiple` question adds/removes that option,
     /// a single-pick question selects it or clears it when it is already
     /// picked. Delegates to [`Self::toggle_option`] so answer-draft semantics
@@ -923,9 +886,8 @@ impl UserInputPresentation {
         self.toggle_option();
     }
 
-    /// Enter on a specific option row: focuses the question and selects that
-    /// option (single-pick) or toggles it (multiple). Delegates to
-    /// [`Self::select_option`] / [`Self::toggle_option`].
+    /// Enter confirms the option without unchecking it or clearing other
+    /// multi-select answers. Space remains the toggle action.
     pub fn commit_option_index(&mut self, question_index: usize, option_index: usize) {
         if self.questions.get(question_index).is_none() {
             return;
@@ -938,7 +900,11 @@ impl UserInputPresentation {
             .get(question_index)
             .is_some_and(|question| question.multiple)
         {
-            self.toggle_option();
+            self.answers
+                .entry(question_index)
+                .or_default()
+                .option_indexes
+                .insert(option_index);
         } else {
             self.select_option();
         }
@@ -1149,18 +1115,42 @@ mod tests {
     }
 
     #[test]
-    fn single_question_accept_emits_submit_and_records_answer() {
+    fn single_question_accept_records_answer_and_requires_summary() {
         let mut presentation =
             UserInputPresentation::new(overlay(false), vec![question(false, false)]);
 
         assert_eq!(
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
-            UserInputEffect::Submit
+            UserInputEffect::KeepOpen
         );
+        assert_eq!(presentation.screen(), super::QuestionFlowScreen::Review);
         assert!(
             presentation
                 .answer(0)
                 .is_some_and(|draft| draft.option_indexes.contains(&0))
+        );
+    }
+
+    #[test]
+    fn confirming_multi_select_preserves_existing_options_and_custom_answers() {
+        let mut q = question(true, true);
+        q.options.push(UserInputOptionPresentation {
+            label: "Two".into(),
+            description: String::new(),
+        });
+        let mut presentation = UserInputPresentation::new(overlay(false), vec![q]);
+        presentation.toggle_option_index(0, 0);
+        presentation.toggle_option_index(0, 1);
+        presentation.commit_option_index(0, 1);
+        assert_eq!(
+            presentation
+                .answer(0)
+                .unwrap()
+                .option_indexes
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![0, 1]
         );
     }
 
@@ -1172,7 +1162,7 @@ mod tests {
         assert!(presentation.insert_custom_text("custom value"));
         assert_eq!(
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
-            UserInputEffect::Submit
+            UserInputEffect::KeepOpen
         );
         assert_eq!(
             presentation.answer(0).expect("custom answer").custom_values,

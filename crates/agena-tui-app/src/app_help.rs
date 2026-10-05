@@ -35,7 +35,32 @@ impl App {
         true
     }
 
-    fn build_context_help(&self) -> HelpOverlay {
+    fn build_context_help(&mut self) -> HelpOverlay {
+        if self.work_focus.is_some() && self.work_focus == self.transcript.session_id {
+            return self.help_for(
+                HelpPreset::SessionWork,
+                self.i18n.text("session-work-title"),
+            );
+        }
+        if self.overlay.is_none()
+            && self.focus == Focus::Transcript
+            && let Some(id) = self.active_user_input_interaction_request_id()
+            && let Some(dialog) = self.user_input_interactions.get(&id)
+        {
+            let preset =
+                if dialog.presentation.is_editing_custom() || self.interaction_editing.is_some() {
+                    HelpPreset::UserInputEditor
+                } else if dialog.presentation.is_review_decision() {
+                    HelpPreset::UserInputDecisionReview
+                } else if dialog.presentation.screen()
+                    == agena_tui::user_input::QuestionFlowScreen::Review
+                {
+                    HelpPreset::UserInputReview
+                } else {
+                    HelpPreset::UserInputQuestion
+                };
+            return self.help_for(preset, dialog.request.title.clone());
+        }
         if self.btw_has_focus() {
             return self.help_for_editor(self.i18n.text("btw-title"), true);
         }
@@ -770,6 +795,7 @@ mod tests {
             HelpPreset::Transcript,
             HelpPreset::Composer,
             HelpPreset::ComposerItems,
+            HelpPreset::SessionWork,
             HelpPreset::PromptHistory,
             HelpPreset::Suggestion,
             HelpPreset::SingleLineEditor,
@@ -931,6 +957,7 @@ mod tests {
         for preset in [
             HelpPreset::Composer,
             HelpPreset::ComposerItems,
+            HelpPreset::SessionWork,
             HelpPreset::PromptHistory,
             HelpPreset::SingleLineEditor,
             HelpPreset::MultiLineEditor,
@@ -1018,6 +1045,7 @@ mod tests {
             HelpPreset::Transcript,
             HelpPreset::Composer,
             HelpPreset::ComposerItems,
+            HelpPreset::SessionWork,
             HelpPreset::PromptHistory,
             HelpPreset::Suggestion,
             HelpPreset::SingleLineEditor,

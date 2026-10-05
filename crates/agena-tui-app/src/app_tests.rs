@@ -510,11 +510,10 @@ mod interaction_reply_building_tests {
         let mut dialog = App::build_user_input_overlay(7, ask_user_request(false));
         assert!(!dialog.presentation.is_review_decision());
 
-        // A single non-multiple question hides the review header, so Enter
-        // selects the first option and submits in one step.
+        // Enter selects the first option and opens the explicit summary.
         assert_eq!(
             dialog.presentation.handle_key(enter(), 10),
-            UserInputEffect::Submit
+            UserInputEffect::KeepOpen
         );
 
         let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
@@ -537,7 +536,7 @@ mod interaction_reply_building_tests {
         let mut dialog = App::build_user_input_overlay(7, ask_user_request(true));
 
         // `e` opens the question-flow custom editor, paste fills it, Enter
-        // commits the draft and (single question) submits.
+        // commits the draft and opens the summary.
         assert_eq!(
             dialog.presentation.handle_key(edit(), 10),
             UserInputEffect::KeepOpen
@@ -545,7 +544,7 @@ mod interaction_reply_building_tests {
         assert!(dialog.presentation.insert_custom_text("custom answer"));
         assert_eq!(
             dialog.presentation.handle_key(enter(), 10),
-            UserInputEffect::Submit
+            UserInputEffect::KeepOpen
         );
 
         let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
@@ -1131,7 +1130,7 @@ mod interaction_part_routing_tests {
         let view = wizard_view(app);
         let layouts =
             agena_tui_transcript::interaction_question_layouts(&dialog(app).request, &view.answers);
-        agena_tui_transcript::ask_user_question_landing_offset(
+        agena_tui_transcript::ask_user_page_landing_offset(
             view.plan_body_lines,
             &layouts,
             question_index,
@@ -1143,12 +1142,7 @@ mod interaction_part_routing_tests {
         let view = wizard_view(app);
         let layouts =
             agena_tui_transcript::interaction_question_layouts(&dialog(app).request, &view.answers);
-        let start = agena_tui_transcript::ask_user_question_body_start(
-            view.plan_body_lines,
-            &layouts,
-            question_index,
-        );
-        start + 2 + layouts[question_index].options_len
+        view.plan_body_lines + 4 + layouts[question_index].options_len
     }
 
     #[tokio::test]
@@ -1657,59 +1651,49 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_left_right_jump_between_questions() {
+    async fn ask_user_pages_preserve_answers_and_include_summary_without_wrapping() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        move_cursor_to_part_headline(&mut app);
-
-        let start_line = interaction_node_start(&mut app);
-        // Left with the cursor on the plan area (before Q0) is a no-op but
-        // still consumed.
+        let offset = q_landing_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, offset);
+        app.handle_active_interaction_action(space_key());
+        let left = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        let before = app.transcript.navigation_cursor_line();
+        assert!(app.handle_active_interaction_action(left));
+        assert_eq!(app.transcript.navigation_cursor_line(), before);
+        assert_eq!(wizard_view(&app).question_page, 0);
+        assert!(app.handle_active_interaction_action(right));
+        assert_eq!(wizard_view(&app).question_page, 1);
+        let body = app
+            .transcript
+            .rendered(WIDTH)
+            .lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(body.contains("Toppings"));
+        assert!(!body.contains("Pick one."));
+        assert!(app.handle_active_interaction_action(right));
+        assert_eq!(wizard_view(&app).question_page, 2);
+        assert!(app.handle_active_interaction_action(right));
+        assert_eq!(wizard_view(&app).question_page, 2);
+        assert!(app.handle_active_interaction_action(left));
+        assert!(app.handle_active_interaction_action(left));
+        assert_eq!(wizard_view(&app).question_page, 0);
         assert!(
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
-            "Left is owned while the cursor is on the part"
+            dialog(&app)
+                .presentation
+                .answer(0)
+                .unwrap()
+                .option_indexes
+                .contains(&0)
         );
-        assert_eq!(
-            app.transcript.navigation_cursor_line(),
-            Some(start_line),
-            "Left before the first question is a no-op"
-        );
-
-        // Right from the plan area jumps to Q0's first option row.
-        assert!(
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-            "Right is owned while the cursor is on the part"
-        );
-        assert_eq!(
-            app.transcript.navigation_cursor_line(),
-            Some(start_line + 1 + q_landing_offset(&app, 0)),
-            "Right jumps to Q0's first option row"
-        );
-
-        // Right again jumps to Q1's first option row.
-        assert!(
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
-        );
-        assert_eq!(
-            app.transcript.navigation_cursor_line(),
-            Some(start_line + 1 + q_landing_offset(&app, 1)),
-            "Right jumps to Q1's first option row"
-        );
-
-        // Right at the last question is a no-op but still consumed.
-        assert!(
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
-        );
-        assert_eq!(
-            app.transcript.navigation_cursor_line(),
-            Some(start_line + 1 + q_landing_offset(&app, 1)),
-            "Right at the last question is a no-op"
-        );
-        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
     }
 
     #[tokio::test]
-    async fn ask_user_continuous_body_is_taller_than_viewport_and_down_reaches_its_bottom() {
+    async fn ask_user_tall_page_scrolls_and_shrinking_page_reanchors_cursor() {
         let mut app = seeded_app().await;
         // Give the SECOND question 30 options so the continuous body is far
         // taller than the 24-row viewport.
@@ -1732,6 +1716,7 @@ mod interaction_part_routing_tests {
         seed_pending_ask_user_with(&mut app, wire, domain);
         move_cursor_to_part_headline(&mut app);
 
+        app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         let height = usize::from(HEIGHT);
         let (start_line, end_line) = {
             let rendered = app.transcript.rendered(WIDTH);
@@ -1763,7 +1748,16 @@ mod interaction_part_routing_tests {
             cursor = next;
         }
         assert_eq!(cursor, end_line - 1, "free Down reaches the footer");
-        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+        );
+        assert_eq!(wizard_view(&app).question_page, 2);
+        assert!(app.active_user_input_interaction_request_id().is_some());
+        assert!(
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+        );
+        assert_eq!(wizard_view(&app).question_page, 1);
+        assert!(app.active_user_input_interaction_request_id().is_some());
     }
 
     #[tokio::test]
@@ -1811,64 +1805,98 @@ mod interaction_part_routing_tests {
         );
     }
 
+    fn move_to_summary_action(app: &mut App, cancel: bool) {
+        let view = wizard_view(app);
+        assert_eq!(view.question_page, dialog(app).request.questions.len());
+        let offset = view.plan_body_lines
+            + 2
+            + view.summary_rows.iter().sum::<usize>()
+            + 1
+            + usize::from(cancel);
+        move_cursor_to_body_offset(app, offset);
+    }
+
     #[tokio::test]
-    async fn ask_user_enter_on_answered_option_submits_the_request() {
+    async fn ask_user_only_explicit_summary_submit_sends_the_request() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        // Answer Q0 with Space, then Enter on Q1's option row: Enter checks it
-        // (multi-pick toggles it on) AND submits — every question is answered.
-        // The option offset is computed from the live layout after Q0 is
-        // answered (Q0's block grows an answered-preview row).
-        let q0_landing = q_landing_offset(&app, 0);
-        move_cursor_to_body_offset(&mut app, q0_landing);
+        let offset = q_landing_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, offset);
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(wizard_view(&app).question_page, 1);
         app.handle_active_interaction_action(space_key());
-        let q1_landing = q_landing_offset(&app, 1);
-        move_cursor_to_body_offset(&mut app, q1_landing);
-
-        assert!(
-            app.handle_active_interaction_action(enter()),
-            "Enter on an option row is owned"
-        );
-        assert!(
-            !app.user_input_interactions.contains_key(REQUEST_ID),
-            "submitting drops the dialog"
-        );
-        assert!(
-            !app.transcript.interaction_views.contains_key(REQUEST_ID),
-            "the part stops rendering the stale pending body"
-        );
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(wizard_view(&app).question_page, 2);
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+        let text = app
+            .transcript
+            .rendered(WIDTH)
+            .lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Vanilla") && text.contains("Sprinkles"));
+        // Enter on a summary answer returns to that question for editing.
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(wizard_view(&app).question_page, 0);
+        for _ in 0..2 {
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        }
+        move_to_summary_action(&mut app, false);
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
         assert!(app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
-            RunOperation::UserInputReply,
+            RunOperation::UserInputReply
         ));
     }
 
     #[tokio::test]
-    async fn ask_user_enter_validation_jumps_to_first_unanswered_question() {
+    async fn ask_user_summary_validation_jumps_to_first_unanswered_question() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        // Answer only Q0 (Vanilla), leave Q1 unanswered.
-        let q0_landing = q_landing_offset(&app, 0);
-        move_cursor_to_body_offset(&mut app, q0_landing);
-        app.handle_active_interaction_action(space_key());
-
-        // Enter on Q0's option row: Q0 is answered but Q1 is not, so no reply
-        // is sent and the cursor jumps to the first unanswered question (Q1).
-        assert!(
-            app.handle_active_interaction_action(enter()),
-            "Enter on an option row is owned"
-        );
+        let offset = q_landing_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, offset);
+        app.handle_active_interaction_action(enter());
+        app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        move_to_summary_action(&mut app, false);
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(wizard_view(&app).question_page, 1);
         assert!(!app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
-            RunOperation::UserInputReply,
+            RunOperation::UserInputReply
         ));
+        assert!(app.active_user_input_interaction_request_id().is_some());
+    }
+
+    #[tokio::test]
+    async fn single_question_ask_requires_summary_and_can_cancel() {
+        let mut app = seeded_app().await;
+        let mut wire = ask_user_wire_request();
+        wire.questions.truncate(1);
+        let mut domain = ask_user_domain_request();
+        domain.questions.truncate(1);
+        seed_pending_ask_user_with(&mut app, wire, domain);
+        let offset = q_landing_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, offset);
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(wizard_view(&app).question_page, 1);
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+        move_to_summary_action(&mut app, true);
+        assert!(app.handle_active_interaction_action(enter()));
+        // Cancellation retains the draft until the server acknowledges it.
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
-        let start_line = interaction_node_start(&mut app);
-        assert_eq!(
-            app.transcript.navigation_cursor_line(),
-            Some(start_line + 1 + q_landing_offset(&app, 1)),
-            "the cursor lands on the first unanswered question's first option row"
-        );
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
     }
 
     #[tokio::test]
@@ -1945,7 +1973,7 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_enter_on_custom_row_submits_committed_text_or_opens_the_editor() {
+    async fn ask_user_custom_answer_advances_and_survives_back_navigation() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
         let custom_row = q_custom_row_offset(&app, 0);
@@ -1979,21 +2007,20 @@ mod interaction_part_routing_tests {
             RunOperation::UserInputReply,
         ));
 
-        // Answer Q1 with Space, then Enter on Q0's custom row: the custom text
-        // is committed and every question is answered, so Enter submits.
-        let q1_landing = q_landing_offset(&app, 1);
-        move_cursor_to_body_offset(&mut app, q1_landing);
-        app.handle_active_interaction_action(space_key());
+        assert_eq!(wizard_view(&app).question_page, 1);
+        app.handle_active_interaction_action(enter());
+        assert_eq!(wizard_view(&app).question_page, 2);
+        for _ in 0..2 {
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        }
         let custom_row = q_custom_row_offset(&app, 0);
         move_cursor_to_body_offset(&mut app, custom_row);
-        assert!(
-            app.handle_active_interaction_action(enter()),
-            "Enter on a custom row with committed text submits"
-        );
-        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
-        assert!(app.run_activity.has_operation(
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(app.interaction_editing.as_deref(), Some(REQUEST_ID));
+        assert_eq!(dialog(&app).presentation.custom_input().text(), "mint");
+        assert!(!app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
-            RunOperation::UserInputReply,
+            RunOperation::UserInputReply
         ));
     }
 

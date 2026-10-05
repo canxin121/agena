@@ -14,6 +14,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             _ => None,
         },
         KeyContext::Main => match key.code {
+            K::Char(']') if only_ctrl(key) => Some(A::ToggleSessionWork),
             K::Char('/') if unmodified(key) => Some(A::SearchForward),
             K::Char('?') if unmodified_or_shift(key) => Some(A::SearchBackward),
             K::Char('N') if unmodified_or_shift(key) => Some(A::SearchPrevious),

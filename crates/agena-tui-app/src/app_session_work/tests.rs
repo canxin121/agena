@@ -262,3 +262,35 @@ async fn visible_file_rows_are_clickable_without_leaving_the_conversation() {
     assert_eq!(app.composer.text(), "unsent draft");
     assert_eq!(app.work_focus, Some(7));
 }
+
+#[tokio::test]
+async fn panel_header_uses_full_width_and_keyboard_entry_needs_no_function_key() {
+    let mut app = app();
+    app.composer.insert_str("draft to preserve");
+    for width in [28, 40, 80] {
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+        terminal
+            .draw(|frame| app.render_session_work(frame, frame.area()))
+            .unwrap();
+        let cells = terminal.backend().buffer().content();
+        let text: String = cells.iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("Workspace") && text.contains("Files"));
+        assert!(!text.contains("F6") && !text.contains('…') && !text.contains("Ctrl"));
+        assert_eq!(cells[0].bg, cells[usize::from(width) - 1].bg);
+    }
+    assert!(!app.handle_session_work_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)));
+    let toggle = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL);
+    assert!(app.handle_session_work_key(toggle));
+    assert!(app.session_work[&7].expanded);
+    assert_eq!(app.work_focus, Some(7));
+    assert!(app.handle_session_work_key(toggle));
+    assert!(!app.session_work[&7].expanded);
+    assert_eq!(app.composer.text(), "draft to preserve");
+    app.interaction_editing = Some("ask".into());
+    assert!(!app.handle_session_work_key(toggle));
+    assert!(
+        app.composer_status_parts()
+            .iter()
+            .all(|p| !matches!(p.kind, "btw" | "side" | "side-parent"))
+    );
+}

@@ -49,14 +49,15 @@ impl App {
             self.i18n.text("session-work-tasks"),
             activities.len()
         );
-        let files_label = format!(
-            "{} {}",
-            self.i18n.text("session-work-files"),
-            state
-                .files
-                .as_ref()
-                .map_or_else(|| "…".to_owned(), |f| f.total_files.to_string())
-        );
+        let files_label = match state.files.as_ref() {
+            Some(files) => format!(
+                "{} {}",
+                self.i18n.text("session-work-files"),
+                files.total_files
+            ),
+            None if state.file_task.is_some() => self.i18n.text("session-work-loading"),
+            None => self.i18n.text("session-work-files"),
+        };
         let status_label = retry.as_ref().map(|retry| {
             format!(
                 "↻ {} · {}s",
@@ -64,10 +65,17 @@ impl App {
                 ((retry.next_at_ms - chrono::Utc::now().timestamp_millis()).max(0) + 999) / 1000
             )
         });
-        let mut buttons = vec![(
-            if expanded { "▾ F6" } else { "▸ F6" },
-            PointerAction::Named("work-toggle"),
-        )];
+        let toggle_label = format!(
+            "{} {}",
+            if expanded { "▾" } else { "▸" },
+            self.i18n.text("session-work-title")
+        );
+        let header = Rect { height: 1, ..area };
+        // Paint the complete row, aligned with the composer, even when only
+        // a few action labels are present. Click empty space to toggle too.
+        frame.render_widget(Paragraph::new("").style(theme::status_chip_style()), header);
+        pointer::register(header, Some(PointerAction::Named("work-toggle")), None);
+        let mut buttons = vec![(toggle_label.as_str(), PointerAction::Named("work-toggle"))];
         if let Some(label) = &status_label {
             buttons.push((label, PointerAction::Named("work-status")));
         }
@@ -337,8 +345,14 @@ impl App {
                 frame,
                 footer,
                 &[
-                    ("‹ p", PointerAction::Named("work-prev")),
-                    ("n ›", PointerAction::Named("work-next")),
+                    (
+                        &self.i18n.text("session-work-previous"),
+                        PointerAction::Named("work-prev"),
+                    ),
+                    (
+                        &self.i18n.text("session-work-next"),
+                        PointerAction::Named("work-next"),
+                    ),
                 ],
             );
         } else {

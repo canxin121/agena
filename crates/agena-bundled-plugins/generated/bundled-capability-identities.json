@@ -617,7 +617,8 @@
     {
       "conditional": null,
       "hooks": [
-        "tool.invoke"
+        "tool.invoke",
+        "tool.invoke.stream"
       ],
       "id": "agena.fs",
       "tools": [
@@ -636,7 +637,7 @@
         {
           "canonical_name": "agena.fs.document",
           "conditional": null,
-          "definition_identity": "f50aff8340dc8ada914ddc4ae51883d90d3b0105322d966959aec4be2e895d3e",
+          "definition_identity": "a63c94d8fb591957365f7a885d8514f603f7419dc21966bcbcdc467499c34462",
           "gateway": false,
           "input_schema_sha256": "1c2ce672d8209f1e336ade31d21c649f3dae2e4431bfba2332087335d87b15a0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",

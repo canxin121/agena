@@ -10,7 +10,9 @@ use crate::part::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInp
 use crate::plugins::provided::router;
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolStreamSink,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -112,6 +114,7 @@ pub(crate) fn new_plugin() -> FsPlugin {
 )]
 impl FsPlugin {
     #[tool(
+        stream = invoke_document_stream,
         tags(query, filesystem, read_only),
         summary = "Extract or search text in one local PDF/Office document.",
         help = "Supported formats: pdf, docx, pptx, xlsx. backend=auto prefers pdftotext for PDFs and otherwise uses selected local MarkItDown converters. MarkItDown needs a Python environment with its format extras; set AGENA_DOCUMENT_PYTHON to that interpreter, or install in the host python3 environment. No dependency installation, plugins, audio/image transcription or remote document service is enabled. Supply pattern to search extracted lines (fixed_strings defaults true); start_line is 1-based, max_lines 1–500. Outputs include source_sha256, extraction warnings, line counts and explicit truncation. Source limit 32 MiB; conversion 30 seconds / 2 MiB per output stream; displayed records 128 KiB. Empty text can indicate a scanned PDF needing OCR. Extracted lines are not source page numbers."
@@ -121,6 +124,18 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        document::invoke(Path::new(context.workspace_root), input).await
+    }
+
+    /// Streaming variant: extraction shells out to a local converter, so a
+    /// reader sees the work before the extracted text arrives.
+    async fn invoke_document_stream(
+        &self,
+        sink: ToolStreamSink,
+        context: &ToolInvokeContext<'_>,
+        input: document::DocumentInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        sink.text("Extracting document text…\n").await;
         document::invoke(Path::new(context.workspace_root), input).await
     }
 

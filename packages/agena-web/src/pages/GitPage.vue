@@ -1084,6 +1084,19 @@ watch(
   },
 )
 
+/**
+ * Start or stop the diff watch for the current selection. A hidden tab shows
+ * nothing, so the watch closes and the visibility listener restarts it.
+ */
+function syncWatch() {
+  const nextDir = (root.value || '').trim()
+  if (!gitReady.value || !nextDir || !selectedFile.value || document.visibilityState === 'hidden') {
+    stopWatch()
+    return
+  }
+  startWatch(nextDir)
+}
+
 watch(
   () => [root.value, gitReady.value, selectedFile.value] as const,
   (next, old) => {
@@ -1092,13 +1105,7 @@ watch(
     const nextDir = (dir || '').trim()
     const prevDirTrimmed = (prevDir || '').trim()
     if (nextDir === prevDirTrimmed && ready === prevReady && selected === prevSelected) return
-
-    if (!ready || !nextDir || !selected) {
-      stopWatch()
-      return
-    }
-
-    startWatch(nextDir)
+    syncWatch()
   },
   { immediate: true },
 )
@@ -1312,9 +1319,11 @@ defineExpose({
 
 onMounted(() => {
   void repoSelection.loadRepos().then(() => load())
+  document.addEventListener('visibilitychange', syncWatch)
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', syncWatch)
   stopWatch()
 })
 </script>

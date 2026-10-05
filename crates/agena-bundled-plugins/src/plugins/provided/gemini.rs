@@ -9,7 +9,9 @@ use std::{
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput, ToolStreamSink,
+};
 use base64::Engine as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -430,6 +432,7 @@ impl GeminiToolsPlugin {
     }
     #[tool(
         name = "cloud_code_execution",
+        stream = code_execution_stream,
         tags(network, interactive, read_only),
         summary = "Execute code in Google cloud infrastructure, not on this computer.",
         help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena."
@@ -442,6 +445,17 @@ impl GeminiToolsPlugin {
             input,
         )
         .await
+    }
+
+    /// Streaming variant: a cloud sandbox run stays silent for a while, so a
+    /// reader sees the work before the result lands.
+    async fn code_execution_stream(
+        &self,
+        sink: ToolStreamSink,
+        input: GeminiToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        sink.text("Running code in Google cloud…\n").await;
+        self.code_execution(input).await
     }
 
     #[tool(

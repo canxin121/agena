@@ -102,14 +102,15 @@
       "conditional": null,
       "hooks": [
         "init",
-        "tool.invoke"
+        "tool.invoke",
+        "tool.invoke.stream"
       ],
       "id": "agena.chatgpt",
       "tools": [
         {
           "canonical_name": "agena.chatgpt.cloud_code_interpreter",
           "conditional": null,
-          "definition_identity": "0c05089a3cbdcf39ce9f529735ffc9935aaf9b9999f1260df6ae6823c90e14ed",
+          "definition_identity": "148ec3f6d4ebfff60db1badda34ea602b32a112c6c0e53c24acbbcec30dc69cb",
           "gateway": false,
           "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -223,7 +224,7 @@
         {
           "canonical_name": "agena.chatgpt.cloud_shell",
           "conditional": null,
-          "definition_identity": "9a8cc7287d72ce32eab951d5527b9b8175d5f99b4549730320eb9395d2ef41f6",
+          "definition_identity": "8735cf5b3e01744c5810c1e1b20abc1063a7b008439543378d18e642a94764d6",
           "gateway": false,
           "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -254,14 +255,15 @@
       "conditional": null,
       "hooks": [
         "init",
-        "tool.invoke"
+        "tool.invoke",
+        "tool.invoke.stream"
       ],
       "id": "agena.claude",
       "tools": [
         {
           "canonical_name": "agena.claude.cloud_advisor",
           "conditional": null,
-          "definition_identity": "a544ffaa5df6d0515345c198b4f0fb9fcd86eb0c10424921aaa8337b93d75bcb",
+          "definition_identity": "b39530d24f0436b994c9fa8c497589cc5b5dba2fe4366f9a4dccba4d506d2352",
           "gateway": false,
           "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -274,7 +276,7 @@
         {
           "canonical_name": "agena.claude.cloud_code_execution",
           "conditional": null,
-          "definition_identity": "9f57fdd1f5fc8dfa1cffe6cf9b0a2b959bcdbf887da70577c86c40f5814df6fc",
+          "definition_identity": "aa33bad4f775ba039bed39bbd24df68dc844b2d7917cf29b6ba0399462fd0225",
           "gateway": false,
           "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -745,14 +747,15 @@
       "conditional": null,
       "hooks": [
         "init",
-        "tool.invoke"
+        "tool.invoke",
+        "tool.invoke.stream"
       ],
       "id": "agena.gemini",
       "tools": [
         {
           "canonical_name": "agena.gemini.cloud_code_execution",
           "conditional": null,
-          "definition_identity": "43663f4846d2c7e5ccf6e202ce983a5379c430cc0571f527c377a8906e04080a",
+          "definition_identity": "84b29b5c17ba1bdc6b7294020df11bcbdb7ff49ea1dce60bfdd1da848115e3f0",
           "gateway": false,
           "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",

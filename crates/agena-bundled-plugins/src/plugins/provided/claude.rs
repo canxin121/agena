@@ -9,7 +9,9 @@ use std::{
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput, ToolStreamSink,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -377,6 +379,7 @@ impl ClaudeToolsPlugin {
     }
     #[tool(
         name = "cloud_code_execution",
+        stream = code_execution_stream,
         tags(network, interactive, read_only),
         summary = "Execute code in Anthropic cloud infrastructure, not on this computer.",
         help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options."
@@ -390,6 +393,17 @@ impl ClaudeToolsPlugin {
             input,
         )
         .await
+    }
+
+    /// Streaming variant: a cloud sandbox run stays silent for a while, so a
+    /// reader sees the work before the result lands.
+    async fn code_execution_stream(
+        &self,
+        sink: ToolStreamSink,
+        input: ClaudeToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        sink.text("Running code in Anthropic cloud…\n").await;
+        self.code_execution(input).await
     }
 
     #[tool(
@@ -428,6 +442,7 @@ impl ClaudeToolsPlugin {
 
     #[tool(
         name = "cloud_advisor",
+        stream = advisor_stream,
         tags(network, interactive, read_only),
         summary = "Consult an advisor model in Anthropic cloud using the supplied context.",
         help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict."
@@ -441,5 +456,16 @@ impl ClaudeToolsPlugin {
             input,
         )
         .await
+    }
+
+    /// Streaming variant: the advisor call is a long remote request, so a
+    /// reader sees the work before the answer lands.
+    async fn advisor_stream(
+        &self,
+        sink: ToolStreamSink,
+        input: ClaudeToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        sink.text("Consulting the Anthropic advisor…\n").await;
+        self.advisor(input).await
     }
 }

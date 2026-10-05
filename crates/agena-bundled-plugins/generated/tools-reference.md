@@ -48,7 +48,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `read_only`
 
-**Runtime**: streaming `buffered`
+**Runtime**: streaming `streaming`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.
@@ -765,7 +765,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `mutate`
 
-**Runtime**: streaming `buffered`
+**Runtime**: streaming `streaming`
 
 **Help**:
 > Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.
@@ -961,7 +961,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `network` `interactive` `read_only`
 
-**Runtime**: streaming `buffered`
+**Runtime**: streaming `streaming`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.
@@ -1076,7 +1076,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 
 **Tags**: `network` `interactive` `read_only`
 
-**Runtime**: streaming `buffered`
+**Runtime**: streaming `streaming`
 
 **Help**:
 > Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.
@@ -3484,7 +3484,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 
 **Tags**: `network` `interactive` `read_only`
 
-**Runtime**: streaming `buffered`
+**Runtime**: streaming `streaming`
 
 **Help**:
 > Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.

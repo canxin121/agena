@@ -9,7 +9,9 @@ use std::{
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput, ToolStreamSink,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -476,6 +478,7 @@ impl ChatGptToolsPlugin {
 
     #[tool(
         name = "cloud_code_interpreter",
+        stream = code_interpreter_stream,
         tags(network, interactive, read_only),
         summary = "Run Python in an OpenAI cloud container, not the Agena local workspace.",
         help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy."
@@ -488,6 +491,18 @@ impl ChatGptToolsPlugin {
             input,
         )
         .await
+    }
+
+    /// Streaming variant: a cloud sandbox run stays silent for a while, so a
+    /// reader sees the work before the result lands.
+    async fn code_interpreter_stream(
+        &self,
+        sink: ToolStreamSink,
+        input: ChatGptToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        sink.text("Running code in the OpenAI cloud container…\n")
+            .await;
+        self.code_interpreter(input).await
     }
 
     #[tool(
@@ -508,6 +523,7 @@ impl ChatGptToolsPlugin {
 
     #[tool(
         name = "cloud_shell",
+        stream = shell_stream,
         tags(network, interactive, mutate),
         summary = "Run shell commands in an OpenAI cloud container, never in the local terminal.",
         help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback."
@@ -520,6 +536,18 @@ impl ChatGptToolsPlugin {
             input,
         )
         .await
+    }
+
+    /// Streaming variant: a cloud shell run stays silent for a while, so a
+    /// reader sees the work before the result lands.
+    async fn shell_stream(
+        &self,
+        sink: ToolStreamSink,
+        input: ChatGptToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        sink.text("Running a shell in the OpenAI cloud container…\n")
+            .await;
+        self.shell(input).await
     }
 
     #[tool(

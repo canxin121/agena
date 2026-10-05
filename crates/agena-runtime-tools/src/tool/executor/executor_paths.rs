@@ -39,13 +39,6 @@ impl ToolExecutor {
         canonicalize_path_for_execution(&resolved)
     }
 
-    pub(crate) async fn execute_shell_command(
-        &self,
-        request: &ShellRequest,
-    ) -> Result<ShellOutput, ToolError> {
-        self.execute_shell_command_with_live(request, None).await
-    }
-
     /// Execute a foreground command and forward its output while it runs. The
     /// returned [`ShellOutput`] stays the single source of truth for the
     /// terminal result, so a live consumer never changes the outcome.

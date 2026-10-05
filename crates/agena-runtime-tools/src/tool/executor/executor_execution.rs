@@ -314,6 +314,10 @@ impl ToolExecutor {
                     end,
                 }));
             }
+            // An executor-backed payload without a live sink is buffered: only
+            // the shell implements one today. Returning here keeps it away from
+            // the plugin host, whose bundled handler cannot run anything.
+            return Ok(None);
         }
 
         // Plugin tools stream only when their own definition declares it; the

@@ -46,7 +46,11 @@ pub(super) async fn execute_async(
     request.command =
         crate::shell_sandbox::protect(executor, request.command, input, &mut request.env)?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
-    let execution = executor.execute_shell_command(&request).await?;
+    // A foreground command reports its output while it runs, exactly like the
+    // bash path: the sink is display state and never changes the result.
+    let execution = executor
+        .execute_shell_command_with_live(&request, context.live_output.clone())
+        .await?;
     executor.ensure_not_cancelled()?;
     render_execution(&request, execution)
 }

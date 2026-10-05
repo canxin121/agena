@@ -67,7 +67,7 @@ pub(crate) fn plugin_settings_setting_target(
     if segments.len() < 4
         || segments.first().is_none_or(|segment| segment != "plugins")
         || segments.get(1).is_none_or(|segment| segment != "list")
-        || segments.get(3).is_none_or(|segment| segment != "config")
+        || segments.get(3).is_none_or(|segment| segment != "settings")
     {
         return Ok(None);
     }
@@ -78,7 +78,7 @@ pub(crate) fn default_static_plugin_record() -> JsonValue {
     json!({
         "enabled": true,
         "package": { "kind": "static" },
-        "config": null
+        "settings": null
     })
 }
 
@@ -114,7 +114,7 @@ pub(crate) fn normalize_plugin_record_for_settings_edit(
         .entry("package".to_owned())
         .or_insert_with(|| json!({ "kind": "static" }));
     Ok(object
-        .entry("config".to_owned())
+        .entry("settings".to_owned())
         .or_insert_with(|| JsonValue::Object(JsonMap::new())))
 }
 
@@ -997,7 +997,9 @@ mod tests {
 
     use super::super::catalog::canonical_provider_model_id;
     use super::{
-        default_speed_mode_name, generated_provider_model_settings, preserve_existing_model_config,
+        default_speed_mode_name, default_static_plugin_record, generated_provider_model_settings,
+        normalize_plugin_record_for_settings_edit, plugin_settings_setting_target,
+        preserve_existing_model_config, set_nested_json_value,
     };
 
     #[test]
@@ -1091,5 +1093,102 @@ mod tests {
         );
 
         assert_eq!(default_speed_mode_name(&modes).as_deref(), Some("pro"));
+    }
+
+    #[test]
+    fn plugin_settings_paths_resolve_only_against_the_settings_field() {
+        let (plugin_id, segments) = plugin_settings_setting_target(
+            r#"plugins.list."agena.web".settings.fetch.request.respect_robots_txt"#,
+        )
+        .expect("parse plugin settings path")
+        .expect("plugin settings path is recognized");
+        assert_eq!(plugin_id, "agena.web");
+        assert_eq!(
+            segments,
+            vec![
+                "fetch".to_owned(),
+                "request".to_owned(),
+                "respect_robots_txt".to_owned()
+            ]
+        );
+
+        let (plugin_id, segments) =
+            plugin_settings_setting_target(r#"plugins.list."agena.web".settings"#)
+                .expect("parse whole-settings path")
+                .expect("whole-settings path is recognized");
+        assert_eq!(plugin_id, "agena.web");
+        assert!(segments.is_empty());
+
+        assert!(
+            plugin_settings_setting_target(
+                r#"plugins.list."agena.web".config.fetch.request.respect_robots_txt"#
+            )
+            .expect("parse legacy config path")
+            .is_none(),
+            "the retired `config` field must not be treated as a plugin settings target"
+        );
+        assert!(
+            plugin_settings_setting_target("ui.locale")
+                .expect("parse unrelated path")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn settings_edit_records_deserialize_as_configured_plugins() {
+        let mut record = default_static_plugin_record();
+        let settings = normalize_plugin_record_for_settings_edit(&mut record)
+            .expect("normalize plugin record");
+        set_nested_json_value(
+            settings,
+            &[
+                "fetch".to_owned(),
+                "request".to_owned(),
+                "respect_robots_txt".to_owned(),
+            ],
+            json!(false),
+        );
+        assert_eq!(
+            record["settings"]["fetch"]["request"]["respect_robots_txt"],
+            json!(false)
+        );
+        assert!(
+            record.get("config").is_none(),
+            "settings edits must not resurrect the retired `config` field"
+        );
+        let configured: agena_plugin_host::config::ConfiguredPlugin =
+            serde_json::from_value(record.clone()).expect("settings record is a configured plugin");
+        assert_eq!(
+            configured.settings()["fetch"]["request"]["respect_robots_txt"],
+            json!(false)
+        );
+
+        // The whole-settings update shape (`update_plugin_settings`) replaces
+        // the settings object wholesale with empty segments.
+        let mut record = default_static_plugin_record();
+        let settings = normalize_plugin_record_for_settings_edit(&mut record)
+            .expect("normalize plugin record");
+        set_nested_json_value(settings, &[], json!({"browser": {"enabled": true}}));
+        let configured: agena_plugin_host::config::ConfiguredPlugin =
+            serde_json::from_value(record.clone()).expect("whole-settings record is valid");
+        assert_eq!(configured.settings()["browser"]["enabled"], json!(true));
+
+        // Regression: the pre-fix record shape used `config`, which the host
+        // rejects with `unknown field `config`` during config validation.
+        let mut legacy = record.clone();
+        let settings = legacy
+            .as_object_mut()
+            .expect("record object")
+            .remove("settings");
+        legacy
+            .as_object_mut()
+            .expect("record object")
+            .insert(
+                "config".to_owned(),
+                settings.unwrap_or(serde_json::Value::Null),
+            );
+        let error = serde_json::from_value::<agena_plugin_host::config::ConfiguredPlugin>(legacy)
+            .expect_err("the legacy `config` field must be rejected");
+        assert!(error.to_string().contains("unknown field `config`"));
     }
 }

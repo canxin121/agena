@@ -2215,7 +2215,7 @@ fn mcp_plugin_record(
         serde_json::Value::Null => serde_json::json!({
             "enabled": true,
             "package": { "kind": "static" },
-            "config": {},
+            "settings": {},
         })
         .as_object()
         .expect("MCP default plugin record is an object")
@@ -2243,7 +2243,7 @@ fn mcp_plugin_record(
             );
         }
     }
-    match record.get_mut("config") {
+    match record.get_mut("settings") {
         Some(value) if value.is_null() => *value = serde_json::Value::Object(Default::default()),
         Some(serde_json::Value::Object(_)) => {}
         Some(_) => {
@@ -2253,7 +2253,7 @@ fn mcp_plugin_record(
         }
         None => {
             record.insert(
-                "config".to_owned(),
+                "settings".to_owned(),
                 serde_json::Value::Object(Default::default()),
             );
         }
@@ -2298,7 +2298,7 @@ fn mcp_servers_mut(
     record: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<&mut serde_json::Map<String, serde_json::Value>, AppError> {
     let config = record
-        .get_mut("config")
+        .get_mut("settings")
         .and_then(serde_json::Value::as_object_mut)
         .ok_or_else(|| AppError::Config("MCP plugin config must be an object".to_owned()))?;
     let servers = config
@@ -2659,7 +2659,18 @@ mod tests {
         )
         .expect("add MCP server");
         assert_eq!(record["package"]["kind"], "static");
-        assert_eq!(record["config"]["servers"]["local"]["transport"], "stdio");
+        assert_eq!(record["settings"]["servers"]["local"]["transport"], "stdio");
+        assert!(
+            record.get("config").is_none(),
+            "MCP records must use the `settings` field"
+        );
+        let configured: agena_plugin_host::config::ConfiguredPlugin =
+            serde_json::from_value(serde_json::Value::Object(record.clone()))
+                .expect("MCP record is a configured plugin");
+        assert_eq!(
+            configured.settings()["servers"]["local"]["transport"],
+            "stdio"
+        );
 
         apply_mcp_config_mutation(
             &mut record,
@@ -2669,7 +2680,7 @@ mod tests {
         )
         .expect("remove MCP server");
         assert!(
-            record["config"]["servers"]
+            record["settings"]["servers"]
                 .as_object()
                 .expect("servers object")
                 .is_empty()

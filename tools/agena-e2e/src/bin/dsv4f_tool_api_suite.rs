@@ -512,7 +512,7 @@ fn write_project_config(repo_root: &Path, workspace: &Path) -> anyhow::Result<()
             "list": {
                 "agena.lsp": {
                     "package": { "kind": "static" },
-                    "config": {
+                    "settings": {
                         "servers": {
                             "rust": {
                                 "process": { "command": rust_analyzer, "args": [], "env": rust_analyzer_env },
@@ -524,7 +524,7 @@ fn write_project_config(repo_root: &Path, workspace: &Path) -> anyhow::Result<()
                 },
                 "agena.mcp": {
                     "package": { "kind": "static" },
-                    "config": {
+                    "settings": {
                         "runtime": { "token_store": { "enabled": false } },
                         "servers": {
                             "fixture": {
@@ -541,7 +541,7 @@ fn write_project_config(repo_root: &Path, workspace: &Path) -> anyhow::Result<()
                 },
                 "example.echo": {
                     "package": { "kind": "cdylib", "path": cdylib },
-                    "config": { "uppercase": true }
+                    "settings": { "uppercase": true }
                 },
                 "example.echo_stdio": {
                     "package": {
@@ -560,7 +560,7 @@ fn write_project_config(repo_root: &Path, workspace: &Path) -> anyhow::Result<()
                         "env": {},
                         "cwd": workspace
                     },
-                    "config": { "prefix": "[probe] ", "uppercase": false }
+                    "settings": { "prefix": "[probe] ", "uppercase": false }
                 }
             }
         }

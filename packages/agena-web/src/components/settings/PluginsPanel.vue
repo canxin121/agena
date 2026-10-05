@@ -133,7 +133,7 @@ type PluginInspectResponse = {
     configured_plugin?: {
       enabled?: boolean
       package?: JsonValue
-      config?: JsonValue
+      settings?: JsonValue
       activation?: { requires?: string[]; after?: string[] }
     } | null
     authority?: {

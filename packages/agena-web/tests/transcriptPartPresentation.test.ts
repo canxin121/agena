@@ -63,6 +63,24 @@ describe('TUI-parity part presentation', () => {
   })
 
   test('preserves operation title, human output, rich blocks, metadata, and duration', () => {
+    const running = operationPresentation(
+      operationPart({
+        name: 'bash',
+        input: { command: 'rg -n "load more" packages/agena-web/src' },
+        state: 'in_progress',
+      }),
+    )
+    // The collapsed headline clips the command, so the expanded body has to
+    // carry the complete command as a Markdown code block even before the tool
+    // returns any result.
+    expect(running.commandMarkdown).toBe('```sh\nrg -n "load more" packages/agena-web/src\n```\n')
+    expect(
+      operationPresentation(operationPart({ name: 'fs.read', input: { file_path: 'README.md' } })).commandMarkdown,
+    ).toBe('')
+    expect(
+      operationPresentation(operationPart({ name: 'bash', input: { command: 'echo ```nested```' } })).commandMarkdown,
+    ).toBe('````sh\necho ```nested```\n````\n')
+
     const projected = operationPresentation(
       operationPart(
         {

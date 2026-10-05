@@ -31,6 +31,7 @@ export type OperationPresentation = {
   toolName: string
   input: JsonValue | null
   inputMarkdown: string
+  commandMarkdown: string
   error: string
   rawOutput: JsonValue | null
   blocks: JsonRecord[]
@@ -317,6 +318,32 @@ function toolCallView(content: JsonRecord, presentationValue: JsonValue): JsonRe
   }
 }
 
+const COMMAND_INPUT_KEYS = ['command', 'cmd', 'script'] as const
+
+/**
+ * The durable invocation already carries the command, but the collapsed
+ * headline clips it. Project the full command as a fenced Markdown block so a
+ * tool that is still running can be read instead of guessed from a truncated
+ * line.
+ */
+function commandMarkdownFromInput(input: JsonValue | null): string {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return ''
+  const record = input as Record<string, JsonValue>
+  for (const key of COMMAND_INPUT_KEYS) {
+    const command = stringValue(record[key])
+    if (command.trim()) return fencedCodeBlock(command, 'sh')
+  }
+  return ''
+}
+
+function fencedCodeBlock(text: string, language: string): string {
+  let longestFence = 0
+  for (const match of text.matchAll(/`+/g)) longestFence = Math.max(longestFence, match[0].length)
+  const fence = '`'.repeat(Math.max(3, longestFence + 1))
+  const body = text.endsWith('\n') ? text.slice(0, -1) : text
+  return `${fence}${language}\n${body}\n${fence}\n`
+}
+
 export function operationPresentation(
   part: TranscriptDisplayPart,
   sectionValues: OperationSectionValues = {},
@@ -412,6 +439,7 @@ export function operationPresentation(
     toolName,
     input,
     inputMarkdown: input === null ? '' : structuredValueMarkdown(input),
+    commandMarkdown: commandMarkdownFromInput(input),
     error: operationFailureMessage(operation.error ?? null),
     rawOutput,
     blocks,

@@ -296,6 +296,12 @@ function toggleOuter() {
 
       <div class="space-y-3 py-1" data-tool-presentation>
         <MarkdownRenderer
+          v-if="operation.commandMarkdown"
+          :content="operation.commandMarkdown"
+          mode="markdown"
+          :stream="false"
+        />
+        <MarkdownRenderer
           v-if="
             operation.summary &&
             !operation.presentationBlocks.length &&

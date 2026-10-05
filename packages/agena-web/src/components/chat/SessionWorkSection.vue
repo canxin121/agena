@@ -77,7 +77,7 @@ async function control(activity: SessionActivity, action: string) {
 <template>
   <div
     v-if="retry"
-    class="my-3 rounded-lg border border-border/60 px-3 py-2 text-xs"
+    class="rounded-lg border border-border/60 px-3 py-2 text-xs"
     data-transcript-chrome="true"
     aria-live="polite"
   >
@@ -89,6 +89,7 @@ async function control(activity: SessionActivity, action: string) {
   </div>
   <SessionSection
     v-if="activities.length || selected"
+    docked
     v-model:expanded="expanded"
     :title="t('chat.sessionWork.tasks')"
     :summary="t('chat.sessionWork.activeTasks', { count: activities.length })"

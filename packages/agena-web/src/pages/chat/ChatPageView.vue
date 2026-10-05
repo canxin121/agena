@@ -275,14 +275,14 @@ function handleAttachProjectFromPanel() {
 // A classic scrollbar reserves space in the transcript. Reserve that same
 // space beside the composer so their shared column aligns on every platform.
 const scrollbarGutter = ref(0)
-const workspaceChangesDockRef = ref<HTMLElement | null>(null)
-const workspaceChangesDockHeight = ref(0)
+const sessionSectionsDockRef = ref<HTMLElement | null>(null)
+const sessionSectionsDockHeight = ref(0)
 useResizeObserver(scrollEl, () => {
   const element = scrollEl.value
   scrollbarGutter.value = element ? Math.max(0, element.offsetWidth - element.clientWidth) : 0
 })
-useResizeObserver(workspaceChangesDockRef, () => {
-  workspaceChangesDockHeight.value = workspaceChangesDockRef.value?.getBoundingClientRect().height ?? 0
+useResizeObserver(sessionSectionsDockRef, () => {
+  sessionSectionsDockHeight.value = sessionSectionsDockRef.value?.getBoundingClientRect().height ?? 0
 })
 
 // Resolve popover anchors to the trigger button element.
@@ -527,37 +527,37 @@ void sessionActionsMenuRef
                   @set-activity-page-size="ctx.setTranscriptPartPageSize"
                 />
               </div>
-              <div class="chat-column" data-session-sections="true">
-                <SessionWorkSection
-                  v-if="chat.selectedSessionId"
-                  :key="chat.selectedSessionId"
-                  :session-id="chat.selectedSessionId"
-                  :retry="retryStatus"
-                  :countdown="retryCountdownLabel"
-                />
-                <PlanSection
-                  v-if="ctx.planVisible.value"
-                  v-model:expanded="ctx.planViewerOpen.value"
-                  :state="ctx.planViewer"
-                />
-                <BtwSection
-                  v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
-                  :key="chat.selectedSessionId"
-                  :session-id="chat.selectedSessionId"
-                />
-              </div>
-
               <div ref="bottomEl" class="h-px w-full" aria-hidden="true" />
             </div>
           </div>
 
+          <!-- Every session section docks above the composer: the plan and the
+               background work stay in one place instead of drifting to the end
+               of the transcript behind the messages. -->
           <div
-            ref="workspaceChangesDockRef"
+            ref="sessionSectionsDockRef"
             class="flex min-h-0 max-h-[45%] shrink-0 flex-col overflow-hidden bg-background/85"
             :style="{ paddingInlineEnd: `${scrollbarGutter}px` }"
-            data-workspace-changes-dock="true"
+            data-session-sections-dock="true"
           >
-            <div class="chat-column flex min-h-0 flex-col">
+            <div class="chat-column flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain py-1">
+              <SessionWorkSection
+                v-if="chat.selectedSessionId"
+                :key="chat.selectedSessionId"
+                :session-id="chat.selectedSessionId"
+                :retry="retryStatus"
+                :countdown="retryCountdownLabel"
+              />
+              <PlanSection
+                v-if="ctx.planVisible.value"
+                v-model:expanded="ctx.planViewerOpen.value"
+                :state="ctx.planViewer"
+              />
+              <BtwSection
+                v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
+                :key="chat.selectedSessionId"
+                :session-id="chat.selectedSessionId"
+              />
               <WorkspaceChangesSection
                 v-if="chat.selectedSessionId"
                 :key="chat.selectedSessionId + ':files'"
@@ -578,7 +578,7 @@ void sessionActionsMenuRef
                 (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted))
             "
             class="pointer-events-none absolute right-3 z-20 flex flex-col items-center gap-2"
-            :style="{ bottom: `${workspaceChangesDockHeight + 12}px` }"
+            :style="{ bottom: `${sessionSectionsDockHeight + 12}px` }"
           >
             <IconButton
               v-if="

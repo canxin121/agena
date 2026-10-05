@@ -21,6 +21,7 @@ const summary = computed(() => {
 <template>
   <SessionSection
     data-plan-state-viewer="true"
+    docked
     :title="t('chat.planViewer.title')"
     :expanded="expanded"
     :summary="summary"

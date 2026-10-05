@@ -41,6 +41,7 @@ function handleKeydown(event: KeyboardEvent) {
 <template>
   <SessionSection
     v-if="state"
+    docked
     title="BTW"
     v-model:expanded="state.expanded"
     :summary="[t('chat.btw.inlineHint'), state.exchanges.length || ''].filter(Boolean).join(' · ')"
@@ -56,7 +57,7 @@ function handleKeydown(event: KeyboardEvent) {
         <RiCloseLine class="h-3.5 w-3.5" />
       </IconButton>
     </template>
-    <div class="space-y-3">
+    <div class="max-h-[min(45dvh,28rem)] space-y-3 overflow-auto overscroll-contain">
       <article v-for="entry in state.exchanges" :key="entry.id" class="min-w-0">
         <div class="flex items-start gap-2">
           <button

@@ -501,6 +501,84 @@ fn is_user_message_marker(part: &PartResource) -> bool {
     part.kind == "run" && part.role == "user"
 }
 
+/// Project what a still-running process has produced so far as one Markdown
+/// block. A tool that has not produced anything yet keeps the empty body it had
+/// before, so nothing is invented for a quiet process.
+fn running_live_output_blocks(content: &ToolCallContent) -> Vec<agena_domain::ViewBlock> {
+    content
+        .live_output()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| {
+            vec![agena_domain::ViewBlock::Markdown {
+                id: Some("live-output".to_owned()),
+                text: live_output_markdown(text),
+            }]
+        })
+        .unwrap_or_default()
+}
+
+/// Fence what a running process has produced so far, matching the code surface
+/// of its terminal result.
+fn live_output_markdown(text: &str) -> String {
+    let mut longest_fence = 0;
+    let mut run = 0;
+    for character in text.chars() {
+        if character == '`' {
+            run += 1;
+            longest_fence = longest_fence.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    let fence = "`".repeat((longest_fence + 1).max(3));
+    format!("{fence}text\n{}\n{fence}\n", text.trim_end())
+}
+
+#[cfg(test)]
+mod live_output_tests {
+    use super::{live_output_markdown, running_live_output_blocks};
+
+    #[test]
+    fn fences_what_a_still_running_process_produced() {
+        assert_eq!(
+            live_output_markdown("one\ntwo\n"),
+            "```text\none\ntwo\n```\n"
+        );
+    }
+
+    #[test]
+    fn a_fence_inside_the_output_widens_the_block() {
+        assert_eq!(
+            live_output_markdown("echo ```x```"),
+            "````text\necho ```x```\n````\n"
+        );
+    }
+
+    #[test]
+    fn a_running_process_shows_its_output_as_one_markdown_block() {
+        let mut content = agena_runtime_contracts::part_content::ToolCallContent {
+            name: "command".to_owned(),
+            input: serde_json::json!({ "command": ["echo", "hi"] }),
+            call_id: 1,
+            state: agena_domain::ToolResultState::Running,
+            ..Default::default()
+        };
+        assert!(
+            running_live_output_blocks(&content).is_empty(),
+            "a quiet process keeps the empty body"
+        );
+
+        content.set_live_output("one\ntwo\n");
+        match running_live_output_blocks(&content).as_slice() {
+            [agena_domain::ViewBlock::Markdown { text, .. }] => {
+                assert_eq!(text.as_str(), "```text\none\ntwo\n```\n")
+            }
+            other => panic!("unexpected blocks: {other:?}"),
+        }
+    }
+}
+
 async fn project_tool_presentation(
     state: &AppState,
     part: &Part,
@@ -519,6 +597,10 @@ async fn project_tool_presentation(
             return None;
         }
     };
+    // A process that is still running reports what it produced so far, so the
+    // reader can watch the command instead of waiting for its result. Read it
+    // before the fields below move into the invocation.
+    let live_blocks = running_live_output_blocks(&content);
     let input = match agena_domain::StructuredObject::try_from(content.input) {
         Ok(input) => input,
         Err(error) => {
@@ -542,7 +624,7 @@ async fn project_tool_presentation(
         return Some(HumanPresentationResource {
             title: agena_tool::tool_title_for_state(&invocation, content.state),
             summary: part.summary.clone().unwrap_or_default(),
-            blocks: Vec::new(),
+            blocks: live_blocks,
         });
     };
     let projection = state

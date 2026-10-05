@@ -52,13 +52,6 @@ pub(crate) async fn acquire_worker_permit() -> Result<tokio::sync::OwnedSemaphor
         })
 }
 
-pub async fn execute(
-    request: &ShellRequest,
-    cancellation: Option<&CancellationToken>,
-) -> Result<ShellOutput, ShellError> {
-    execute_with_sink(request, cancellation, None).await
-}
-
 /// Run a foreground command and, when `live` is attached, report every chunk it
 /// produces while it is still running. The returned [`ShellOutput`] stays the
 /// single source of truth for the terminal result.
@@ -485,7 +478,7 @@ mod tests {
         };
         let started = Instant::now();
 
-        let result = execute(&request, Some(&cancellation)).await;
+        let result = execute_with_sink(&request, Some(&cancellation), None).await;
 
         assert!(matches!(result, Err(ShellError::Cancelled)), "{result:?}");
         assert!(
@@ -528,7 +521,7 @@ mod tests {
             timeout_ms: None,
         };
 
-        let result = execute(&request, Some(&cancellation)).await;
+        let result = execute_with_sink(&request, Some(&cancellation), None).await;
 
         assert!(matches!(result, Err(ShellError::Cancelled)), "{result:?}");
         let pid = std::fs::read_to_string(&pid_path)
@@ -569,10 +562,13 @@ mod tests {
             timeout_ms: Some(2_000),
         };
 
-        tokio::time::timeout(Duration::from_secs(2), execute(&request, None))
-            .await
-            .expect("foreground execution must not wait on inherited descendant pipes")
-            .expect("shell execution");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            execute_with_sink(&request, None, None),
+        )
+        .await
+        .expect("foreground execution must not wait on inherited descendant pipes")
+        .expect("shell execution");
         let pid = std::fs::read_to_string(&pid_path)
             .expect("shell should publish descendant pid")
             .trim()

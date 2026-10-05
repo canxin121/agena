@@ -3103,7 +3103,12 @@ impl SessionManager {
                     // long-running command still shows live progress.
                     _ = tokio::time::sleep(std::time::Duration::from_millis(TITLE_REFRESH_MS)) => {
                         session = self
-                            .refresh_streaming_title(session.id, pending_tool, state.clone())
+                            .refresh_streaming_title(
+                                session.id,
+                                pending_tool,
+                                Some(Self::bounded_live_output(&streamed_output)),
+                                state.clone(),
+                            )
                             .await?;
                         continue;
                     },
@@ -3123,7 +3128,12 @@ impl SessionManager {
             if last_title_refresh.elapsed() >= std::time::Duration::from_millis(TITLE_REFRESH_MS) {
                 last_title_refresh = std::time::Instant::now();
                 session = self
-                    .refresh_streaming_title(session.id, pending_tool, state.clone())
+                    .refresh_streaming_title(
+                        session.id,
+                        pending_tool,
+                        Some(Self::bounded_live_output(&streamed_output)),
+                        state.clone(),
+                    )
                     .await?;
             }
         }
@@ -3225,15 +3235,31 @@ impl SessionManager {
             .await
     }
 
-    /// Refresh the running title of a streaming tool and emit a header-only
-    /// checkpoint. This is the only durable write during a stream: it updates
-    /// the compact title (a tiny UPDATE), never the cumulative output, so a
-    /// long stream costs O(1) writes rather than re-persisting the growing
-    /// text every 2s.
+    /// A running process can produce more output than any reader needs, so the
+    /// checkpoint only carries the tail and stays small.
+    fn bounded_live_output(text: &str) -> &str {
+        const MAX_LIVE_OUTPUT_BYTES: usize = 8 * 1024;
+        if text.len() <= MAX_LIVE_OUTPUT_BYTES {
+            return text;
+        }
+        let mut start = text.len() - MAX_LIVE_OUTPUT_BYTES;
+        while start < text.len() && !text.is_char_boundary(start) {
+            start += 1;
+        }
+        &text[start..]
+    }
+
+    /// Refresh the running title of a streaming tool and emit a checkpoint. This
+    /// is the only durable write during a stream: it updates the compact title
+    /// plus, at most, the bounded tail of what the process has produced so far
+    /// (see [`Self::bounded_live_output`]), never the cumulative output, so a
+    /// long stream costs O(1) writes rather than re-persisting the growing text
+    /// every 2s.
     pub(in crate::session::manager) async fn refresh_streaming_title(
         &self,
         session_id: i64,
         pending_tool: &SessionPendingTool,
+        live_output: Option<&str>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let mut session = self.load_session_with_workspace_root(session_id).await?;
@@ -3246,6 +3272,22 @@ impl SessionManager {
                 .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
             if matches!(tool_part.state, PartState::Pending | PartState::InProgress) {
                 tool_part.state = PartState::InProgress;
+            }
+            if let Some(live) = live_output
+                && let Some(object) = tool_part.content.as_object_mut()
+            {
+                // Bounded display state: the terminal payload replaces it, so
+                // the checkpoint stays small however long the stream runs.
+                let metadata = object
+                    .entry("metadata".to_owned())
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if let Some(metadata) = metadata.as_object_mut() {
+                    metadata.insert(
+                        agena_runtime_contracts::part_content::ToolCallContent::LIVE_OUTPUT_METADATA_KEY
+                            .to_owned(),
+                        serde_json::Value::String(live.to_owned()),
+                    );
+                }
             }
         };
         // Persist the refreshed title as a part delta checkpoint (D10):

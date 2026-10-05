@@ -216,13 +216,6 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<Option<StreamingToolExecution>, ToolError> {
         self.ensure_not_cancelled()?;
-        if !matches!(
-            self.invocation_streaming_mode(invocation),
-            Some(SdkToolStreamingMode::Streaming)
-        ) {
-            return Ok(None);
-        }
-
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
 
         let resolution = self
@@ -231,9 +224,12 @@ impl ToolExecutor {
         self.check_cloud_tool_adapter(&resolution.canonical_name())?;
 
         // Bundled tools execute inside this crate; their plugin handler is a
-        // definition-only adapter that cannot run anything. Stream a bundled
-        // foreground shell here and finalize the terminal frame exactly like the
-        // non-streaming bundled path, so live output and the final result agree.
+        // definition-only adapter that cannot run anything, so a plugin-level
+        // streaming declaration would describe a stream nobody produces. This
+        // crate owns the process instead: a bundled foreground shell is
+        // streamable by construction, and its terminal frame is finalized
+        // exactly like the non-streaming bundled path so live output and the
+        // final result always agree.
         if let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
         {
@@ -318,6 +314,15 @@ impl ToolExecutor {
                     end,
                 }));
             }
+        }
+
+        // Plugin tools stream only when their own definition declares it; the
+        // bundled tools were already served above.
+        if !matches!(
+            self.invocation_streaming_mode(invocation),
+            Some(SdkToolStreamingMode::Streaming)
+        ) {
+            return Ok(None);
         }
 
         let invoke_stream = self.plugins.invoke_tool_stream(

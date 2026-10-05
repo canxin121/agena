@@ -200,8 +200,28 @@ impl ToolCallContent {
         "tool_call"
     }
 
+    /// Metadata key carrying the output a still-running tool has produced so
+    /// far. It is display state only: the terminal payload replaces it once the
+    /// tool returns, so it never becomes part of the durable result.
+    pub const LIVE_OUTPUT_METADATA_KEY: &'static str = "live_output";
+
     pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("tool call content is always JSON serializable")
+    }
+
+    /// Record what a still-running process has produced so a reader can watch it
+    /// before the tool returns. The caller bounds the text.
+    pub fn set_live_output(&mut self, text: impl Into<String>) {
+        self.metadata.insert(
+            Self::LIVE_OUTPUT_METADATA_KEY.to_owned(),
+            Value::String(text.into()),
+        );
+    }
+
+    pub fn live_output(&self) -> Option<&str> {
+        self.metadata
+            .get(Self::LIVE_OUTPUT_METADATA_KEY)
+            .and_then(|value| value.as_str())
     }
 }
 

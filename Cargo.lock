@@ -422,6 +422,7 @@ dependencies = [
 name = "agena-git-http"
 version = "0.1.0"
 dependencies = [
+ "agena-api",
  "agena-failure",
  "agena-process",
  "async-stream",

@@ -2,17 +2,26 @@ use super::*;
 
 impl App {
     pub(crate) fn session_work_height(&self, available: u16) -> u16 {
-        if self.transcript.session_id.is_none() || available == 0 {
+        if !self.session_work_visible() || available == 0 {
             return 0;
         }
-        if self
+        if let Some(state) = self
             .transcript
             .session_id
             .and_then(|id| self.session_work.get(&id))
-            .is_some_and(|s| s.expanded)
-            && available >= 6
+            .filter(|s| s.expanded && available >= 4)
         {
-            available.min(14)
+            let rows = if state.detail.is_some() {
+                state.rendered.len().max(state.diff.lines().count()).max(3)
+            } else if state.tab == Tab::Tasks {
+                self.transcript
+                    .execution
+                    .as_ref()
+                    .map_or(0, |e| e.background_activities.len())
+            } else {
+                state.files.as_ref().map_or(0, |p| p.files.len())
+            };
+            available.min((rows.max(1) + 3).min(14) as u16)
         } else {
             1
         }
@@ -26,6 +35,17 @@ impl App {
         if area.is_empty() {
             return;
         }
+        if !self.session_work_visible() {
+            return;
+        }
+        let has_files = self.session_work_has_files();
+        // Use the same visible vertical edges as the composer. A background
+        // painted to the edges of the terminal cells appears wider than its border.
+        let border = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::LEFT | ratatui::widgets::Borders::RIGHT);
+        let inner = border.inner(area);
+        frame.render_widget(border, area);
+        let area = inner;
         let activities = self
             .transcript
             .execution
@@ -43,7 +63,7 @@ impl App {
         {
             state.detail_activity = Some(activity.clone());
         }
-        let expanded = state.expanded && area.height >= 6;
+        let expanded = state.expanded && area.height >= 4;
         let tasks_label = format!(
             "{} {}",
             self.i18n.text("session-work-tasks"),
@@ -82,7 +102,9 @@ impl App {
         if !activities.is_empty() {
             buttons.push((&tasks_label, PointerAction::Named("work-tasks")));
         }
-        buttons.push((&files_label, PointerAction::Named("work-files")));
+        if has_files {
+            buttons.push((&files_label, PointerAction::Named("work-files")));
+        }
         pointer::render_buttons(frame, Rect { height: 1, ..area }, &buttons);
         if !expanded {
             return;

@@ -27,6 +27,7 @@ export function useWorkspaceChanges(options: { directory: Ref<string>; busy: Ref
     () => {
       snapshot.value = null
       selected.value = null
+      expanded.value = false
       page.value = 0
     },
     { flush: 'sync' },
@@ -72,6 +73,7 @@ export function useWorkspaceChanges(options: { directory: Ref<string>; busy: Ref
   const current = computed(() => (status.data.value?.kind === 'repository' ? status.data.value.status : null))
   const files = computed(() => (status.error.value ? [] : (current.value?.files ?? [])))
   const total = computed(() => (snapshot.value?.kind === 'repository' ? snapshot.value.status.totalFiles : null))
+  const hasChanges = computed(() => (total.value ?? 0) > 0)
   const notRepository = computed(() => snapshot.value?.kind === 'not_repository')
   const statusPending = computed(
     () => Boolean(options.directory.value) && (status.loading.value || (!status.data.value && !status.error.value)),
@@ -86,6 +88,14 @@ export function useWorkspaceChanges(options: { directory: Ref<string>; busy: Ref
       snapshot.value = value
       if (value.kind === 'not_repository') {
         selected.value = null
+        expanded.value = false
+        page.value = 0
+        return
+      }
+      if (value.status.totalFiles === 0) {
+        selected.value = null
+        expanded.value = false
+        page.value = 0
         return
       }
       if (!expanded.value) return
@@ -175,6 +185,7 @@ export function useWorkspaceChanges(options: { directory: Ref<string>; busy: Ref
     current,
     files,
     total,
+    hasChanges,
     notRepository,
     statusPending,
     hasStaged,

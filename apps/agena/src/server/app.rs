@@ -71,8 +71,25 @@ fn fs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
 /// Workbench API for filesystem, Git, preview, terminal, and MCP controls.
 /// These UI-oriented endpoints are versioned separately from the resource API
 /// but share the same bearer-token boundary.
+fn workspace_git_reads_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
+    Router::new()
+        .route(
+            "/api/v1/workbench/git/status",
+            get(crate::server::git::git_status).layer(middleware::map_response(
+                crate::server::git::git_error_envelope,
+            )),
+        )
+        .route(
+            "/api/v1/workbench/git/diff",
+            get(crate::server::git::git_diff).layer(middleware::map_response(
+                crate::server::git::git_error_envelope,
+            )),
+        )
+}
+
 fn server_api_router() -> Router<Arc<AppState>> {
     fs_router()
+        .merge(workspace_git_reads_router())
         .route(
             "/api/v1/server/mcp",
             get(crate::server::mcp::get_mcp_server_control)
@@ -141,20 +158,12 @@ fn server_api_router() -> Router<Arc<AppState>> {
             ),
         )
         .route(
-            "/api/v1/workbench/git/status",
-            get(crate::server::git::git_status),
-        )
-        .route(
             "/api/v1/workbench/git/watch",
             get(crate::server::git::git_watch),
         )
         .route(
             "/api/v1/workbench/git/blame",
             get(crate::server::git::git_blame),
-        )
-        .route(
-            "/api/v1/workbench/git/diff",
-            get(crate::server::git::git_diff),
         )
         .route(
             "/api/v1/workbench/git/file-diff",

@@ -124,6 +124,62 @@ impl SessionWorkState {
 }
 
 impl App {
+    fn session_work_has_files(&self) -> bool {
+        self.transcript
+            .session_id
+            .and_then(|id| self.session_work.get(&id))
+            .and_then(|state| state.files.as_ref())
+            .is_some_and(|files| files.total_files > 0)
+    }
+
+    fn session_work_has_tasks(&self) -> bool {
+        self.transcript
+            .execution
+            .as_ref()
+            .is_some_and(|e| !e.background_activities.is_empty())
+    }
+
+    pub(crate) fn session_work_visible(&self) -> bool {
+        self.transcript.session_id.is_some()
+            && (self.session_work_has_files()
+                || self.session_work_has_tasks()
+                || self.session_work_has_status())
+    }
+
+    fn heal_session_work_selection(&mut self, id: i64) {
+        if self.transcript.session_id != Some(id) {
+            return;
+        }
+        let has_files = self.session_work_has_files();
+        let has_tasks = self.session_work_has_tasks();
+        let has_status = self.session_work_has_status();
+        let Some(state) = self.session_work.get_mut(&id) else {
+            return;
+        };
+        let tab_available = match state.tab {
+            Tab::Files => has_files,
+            Tab::Tasks => has_tasks,
+            Tab::Status => has_status,
+        };
+        if !tab_available {
+            state.tab = if has_files {
+                Tab::Files
+            } else if has_tasks {
+                Tab::Tasks
+            } else if has_status {
+                Tab::Status
+            } else {
+                Tab::Files
+            };
+            state.expanded = false;
+            state.select_detail(None);
+            if self.work_focus == Some(id) {
+                self.work_focus = None;
+                self.focus = Focus::Composer;
+            }
+        }
+    }
+
     fn session_work_has_status(&self) -> bool {
         self.transcript
             .execution
@@ -174,7 +230,6 @@ impl App {
             }
         }
         let busy = self.active_run_session_id() == Some(id);
-        let has_status = self.session_work_has_status();
         let state = self.session_work.entry(id).or_default();
         if state.directory != directory {
             *state = SessionWorkState {
@@ -182,14 +237,8 @@ impl App {
                 ..Default::default()
             };
         }
-        if state.tab == Tab::Status && !has_status {
-            state.tab = Tab::Files;
-            state.expanded = false;
-            if self.work_focus == Some(id) {
-                self.work_focus = None;
-                self.focus = Focus::Composer;
-            }
-        }
+        self.heal_session_work_selection(id);
+        let state = self.session_work.get_mut(&id).expect("work state exists");
         let now = Instant::now();
         let interval = if state.file_error.is_some() {
             60
@@ -278,6 +327,9 @@ impl App {
         let Some(id) = self.transcript.session_id else {
             return;
         };
+        if !self.session_work_visible() {
+            return;
+        }
         if action == "work-control-primary" {
             let task = self.session_work.get(&id).and_then(|s| {
                 if let Some(Detail::Task(task)) = &s.detail {
@@ -302,7 +354,14 @@ impl App {
             self.control_work_activity(action);
             return;
         }
-        let has_status = self.session_work_has_status();
+        let tabs: Vec<_> = [
+            (Tab::Files, self.session_work_has_files()),
+            (Tab::Tasks, self.session_work_has_tasks()),
+            (Tab::Status, self.session_work_has_status()),
+        ]
+        .into_iter()
+        .filter_map(|(tab, available)| available.then_some(tab))
+        .collect();
         let state = self.session_work.entry(id).or_default();
         if matches!(
             action,
@@ -332,17 +391,11 @@ impl App {
                 state.file_at = None;
             }
             "work-next-tab" => {
-                state.tab = match state.tab {
-                    Tab::Tasks => Tab::Files,
-                    Tab::Files => {
-                        if has_status {
-                            Tab::Status
-                        } else {
-                            Tab::Tasks
-                        }
-                    }
-                    Tab::Status => Tab::Tasks,
-                };
+                let next = tabs
+                    .iter()
+                    .position(|tab| *tab == state.tab)
+                    .map_or(0, |i| (i + 1) % tabs.len());
+                state.tab = tabs[next];
                 state.select_detail(None);
                 state.selected = 0;
                 state.file_at = None;
@@ -366,13 +419,17 @@ impl App {
                 state.page = state.page.saturating_sub(1);
                 state.file_at = None;
                 state.selected = 0;
-                state.files = None;
+                if let Some(files) = &mut state.files {
+                    files.files.clear();
+                }
             }
             "work-next" => {
                 if state.files.as_ref().is_some_and(|f| f.has_more) {
                     state.page += 1;
                     state.file_at = None;
-                    state.files = None;
+                    if let Some(files) = &mut state.files {
+                        files.files.clear();
+                    }
                     state.selected = 0;
                 }
             }

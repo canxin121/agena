@@ -17,10 +17,19 @@ impl App {
         let tx = self.tx.clone();
         state.file_task = Some(ReadTask(tokio::spawn(async move {
             let result = tokio::time::timeout(Duration::from_secs(15), async {
-                let value = application
+                let value = match application
                     .client()
                     .workspace_git_status(&directory, page * 40, summary)
-                    .await?;
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(agena_client::ClientError::Api(error))
+                        if error.problem.code.as_str() == "not_git_repo" =>
+                    {
+                        return Ok(WorkResult::Files(FilePage::default()));
+                    }
+                    Err(error) => return Err(anyhow::Error::from(error)),
+                };
                 Ok::<_, anyhow::Error>(WorkResult::Files(serde_json::from_value(value)?))
             })
             .await
@@ -237,6 +246,9 @@ impl App {
                     _ => state.control_error = Some(error),
                 }
             }
+        }
+        if channel == 0 {
+            self.heal_session_work_selection(id);
         }
     }
 

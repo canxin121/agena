@@ -117,7 +117,6 @@ const {
   handleWheel,
   isAtBottom,
   navigableMessageIds,
-  navBottomOffset,
   navIndex,
   navTotalLabel,
   navCurrentOrdinal,
@@ -276,9 +275,14 @@ function handleAttachProjectFromPanel() {
 // A classic scrollbar reserves space in the transcript. Reserve that same
 // space beside the composer so their shared column aligns on every platform.
 const scrollbarGutter = ref(0)
+const workspaceChangesDockRef = ref<HTMLElement | null>(null)
+const workspaceChangesDockHeight = ref(0)
 useResizeObserver(scrollEl, () => {
   const element = scrollEl.value
   scrollbarGutter.value = element ? Math.max(0, element.offsetWidth - element.clientWidth) : 0
+})
+useResizeObserver(workspaceChangesDockRef, () => {
+  workspaceChangesDockHeight.value = workspaceChangesDockRef.value?.getBoundingClientRect().height ?? 0
 })
 
 // Resolve popover anchors to the trigger button element.
@@ -531,13 +535,6 @@ void sessionActionsMenuRef
                   :retry="retryStatus"
                   :countdown="retryCountdownLabel"
                 />
-                <WorkspaceChangesSection
-                  v-if="chat.selectedSessionId"
-                  :key="chat.selectedSessionId + ':files'"
-                  :session-id="chat.selectedSessionId"
-                  :directory="sessionDirectory || ''"
-                  :busy="currentPhase !== 'idle'"
-                />
                 <PlanSection
                   v-if="ctx.planVisible.value"
                   v-model:expanded="ctx.planViewerOpen.value"
@@ -554,6 +551,23 @@ void sessionActionsMenuRef
             </div>
           </div>
 
+          <div
+            ref="workspaceChangesDockRef"
+            class="flex min-h-0 max-h-[45%] shrink-0 flex-col overflow-hidden bg-background/85"
+            :style="{ paddingInlineEnd: `${scrollbarGutter}px` }"
+            data-workspace-changes-dock="true"
+          >
+            <div class="chat-column flex min-h-0 flex-col">
+              <WorkspaceChangesSection
+                v-if="chat.selectedSessionId"
+                :key="chat.selectedSessionId + ':files'"
+                :session-id="chat.selectedSessionId"
+                :directory="sessionDirectory || ''"
+                :busy="currentPhase !== 'idle'"
+              />
+            </div>
+          </div>
+
           <!-- Floating message navigation (user messages only) -->
           <div
             v-if="
@@ -564,7 +578,7 @@ void sessionActionsMenuRef
                 (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted))
             "
             class="pointer-events-none absolute right-3 z-20 flex flex-col items-center gap-2"
-            :style="{ bottom: navBottomOffset }"
+            :style="{ bottom: `${workspaceChangesDockHeight + 12}px` }"
           >
             <IconButton
               v-if="

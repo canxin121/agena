@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use std::{future::Future, path::PathBuf, pin::Pin};
 
+mod error;
 mod git;
 mod git2_utils;
 mod path_utils;
@@ -59,5 +60,6 @@ pub fn home_dir_path() -> Option<PathBuf> {
     path_utils::home_dir_path()
 }
 
+pub use error::git_error_envelope;
 pub use git::*;
 pub use git2_utils::{Git2OpenError, open_repo_discover};

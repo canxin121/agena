@@ -24,6 +24,7 @@ const {
   current,
   files,
   total,
+  hasChanges,
   notRepository,
   statusPending,
   hasStaged,
@@ -55,7 +56,8 @@ const oldPath = computed(() => (staged.value ? selected.value?.indexOldPath : se
 
 <template>
   <SessionSection
-    v-if="directory"
+    v-if="hasChanges"
+    docked
     v-model:expanded="expanded"
     :title="t('chat.sessionWork.changes')"
     :summary="summary"
@@ -72,11 +74,7 @@ const oldPath = computed(() => (staged.value ? selected.value?.indexOldPath : se
         <RiRefreshLine class="h-3.5 w-3.5" />
       </IconButton>
     </template>
-    <div
-      ref="bodyRef"
-      class="max-h-[min(50dvh,32rem)] min-w-0 overflow-auto overscroll-contain"
-      :aria-busy="statusPending"
-    >
+    <div ref="bodyRef" class="min-h-0 min-w-0 overflow-auto overscroll-contain" :aria-busy="statusPending">
       <div class="mb-2 text-xs text-muted-foreground">
         <p>{{ t('chat.sessionWork.workspaceScope') }}</p>
         <p class="mt-1 font-mono [overflow-wrap:anywhere]">{{ directory }}</p>

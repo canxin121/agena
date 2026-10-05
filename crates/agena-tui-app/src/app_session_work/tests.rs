@@ -101,14 +101,14 @@ async fn tool_execution_stays_out_of_accessories_and_resolved_retry_collapses() 
         .execution
         .provider_retry = None;
     app.heal_session_work();
-    assert_eq!(app.session_work_height(30), 1);
+    assert_eq!(app.session_work_height(30), 0);
     assert_eq!(app.work_focus, None);
     let resumed = render(&mut app, &mut terminal);
     assert!(!resumed.contains("retrying shortly"));
     assert!(!resumed.contains(&app.i18n.text("session-work-waiting")));
     app.handle_session_work_action("work-toggle");
     assert_eq!(app.session_work[&7].tab, Tab::Files);
-    assert!(app.session_work[&7].expanded);
+    assert!(!app.session_work[&7].expanded);
 }
 
 #[tokio::test]
@@ -128,6 +128,8 @@ async fn accessories_align_with_composer_and_leave_room_for_chat() {
         terminal.draw(|frame| app.draw(frame)).unwrap();
         assert_eq!(app.work_area.width, app.surface_layout.composer_outer.width);
         assert_eq!(app.work_area.x, app.surface_layout.composer_outer.x);
+        assert_eq!(app.work_area.bottom(), app.surface_layout.composer_outer.y);
+        assert_eq!(app.work_area.height, if height >= 20 { 4 } else { 1 });
         assert!(app.layout.transcript_body.height > 0);
         let text: String = terminal
             .backend()
@@ -267,6 +269,7 @@ async fn visible_file_rows_are_clickable_without_leaving_the_conversation() {
 async fn panel_header_uses_full_width_and_keyboard_entry_needs_no_function_key() {
     let mut app = app();
     app.composer.insert_str("draft to preserve");
+    app.session_work.entry(7).or_default().files = Some(files());
     for width in [28, 40, 80] {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
         terminal
@@ -277,6 +280,8 @@ async fn panel_header_uses_full_width_and_keyboard_entry_needs_no_function_key()
         assert!(text.contains("Workspace") && text.contains("Files"));
         assert!(!text.contains("F6") && !text.contains('…') && !text.contains("Ctrl"));
         assert_eq!(cells[0].bg, cells[usize::from(width) - 1].bg);
+        assert_eq!(cells[0].symbol(), "│");
+        assert_eq!(cells[usize::from(width) - 1].symbol(), "│");
     }
     assert!(!app.handle_session_work_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)));
     let toggle = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL);
@@ -293,4 +298,118 @@ async fn panel_header_uses_full_width_and_keyboard_entry_needs_no_function_key()
             .iter()
             .all(|p| !matches!(p.kind, "btw" | "side" | "side-parent"))
     );
+}
+
+#[tokio::test]
+async fn empty_loading_and_unknown_workspace_changes_do_not_take_composer_space() {
+    let mut app = app();
+    app.composer.insert_str("preserved draft");
+    let mut terminal = Terminal::new(TestBackend::new(70, 24)).unwrap();
+    for state in [
+        SessionWorkState::default(),
+        SessionWorkState {
+            expanded: true,
+            files: Some(FilePage::default()),
+            ..Default::default()
+        },
+        SessionWorkState {
+            file_task: Some(ReadTask(tokio::spawn(std::future::pending()))),
+            ..Default::default()
+        },
+        SessionWorkState {
+            file_error: Some("Failed to read status".into()),
+            ..Default::default()
+        },
+    ] {
+        app.session_work.insert(7, state);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert_eq!(app.work_area.height, 0);
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(!text.contains(&app.i18n.text("session-work-title")));
+        assert!(!text.contains("Failed to read status"));
+        assert!(text.contains("preserved draft"));
+        app.handle_session_work_action("work-toggle");
+        assert_eq!(app.work_focus, None);
+    }
+}
+
+#[tokio::test]
+async fn cleared_changes_close_the_preview_and_return_focus_to_the_composer() {
+    let mut app = app();
+    app.session_work.insert(
+        7,
+        SessionWorkState {
+            expanded: true,
+            files: Some(files()),
+            file_request: 1,
+            detail: Some(Detail::File("src/main.rs".into(), false)),
+            diff: "old diff".into(),
+            ..Default::default()
+        },
+    );
+    app.work_focus = Some(7);
+    app.focus = Focus::Transcript;
+    app.handle_session_work_loaded(7, 1, 0, Ok(WorkResult::Files(FilePage::default())));
+    assert!(!app.session_work_visible());
+    assert!(!app.session_work[&7].expanded);
+    assert!(app.session_work[&7].detail.is_none());
+    assert!(app.session_work[&7].diff.is_empty());
+    assert_eq!(app.work_focus, None);
+    assert_eq!(app.focus, Focus::Composer);
+}
+
+#[tokio::test]
+async fn work_panel_stays_above_the_composer_when_chat_scrolls_and_other_sections_exist() {
+    let mut app = app();
+    let now = chrono::Utc::now();
+    app.transcript.messages = (1..=60)
+        .map(|id| agena_api::resource::RunResource {
+            id,
+            session_id: 7,
+            role: agena_api::resource::RunRole::Assistant,
+            state: agena_api::resource::RunStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![crate::TranscriptFixture::text_part(
+                id * 10,
+                id,
+                now,
+                agena_domain::ExecutionStatus::Completed,
+                format!("Message {id}\nA readable transcript line"),
+            )]),
+        })
+        .collect();
+    app.open_btw("");
+    app.collapse_btw(7);
+    app.session_work.entry(7).or_default().files = Some(files());
+    app.session_work.get_mut(&7).unwrap().expanded = true;
+    for i18n in [I18n::english(), I18n::resolve(Some("zh-CN"), None)] {
+        app.i18n = i18n;
+        app.transcript.viewport.follow_tail();
+        let mut terminal = Terminal::new(TestBackend::new(70, 26)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let work = app.work_area;
+        assert_eq!(work.bottom(), app.surface_layout.composer_outer.y);
+        assert!(app.btw_area.bottom() <= work.y);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(work.x, work.y)].symbol(), "│");
+        assert_eq!(buffer[(work.right() - 1, work.y)].symbol(), "│");
+        assert!(app.transcript.viewport.top > 0);
+        app.transcript.scroll_to_top(
+            app.layout.transcript_body.width,
+            app.layout.transcript_body.height,
+        );
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert_eq!(app.transcript.viewport.top, 0);
+        assert_eq!(app.work_area, work);
+    }
 }

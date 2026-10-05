@@ -178,9 +178,8 @@ impl App {
             .height
             .saturating_sub(composer_height)
             .saturating_sub(6);
-        let headers = self.inline_plan_height(1)
-            + self.btw_inline_height(1)
-            + u16::from(self.transcript.session_id.is_some());
+        let headers =
+            self.inline_plan_height(1) + self.btw_inline_height(1) + self.session_work_height(1);
         let section_space = section_space.max(
             headers.min(
                 area.height
@@ -202,19 +201,19 @@ impl App {
             area,
             &[
                 VerticalSectionSize::Flexible(0),
-                VerticalSectionSize::Fixed(work_height),
                 VerticalSectionSize::Fixed(plan_height),
                 VerticalSectionSize::Fixed(btw_height),
+                VerticalSectionSize::Fixed(work_height),
                 VerticalSectionSize::Fixed(composer_height),
             ],
         );
 
         let transcript_host_area = vertical[0];
-        let work_area = vertical[1];
-        let plan_area = vertical[2];
-        let btw_area = vertical[3];
+        let plan_area = vertical[1];
+        let btw_area = vertical[2];
+        let work_area = vertical[3];
         let composer = vertical[4];
-        if work_area.height < 6 && self.work_focus.is_some() {
+        if work_area.height < 4 && self.work_focus.is_some() {
             self.work_focus = None;
             self.focus = Focus::Composer;
         }
@@ -257,7 +256,14 @@ impl App {
 
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
-        self.render_session_work(frame, work_area);
+        self.render_session_work(
+            frame,
+            Rect {
+                x: self.surface_layout.composer_outer.x,
+                width: self.surface_layout.composer_outer.width,
+                ..work_area
+            },
+        );
         self.render_inline_plan(frame, plan_area);
         self.render_btw_inline(frame, btw_area);
     }

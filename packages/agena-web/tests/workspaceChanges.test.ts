@@ -204,8 +204,38 @@ test('workspace reads stay lazy and discard old pages and counts when changing d
     calls.at(-1)!.reject(error)
     await settle()
     expect(state.notRepository.value).toBe(true)
+    expect(state.hasChanges.value).toBe(false)
     expect(state.status.error.value).toBe('')
     expect(state.total.value).toBe(null)
+  }))
+
+test('the dock only appears for confirmed changes and closes when changes disappear', async () =>
+  withPanel(async ({ state, directory, calls, advance, settle }) => {
+    expect(state.statusPending.value).toBe(true)
+    expect(state.hasChanges.value).toBe(false)
+    calls[0]!.resolve(snapshot([], 0))
+    await settle()
+    expect(state.hasChanges.value).toBe(false)
+    await advance(30_000)
+    calls.at(-1)!.resolve(snapshot([], 1))
+    await settle()
+    expect(state.hasChanges.value).toBe(true)
+    state.expanded.value = true
+    await advance(750)
+    calls.at(-1)!.resolve(snapshot([file('modified.ts')]))
+    await settle()
+    state.select(file('modified.ts'))
+    const preview = calls.at(-1)!
+    await advance(750)
+    void state.status.refresh()
+    calls.at(-1)!.resolve(snapshot([], 0))
+    await settle()
+    expect(state.hasChanges.value).toBe(false)
+    expect(state.expanded.value).toBe(false)
+    expect(state.selected.value).toBe(null)
+    expect(preview.signal.aborted).toBe(true)
+    directory.value = '/repo/b'
+    expect(state.hasChanges.value).toBe(false)
   }))
 
 test('diff expansion cancels an older read and uses the correct rename side and new budget', async () =>

@@ -8903,7 +8903,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `discovery` `mutate`
 
-**Runtime**: streaming `buffered`
+**Runtime**: streaming `streaming`
 
 **Help**:
 > Traverse links breadth first with bounded concurrency (default 4, maximum 8; also capped by config). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.
@@ -9081,7 +9081,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 **Tags**: `network` `read_only`
 
-**Runtime**: streaming `buffered`
+**Runtime**: streaming `streaming`
 
 **Help**:
 > Fetch 1–8 known URLs concurrently (default concurrency 4, maximum 8), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).

@@ -38,8 +38,8 @@ use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    ActivitySourceAdapter, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolStreamSink,
-    async_trait,
+    ActivitySourceAdapter, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
+    ToolStreamSink, async_trait,
 };
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
@@ -2123,8 +2123,10 @@ impl WebPlugin {
         let done = std::sync::atomic::AtomicUsize::new(0);
         let done = &done;
         if let Some(sink) = progress {
-            sink.text(format!("Fetching {total} URL(s), concurrency {concurrency}\n"))
-                .await;
+            sink.text(format!(
+                "Fetching {total} URL(s), concurrency {concurrency}\n"
+            ))
+            .await;
         }
         let results = content::batch(urls, concurrency, |raw| async move {
             let result = async {
@@ -2261,9 +2263,31 @@ impl WebPlugin {
     #[tool(
         summary = "Crawl a site and cache indexed pages locally.",
         help = "Traverse links breadth first with bounded concurrency (default 4, maximum 8; also capped by config). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.",
+        stream = invoke_crawl_stream,
         tags(network, discovery, mutate)
     )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
+        self.run_crawl(input, None).await
+    }
+
+    /// Streaming variant: a crawl runs for a while, so report where it starts
+    /// before the final report arrives.
+    async fn invoke_crawl_stream(
+        &self,
+        sink: ToolStreamSink,
+        input: &CrawlRunInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.run_crawl(input, Some(&sink)).await
+    }
+
+    async fn run_crawl(
+        &self,
+        input: &CrawlRunInput,
+        progress: Option<&ToolStreamSink>,
+    ) -> SdkResult<ToolInvokeOutput> {
+        if let Some(sink) = progress {
+            sink.text(format!("Crawling {}\n", input.start_url)).await;
+        }
         let start_url =
             prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?;
         let store = self.store()?;

@@ -1180,13 +1180,10 @@ mod tests {
             .as_object_mut()
             .expect("record object")
             .remove("settings");
-        legacy
-            .as_object_mut()
-            .expect("record object")
-            .insert(
-                "config".to_owned(),
-                settings.unwrap_or(serde_json::Value::Null),
-            );
+        legacy.as_object_mut().expect("record object").insert(
+            "config".to_owned(),
+            settings.unwrap_or(serde_json::Value::Null),
+        );
         let error = serde_json::from_value::<agena_plugin_host::config::ConfiguredPlugin>(legacy)
             .expect_err("the legacy `config` field must be rejected");
         assert!(error.to_string().contains("unknown field `config`"));

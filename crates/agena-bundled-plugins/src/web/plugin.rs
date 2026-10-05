@@ -38,7 +38,8 @@ use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    ActivitySourceAdapter, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, async_trait,
+    ActivitySourceAdapter, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolStreamSink,
+    async_trait,
 };
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
@@ -2093,12 +2094,38 @@ impl WebPlugin {
     #[tool(
         summary = "Read several independent web pages concurrently.",
         help = "Fetch 1–8 known URLs concurrently (default concurrency 4, maximum 8), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).",
+        stream = invoke_fetch_many_stream,
         tags(network, read_only)
     )]
     async fn invoke_fetch_many(&self, input: &FetchManyInput) -> SdkResult<ToolInvokeOutput> {
+        self.run_fetch_many(input, None).await
+    }
+
+    /// Streaming variant: report every URL as it settles, so a reader watches
+    /// the pages arrive instead of waiting for the slowest one.
+    async fn invoke_fetch_many_stream(
+        &self,
+        sink: ToolStreamSink,
+        input: &FetchManyInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.run_fetch_many(input, Some(&sink)).await
+    }
+
+    async fn run_fetch_many(
+        &self,
+        input: &FetchManyInput,
+        progress: Option<&ToolStreamSink>,
+    ) -> SdkResult<ToolInvokeOutput> {
         let urls = content::unique_urls(&input.urls)?;
         let concurrency = content::bounded(input.concurrency, 4, 8, "concurrency")?;
         let max_chars = content::bounded(input.max_chars, 4000, 8000, "max_chars")?;
+        let total = urls.len();
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        let done = &done;
+        if let Some(sink) = progress {
+            sink.text(format!("Fetching {total} URL(s), concurrency {concurrency}\n"))
+                .await;
+        }
         let results = content::batch(urls, concurrency, |raw| async move {
             let result = async {
                 let url = prepare_fetch_url(&raw).map_err(crawl_error_to_plugin)?;
@@ -2107,6 +2134,11 @@ impl WebPlugin {
                 let output = self.page_output(page, None, max_chars).await?;
                 Ok::<_, PluginError>((output, usable))
             }.await;
+            if let Some(sink) = progress {
+                let position = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let state = if result.is_ok() { "ok" } else { "failed" };
+                sink.text(format!("[{position}/{total}] {state} {raw}\n")).await;
+            }
             match result {
                 Ok((output, usable)) => (serde_json::json!({"url":raw,"ok":true,"usable":usable,"page":output.payload}), output.output_text, usable),
                 Err(error) => {

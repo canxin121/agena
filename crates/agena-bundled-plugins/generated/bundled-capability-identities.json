@@ -1916,7 +1916,8 @@
       "hooks": [
         "init",
         "shutdown",
-        "tool.invoke"
+        "tool.invoke",
+        "tool.invoke.stream"
       ],
       "id": "agena.web",
       "tools": [
@@ -2085,7 +2086,7 @@
         {
           "canonical_name": "agena.web.fetch_many",
           "conditional": null,
-          "definition_identity": "0c7d4c079eafc7fb7475a80a3d83af22c55f1a85425293b18e13b166b7d16173",
+          "definition_identity": "2418be68151fe33a2a3a9565602c68e5ff3fa1b2c973f64de457057532a649fc",
           "gateway": false,
           "input_schema_sha256": "70afbd87606f42484a34b8d65d2e739c145ed8016f0ebcebde9442d265a714ee",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",

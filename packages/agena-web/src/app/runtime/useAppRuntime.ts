@@ -164,6 +164,13 @@ export function useAppRuntime() {
     const state = document.visibilityState
     const visible = state === 'visible'
 
+    if (!visible && sse) {
+      // A hidden tab displays nothing, so the live stream pauses; the resume
+      // path reconnects from the stored cursor and replays what was missed.
+      sse.close()
+      sse = null
+    }
+
     // Only trigger a resync on hidden -> visible transitions.
     if (visible && lastVisibilityState && lastVisibilityState !== 'visible') {
       if (pendingResumeReason) {

@@ -45,7 +45,15 @@ export function useGitAutoFetch(opts: {
   }
 
   function canRun(): boolean {
-    return Boolean(repoRoot.value) && gitReady.value && hasRemotes.value && !repoBusy.value
+    // Automatic fetch and sync are background maintenance: a hidden tab has no
+    // viewer to update, and the next interval picks the work up once visible.
+    return (
+      Boolean(repoRoot.value) &&
+      gitReady.value &&
+      hasRemotes.value &&
+      !repoBusy.value &&
+      document.visibilityState !== 'hidden'
+    )
   }
 
   function scheduleFetch() {

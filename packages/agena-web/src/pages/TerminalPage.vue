@@ -722,6 +722,15 @@ function openTerminalUiStateEvents() {
   terminalStateEventsSource = client
 }
 
+/**
+ * A hidden tab shows nothing, so its terminal list stream pauses; reopening
+ * resumes from the stored event cursor instead of replaying the whole state.
+ */
+function handleTerminalUiStateVisibility() {
+  if (document.visibilityState === 'hidden') closeTerminalUiStateEvents()
+  else openTerminalUiStateEvents()
+}
+
 async function bootstrapTerminalUiState() {
   try {
     const remote = await getTerminalUiState()
@@ -1902,6 +1911,7 @@ onMounted(() => {
   })
 
   window.addEventListener('resize', scheduleResize)
+  document.addEventListener('visibilitychange', handleTerminalUiStateVisibility)
 
   // ResizeObserver catches layout changes that don't trigger window resize
   // (e.g. switching tabs/panels).
@@ -1941,6 +1951,7 @@ watch(
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', scheduleResize)
+  document.removeEventListener('visibilitychange', handleTerminalUiStateVisibility)
   closeTerminalUiStateEvents()
 
   if (terminalStatePersistTimer !== null) {

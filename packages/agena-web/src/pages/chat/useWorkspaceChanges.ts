@@ -51,7 +51,9 @@ export function useWorkspaceChanges(options: { directory: Ref<string>; busy: Ref
     key: computed(() =>
       options.directory.value ? JSON.stringify([options.directory.value, expanded.value, page.value]) : '',
     ),
-    interval: () => (options.busy.value || expanded.value ? 5000 : 30_000),
+    // Fast refreshes belong to a rendered panel; a clean tree shows no row,
+    // so it keeps only the slow discovery heartbeat.
+    interval: () => (hasChanges.value || expanded.value ? 5000 : 30_000),
     async load(key, signal) {
       const [directory, open, index] = JSON.parse(key) as [string, boolean, number]
       try {

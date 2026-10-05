@@ -70,6 +70,9 @@ export function useSessionPlan(
   })
   onMounted(() => {
     poll = setInterval(() => {
+      // Nothing rendered means nothing to refresh: a plan appears when the
+      // session signals a change, not from a timer that queries an empty viewer.
+      if (!visible.value) return
       const interval = busy() || expanded.value ? 5_000 : viewer.snapshot.value ? 30_000 : 60_000
       if (Date.now() - lastStarted >= interval) scheduleRefresh()
     }, 1_000)

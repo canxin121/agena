@@ -200,6 +200,17 @@ function scheduleStaleSectionRetry(section: ToolDetailSection, attempt: number, 
 // not do. Keep the rendered snapshot while the part is live and refresh the
 // expanded sections once it settles, so a stale running snapshot still cannot
 // overwrite the completed result.
+/**
+ * Refresh the expanded sections of a settled part. Reloading them is display
+ * work, so a hidden tab defers it until the reader is looking again.
+ */
+function refreshSettledSections() {
+  if (document.hidden || !props.expanded || !detailsExpanded.value) return
+  for (const section of toolDetailSections) {
+    if (sectionExpanded(section)) void loadSection(section, { force: true })
+  }
+}
+
 watch(
   () => [props.part.status, props.part.source.revision, props.part.source.updatedAt] as const,
   (next, previous) => {
@@ -209,15 +220,14 @@ watch(
     partGeneration += 1
     cancelSectionRequests()
     loadingSections.value = new Set()
-    if (!props.expanded || !detailsExpanded.value) return
-    for (const section of toolDetailSections) {
-      if (sectionExpanded(section)) void loadSection(section, { force: true })
-    }
+    refreshSettledSections()
   },
 )
+document.addEventListener('visibilitychange', refreshSettledSections)
 onBeforeUnmount(() => {
   partGeneration += 1
   cancelSectionRequests()
+  document.removeEventListener('visibilitychange', refreshSettledSections)
 })
 
 function toggleOuter() {

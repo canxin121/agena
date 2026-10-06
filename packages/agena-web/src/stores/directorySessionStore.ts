@@ -841,6 +841,10 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     after((session) => {
       if (disposed || !session) return
       const directoryId = String(session.workspace_id)
+      const needsReveal =
+        uiPrefs.value.collapsedDirectoryIds.includes(directoryId) ||
+        (!session.parent_id && (uiPrefs.value.sessionRootPageByDirectoryId[directoryId] ?? 0) > 0) ||
+        (Boolean(session.parent_id) && !uiPrefs.value.expandedParentSessionIds.includes(String(session.parent_id)))
       const patch: Partial<ChatSidebarUiPrefs> = {
         collapsedDirectoryIds: uiPrefs.value.collapsedDirectoryIds.filter((id) => id !== directoryId),
       }
@@ -858,8 +862,12 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       }
       applyAuthoritativeUiPrefs(patchChatSidebarUiPrefs(uiPrefs.value, patch))
       syncWorkspaceSubscriptions(directoryPageRows.value)
-      // The successful write already invalidated the relevant revisions.
-      // Updating preferences here lets that same targeted refresh reveal it.
+      // Chat hydration may finish after the mutation's revision check. A
+      // newly revealed section still needs its page read in that case.
+      if (needsReveal && sidebarInitialized && directoriesById.value[directoryId]) {
+        dirtyDirectories.add(directoryId)
+        sidebarSync.invalidate(180)
+      }
     })
   })
   watch(

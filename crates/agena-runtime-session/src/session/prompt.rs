@@ -23,6 +23,22 @@ use agena_runtime_tools::tool::{
 pub(crate) const MAX_MODEL_TOOL_OUTPUT_LINES: usize = 2_000;
 pub(crate) const MAX_MODEL_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 
+static PROMPT_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+pub(crate) async fn bound_model_tool_outputs_async(
+    mut turns: Vec<CompletionInputRun>,
+    workspace_root: Option<PathBuf>,
+    session_id: i64,
+) -> Result<Vec<CompletionInputRun>, crate::AppError> {
+    PROMPT_WORKERS
+        .run(move || {
+            bound_model_tool_outputs(&mut turns, workspace_root.as_deref(), session_id);
+            turns
+        })
+        .await
+        .map_err(|error| crate::AppError::Internal(format!("prompt output worker failed: {error}")))
+}
+
 /// Bound every non-empty tool result the model is about to see.
 ///
 /// A result within budget is left byte-for-byte untouched. A result over

@@ -1423,8 +1423,10 @@ impl SessionManager {
                 tool_api_functions.as_slice(),
                 state.as_ref(),
             );
-            let provider_request_shape =
-                state.provider_registry.prompt_cache_shape(&options.model)?;
+            let provider_request_shape = state
+                .provider_registry
+                .prompt_cache_shape_async(&options.model)
+                .await?;
             let continuation_supported = state
                 .provider_registry
                 .supports_prompt_continuation(&options.model)
@@ -1449,11 +1451,12 @@ impl SessionManager {
                 &state.tool_executor,
             )
             .await;
-            crate::session::prompt::bound_model_tool_outputs(
-                &mut prepared.turns,
-                Some(state.tool_executor.workspace_root()),
+            prepared.turns = crate::session::prompt::bound_model_tool_outputs_async(
+                prepared.turns,
+                Some(state.tool_executor.workspace_root().to_path_buf()),
                 session.id,
-            );
+            )
+            .await?;
             let (replayed_tool_calls, replayed_tool_results, unanswered_tool_call) =
                 prompt_window::prompt_tool_call_status(&prepared.turns);
             if unanswered_tool_call {
@@ -1625,7 +1628,8 @@ impl SessionManager {
                     };
                     let anchored_provider_request_shape = match state
                         .provider_registry
-                        .prompt_cache_shape(&options.model)
+                        .prompt_cache_shape_async(&options.model)
+                        .await
                     {
                         Ok(shape) => shape,
                         Err(err) => {
@@ -2180,7 +2184,10 @@ impl SessionManager {
         let semaphore = Arc::clone(&state.tool_execution_semaphore);
         let cancellation = self.execution_registry.cancellation_token(session_id).await;
 
-        let mut handles = Vec::with_capacity(pending_tools.len());
+        // JoinSet owns every child. Cancellation, a panic, or a dropped batch
+        // aborts outstanding children instead of detaching their executions
+        // and leaking the shared tool permits into the next turn.
+        let mut tasks = tokio::task::JoinSet::new();
         let batch_executor = match pending_tools.first() {
             Some(pending_tool) => state
                 .tool_executor
@@ -2192,45 +2199,69 @@ impl SessionManager {
                 )),
             None => return Ok(Vec::new()),
         };
-        for pending_tool in pending_tools {
+        for (index, pending_tool) in pending_tools.into_iter().enumerate() {
             let scoped_executor = batch_executor
                 .clone()
                 .with_cancellation_token(cancellation.clone());
-            let acquire = semaphore.clone().acquire_owned();
-            let permit = match cancellation.as_ref() {
-                Some(cancellation) => tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => return Err(AppError::Cancelled),
-                    permit = acquire => permit,
-                },
-                None => acquire.await,
-            }
-            .map_err(|err| AppError::Internal(format!("tool semaphore closed: {err}")))?;
-            handles.push(tokio::spawn(async move {
-                let _permit = permit;
-                scoped_executor.validate_advertised_tool_identity(
-                    &pending_tool.invocation,
-                    pending_tool.advertised_tool_identity.as_deref(),
-                )?;
-                scoped_executor
-                    .execute_invocation_detailed_with_launch_provenance(
+            let semaphore = Arc::clone(&semaphore);
+            let token = cancellation.clone();
+            tasks.spawn(async move {
+                let execution = async {
+                    let acquire = semaphore.acquire_owned();
+                    let permit = match token.as_ref() {
+                        Some(token) => tokio::select! {
+                            biased;
+                            _ = token.cancelled() => return Err(ToolError::Cancelled),
+                            permit = acquire => permit,
+                        },
+                        None => acquire.await,
+                    }
+                    .map_err(|error| {
+                        ToolError::plugin(format!("tool semaphore closed: {error}"))
+                    })?;
+                    let _permit = permit;
+                    scoped_executor.validate_advertised_tool_identity(
                         &pending_tool.invocation,
-                        session_id,
-                        pending_tool.call_id,
-                        pending_tool.prepared_shell_command.clone(),
-                        Some(pending_tool.scheduled_job_launch_provenance(session_id)),
-                    )
-                    .await
-            }));
+                        pending_tool.advertised_tool_identity.as_deref(),
+                    )?;
+                    scoped_executor
+                        .execute_invocation_detailed_with_launch_provenance(
+                            &pending_tool.invocation,
+                            session_id,
+                            pending_tool.call_id,
+                            pending_tool.prepared_shell_command.clone(),
+                            Some(pending_tool.scheduled_job_launch_provenance(session_id)),
+                        )
+                        .await
+                };
+                (index, execution.await)
+            });
         }
 
-        let mut results = Vec::with_capacity(handles.len());
-        for handle in handles {
-            results.push(handle.await.map_err(|err| {
-                AppError::Internal(format!("concurrent tool task failed: {err}"))
+        let cancelled = async {
+            match cancellation.as_ref() {
+                Some(token) => token.cancelled().await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(cancelled);
+        let mut results = Vec::with_capacity(tasks.len());
+        loop {
+            let joined = tokio::select! {
+                biased;
+                _ = &mut cancelled => return Err(AppError::Cancelled),
+                joined = tasks.join_next() => joined,
+            };
+            let Some(joined) = joined else {
+                break;
+            };
+            results.push(joined.map_err(|error| {
+                AppError::Internal(format!("concurrent tool task failed: {error}"))
             })?);
         }
-        Ok(results)
+        // Completion order must not change transcript/tool-result order.
+        results.sort_unstable_by_key(|(index, _)| *index);
+        Ok(results.into_iter().map(|(_, result)| result).collect())
     }
 
     async fn prepare_pending_tool_execution(

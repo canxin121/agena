@@ -7,6 +7,8 @@ use agena_domain::{AccessKind, AttachmentSource, ModelRef, PermissionDecision};
 use agena_runtime_contracts::part_content::{TypedContent, attachment_from_file_ref};
 use agena_runtime_tools::media_input;
 
+static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 impl SessionManager {
     pub(super) async fn materialize_user_media(
         &self,
@@ -75,19 +77,26 @@ impl SessionManager {
             let expected = reference.sha.clone();
             let selected_path = path.clone();
             let selected_root = root.clone();
-            let prepared = tokio::task::spawn_blocking(move || {
-                media_input::read_local(&selected_root, &selected_path, expected.as_deref())
-            })
-            .await
-            .map_err(|e| AppError::Internal(format!("media preparation failed: {e}")))?
-            .map_err(AppError::Config)?;
+            let selected_route = route.clone();
+            let (prepared, bound) = MEDIA_WORKERS
+                .run(move || {
+                    let prepared = media_input::read_local(
+                        &selected_root,
+                        &selected_path,
+                        expected.as_deref(),
+                    )?;
+                    let bound = prepared.attachment(Some(&selected_route));
+                    Ok::<_, String>((prepared, bound))
+                })
+                .await
+                .map_err(|e| AppError::Internal(format!("media preparation failed: {e}")))?
+                .map_err(AppError::Config)?;
             used = used.saturating_add(prepared.bytes.len());
             if used > media_input::MAX_MEDIA_BATCH_BYTES {
                 return Err(AppError::Config(
                     "message media exceeds the 40 MiB total input limit".into(),
                 ));
             }
-            let bound = prepared.attachment(Some(&route));
             state
                 .provider_registry
                 .validate_media_inputs(model, std::slice::from_ref(&bound))?;

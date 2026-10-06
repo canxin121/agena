@@ -443,6 +443,7 @@ impl SessionManager {
             native_compaction_enabled,
             tool_api_functions,
         )
+        .await
     }
 
     fn session_usage_run_options(
@@ -472,7 +473,7 @@ impl SessionManager {
         Ok(options)
     }
 
-    fn session_usage_with_catalog(
+    async fn session_usage_with_catalog(
         &self,
         session: &Session,
         state: &SessionManagerState,
@@ -520,12 +521,16 @@ impl SessionManager {
                 )
             };
 
-        let prompt_fingerprints = options.as_ref().map(|options| {
-            let provider_request_shape = state
+        let provider_request_shape = match options.as_ref() {
+            Some(options) => state
                 .provider_registry
-                .prompt_cache_shape(&options.model)
+                .prompt_cache_shape_async(&options.model)
+                .await
                 .ok()
-                .flatten();
+                .flatten(),
+            None => None,
+        };
+        let prompt_fingerprints = options.as_ref().map(|options| {
             let continuation_supported = state
                 .provider_registry
                 .supports_prompt_continuation(&options.model)

@@ -39,6 +39,7 @@ struct WriteRequest {
 
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+static JSON_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 impl StdioTransport {
     pub async fn spawn(
@@ -120,7 +121,11 @@ impl StdioTransport {
 #[async_trait]
 impl LspTransport for StdioTransport {
     async fn send(&self, payload: Value) -> LspResult<()> {
-        let body = Bytes::from(serde_json::to_vec(&payload)?);
+        let body = JSON_WORKERS
+            .run(move || serde_json::to_vec(&payload))
+            .await
+            .map_err(|error| LspError::transport_error(&error))??;
+        let body = Bytes::from(body);
         let (completion, result) = tokio::sync::oneshot::channel();
         self.writer
             .send(WriteRequest { body, completion })
@@ -165,6 +170,7 @@ fn spawn_stdout_reader(
     tokio::spawn(async move {
         let mut reader = FramedRead::new(stdout, ContentLengthCodec::new(MAX_FRAME_BYTES));
         while let Some(frame) = reader.next().await {
+            tokio::task::consume_budget().await;
             let body = match frame {
                 Ok(body) => body,
                 Err(error) => {
@@ -181,14 +187,20 @@ fn spawn_stdout_reader(
                     return;
                 }
             };
-            let value = match serde_json::from_slice(body.as_ref()) {
+            let decoded = if body.len() > 64 * 1024 {
+                JSON_WORKERS
+                    .run(move || serde_json::from_slice(body.as_ref()))
+                    .await
+                    .map_err(|error| LspError::transport_error(&error))
+                    .and_then(|result| result.map_err(|error| LspError::protocol_error(&error)))
+            } else {
+                serde_json::from_slice(body.as_ref())
+                    .map_err(|error| LspError::protocol_error(&error))
+            };
+            let value = match decoded {
                 Ok(value) => value,
                 Err(error) => {
-                    if tx
-                        .send(Err(LspError::protocol_error(&error)))
-                        .await
-                        .is_err()
-                    {
+                    if tx.send(Err(error)).await.is_err() {
                         tracing::debug!(
                             server = %name,
                             "LSP JSON decode failure could not be delivered because the receiver closed"
@@ -235,6 +247,7 @@ fn spawn_stderr_reader(name: String, stderr: tokio::process::ChildStderr) {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
+            tokio::task::consume_budget().await;
             tracing::debug!(target: "agena_lsp::stderr", server = %name, "{line}");
         }
     });

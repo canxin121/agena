@@ -13,6 +13,8 @@ use crate::error::{LspError, LspResult};
 use crate::server_spec::LspServerSpec;
 use crate::transport::StdioTransport;
 
+static ROOT_RESOLVERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
+
 #[derive(Debug, Error)]
 /// Error resolving an LSP server.
 pub enum ResolveError {
@@ -201,8 +203,16 @@ impl LspRegistry {
             .get(server_name)
             .cloned()
             .ok_or_else(|| LspError::UnknownServer(server_name.to_string()))?;
-        let root_dir = spec.resolve_root(hint_dir, &self.workspace_root);
-        let root_dir = std::fs::canonicalize(&root_dir).unwrap_or(root_dir);
+        let root_spec = spec.clone();
+        let hint_dir = hint_dir.to_owned();
+        let workspace = self.workspace_root.clone();
+        let root_dir = ROOT_RESOLVERS
+            .run(move || {
+                let root = root_spec.resolve_root(&hint_dir, &workspace);
+                std::fs::canonicalize(&root).unwrap_or(root)
+            })
+            .await
+            .map_err(|error| LspError::transport_error(&error))?;
         let key = ClientKey {
             server: server_name.to_owned(),
             root: root_dir.clone(),

@@ -19,6 +19,9 @@ use crate::transport::{
 
 const TRANSPORT_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSPORT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+static NATIVE_LOADERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+#[cfg(feature = "wasm")]
+static WASM_LOADERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 pub(crate) async fn close_transport_for_plugin(
     plugin_id: &str,
@@ -133,23 +136,6 @@ pub async fn prepare_entry(
             } else {
                 workspace_root.join(path)
             };
-            #[cfg(feature = "signing")]
-            {
-                if let Some(expected) = sha256 {
-                    verify_sha256(&resolved, expected).map_err(|e| HostError::Load {
-                        plugin: plugin_id.to_string(),
-                        message: e,
-                    })?;
-                }
-                if let Some(sig) = signature {
-                    verify_signature(&resolved, sig, trusted_keys).map_err(|e| {
-                        HostError::Load {
-                            plugin: plugin_id.to_string(),
-                            message: e,
-                        }
-                    })?;
-                }
-            }
             #[cfg(not(feature = "signing"))]
             {
                 if sha256.is_some() || signature.is_some() {
@@ -162,10 +148,32 @@ pub async fn prepare_entry(
                 }
                 let _ = (sha256, signature, trusted_keys);
             }
-            let t = CdylibTransport::load(&resolved).map_err(|e| HostError::Load {
-                plugin: plugin_id.to_string(),
-                message: agena_failure::diagnostic::format_error_chain(&e),
-            })?;
+            #[cfg(feature = "signing")]
+            let (sha256, signature, trusted_keys) =
+                (sha256.clone(), signature.clone(), trusted_keys.clone());
+            let t = NATIVE_LOADERS
+                .run(move || {
+                    #[cfg(feature = "signing")]
+                    {
+                        if let Some(expected) = sha256 {
+                            verify_sha256(&resolved, &expected)?;
+                        }
+                        if let Some(sig) = signature {
+                            verify_signature(&resolved, &sig, &trusted_keys)?;
+                        }
+                    }
+                    CdylibTransport::load(&resolved)
+                        .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
+                })
+                .await
+                .map_err(|error| HostError::Load {
+                    plugin: plugin_id.to_owned(),
+                    message: format!("native plugin load worker failed: {error}"),
+                })?
+                .map_err(|message| HostError::Load {
+                    plugin: plugin_id.to_owned(),
+                    message,
+                })?;
             Arc::new(t)
         }
         PluginPackage::Stdio {
@@ -231,19 +239,24 @@ pub async fn prepare_entry(
             } else {
                 workspace_root.join(path)
             };
-            // Optional supply-chain check before loading.
-            if let Some(expected) = sha256 {
-                verify_sha256(&resolved, expected).map_err(|e| HostError::Load {
-                    plugin: plugin_id.to_string(),
-                    message: e,
+            let sha256 = sha256.clone();
+            let t = WASM_LOADERS
+                .run(move || {
+                    if let Some(expected) = sha256 {
+                        verify_sha256(&resolved, &expected)?;
+                    }
+                    crate::transport::wasm::WasmTransport::load(&resolved)
+                        .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
+                })
+                .await
+                .map_err(|error| HostError::Load {
+                    plugin: plugin_id.to_owned(),
+                    message: format!("Wasm plugin load worker failed: {error}"),
+                })?
+                .map_err(|message| HostError::Load {
+                    plugin: plugin_id.to_owned(),
+                    message,
                 })?;
-            }
-            let t = crate::transport::wasm::WasmTransport::load(&resolved).map_err(|e| {
-                HostError::Load {
-                    plugin: plugin_id.to_string(),
-                    message: agena_failure::diagnostic::format_error_chain(&e),
-                }
-            })?;
             Arc::new(t)
         }
         #[cfg(not(feature = "wasm"))]

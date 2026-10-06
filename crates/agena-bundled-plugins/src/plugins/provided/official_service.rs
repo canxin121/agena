@@ -33,6 +33,8 @@ const MAX_PROVIDER_RESPONSE_BYTES: usize = 96 * 1024 * 1024;
 pub(crate) const MAX_PROVIDER_IMAGE_INPUT_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 32 * 1024;
 const MAX_SOURCES: usize = 100;
+static JSON_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static IMAGE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ProviderUsageKind {
@@ -228,6 +230,7 @@ pub(crate) async fn read_json_response_bounded(
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
+        tokio::task::consume_budget().await;
         let chunk = chunk.map_err(|error| {
             PluginError::internal(format!(
                 "cannot read {provider} {operation} response: {error}"
@@ -241,13 +244,21 @@ pub(crate) async fn read_json_response_bounded(
         }
         bytes.extend_from_slice(&chunk);
     }
-    let value = serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| {
-        let preview = String::from_utf8_lossy(&bytes);
-        PluginError::internal(format!(
-            "{provider} {operation} returned invalid JSON: {error}; body={}",
-            truncate_text(preview.as_ref(), 2048)
-        ))
-    })?;
+    let context = format!("{provider} {operation}");
+    let value = JSON_WORKERS
+        .run(move || {
+            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| {
+                let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(2052)]);
+                PluginError::internal(format!(
+                    "{context} returned invalid JSON: {error}; body={}",
+                    truncate_text(preview.as_ref(), 2048)
+                ))
+            })
+        })
+        .await
+        .map_err(|error| {
+            PluginError::internal(format!("provider JSON decode worker failed: {error}"))
+        })??;
     Ok((status, request_id, value))
 }
 
@@ -276,16 +287,26 @@ pub(crate) async fn post_json(
     host: &Arc<dyn HostClient>,
     url: &str,
     headers: &BTreeMap<String, String>,
-    body: &serde_json::Value,
+    body: serde_json::Value,
     timeout_secs: u64,
     provider: &str,
     operation: &str,
 ) -> SdkResult<ProviderHttpResponse> {
     validate_provider_endpoint(host, url).await?;
+    let bytes = JSON_WORKERS
+        .run(move || serde_json::to_vec(&body))
+        .await
+        .map_err(|error| {
+            PluginError::internal(format!("provider JSON encode worker failed: {error}"))
+        })?
+        .map_err(|error| {
+            PluginError::internal(format!("cannot serialize provider request: {error}"))
+        })?;
     let mut request = crate::PROVIDER_HTTP_CLIENT
         .post(url)
         .timeout(Duration::from_secs(timeout_secs.max(1)))
-        .json(body);
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(bytes);
     for (name, value) in headers {
         request = request.header(name, value);
     }
@@ -317,6 +338,8 @@ pub(crate) async fn provider_output(
     usage_kind: ProviderUsageKind,
     response: ProviderHttpResponse,
 ) -> SdkResult<ToolInvokeOutput> {
+    let request_id = response.request_id;
+    let response = Arc::new(response.value);
     let cloud_tool = agena_tool::provider_tools::cloud_operation(provider, tool);
     let public_tool_name = cloud_tool.map(|entry| entry.name).unwrap_or(tool);
     let execution_provider = cloud_tool
@@ -329,7 +352,7 @@ pub(crate) async fn provider_output(
         workspace_root,
         provider,
         tool,
-        &response.value,
+        Arc::clone(&response),
     )
     .await
     {
@@ -342,19 +365,19 @@ pub(crate) async fn provider_output(
         }
     };
     let (attachments, image_warnings) =
-        persist_images(host, workspace_root, provider, title, &response.value).await;
+        persist_images(host, workspace_root, provider, title, Arc::clone(&response)).await;
     persistence_warnings.extend(image_warnings);
-    let mut output_text = extract_response_text(&response.value)
+    let mut output_text = extract_response_text(&response)
         .filter(|text| !text.trim().is_empty())
         .unwrap_or_else(|| {
             format!("{public_tool_name} returned no text summary; completion is not inferred.")
         });
-    let evidence = hosted::inspect(provider, tool, &response.value);
-    let base_outcome = outcome::classify(provider, &response.value, false);
+    let evidence = hosted::inspect(provider, tool, &response);
+    let base_outcome = outcome::classify(provider, &response, false);
     let continuation_required = !evidence.blocked()
         && !evidence.server_errors
         && (matches!(base_outcome, outcome::Outcome::Pending)
-            || (provider == "claude" && response.value["stop_reason"] == "pause_turn"));
+            || (provider == "claude" && response["stop_reason"] == "pause_turn"));
     let outcome = if evidence.blocked() {
         "blocked_client_execution"
     } else if evidence.server_errors {
@@ -391,22 +414,21 @@ pub(crate) async fn provider_output(
         }
     );
     let response_id = response
-        .value
         .get("id")
-        .or_else(|| response.value.get("interaction_id"))
-        .or_else(|| response.value.get("interactionId"))
+        .or_else(|| response.get("interaction_id"))
+        .or_else(|| response.get("interactionId"))
         .cloned();
     let assistant_content = (provider == "claude" && !evidence.blocked())
-        .then(|| response.value.get("content").cloned())
+        .then(|| response.get("content").cloned())
         .flatten();
-    let sources = compact_sources(&response.value);
-    let mut usage = parse_provider_usage(usage_kind, provider, tool, model, &response.value);
+    let sources = compact_sources(&response);
+    let mut usage = parse_provider_usage(usage_kind, provider, tool, model, &response);
     finalize_usage_estimate(provider, model, &mut usage);
     let attributed = AttributedCompletionUsage {
         provider_id: provider.to_owned(),
         model_id: model.to_owned(),
         operation: tool.to_owned(),
-        request_id: response.request_id.clone(),
+        request_id: request_id.clone(),
         usage: Box::new(usage.clone()),
     };
 
@@ -418,7 +440,7 @@ pub(crate) async fn provider_output(
         "execution_provider": execution_provider,
         "local_workspace_automatically_available": false,
         "model": model,
-        "request_id": response.request_id,
+        "request_id": request_id,
         "response_id": response_id,
         "pending_calls": [],
         "execution_boundary": "vendor_hosted_only",
@@ -437,7 +459,7 @@ pub(crate) async fn provider_output(
     });
     if let Some(object) = payload.as_object_mut() {
         for (key, value) in
-            compact_operation_facts(tool, &response.value, sources.len(), attachments.len())
+            compact_operation_facts(tool, &response, sources.len(), attachments.len())
         {
             // Presentation facts from a vendor response must never replace
             // our execution boundary, classified outcome, or receipt facts.
@@ -1264,14 +1286,22 @@ async fn persist_response_receipt(
     workspace_root: &Path,
     provider: &str,
     tool: &str,
-    response: &serde_json::Value,
+    response: Arc<serde_json::Value>,
 ) -> SdkResult<(String, String)> {
-    let mut safe_response = response.clone();
-    redact_binary_payloads(&mut safe_response);
-    let bytes = serde_json::to_vec_pretty(&safe_response).map_err(|error| {
-        PluginError::internal(format!("cannot serialize provider receipt: {error}"))
-    })?;
-    let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
+    let (bytes, sha256) = JSON_WORKERS
+        .run(move || {
+            let mut safe_response = (*response).clone();
+            redact_binary_payloads(&mut safe_response);
+            let bytes = serde_json::to_vec_pretty(&safe_response).map_err(|error| {
+                PluginError::internal(format!("cannot serialize provider receipt: {error}"))
+            })?;
+            let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
+            Ok::<_, PluginError>((bytes, sha256))
+        })
+        .await
+        .map_err(|error| {
+            PluginError::internal(format!("provider receipt worker failed: {error}"))
+        })??;
     let safe_tool = tool
         .chars()
         .map(|ch| {
@@ -1443,35 +1473,62 @@ async fn persist_images(
     workspace_root: &Path,
     provider: &str,
     title: &str,
-    response: &serde_json::Value,
+    response: Arc<serde_json::Value>,
 ) -> (Vec<AttachmentItem>, Vec<String>) {
-    let mut candidates = Vec::new();
-    collect_image_candidates(response, &mut candidates, 0);
+    let candidates = match IMAGE_WORKERS
+        .run(move || {
+            let mut candidates = Vec::new();
+            collect_image_candidates(&response, &mut candidates, 0);
+            candidates
+        })
+        .await
+    {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            return (
+                Vec::new(),
+                vec![format!("Image preparation worker failed: {error}")],
+            );
+        }
+    };
     let mut attachments = Vec::new();
     let mut warnings = Vec::new();
     let mut seen = HashSet::new();
     for candidate in candidates {
-        let encoded = candidate
-            .encoded
-            .split_once(',')
-            .map(|(_, data)| data)
-            .unwrap_or(candidate.encoded.as_str())
-            .trim();
-        if encoded.len() > MAX_IMAGE_BASE64_BYTES {
-            warnings.push(
-                "An image result exceeded its encoded size limit; it was not persisted.".into(),
-            );
-            continue;
-        }
-        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
-            warnings.push("An image result was not valid base64; it was not persisted.".into());
-            continue;
+        let decoded = IMAGE_WORKERS
+            .run(move || {
+                let encoded = candidate
+                    .encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(candidate.encoded.as_str())
+                    .trim();
+                if encoded.len() > MAX_IMAGE_BASE64_BYTES {
+                    return Err(
+                        "An image result exceeded its encoded size limit; it was not persisted.",
+                    );
+                }
+                let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+                    return Err("An image result was not valid base64; it was not persisted.");
+                };
+                if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+                    return Err("An image result was empty or exceeded its decoded byte limit.");
+                }
+                let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
+                Ok((candidate, bytes, sha256))
+            })
+            .await;
+        let (candidate, bytes, sha256) = match decoded {
+            Ok(Ok(decoded)) => decoded,
+            Ok(Err(warning)) => {
+                warnings.push(warning.to_owned());
+                continue;
+            }
+            Err(error) => {
+                warnings.push(format!("Image preparation worker failed: {error}"));
+                continue;
+            }
         };
-        if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
-            warnings.push("An image result was empty or exceeded its decoded byte limit.".into());
-            continue;
-        }
-        let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
         if !seen.insert(sha256.clone()) {
             continue;
         }
@@ -1764,7 +1821,7 @@ mod audit_transport_tests {
             &host,
             &format!("{base}/redirect"),
             &BTreeMap::from([("authorization".into(), "Bearer synthetic-test-only".into())]),
-            &serde_json::json!({"test":true}),
+            serde_json::json!({"test":true}),
             3,
             "audit",
             "redirect",

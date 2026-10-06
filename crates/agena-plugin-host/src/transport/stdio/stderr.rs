@@ -18,6 +18,7 @@ impl Inner {
         let mut line = Vec::with_capacity(MAX_LOG_BYTES);
         let mut continuation = false;
         loop {
+            tokio::task::consume_budget().await;
             let available = tokio::select! {
                 biased;
                 _ = stop.cancelled() => return,

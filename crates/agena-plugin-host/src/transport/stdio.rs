@@ -52,6 +52,30 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BUFFERED_STREAMS: usize = 128;
 const MAX_BUFFERED_STREAM_CHUNKS: usize = 64;
+static JSON_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+#[cfg(feature = "signing")]
+static VERIFICATION_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+async fn encode_frame<T: serde::Serialize + Send + 'static>(
+    frame: T,
+) -> Result<Vec<u8>, TransportError> {
+    JSON_WORKERS
+        .run(move || serde_json::to_vec(&frame))
+        .await
+        .map_err(|error| TransportError::Io(format!("stdio JSON encode worker failed: {error}")))?
+        .map_err(TransportError::from)
+}
+
+async fn decode_frame(body: Bytes) -> Result<Frame, TransportError> {
+    if body.len() <= 64 * 1024 {
+        return serde_json::from_slice(&body).map_err(TransportError::from);
+    }
+    JSON_WORKERS
+        .run(move || serde_json::from_slice(&body))
+        .await
+        .map_err(|error| TransportError::Io(format!("stdio JSON decode worker failed: {error}")))?
+        .map_err(TransportError::from)
+}
 
 mod hosted;
 mod lifecycle;
@@ -313,24 +337,25 @@ impl Inner {
         #[cfg(feature = "signing")]
         let (command, cwd) = if let Some(expected) = self.spawn_spec.sha256.clone() {
             let this = Arc::clone(&self);
-            let verification = tokio::task::spawn_blocking(move || {
-                let resolved = this
-                    .spawn_spec
-                    .resolved_command
-                    .get_or_init(|| {
-                        verification::resolve(
-                            &this.spawn_spec.command,
-                            &this.spawn_spec.env,
-                            this.spawn_spec.cwd.as_deref(),
-                        )
-                    })
-                    .clone()?;
-                crate::loader::verify_sha256(&resolved.executable, &expected)?;
-                Ok::<_, String>(resolved)
-            })
-            .await
-            .map_err(|error| format!("stdio executable verification worker failed: {error}"))
-            .and_then(|result| result);
+            let verification = VERIFICATION_WORKERS
+                .run(move || {
+                    let resolved = this
+                        .spawn_spec
+                        .resolved_command
+                        .get_or_init(|| {
+                            verification::resolve(
+                                &this.spawn_spec.command,
+                                &this.spawn_spec.env,
+                                this.spawn_spec.cwd.as_deref(),
+                            )
+                        })
+                        .clone()?;
+                    crate::loader::verify_sha256(&resolved.executable, &expected)?;
+                    Ok::<_, String>(resolved)
+                })
+                .await
+                .map_err(|error| format!("stdio executable verification worker failed: {error}"))
+                .and_then(|result| result);
             let resolved = match verification {
                 Ok(resolved) => resolved,
                 Err(error) => {
@@ -491,13 +516,18 @@ impl Inner {
             tasks.spawn(async move {
                 let mut reader = FramedRead::new(stdout, ContentLengthCodec::new(MAX_FRAME_BYTES));
                 let outcome = loop {
+                    tokio::task::consume_budget().await;
                     let frame = tokio::select! {
                         biased;
                         _ = stop.cancelled() => return,
                         frame = reader.next() => frame,
                     };
                     match frame {
-                        Some(Ok(body)) => match serde_json::from_slice::<Frame>(body.as_ref()) {
+                        Some(Ok(body)) => match tokio::select! {
+                            biased;
+                            _ = stop.cancelled() => return,
+                            result = decode_frame(body) => result,
+                        } {
                             Ok(frame) => {
                                 tokio::select! {
                                     biased;
@@ -600,7 +630,7 @@ impl Inner {
                             },
                         },
                     };
-                    match serde_json::to_vec(&response) {
+                    match encode_frame(response).await {
                         Ok(body) => {
                             if let Err(error) = self
                                 .write_frame_for_generation(&body, Some(generation))
@@ -668,7 +698,7 @@ impl Inner {
                             },
                         },
                     };
-                    let body = match serde_json::to_vec(&resp) {
+                    let body = match encode_frame(resp).await {
                         Ok(body) => body,
                         Err(error) => {
                             tracing::error!(
@@ -841,7 +871,7 @@ impl Inner {
             params: Some(params),
             context: crate::sdk::host_api::current_host_callback_context(),
         };
-        let body = serde_json::to_vec(&req)?;
+        let body = encode_frame(req).await?;
         let (tx, rx) = oneshot::channel();
         let (generation, stop) = self
             .begin_request(req_id.clone(), tx, expected_generation)
@@ -1059,7 +1089,7 @@ impl PluginTransport for StdioTransport {
             method: method.to_string(),
             params: Some(params),
         };
-        let body = serde_json::to_vec(&n)?;
+        let body = encode_frame(n).await?;
         self.inner.write_frame(&body).await.map(|_| ())
     }
 
@@ -1069,14 +1099,23 @@ impl PluginTransport for StdioTransport {
     ) -> Result<Option<crate::transport::ToolStreamHandle>, TransportError> {
         let id = self.inner.next_id();
         let req_id = RequestId::Num(id);
-        let req = Request {
-            jsonrpc: JsonRpcVersion,
-            id: req_id.clone(),
-            method: method::HOOK_TOOL_INVOKE_STREAM.to_string(),
-            params: Some(serde_json::to_value(&input)?),
-            context: crate::sdk::host_api::current_host_callback_context(),
-        };
-        let body = serde_json::to_vec(&req)?;
+        let context = crate::sdk::host_api::current_host_callback_context();
+        let request_id = req_id.clone();
+        let body = JSON_WORKERS
+            .run(move || {
+                let req = Request {
+                    jsonrpc: JsonRpcVersion,
+                    id: request_id,
+                    method: method::HOOK_TOOL_INVOKE_STREAM.to_string(),
+                    params: Some(serde_json::to_value(input)?),
+                    context,
+                };
+                serde_json::to_vec(&req)
+            })
+            .await
+            .map_err(|error| {
+                TransportError::Io(format!("stdio stream encode worker failed: {error}"))
+            })??;
         let (tx, rx) = oneshot::channel();
         let (generation, _stop) = self.inner.begin_request(req_id.clone(), tx, None).await?;
         let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());

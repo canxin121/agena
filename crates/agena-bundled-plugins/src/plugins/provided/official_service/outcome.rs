@@ -238,7 +238,7 @@ mod partial_images_tests {
         let host: Arc<dyn HostClient> = Arc::new(agena_plugin_host::sdk::NoopHostClient);
         let value = serde_json::json!({"data":[{"b64_json":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WP0fooAAAAASUVORK5CYII="},{"b64_json":"not/base64!!!"}]});
         let (attachments, warnings) =
-            persist_images(&host, dir.path(), "fixture", "fixture", &value).await;
+            persist_images(&host, dir.path(), "fixture", "fixture", Arc::new(value)).await;
         assert_eq!(attachments.len(), 1);
         assert_eq!(warnings.len(), 1);
         match &attachments[0].source {

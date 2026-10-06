@@ -315,7 +315,7 @@ impl ChatGptToolsPlugin {
             self.host()?,
             url.as_str(),
             &headers,
-            &body,
+            body,
             self.config()?.timeout_secs,
             "chatgpt",
             tool_name,

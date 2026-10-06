@@ -431,6 +431,15 @@ impl Part {
     pub fn is_run_marker(&self) -> bool {
         self.kind == "run"
     }
+
+    /// A complete user/assistant message, including failed and cancelled
+    /// endings. Content and tool parts are children of the message's run;
+    /// finishing one of those children does not finish the message.
+    pub fn is_terminal_message(&self) -> bool {
+        self.is_run_marker()
+            && matches!(self.role, PartRole::User | PartRole::Assistant)
+            && self.state.is_terminal()
+    }
 }
 
 /// A minimal projection of [`Part`] for presentation layers that only need
@@ -555,6 +564,9 @@ pub struct SessionMeta {
     /// provider caches (D8, 13.3).
     pub provider_anchors_json: Option<Value>,
     pub created_at_ms: i64,
+    /// Navigation recency: creation time until the first user/assistant
+    /// message ends, then the last message ending time. Independent of
+    /// `version`; streaming, tools and metadata edits do not advance it.
     pub updated_at_ms: i64,
 }
 
@@ -649,8 +661,11 @@ pub struct SessionSummary {
     /// Number of run markers in the session (D9: message_count = run markers).
     pub message_count: i64,
     pub child_session_count: i64,
+    /// Latest ending time of a completed/failed/cancelled user or assistant
+    /// message in this view. Tool/content timestamps are excluded.
     pub last_message_at_ms: Option<i64>,
     pub created_at_ms: i64,
+    /// Last user/assistant message ending time (or creation time).
     pub updated_at_ms: i64,
 }
 

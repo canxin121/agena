@@ -2066,7 +2066,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
             ...(title ? { title } : {}),
             ...(favorite !== undefined ? { favorite } : {}),
             ...(pinned !== undefined ? { pinned } : {}),
-            ...(typeof updatedAtMs === 'number' ? { updated_at_ms: updatedAtMs } : {}),
+            ...(typeof updatedAtMs === 'number' && Number.isFinite(updatedAtMs) && Math.abs(updatedAtMs) <= 8.64e15
+              ? { updated_at: new Date(updatedAtMs).toISOString() }
+              : {}),
           })
         }
         if (!props.resource_revisions) {

@@ -31,7 +31,8 @@ pub use permission_rule_repository::{
 pub use schema::initialize_schema;
 pub use schema_invariants::install_invariant_triggers;
 pub use transaction::{
-    acquire_write_lock, is_sqlite_busy, run_transaction_app_effects, run_transaction_effects,
+    acquire_write_lock, acquire_write_permit, is_sqlite_busy, is_write_admission_busy,
+    run_transaction_app_effects, run_transaction_effects,
 };
 pub use workspace_repository::SeaWorkspaceRepository;
 

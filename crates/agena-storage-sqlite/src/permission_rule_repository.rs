@@ -101,7 +101,21 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         &self,
         rule: &PersistedPermissionRule,
     ) -> Result<(PermissionRuleRecord, bool), PermissionRuleRepositoryError> {
-        upsert_rule(self.db.as_ref(), rule).await
+        let (txn, _permit) = crate::transaction::begin_with_write_lock(&self.db)
+            .await
+            .map_err(map_error)?;
+        match upsert_rule(&txn, rule).await {
+            Ok(value) => {
+                txn.commit().await.map_err(map_error)?;
+                Ok(value)
+            }
+            Err(error) => {
+                if let Err(rollback_error) = txn.rollback().await {
+                    tracing::error!(%rollback_error, "permission rule rollback failed");
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn replace(
@@ -109,14 +123,13 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         rule_id: i64,
         rule: &PersistedPermissionRule,
     ) -> Result<Option<PermissionRuleRecord>, PermissionRuleRepositoryError> {
-        if self.record(rule_id).await?.is_none() {
-            return Ok(None);
-        }
-        self.db.execute(statement(
-            format!("UPDATE {TABLE} SET action_key = ?, mode = ?, scope = ?, session_id = ?, workspace_id = ?, source = ?, reason = ?, operator = ?, revoked_at_ms = ?, revoked_reason = ?, revoked_by = ?, updated_at_ms = ? WHERE id = ?"),
+        let _permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
+        self.db.query_one(statement(
+            format!("UPDATE {TABLE} SET action_key = ?, mode = ?, scope = ?, session_id = ?, workspace_id = ?, source = ?, reason = ?, operator = ?, revoked_at_ms = ?, revoked_reason = ?, revoked_by = ?, updated_at_ms = ? WHERE id = ? RETURNING {COLUMNS}"),
             [rule.action_key.clone().into(), mode_to_string(rule.mode).into(), scope_to_string(rule.scope).into(), rule.session_id.into(), rule.workspace_id.into(), rule.source.clone().into(), rule.reason.clone().into(), rule.operator.clone().into(), rule.revoked_at_ms.into(), rule.revoked_reason.clone().into(), rule.revoked_by.clone().into(), Utc::now().timestamp_millis().into(), rule_id.into()],
-        )).await.map_err(map_error)?;
-        self.record(rule_id).await
+        )).await.map_err(map_error)?.map(record_from_row).transpose()
     }
 
     async fn revoke(
@@ -125,28 +138,28 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         revoked_reason: Option<String>,
         revoked_by: Option<String>,
     ) -> Result<Option<PermissionRuleRecord>, PermissionRuleRepositoryError> {
-        if self.record(rule_id).await?.is_none() {
-            return Ok(None);
-        }
-        self.db.execute(statement(format!("UPDATE {TABLE} SET revoked_at_ms = ?, revoked_reason = ?, revoked_by = ?, updated_at_ms = ? WHERE id = ?"), [Utc::now().timestamp_millis().into(), revoked_reason.into(), revoked_by.into(), Utc::now().timestamp_millis().into(), rule_id.into()])).await.map_err(map_error)?;
-        self.record(rule_id).await
+        let _permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
+        self.db.query_one(statement(format!("UPDATE {TABLE} SET revoked_at_ms = ?, revoked_reason = ?, revoked_by = ?, updated_at_ms = ? WHERE id = ? RETURNING {COLUMNS}"), [Utc::now().timestamp_millis().into(), revoked_reason.into(), revoked_by.into(), Utc::now().timestamp_millis().into(), rule_id.into()])).await.map_err(map_error)?.map(record_from_row).transpose()
     }
 
     async fn delete(
         &self,
         rule_id: i64,
     ) -> Result<Option<PermissionRuleRecord>, PermissionRuleRepositoryError> {
-        let existing = self.record(rule_id).await?;
-        if existing.is_some() {
-            self.db
-                .execute(statement(
-                    format!("DELETE FROM {TABLE} WHERE id = ?"),
-                    [rule_id.into()],
-                ))
-                .await
-                .map_err(map_error)?;
-        }
-        Ok(existing)
+        let _permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
+        self.db
+            .query_one(statement(
+                format!("DELETE FROM {TABLE} WHERE id = ? RETURNING {COLUMNS}"),
+                [rule_id.into()],
+            ))
+            .await
+            .map_err(map_error)?
+            .map(record_from_row)
+            .transpose()
     }
 
     async fn resolve(

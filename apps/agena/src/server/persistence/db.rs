@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::Value;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-const DB_BUSY_TIMEOUT_MS: u64 = 15000;
+static STATE_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+const DB_BUSY_TIMEOUT_MS: u64 = 1000;
 const DB_POOL_MAX_CONNECTIONS: u32 = 16;
 const DB_POOL_ACQUIRE_TIMEOUT_MS: u64 = 1500;
 const DB_POOL_IDLE_TIMEOUT_SECS: u64 = 120;
@@ -28,6 +29,7 @@ pub(crate) const KV_KEY_MCP_OAUTH_SIGNING_KEY: &str = "mcp.oauth.signing_key";
 pub(crate) struct ServerStateDb {
     path: PathBuf,
     pool: SqlitePool,
+    writer: std::sync::Arc<agena_async::WriteQueue>,
 }
 
 impl ServerStateDb {
@@ -62,77 +64,83 @@ impl ServerStateDb {
                 database_diagnostic("failed to open the server-state SQLite database", &error)
             })?;
 
+        let writer = agena_async::WriteQueue::for_file(&path)
+            .await
+            .map_err(|error| {
+                database_diagnostic("failed to resolve server-state write queue", &error)
+            })?;
+        let permit = writer.acquire().await.map_err(|error| error.to_string())?;
         initialize_schema(&pool).await?;
+        drop(permit);
         secure_server_state_files(&path).await?;
 
-        Ok(Self { path, pool })
+        Ok(Self { path, pool, writer })
     }
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(crate) async fn get_value(&self, key: &str) -> Result<Option<Value>, String> {
+    async fn get_payload(&self, key: &str) -> Result<Option<String>, String> {
         let key = normalize_kv_key(key)?;
-        let raw = sqlx::query_scalar::<_, String>(
-            "SELECT value_json FROM server_kv WHERE key = ? LIMIT 1",
-        )
-        .bind(key)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|error| {
-            database_diagnostic("failed to read a server-state database value", &error)
-        })?;
-
-        let Some(raw) = raw else {
-            return Ok(None);
-        };
-        serde_json::from_str::<Value>(&raw)
-            .map(Some)
+        sqlx::query_scalar::<_, String>("SELECT value_json FROM server_kv WHERE key = ? LIMIT 1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
             .map_err(|error| {
-                database_diagnostic("failed to decode a server-state database value", &error)
+                database_diagnostic("failed to read a server-state database value", &error)
             })
     }
 
-    pub(crate) async fn set_value(&self, key: &str, value: &Value) -> Result<(), String> {
+    async fn set_payload(&self, key: &str, payload: String) -> Result<(), String> {
         let key = normalize_kv_key(key)?;
-        let payload = serde_json::to_string(value).map_err(|error| {
-            database_diagnostic("failed to encode a server-state database value", &error)
-        })?;
-        let now = now_unix_ms();
+        let _permit = self
+            .writer
+            .acquire()
+            .await
+            .map_err(|error| error.to_string())?;
         sqlx::query(
-            "INSERT INTO server_kv (key, value_json, updated_at) VALUES (?, ?, ?)\n             ON CONFLICT(key) DO UPDATE SET\n               value_json = excluded.value_json,\n               updated_at = excluded.updated_at",
-        )
-        .bind(key)
-        .bind(payload)
-        .bind(now)
-        .execute(&self.pool)
-        .await
-        .map_err(|error| {
-            database_diagnostic("failed to write a server-state database value", &error)
-        })?;
+            "INSERT INTO server_kv (key, value_json, updated_at) VALUES (?, ?, ?) \
+             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at \
+             WHERE server_kv.value_json != excluded.value_json",
+        ).bind(key).bind(payload).bind(now_unix_ms()).execute(&self.pool).await
+            .map_err(|error| database_diagnostic("failed to write a server-state database value", &error))?;
         Ok(())
     }
 
-    pub(crate) async fn get_json<T: DeserializeOwned>(
+    pub(crate) async fn get_json<T: DeserializeOwned + Send + 'static>(
         &self,
         key: &str,
     ) -> Result<Option<T>, String> {
-        let Some(value) = self.get_value(key).await? else {
+        let Some(payload) = self.get_payload(key).await? else {
             return Ok(None);
         };
-        serde_json::from_value::<T>(value)
+        STATE_CODECS
+            .run(move || serde_json::from_str::<T>(&payload))
+            .await
+            .map_err(|error| database_diagnostic("server-state decode worker failed", &error))?
             .map(Some)
             .map_err(|error| {
                 database_diagnostic("failed to decode typed server-state data", &error)
             })
     }
 
-    pub(crate) async fn set_json<T: Serialize>(&self, key: &str, value: &T) -> Result<(), String> {
-        let json = serde_json::to_value(value).map_err(|error| {
-            database_diagnostic("failed to encode typed server-state data", &error)
-        })?;
-        self.set_value(key, &json).await
+    pub(crate) async fn set_json<T: Serialize + Send + 'static>(
+        &self,
+        key: &str,
+        value: T,
+    ) -> Result<(), String> {
+        let key = normalize_kv_key(key)?;
+        // Encode the owned value directly once, before write admission. No
+        // intermediate JSON tree and no CPU work inside the SQLite lock wait.
+        let payload = STATE_CODECS
+            .run(move || serde_json::to_string(&value))
+            .await
+            .map_err(|error| database_diagnostic("server-state encode worker failed", &error))?
+            .map_err(|error| {
+                database_diagnostic("failed to encode typed server-state data", &error)
+            })?;
+        self.set_payload(key, payload).await
     }
 }
 

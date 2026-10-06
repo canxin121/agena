@@ -1155,6 +1155,7 @@ dependencies = [
 name = "agena-scheduler"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-failure",
  "async-trait",
  "chrono",

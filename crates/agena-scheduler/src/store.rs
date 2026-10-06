@@ -10,6 +10,8 @@ use uuid::Uuid;
 use crate::error::{SchedulerError, SchedulerResult};
 use crate::job::{ScheduledJob, SchedulerHistoryEntry};
 
+static JOB_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 pub const MAX_RETAINED_HISTORY_ENTRIES: usize = 1_000;
 
 /// A worker renews every 30 seconds. An abandoned claim becomes recoverable
@@ -395,11 +397,99 @@ impl JobStore for InMemoryJobStore {
 #[derive(Clone)]
 pub struct SqliteJobStore {
     db: DatabaseConnection,
+    writer: Arc<tokio::sync::OnceCell<Arc<agena_async::WriteQueue>>>,
 }
 
 impl SqliteJobStore {
     pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+        Self {
+            db,
+            writer: Arc::new(tokio::sync::OnceCell::new()),
+        }
+    }
+
+    async fn write_permit(&self) -> SchedulerResult<agena_async::WritePermit> {
+        let queue = self
+            .writer
+            .get_or_try_init(|| async {
+                let row = self
+                    .db
+                    .query_one(Statement::from_string(
+                        DatabaseBackend::Sqlite,
+                        "PRAGMA database_list",
+                    ))
+                    .await?
+                    .ok_or_else(|| {
+                        sea_orm::DbErr::Custom("SQLite main database is missing".into())
+                    })?;
+                let file: String = row.try_get("", "file")?;
+                if file.is_empty() {
+                    Ok::<_, sea_orm::DbErr>(agena_async::WriteQueue::named(
+                        format!(
+                            "sqlite-memory:{}",
+                            self.db
+                                .get_sqlite_connection_pool()
+                                .connect_options()
+                                .get_filename()
+                                .display()
+                        )
+                        .into(),
+                    ))
+                } else {
+                    agena_async::WriteQueue::for_file(std::path::Path::new(&file))
+                        .await
+                        .map_err(|error| {
+                            sea_orm::DbErr::Custom(format!(
+                                "resolve scheduler write queue: {error}"
+                            ))
+                        })
+                }
+            })
+            .await?;
+        queue
+            .acquire()
+            .await
+            .map_err(|error| SchedulerError::Persistence(sea_orm::DbErr::Custom(error.to_string())))
+    }
+
+    async fn encode_job(job: ScheduledJob) -> SchedulerResult<(ScheduledJob, String)> {
+        JOB_CODECS
+            .run(move || {
+                let json = serde_json::to_string(&job)?;
+                Ok((job, json))
+            })
+            .await
+            .map_err(|error| {
+                SchedulerError::Persistence(sea_orm::DbErr::Custom(format!(
+                    "job encode worker failed: {error}"
+                )))
+            })?
+    }
+
+    async fn encode_job_update(
+        expected: &JobSnapshot,
+        job: ScheduledJob,
+    ) -> SchedulerResult<(ScheduledJob, String)> {
+        if expected.job.owner_session_id != job.owner_session_id
+            || expected.job.owner_workspace != job.owner_workspace
+            || expected.job.id != job.id
+        {
+            return Err(SchedulerError::InvalidUpdate(
+                "job id and ownership are immutable".into(),
+            ));
+        }
+        Self::encode_job(job).await
+    }
+
+    async fn decode_rows(rows: Vec<sea_orm::QueryResult>) -> SchedulerResult<Vec<JobSnapshot>> {
+        JOB_CODECS
+            .run(move || rows.iter().map(Self::decode).collect())
+            .await
+            .map_err(|error| {
+                SchedulerError::Persistence(sea_orm::DbErr::Custom(format!(
+                    "job decode worker failed: {error}"
+                )))
+            })?
     }
 
     fn decode(row: &sea_orm::QueryResult) -> SchedulerResult<JobSnapshot> {
@@ -423,20 +513,18 @@ impl SqliteJobStore {
         ]
     }
 
-    async fn write_history(
-        db: &impl ConnectionTrait,
-        entry: &SchedulerHistoryEntry,
-    ) -> SchedulerResult<()> {
-        db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            "INSERT INTO agena_scheduler_history (job_id, owner_workspace, owner_session_id, run_json, finished_at_ms) VALUES (?, ?, ?, ?, ?)",
-            [
-                entry.job_id.to_string().into(),
-                entry.owner_workspace.clone().into(),
-                entry.owner_session_id.into(),
-                serde_json::to_string(&entry.record)?.into(),
-                entry.record.finished_at.timestamp_millis().into(),
-            ],
-        )).await?;
+    async fn prepare_history(entry: SchedulerHistoryEntry) -> SchedulerResult<Statement> {
+        JOB_CODECS.run(move || {
+            Ok(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+                "INSERT INTO agena_scheduler_history (job_id, owner_workspace, owner_session_id, run_json, finished_at_ms) VALUES (?, ?, ?, ?, ?)",
+                [entry.job_id.to_string().into(), entry.owner_workspace.into(), entry.owner_session_id.into(),
+                 serde_json::to_string(&entry.record)?.into(), entry.record.finished_at.timestamp_millis().into()],
+            ))
+        }).await.map_err(|error| SchedulerError::Persistence(sea_orm::DbErr::Custom(format!("history encode worker failed: {error}"))))?
+    }
+
+    async fn write_history(db: &impl ConnectionTrait, statement: Statement) -> SchedulerResult<()> {
+        db.execute(statement).await?;
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "DELETE FROM agena_scheduler_history \
@@ -455,10 +543,15 @@ impl SqliteJobStore {
         expected: &JobSnapshot,
         job: &ScheduledJob,
     ) -> SchedulerResult<bool> {
+        let history = match new_history(expected, job) {
+            Some(entry) => Some(Self::prepare_history(entry).await?),
+            None => None,
+        };
+        let _permit = self.write_permit().await?;
         let txn = self.db.begin().await?;
         let changed = txn.execute(statement).await?.rows_affected() > 0;
-        if changed && let Some(entry) = new_history(expected, job) {
-            Self::write_history(&txn, &entry).await?;
+        if changed && let Some(statement) = history {
+            Self::write_history(&txn, statement).await?;
         }
         // Any statement failure returns early, dropping/rolling back the
         // transaction. Never commit an update without its audit record.
@@ -470,8 +563,10 @@ impl SqliteJobStore {
 #[async_trait::async_trait]
 impl JobStore for SqliteJobStore {
     async fn put(&self, job: ScheduledJob) -> SchedulerResult<()> {
-        let mut values = Self::job_values(&job, serde_json::to_string(&job)?);
+        let (job, json) = Self::encode_job(job).await?;
+        let mut values = Self::job_values(&job, json);
         values.push(job.id.to_string().into());
+        let _permit = self.write_permit().await?;
         let result = self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
             "INSERT INTO agena_scheduler_jobs (job_json, next_fire_at_ms, retry_at_ms, paused, completed, updated_at_ms, id) \
              VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING", values,
@@ -483,6 +578,7 @@ impl JobStore for SqliteJobStore {
     }
 
     async fn remove_checked(&self, expected: &JobSnapshot) -> SchedulerResult<bool> {
+        let _permit = self.write_permit().await?;
         Ok(self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
             "DELETE FROM agena_scheduler_jobs WHERE id = ? AND job_json = ? AND delivery_key IS ?",
             [expected.job.id.to_string().into(), expected.json.clone().into(), expected.claim_key.clone().into()],
@@ -490,6 +586,7 @@ impl JobStore for SqliteJobStore {
     }
 
     async fn remove(&self, id: Uuid) -> SchedulerResult<bool> {
+        let _permit = self.write_permit().await?;
         Ok(self
             .db
             .execute(Statement::from_sql_and_values(
@@ -503,29 +600,48 @@ impl JobStore for SqliteJobStore {
     }
 
     async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>> {
-        self.db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
+        let rows = self.db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
             "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id",
-        )).await?.iter().map(Self::decode).collect()
+        )).await?;
+        Self::decode_rows(rows).await
     }
 
     async fn pending_jobs_for_session(
         &self,
         session_id: i64,
     ) -> SchedulerResult<Vec<ScheduledJob>> {
-        self.db.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+        let rows = self.db.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
             "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE json_extract(job_json, '$.owner_session_id') = ? AND paused = 0 AND completed = 0 AND (next_fire_at_ms IS NOT NULL OR json_extract(job_json, '$.pending_delivery') IS NOT NULL) ORDER BY id",
             [session_id.into()],
-        )).await?.iter().map(|row| Self::decode(row).map(|snapshot| snapshot.job)).collect()
+        )).await?;
+        Ok(Self::decode_rows(rows)
+            .await?
+            .into_iter()
+            .map(|snapshot| snapshot.job)
+            .collect())
+    }
+
+    async fn session_has_pending_jobs(&self, session_id: i64) -> SchedulerResult<bool> {
+        let row = self.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "SELECT EXISTS(SELECT 1 FROM agena_scheduler_jobs WHERE json_extract(job_json, '$.owner_session_id') = ? AND paused = 0 AND completed = 0 AND (next_fire_at_ms IS NOT NULL OR json_extract(job_json, '$.pending_delivery') IS NOT NULL)) AS present",
+            [session_id.into()],
+        )).await?;
+        Ok(row
+            .map(|row| row.try_get("", "present"))
+            .transpose()?
+            .unwrap_or(false))
     }
 
     async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>> {
-        self.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+        let row = self.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
             "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE id = ?", [id.to_string().into()],
-        )).await?.as_ref().map(Self::decode).transpose()
+        )).await?;
+        Ok(Self::decode_rows(row.into_iter().collect()).await?.pop())
     }
 
     async fn list_due(&self, now_ms: i64) -> SchedulerResult<Vec<JobSnapshot>> {
-        self.db
+        let rows = self
+            .db
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs \
@@ -536,14 +652,13 @@ impl JobStore for SqliteJobStore {
              ORDER BY COALESCE(retry_at_ms, next_fire_at_ms), id",
                 [now_ms.into(), now_ms.into(), lease_cutoff(now_ms).into()],
             ))
-            .await?
-            .iter()
-            .map(Self::decode)
-            .collect()
+            .await?;
+        Self::decode_rows(rows).await
     }
 
     async fn replace(&self, expected: &JobSnapshot, job: ScheduledJob) -> SchedulerResult<bool> {
-        let mut values = Self::job_values(&job, encode_update(expected, &job)?);
+        let (job, json) = Self::encode_job_update(expected, job).await?;
+        let mut values = Self::job_values(&job, json);
         values.extend([
             job.id.to_string().into(),
             expected.json.clone().into(),
@@ -562,7 +677,8 @@ impl JobStore for SqliteJobStore {
         claim_key: String,
         now_ms: i64,
     ) -> SchedulerResult<bool> {
-        let mut values = Self::job_values(&job, encode_update(expected, &job)?);
+        let (job, json) = Self::encode_job_update(expected, job).await?;
+        let mut values = Self::job_values(&job, json);
         values.extend([
             claim_key.into(),
             now_ms.into(),
@@ -571,6 +687,7 @@ impl JobStore for SqliteJobStore {
             expected.claim_key.clone().into(),
             lease_cutoff(now_ms).into(),
         ]);
+        let _permit = self.write_permit().await?;
         Ok(self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
             "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, updated_at_ms = ?, delivery_key = ?, claimed_at_ms = ? \
              WHERE id = ? AND job_json = ? AND delivery_key IS ? \
@@ -579,6 +696,7 @@ impl JobStore for SqliteJobStore {
     }
 
     async fn renew(&self, id: Uuid, claim_key: &str, now_ms: i64) -> SchedulerResult<bool> {
+        let _permit = self.write_permit().await?;
         Ok(self
             .db
             .execute(Statement::from_sql_and_values(
@@ -607,7 +725,8 @@ impl JobStore for SqliteJobStore {
         if expected.claim_key() != Some(claim_key) {
             return Ok(false);
         }
-        let mut values = Self::job_values(&job, encode_update(expected, &job)?);
+        let (job, json) = Self::encode_job_update(expected, job).await?;
+        let mut values = Self::job_values(&job, json);
         values.extend([
             job.id.to_string().into(),
             expected.json.clone().into(),
@@ -621,8 +740,10 @@ impl JobStore for SqliteJobStore {
     }
 
     async fn append_history(&self, entry: SchedulerHistoryEntry) -> SchedulerResult<()> {
+        let statement = Self::prepare_history(entry).await?;
+        let _permit = self.write_permit().await?;
         let txn = self.db.begin().await?;
-        Self::write_history(&txn, &entry).await?;
+        Self::write_history(&txn, statement).await?;
         txn.commit().await?;
         Ok(())
     }
@@ -644,30 +765,40 @@ impl JobStore for SqliteJobStore {
                 vec![limit.into()],
             )
         };
-        self.db
+        let rows = self
+            .db
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 sql,
                 values,
             ))
-            .await?
-            .iter()
-            .map(|row| {
-                let id: String = row.try_get("", "job_id")?;
-                let job_id = id.parse().map_err(|error| {
-                    SchedulerError::Persistence(sea_orm::DbErr::Custom(format!(
-                        "invalid scheduler history job id: {error}"
-                    )))
-                })?;
-                let json: String = row.try_get("", "run_json")?;
-                Ok(SchedulerHistoryEntry {
-                    job_id,
-                    owner_workspace: row.try_get("", "owner_workspace")?,
-                    owner_session_id: row.try_get("", "owner_session_id")?,
-                    record: serde_json::from_str(&json)?,
-                })
+            .await?;
+        JOB_CODECS
+            .run(move || {
+                rows.iter()
+                    .map(|row| {
+                        let id: String = row.try_get("", "job_id")?;
+                        let job_id = id.parse().map_err(|error| {
+                            SchedulerError::Persistence(sea_orm::DbErr::Custom(format!(
+                                "invalid scheduler history job id: {error}"
+                            )))
+                        })?;
+                        let json: String = row.try_get("", "run_json")?;
+                        Ok(SchedulerHistoryEntry {
+                            job_id,
+                            owner_workspace: row.try_get("", "owner_workspace")?,
+                            owner_session_id: row.try_get("", "owner_session_id")?,
+                            record: serde_json::from_str(&json)?,
+                        })
+                    })
+                    .collect()
             })
-            .collect()
+            .await
+            .map_err(|error| {
+                SchedulerError::Persistence(sea_orm::DbErr::Custom(format!(
+                    "history decode worker failed: {error}"
+                )))
+            })?
     }
 }
 

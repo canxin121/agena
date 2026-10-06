@@ -5,8 +5,15 @@
 //! SQLite serializes writers with its single-write lock; the failure mode to
 //! avoid is `SQLITE_BUSY` ("database is locked").
 
-use std::{future::Future, pin::Pin};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex, OnceLock, Weak},
+    time::{Duration, Instant},
+};
 
+use agena_async::{WritePermit, WriteQueue};
 use agena_storage::TransactionEffects;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, Statement, TransactionTrait,
@@ -26,14 +33,77 @@ const WRITE_LOCK_SEQUENCE: &str = "__agena_write_lock__";
 
 /// Number of times a write transaction retries a busy lock before giving up.
 const MAX_BUSY_RETRIES: usize = 5;
+const WRITE_LOCK_DEADLINE: Duration = Duration::from_secs(10);
+const ADMISSION_ERROR_PREFIX: &str = "SQLite write admission failed: ";
+
+/// Admission overload is transient, but has no SQLite driver error code.
+/// Pool checkout timeouts likewise indicate exhausted database capacity.
+pub fn is_write_admission_busy(error: &DbErr) -> bool {
+    matches!(error, DbErr::Custom(message) if message.starts_with(ADMISSION_ERROR_PREFIX))
+        || matches!(
+            error,
+            DbErr::ConnectionAcquire(sea_orm::ConnAcquireErr::Timeout)
+        )
+}
+
+/// Pool clones and all repositories on the same file share one writer queue.
+/// Cache by the pool's retained connect-options Arc, so pointer reuse cannot
+/// accidentally associate a newly opened database with an old pool's queue.
+pub async fn acquire_write_permit(db: &DatabaseConnection) -> Result<WritePermit, DbErr> {
+    type Options = sea_orm::sqlx::sqlite::SqliteConnectOptions;
+    type QueueCell = tokio::sync::OnceCell<Arc<WriteQueue>>;
+    type Registry = HashMap<usize, (Weak<Options>, Arc<QueueCell>)>;
+    static POOLS: OnceLock<Mutex<Registry>> = OnceLock::new();
+    let options = db.get_sqlite_connection_pool().connect_options();
+    let cell = {
+        let mut pools = POOLS
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        pools.retain(|_, (options, _)| options.strong_count() > 0);
+        Arc::clone(
+            &pools
+                .entry(Arc::as_ptr(&options) as usize)
+                .or_insert_with(|| (Arc::downgrade(&options), Arc::new(QueueCell::new())))
+                .1,
+        )
+    };
+    let queue = cell
+        .get_or_try_init(|| async {
+            let row = db
+                .query_one(Statement::from_string(
+                    db.get_database_backend(),
+                    "PRAGMA database_list",
+                ))
+                .await?
+                .ok_or_else(|| DbErr::Custom("SQLite main database is missing".into()))?;
+            let file: String = row.try_get("", "file")?;
+            if file.is_empty() {
+                // SQLx gives each anonymous memory database a unique filename.
+                // Named shared-cache memory pools deliberately share admission.
+                Ok(WriteQueue::named(
+                    format!("sqlite-memory:{}", options.get_filename().display()).into(),
+                ))
+            } else {
+                WriteQueue::for_file(std::path::Path::new(&file))
+                    .await
+                    .map_err(|error| DbErr::Custom(format!("resolve SQLite write queue: {error}")))
+            }
+        })
+        .await?;
+    queue
+        .acquire()
+        .await
+        .map_err(|error| DbErr::Custom(format!("{ADMISSION_ERROR_PREFIX}{error}")))
+}
 
 /// Acquire the SQLite write lock as the first statement of a transaction.
 ///
 /// SeaORM begins every transaction with `BEGIN` (SQLite `BEGIN DEFERRED`). A
 /// deferred transaction that runs a `SELECT` before its first write must
 /// upgrade from a read lock to the write lock mid-transaction, and SQLite
-/// returns `SQLITE_BUSY` immediately for that upgrade — the busy timeout only
-/// applies when the lock is taken at transaction start. Issuing a benign write
+/// can return `SQLITE_BUSY` immediately for that upgrade (or `BUSY_SNAPSHOT`
+/// in WAL mode) without a useful busy-timeout wait. Issuing a benign write
 /// as the first statement moves the lock acquisition to the point where the
 /// busy timeout applies, so concurrent writers wait instead of failing.
 ///
@@ -102,11 +172,12 @@ where
         &'a mut TransactionEffects,
     ) -> Pin<Box<dyn Future<Output = Result<T, DbErr>> + Send + 'a>>,
 {
-    let transaction = begin_with_write_lock(db).await?;
+    let (transaction, permit) = begin_with_write_lock(db).await?;
     let mut effects = TransactionEffects::new();
     match op(&transaction, &mut effects).await {
         Ok(value) => {
             transaction.commit().await?;
+            drop(permit);
             effects.run().await;
             Ok(value)
         }
@@ -126,11 +197,12 @@ where
         &'a mut TransactionEffects,
     ) -> Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>,
 {
-    let transaction = begin_with_write_lock(db).await.map_err(E::from)?;
+    let (transaction, permit) = begin_with_write_lock(db).await.map_err(E::from)?;
     let mut effects = TransactionEffects::new();
     match op(&transaction, &mut effects).await {
         Ok(value) => {
             transaction.commit().await.map_err(E::from)?;
+            drop(permit);
             effects.run().await;
             Ok(value)
         }
@@ -160,12 +232,14 @@ async fn rollback_after_operation_error(transaction: DatabaseTransaction) {
 /// lock with backoff. Returns a transaction that already holds the write lock.
 pub(crate) async fn begin_with_write_lock(
     db: &DatabaseConnection,
-) -> Result<DatabaseTransaction, DbErr> {
+) -> Result<(DatabaseTransaction, WritePermit), DbErr> {
+    let permit = acquire_write_permit(db).await?;
+    let started = Instant::now();
     let mut attempt = 0usize;
     loop {
         let transaction = db.begin().await?;
         match acquire_write_lock(&transaction).await {
-            Ok(()) => return Ok(transaction),
+            Ok(()) => return Ok((transaction, permit)),
             Err(error) => {
                 if let Err(rollback_error) = transaction.rollback().await {
                     return Err(DbErr::Custom(format!(
@@ -177,8 +251,14 @@ pub(crate) async fn begin_with_write_lock(
                         )
                     )));
                 }
-                if is_sqlite_busy(&error) && attempt < MAX_BUSY_RETRIES {
-                    tokio::time::sleep(busy_backoff(attempt)).await;
+                if is_sqlite_busy(&error)
+                    && attempt < MAX_BUSY_RETRIES
+                    && started.elapsed() < WRITE_LOCK_DEADLINE
+                {
+                    // Rollback returned the connection to the pool before the
+                    // backoff. No user statement/effect is retried here.
+                    let remaining = WRITE_LOCK_DEADLINE.saturating_sub(started.elapsed());
+                    tokio::time::sleep(busy_backoff(attempt).min(remaining)).await;
                     attempt += 1;
                 } else {
                     return Err(error);

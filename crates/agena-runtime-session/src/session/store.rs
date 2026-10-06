@@ -723,13 +723,13 @@ impl ProcessorPartIdAllocator {
 pub(crate) fn store_error(error: StoreError) -> AppError {
     match error {
         StoreError::NotFound(message) => AppError::Internal(message),
+        StoreError::Conflict(message) => AppError::PersistenceConflict(message),
         StoreError::InvalidState(message)
         | StoreError::Constraint(message)
-        | StoreError::Conflict(message)
         | StoreError::Serialization(message)
         | StoreError::Io(message)
         | StoreError::Database(message) => AppError::Internal(message),
-        StoreError::Busy => AppError::Internal("database busy, retry".to_string()),
+        StoreError::Busy => AppError::PersistenceBusy,
     }
 }
 

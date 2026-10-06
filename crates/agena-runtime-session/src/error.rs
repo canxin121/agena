@@ -6,6 +6,7 @@ use thiserror::Error;
 /// terminal internal error.
 pub(crate) fn is_database_busy(error: &sea_orm::DbErr) -> bool {
     agena_storage_sqlite::is_sqlite_busy(error)
+        || agena_storage_sqlite::is_write_admission_busy(error)
 }
 
 #[derive(Debug, Error)]
@@ -19,6 +20,10 @@ pub enum AppError {
     Provider(String),
     #[error("database error: {0}")]
     Database(#[from] sea_orm::DbErr),
+    #[error("database write capacity is temporarily unavailable")]
+    PersistenceBusy,
+    #[error("database mutation conflict: {0}")]
+    PersistenceConflict(String),
     #[error("serde json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
     #[error("http client error: {0}")]
@@ -165,7 +170,7 @@ impl AppError {
             | Self::Http(_) => {
                 "The provider could not complete the response. Try again or choose another model."
             }
-            Self::Conflict { .. } => {
+            Self::Conflict { .. } | Self::PersistenceConflict(_) => {
                 "The session changed while the request was running. Refresh and try again."
             }
             Self::Cancelled => "Response cancelled.",
@@ -189,6 +194,7 @@ impl AppError {
                 "The conversation is too large for the selected model. Compact the conversation or choose a model with a larger context window."
             }
             Self::NoActiveExecution(_) => "This session has no active response.",
+            Self::PersistenceBusy => "The database is busy. Try again in a moment.",
             Self::Database(error) if is_database_busy(error) => {
                 "The database is busy. Try again in a moment."
             }
@@ -330,6 +336,7 @@ impl AppError {
                 Recovery::ChooseAlternative,
             ),
             Self::Conflict { .. }
+            | Self::PersistenceConflict(_)
             | Self::ExecutionAlreadyActive(_)
             | Self::SessionMutationBusy(_) => (
                 "session.conflict",
@@ -393,6 +400,13 @@ impl AppError {
             // A transient SQLite lock conflict ("database is locked") is a
             // dependency-level, retryable condition, not an internal error.
             // This guard must precede the `Database` catch-all arm below.
+            Self::PersistenceBusy => (
+                "database.busy",
+                Category::DependencyUnavailable,
+                Responsibility::System,
+                Retry::Backoff,
+                Recovery::Retry,
+            ),
             Self::Database(error) if is_database_busy(error) => (
                 "database.busy",
                 Category::DependencyUnavailable,
@@ -462,6 +476,7 @@ impl AppError {
                 Some(actionable) => UserPresentation::validated_with_context(code, actionable),
                 None => UserPresentation::new(code, self.public_message()),
             },
+            Self::PersistenceBusy => UserPresentation::new(code, self.public_message()),
             Self::Database(error) if is_database_busy(error) => {
                 // A lock conflict is a transient condition with a stable,
                 // localizable message — don't surface the internal SQLite

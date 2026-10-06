@@ -330,7 +330,7 @@ async fn load_or_create_oauth_signing_key(
     database
         .set_json(
             KV_KEY_MCP_OAUTH_SIGNING_KEY,
-            &PersistedSigningKey {
+            PersistedSigningKey {
                 secret_key: encoded,
             },
         )
@@ -890,7 +890,7 @@ impl McpServerState {
         database
             .set_json(
                 KV_KEY_MCP_SERVER_CONTROL,
-                &PersistedMcpServerControl {
+                PersistedMcpServerControl {
                     enabled,
                     auth_mode,
                     anonymous_access,
@@ -986,7 +986,7 @@ impl McpServerState {
         database
             .set_json(
                 KV_KEY_MCP_SERVER_CONTROL,
-                &PersistedMcpServerControl {
+                PersistedMcpServerControl {
                     enabled,
                     auth_mode,
                     anonymous_access,
@@ -1023,7 +1023,7 @@ impl McpServerState {
         database
             .set_json(
                 KV_KEY_MCP_SERVER_CONTROL,
-                &PersistedMcpServerControl {
+                PersistedMcpServerControl {
                     enabled,
                     auth_mode,
                     anonymous_access,
@@ -2683,7 +2683,7 @@ impl OAuthState {
         database
             .set_json(
                 KV_KEY_MCP_OAUTH_RUNTIME,
-                &PersistedOAuthRuntime {
+                PersistedOAuthRuntime {
                     refresh_tokens,
                     revoked_jti,
                 },

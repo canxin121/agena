@@ -707,6 +707,7 @@ pub(crate) struct ResourceRevisions {
 #[derive(Default)]
 struct DurableSnapshot {
     checked_at: Option<Instant>,
+    last_attempt: Option<Instant>,
     sessions: HashMap<i64, (i64, i64)>,
     workspaces: Vec<(i64, i64, String)>,
 }
@@ -856,13 +857,24 @@ impl ResourceRevisions {
     /// check per server per 30s, regardless of browser count; no part/history
     /// reads or representation serialization occur here.
     pub(crate) async fn refresh_durable(&self, state: &AppState) -> Result<(), ServerError> {
-        let mut durable = self.durable.lock().await;
+        // Local commit observers already update the clock synchronously.
+        // The cross-process safety check must not queue every browser behind
+        // a slow metadata read; the in-flight refresh owns the next baseline.
+        let Ok(mut durable) = self.durable.try_lock() else {
+            return Ok(());
+        };
         if durable
             .checked_at
             .is_some_and(|at| at.elapsed() < Duration::from_secs(30))
+            || durable
+                .last_attempt
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(2))
         {
             return Ok(());
         }
+        // Retain a short cooldown after errors or caller cancellation as well,
+        // so failing reads cannot turn a revision poll into a retry storm.
+        durable.last_attempt = Some(Instant::now());
         let (sessions, mut workspaces) = tokio::try_join!(
             async {
                 state

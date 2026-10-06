@@ -263,7 +263,7 @@ async fn load_session_registry_from_store(
     let registry = PersistedTerminalRegistry::default();
     db.set_json(
         crate::server::persistence::db::KV_KEY_TERMINAL_SESSION_REGISTRY,
-        &registry,
+        registry.clone(),
     )
     .await
     .map_err(|error| format!("failed to initialize current terminal session registry: {error}"))?;
@@ -376,7 +376,7 @@ impl TerminalManager {
                 if let Err(error) = db
                     .set_json(
                         crate::server::persistence::db::KV_KEY_TERMINAL_SESSION_REGISTRY,
-                        &candidate,
+                        candidate.clone(),
                     )
                     .await
                 {

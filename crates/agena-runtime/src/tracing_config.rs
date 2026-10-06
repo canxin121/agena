@@ -11,6 +11,8 @@ use tracing_subscriber::EnvFilter;
 use crate::{DatabaseCompositionInputs, connect_or_initialize};
 pub use agena_runtime_config::RuntimeTracingConfiguration;
 
+static DATABASE_BOOTSTRAP: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 pub fn runtime_env_filter(
     config: &RuntimeTracingConfiguration,
 ) -> Result<EnvFilter, tracing_subscriber::filter::ParseError> {
@@ -73,13 +75,14 @@ pub(crate) async fn connect_database(
             opts.journal_mode(SqliteJournalMode::Wal)
                 .synchronous(SqliteSynchronous::Normal)
                 .foreign_keys(true)
-                .busy_timeout(std::time::Duration::from_secs(15))
+                .busy_timeout(std::time::Duration::from_secs(1))
         });
         // A bounded connection pool lets concurrent reads proceed in parallel;
-        // writes remain serialized by SQLite and guarded by the busy timeout.
-        // Larger pools reduce the chance that a write waits on a connection
-        // checkout while a session concurrently reads history or projections.
-        options.max_connections(16);
+        // Writers queue before checking out a connection, leaving the other
+        // connections available to readers even during cross-process contention.
+        options
+            .max_connections(16)
+            .acquire_timeout(std::time::Duration::from_secs(3));
     }
     Database::connect(options).await
 }
@@ -121,7 +124,13 @@ pub(crate) async fn connect_runtime_database(
                 database_path,
             }
             .resolve_url()?;
-            StorageConfig::ensure_parent(url.as_str())?;
+            let parent_url = url.clone();
+            DATABASE_BOOTSTRAP
+                .run(move || StorageConfig::ensure_parent(parent_url.as_str()))
+                .await
+                .map_err(|error| {
+                    DbErr::Custom(format!("database directory worker failed: {error}"))
+                })??;
             connect_database(url.as_str(), tracing)
                 .await
                 .map_err(RuntimeDatabaseCompositionError::from)
@@ -196,7 +205,13 @@ pub(crate) async fn connect_scheduler_database(
         true,
         || async move {
             let url = resolve_scheduler_database_url(database_url, database_path)?;
-            StorageConfig::ensure_parent(url.as_str())?;
+            let parent_url = url.clone();
+            DATABASE_BOOTSTRAP
+                .run(move || StorageConfig::ensure_parent(parent_url.as_str()))
+                .await
+                .map_err(|error| {
+                    DbErr::Custom(format!("database directory worker failed: {error}"))
+                })??;
             connect_database(url.as_str(), tracing)
                 .await
                 .map_err(RuntimeDatabaseCompositionError::from)

@@ -11,6 +11,8 @@ use agena_storage::{ModelCatalogCacheRecord, ModelCatalogRepository, ModelCatalo
 use async_trait::async_trait;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
 
+static CATALOG_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 const CATALOG_KIND_OFFICIAL: &str = "official";
 const CATALOG_STATE_ID: i32 = 1;
 const ENTRY_TABLE: &str = "agena_model_catalog_entries";
@@ -68,40 +70,55 @@ impl SeaModelCatalogRepository {
         Self { db }
     }
 
-    async fn read_document_from_db(
-        &self,
-        kind: &str,
+    async fn decode_document(
+        rows: Vec<sea_orm::QueryResult>,
     ) -> Result<ModelCatalogDocument, ModelCatalogRepositoryError> {
-        let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "SELECT model_id, definition_json FROM {ENTRY_TABLE} WHERE kind = ? ORDER BY model_id ASC"
-                ),
-                [kind.into()],
-            ))
+        CATALOG_CODECS
+            .run(move || {
+                let mut models = BTreeMap::new();
+                for row in rows {
+                    let model_id: String = row.try_get("", "model_id").map_err(backend_error)?;
+                    let raw: String = row.try_get("", "definition_json").map_err(backend_error)?;
+                    let definition_json = serde_json::from_str(&raw).map_err(backend_error)?;
+                    let definition = CatalogModelDefinition::from_persisted_json(definition_json)
+                        .map_err(|error| {
+                        ModelCatalogRepositoryError::Backend(format!(
+                            "parse model catalog definition `{model_id}`/official: {error}"
+                        ))
+                    })?;
+                    models.insert(model_id, definition);
+                }
+                Ok(ModelCatalogDocument { models })
+            })
             .await
-            .map_err(backend_error)?;
-        let mut models = BTreeMap::new();
-        for row in rows {
-            let model_id: String = row.try_get("", "model_id").map_err(backend_error)?;
-            let definition_json: serde_json::Value =
-                row.try_get("", "definition_json").map_err(backend_error)?;
-            let definition =
-                CatalogModelDefinition::from_persisted_json(definition_json).map_err(|error| {
-                    ModelCatalogRepositoryError::Backend(format!(
-                        "parse model catalog definition `{model_id}`/{kind}: {error}"
-                    ))
-                })?;
-            models.insert(model_id, definition);
-        }
-        Ok(ModelCatalogDocument { models })
+            .map_err(backend_error)?
     }
 
-    async fn clear_cached_official_from_db(&self) -> Result<(), ModelCatalogRepositoryError> {
-        let txn = self.db.begin().await.map_err(backend_error)?;
+    async fn clear_cached_official_from_db(
+        &self,
+        expected_fetched_at: i64,
+    ) -> Result<(), ModelCatalogRepositoryError> {
+        let (txn, _permit) = crate::transaction::begin_with_write_lock(&self.db)
+            .await
+            .map_err(backend_error)?;
         let result = async {
+            let row = txn
+                .query_one(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    format!("SELECT fetched_at_unix_ms FROM {STATE_TABLE} WHERE id = ?"),
+                    [CATALOG_STATE_ID.into()],
+                ))
+                .await
+                .map_err(backend_error)?;
+            let current: Option<i64> = row
+                .map(|row| row.try_get("", "fetched_at_unix_ms"))
+                .transpose()
+                .map_err(backend_error)?
+                .flatten();
+            if current != Some(expected_fetched_at) {
+                return Ok(());
+            }
+
             txn.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!("DELETE FROM {ENTRY_TABLE} WHERE kind = ?"),
@@ -135,48 +152,51 @@ impl SeaModelCatalogRepository {
         }
     }
 
-    async fn write_document_to_db<C: ConnectionTrait>(
-        db: &C,
-        document: &ModelCatalogDocument,
-    ) -> Result<(), ModelCatalogRepositoryError> {
-        db.execute(Statement::from_sql_and_values(
-            DatabaseBackend::Sqlite,
-            format!("DELETE FROM {ENTRY_TABLE} WHERE kind = ?"),
-            [CATALOG_KIND_OFFICIAL.into()],
-        ))
-        .await
-        .map_err(backend_error)?;
-
+    fn prepare_document(
+        document: ModelCatalogDocument,
+    ) -> Result<Vec<Statement>, ModelCatalogRepositoryError> {
         let updated_at_ms = now_unix_ms().map_err(backend_error)?;
-        for (model_id, definition) in &document.models {
-            let definition_json = definition.to_persisted_json()?;
-            let definition_search_json = definition_json.to_string();
-            let search_text =
-                model_catalog_definition_search_text(model_id, definition, &definition_search_json);
-            db.execute(Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "INSERT INTO {ENTRY_TABLE} (kind, model_id, definition_json, search_text, updated_at_ms) VALUES (?, ?, ?, ?, ?)"
-                ),
-                [
-                    CATALOG_KIND_OFFICIAL.into(),
-                    model_id.clone().into(),
-                    definition_json.into(),
-                    search_text.into(),
-                    updated_at_ms.into(),
-                ],
-            ))
-            .await
-            .map_err(backend_error)?;
+        let mut statements = Vec::new();
+        let mut values = Vec::<sea_orm::Value>::new();
+        let mut count = 0;
+        for (model_id, definition) in document.models {
+            let json = definition.to_persisted_json()?.to_string();
+            let search = model_catalog_definition_search_text(&model_id, &definition, &json);
+            values.extend([
+                CATALOG_KIND_OFFICIAL.into(),
+                model_id.into(),
+                json.into(),
+                search.into(),
+                updated_at_ms.into(),
+            ]);
+            count += 1;
+            if count == 100 {
+                statements.push(Self::insert_statement(count, std::mem::take(&mut values)));
+                count = 0;
+            }
         }
-        Ok(())
+        if count > 0 {
+            statements.push(Self::insert_statement(count, values));
+        }
+        Ok(statements)
+    }
+
+    fn insert_statement(count: usize, values: Vec<sea_orm::Value>) -> Statement {
+        Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!(
+                "INSERT INTO {ENTRY_TABLE} (kind, model_id, definition_json, search_text, updated_at_ms) VALUES {}",
+                vec!["(?, ?, ?, ?, ?)"; count].join(", ")
+            ),
+            values,
+        )
     }
 
     async fn read_cached_official_from_db(
         &self,
     ) -> Result<Option<CachedOfficialCatalog>, ModelCatalogRepositoryError> {
-        let Some(state) = self
-            .db
+        let txn = self.db.begin().await.map_err(backend_error)?;
+        let Some(state) = txn
             .query_one(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!(
@@ -189,6 +209,12 @@ impl SeaModelCatalogRepository {
         else {
             return Ok(None);
         };
+        let rows = txn.query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("SELECT model_id, CAST(definition_json AS TEXT) AS definition_json FROM {ENTRY_TABLE} WHERE kind = ? ORDER BY model_id ASC"),
+            [CATALOG_KIND_OFFICIAL.into()],
+        )).await.map_err(backend_error)?;
+        txn.commit().await.map_err(backend_error)?;
         let fetched_at_unix_ms: Option<i64> = state
             .try_get("", "fetched_at_unix_ms")
             .map_err(backend_error)?;
@@ -205,16 +231,18 @@ impl SeaModelCatalogRepository {
                     error = %error,
                     "cached model catalog has an invalid source and will be cleared"
                 );
-                self.clear_cached_official_from_db().await?;
+                self.clear_cached_official_from_db(fetched_at_unix_ms)
+                    .await?;
                 return Ok(None);
             }
         };
-        let document = match self.read_document_from_db(CATALOG_KIND_OFFICIAL).await {
+        let document = match Self::decode_document(rows).await {
             Ok(document) => document,
             Err(ModelCatalogRepositoryError::Backend(error))
                 if error.starts_with("parse model catalog definition") =>
             {
-                self.clear_cached_official_from_db().await?;
+                self.clear_cached_official_from_db(fetched_at_unix_ms)
+                    .await?;
                 return Ok(None);
             }
             Err(error) => return Err(error),
@@ -228,27 +256,17 @@ impl SeaModelCatalogRepository {
 
     async fn write_cached_official_to_db(
         &self,
-        cached: &CachedOfficialCatalog,
+        cached: CachedOfficialCatalog,
     ) -> Result<(), ModelCatalogRepositoryError> {
-        let txn = self.db.begin().await.map_err(backend_error)?;
-        // Acquire the write lock before the freshness SELECT so the busy
-        // timeout applies at transaction start instead of surfacing SQLITE_BUSY
-        // on the read→write lock upgrade. Without this, a concurrent writer in
-        // another process makes the gate SELECT→write path fail immediately.
-        if let Err(error) = crate::acquire_write_lock(&txn).await {
-            let primary_error = backend_error(error);
-            return match txn.rollback().await {
-                Ok(()) => Err(primary_error),
-                Err(rollback_error) => Err(ModelCatalogRepositoryError::Backend(format!(
-                    "{}; additionally, {}",
-                    agena_failure::diagnostic::format_error_chain(&primary_error),
-                    agena_failure::diagnostic::format_error_chain_with_context(
-                        "failed to roll back after acquiring the model-catalog write lock failed",
-                        &rollback_error,
-                    )
-                ))),
-            };
-        }
+        let fetched_at_unix_ms = cached.fetched_at_unix_ms;
+        let source = cached.source;
+        let statements = CATALOG_CODECS
+            .run(move || Self::prepare_document(cached.document))
+            .await
+            .map_err(backend_error)??;
+        let (txn, _permit) = crate::transaction::begin_with_write_lock(&self.db)
+            .await
+            .map_err(backend_error)?;
         let result = async {
             // Freshness gate: if another process already wrote a catalog
             // fetched at or after ours, skip the whole rewrite. SQLite's
@@ -266,10 +284,16 @@ impl SeaModelCatalogRepository {
             let existing: Option<i64> = existing
                 .map(|row| row.try_get("", "fetched_at_unix_ms").map_err(backend_error))
                 .transpose()?;
-            if existing.is_some_and(|value| value >= cached.fetched_at_unix_ms) {
+            if existing.is_some_and(|value| value >= fetched_at_unix_ms) {
                 return Ok(());
             }
-            Self::write_document_to_db(&txn, &cached.document).await?;
+            txn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite, format!("DELETE FROM {ENTRY_TABLE} WHERE kind = ?"),
+                [CATALOG_KIND_OFFICIAL.into()],
+            )).await.map_err(backend_error)?;
+            for statement in statements {
+                txn.execute(statement).await.map_err(backend_error)?;
+            }
             txn.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!("DELETE FROM {STATE_TABLE} WHERE id = ?"),
@@ -284,8 +308,8 @@ impl SeaModelCatalogRepository {
                 ),
                 [
                     CATALOG_STATE_ID.into(),
-                    cached.fetched_at_unix_ms.into(),
-                    cached.source.as_persisted().to_owned().into(),
+                    fetched_at_unix_ms.into(),
+                    source.as_persisted().to_owned().into(),
                     now_unix_ms().map_err(backend_error)?.into(),
                 ],
             ))
@@ -322,7 +346,10 @@ impl ModelCatalogRepository for SeaModelCatalogRepository {
         Ok(Some(ModelCatalogCacheRecord {
             fetched_at_unix_ms: cached.fetched_at_unix_ms,
             source: cached.source.as_persisted().to_owned(),
-            document: serde_json::to_value(cached.document)?,
+            document: CATALOG_CODECS
+                .run(move || serde_json::to_value(cached.document))
+                .await
+                .map_err(backend_error)??,
         }))
     }
 
@@ -332,8 +359,12 @@ impl ModelCatalogRepository for SeaModelCatalogRepository {
     ) -> Result<(), ModelCatalogRepositoryError> {
         let source = ModelCatalogSnapshotSourceKind::from_persisted(record.source.as_str())
             .map_err(ModelCatalogRepositoryError::Backend)?;
-        let document = serde_json::from_value(record.document.clone())?;
-        self.write_cached_official_to_db(&CachedOfficialCatalog {
+        let raw = record.document.clone();
+        let document = CATALOG_CODECS
+            .run(move || serde_json::from_value(raw))
+            .await
+            .map_err(backend_error)??;
+        self.write_cached_official_to_db(CachedOfficialCatalog {
             fetched_at_unix_ms: record.fetched_at_unix_ms,
             source,
             document,

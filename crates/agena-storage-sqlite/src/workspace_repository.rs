@@ -39,21 +39,21 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
     async fn create(&self, path: String) -> Result<WorkspaceRecord, WorkspaceRepositoryError> {
         let path = normalized_workspace_path(path.as_str())?;
         let now = Utc::now().timestamp_millis();
-        let result = self
+        let _permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
+        let row = self
             .db
-            .execute(Statement::from_sql_and_values(
+            .query_one(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!(
-                    "INSERT INTO {TABLE} (path, created_at_ms, updated_at_ms) VALUES (?, ?, ?)"
+                    "INSERT INTO {TABLE} (path, created_at_ms, updated_at_ms) VALUES (?, ?, ?) RETURNING id, path, created_at_ms, updated_at_ms"
                 ),
                 [path.into(), now.into(), now.into()],
             ))
             .await
             .map_err(map_error)?;
-        let id = i64::try_from(result.last_insert_id()).map_err(|_| {
-            WorkspaceRepositoryError::Backend("workspace identifier exceeds i64 range".to_owned())
-        })?;
-        self.record(id).await?.ok_or_else(|| {
+        row.map(record_from_row).transpose()?.ok_or_else(|| {
             WorkspaceRepositoryError::Backend("created workspace row is missing".to_owned())
         })
     }
@@ -62,10 +62,10 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
         id: i64,
         path: String,
     ) -> Result<Option<WorkspaceRecord>, WorkspaceRepositoryError> {
-        if self.record(id).await?.is_none() {
-            return Ok(None);
-        }
         let path = normalized_workspace_path(path.as_str())?;
+        let permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
         self.db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
@@ -74,21 +74,18 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
             ))
             .await
             .map_err(map_error)?;
+        drop(permit);
         self.record(id).await
     }
     async fn delete(&self, id: i64) -> Result<Option<WorkspaceRecord>, WorkspaceRepositoryError> {
-        let existing = self.record(id).await?;
-        if existing.is_some() {
-            self.db
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Sqlite,
-                    format!("DELETE FROM {TABLE} WHERE id = ?"),
-                    [id.into()],
-                ))
-                .await
-                .map_err(map_error)?;
-        }
-        Ok(existing)
+        let _permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
+        self.db.query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("DELETE FROM {TABLE} WHERE id = ? RETURNING id, path, created_at_ms, updated_at_ms"),
+            [id.into()],
+        )).await.map_err(map_error)?.map(record_from_row).transpose()
     }
     async fn get(&self, id: i64) -> Result<Option<WorkspaceRecord>, WorkspaceRepositoryError> {
         self.record(id).await
@@ -139,6 +136,14 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
         // path can only win one insert, and every loser falls through to the
         // read-back below instead of surfacing a unique-constraint error.
         let path = normalized_workspace_path(path)?;
+        // Workspace resolution happens on many request paths. An existing
+        // workspace needs no INSERT OR IGNORE and no SQLite writer lock.
+        if let Some(id) = self.lookup_id(&path).await? {
+            return Ok(id);
+        }
+        let permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
         let now = Utc::now().timestamp_millis();
         self.db
             .execute(Statement::from_sql_and_values(
@@ -151,6 +156,7 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
             ))
             .await
             .map_err(map_error)?;
+        drop(permit);
         self.lookup_id(&path).await?.ok_or_else(|| {
             WorkspaceRepositoryError::Backend(format!(
                 "workspace row is missing after ensure_id for {path}"

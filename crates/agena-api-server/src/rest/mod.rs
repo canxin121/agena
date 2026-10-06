@@ -62,6 +62,12 @@ pub(crate) fn server_error_from_store(error: agena_storage::store::StoreError) -
         agena_storage::store::StoreError::NotFound(_) => {
             ServerError::not_found("The session was not found.")
         }
+        agena_storage::store::StoreError::Busy => {
+            ServerError::service_unavailable("database write capacity is temporarily unavailable")
+        }
+        agena_storage::store::StoreError::Conflict(_) => {
+            ServerError::conflict("The data changed concurrently. Refresh and try again.")
+        }
         other => ServerError::internal_error(&other),
     }
 }

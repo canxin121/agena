@@ -231,7 +231,7 @@ impl WorkspacePreviewRegistry {
         self.db
             .set_json(
                 crate::server::persistence::db::KV_KEY_WORKSPACE_PREVIEW_SERVER_STATE,
-                file,
+                file.clone(),
             )
             .await
             .map_err(|err| {
@@ -972,9 +972,9 @@ mod preview_delta_tests {
                 .await
                 .unwrap(),
         );
-        db.set_value(
+        db.set_json(
             db::KV_KEY_WORKSPACE_PREVIEW_SERVER_STATE,
-            &serde_json::json!({"invalid":"snapshot"}),
+            serde_json::json!({"invalid":"snapshot"}),
         )
         .await
         .unwrap();
@@ -984,7 +984,7 @@ mod preview_delta_tests {
         let revision = registry.revision();
         db.set_json(
             db::KV_KEY_WORKSPACE_PREVIEW_SERVER_STATE,
-            &PreviewSessionsFile {
+            PreviewSessionsFile {
                 updated_at: 1,
                 sessions: vec![record("A", "/repo-A")],
             },

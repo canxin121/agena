@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, TransactionTrait};
 
+static SCHEMA_FILES: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 /// How long `initialize_schema` waits for a concurrent process to finish
 /// building the schema before giving up.
 const SCHEMA_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -32,11 +34,17 @@ impl SchemaLock {
         let Some(lock_path) = schema_lock_path(db).await? else {
             return Ok(None);
         };
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
+        let worker_path = lock_path.clone();
+        let mut file = SCHEMA_FILES
+            .run(move || {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .write(true)
+                    .open(&worker_path)
+            })
+            .await
+            .map_err(|error| DbErr::Custom(format!("schema lock worker failed: {error}")))?
             .map_err(|error| {
                 DbErr::Custom(format!(
                     "open schema lock file {}: {error}",
@@ -45,14 +53,30 @@ impl SchemaLock {
             })?;
         let started = std::time::Instant::now();
         loop {
-            match file.try_lock() {
+            let (returned_file, result) = SCHEMA_FILES
+                .run(move || {
+                    let result = file.try_lock();
+                    (file, result)
+                })
+                .await
+                .map_err(|error| DbErr::Custom(format!("schema lock worker failed: {error}")))?;
+            file = returned_file;
+            match result {
                 Ok(()) => return Ok(Some(SchemaLock { _file: file })),
-                Err(_) if started.elapsed() < SCHEMA_LOCK_TIMEOUT => {
+                Err(std::fs::TryLockError::WouldBlock)
+                    if started.elapsed() < SCHEMA_LOCK_TIMEOUT =>
+                {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(DbErr::Custom(format!(
+                        "timed out acquiring schema lock {}",
+                        lock_path.display()
+                    )));
                 }
                 Err(error) => {
                     return Err(DbErr::Custom(format!(
-                        "timed out acquiring schema lock {}: {error}",
+                        "acquire schema lock {}: {error}",
                         lock_path.display()
                     )));
                 }
@@ -94,7 +118,7 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     }
     for pragma in [
         "PRAGMA journal_mode = WAL",
-        "PRAGMA busy_timeout = 15000",
+        "PRAGMA busy_timeout = 1000",
         "PRAGMA synchronous = NORMAL",
     ] {
         db.execute(Statement::from_string(

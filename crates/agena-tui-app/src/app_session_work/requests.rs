@@ -3,34 +3,25 @@ use super::*;
 impl App {
     pub(super) fn request_work_files(&mut self, id: i64) {
         let state = self.session_work.entry(id).or_default();
-        if state.file_task.is_some() || state.directory.is_empty() {
+        if state.file_task.is_some() {
             return;
         }
         self.next_usage_request_id += 1;
         let request_id = self.next_usage_request_id;
         state.file_request = request_id;
         state.file_at = Some(Instant::now());
-        let directory = state.directory.clone();
+        state.file_dirty = false;
         let page = state.page;
         let summary = !state.expanded || state.tab != Tab::Files;
         let application = self.application.clone();
         let tx = self.tx.clone();
         state.file_task = Some(ReadTask(tokio::spawn(async move {
             let result = tokio::time::timeout(Duration::from_secs(15), async {
-                let value = match application
+                let value = application
                     .client()
-                    .workspace_git_status(&directory, page * 40, summary)
-                    .await
-                {
-                    Ok(value) => value,
-                    Err(agena_client::ClientError::Api(error))
-                        if error.problem.code.as_str() == "not_git_repo" =>
-                    {
-                        return Ok(WorkResult::Files(FilePage::default()));
-                    }
-                    Err(error) => return Err(anyhow::Error::from(error)),
-                };
-                Ok::<_, anyhow::Error>(WorkResult::Files(serde_json::from_value(value)?))
+                    .session_file_changes(id, page * 40, summary, None, 256 * 1024)
+                    .await?;
+                Ok::<_, anyhow::Error>(WorkResult::Files(value))
             })
             .await
             .map_err(crate::UiFailure::internal)
@@ -60,7 +51,7 @@ impl App {
         let request_id = self.next_usage_request_id;
         state.detail_request = request_id;
         state.detail_at = Some(Instant::now());
-        let directory = state.directory.clone();
+        state.detail_dirty = false;
         let cursor = state.logs.as_ref().map_or_else(
             || {
                 let Some(Detail::Task(task)) = &state.detail else {
@@ -75,21 +66,10 @@ impl App {
             |l| l.last_seq,
         );
         let max_bytes = state.diff_limit.max(256 * 1024);
-        let old_path = if let Some(Detail::File(path, staged)) = &state.detail {
-            state
-                .files
-                .as_ref()
-                .and_then(|p| p.files.iter().find(|f| &f.path == path))
-                .and_then(|f| {
-                    if *staged {
-                        f.index_old_path.clone()
-                    } else {
-                        f.working_old_path.clone()
-                    }
-                })
-        } else {
-            None
-        };
+        let history_label = self.i18n.text("session-work-operation-history");
+        let operation_diff_label = self.i18n.text("session-work-operation-diff");
+        let truncated_label = self.i18n.text("session-work-recorded-truncated");
+        let no_diff_label = self.i18n.text("session-work-no-recorded-diff");
         let application = self.application.clone();
         let tx = self.tx.clone();
         state.detail_task = Some(ReadTask(tokio::spawn(async move {
@@ -105,28 +85,47 @@ impl App {
                         )
                         .await?,
                     )),
-                    Detail::File(path, staged) => {
+                    Detail::File(path) => {
                         let value = application
                             .client()
-                            .workspace_git_diff(
-                                &directory,
-                                &path,
-                                staged,
-                                max_bytes,
-                                old_path.as_deref(),
-                            )
+                            .session_file_changes(id, 0, false, Some(&path), max_bytes)
                             .await?;
-                        Ok(WorkResult::Diff(
-                            value
-                                .get("diff")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or_default()
-                                .to_owned(),
-                            value
-                                .get("truncated")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false),
-                        ))
+                        let mut text = String::new();
+                        let mut truncated = false;
+                        if let Some(file) = value.files.first() {
+                            if file.operation_history {
+                                text.push_str(&format!("{history_label}\n"));
+                            }
+                            for op in &file.operations {
+                                text.push_str(&format!(
+                                    "\n#{} · {} · {} · {}\n",
+                                    op.part_id, op.tool, op.kind, file.path
+                                ));
+                                if let Some(from) = &op.from_path {
+                                    text.push_str(&format!("{from} → {}\n", file.path));
+                                }
+                                if op.before_sha256.is_some() || op.after_sha256.is_some() {
+                                    text.push_str(&format!(
+                                        "SHA {} → {}\n",
+                                        op.before_sha256.as_deref().unwrap_or("?"),
+                                        op.after_sha256.as_deref().unwrap_or("?")
+                                    ));
+                                }
+                                if op.diff_scope == "operation" {
+                                    text.push_str(&format!("{operation_diff_label}\n"));
+                                }
+                                text.push_str(op.diff.as_deref().unwrap_or_else(|| {
+                                    op.diff_unavailable_reason
+                                        .as_deref()
+                                        .unwrap_or(&no_diff_label)
+                                }));
+                                if op.diff_truncated {
+                                    text.push_str(&format!("\n{truncated_label}\n"));
+                                    truncated = true;
+                                }
+                            }
+                        }
+                        Ok(WorkResult::Diff(text, truncated))
                     }
                 }
             })
@@ -151,6 +150,10 @@ impl App {
         channel: u8,
         result: crate::UiResult<WorkResult>,
     ) {
+        if channel == 3 {
+            self.handle_inline_activity_logs_loaded(id, request_id, result);
+            return;
+        }
         let Some(state) = self.session_work.get_mut(&id) else {
             return;
         };
@@ -162,13 +165,16 @@ impl App {
         if request_id != expected || expected == 0 {
             return;
         }
+        let control_observation = if channel == 2 { state.control_observation.take() } else { None };
         match channel {
             0 => {
                 state.file_task = None;
+                state.file_at = Some(Instant::now());
                 state.file_error = None;
             }
             1 => {
                 state.detail_task = None;
+                state.detail_at = Some(Instant::now());
                 state.detail_error = None;
             }
             _ => {
@@ -189,53 +195,27 @@ impl App {
                 state.selected = state.selected.min(files.files.len().saturating_sub(1));
                 state.files = Some(files);
             }
-            Ok(WorkResult::Logs(mut logs)) => {
-                if let Some(old) = state
-                    .logs
-                    .take()
-                    .filter(|old| old.activity_id == logs.activity_id)
-                {
-                    let cursor = old.lines.last().map_or(0, |l| l.seq);
-                    let mut lines = old.lines;
-                    lines.extend(logs.lines.into_iter().filter(|l| l.seq > cursor));
-                    logs.lines = lines;
-                }
-                let excess = logs.lines.len().saturating_sub(200);
-                logs.lines.drain(..excess);
-                let mut budget = 128 * 1024;
-                let mut keep = 0;
-                for line in logs.lines.iter_mut().rev() {
-                    if budget < 4 {
-                        break;
-                    }
-                    if line.text.len() > budget {
-                        let mut start = line.text.len() - budget + 3;
-                        while !line.text.is_char_boundary(start) {
-                            start += 1;
-                        }
-                        line.text = format!("…{}", &line.text[start..]);
-                    }
-                    budget = budget.saturating_sub(line.text.len());
-                    keep += 1;
-                }
-                logs.lines.drain(..logs.lines.len() - keep);
-                state.logs = Some(logs);
+            Ok(WorkResult::Logs(logs)) => {
+                state.logs = Some(merge_log_tail(state.logs.take(), logs));
             }
             Ok(WorkResult::Diff(diff, truncated)) => {
                 state.diff = diff;
                 state.diff_truncated = truncated;
             }
             Ok(WorkResult::Control(activity)) => {
-                if self.transcript.session_id == Some(id) {
-                    if let Some(execution) = self.transcript.execution.as_mut()
-                        && let Some(row) = execution
-                            .background_activities
-                            .iter_mut()
-                            .find(|row| row.id == activity.id)
-                    {
-                        *row = *activity;
+                if let Some((task, action, observed)) = control_observation
+                    && task == activity.id && observed == state.activity_times.get(&task).copied()
+                    && self.transcript.session_id == Some(id)
+                    && let Some(execution) = self.transcript.execution.as_mut() {
+                    if matches!(action.as_str(), "dismiss" | "delete") {
+                        execution.background_activities.retain(|row| row.id != task);
+                    } else if let Some(row) = execution.background_activities.iter_mut().find(|row| row.id == task) {
+                        if row != activity.as_ref() { *row = *activity; }
+                    } else {
+                        execution.background_activities.insert(0, *activity);
                     }
-                    self.request_refresh(id, false);
+                    if matches!(&state.detail, Some(Detail::Task(selected)) if selected == &task) { state.detail_dirty = true; }
+                    if let Some(logs) = state.inline_logs.get_mut(&task) { logs.dirty = true; }
                 }
             }
             Err(error) => {
@@ -281,6 +261,7 @@ impl App {
         self.next_usage_request_id += 1;
         let request_id = self.next_usage_request_id;
         state.control_request = request_id;
+        state.control_observation = Some((task.clone(), action.clone(), state.activity_times.get(&task).copied()));
         let application = self.application.clone();
         let tx = self.tx.clone();
         // Mutations retain their original activity/session even after navigation.

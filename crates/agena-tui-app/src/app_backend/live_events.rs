@@ -6,12 +6,16 @@ use tokio::sync::mpsc;
 
 /// Session subscription signal used by the TUI to converge from snapshots and
 /// force a persisted-state refresh after lag or transport loss.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LiveEvent {
     pub session_deleted: bool,
     /// Canonical snapshot of one changed part. Forks may already contain the
     /// same ID even when the event names its origin session.
     pub(crate) part_update: Option<(i64, agena_api::resource::SessionTranscriptPart)>,
+    /// Complete activity descriptors are applied locally; the timestamp
+    /// orders updates and `bool` denotes dismissal.
+    pub(crate) activity_update: Option<(i64, bool, agena_api::resource::BackgroundActivityResource)>,
+    pub(crate) plan_changed: bool,
     /// Snapshot captured after a live subscription was established. Remote
     /// reconnect uses this to close the subscribe/read race.
     pub(crate) snapshot: Option<super::SessionStateWithTranscriptPage>,

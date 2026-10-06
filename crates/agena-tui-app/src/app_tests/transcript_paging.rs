@@ -440,6 +440,7 @@ async fn reconnect_keeps_the_fold_and_rejects_stale_fold_metadata() {
             session_deleted: false,
             snapshot: Some(snapshot(12, 17, 3)),
             force_refresh: false,
+            ..crate::LiveEvent::default()
         },
     );
     assert_fold_visible(&mut app.transcript, 12, 8);
@@ -452,6 +453,7 @@ async fn reconnect_keeps_the_fold_and_rejects_stale_fold_metadata() {
             session_deleted: false,
             snapshot: Some(snapshot(9, 14, 4)),
             force_refresh: false,
+            ..crate::LiveEvent::default()
         },
     );
     assert_fold_visible(&mut app.transcript, 12, 8);
@@ -667,6 +669,7 @@ async fn normal_live_events_schedule_a_coalesced_refresh() {
             session_deleted: false,
             snapshot: None,
             force_refresh: false,
+            ..crate::LiveEvent::default()
         },
     );
     assert!(app.pending_refresh.is_some());
@@ -683,6 +686,7 @@ async fn completed_refreshes_wait_for_the_tick_gate_and_failures_back_off() {
     app.handle_session_refreshed(
         SESSION_ID,
         Ok(crate::app_backend::SessionRefresh {
+            execution_only: None,
             reconciled_parts: None,
             snapshot: None,
             latest_event_seq: Some(1),
@@ -852,6 +856,7 @@ async fn obsolete_state_refresh_and_subscription_tokens_cannot_change_a_reopened
         session_id: SESSION_ID,
         requested_at: old,
         result: Ok(crate::app_backend::SessionRefresh {
+            execution_only: None,
             snapshot: Some(snapshot(10, 12, 2)),
             reconciled_parts: None,
             latest_event_seq: Some(2),
@@ -889,12 +894,14 @@ async fn obsolete_state_refresh_and_subscription_tokens_cannot_change_a_reopened
             session_deleted: true,
             snapshot: None,
             force_refresh: false,
+            ..crate::LiveEvent::default()
         },
     });
     assert_eq!(app.transcript.session_id, Some(SESSION_ID));
     app.handle_session_refreshed(
         SESSION_ID,
         Ok(crate::app_backend::SessionRefresh {
+            execution_only: None,
             snapshot: Some(snapshot(10, 12, 2)),
             reconciled_parts: None,
             latest_event_seq: Some(2),
@@ -926,6 +933,7 @@ async fn shared_streaming_part_updates_are_ordered_without_snapshot_polls() {
         session_deleted: false,
         snapshot: None,
         force_refresh: false,
+        ..crate::LiveEvent::default()
     };
     let mut old = text.clone();
     old.updated_at_ms = 9;
@@ -963,6 +971,7 @@ async fn reconnect_removes_missed_memberships_without_resurrecting_them_from_old
     app.handle_session_refreshed(
         SESSION_ID,
         Ok(crate::app_backend::SessionRefresh {
+            execution_only: None,
             snapshot: None,
             reconciled_parts: Some((vec![12, 13], current)),
             latest_event_seq: Some(8),

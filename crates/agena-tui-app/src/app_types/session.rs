@@ -227,6 +227,17 @@ pub(crate) struct TranscriptState {
     /// One request per detail, tied to both the request and tool state.
     pub(crate) tool_detail_loads:
         BTreeMap<(i64, agena_api::live::ToolDetailSection), (Instant, (String, i64, i64))>,
+    pub(crate) tool_detail_tasks:
+        BTreeMap<(i64, agena_api::live::ToolDetailSection), tokio::task::AbortHandle>,
+    /// Independent activity output, never written into a launch receipt.
+    pub(crate) background_output: BTreeMap<i64, String>,
+    /// Freshness is separate from the displayed value: live patches retain
+    /// rendered details while a replacement is being fetched.
+    pub(crate) tool_detail_versions:
+        BTreeMap<(i64, agena_api::live::ToolDetailSection), (String, i64, i64)>,
+    pub(crate) tool_detail_pending: BTreeSet<(i64, agena_api::live::ToolDetailSection)>,
+    pub(crate) tool_detail_allowed_at: BTreeMap<(i64, agena_api::live::ToolDetailSection), Instant>,
+    pub(crate) tool_detail_failures: BTreeMap<(i64, agena_api::live::ToolDetailSection), u32>,
     pub(crate) transcript_fold_seen_cursors: BTreeMap<i64, BTreeSet<String>>,
     pub(crate) refresh_failures: u32,
     pub(crate) last_history_load_at: Option<Instant>,

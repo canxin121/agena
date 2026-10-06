@@ -12,7 +12,7 @@ fn app() -> App {
     app
 }
 fn files() -> FilePage {
-    serde_json::from_value(serde_json::json!({"files":[{"path":"src/main.rs","index":" ","workingDir":"M"}],"totalFiles":1,"hasMore":false})).unwrap()
+    serde_json::from_value(serde_json::json!({"files":[{"path":"src/main.rs","operation_count":1,"operation_history":false,"operations":[]}],"total_files":1,"has_more":false,"offset":0,"recording_incomplete":false})).unwrap()
 }
 
 #[tokio::test]
@@ -167,7 +167,7 @@ fn switched_sessions_and_changed_selections_reject_old_reads() {
     app.session_work
         .get_mut(&7)
         .unwrap()
-        .select_detail(Some(Detail::File("new.rs".into(), false)));
+        .select_detail(Some(Detail::File("new.rs".into())));
     app.handle_session_work_loaded(7, 12, 1, Ok(WorkResult::Diff("old content".into(), false)));
     assert!(app.session_work[&7].diff.is_empty());
     app.transcript.session_id = Some(7);
@@ -199,6 +199,7 @@ fn log_tails_deduplicate_and_bound_retained_output() {
         lines: (start..=end)
             .map(
                 |seq| agena_api::resource::BackgroundActivityLogLineResource {
+                    chunk: false,
                     seq,
                     stream: "stdout".into(),
                     ts_ms: 0,
@@ -258,7 +259,7 @@ async fn visible_file_rows_are_clickable_without_leaving_the_conversation() {
     app.handle_mouse_event(target.expect("file row must own a pointer target"));
     assert_eq!(
         app.session_work[&7].detail,
-        Some(Detail::File("src/main.rs".into(), false))
+        Some(Detail::File("src/main.rs".into()))
     );
     assert!(matches!(app.current_route, Route::Main));
     assert_eq!(app.composer.text(), "unsent draft");
@@ -277,7 +278,7 @@ async fn panel_header_uses_full_width_and_keyboard_entry_needs_no_function_key()
             .unwrap();
         let cells = terminal.backend().buffer().content();
         let text: String = cells.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("Workspace") && text.contains("Files"));
+        assert!(text.contains("Session") && text.contains("Files"));
         assert!(!text.contains("F6") && !text.contains('…') && !text.contains("Ctrl"));
         assert_eq!(cells[0].bg, cells[usize::from(width) - 1].bg);
         assert_eq!(cells[0].symbol(), "│");
@@ -348,7 +349,7 @@ async fn cleared_changes_close_the_preview_and_return_focus_to_the_composer() {
             expanded: true,
             files: Some(files()),
             file_request: 1,
-            detail: Some(Detail::File("src/main.rs".into(), false)),
+            detail: Some(Detail::File("src/main.rs".into())),
             diff: "old diff".into(),
             ..Default::default()
         },
@@ -412,4 +413,40 @@ async fn work_panel_stays_above_the_composer_when_chat_scrolls_and_other_section
         assert_eq!(app.transcript.viewport.top, 0);
         assert_eq!(app.work_area, work);
     }
+}
+
+#[tokio::test]
+async fn incomplete_recording_is_visible_without_a_git_workspace_and_has_no_staged_switch() {
+    let mut app = app();
+    app.session_work.insert(
+        7,
+        SessionWorkState {
+            files: Some(FilePage {
+                recording_incomplete: true,
+                ..Default::default()
+            }),
+            expanded: true,
+            ..Default::default()
+        },
+    );
+    assert!(app.session_work_visible());
+    assert!(!app.handle_session_work_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)));
+    let mut terminal = Terminal::new(TestBackend::new(120, 8)).unwrap();
+    terminal
+        .draw(|frame| app.render_session_work(frame, frame.area()))
+        .unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("Session recorded edits"));
+    assert!(text.contains("Recording may be incomplete"));
+    app.transcript.session_id = Some(8);
+    assert!(
+        !app.session_work_visible(),
+        "a different session cannot inherit cached edit rows"
+    );
 }

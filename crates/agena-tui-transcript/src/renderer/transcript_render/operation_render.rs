@@ -583,11 +583,17 @@ pub(crate) fn render_operation_blocks<'a>(
                 stderr,
                 ..
             } => {
-                push_label_value(
+                let longest_fence = command
+                    .split(|ch| ch != '`')
+                    .map(str::len)
+                    .max()
+                    .unwrap_or(0);
+                let fence = "`".repeat((longest_fence + 1).max(3));
+                let separator = if command.ends_with('\n') { "" } else { "\n" };
+                push_expanded_markdown(
                     out,
-                    "    $ ",
-                    command.as_str(),
-                    Style::default().fg(agena_tui_components::theme::special_color()),
+                    "    ",
+                    &format!("{fence}sh\n{command}{separator}{fence}\n"),
                     width,
                 );
                 if !stdout.trim().is_empty() {

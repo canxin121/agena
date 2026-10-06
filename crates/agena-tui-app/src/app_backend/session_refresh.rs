@@ -8,6 +8,7 @@ use super::SessionStateWithTranscriptPage;
 /// Refresh signal of a session.
 #[derive(Debug, Clone)]
 pub struct SessionRefresh {
+    pub(crate) execution_only: Option<agena_api::resource::SessionExecutionResource>,
     pub latest_event_seq: Option<i64>,
     pub event_count: usize,
     pub(crate) reconciled_parts:

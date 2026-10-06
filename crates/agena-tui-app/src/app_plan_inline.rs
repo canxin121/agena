@@ -132,6 +132,7 @@ pub(crate) struct InlinePlanState {
     request_id: u64,
     mutating: bool,
     refreshed_at: Option<Instant>,
+    dirty: bool,
     scroll: u16,
     max_scroll: u16,
     render_key: Option<(String, u16, ratatui::style::Color)>,
@@ -147,23 +148,28 @@ impl InlinePlanState {
                 .is_some_and(|data| !data.summary.is_empty())
     }
 
-    fn refresh_due(&self, busy: bool, now: Instant) -> bool {
+    fn refresh_due(&self, _busy: bool, now: Instant) -> bool {
         if self.request.is_some() {
             return false;
         }
-        let seconds = if busy || self.expanded || self.error.is_some() {
-            5
-        } else if self.visible() {
+        let seconds = if self.error.is_some() {
+            60
+        } else if self.visible() || self.expanded {
             30
         } else {
             60
         };
         self.refreshed_at
-            .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(seconds))
+            .is_none_or(|last| now.saturating_duration_since(last) >= if self.dirty && self.error.is_none() {
+                Duration::from_millis(750)
+            } else { Duration::from_secs(seconds) })
     }
 }
 
 impl App {
+    pub(crate) fn mark_inline_plan_changed(&mut self, id: i64) {
+        self.inline_plans.entry(id).or_default().dirty = true;
+    }
     pub(crate) fn open_plan_viewer(&mut self) {
         let Some(id) = self.current_or_selected_session_id() else {
             self.flash_warning(self.i18n.text("flash-plan-viewer-requires-session"));
@@ -253,6 +259,7 @@ impl App {
         state.mutating = autorun.is_some();
         state.error = None;
         state.refreshed_at = Some(Instant::now());
+        state.dirty = false;
         state.request = Some(PlanTask(tokio::spawn(async move {
             let operation = async {
                 if let Some(autorun) = autorun {

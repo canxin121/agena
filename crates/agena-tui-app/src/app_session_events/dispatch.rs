@@ -608,17 +608,28 @@ impl App {
         {
             return;
         }
+        let key = (part_id, section);
+        self.transcript.tool_detail_allowed_at.insert(key, Instant::now() + std::time::Duration::from_millis(750));
         match result {
             Ok(resource) => {
                 if resource.part_id != part_id || resource.section != section {
                     return;
                 }
+                self.transcript.tool_detail_failures.remove(&key);
                 self.transcript.finish_tool_detail_load(resource);
                 if let Some(execution) = self.transcript.execution.as_mut() {
                     execution.parts = self.transcript.parts.clone();
                 }
+                // An update may have arrived during this request. Catch up
+                // only the still-expanded section, preserving its old value.
+                self.request_expanded_tool_details(&[part_id]);
             }
             Err(error) => {
+                let failures = self.transcript.tool_detail_failures.entry(key).or_default();
+                *failures = failures.saturating_add(1).min(6);
+                let delay = (5000_u64 * 2_u64.pow(*failures - 1)).min(60_000);
+                self.transcript.tool_detail_allowed_at.insert(key, Instant::now() + std::time::Duration::from_millis(delay));
+                self.transcript.tool_detail_pending.insert(key);
                 self.flash_error(error);
             }
         }
@@ -688,6 +699,8 @@ impl App {
                             self.try_send_pending();
                         }
                     }
+                } else if let Some(execution) = refresh.execution_only {
+                    self.apply_transcript_execution(execution);
                 }
                 if refresh.event_count > 0 {
                     self.sync_session_list_selection_to_current_execution();

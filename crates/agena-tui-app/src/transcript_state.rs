@@ -67,10 +67,8 @@ fn preserve_loaded_tool_sections(
         agena_api::live::ToolDetailSection::Input,
         agena_api::live::ToolDetailSection::Output,
     ] {
-        if previous.revision == incoming.revision
-            && previous.updated_at_ms == incoming.updated_at_ms
-            && (section == agena_api::live::ToolDetailSection::Input
-                || previous.state == incoming.state)
+        if (section == agena_api::live::ToolDetailSection::Input
+            || previous.state == incoming.state)
             && !incoming_content.contains_key(section.as_str())
             && tool_detail_section_loaded(previous, section)
             && let Some(value) = previous_content.get(section.as_str())
@@ -220,6 +218,57 @@ mod tool_detail_tests {
     }
 
     #[test]
+    fn running_output_keeps_useful_snapshots_and_catches_up_without_overwriting_completion() {
+        use agena_api::live::ToolDetailResource;
+        let mut transcript = super::TranscriptState {
+            parts: vec![tool_part("in_progress", json!({}))],
+            ..Default::default()
+        };
+        let first = transcript.begin_tool_detail_load(1, ToolDetailSection::Output).unwrap();
+        transcript.parts[0].revision = 1;
+        transcript.parts[0].updated_at_ms = 10;
+        assert!(transcript.begin_tool_detail_load(1, ToolDetailSection::Output).is_none());
+        assert!(transcript.accept_tool_detail_load(1, ToolDetailSection::Output, first));
+        assert!(transcript.finish_tool_detail_load(ToolDetailResource {
+            part_state: None,
+            part_id: 1, section: ToolDetailSection::Output, revision: 0, updated_at_ms: 0,
+            value: json!({"payload":{"text":"first"}}),
+        }));
+        assert_eq!(transcript.parts[0].content["output"]["payload"]["text"], "first");
+        let catch_up = transcript.begin_tool_detail_load(1, ToolDetailSection::Output).unwrap();
+        let mut incoming = tool_part("in_progress", json!({}));
+        incoming.revision = 2;
+        incoming.updated_at_ms = 20;
+        preserve_loaded_tool_sections(&transcript.parts[0], &mut incoming);
+        transcript.parts[0] = incoming;
+        assert_eq!(transcript.parts[0].content["output"]["payload"]["text"], "first");
+        assert!(transcript.accept_tool_detail_load(1, ToolDetailSection::Output, catch_up));
+        assert!(transcript.finish_tool_detail_load(ToolDetailResource {
+            part_state: None,
+            part_id: 1, section: ToolDetailSection::Output, revision: 1, updated_at_ms: 10,
+            value: json!({"payload":{"text":"intermediate"}}),
+        }));
+        let running = transcript.begin_tool_detail_load(1, ToolDetailSection::Output).unwrap();
+        transcript.parts[0].state = "completed".into();
+        transcript.parts[0].revision = 3;
+        let completed = transcript.begin_tool_detail_load(1, ToolDetailSection::Output).unwrap();
+        assert!(!transcript.accept_tool_detail_load(1, ToolDetailSection::Output, running));
+        assert!(transcript.accept_tool_detail_load(1, ToolDetailSection::Output, completed));
+        assert!(!transcript.finish_tool_detail_load(ToolDetailResource {
+            part_state: None,
+            part_id: 1, section: ToolDetailSection::Output, revision: 2, updated_at_ms: 20,
+            value: json!({"payload":{"text":"old running output"}}),
+        }));
+        assert!(transcript.finish_tool_detail_load(ToolDetailResource {
+            part_state: None,
+            part_id: 1, section: ToolDetailSection::Output, revision: 3, updated_at_ms: 30,
+            value: json!({"payload":{"text":"final"}}),
+        }));
+        assert_eq!(transcript.parts[0].content["output"]["payload"]["text"], "final");
+        assert!(transcript.begin_tool_detail_load(1, ToolDetailSection::Output).is_none());
+    }
+
+    #[test]
     fn incoming_complete_output_wins_without_merging_cached_result_fields() {
         let previous = tool_part(
             "completed",
@@ -307,6 +356,12 @@ impl TranscriptState {
             transcript_fold_loads: BTreeMap::new(),
             transcript_fold_errors: BTreeMap::new(),
             tool_detail_loads: BTreeMap::new(),
+            tool_detail_tasks: BTreeMap::new(),
+            background_output: BTreeMap::new(),
+            tool_detail_pending: BTreeSet::new(),
+            tool_detail_allowed_at: BTreeMap::new(),
+            tool_detail_failures: BTreeMap::new(),
+            tool_detail_versions: BTreeMap::new(),
             last_history_load_at: None,
             transcript_fold_seen_cursors: BTreeMap::new(),
             refresh_failures: 0,
@@ -354,6 +409,13 @@ impl TranscriptState {
         self.transcript_fold_loads.clear();
         self.transcript_fold_errors.clear();
         self.tool_detail_loads.clear();
+        for task in self.tool_detail_tasks.values() { task.abort(); }
+        self.tool_detail_tasks.clear();
+        self.background_output.clear();
+        self.tool_detail_pending.clear();
+        self.tool_detail_allowed_at.clear();
+        self.tool_detail_failures.clear();
+        self.tool_detail_versions.clear();
         self.last_history_load_at = None;
         self.transcript_fold_seen_cursors.clear();
         self.refresh_failures = 0;
@@ -405,6 +467,13 @@ impl TranscriptState {
         self.transcript_fold_loads.clear();
         self.transcript_fold_errors.clear();
         self.tool_detail_loads.clear();
+        for task in self.tool_detail_tasks.values() { task.abort(); }
+        self.tool_detail_tasks.clear();
+        self.background_output.clear();
+        self.tool_detail_pending.clear();
+        self.tool_detail_allowed_at.clear();
+        self.tool_detail_failures.clear();
+        self.tool_detail_versions.clear();
         self.last_history_load_at = None;
         self.transcript_fold_seen_cursors.clear();
         self.refresh_failures = 0;
@@ -506,12 +575,23 @@ impl TranscriptState {
             }
         }
         self.apply_parts_change(|current| *current = parts);
+        self.tool_detail_versions
+            .retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
+        self.tool_detail_pending.retain(|(id, _)| self.parts.iter().any(|part| part.part_id == *id));
+        self.tool_detail_allowed_at.retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
+        self.tool_detail_failures.retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
         self.invalidate_render();
     }
 
     /// Reserve one lazy section request. The loaded state is inferred from the
     /// merged canonical part so refreshes can preserve it without maintaining
     /// a second transcript cache.
+    pub(crate) fn tool_detail_is_current(&self, part_id: i64, section: agena_api::live::ToolDetailSection) -> bool {
+        self.parts.iter().find(|part| part.part_id == part_id).is_some_and(|part|
+            tool_detail_section_loaded(part, section)
+                && self.tool_detail_versions.get(&(part_id, section)) == Some(&(part.state.clone(), part.revision, part.updated_at_ms)))
+    }
+
     pub(crate) fn begin_tool_detail_load(
         &mut self,
         part_id: i64,
@@ -521,13 +601,13 @@ impl TranscriptState {
             .parts
             .iter()
             .find(|part| part.part_id == part_id && part.kind == "tool_call")?;
-        if tool_detail_section_loaded(part, section)
+        let stamp = (part.state.clone(), part.revision, part.updated_at_ms);
+        if (tool_detail_section_loaded(part, section)
+            && self.tool_detail_versions.get(&(part_id, section)) == Some(&stamp))
             || self
                 .tool_detail_loads
                 .get(&(part_id, section))
-                .is_some_and(|(_, stamp)| {
-                    *stamp == (part.state.clone(), part.revision, part.updated_at_ms)
-                })
+                .is_some_and(|(_, stamp)| stamp.0 == part.state)
         {
             return None;
         }
@@ -555,11 +635,12 @@ impl TranscriptState {
         if *since != requested_at {
             return false;
         }
-        let current = self.parts.iter().any(|part| {
-            part.part_id == part_id
-                && (part.state.clone(), part.revision, part.updated_at_ms) == *state
-        });
+        let current = self
+            .parts
+            .iter()
+            .any(|part| part.part_id == part_id && part.state == state.0);
         self.tool_detail_loads.remove(&key);
+        self.tool_detail_tasks.remove(&key);
         current
     }
 
@@ -574,9 +655,23 @@ impl TranscriptState {
         else {
             return false;
         };
-        if (resource.revision, resource.updated_at_ms) < (part.revision, part.updated_at_ms) {
+        if resource.section == agena_api::live::ToolDetailSection::Output
+            && agena_tui_transcript::part_state_is_terminal(&part.state)
+            && resource.part_state.as_ref().map_or(
+                (resource.revision, resource.updated_at_ms) < (part.revision, part.updated_at_ms),
+                |state| state != &part.state,
+            )
+        {
             return false;
         }
+        self.tool_detail_versions.insert(
+            (resource.part_id, resource.section),
+            (
+                part.state.clone(),
+                part.revision,
+                part.updated_at_ms,
+            ),
+        );
         let changed = apply_tool_detail_value(part, resource.section, resource.value);
         if changed {
             self.invalidate_render();
@@ -1671,6 +1766,21 @@ impl TranscriptState {
         let mut line_nodes = Vec::new();
         let mut entries =
             agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds);
+        for part in entries.iter_mut().flat_map(|entry| &mut entry.parts) {
+            let agena_tui_transcript::TranscriptContentId::StoredPart(id) = part.id else { continue; };
+            let Some(text) = self.background_output.get(&id) else { continue; };
+            let agena_tui_transcript::TranscriptPartContent::Activity(
+                agena_tui_transcript::TranscriptActivityContent::Operation(tool)
+            ) = &mut part.content else { continue; };
+            if tool.presentation.blocks.is_empty() && !tool.presentation.summary.is_empty() {
+                tool.presentation.blocks.push(agena_domain::ViewBlock::Markdown {
+                    id: None, text: tool.presentation.summary.clone(),
+                });
+            }
+            tool.presentation.blocks.push(agena_domain::ViewBlock::Text {
+                id: Some("background-output".into()), text: text.clone(),
+            });
+        }
         inject_remembered_failures(&mut entries, &self.reply_failures);
         #[cfg(test)]
         let entries = if self.parts.is_empty() {

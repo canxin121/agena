@@ -334,11 +334,29 @@ impl App {
         if self.transcript.session_id != Some(session_id) {
             return;
         }
+        if let Some((time, dismissed, activity)) = live.activity_update {
+            self.apply_session_activity(session_id, time, dismissed, activity);
+            return;
+        }
+        if live.plan_changed {
+            self.mark_inline_plan_changed(session_id);
+            return;
+        }
         if let Some((origin, part)) = live.part_update {
             let id = part.part_id;
+            if part.kind == "tool_call" && matches!(part.state.as_str(), "completed" | "failed" | "cancelled") {
+                let name = part.content.get("name").and_then(serde_json::Value::as_str).unwrap_or_default();
+                if matches!(name, "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast") || name.starts_with("shell.") {
+                    self.mark_session_files_changed(session_id);
+                }
+            }
             let known = self.transcript.parts.iter().any(|old| old.part_id == id);
             if known {
-                let content_only = matches!(part.kind.as_str(), "text" | "reasoning");
+                let previous = self.transcript.parts.iter().find(|old| old.part_id == id).expect("known part");
+                if (previous.revision, previous.updated_at_ms) >= (part.revision, part.updated_at_ms) { return; }
+                let content_only = matches!(part.kind.as_str(), "text" | "reasoning") || (part.kind == "tool_call"
+                    && previous.state == part.state
+                    && previous.content.get("user_input") == part.content.get("user_input"));
                 let mut parts = self.transcript.parts.clone();
                 if let Some(old) = parts.iter_mut().find(|old| old.part_id == id) {
                     *old = part;
@@ -353,6 +371,8 @@ impl App {
             }
         }
         if live.force_refresh {
+            self.mark_session_files_changed(session_id);
+            self.mark_inline_plan_changed(session_id);
             self.transcript.reconcile_loaded_parts = true;
         }
         if live.force_refresh || changed {

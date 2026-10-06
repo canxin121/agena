@@ -14,10 +14,10 @@ use ratatui::{
     text::Line,
     widgets::{Paragraph, Wrap},
 };
-use serde::Deserialize;
 use std::time::{Duration, Instant};
 
 mod requests;
+mod inline;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -41,29 +41,10 @@ enum Tab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Detail {
     Task(String),
-    File(String, bool),
+    File(String),
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct FilePage {
-    #[serde(default)]
-    files: Vec<FileRow>,
-    total_files: usize,
-    #[serde(default)]
-    has_more: bool,
-}
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FileRow {
-    path: String,
-    index: String,
-    working_dir: String,
-    #[serde(default)]
-    index_old_path: Option<String>,
-    #[serde(default)]
-    working_old_path: Option<String>,
-}
+pub(crate) type FilePage = agena_api::resource::SessionFileChangesResource;
 
 #[derive(Debug)]
 pub(crate) enum WorkResult {
@@ -75,7 +56,6 @@ pub(crate) enum WorkResult {
 
 #[derive(Debug, Default)]
 pub(crate) struct SessionWorkState {
-    directory: String,
     expanded: bool,
     tab: Tab,
     files: Option<FilePage>,
@@ -84,6 +64,7 @@ pub(crate) struct SessionWorkState {
     detail: Option<Detail>,
     detail_activity: Option<BackgroundActivityResource>,
     logs: Option<BackgroundActivityLogResource>,
+    inline_logs: std::collections::BTreeMap<String, inline::InlineLogState>,
     diff: String,
     diff_limit: usize,
     diff_truncated: bool,
@@ -92,8 +73,12 @@ pub(crate) struct SessionWorkState {
     file_request: u64,
     detail_request: u64,
     control_request: u64,
+    control_observation: Option<(String, String, Option<i64>)>,
     file_at: Option<Instant>,
     detail_at: Option<Instant>,
+    file_dirty: bool,
+    detail_dirty: bool,
+    activity_times: std::collections::BTreeMap<String, i64>,
     file_error: Option<String>,
     detail_error: Option<String>,
     control_error: Option<String>,
@@ -108,6 +93,7 @@ impl SessionWorkState {
         self.detail_task = None;
         self.detail_request = 0;
         self.detail_at = None;
+        self.detail_dirty = true;
     }
     fn select_detail(&mut self, detail: Option<Detail>) {
         self.cancel_detail();
@@ -129,7 +115,7 @@ impl App {
             .session_id
             .and_then(|id| self.session_work.get(&id))
             .and_then(|state| state.files.as_ref())
-            .is_some_and(|files| files.total_files > 0)
+            .is_some_and(|files| files.total_files > 0 || files.recording_incomplete)
     }
 
     fn session_work_has_tasks(&self) -> bool {
@@ -212,12 +198,6 @@ impl App {
         let Some(id) = selected else {
             return;
         };
-        let directory = self
-            .transcript
-            .execution
-            .as_ref()
-            .and_then(|e| e.execution.effective_workspace_root.clone())
-            .unwrap_or_default();
         if !self.session_work.contains_key(&id) && self.session_work.len() >= 16 {
             let oldest = self
                 .session_work
@@ -229,50 +209,33 @@ impl App {
                 self.session_work.remove(&oldest);
             }
         }
-        let busy = self.active_run_session_id() == Some(id);
-        let state = self.session_work.entry(id).or_default();
-        if state.directory != directory {
-            *state = SessionWorkState {
-                directory,
-                ..Default::default()
-            };
-        }
+        self.session_work.entry(id).or_default();
         self.heal_session_work_selection(id);
         let state = self.session_work.get_mut(&id).expect("work state exists");
         let now = Instant::now();
         let interval = if state.file_error.is_some() {
             60
-        } else if state.expanded || busy {
-            5
         } else {
             30
         };
-        let files_due = !state.directory.is_empty()
-            && state.file_task.is_none()
+        let files_due = state.file_task.is_none()
             && state
                 .file_at
-                .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(interval));
+                .is_none_or(|at| now.duration_since(at) >= if state.file_dirty && state.file_error.is_none() {
+                    Duration::from_millis(750)
+                } else { Duration::from_secs(interval) });
         let detail_due = state.expanded
             && state.detail.is_some()
             && state.detail_task.is_none()
             && state.detail_at.is_none_or(|at| {
                 now.duration_since(at)
-                    >= Duration::from_secs(if state.detail_error.is_some() {
-                        30
-                    } else if matches!(state.detail, Some(Detail::Task(_)))
-                        && state.logs.as_ref().is_none_or(|l| {
-                            l.has_more
-                                || matches!(
-                                    l.status.as_str(),
-                                    "running" | "pending" | "waiting" | "paused"
-                                )
-                        })
+                    >= Duration::from_millis(if state.detail_error.is_some() {
+                        30_000
+                    } else if state.detail_dirty || state.logs.as_ref().is_some_and(|logs| logs.has_more)
                     {
-                        2
-                    } else if busy {
-                        5
+                        750
                     } else {
-                        30
+                        30_000
                     })
             });
         if files_due {
@@ -281,6 +244,47 @@ impl App {
         if detail_due {
             self.request_work_detail(id);
         }
+    }
+
+    pub(crate) fn mark_session_files_changed(&mut self, id: i64) {
+        let state = self.session_work.entry(id).or_default();
+        state.file_dirty = true;
+        if matches!(state.detail, Some(Detail::File(_))) { state.detail_dirty = true; }
+    }
+
+    pub(crate) fn apply_session_activity(&mut self, id: i64, time: i64, dismissed: bool, activity: BackgroundActivityResource) {
+        let state = self.session_work.entry(id).or_default();
+        if state.activity_times.get(&activity.id).is_some_and(|previous| *previous >= time) { return; }
+        if state.activity_times.len() >= 512 && !state.activity_times.contains_key(&activity.id) {
+            if let Some(oldest) = state.activity_times.iter().min_by_key(|(_, time)| *time).map(|(id, _)| id.clone()) {
+                state.activity_times.remove(&oldest);
+            }
+        }
+        state.activity_times.insert(activity.id.clone(), time);
+        if let Some(logs) = state.inline_logs.get_mut(&activity.id) { logs.dirty = true; }
+        if matches!(&state.detail, Some(Detail::Task(task)) if task == &activity.id) {
+            if state.detail_activity.as_ref() != Some(&activity) { state.detail_activity = Some(activity.clone()); }
+            state.detail_dirty = true;
+        }
+        let mut representation_changed = false;
+        let execution_absent = self.transcript.execution.is_none();
+        if let Some(execution) = self.transcript.execution.as_mut() {
+            if dismissed {
+                representation_changed = execution.background_activities.iter().any(|row| row.id == activity.id);
+                execution.background_activities.retain(|row| row.id != activity.id);
+            } else if let Some(row) = execution.background_activities.iter_mut().find(|row| row.id == activity.id) {
+                if row != &activity { *row = activity; representation_changed = true; }
+            } else {
+                execution.background_activities.insert(0, activity);
+                representation_changed = true;
+            }
+        }
+        // A snapshot already in flight may precede this event. Leave one
+        // trailing refresh so applying that older body cannot erase the event.
+        if execution_absent || (representation_changed && (self.transcript.refresh_in_flight_since.is_some() || self.transcript.state_load_in_flight_since.is_some())) {
+            self.pending_refresh_for(id);
+        }
+        self.heal_session_work_selection(id);
     }
 
     pub(crate) fn handle_work_row(&mut self, index: usize) {
@@ -302,12 +306,7 @@ impl App {
                 .files
                 .as_ref()
                 .and_then(|p| p.files.get(index))
-                .map(|f| {
-                    Detail::File(
-                        f.path.clone(),
-                        !f.index.trim().is_empty() && f.working_dir.trim().is_empty(),
-                    )
-                })
+                .map(|f| Detail::File(f.path.clone()))
         };
         state.select_detail(detail);
         state.detail_activity = if state.tab == Tab::Tasks {
@@ -434,13 +433,8 @@ impl App {
                 }
             }
             "work-more-diff" => {
-                state.diff_limit += 256 * 1024;
+                state.diff_limit = (state.diff_limit + 256 * 1024).min(2 * 1024 * 1024);
                 state.detail_at = None;
-            }
-            "work-staged" => {
-                if let Some(Detail::File(path, staged)) = state.detail.clone() {
-                    state.select_detail(Some(Detail::File(path, !staged)));
-                }
             }
             "work-up" => {
                 if state.detail.is_some() || state.tab == Tab::Status {
@@ -499,7 +493,6 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => "work-up",
             KeyCode::Down | KeyCode::Char('j') => "work-down",
             KeyCode::Backspace => "work-back",
-            KeyCode::Char('s') => "work-staged",
             KeyCode::Char('m') => "work-more-diff",
             KeyCode::Char('n') => "work-next",
             KeyCode::Char('p') => "work-prev",
@@ -517,4 +510,41 @@ impl App {
         self.handle_session_work_action(action);
         true
     }
+}
+
+fn merge_log_tail(previous: Option<BackgroundActivityLogResource>, mut logs: BackgroundActivityLogResource) -> BackgroundActivityLogResource {
+    if let Some(old) = previous
+        .filter(|old| old.activity_id == logs.activity_id)
+    {
+        logs.last_seq = logs.last_seq.max(old.last_seq);
+        let mut lines = old
+            .lines
+            .into_iter()
+            .map(|line| (line.seq, line))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for line in logs.lines {
+            lines.insert(line.seq, line);
+        }
+        logs.lines = lines.into_values().collect();
+    }
+    let excess = logs.lines.len().saturating_sub(200);
+    logs.lines.drain(..excess);
+    let mut budget = 128 * 1024;
+    let mut keep = 0;
+    for line in logs.lines.iter_mut().rev() {
+        if budget < 4 {
+            break;
+        }
+        if line.text.len() > budget {
+            let mut start = line.text.len() - budget + 3;
+            while !line.text.is_char_boundary(start) {
+                start += 1;
+            }
+            line.text = format!("…{}", &line.text[start..]);
+        }
+        budget = budget.saturating_sub(line.text.len());
+        keep += 1;
+    }
+    logs.lines.drain(..logs.lines.len() - keep);
+    logs
 }

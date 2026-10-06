@@ -1168,10 +1168,11 @@ impl TuiBackend {
         agena_plugin_host::PluginToolInvokeResponse,
         agena_application::ApplicationError,
     > {
-        let response = self
-            .client()
-            .invoke_plugin_tool(plugin_id, tool_name, input, session_id)
-            .await
+        let response = if plugin_id == "agena.plan" && tool_name == "get" && session_id.is_some() {
+            self.client().session_plan(session_id.expect("checked session id"), false).await
+        } else {
+            self.client().invoke_plugin_tool(plugin_id, tool_name, input, session_id).await
+        }
             .map_err(|error| {
                 agena_application::ApplicationError::internal(format!(
                     "failed to invoke plugin tool `{tool_name}` through the server: {}",
@@ -1184,7 +1185,7 @@ impl TuiBackend {
                 &error,
             )
         })?;
-        if let Err(error) = self.refresh_plugin_presentation_snapshot().await {
+        if tool_name != "get" && let Err(error) = self.refresh_plugin_presentation_snapshot().await {
             tracing::warn!(
                 diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
                 "plugin tool invocation succeeded, but refreshing the TUI plugin presentation snapshot failed"
@@ -1884,7 +1885,7 @@ impl TuiBackend {
         let mut attempts = 0;
         let (mut execution, page_resource) = loop {
             let (execution, page) = tokio::try_join!(
-                self.client().get_session_state(session_id),
+                self.client().get_session_state_validated(session_id, attempts > 0),
                 self.client().session_transcript_page(
                     session_id,
                     SESSION_TRANSCRIPT_PAGE_SIZE,
@@ -1995,10 +1996,16 @@ impl TuiBackend {
         after_seq: Option<i64>,
         force: bool,
     ) -> Result<SessionRefresh> {
-        // REST/SSE is an invalidation protocol: the snapshot is the
-        // correctness path. Reading on every refresh also converges
-        // after SSE lag or reconnect without depending on replay.
-        let _ = force;
+        let execution = self.client().get_session_state_validated(session_id, force).await?;
+        if !force && after_seq.is_some() && execution.latest_event_seq == after_seq {
+            return Ok(SessionRefresh {
+                execution_only: Some(execution),
+                reconciled_parts: None,
+                latest_event_seq: after_seq,
+                event_count: 0,
+                snapshot: None,
+            });
+        }
         let snapshot = self
             .get_session_state_with_transcript_page(session_id)
             .await?;
@@ -2008,6 +2015,7 @@ impl TuiBackend {
             .map(|(after, current)| current.saturating_sub(after).clamp(0, 256) as usize)
             .unwrap_or(0);
         Ok(SessionRefresh {
+            execution_only: None,
             reconciled_parts: None,
             latest_event_seq,
             event_count,
@@ -2410,6 +2418,7 @@ impl TuiBackend {
                                 session_deleted: false,
                                 snapshot: None,
                                 force_refresh: true,
+                                ..crate::LiveEvent::default()
                             })
                             .await
                             .is_err()
@@ -2442,6 +2451,7 @@ impl TuiBackend {
                                     session_deleted: true,
                                     snapshot: None,
                                     force_refresh: false,
+                                    ..crate::LiveEvent::default()
                                 })
                                 .await;
                             return;
@@ -2461,6 +2471,7 @@ impl TuiBackend {
                                 session_deleted: false,
                                 snapshot: None,
                                 force_refresh: true,
+                                ..crate::LiveEvent::default()
                             })
                             .await
                             .is_err()
@@ -2480,6 +2491,7 @@ impl TuiBackend {
                         session_deleted: false,
                         snapshot: Some(snapshot),
                         force_refresh: false,
+                        ..crate::LiveEvent::default()
                     })
                     .await
                     .is_err()
@@ -2490,6 +2502,30 @@ impl TuiBackend {
                     _ = tx.closed() => None,
                     item = subscription.recv() => item,
                 } {
+                    if let Ok(SubscriptionEvent::RuntimeSignal(signal)) = &item
+                        && signal.session_id == Some(session_id)
+                    {
+                        let incremental = if signal.kind == "activity" {
+                            signal.payload.get("activity").cloned()
+                                .and_then(|value| serde_json::from_value(value).ok())
+                                .map(|activity| LiveEvent {
+                                    activity_update: Some((
+                                        signal.payload.get("ts_ms").and_then(serde_json::Value::as_i64).unwrap_or(0),
+                                        signal.payload.get("reason").and_then(serde_json::Value::as_str) == Some("dismissed"),
+                                        activity,
+                                    )),
+                                    ..LiveEvent::default()
+                                })
+                        } else if signal.kind == "plugin"
+                            && signal.payload.get("kind").and_then(serde_json::Value::as_str) == Some("plan.changed")
+                        {
+                            Some(LiveEvent { plan_changed: true, ..LiveEvent::default() })
+                        } else { None };
+                        if let Some(live) = incremental {
+                            if tx.send(live).await.is_err() { return; }
+                            continue;
+                        }
+                    }
                     let reconnect = item
                         .as_ref()
                         .map_or(true, |event| matches!(event, SubscriptionEvent::Lagged(_)));
@@ -2501,6 +2537,7 @@ impl TuiBackend {
                                 session_deleted: true,
                                 snapshot: None,
                                 force_refresh: false,
+                                ..crate::LiveEvent::default()
                             })
                             .await;
                         return;
@@ -2522,6 +2559,7 @@ impl TuiBackend {
                                 session_deleted: false,
                                 snapshot: None,
                                 force_refresh: false,
+                                ..crate::LiveEvent::default()
                             })
                             .await
                             .is_err()
@@ -2579,6 +2617,7 @@ impl TuiBackend {
                             session_deleted: false,
                             snapshot: None,
                             force_refresh,
+                            ..LiveEvent::default()
                         })
                         .await
                         .is_err()
@@ -2597,6 +2636,7 @@ impl TuiBackend {
                         session_deleted: false,
                         snapshot: None,
                         force_refresh: true,
+                        ..crate::LiveEvent::default()
                     })
                     .await
                     .is_err()

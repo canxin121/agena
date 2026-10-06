@@ -386,12 +386,26 @@ impl App {
         let Some(session_id) = self.transcript.session_id else {
             return;
         };
+        let key = (part_id, section);
+        if self.transcript.tool_detail_is_current(part_id, section) { return; }
+        if let Some((_, stamp)) = self.transcript.tool_detail_loads.get(&key) {
+            if self.transcript.parts.iter().find(|part| part.part_id == part_id)
+                .is_some_and(|part| stamp != &(part.state.clone(), part.revision, part.updated_at_ms)) {
+                self.transcript.tool_detail_pending.insert(key);
+            }
+            return;
+        }
+        if self.transcript.tool_detail_allowed_at.get(&key).is_some_and(|at| *at > Instant::now()) {
+            self.transcript.tool_detail_pending.insert(key);
+            return;
+        }
+        self.transcript.tool_detail_pending.remove(&key);
         let Some(requested_at) = self.transcript.begin_tool_detail_load(part_id, section) else {
             return;
         };
         let application = self.application.clone();
         let tx = self.tx.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let result = tokio::time::timeout(
                 Duration::from_secs(30),
                 crate::app_backend::operations::get_tool_detail(
@@ -414,6 +428,7 @@ impl App {
                 })
                 .await;
         });
+        self.transcript.tool_detail_tasks.insert(key, task.abort_handle());
     }
 
     /// Park a forced refresh for the periodic tick to consume. `on_tick`

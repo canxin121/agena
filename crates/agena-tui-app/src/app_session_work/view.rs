@@ -109,27 +109,21 @@ impl App {
         if !expanded {
             return;
         }
-        let title = self.i18n.text(match state.tab {
+        let mut title = self.i18n.text(match state.tab {
             Tab::Tasks => "session-work-tasks",
             Tab::Files => "session-work-workspace",
             Tab::Status => "session-work-status",
         });
+        if state.tab == Tab::Files && state.files.as_ref().is_some_and(|f| f.recording_incomplete) {
+            title.push_str(" · ");
+            title.push_str(&self.i18n.text("session-work-recording-incomplete"));
+        }
         let refresh = self.i18n.text("plan-viewer-refresh");
         let back = self.i18n.text("session-work-back");
         let switch = self.i18n.text("session-work-switch");
         let mut actions: Vec<(&str, PointerAction)> = Vec::new();
         if state.detail.is_some() {
             actions.insert(0, (&back, PointerAction::Named("work-back")));
-        }
-        let staged = self
-            .i18n
-            .text(if matches!(state.detail, Some(Detail::File(_, true))) {
-                "session-work-staged"
-            } else {
-                "session-work-working"
-            });
-        if matches!(state.detail, Some(Detail::File(..))) {
-            actions.push((&staged, PointerAction::Named("work-staged")));
         }
         let control_labels: Vec<_> = if let Some(Detail::Task(task)) = &state.detail {
             activities
@@ -223,9 +217,17 @@ impl App {
                             self.i18n.text(&format!("session-work-status-{}", l.status)),
                             l.lines
                                 .iter()
-                                .map(|l| crate::sanitize_terminal_text(&l.text))
+                                .map(|l| format!(
+                                    "{}{}",
+                                    crate::sanitize_terminal_text(&l.text),
+                                    if l.chunk || l.text.ends_with('\n') {
+                                        ""
+                                    } else {
+                                        "\n"
+                                    }
+                                ))
                                 .collect::<Vec<_>>()
-                                .join("\n")
+                                .join("")
                         )
                     })
                     .unwrap_or_else(|| self.i18n.text("plan-viewer-loading")),
@@ -292,9 +294,8 @@ impl App {
                             .iter()
                             .map(|f| {
                                 format!(
-                                    "{}{} {}",
-                                    f.index,
-                                    f.working_dir,
+                                    "{}× {}",
+                                    f.operation_count,
                                     crate::sanitize_terminal_text(&f.path)
                                 )
                             })
@@ -348,7 +349,10 @@ impl App {
             }
         }
         let footer = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-        if state.diff_truncated && matches!(state.detail, Some(Detail::File(..))) {
+        if state.diff_truncated
+            && state.diff_limit < 2 * 1024 * 1024
+            && matches!(state.detail, Some(Detail::File(..)))
+        {
             pointer::render_buttons(
                 frame,
                 footer,

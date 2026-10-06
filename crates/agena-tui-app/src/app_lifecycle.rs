@@ -331,6 +331,11 @@ impl App {
         }
 
         self.rx.close();
+        for task in self.transcript.tool_detail_tasks.values() { task.abort(); }
+        self.transcript.tool_detail_tasks.clear();
+        self.transcript.tool_detail_loads.clear();
+        self.transcript.tool_detail_pending.clear();
+        self.session_work.clear();
         if let Some(subscription) = self.active_subscription.take() {
             subscription.abort();
         }
@@ -377,6 +382,8 @@ impl App {
         self.refresh_hub_if_due();
         self.heal_plan_display_refresh();
         self.heal_session_work();
+        self.heal_inline_activity_logs();
+        self.heal_tool_detail_reads();
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);
         }
@@ -405,12 +412,12 @@ impl App {
         }
 
         // Known text/reasoning parts merge directly from throttled patches.
-        // Only semantic invalidations need a fast read; the five-second
+        // Only semantic invalidations need a fast read; the shared 30-second
         // fallback heals lost delivery without polling per token.
         let refresh_interval = if self.pending_refresh.is_some() {
             REFRESH_INTERVAL_MS
         } else {
-            5_000
+            30_000
         };
         let refresh_interval = if self.transcript.refresh_failures > 0 {
             refresh_interval
@@ -419,6 +426,7 @@ impl App {
             refresh_interval
         };
         if let Some(session_id) = self.transcript.session_id
+            && self.current_route_is_main()
             && !self.transcript.refreshing
             && !self.transcript.state_loading
             && self.last_refresh_at.elapsed() >= Duration::from_millis(refresh_interval)

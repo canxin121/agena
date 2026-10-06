@@ -6,7 +6,8 @@ use crate::part::ShellToolInput;
 use agena_domain::{ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary};
 
 use super::shell_tools::{
-    inherited_environment, resolve_workdir, validate_declared_filesystem_effects,
+    inherited_environment, prepare_posix_launch, resolve_workdir, shell_settings,
+    validate_declared_filesystem_effects,
 };
 use super::{
     PreparedShellCommand, ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution,
@@ -253,17 +254,24 @@ async fn execute_background_run_async(
         ProcessShell::Powershell => None,
     };
     let prepared_env = prepared.as_ref().map(|prepared| prepared.env.clone());
+    let prepared_launch = prepared
+        .as_ref()
+        .and_then(|prepared| prepared.launch.clone());
     let (final_command, final_cwd) = finalize_background_command(shell, command, cwd, prepared)?;
-    let env = match prepared_env {
-        Some(env) => env,
+    let (env, launch) = match prepared_env {
+        Some(env) => (env, prepared_launch),
         None => {
             let mut env = inherited_environment();
+            let launch = match shell {
+                ProcessShell::Bash => Some(prepare_posix_launch(shell_settings(), &mut env).await?),
+                ProcessShell::Powershell => None,
+            };
             env.extend(
                 executor
                     .shell_env_overrides_async(&final_cwd, session_id, call_id)
                     .await?,
             );
-            env
+            (env, launch)
         }
     };
 
@@ -288,6 +296,7 @@ async fn execute_background_run_async(
                 final_command,
                 final_cwd,
                 env,
+                launch.as_ref(),
                 reserved_process_id,
                 owner,
                 cancel,
@@ -302,6 +311,7 @@ async fn execute_background_run_async(
                 command: final_command,
                 cwd: final_cwd,
                 env,
+                launch,
             },
             reserved_process_id,
             process_owner,
@@ -323,10 +333,14 @@ fn execute_background_run_prepared(
         command: final_command,
         cwd: final_cwd,
         mut env,
+        launch,
     } = prepared;
     let argv = crate::shell_sandbox::protect(
         executor,
-        agena_tool::shell::shell_command_for_platform(&final_command),
+        match launch.as_ref() {
+            Some(spec) => spec.argv(final_command.as_str()),
+            None => agena_tool::shell::shell_command_for_platform(&final_command),
+        },
         command,
         &mut env,
     )?;
@@ -362,7 +376,13 @@ fn execute_background_run_prepared(
             env,
         })
         .map_err(into_tool_error)?;
-    Ok(render_run(started, shell, command, monitor.is_some()))
+    let mut execution = render_run(started, shell, command, monitor.is_some());
+    if let Some(spec) = launch.as_ref() {
+        for (key, value) in spec.metadata() {
+            execution.view.metadata.insert(key, value);
+        }
+    }
+    Ok(execution)
 }
 
 fn finalize_background_command(

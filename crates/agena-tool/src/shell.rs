@@ -150,9 +150,25 @@ pub struct ShellLaunchSpec {
     pub dialect: ShellDialect,
     pub login: bool,
     pub preamble: String,
+    /// Where the program came from: `override`, `detected`, or `fallback`.
+    pub source: String,
+    /// Snapshot provenance for tool metadata: `disabled`, `used(...)`, or
+    /// `fallback: ...`. Never contains captured values.
+    pub snapshot: String,
 }
 
 impl ShellLaunchSpec {
+    /// Tool-metadata projection: provenance only, never captured values.
+    pub fn metadata(&self) -> Vec<(String, String)> {
+        vec![
+            ("shell".to_string(), self.dialect.name().to_string()),
+            ("shell_program".to_string(), self.program.clone()),
+            ("shell_source".to_string(), self.source.clone()),
+            ("login_shell".to_string(), self.login.to_string()),
+            ("shell_snapshot".to_string(), self.snapshot.clone()),
+        ]
+    }
+
     /// Command text with the startup preamble applied.
     pub fn script(&self, command: &str) -> String {
         if self.preamble.is_empty() {
@@ -237,6 +253,8 @@ mod tests {
             dialect: ShellDialect::Zsh,
             login: false,
             preamble: "alias ll='ls -l'\nsetopt extendedglob\n".to_string(),
+            source: "detected".to_string(),
+            snapshot: "used(env=2,dropped=0)".to_string(),
         };
         assert_eq!(
             spec.script("ll /tmp"),
@@ -256,8 +274,14 @@ mod tests {
             dialect: ShellDialect::Sh,
             login: true,
             preamble: String::new(),
+            source: "fallback".to_string(),
+            snapshot: "disabled".to_string(),
         };
         assert_eq!(plain.script("echo hi"), "echo hi");
         assert_eq!(plain.argv("echo hi"), vec!["/bin/sh", "-lc", "echo hi"]);
+        let metadata = plain.metadata();
+        assert!(metadata.contains(&("shell".to_string(), "sh".to_string())));
+        assert!(metadata.contains(&("login_shell".to_string(), "true".to_string())));
+        assert!(metadata.contains(&("shell_snapshot".to_string(), "disabled".to_string())));
     }
 }

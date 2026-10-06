@@ -1,7 +1,9 @@
-import { ref, type Ref } from 'vue'
+import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 
 import { ApiError } from '@/lib/api'
 import { i18n } from '@/i18n'
+import { createRevalidator } from '@/lib/revalidation'
+import { isDocumentVisible } from '@/lib/backgroundReads'
 
 import type { GitStashEntry, GitStashListResponse, GitStashShowResponse } from '@/types/git'
 import type { JsonValue } from '@/types/json'
@@ -28,6 +30,7 @@ export function useGitStashOps(opts: {
   repoRoot: Ref<string | null>
   toasts: Toasts
   gitJson: GitJson
+  readJson?: GitJson
   withRepoBusy: (op: string, fn: () => Promise<void>) => Promise<void>
   handleGitBusy: <T>(err: T, op: string, retry: () => Promise<void>) => boolean
   load: () => Promise<void>
@@ -35,6 +38,7 @@ export function useGitStashOps(opts: {
   openTerminalHelp: (title: string, explain: string, send: string) => void
 }) {
   const { repoRoot, toasts, gitJson, withRepoBusy, handleGitBusy, load, loadBranches, openTerminalHelp } = opts
+  const readJson = opts.readJson ?? gitJson
 
   const isStashExpanded = ref(false)
   const stashList = ref<GitStashEntry[]>([])
@@ -52,19 +56,79 @@ export function useGitStashOps(opts: {
   const stashViewLoading = ref(false)
   const stashViewError = ref<string | null>(null)
 
-  async function loadStash(directory: string) {
-    const dir = (directory || '').trim()
-    if (!dir) return
+  let listDirectory = ''
+  let listController: AbortController | null = null
+  let viewController: AbortController | null = null
+  function cancelReads() {
+    listController?.abort()
+    viewController?.abort()
+    listController = null
+    viewController = null
+    stashLoading.value = false
+    stashViewLoading.value = false
+  }
+  const makeListQueue = () => createRevalidator(async () => {
+    const dir = listDirectory
+    const controller = new AbortController()
+    listController = controller
     stashLoading.value = true
     try {
-      const resp = await gitJson<GitStashListResponse>('stash', dir)
-      stashList.value = Array.isArray(resp?.stashes) ? resp.stashes : []
-    } catch {
-      stashList.value = []
+      const resp = await readJson<GitStashListResponse>('stash', dir, undefined, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
+      })
+      if (listController === controller && !controller.signal.aborted && dir === listDirectory)
+        stashList.value = Array.isArray(resp?.stashes) ? resp.stashes : []
+    } catch (error) {
+      if (listController === controller && !controller.signal.aborted) stashList.value = []
+      throw error
     } finally {
-      stashLoading.value = false
+      if (listController === controller) {
+        listController = null
+        stashLoading.value = false
+      }
     }
+  }, { intervalMs: 750, retryMs: 5000, enabled: () => isDocumentVisible() && isStashExpanded.value && Boolean(listDirectory) })
+  let listQueue = makeListQueue()
+  function loadStash(directory: string, changed = false) {
+    const dir = (directory || '').trim()
+    if (!dir) return Promise.resolve()
+    if (dir !== listDirectory) {
+      listQueue.dispose()
+      listController?.abort()
+      listDirectory = dir
+      listQueue = makeListQueue()
+    }
+    if (changed) listQueue.invalidate(0)
+    // The queue retains one follow-up after an in-flight pre-mutation read.
+    // Event handlers may fire-and-forget this method, so consume its error.
+    return listQueue.refresh().catch(() => {})
   }
+  const visibility = () => {
+    if (isDocumentVisible()) listQueue.resume()
+    else { listQueue.pause(); cancelReads(); }
+  }
+  watch(isStashExpanded, (open) => {
+    if (open && repoRoot.value) void loadStash(repoRoot.value)
+    else { listQueue.pause(); listController?.abort(); }
+  }, { flush: 'sync' })
+  watch(repoRoot, () => {
+    listQueue.dispose()
+    cancelReads()
+    listDirectory = ''
+    listQueue = makeListQueue()
+    stashList.value = []
+    stashViewOpen.value = false
+    stashViewDiff.value = ''
+  }, { flush: 'sync' })
+  watch(stashViewOpen, (open) => {
+    if (!open) { viewController?.abort(); viewController = null; stashViewLoading.value = false; }
+  }, { flush: 'sync' })
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility)
+  onBeforeUnmount(() => {
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibility)
+    listQueue.dispose()
+    cancelReads()
+  })
 
   async function stashBranchFrom(refStr: string) {
     const dir = repoRoot.value
@@ -210,6 +274,9 @@ export function useGitStashOps(opts: {
     if (!dir) return
     const r = (refStr || '').trim()
     if (!r) return
+    viewController?.abort()
+    const controller = new AbortController()
+    viewController = controller
 
     stashViewTitle.value = r
     stashViewOpen.value = true
@@ -217,16 +284,20 @@ export function useGitStashOps(opts: {
     stashViewError.value = null
     stashViewDiff.value = ''
     try {
-      const resp = await gitJson<GitStashShowResponse>('stash/show', dir, { ref: r })
+      const resp = await readJson<GitStashShowResponse>('stash/show', dir, { ref: r }, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
+      })
+      if (viewController !== controller || controller.signal.aborted || !stashViewOpen.value) return
       stashViewTitle.value = (resp?.ref || r).trim() || r
       stashViewDiff.value = (resp?.diff || '').trimEnd()
       if (!stashViewDiff.value) {
         stashViewError.value = i18n.global.t('git.ui.dialogs.stashDiff.empty')
       }
     } catch (err) {
-      stashViewError.value = err instanceof Error ? err.message : String(err)
+      if (viewController === controller && !controller.signal.aborted)
+        stashViewError.value = err instanceof Error ? err.message : String(err)
     } finally {
-      stashViewLoading.value = false
+      if (viewController === controller) { viewController = null; stashViewLoading.value = false; }
     }
   }
 

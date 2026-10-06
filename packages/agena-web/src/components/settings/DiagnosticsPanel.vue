@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onScopeDispose, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiRefreshLine, RiRestartLine } from '@remixicon/vue'
 
@@ -45,6 +45,8 @@ const runtime = ref<RuntimeStatus | null>(null)
 const resolved = ref<ResolvedDocument | null>(null)
 const validation = ref<JsonValue>(null)
 const reloadInfo = ref<JsonValue>(null)
+const reloadController = new AbortController()
+onScopeDispose(() => reloadController.abort())
 
 // Keep the tracing editors aligned with the TUI's SelectOnly choices. The
 // runtime still validates these values server-side, but offering the same
@@ -96,10 +98,11 @@ async function reload() {
   actionBusy.value = true
   error.value = ''
   try {
-    reloadInfo.value = await reloadAgenaRuntime()
+    reloadInfo.value = await reloadAgenaRuntime(reloadController.signal)
     await refresh()
     toasts.push('success', st('Runtime reloaded'))
   } catch (reason) {
+    if (reloadController.signal.aborted) return
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
     actionBusy.value = false

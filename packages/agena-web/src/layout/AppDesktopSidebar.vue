@@ -21,8 +21,7 @@ import { useUiStore } from '@/stores/ui'
 import { useDirectoryStore } from '@/stores/directory'
 import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
-import { apiJson } from '@/lib/api'
-import type { GitStatusResponse } from '@/types/git'
+import { useGitWatchSse } from '@/composables/git/useGitWatchSse'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { normalizeRememberedSettingsRoute } from '@/components/settings/sidebar/settingsSidebarNavigation'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
@@ -66,8 +65,10 @@ const NAV_ICONS: Record<MainTabId, Component> = {
 }
 
 const diffFileCount = ref(0)
-let diffRequest: { directory: string; controller: AbortController } | null = null
-let diffTimer: number | null = null
+const { startWatch: startDiffWatch, stopWatch: stopDiffWatch } = useGitWatchSse<{ totalFiles: number }>({
+  buildUrl: (directory) => `/api/v1/workbench/git/watch?directory=${encodeURIComponent(directory)}`,
+  onPayload: (payload) => { diffFileCount.value = Math.max(0, Number(payload.totalFiles) || 0) },
+})
 
 function getRememberedSettingsRoute(): string {
   try {
@@ -84,44 +85,19 @@ function routeForTab(tabId: MainTabId): string {
     : (WORKSPACE_MAIN_TABS.find((item) => item.id === tabId)?.path ?? '/chat')
 }
 
-async function refreshDiffFileCount() {
+function refreshDiffFileCount() {
   const dir = directoryStore.currentDirectory
-  if (diffRequest?.directory === dir) return
-  diffRequest?.controller.abort()
-  const controller = new AbortController()
-  diffRequest = { directory: dir, controller }
-  const timeout = window.setTimeout(() => controller.abort(), 30_000)
-  if (!dir) {
+  if (!dir || document.visibilityState === 'hidden') {
+    stopDiffWatch()
     diffFileCount.value = 0
-    diffRequest = null
-    window.clearTimeout(timeout)
     return
   }
-  try {
-    const resp = await apiJson<Partial<GitStatusResponse>>(
-      `/api/v1/workbench/git/status?directory=${encodeURIComponent(dir)}&summary=true`,
-      { signal: controller.signal },
-    )
-    if (controller.signal.aborted || directoryStore.currentDirectory !== dir) return
-    if (typeof resp?.totalFiles === 'number') {
-      diffFileCount.value = resp.totalFiles
-      return
-    }
-    const files = Array.isArray(resp?.files) ? resp.files : []
-    diffFileCount.value = files.length
-  } catch {
-    if (!controller.signal.aborted && directoryStore.currentDirectory === dir) diffFileCount.value = 0
-  } finally {
-    window.clearTimeout(timeout)
-    if (diffRequest?.controller === controller) diffRequest = null
-  }
+  startDiffWatch(dir)
 }
 
 onMounted(() => {
-  void refreshDiffFileCount()
-  diffTimer = window.setInterval(() => {
-    if (document.visibilityState !== 'hidden') void refreshDiffFileCount()
-  }, 4000)
+  refreshDiffFileCount()
+  document.addEventListener('visibilitychange', refreshDiffFileCount)
 })
 
 watch(
@@ -130,11 +106,8 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  diffRequest?.controller.abort()
-  if (diffTimer !== null) {
-    window.clearInterval(diffTimer)
-    diffTimer = null
-  }
+  stopDiffWatch()
+  document.removeEventListener('visibilitychange', refreshDiffFileCount)
 })
 
 const activeTab = computed<MainTabId>(() => {

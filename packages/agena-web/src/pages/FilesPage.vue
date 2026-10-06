@@ -132,8 +132,6 @@ const STORAGE_FILES_EXPLORER_CACHE_PREFIX = localStorageKeys.files.explorerCache
 const DIRECTORY_PAGE_SIZE = 400
 const FILE_CHUNK_BYTES = 256 * 1024
 const LARGE_FILE_WARNING_BYTES = 1024 * 1024
-const FILE_AUTO_REFRESH_INTERVAL_MS = 9_000
-const FILE_AUTO_REFRESH_EDIT_IDLE_MS = 4_500
 const HIDDEN_FILE_RELATIVE_PATHS = new Set(['web/src/data/directorySessionSnapshotDb.ts'])
 
 const chat = useChatStore()
@@ -510,29 +508,12 @@ const fileTimelineContentCache = new Map<string, GitCommitFileContentResponse>()
 const fileTimelineContentInFlight = new Map<string, Promise<GitCommitFileContentResponse>>()
 
 let autoSaveTimer: number | null = null
-let fileAutoRefreshTimer: number | null = null
 let fileRefreshSeq = 0
-let lastDraftEditAt = 0
 function clearAutoSaveTimer() {
   if (autoSaveTimer !== null) {
     window.clearTimeout(autoSaveTimer)
     autoSaveTimer = null
   }
-}
-
-function clearFileAutoRefreshTimer() {
-  if (fileAutoRefreshTimer !== null) {
-    window.clearInterval(fileAutoRefreshTimer)
-    fileAutoRefreshTimer = null
-  }
-}
-
-function startFileAutoRefreshTimer() {
-  clearFileAutoRefreshTimer()
-  fileAutoRefreshTimer = window.setInterval(() => {
-    if (document.visibilityState === 'hidden') return
-    void runAutoFileRefreshTick()
-  }, FILE_AUTO_REFRESH_INTERVAL_MS)
 }
 
 function handleGlobalKeydown(e: KeyboardEvent) {
@@ -628,10 +609,8 @@ watch(autoSaveEnabled, (v) => {
   localStorage.setItem(STORAGE_FILES_AUTOSAVE, v ? 'true' : 'false')
   if (!v) {
     clearAutoSaveTimer()
-    clearFileAutoRefreshTimer()
     return
   }
-  startFileAutoRefreshTimer()
 })
 watch(blameEnabled, (v) => localStorage.setItem(STORAGE_FILES_VIEWER_BLAME_VISIBLE, v ? 'true' : 'false'))
 watch(timelineVisibilityPreference, (v) =>
@@ -679,7 +658,6 @@ watch(
     fileRefreshSeq += 1
     isRefreshingFile.value = false
     closeRefreshConflictDialog()
-    lastDraftEditAt = 0
     selectedFile.value = null
     viewerMode.value = 'none'
     fileContent.value = ''
@@ -2887,7 +2865,6 @@ function applyRefreshPayload(path: string, payload: FileRefreshPayload) {
   selection.value = null
   commentText.value = ''
   fileChunkLoadingMore.value = false
-  lastDraftEditAt = 0
 
   if (payload.kind === 'large') {
     pendingLargeFilePrompt.value = {
@@ -3002,25 +2979,6 @@ async function refreshCurrentFile(opts?: {
       isRefreshingFile.value = false
     }
   }
-}
-
-function shouldPauseAutoFileRefresh(): boolean {
-  if (!autoSaveEnabled.value) return true
-  if (!root.value) return true
-  if (!selectedFile.value || selectedFile.value.type !== 'file') return true
-  if (!['text', 'markdown'].includes(viewerMode.value)) return true
-  if (!canEdit.value) return true
-  if (dirty.value) return true
-  if (autoSaveTimer !== null) return true
-  if (isSaving.value || fileLoading.value || fileChunkLoadingMore.value || isRefreshingFile.value) return true
-  if (fileRefreshConflict.value) return true
-  if (Date.now() - lastDraftEditAt < FILE_AUTO_REFRESH_EDIT_IDLE_MS) return true
-  return false
-}
-
-async function runAutoFileRefreshTick() {
-  if (shouldPauseAutoFileRefresh()) return
-  await refreshCurrentFile({ source: 'auto', silent: true })
 }
 
 function closeRefreshConflictDialog() {
@@ -3637,7 +3595,6 @@ function scheduleAutoSave() {
 watch(
   () => draftContent.value,
   () => {
-    if (selectedFile.value?.type === 'file' && canEdit.value && dirty.value) lastDraftEditAt = Date.now()
     scheduleAutoSave()
   },
 )
@@ -3645,9 +3602,6 @@ watch(
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalKeydown)
 
-  if (autoSaveEnabled.value) {
-    startFileAutoRefreshTimer()
-  }
 })
 
 onBeforeUnmount(() => {
@@ -3658,7 +3612,6 @@ onBeforeUnmount(() => {
   isRefreshingFile.value = false
   closeRefreshConflictDialog()
   clearAutoSaveTimer()
-  clearFileAutoRefreshTimer()
   if (persistExplorerTimer !== null) {
     window.clearTimeout(persistExplorerTimer)
     persistExplorerTimer = null
@@ -3810,7 +3763,6 @@ function resetViewerSelectionState() {
   fileRefreshSeq += 1
   isRefreshingFile.value = false
   closeRefreshConflictDialog()
-  lastDraftEditAt = 0
   selectedFile.value = null
   viewerMode.value = 'none'
   fileContent.value = ''
@@ -3990,7 +3942,6 @@ async function restoreForRoot(next: string) {
   fileRefreshSeq += 1
   isRefreshingFile.value = false
   closeRefreshConflictDialog()
-  lastDraftEditAt = 0
 
   closeFileTimeline()
 
@@ -4101,7 +4052,7 @@ const filesystemRefresh = createRevalidator(
       throw error
     }
   },
-  { intervalMs: 500, retryMs: 1000, enabled: () => pageMounted && document.visibilityState !== 'hidden' },
+  { intervalMs: 1000, retryMs: 5000, enabled: () => pageMounted && document.visibilityState !== 'hidden' },
 )
 
 function invalidateFilesystem() {
@@ -4124,7 +4075,7 @@ function watchFilesystem() {
   const paths = visiblePaths.slice(0, 128)
   // Beyond the OS-watch budget, keep the remaining loaded folders coherent
   // with a bounded, low-frequency fallback while this pane is visible.
-  if (visiblePaths.length > 128) filesystemOverflowTimer = window.setInterval(invalidateFilesystem, 10_000)
+  if (visiblePaths.length > 128) filesystemOverflowTimer = window.setInterval(invalidateFilesystem, 60_000)
   const query = new URLSearchParams({ directory: rootPath, paths: JSON.stringify(paths) })
   filesystemStream = connectSse({
     endpoint: `/api/v1/workbench/fs/stream?${query}`,
@@ -4132,7 +4083,6 @@ function watchFilesystem() {
     onEvent: (event) => {
       directoryStore.applyGlobalEvent(event)
     },
-    onError: invalidateFilesystem,
   })
   filesystemRefresh.resume()
 }

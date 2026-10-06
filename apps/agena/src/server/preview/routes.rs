@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequestParts, OriginalUri, Path, Query, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode, Uri, header};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -138,8 +138,134 @@ pub(crate) async fn workspace_preview_proxy_get(
 
 pub(crate) async fn workspace_preview_sessions_get(
     State(state): State<std::sync::Arc<AppState>>,
-) -> ApiResult<Json<PreviewSessionsResponse>> {
-    Ok(Json(state.workspace_preview_registry.list_all().await))
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let etag = format!("W/\"{}\"", state.workspace_preview_registry.revision());
+    let unchanged = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|h| h.to_str().ok())
+        == Some(etag.as_str());
+    let mut response = if unchanged {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        Json(state.workspace_preview_registry.list_all().await).into_response()
+    };
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).expect("preview revision tag"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-cache"),
+    );
+    Ok(response)
+}
+
+pub(crate) async fn workspace_preview_sessions_events(
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    let registry = state.workspace_preview_registry.clone();
+    let mut changes = registry.subscribe();
+    let stream = async_stream::stream! {
+        let mut previous: Option<PreviewSessionsResponse> = None;
+        loop {
+            let revision = registry.revision();
+            let snapshot = registry.list_all().await;
+            yield Ok::<_, std::convert::Infallible>(Event::default().data(
+                serde_json::json!({"type": "preview.sessions.changed", "revision": revision,
+                    "delta": preview_session_delta(previous.as_ref(), &snapshot)}).to_string()));
+            previous = Some(snapshot);
+            if changes.changed().await.is_err() { break; }
+        }
+    };
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(25)))
+        .into_response()
+}
+
+fn preview_session_delta(
+    previous: Option<&PreviewSessionsResponse>,
+    snapshot: &PreviewSessionsResponse,
+) -> serde_json::Value {
+    let old = previous
+        .into_iter()
+        .flat_map(|snapshot| &snapshot.sessions)
+        .map(|session| (session.id.as_str(), session))
+        .collect::<std::collections::HashMap<_, _>>();
+    let ids = snapshot
+        .sessions
+        .iter()
+        .map(|session| session.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let upsert = snapshot
+        .sessions
+        .iter()
+        .filter(|session| old.get(session.id.as_str()).copied() != Some(*session))
+        .collect::<Vec<_>>();
+    let removed = old
+        .keys()
+        .filter(|id| !ids.contains(**id))
+        .collect::<Vec<_>>();
+    serde_json::json!({"reset": previous.is_none(), "upsert": upsert, "removed": removed})
+}
+
+#[cfg(test)]
+mod preview_delta_tests {
+    use super::*;
+
+    fn record(id: &str, directory: &str) -> PreviewSessionRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "directory": directory, "runDirectory": directory, "state": "running",
+            "proxyBasePath": format!("/api/v1/workbench/preview/s/{id}/"), "targetUrl": "http://localhost:3000",
+            "command": "bun", "args": ["dev"], "logsPath": "/tmp/preview.log", "updatedAt": 1,
+        })).unwrap()
+    }
+
+    #[test]
+    fn preview_delta_transmits_only_changed_records_and_deleted_ids() {
+        let a = record("A", "/repo-A");
+        let b = record("B", "/repo-B");
+        let old = PreviewSessionsResponse {
+            updated_at: 1,
+            sessions: vec![a.clone(), b.clone()],
+        };
+        let mut changed = a;
+        changed.state = "stopped".into();
+        changed.updated_at = 2;
+        let next = PreviewSessionsResponse {
+            updated_at: 2,
+            sessions: vec![changed, b.clone()],
+        };
+        let delta = preview_session_delta(Some(&old), &next);
+        assert_eq!(delta["reset"], false);
+        assert_eq!(delta["upsert"].as_array().unwrap().len(), 1);
+        assert_eq!(delta["upsert"][0]["id"], "A");
+        assert!(delta["removed"].as_array().unwrap().is_empty());
+        let renamed = PreviewSessionsResponse {
+            updated_at: 3,
+            sessions: vec![record("renamed-A", "/repo-A"), b],
+        };
+        let delta = preview_session_delta(Some(&next), &renamed);
+        assert_eq!(delta["removed"], serde_json::json!(["A"]));
+        assert_eq!(delta["upsert"][0]["id"], "renamed-A");
+        assert_eq!(delta["upsert"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn preview_delta_reconnect_replaces_the_snapshot_and_idle_is_empty() {
+        let snapshot = PreviewSessionsResponse {
+            updated_at: 1,
+            sessions: vec![record("A", "/repo-A"), record("B", "/repo-B")],
+        };
+        let initial = preview_session_delta(None, &snapshot);
+        assert_eq!(initial["reset"], true);
+        assert_eq!(initial["upsert"].as_array().unwrap().len(), 2);
+        let idle = preview_session_delta(Some(&snapshot), &snapshot);
+        assert_eq!(idle["reset"], false);
+        assert!(idle["upsert"].as_array().unwrap().is_empty());
+        assert!(idle["removed"].as_array().unwrap().is_empty());
+    }
 }
 
 pub(crate) async fn workspace_preview_sessions_by_id_get(

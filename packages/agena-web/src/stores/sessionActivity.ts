@@ -1,7 +1,12 @@
 import { defineStore } from 'pinia'
 import { computed, onScopeDispose, ref } from 'vue'
 
-import { apiJson } from '../lib/api'
+import { conditionalJson } from '../lib/conditionalJson'
+import { apiUrl } from '../lib/api'
+import { readUiAuthTokenVersion } from '../lib/uiAuthToken'
+import { isDocumentVisible } from '../lib/backgroundReads'
+import { subscribeResource } from '../lib/resourceSync'
+import { createRevalidator } from '../lib/revalidation'
 import { extractSessionActivityUpdate } from '../lib/sessionActivityEvent.js'
 import type { SseEvent } from '../lib/sse'
 import type { JsonValue as JsonLike } from '@/types/json'
@@ -16,6 +21,7 @@ type ActivityItem = {
   kind?: string
   status?: string
   session_id?: number
+  parent_session_id?: number
   [k: string]: JsonLike
 }
 
@@ -28,130 +34,178 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
   const snapshot = ref<Snapshot>({})
   const loading = ref(false)
   const error = ref<string | null>(null)
-  let refreshTimer: number | null = null
-  let inFlight: Promise<void> | null = null
-  let dirty = false
   let disposed = false
   let eventGeneration = 0
-  let lastStartedAt = 0
-  let failures = 0
+  const activities = new Map<string, ActivityItem>()
+  const changedAt = new Map<string, number>()
+  const liveAt = new Map<string, number>()
+  const runs = new Map<string, Phase>()
   let controller: AbortController | null = null
+  let resourceScope = ''
+  function ensureActivityScope() {
+    const next = `${readUiAuthTokenVersion()}:${apiUrl('/')}`
+    if (next !== resourceScope) {
+      resourceScope = next
+      controller?.abort()
+      activities.clear()
+      changedAt.clear()
+      liveAt.clear()
+      runs.clear()
+      snapshot.value = {}
+      eventGeneration++
+    }
+    return resourceScope
+  }
 
   const sessions = computed(() => Object.entries(snapshot.value))
 
+  function rebuild() {
+    const next: Snapshot = {}
+    for (const [sid, phase] of runs) if (phase !== 'idle') next[sid] = { type: phase, kinds: [] }
+    for (const item of activities.values()) {
+      const id = item.parent_session_id ?? item.session_id
+      if (typeof id !== 'number' || !isActiveActivityStatus(String(item.status ?? ''))) continue
+      const sid = String(id)
+      const kinds = next[sid]?.kinds ?? []
+      const kind = String(item.kind ?? '')
+        .trim()
+        .toLowerCase()
+      next[sid] = { type: 'busy', kinds: kind ? [...kinds, kind] : kinds }
+    }
+    for (const entry of Object.values(next)) entry.kinds = [...new Set(entry.kinds)].sort()
+    const previous = snapshot.value
+    if (Object.keys(previous).length === Object.keys(next).length && Object.entries(next).every(([sid, entry]) => {
+      const old = previous[sid]
+      return old?.type === entry.type && old.kinds.length === entry.kinds.length && old.kinds.every((kind, index) => kind === entry.kinds[index])
+    })) return
+    snapshot.value = next
+  }
+
   /** GET /api/v1/activities → per-session busy snapshot (active activities only). */
   async function refreshInternal() {
+    const scope = ensureActivityScope()
     const generation = eventGeneration
-    lastStartedAt = Date.now()
-    controller = new AbortController()
-    const timeout = window.setTimeout(() => controller?.abort(), 30_000)
+    const request = new AbortController()
+    controller = request
+    const timeout = window.setTimeout(() => request.abort(new Error('Activity request timed out')), 30_000)
     loading.value = true
     error.value = null
     try {
-      const list = await apiJson<ActivityItem[]>('/api/v1/activities', { signal: controller.signal })
+      const list = await conditionalJson<ActivityItem[]>('activities', '/api/v1/activities', {
+        signal: request.signal,
+      })
       const arr = Array.isArray(list) ? list : []
-      const next: Snapshot = {}
+      const next = new Map<string, ActivityItem>()
       for (const item of arr) {
-        const sidRaw = typeof item?.session_id === 'number' ? item.session_id : null
-        if (sidRaw == null) continue
-        if (isActiveActivityStatus(String(item?.status || ''))) {
-          const sid = String(sidRaw)
-          const kinds = next[sid]?.kinds || []
-          const kind = String(item?.kind || '')
-            .trim()
-            .toLowerCase()
-          // Keep one entry per active activity. TUI renders counts (for
-          // example, "shell 2"), so collapsing equal kinds loses information.
-          next[sid] = { type: 'busy', kinds: kind ? [...kinds, kind] : kinds }
-        }
+        if (typeof item.id === 'string') next.set(item.id, item)
       }
-      failures = 0
-      if (!disposed && generation === eventGeneration) snapshot.value = next
+      if (!disposed && !request.signal.aborted && scope === ensureActivityScope()) {
+        // Only the records touched during this read override the response.
+        // Continuous output from one task must not discard unrelated rows.
+        for (const [id, changed] of changedAt)
+          if (changed > generation) {
+            const current = activities.get(id)
+            if (current) next.set(id, current)
+            else next.delete(id)
+          }
+        activities.clear()
+        for (const [id, item] of next) activities.set(id, item)
+        rebuild()
+      }
     } catch (err) {
-      if (!disposed) {
+      if (!disposed && scope === ensureActivityScope() && !(err instanceof DOMException && err.name === 'AbortError')) {
         error.value = err instanceof Error ? err.message : String(err)
-        failures = Math.min(6, failures + 1)
-        dirty = true
       }
+      throw err
     } finally {
       window.clearTimeout(timeout)
-      loading.value = false
+      if (controller === request) {
+        controller = null
+        loading.value = false
+      }
     }
   }
 
-  function refresh(): Promise<void> {
-    if (disposed) return Promise.resolve()
-    if (inFlight) return inFlight
-    dirty = false
-    if (refreshTimer !== null) window.clearTimeout(refreshTimer)
-    refreshTimer = null
-    inFlight = refreshInternal().finally(() => {
-      inFlight = null
-      if (dirty) scheduleRefresh()
-    })
-    return inFlight
+  const queue = createRevalidator(refreshInternal, {
+    intervalMs: 2000,
+    retryMs: 5000,
+    enabled: () => !disposed && isDocumentVisible(),
+  })
+  const releaseResource = subscribeResource('activities', (event) => {
+    if (event?.type !== 'runtime_signal' || event.properties?.kind !== 'activity') queue.invalidate(150)
+  })
+  const refresh = () => queue.refresh().catch(() => {})
+  const scheduleRefresh = () => queue.invalidate(150)
+  const visibility = () => {
+    if (isDocumentVisible()) queue.resume()
+    else {
+      queue.pause()
+      controller?.abort()
+    }
   }
-
-  function scheduleRefresh() {
-    dirty = true
-    if (disposed || refreshTimer !== null || inFlight) return
-    refreshTimer = window.setTimeout(
-      () => {
-        refreshTimer = null
-        void refresh()
-      },
-      Math.max(failures ? Math.min(30_000, 1000 * 2 ** (failures - 1)) : 100, 500 - (Date.now() - lastStartedAt)),
-    )
-  }
-
-  function activityKindFromEvent(evt: SseEvent): string {
-    if (evt.type !== 'runtime_signal') return ''
-    const props = evt.properties && typeof evt.properties === 'object' ? evt.properties : {}
-    if (String(props.kind || '').trim() !== 'activity') return ''
-    const payload = props.payload && typeof props.payload === 'object' ? props.payload : {}
-    return String(payload.kind || '')
-      .trim()
-      .toLowerCase()
-  }
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility)
 
   function applyEvent(evt: SseEvent) {
+    ensureActivityScope()
+    const props = evt.properties ?? {}
+    if (evt.type === 'runtime_signal' && props.kind === 'activity') {
+      const payload =
+        props.payload && typeof props.payload === 'object' && !Array.isArray(props.payload) ? props.payload : {}
+      const item =
+        payload.activity && typeof payload.activity === 'object' && !Array.isArray(payload.activity)
+          ? payload.activity
+          : payload
+      if (typeof item.id !== 'string' || typeof item.status !== 'string') {
+        scheduleRefresh()
+        return
+      }
+      const timestamp = typeof payload.ts_ms === 'number' ? payload.ts_ms : 0
+      // Separate progress/completion/dismissal events can share a millisecond.
+      // The stream preserves their order; only strictly older events are stale.
+      if (timestamp && timestamp < (liveAt.get(item.id) ?? 0)) return
+      liveAt.set(item.id, timestamp)
+      changedAt.set(item.id, ++eventGeneration)
+      const previous = activities.get(item.id)
+      const dismissed = payload.reason === 'dismissed'
+      if (dismissed) activities.delete(item.id)
+      else activities.set(item.id, item as ActivityItem)
+      if (
+        dismissed ||
+        !previous ||
+        previous.kind !== item.kind ||
+        previous.status !== item.status ||
+        previous.session_id !== item.session_id ||
+        previous.parent_session_id !== item.parent_session_id
+      )
+        rebuild()
+      // Tombstones protect in-flight reads but have a bounded lifetime.
+      if (changedAt.size > 1024)
+        for (const id of changedAt.keys()) {
+          if (activities.has(id)) continue
+          changedAt.delete(id)
+          liveAt.delete(id)
+          if (changedAt.size <= 512) break
+        }
+      return
+    }
     const upd = extractSessionActivityUpdate(evt)
     if (!upd) return
     const sessionId = upd.sessionID
     const phase = upd.phase as Phase
     if (!sessionId) return
-    eventGeneration++
-    const activityKind = activityKindFromEvent(evt)
-    if (phase === 'idle') {
-      if (!Object.prototype.hasOwnProperty.call(snapshot.value, sessionId)) {
-        scheduleRefresh()
-        return
-      }
-      const next = { ...snapshot.value }
-      delete next[sessionId]
-      snapshot.value = next
-      scheduleRefresh()
-      return
-    }
-    snapshot.value = {
-      ...snapshot.value,
-      [sessionId]: {
-        type: phase,
-        kinds:
-          activityKind && !snapshot.value[sessionId]?.kinds.includes(activityKind)
-            ? [...(snapshot.value[sessionId]?.kinds || []), activityKind]
-            : snapshot.value[sessionId]?.kinds || [],
-      },
-    }
-    // The event is an optimistic signal; the list endpoint is authoritative
-    // for concurrent same-kind activities and terminal transitions.
-    if (activityKind) scheduleRefresh()
+    if ((runs.get(sessionId) ?? 'idle') === phase) return
+    if (phase === 'idle') runs.delete(sessionId)
+    else runs.set(sessionId, phase)
+    if (runs.size > 512) runs.delete(runs.keys().next().value!)
+    rebuild()
   }
 
   onScopeDispose(() => {
     disposed = true
     controller?.abort()
-    if (refreshTimer !== null) window.clearTimeout(refreshTimer)
+    queue.dispose()
+    releaseResource()
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibility)
   })
 
   return { snapshot, sessions, loading, error, refresh, invalidate: scheduleRefresh, applyEvent }

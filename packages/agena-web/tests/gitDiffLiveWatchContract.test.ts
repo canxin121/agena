@@ -14,7 +14,10 @@ test('git page refreshes open diff after watch and working tree updates', () => 
 
   assert.match(source, refreshFromWatch)
   assert.match(source, refreshAfterWorkingTreeChange)
-  assert.ok(source.includes('await loadConflicts(directory).catch(() => (conflictPaths.value = []))'))
+  assert.match(
+    source,
+    /if \(conflicts\)\s*\{[\s\S]*?mergeCount[\s\S]*?await loadConflicts\(directory(?:,\s*signal)?\)[\s\S]*?else conflictPaths\.value = \[\]/m,
+  )
   assert.ok(source.includes('() => [root.value, gitReady.value, selectedFile.value] as const'))
   assert.ok(source.includes('useGitWatchSse'))
 })

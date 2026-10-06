@@ -1,24 +1,8 @@
 import * as api from './api'
+import { limitBackgroundReads } from '@/lib/backgroundReads'
 
-// Keep a directory page with many expanded trees from saturating the connection.
-export function createRequestLimiter(concurrency: number) {
-  let active = 0
-  const waiting: Array<() => void> = []
-  return async <T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
-    if (active >= concurrency) await new Promise<void>((resolve) => waiting.push(resolve))
-    else active++
-    try {
-      signal?.throwIfAborted()
-      return await run()
-    } finally {
-      const next = waiting.shift()
-      if (next) next()
-      else active--
-    }
-  }
-}
+export { createRequestLimiter } from '@/lib/backgroundReads'
 
-const limitRequests = createRequestLimiter(6)
 type Options = NonNullable<Parameters<typeof api.listSessions>[0]>
 
 export async function loadSidebarSessionPage(
@@ -29,11 +13,10 @@ export async function loadSidebarSessionPage(
 ) {
   let page = Math.max(0, Math.floor(requestedPage))
   const size = Math.max(1, Math.min(200, Math.floor(pageSize)))
-  const fetchPage = () =>
-    limitRequests(
-      () => list({ ...options, limit: size, offset: page * size, excludeSubagents: true, includeTotal: true }),
-      options.signal,
-    )
+  const fetchPage = () => {
+    const run = () => list({ ...options, limit: size, offset: page * size, excludeSubagents: true, includeTotal: true })
+    return list === api.listSessions ? run() : limitBackgroundReads(run, options.signal)
+  }
   let result = await fetchPage()
   const total = result.total ?? page * size + result.sessions.length + (result.hasMore ? 1 : 0)
   const pageCount = Math.max(1, Math.ceil(total / size))

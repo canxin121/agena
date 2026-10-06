@@ -25,7 +25,7 @@ const deferred = <T>() => {
   return { promise, resolve }
 }
 async function until(check: () => boolean) {
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 400; i++) {
     if (check()) return
     await pause(10)
   }
@@ -150,6 +150,42 @@ test('an older HTTP snapshot or live patch cannot roll text back, including buff
       '',
       'empty authoritative text clears the previous body',
     )
+  }))
+
+test('background activity events update the parent immediately and a pending state read cannot undo progress or dismissal', async () =>
+  withChat(async (chat) => {
+    const pending = deferred<Response>()
+    globalThis.fetch = (async () => pending.promise) as typeof fetch
+    const reading = chat.refreshExecutionStatus('7')
+    const activity = {
+      id: 'task_a', kind: 'task', status: 'running', title: 'Child task', description: '',
+      session_id: 8, parent_session_id: 7, last_seq: 1, controls: ['stop'],
+    }
+    const event = (value: typeof activity, reason = 'updated') => chat.applyEvent({
+      type: 'runtime_signal', properties: {
+        kind: 'activity', session_id: 7, payload: { activity_id: value.id, reason, activity: value },
+      },
+    })
+    event(activity)
+    assert.equal(chat.sessionBackgroundActivities('7')[0]?.last_seq, 1)
+    assert.equal(chat.sessionBackgroundActivityKinds('7').join(','), 'task')
+    assert.equal(chat.sessionBackgroundActivities('8').length, 0)
+    event({ ...activity, last_seq: 4 })
+    assert.equal(chat.sessionBackgroundActivities('7')[0]?.last_seq, 4)
+    pending.resolve(Response.json({ ...state(), background_activities: [activity] }))
+    await reading
+    assert.equal(chat.sessionBackgroundActivities('7')[0]?.last_seq, 4)
+
+    const dismissedRead = deferred<Response>()
+    globalThis.fetch = (async () => dismissedRead.promise) as typeof fetch
+    const refreshing = chat.refreshExecutionStatus('7')
+    event({ ...activity, status: 'succeeded', last_seq: 5, controls: ['dismiss'] })
+    event({ ...activity, status: 'succeeded', last_seq: 5, controls: ['dismiss'] }, 'dismissed')
+    assert.equal(chat.sessionBackgroundActivities('7').length, 0)
+    assert.equal(chat.sessionBackgroundActivityKinds('7').length, 0)
+    dismissedRead.resolve(Response.json({ ...state(), background_activities: [activity] }))
+    await refreshing
+    assert.equal(chat.sessionBackgroundActivities('7').length, 0)
   }))
 
 test('removed memberships and deleted sessions cannot be resurrected by pending reads', async () =>

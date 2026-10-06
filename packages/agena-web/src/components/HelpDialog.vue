@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, onScopeDispose, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiAddLine,
@@ -154,8 +154,12 @@ const sections = computed((): ShortcutSection[] => {
     .filter((group) => group.items.length > 0)
 })
 
+const reloadController = new AbortController()
+onScopeDispose(() => reloadController.abort())
+
 async function reloadConfiguration() {
-  await reloadAgenaRuntime().catch(() => {})
+  await reloadAgenaRuntime(reloadController.signal).catch(() => {})
+  if (reloadController.signal.aborted) return
   window.location.reload()
 }
 

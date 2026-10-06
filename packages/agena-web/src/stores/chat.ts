@@ -1,4 +1,4 @@
-import type { SessionActivity } from '@/types/activity'
+import { activityEquals, activityIsActive, type SessionActivity } from '@/types/activity'
 import { defineStore } from 'pinia'
 import { useBtwStore } from './btw'
 import { computed, onScopeDispose, ref } from 'vue'
@@ -10,6 +10,8 @@ import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat
 import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
 import { createRevalidator } from '../lib/revalidation'
+import { isDocumentVisible } from '../lib/backgroundReads'
+import { subscribeResource } from '../lib/resourceSync'
 import { isRunTerminal } from '../lib/chatRunState'
 import { setLocalJson, getLocalJson } from '../lib/persist'
 import { localStorageKeys } from '../lib/persistence/storageKeys'
@@ -130,7 +132,31 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // fields that are not part of the model picker configuration.
   const sessionExecutionBySession = ref<Record<string, NonNullable<chatApi.AgenaExecutionState['execution']>>>({})
   const backgroundActivitiesBySession = ref<Record<string, SessionActivity[]>>({})
+  const backgroundActivityGeneration = new Map<string, number>()
+  const backgroundActivityTimes = new Map<string, number>()
   const backgroundActivityKindsBySession = ref<Record<string, string[]>>({})
+  function applySessionActivity(
+    sid: string,
+    activity: SessionActivity,
+    dismissed = false,
+    expectedGeneration?: number,
+  ) {
+    if (
+      deletedSessions.has(sid) ||
+      (expectedGeneration !== undefined && expectedGeneration !== (backgroundActivityGeneration.get(sid) ?? 0))
+    )
+      return
+    const rows = backgroundActivitiesBySession.value[sid] || []
+    const previous = rows.find((row) => row.id === activity.id)
+    if ((dismissed && !previous) || (!dismissed && previous && activityEquals(previous, activity))) return
+    backgroundActivityGeneration.set(sid, (backgroundActivityGeneration.get(sid) ?? 0) + 1)
+    const remaining = rows.filter((row) => row.id !== activity.id)
+    backgroundActivitiesBySession.value[sid] = dismissed ? remaining : [activity, ...remaining]
+    backgroundActivityKindsBySession.value[sid] = backgroundActivitiesBySession.value[sid]
+      .filter((row) => activityIsActive(row.status))
+      .map((row) => row.kind.toLowerCase())
+      .filter(Boolean)
+  }
   sessionRunConfigBySession.value = loadSessionRunConfigMap(STORAGE_RUN_CONFIG)
   const runConfigPersister = createSessionRunConfigPersister(STORAGE_RUN_CONFIG, () => sessionRunConfigBySession.value)
 
@@ -146,6 +172,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const removedParts = new Map<string, Set<string>>()
   const membershipRevalidation = new Set<string>()
   const visibleSessions = new Map<string, number>()
+  const sessionResourceSubscriptions = new Map<string, () => void>()
   const messageRevalidators = new Map<string, ReturnType<typeof createRevalidator>>()
   const statusRevalidators = new Map<string, ReturnType<typeof createRevalidator>>()
   const sessionsRevalidator = createRevalidator(
@@ -153,8 +180,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
       await refreshSessionsInFlight?.catch(() => {})
       await refreshSessions()
     },
-    { intervalMs: 500, retryMs: 1000 },
+    { intervalMs: 5000, retryMs: 5000, enabled: isDocumentVisible },
   )
+  const releaseSessionsResource = subscribeResource('sessions', (event) => {
+    // Live metadata/deletions are applied to the cache below; visible session
+    // state has its own subscription. The global bootstrap list is needed
+    // only to recover a change discovered by the shared revision check.
+    if (event?.type !== 'session_changed') sessionsRevalidator.invalidate(150)
+  })
 
   function messageRevalidator(sid: string) {
     let queue = messageRevalidators.get(sid)
@@ -164,7 +197,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           await refreshMessagesInFlightBySession.get(sid)
           await refreshMessages(sid, { silent: true })
         },
-        { intervalMs: 250 },
+        { intervalMs: 1000, enabled: () => isDocumentVisible() && isSessionVisible(sid) },
       )
       messageRevalidators.set(sid, queue)
     }
@@ -173,15 +206,37 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   function retainSession(sid: string) {
     visibleSessions.set(sid, (visibleSessions.get(sid) || 0) + 1)
+    if (!sessionResourceSubscriptions.has(sid))
+      sessionResourceSubscriptions.set(
+        sid,
+        subscribeResource(`session:${sid}:state`, (event) => {
+          if (event?.type === 'runtime_signal' && event.properties?.kind === 'activity') return
+          scheduleSessionStatusRefresh(sid)
+        }),
+      )
+    statusRevalidators.get(sid)?.resume()
+    messageRevalidators.get(sid)?.resume()
     return () => {
       const count = (visibleSessions.get(sid) || 1) - 1
       if (count) visibleSessions.set(sid, count)
-      else visibleSessions.delete(sid)
+      else {
+        visibleSessions.delete(sid)
+        sessionResourceSubscriptions.get(sid)?.()
+        sessionResourceSubscriptions.delete(sid)
+        statusRevalidators.get(sid)?.pause()
+        messageRevalidators.get(sid)?.pause()
+      }
     }
   }
 
+  function isSessionVisible(sid: string) {
+    return visibleSessions.has(sid)
+  }
+
   function reconcileLiveState() {
-    sessionsRevalidator.invalidate(0)
+    // A reconnect racing the initial unversioned bootstrap read needs one
+    // trailing list. Settled snapshots recover through the shared tokens.
+    if (refreshSessionsInFlight) sessionsRevalidator.invalidate(0)
     // Cached inactive conversations are revalidated when opened again.
     for (const sid of Object.keys(messagesBySession.value)) membershipRevalidation.add(sid)
     messagesHydratedBySession.value = {}
@@ -552,6 +607,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   function resumeMessageRefresh() {
     if (document.visibilityState === 'hidden') return
+    sessionsRevalidator.resume()
+    for (const sid of visibleSessions.keys()) {
+      messageRevalidators.get(sid)?.resume()
+      statusRevalidators.get(sid)?.resume()
+    }
     const sid = selectedSessionId.value
     if (!sid || !refreshMessagesFailuresBySession.has(sid) || refreshMessagesRetryTimerBySession.has(sid)) return
     void refreshMessages(sid, { silent: true }).catch(() => {})
@@ -562,6 +622,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
     refreshMessagesRetryTimerBySession.clear()
     sessionsRevalidator.dispose()
+    releaseSessionsResource()
+    for (const release of sessionResourceSubscriptions.values()) release()
     for (const queue of messageRevalidators.values()) queue.dispose()
     for (const queue of statusRevalidators.values()) queue.dispose()
   })
@@ -912,6 +974,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
     messageRevalidators.clear()
     for (const queue of statusRevalidators.values()) queue.dispose()
     statusRevalidators.clear()
+    // Other workspace panes may still retain a session when this pane clears
+    // its transcript pages. Their subscriptions survive until release.
+    for (const [sid, release] of sessionResourceSubscriptions)
+      if (!isSessionVisible(sid)) {
+        release()
+        sessionResourceSubscriptions.delete(sid)
+      }
     presentedInteractiveRequestBySession.clear()
     messagesBySession.value = {}
     messagesHydratedBySession.value = {}
@@ -932,7 +1001,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   function scheduleSessionStatusRefresh(sessionId: string, delayMs = 150) {
     const sid = sessionId.trim()
-    if (!sid || deletedSessions.has(sid)) return
+    if (!sid || deletedSessions.has(sid) || !isSessionVisible(sid)) return
     let queue = statusRevalidators.get(sid)
     if (!queue) {
       queue = createRevalidator(
@@ -940,7 +1009,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           await refreshExecutionInFlightBySession.get(sid)?.catch(() => {})
           await refreshExecutionStatus(sid)
         },
-        { intervalMs: 250, retryMs: 1000 },
+        { intervalMs: 2000, retryMs: 5000, enabled: () => isDocumentVisible() && isSessionVisible(sid) },
       )
       statusRevalidators.set(sid, queue)
     }
@@ -951,6 +1020,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const st = await chatApi.getSessionExecutionStatus(sid).catch((error) => {
       if (error instanceof ApiError && error.status === 404) {
         forgetSession(sid)
@@ -963,12 +1033,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (Number(getSessionById(sid)?.version || 0) > Number(st.session.version || 0)) return
     upsertSessionCache(st.session)
     applyAttention(sid, st.state)
-    backgroundActivityKindsBySession.value = {
-      ...backgroundActivityKindsBySession.value,
-      [sid]: [...st.backgroundActivityKinds],
+    if (activityGeneration === (backgroundActivityGeneration.get(sid) ?? 0)) {
+      backgroundActivityKindsBySession.value = {
+        ...backgroundActivityKindsBySession.value,
+        [sid]: [...st.backgroundActivityKinds],
+      }
+      backgroundActivitiesBySession.value[sid] = st.backgroundActivities
     }
-
-    backgroundActivitiesBySession.value[sid] = st.backgroundActivities
 
     const execution = st.execution
     if (execution && typeof execution === 'object') {
@@ -1286,7 +1357,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
           ...(typeof opts?.parentId === 'number' ? { parentId: opts.parentId } : {}),
         })
         upsertSessionCache(created)
-        scheduleSessionsRefresh(1200)
         if (created?.id) {
           await selectSession(created.id)
         }
@@ -1311,6 +1381,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function forgetSession(sid: string) {
+    backgroundActivityGeneration.delete(sid)
+    for (const key of backgroundActivityTimes.keys()) if (key.startsWith(`${sid}:`)) backgroundActivityTimes.delete(key)
     useBtwStore().clear(sid)
     deletedSessions.add(sid)
     messageRevalidators.get(sid)?.dispose()
@@ -1396,7 +1468,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
 
     sessions.value = sessions.value.filter((s) => s?.id !== sid)
-    scheduleSessionsRefresh(1200)
   }
 
   async function renameSession(sessionId: string, title: string) {
@@ -1415,7 +1486,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid || Object.keys(patch).length === 0) return null
     const updated = await chatApi.patchSessionMetadata(sid, patch)
     upsertSessionCache(updated)
-    scheduleSessionsRefresh(1200)
     return updated
   }
 
@@ -1665,7 +1735,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid) return null
     await chatApi.compactSession(sid, buildRunOptions({}))
     scheduleSessionStatusRefresh(sid, 200)
-    scheduleSessionsRefresh(1200)
   }
 
   // ─── fork ─────────────────────────────────────────────────────────────────
@@ -1675,7 +1744,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid) return null
     const created = await chatApi.forkSession(sid, opts)
     upsertSessionCache(created)
-    scheduleSessionsRefresh(1200)
     return created
   }
 
@@ -1698,7 +1766,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     const created = await chatApi.rewindSession(sid, atMessageId)
     upsertSessionCache(created)
-    scheduleSessionsRefresh(1200)
     return { session: created, message: target }
   }
 
@@ -1781,7 +1848,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           selectedSessionId.value !== sid &&
           !refreshMessagesInFlightBySession.has(sid)
         ) {
-          if (isRecord(part) && part.kind === 'run') scheduleSessionsRefresh(800)
+          if (!props.resource_revisions && isRecord(part) && part.kind === 'run') scheduleSessionsRefresh(800)
           return
         }
         if (isRecord(part)) {
@@ -1837,7 +1904,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
                   }
                 }
               }
-              scheduleSessionsRefresh(800)
+              if (!props.resource_revisions) scheduleSessionsRefresh(800)
             } else {
               const existing = binarySearchById(list, key, (m) => m.info.id)
               if (existing.found && list[existing.index]) {
@@ -1864,7 +1931,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
               }
             }
             // Text tokens change content, not execution/interaction state.
-            if (kind === 'run' || kind === 'tool_call') scheduleSessionStatusRefresh(sid)
+            if (!props.resource_revisions && (kind === 'run' || kind === 'tool_call')) scheduleSessionStatusRefresh(sid)
           }
         }
       } else if (sid && changeKind === 'part_removed') {
@@ -1873,8 +1940,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
           let removed = removedParts.get(sid)
           if (!removed) removedParts.set(sid, (removed = new Set()))
           removed.add(String(removedPartId))
-          scheduleSessionStatusRefresh(sid)
-          scheduleSessionsRefresh()
+          if (!props.resource_revisions) {
+            scheduleSessionStatusRefresh(sid)
+            scheduleSessionsRefresh()
+          }
           const list = messagesBySession.value[sid]
           if (Array.isArray(list)) {
             const idx = list.findIndex((m) => Number(m.info.runId) === removedPartId)
@@ -1911,20 +1980,39 @@ const useChatStoreDefinition = defineStore('chat', () => {
             ...(typeof updatedAtMs === 'number' ? { updated_at_ms: updatedAtMs } : {}),
           })
         }
-        scheduleSessionsRefresh(600)
-        scheduleSessionStatusRefresh(sid)
+        if (!props.resource_revisions) {
+          scheduleSessionsRefresh(600)
+          scheduleSessionStatusRefresh(sid)
+        }
       }
       return
     }
 
     if (t === 'runtime_signal') {
       const signalSession = sid || (props.session_id != null ? String(props.session_id) : '')
-      if (signalSession) {
-        scheduleSessionStatusRefresh(signalSession)
-      }
       const signalKind = readString(props.kind as JsonValue)
-      if (signalKind === 'activity' || signalKind === 'plugin') {
-        scheduleSessionsRefresh(600)
+      const payload = asRecord(props.payload)
+      const activity = asRecord(payload.activity)
+      if (
+        signalKind === 'activity' &&
+        signalSession &&
+        !deletedSessions.has(signalSession) &&
+        (isSessionVisible(signalSession) || backgroundActivitiesBySession.value[signalSession]) &&
+        typeof activity.id === 'string' &&
+        typeof activity.status === 'string' &&
+        Array.isArray(activity.controls)
+      ) {
+        const key = `${signalSession}:${activity.id}`
+        const time = typeof payload.ts_ms === 'number' ? payload.ts_ms : 0
+        if (time < (backgroundActivityTimes.get(key) ?? 0)) return
+        backgroundActivityTimes.delete(key)
+        backgroundActivityTimes.set(key, time)
+        if (backgroundActivityTimes.size > 1024)
+          backgroundActivityTimes.delete(backgroundActivityTimes.keys().next().value!)
+        applySessionActivity(signalSession, activity as unknown as SessionActivity, payload.reason === 'dismissed')
+      }
+      if (!props.resource_revisions && signalSession && signalKind !== 'activity') {
+        scheduleSessionStatusRefresh(signalSession)
       }
       return
     }
@@ -1975,6 +2063,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getSessionExecution,
     sessionBackgroundActivityKinds,
     sessionBackgroundActivities: (sid: string) => backgroundActivitiesBySession.value[sid] || [],
+    sessionActivityGeneration: (sid: string) => backgroundActivityGeneration.get(sid) ?? 0,
+    applySessionActivity,
     refreshExecutionStatus,
     sessionErrorBySession,
     sessionRunConfigBySession,

@@ -9,6 +9,7 @@ import type { SessionActivity } from '@/types/activity'
 // server rejects unknown fields, including the old Agent/profile selection.
 
 import { apiJson } from '../../lib/api'
+import { conditionalJson } from '../../lib/conditionalJson'
 import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
@@ -72,6 +73,7 @@ export type ToolDetailResource = {
   part_id: number
   revision: number
   updated_at_ms: number
+  part_state?: string
   section: ToolDetailSection
   value: JsonValue
 }
@@ -691,7 +693,12 @@ export async function listSessions(opts?: {
   if (opts?.includeTotal) params.push('include_total=true')
   const suffix = params.length ? `?${params.join('&')}` : ''
 
-  const payload = await apiJson<JsonValue>(
+  const payload = await conditionalJson<JsonValue>(
+    Number.isSafeInteger(workspaceId) && workspaceId > 0
+      ? `workspace:${workspaceId}:sessions`
+      : opts?.bucket
+        ? `sessions:bucket:${opts.bucket}`
+        : 'sessions',
     `/api/v1/sessions${suffix}`,
     opts?.signal ? { signal: opts.signal } : undefined,
   )
@@ -893,13 +900,16 @@ export async function getToolPartDetail(
   partId: string,
   section: ToolDetailSection,
   signal?: AbortSignal,
+  force = false,
 ): Promise<ToolDetailResource> {
   const sid = String(sessionId || '').trim()
   const pid = String(partId || '').trim()
   if (!sid || !pid) throw new Error('A session id and part id are required')
-  return await apiJson<ToolDetailResource>(
+  return await conditionalJson<ToolDetailResource>(
+    section === 'presentation' ? `part:${pid}` : `part:${pid}:${section}`,
     `/api/v1/sessions/${encodeURIComponent(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
     signal ? { signal } : undefined,
+    force,
   )
 }
 
@@ -1278,7 +1288,8 @@ export async function presentInteractiveRequest(sessionId: string, requestId: st
 export async function getSessionExecutionStatus(sessionId: string): Promise<SessionExecutionStatus | null> {
   const sid = String(sessionId || '').trim()
   if (!sid) return null
-  const raw = await apiJson<AgenaExecutionState>(
+  const raw = await conditionalJson<AgenaExecutionState>(
+    `session:${sid}:state`,
     `/api/v1/sessions/${encodeURIComponent(sid)}/state?include_parts=false`,
     { signal: AbortSignal.timeout(30_000) },
   )

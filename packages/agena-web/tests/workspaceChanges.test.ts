@@ -5,8 +5,8 @@ import { createRenderer, defineComponent, nextTick, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import en from '../src/i18n/messages/en-US'
 import zh from '../src/i18n/messages/zh-CN'
-import type { GitStatusFile, GitStatusResponse } from '../src/types/git'
-import type { gitJson } from '../src/lib/gitApi'
+import type { SessionFileChange, SessionFileChanges } from '../src/types/sessionFileChanges'
+import type { apiJson } from '../src/lib/api'
 
 const vite = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
@@ -16,12 +16,11 @@ afterAll(() => vite.close())
 const { useWorkspaceChanges } = (await vite.ssrLoadModule(
   '/src/pages/chat/useWorkspaceChanges.ts',
 )) as typeof import('../src/pages/chat/useWorkspaceChanges')
-const { ApiError } = (await vite.ssrLoadModule('/src/lib/api.ts')) as typeof import('../src/lib/api')
 
 test('workspace and task labels resolve in the chat namespace with interpolated values', () => {
   for (const [locale, messages, title, count, retry] of [
-    ['zh-CN', zh, '工作区变更', '3 个文件', '第 2 次重试'],
-    ['en-US', en, 'Workspace changes', '3 files', 'Retry attempt 2'],
+    ['zh-CN', zh, '会话编辑', '3 个文件', '第 2 次重试'],
+    ['en-US', en, 'Session edits', '3 files', 'Retry attempt 2'],
   ] as const) {
     const { t, te } = createI18n({ legacy: false, locale, messages: { [locale]: messages } }).global
     expect(t('chat.sessionWork.changes')).toBe(title)
@@ -56,34 +55,29 @@ test('workspace and task labels resolve in the chat namespace with interpolated 
 
 type Call = {
   path: string
-  directory: string
-  query: Parameters<typeof gitJson>[2]
+  query: Record<string, string>
   signal: AbortSignal
   resolve: (value: unknown) => void
   reject: (error: Error) => void
 }
-const file = (path: string): GitStatusFile => ({ path, index: '', workingDir: 'M' })
-const snapshot = (files: GitStatusFile[], totalFiles = files.length, offset = 0): GitStatusResponse => ({
-  current: 'master',
-  tracking: null,
-  ahead: 0,
-  behind: 0,
+const file = (path: string): SessionFileChange => ({
+  path,
+  operation_count: 1,
+  operation_history: false,
+  operations: [],
+})
+const snapshot = (files: SessionFileChange[], total_files = files.length, offset = 0): SessionFileChanges => ({
   files,
-  totalFiles,
+  total_files,
   offset,
-  limit: 40,
-  stagedCount: 0,
-  unstagedCount: totalFiles,
-  untrackedCount: 0,
-  mergeCount: 0,
-  hasMore: offset + files.length < totalFiles,
-  scope: 'all',
+  has_more: offset + files.length < total_files,
+  recording_incomplete: false,
 })
 
 async function withPanel(
   run: (ctx: {
     state: ReturnType<typeof useWorkspaceChanges>
-    directory: ReturnType<typeof ref<string>>
+    sessionId: ReturnType<typeof ref<string>>
     calls: Call[]
     advance: (ms: number) => Promise<void>
     settle: () => Promise<void>
@@ -137,19 +131,27 @@ async function withPanel(
     parentNode: () => null,
     nextSibling: () => null,
   })
-  const directory = ref('/repo/a'),
+  const sessionId = ref('7'),
     calls: Call[] = []
   let state!: ReturnType<typeof useWorkspaceChanges>
   const app = renderer.createApp(
     defineComponent({
       setup() {
         state = useWorkspaceChanges({
-          directory,
+          sessionId,
           busy: ref(false),
-          request: ((path, directory, query, init) =>
-            new Promise((resolve, reject) =>
-              calls.push({ path, directory, query, signal: init!.signal as AbortSignal, resolve, reject }),
-            )) as typeof gitJson,
+          request: ((url, init) => {
+            const parsed = new URL(url, 'http://test')
+            return new Promise((resolve, reject) =>
+              calls.push({
+                path: parsed.pathname,
+                query: Object.fromEntries(parsed.searchParams),
+                signal: init!.signal as AbortSignal,
+                resolve,
+                reject,
+              }),
+            )
+          }) as typeof apiJson,
         })
         return () => null
       },
@@ -157,7 +159,7 @@ async function withPanel(
   )
   try {
     app.mount({})
-    await run({ state, directory, calls, advance, settle })
+    await run({ state, sessionId, calls, advance, settle })
   } finally {
     app.unmount()
     Date.now = original.now
@@ -169,57 +171,41 @@ async function withPanel(
   }
 }
 
-test('workspace reads stay lazy and discard old pages and counts when changing directories', async () =>
-  withPanel(async ({ state, directory, calls, advance, settle }) => {
-    expect(calls[0]!.query).toMatchObject({ summary: true, limit: 40, includeDiffStats: false })
+test('session reads stay lazy and discard stale membership when switching sessions', async () =>
+  withPanel(async ({ state, sessionId, calls, advance, settle }) => {
+    expect(calls[0]!.path).toBe('/api/v1/sessions/7/file-changes')
+    expect(calls[0]!.query).toMatchObject({ summary: 'true', limit: '40' })
     calls[0]!.resolve(snapshot([], 83))
     await settle()
     expect(state.total.value).toBe(83)
-    expect(calls.filter((c) => c.path === 'diff')).toHaveLength(0)
     state.expanded.value = true
-    expect(state.statusPending.value).toBe(true)
     await advance(750)
     calls.at(-1)!.resolve(snapshot([file('a.ts')], 83))
     await settle()
     state.select(file('a.ts'))
     const oldDiff = calls.at(-1)!
+    expect(oldDiff.query.path).toBe('a.ts')
     state.page.value = 2
-    expect(state.selected.value).toBe(null)
     expect(oldDiff.signal.aborted).toBe(true)
-    expect(state.files.value).toEqual([])
     await advance(750)
     const oldPage = calls.at(-1)!
-    directory.value = '/repo/b'
+    sessionId.value = '8'
     expect(oldPage.signal.aborted).toBe(true)
     expect(state.total.value).toBe(null)
     expect(state.page.value).toBe(0)
     oldPage.resolve(snapshot([file('wrong.ts')], 999, 80))
-    oldDiff.resolve({ diff: 'old workspace' })
+    oldDiff.resolve(snapshot([file('wrong.ts')]))
     await settle()
     expect(state.total.value).toBe(null)
     expect(state.diff.data.value).toBe(null)
     await advance(750)
-    const error = new ApiError('not a repository', 400)
-    error.code = 'not_git_repo'
-    calls.at(-1)!.reject(error)
-    await settle()
-    expect(state.notRepository.value).toBe(true)
-    expect(state.hasChanges.value).toBe(false)
-    expect(state.status.error.value).toBe('')
-    expect(state.total.value).toBe(null)
+    expect(calls.at(-1)!.path).toBe('/api/v1/sessions/8/file-changes')
   }))
 
-test('the dock only appears for confirmed changes and closes when changes disappear', async () =>
-  withPanel(async ({ state, directory, calls, advance, settle }) => {
-    expect(state.statusPending.value).toBe(true)
-    expect(state.hasChanges.value).toBe(false)
-    calls[0]!.resolve(snapshot([], 0))
+test('empty recorded edits close the dock, but incomplete shell recording remains visible', async () =>
+  withPanel(async ({ state, calls, advance, settle }) => {
+    calls[0]!.resolve(snapshot([], 1))
     await settle()
-    expect(state.hasChanges.value).toBe(false)
-    await advance(30_000)
-    calls.at(-1)!.resolve(snapshot([], 1))
-    await settle()
-    expect(state.hasChanges.value).toBe(true)
     state.expanded.value = true
     await advance(750)
     calls.at(-1)!.resolve(snapshot([file('modified.ts')]))
@@ -232,60 +218,61 @@ test('the dock only appears for confirmed changes and closes when changes disapp
     await settle()
     expect(state.hasChanges.value).toBe(false)
     expect(state.expanded.value).toBe(false)
-    expect(state.selected.value).toBe(null)
     expect(preview.signal.aborted).toBe(true)
-    directory.value = '/repo/b'
-    expect(state.hasChanges.value).toBe(false)
+    await advance(30_000)
+    calls.at(-1)!.resolve({ ...snapshot([], 0), recording_incomplete: true })
+    await settle()
+    expect(state.hasChanges.value).toBe(true)
+    expect(state.recordingIncomplete.value).toBe(true)
   }))
 
-test('diff expansion cancels an older read and uses the correct rename side and new budget', async () =>
+test('operation history and rename facts stay raw; expanding diff cancels older reads', async () =>
   withPanel(async ({ state, calls, advance, settle }) => {
-    const renamed = {
-      path: 'new.ts',
-      index: 'R',
-      workingDir: 'R',
-      indexOldPath: 'index-old.ts',
-      workingOldPath: 'work-old.ts',
-    }
+    const row = { ...file('new name.ts'), operation_count: 2, operation_history: true }
     calls[0]!.resolve(snapshot([], 1))
     await settle()
     state.expanded.value = true
     await advance(750)
-    calls.at(-1)!.resolve(snapshot([renamed]))
+    calls.at(-1)!.resolve(snapshot([row]))
     await settle()
-    state.select(renamed)
-    expect(calls.at(-1)!.query).toMatchObject({ staged: false, oldPath: 'work-old.ts', maxBytes: 256 * 1024 })
-    calls.at(-1)!.resolve({ diff: 'preview', truncated: true })
+    state.select(row)
+    expect(calls.at(-1)!.query).toMatchObject({ path: 'new name.ts', max_bytes: String(256 * 1024) })
+    const recorded: SessionFileChange = {
+      ...row,
+      operations: [
+        {
+          part_id: 1,
+          tool: 'fs.apply_patch',
+          kind: 'moved',
+          from_path: 'old.ts',
+          before_sha256: null,
+          after_sha256: null,
+          diff: 'preview',
+          diff_truncated: true,
+          diff_scope: 'operation',
+          diff_unavailable_reason: null,
+        },
+      ],
+    }
+    calls.at(-1)!.resolve(snapshot([recorded]))
     await settle()
     await advance(750)
     void state.diff.refresh()
     const oldRead = calls.at(-1)!
     state.moreDiff()
     expect(oldRead.signal.aborted).toBe(true)
-    oldRead.resolve({ diff: 'stale preview', truncated: true })
+    oldRead.resolve(snapshot([row]))
     await settle()
-    expect(state.diff.data.value).toBe(null)
-    expect(state.diffPending.value).toBe(true)
-    expect(state.visibleDiff.value?.diff).toBe('preview')
+    expect(state.visibleDiff.value?.files[0]?.operations[0]?.diff).toBe('preview')
     await advance(750)
-    expect(calls.at(-1)!.query?.maxBytes).toBe(512 * 1024)
-    calls.at(-1)!.resolve({ diff: 'expanded diff', truncated: false })
+    expect(calls.at(-1)!.query.max_bytes).toBe(String(512 * 1024))
+    calls.at(-1)!.resolve(snapshot([recorded]))
     await settle()
-    expect(state.diff.data.value?.diff).toBe('expanded diff')
-    await advance(750)
-    void state.status.refresh()
-    calls.at(-1)!.resolve(snapshot([{ ...renamed }]))
-    await settle()
-    expect(state.visibleDiff.value?.diff).toBe('expanded diff')
-    void state.diff.refresh()
-    expect(calls.at(-1)!.query?.maxBytes).toBe(512 * 1024)
-    state.staged.value = true
-    expect(state.visibleDiff.value).toBe(null)
-    await advance(750)
-    expect(calls.at(-1)!.query).toMatchObject({ staged: true, oldPath: 'index-old.ts', maxBytes: 256 * 1024 })
+    expect(state.visibleDiff.value?.files[0]?.operation_history).toBe(true)
+    expect(state.visibleDiff.value?.files[0]?.operations[0]?.from_path).toBe('old.ts')
   }))
 
-test('refresh failures hide stale rows and a shrinking last page recovers to the new last page', async () =>
+test('refresh failures hide stale rows and shrinking pages recover', async () =>
   withPanel(async ({ state, calls, advance, settle }) => {
     calls[0]!.resolve(snapshot([], 83))
     await settle()
@@ -294,7 +281,7 @@ test('refresh failures hide stale rows and a shrinking last page recovers to the
     calls.at(-1)!.resolve(snapshot([file('a.ts')], 83))
     await settle()
     state.select(file('a.ts'))
-    calls.at(-1)!.resolve({ diff: 'diff' })
+    calls.at(-1)!.resolve(snapshot([file('a.ts')]))
     await settle()
     await advance(750)
     void state.status.refresh()
@@ -308,11 +295,9 @@ test('refresh failures hide stale rows and a shrinking last page recovers to the
     calls.at(-1)!.resolve(snapshot([], 41, 80))
     await settle()
     expect(state.page.value).toBe(1)
-    expect(state.selected.value).toBe(null)
     await advance(750)
-    expect(calls.at(-1)!.query?.offset).toBe(40)
+    expect(calls.at(-1)!.query.offset).toBe('40')
     calls.at(-1)!.resolve(snapshot([file('last.ts')], 41, 40))
     await settle()
-    expect(state.current.value?.offset).toBe(40)
     expect(state.files.value.map((f) => f.path)).toEqual(['last.ts'])
   }))

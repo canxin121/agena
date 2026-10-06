@@ -9,6 +9,8 @@ import { useI18n } from 'vue-i18n'
 import { useGitDiffSelection } from '@/composables/git/useGitDiffSelection'
 import { useGitStatusPaged } from '@/composables/git/useGitStatusPaged'
 import { useGitWatchSse } from '@/composables/git/useGitWatchSse'
+import { createRevalidator } from '@/lib/revalidation'
+import { isDocumentVisible, limitBackgroundReads } from '@/lib/backgroundReads'
 import { useGitPageAuth } from './git/useGitPageAuth'
 import { useGitCommitState } from './git/useGitCommitState'
 import { useGitCommitOps } from './git/useGitCommitOps'
@@ -242,7 +244,30 @@ const isHistoryExpanded = ref(true)
 // File list paging (large repos can have thousands of changed files).
 // This is backed by server pagination to keep both network + UI responsive.
 const FILE_LIST_PAGE_SIZE = 200
+let repoReadController = new AbortController()
+let watchReadController: AbortController | null = null
+let watchGeneration = 0
+let gitStatusGeneration = 0
+
+async function readRepoJson<T>(
+  path: string,
+  directory: string,
+  query?: Record<string, string | number | boolean | null | undefined>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const owner = repoReadController
+  const requestSignal = AbortSignal.any([owner.signal, ...(signal ? [signal] : []), AbortSignal.timeout(30_000)])
+  requestSignal.throwIfAborted()
+  if (root.value !== directory) throw new DOMException('Repository changed before read', 'AbortError')
+  const response = await gitJson<T>(path, directory, query, { signal: requestSignal })
+  requestSignal.throwIfAborted()
+  if (owner !== repoReadController || root.value !== directory)
+    throw new DOMException('Repository changed during read', 'AbortError')
+  return response
+}
 const conflictPaths = ref<string[]>([])
+const conflictReaders = new WeakMap<AbortController, number>()
+let conflictGeneration = 0
 
 const {
   mergeList,
@@ -262,13 +287,17 @@ const {
   hasMoreUnstaged,
   hasMoreUntracked,
   loadMore,
-  reloadFirstPages,
+  reloadScopeFirstPage,
+  cancelRequests: cancelStatusRequests,
+  clearScope: clearStatusScope,
+  resetAll: resetStatusPages,
 } = useGitStatusPaged({
   gitReady,
   status,
   pageSize: FILE_LIST_PAGE_SIZE,
-  loadStatusPage: async ({ directory, scope, offset, limit }) => {
-    return await gitJson<GitStatusResponse>('status', directory, { scope, offset, limit, includeDiffStats: true })
+  loadStatusPage: async ({ directory, scope, offset, limit, signal }) => {
+    if (root.value === directory) dirtyWatchScopes.delete(scope)
+    return await readRepoJson<GitStatusResponse>('status', directory, { scope, offset, limit, includeDiffStats: true }, signal)
   },
 })
 
@@ -289,9 +318,9 @@ async function loadMoreUntracked(directory: string) {
 }
 
 // Selection + Diff
-const diffPaneRef = ref<{ refreshDiff: () => void } | null>(null)
+const diffPaneRef = ref<{ refreshDiff: () => Promise<void> } | null>(null)
 function refreshDiff() {
-  diffPaneRef.value?.refreshDiff?.()
+  return diffPaneRef.value?.refreshDiff?.() ?? Promise.resolve()
 }
 const { selectedFile, diffSource, selectedIsConflict, selectFile } = useGitDiffSelection({
   conflictPaths,
@@ -551,6 +580,10 @@ const stashOps = useGitStashOps({
   repoRoot,
   toasts,
   gitJson,
+  readJson: <T,>(endpoint: string, directory: string, query?: Record<string, string | number | boolean | null | undefined>, init?: RequestInit) => {
+    const signal = AbortSignal.any([repoReadController.signal, ...(init?.signal ? [init.signal] : [])])
+    return limitBackgroundReads(() => readRepoJson<T>(endpoint, directory, query, signal), signal)
+  },
   withRepoBusy: auth.withRepoBusy,
   handleGitBusy: auth.handleGitBusy,
   load,
@@ -729,34 +762,115 @@ function insertGitmoji() {
 
 let loadSeq = 0
 
-// Keep the open diff fresh without auto-refreshing the sidebar lists.
-async function refreshOpenDiffFromWatch(directory: string) {
-  await loadConflicts(directory).catch(() => (conflictPaths.value = []))
-  refreshDiff()
+let pendingWatchDiff = false
+let pendingWatchConflicts = false
+type WatchScope = 'merge' | 'staged' | 'unstaged' | 'untracked'
+const dirtyWatchScopes = new Set<WatchScope>()
+// Selection changes restart the path stream, but do not discard the
+// repository baseline used to validate already displayed file lists.
+let repoWatchBaseline: GitWatchStatusPayload | null = null
+const visibleWatchScopes = () =>
+  [
+    ['merge', isMergeExpanded.value, status.value?.mergeCount ?? 0, mergeList],
+    ['staged', isStagedExpanded.value, status.value?.stagedCount ?? 0, stagedList],
+    ['unstaged', isChangesExpanded.value, status.value?.unstagedCount ?? 0, changesList],
+    ['untracked', isUntrackedExpanded.value, status.value?.untrackedCount ?? 0, untrackedList],
+  ] as const
+const watchRefreshQueue = createRevalidator(
+  async () => {
+    const directory = root.value
+    if (!directory || !gitReady.value) return
+    const owner = watchGeneration
+    const controller = new AbortController()
+    watchReadController = controller
+    try {
+      await refreshOpenDiffFromWatch(directory, owner, controller.signal)
+      for (const [scope, expanded, count] of visibleWatchScopes()) {
+        controller.signal.throwIfAborted()
+        if (owner !== watchGeneration || root.value !== directory || !isDocumentVisible()) return
+        if (!dirtyWatchScopes.has(scope) || !expanded) continue
+        dirtyWatchScopes.delete(scope)
+        try {
+          if (count === 0) clearStatusScope(scope)
+          else await reloadScopeFirstPage(directory, scope)
+        } catch (error) {
+          if (owner === watchGeneration && root.value === directory) dirtyWatchScopes.add(scope)
+          throw error
+        }
+      }
+    } finally {
+      if (watchReadController === controller) watchReadController = null
+    }
+  },
+  { intervalMs: 1500, retryMs: 5000, enabled: () => isDocumentVisible() && gitReady.value },
+)
+
+async function refreshOpenDiffFromWatch(directory: string, owner: number, signal: AbortSignal) {
+  let conflicts = pendingWatchConflicts
+  let diff = pendingWatchDiff
+  const path = selectedFile.value
+  pendingWatchConflicts = false
+  pendingWatchDiff = false
+  try {
+    signal.throwIfAborted()
+    if (conflicts) {
+      if ((status.value?.mergeCount ?? 0) > 0) await loadConflicts(directory, signal)
+      else conflictPaths.value = []
+      conflicts = false
+    }
+    signal.throwIfAborted()
+    if (diff && owner === watchGeneration && root.value === directory && selectedFile.value === path && isDocumentVisible()) {
+      await refreshDiff()
+      diff = false
+    }
+  } catch (error) {
+    if (owner === watchGeneration && root.value === directory) {
+      pendingWatchConflicts ||= conflicts
+      pendingWatchDiff ||= diff && selectedFile.value === path
+    }
+    throw error
+  }
 }
 
 async function refreshAfterWorkingTreeChange() {
   const directory = root.value
   if (!directory || !gitReady.value) return
+  await loadStatusSummary(directory)
+  if (root.value !== directory) return
   await Promise.all([
-    loadStatusSummary(directory),
-    loadGitState(directory).catch(() => (gitState.value = null)),
-    loadConflicts(directory).catch(() => (conflictPaths.value = [])),
-    reloadFirstPages(directory),
+    loadGitState(directory).catch((error) => {
+      if (root.value === directory && !(error instanceof DOMException && error.name === 'AbortError')) gitState.value = null
+    }),
+    ((status.value?.mergeCount ?? 0) > 0 ? loadConflicts(directory) : Promise.resolve().then(() => { conflictPaths.value = [] })).catch((error) => {
+      if (root.value === directory && !(error instanceof DOMException && error.name === 'AbortError')) conflictPaths.value = []
+    }),
+    ...visibleWatchScopes().map(([scope, expanded, count]) => {
+      if (count === 0) clearStatusScope(scope)
+      else if (expanded) return reloadScopeFirstPage(directory, scope)
+      else dirtyWatchScopes.add(scope)
+      return Promise.resolve()
+    }),
   ])
-  refreshDiff()
+  if (root.value === directory) void refreshDiff()
 }
 
-const {
-  watchRefreshTimer,
-  startWatch: startWatchInner,
-  stopWatch,
-} = useGitWatchSse<GitWatchStatusPayload>({
-  buildUrl: (directory) => gitWatchUrl(directory, 1500),
+const { startWatch: startWatchInner, stopWatch } = useGitWatchSse<GitWatchStatusPayload>({
+  buildUrl: (directory) => gitWatchUrl(directory, 1500, selectedFile.value),
   onPayload: (payload, prev) => {
-    // Update the summary immediately.
+    const baseline = repoWatchBaseline ?? prev
+    if (baseline?.updatedAtMs != null && payload.updatedAtMs != null && payload.updatedAtMs < baseline.updatedAtMs) return
+    repoWatchBaseline = payload
+    if (
+      prev &&
+      payload.updatedAtMs === prev.updatedAtMs &&
+      payload.worktreeSignature === prev.worktreeSignature &&
+      payload.selectedPathSignature === prev.selectedPathSignature
+    )
+      return
+    // Update the summary immediately; an older HTTP snapshot cannot replace it.
+    gitStatusGeneration++
     const baseStatus = status.value ?? createEmptyStatusSummary()
-    status.value = {
+    const nextStatus = {
       ...baseStatus,
       current: payload.current,
       tracking: payload.tracking ?? null,
@@ -766,75 +880,109 @@ const {
       unstagedCount: payload.unstagedCount,
       untrackedCount: payload.untrackedCount,
       mergeCount: payload.mergeCount,
+      totalFiles: payload.totalFiles ?? baseStatus.totalFiles,
     }
+    if (!status.value || nextStatus.current !== baseStatus.current || nextStatus.tracking !== baseStatus.tracking ||
+      nextStatus.ahead !== baseStatus.ahead || nextStatus.behind !== baseStatus.behind ||
+      nextStatus.stagedCount !== baseStatus.stagedCount || nextStatus.unstagedCount !== baseStatus.unstagedCount ||
+      nextStatus.untrackedCount !== baseStatus.untrackedCount || nextStatus.mergeCount !== baseStatus.mergeCount ||
+      nextStatus.totalFiles !== baseStatus.totalFiles) status.value = nextStatus
 
     if (payload.isClean) {
       // If the repo is clean, clear selection + lists to match VS Code behavior.
       selectedFile.value = null
     }
 
-    // Debounce open diff refreshes; list refresh stays manual.
-    const prevSignature = typeof prev?.worktreeSignature === 'string' ? prev.worktreeSignature : ''
+    // Repository clocks update summaries; independent path/scope signatures
+    // restrict expensive reads to the visible representations that changed.
+    const prevSignature = typeof baseline?.worktreeSignature === 'string' ? baseline.worktreeSignature : ''
     const nextSignature = typeof payload.worktreeSignature === 'string' ? payload.worktreeSignature : ''
     const changedCounts =
-      !prev ||
-      prev.current !== payload.current ||
-      prev.ahead !== payload.ahead ||
-      prev.behind !== payload.behind ||
-      prev.stagedCount !== payload.stagedCount ||
-      prev.unstagedCount !== payload.unstagedCount ||
-      prev.untrackedCount !== payload.untrackedCount ||
-      prev.mergeCount !== payload.mergeCount ||
-      prev.isClean !== payload.isClean ||
+      !baseline ||
+      baseline.current !== payload.current ||
+      baseline.tracking !== payload.tracking ||
+      baseline.ahead !== payload.ahead ||
+      baseline.behind !== payload.behind ||
+      baseline.stagedCount !== payload.stagedCount ||
+      baseline.unstagedCount !== payload.unstagedCount ||
+      baseline.untrackedCount !== payload.untrackedCount ||
+      baseline.mergeCount !== payload.mergeCount ||
+      baseline.isClean !== payload.isClean ||
       prevSignature !== nextSignature
 
-    if (changedCounts && !loading.value) {
-      if (watchRefreshTimer.value) window.clearTimeout(watchRefreshTimer.value)
-      watchRefreshTimer.value = window.setTimeout(() => {
-        const dir = root.value
-        if (!dir || !gitReady.value || !selectedFile.value) return
-        void refreshOpenDiffFromWatch(dir)
-      }, 250)
+    if (changedCounts) {
+      pendingWatchDiff ||=
+        Boolean(selectedFile.value) &&
+        (!baseline || (prev != null && (payload.selectedPathSignature == null || payload.selectedPathSignature !== prev.selectedPathSignature)))
+      const conflictsChanged = baseline
+        ? payload.mergeCount !== baseline.mergeCount || payload.scopeSignatures?.merge !== baseline.scopeSignatures?.merge
+        : conflictPaths.value.length > 0 || (conflictReaders.get(repoReadController) ?? 0) > 0
+      if (conflictsChanged) {
+        conflictGeneration++
+        pendingWatchConflicts = true
+      }
+      const loadingByScope = { merge: mergeListLoading, staged: stagedListLoading, unstaged: changesListLoading, untracked: untrackedListLoading }
+      for (const [scope, , count, list] of visibleWatchScopes()) {
+        if (count === 0) {
+          clearStatusScope(scope)
+          dirtyWatchScopes.delete(scope)
+        } else if (baseline
+          ? !payload.scopeSignatures || payload.scopeSignatures[scope] !== baseline.scopeSignatures?.[scope]
+          : list.value.length > 0 || loadingByScope[scope].value) {
+          // The first stream snapshot may be newer than an earlier HTTP
+          // representation. Validate only rows already read or in flight;
+          // initial reads dispatched after this baseline cover it themselves.
+          dirtyWatchScopes.add(scope)
+        }
+      }
+      if (pendingWatchDiff || pendingWatchConflicts || dirtyWatchScopes.size) watchRefreshQueue.invalidate(0)
     }
   },
 })
 
+watch([isMergeExpanded, isStagedExpanded, isChangesExpanded, isUntrackedExpanded], () => {
+  if (dirtyWatchScopes.size) watchRefreshQueue.invalidate(0)
+})
+
 function startWatch(directory: string) {
-  startWatchInner(
-    directory,
-    () => {
-      const dir = root.value
-      return Boolean(dir && gitReady.value)
-    },
-    () => {
-      const dir = root.value
-      if (!dir || !gitReady.value) return
-      startWatch(dir)
-    },
-  )
+  startWatchInner(directory, `${directory}:${selectedFile.value ?? ''}`)
 }
 
 async function loadStatusSummary(directory: string) {
   // summary=true keeps the payload small even for huge repos.
-  status.value = await gitJson<GitStatusResponse>('status', directory, { summary: true })
+  const generation = gitStatusGeneration
+  const response = await limitBackgroundReads(() => readRepoJson<GitStatusResponse>('status', directory, { summary: true }), repoReadController.signal)
+  if (generation === gitStatusGeneration) status.value = response
 }
 
 async function loadRemoteInfo(directory: string) {
-  remoteInfo.value = await gitJson<GitRemoteInfoResponse>('remote-info', directory)
+  remoteInfo.value = await limitBackgroundReads(() => readRepoJson<GitRemoteInfoResponse>('remote-info', directory), repoReadController.signal)
 }
 
 async function loadSigningInfo(directory: string) {
-  signingInfo.value = await gitJson<GitSigningInfoResponse>('signing-info', directory)
+  signingInfo.value = await limitBackgroundReads(() => readRepoJson<GitSigningInfoResponse>('signing-info', directory), repoReadController.signal)
 }
 
 async function loadGitState(directory: string) {
-  gitState.value = await gitJson<GitStateResponse>('state', directory)
+  gitState.value = await limitBackgroundReads(() => readRepoJson<GitStateResponse>('state', directory), repoReadController.signal)
 }
 
-async function loadConflicts(directory: string) {
-  // Safe even if no conflicts; endpoint returns []
-  const resp = await gitJson<{ files: string[] }>('conflicts', directory)
-  conflictPaths.value = Array.isArray(resp?.files) ? resp.files : []
+async function loadConflicts(directory: string, signal?: AbortSignal) {
+  const owner = repoReadController
+  const generation = conflictGeneration
+  const readSignal = signal ? AbortSignal.any([owner.signal, signal]) : owner.signal
+  conflictReaders.set(owner, (conflictReaders.get(owner) ?? 0) + 1)
+  try {
+    const resp = await limitBackgroundReads(() => readRepoJson<{ files: string[] }>('conflicts', directory, undefined, readSignal), readSignal)
+    if (root.value === directory && generation === conflictGeneration) conflictPaths.value = Array.isArray(resp?.files) ? resp.files : []
+  } catch (error) {
+    if (owner === repoReadController && root.value === directory && generation !== conflictGeneration) return
+    throw error
+  } finally {
+    const remaining = (conflictReaders.get(owner) ?? 1) - 1
+    if (remaining) conflictReaders.set(owner, remaining)
+    else conflictReaders.delete(owner)
+  }
 }
 
 function openFirstConflict() {
@@ -848,6 +996,7 @@ function openFirstConflict() {
 }
 
 function resetRepoState() {
+  resetStatusPages()
   status.value = null
   selectedFile.value = null
   mergeList.value = []
@@ -892,7 +1041,7 @@ async function load() {
   loading.value = true
   try {
     await settings.refresh()
-    if (seq !== loadSeq) return
+    if (seq !== loadSeq || dir !== root.value) return
 
     if (!dir) {
       resetRepoState()
@@ -902,11 +1051,11 @@ async function load() {
 
     gitCheckLoading.value = true
     try {
-      const chk = await gitJson<{ isGitRepository: boolean }>('check', dir)
-      if (seq !== loadSeq) return
+      const chk = await readRepoJson<{ isGitRepository: boolean }>('check', dir)
+      if (seq !== loadSeq || dir !== root.value) return
       isGitRepository.value = Boolean(chk?.isGitRepository)
     } finally {
-      gitCheckLoading.value = false
+      if (seq === loadSeq) gitCheckLoading.value = false
     }
 
     if (!isGitRepository.value) {
@@ -914,25 +1063,29 @@ async function load() {
       return
     }
 
-    // Reset paged lists then load summary + first pages.
-    mergeList.value = []
-    stagedList.value = []
-    changesList.value = []
-    untrackedList.value = []
+    // Reset the cursor as well as the rows before loading this repository.
+    resetStatusPages()
+    await loadStatusSummary(dir)
+    if (seq !== loadSeq || dir !== root.value) return
+    const applyFallback = (error: unknown, fallback: () => void) => {
+      if (seq === loadSeq && dir === root.value && !(error instanceof DOMException && error.name === 'AbortError')) fallback()
+    }
     await Promise.all([
-      loadStatusSummary(dir),
-      loadRemoteInfo(dir).catch(() => (remoteInfo.value = { remotes: [] })),
-      loadSigningInfo(dir).catch(() => (signingInfo.value = null)),
-      loadGitState(dir).catch(() => (gitState.value = null)),
-      loadConflicts(dir).catch(() => (conflictPaths.value = [])),
-      loadStash(dir).catch(() => (stashList.value = [])),
-      loadMoreMerge(dir),
-      loadMoreStaged(dir),
-      loadMoreChanges(dir),
-      loadMoreUntracked(dir),
+      loadRemoteInfo(dir).catch((error) => applyFallback(error, () => { remoteInfo.value = { remotes: [] } })),
+      loadSigningInfo(dir).catch((error) => applyFallback(error, () => { signingInfo.value = null })),
+      loadGitState(dir).catch((error) => applyFallback(error, () => { gitState.value = null })),
+      (status.value?.mergeCount ? loadConflicts(dir) : Promise.resolve()).catch((error) => applyFallback(error, () => { conflictPaths.value = [] })),
+      (stashOps.isStashExpanded.value ? loadStash(dir, true) : Promise.resolve()).catch((error) => applyFallback(error, () => { stashList.value = [] })),
+      ...visibleWatchScopes().map(([scope, expanded, count]) => {
+        if (expanded && count > 0) return reloadScopeFirstPage(dir, scope)
+        if (count === 0) clearStatusScope(scope)
+        else dirtyWatchScopes.add(scope)
+        return Promise.resolve()
+      }),
     ])
-    clearUnsafeRepo()
+    if (seq === loadSeq && dir === root.value) clearUnsafeRepo()
   } catch (err) {
+    if (seq !== loadSeq || dir !== root.value || (err instanceof DOMException && err.name === 'AbortError')) return
     if (err instanceof ApiError && err.code === 'git_unsafe_repository') {
       const body = apiErrorBodyRecord(err)
       const unsafePath = typeof body?.path === 'string' ? body.path.trim() : ''
@@ -953,7 +1106,7 @@ async function load() {
     status.value = null
     isGitRepository.value = null
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -1090,11 +1243,18 @@ watch(
  */
 function syncWatch() {
   const nextDir = (root.value || '').trim()
-  if (!gitReady.value || !nextDir || !selectedFile.value || document.visibilityState === 'hidden') {
+  const visible = isDocumentVisible()
+  if (visible && repoReadController.signal.aborted) repoReadController = new AbortController()
+  if (!gitReady.value || !nextDir || !visible) {
     stopWatch()
+    watchRefreshQueue.pause()
+    watchReadController?.abort()
+    if (!visible) repoReadController.abort()
+    cancelStatusRequests()
     return
   }
   startWatch(nextDir)
+  watchRefreshQueue.resume()
 }
 
 watch(
@@ -1105,9 +1265,20 @@ watch(
     const nextDir = (dir || '').trim()
     const prevDirTrimmed = (prevDir || '').trim()
     if (nextDir === prevDirTrimmed && ready === prevReady && selected === prevSelected) return
+    if (nextDir !== prevDirTrimmed) {
+      watchGeneration++
+      watchReadController?.abort()
+      repoReadController.abort()
+      repoReadController = new AbortController()
+      resetStatusPages()
+      repoWatchBaseline = null
+      dirtyWatchScopes.clear()
+      pendingWatchConflicts = false
+      pendingWatchDiff = false
+    } else if (selected !== prevSelected) pendingWatchDiff = false
     syncWatch()
   },
-  { immediate: true },
+  { immediate: true, flush: 'sync' },
 )
 
 watch(
@@ -1325,6 +1496,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', syncWatch)
   stopWatch()
+  watchReadController?.abort()
+  repoReadController.abort()
+  cancelStatusRequests()
+  watchRefreshQueue.dispose()
 })
 </script>
 

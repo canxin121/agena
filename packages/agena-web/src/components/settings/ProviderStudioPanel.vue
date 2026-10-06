@@ -130,6 +130,9 @@ let modelJsonSyncTimer: ReturnType<typeof setTimeout> | null = null
 let draftRequestGeneration = 0
 let modelListingGeneration = 0
 let authRequestGeneration = 0
+let authController: AbortController | undefined
+let authPollFailures = 0
+let authPollAllowedAt = 0
 let modelEditorGeneration = 0
 let catalogMatchGeneration = 0
 let catalogApplyGeneration = 0
@@ -594,6 +597,10 @@ function providerEditorStateFingerprint(
 
 function resetAuthUiState() {
   ++authRequestGeneration
+  authController?.abort()
+  authController = undefined
+  authPollFailures = 0
+  authPollAllowedAt = 0
   clearAuthPollTimer()
   authPolling.value = false
   authRequestInFlight.value = false
@@ -1397,23 +1404,28 @@ function clearAuthPollTimer() {
 
 function scheduleDeviceAuthPoll() {
   clearAuthPollTimer()
-  if (!pendingDeviceAuth.value || authPolling.value) return
+  if (!pendingDeviceAuth.value || authPolling.value || document.visibilityState === 'hidden') return
   const intervalSeconds = Math.max(1, Number(pendingDeviceAuth.value.interval_seconds) || 2)
   authPollTimer = setTimeout(() => {
     authPollTimer = null
     void startAuth('continue', true)
-  }, intervalSeconds * 1000)
+  }, Math.max(intervalSeconds * 1000, authPollAllowedAt - Date.now()))
 }
 
 async function startAuth(action: 'start' | 'continue', silent = false) {
+  if (silent && document.visibilityState === 'hidden') return
   if (!draft.value || authRequestInFlight.value) return
   const requestGeneration = ++authRequestGeneration
   const draftSnapshot = clone(draft.value)
+  const controller = new AbortController()
+  authController = controller
   authRequestInFlight.value = true
   if (silent) authPolling.value = true
   if (action === 'start') {
     clearAuthPollTimer()
     authMessage.value = ''
+    authPollFailures = 0
+    authPollAllowedAt = 0
   }
   try {
     const response = await apiJson<{
@@ -1424,8 +1436,11 @@ async function startAuth(action: 'start' | 'continue', silent = false) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ draft: draftSnapshot }),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]),
     })
     if (requestGeneration !== authRequestGeneration) return
+    authPollFailures = 0
+    authPollAllowedAt = 0
     if (response?.draft) {
       draft.value = normalizeDraftShape(response.draft)
       markEditorDirty()
@@ -1442,6 +1457,9 @@ async function startAuth(action: 'start' | 'continue', silent = false) {
     scheduleDeviceAuthPoll()
   } catch (reason) {
     if (requestGeneration !== authRequestGeneration) return
+    if (controller.signal.aborted) return
+    authPollFailures = Math.min(authPollFailures + 1, 6)
+    authPollAllowedAt = Date.now() + Math.min(60_000, 5000 * 2 ** (authPollFailures - 1))
     const message = reason instanceof Error ? reason.message : String(reason)
     if (!silent) error.value = message
     else authMessage.value = message
@@ -1449,6 +1467,7 @@ async function startAuth(action: 'start' | 'continue', silent = false) {
   } finally {
     if (requestGeneration === authRequestGeneration) {
       authRequestInFlight.value = false
+      authController = undefined
       if (silent) authPolling.value = false
       if (pendingDeviceAuth.value) scheduleDeviceAuthPoll()
     }
@@ -1927,6 +1946,7 @@ async function createProvider() {
 }
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', onAuthVisibility)
   try {
     await Promise.all([loadProviders(), loadAwsProfiles()])
     const firstProviderId = providers.value[0]?.provider_id
@@ -1937,12 +1957,19 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onAuthVisibility)
   resetAuthUiState()
   clearModelJsonSyncTimer()
   ++draftRequestGeneration
   ++modelListingGeneration
   ++modelEditorGeneration
 })
+function onAuthVisibility() {
+  if (document.visibilityState === 'hidden') {
+    clearAuthPollTimer()
+    if (authPolling.value) authController?.abort()
+  } else scheduleDeviceAuthPoll()
+}
 </script>
 
 <template>

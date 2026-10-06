@@ -526,14 +526,9 @@ watch(
   },
 )
 
-watch(
-  () => directories.value.map((entry) => `${entry?.id || ''}:${entry?.path || ''}`).join('|'),
-  () => {
-    if (directoryPaging.value) return
-    scheduleSidebarStateFetch(0)
-  },
-  { immediate: true },
-)
+// Bootstrap once. Catalog changes are already reconciled by the store's
+// scoped subscriptions and must not trigger a second complete sidebar read.
+scheduleSidebarStateFetch(0)
 
 function isDirectoryCollapsed(directoryId: string): boolean {
   const pid = (directoryId || '').trim()
@@ -848,8 +843,7 @@ function openDirectoryActions(p: DirectoryEntry, event?: MouseEvent | PointerEve
 
 // Desktop: show inline action buttons on hover (Session-style).
 async function refreshDirectoryInline(p: DirectoryEntry) {
-  void p
-  await revalidateSidebarState(undefined, { silent: false })
+  await directorySessions.revalidateDirectorySessionPageFromApi(p.id, { refreshStats: true })
 }
 
 async function refreshVisibleDirectories() {
@@ -899,7 +893,7 @@ function openSidebarContextMenu(event: MouseEvent) {
 async function directoryActionRefresh() {
   const p = directoryActionsTarget.value
   if (!p) return
-  await revalidateSidebarState(undefined, { silent: false })
+  await directorySessions.revalidateDirectorySessionPageFromApi(p.id, { refreshStats: true })
   directoryActionsOpen.value = false
 }
 
@@ -1161,7 +1155,7 @@ async function toggleFavorite(id: string, favoriteHint?: boolean) {
   }
   try {
     await chat.updateSessionMetadata(sid, { favorite: nextFavorite })
-    await directorySessions.revalidateFromApi(undefined, { silent: true })
+    directorySessions.scheduleSidebarRecoverySync('session-favorite-updated', 0, { force: true })
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   } finally {
@@ -1931,7 +1925,7 @@ async function createSessionInDirectory(directoryId: string, directoryPath: stri
     })
     if (created?.id) {
       // Ensure the sidebar list reflects the new session without a manual refresh.
-      void revalidateSidebarState(undefined, { silent: true })
+      directorySessions.scheduleSidebarRecoverySync('session-created', 0, { force: true })
 
       if (props.navigateToChat) {
         await openSessionInWorkspaceWindow(created.id)
@@ -1978,7 +1972,7 @@ async function deleteSession(sessionId: string) {
 
   await chat.deleteSession(sid)
 
-  void revalidateSidebarState(undefined, { silent: true })
+  directorySessions.scheduleSidebarRecoverySync('session-deleted', 0, { force: true })
 }
 
 async function addDirectoryEntry() {

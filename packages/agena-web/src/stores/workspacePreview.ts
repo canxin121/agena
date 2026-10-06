@@ -5,6 +5,7 @@ import {
   createWorkspacePreviewSession,
   deleteWorkspacePreviewSession,
   listWorkspacePreviewSessions,
+  normalizeWorkspacePreviewSession,
   renameWorkspacePreviewSession,
   startWorkspacePreviewSession,
   stopWorkspacePreviewSession,
@@ -14,6 +15,10 @@ import {
 import type { WorkspacePreviewViewport } from '@/features/workspacePreview/model/previewUrl'
 import { getLocalString, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
+import { isDocumentVisible } from '@/lib/backgroundReads'
+import { noteResourceVersion } from '@/lib/resourceSync'
+import { createRevalidator } from '@/lib/revalidation'
+import { connectSse, type SseClient } from '@/lib/sse'
 
 const STORAGE_PREVIEW_ACTIVE_SESSION_ID = localStorageKeys.ui.workspacePreviewActiveSessionId
 const STORAGE_PREVIEW_SIDEBAR_QUERY = localStorageKeys.ui.workspacePreviewSidebarQuery
@@ -324,40 +329,115 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
   let refreshInFlight: Promise<void> | null = null
   let refreshAgain = false
   let refreshGeneration = 0
-  let lastRefreshAt = 0
   let disposed = false
   let refreshController: AbortController | null = null
+  let forceNextRefresh = false
+  let liveConsumers = 0
+  let liveStream: SseClient | null = null
+  const liveRefresh = createRevalidator(
+    async () => {
+      await refreshSessions()
+      if (error.value) throw new Error(error.value)
+    },
+    { intervalMs: 1000, retryMs: 5000, enabled: () => !disposed && liveConsumers > 0 && isDocumentVisible() },
+  )
+
+  function connectLiveSessions() {
+    liveStream?.close()
+    liveStream = null
+    if (disposed || !liveConsumers || !isDocumentVisible()) {
+      liveRefresh.pause()
+      refreshController?.abort()
+      return
+    }
+    liveStream = connectSse({
+      endpoint: '/api/v1/workbench/preview/sessions/events',
+      onEvent: (event) => {
+        if (event.type !== 'preview.sessions.changed') return
+        const payload = event as unknown as {
+          revision?: string
+          delta?: { reset?: boolean; upsert?: unknown[]; removed?: string[] }
+        }
+        const revision = payload.revision
+        if (typeof revision !== 'string') return
+        if (!noteResourceVersion('preview', revision)) return
+        const delta = payload.delta
+        if (!delta || !Array.isArray(delta.upsert) || !Array.isArray(delta.removed)) {
+          liveRefresh.invalidate(0)
+          return
+        }
+        const upsert = delta.upsert.map(normalizeWorkspacePreviewSession)
+        if (upsert.some((session) => !session)) {
+          liveRefresh.invalidate(0)
+          return
+        }
+        applySessionChanges(upsert as WorkspacePreviewSession[], delta.removed, delta.reset === true)
+      },
+    })
+    liveRefresh.resume()
+  }
+
+  function applySessionChanges(upsert: WorkspacePreviewSession[], removed: string[] = [], reset = false) {
+    const previous = new Map(sessions.value.map((session) => [session.id, session]))
+    const next = reset ? new Map<string, WorkspacePreviewSession>() : new Map(previous)
+    for (const id of removed) next.delete(id)
+    for (const session of upsert) {
+      const old = previous.get(session.id)
+      next.set(session.id, old && JSON.stringify(old) === JSON.stringify(session) ? old : session)
+    }
+    const rows = [...next.values()]
+    if (rows.length === sessions.value.length && rows.every((row, index) => row === sessions.value[index])) return
+    refreshGeneration++
+    sessions.value = rows
+    ensureActiveSession()
+    ensureSidebarPageInRange()
+  }
+
+  function retainLiveSessions() {
+    liveConsumers++
+    if (liveConsumers === 1) {
+      document.addEventListener('visibilitychange', connectLiveSessions)
+      connectLiveSessions()
+    }
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      if (--liveConsumers) return
+      document.removeEventListener('visibilitychange', connectLiveSessions)
+      connectLiveSessions()
+    }
+  }
 
   function refreshSessions(opts?: { force?: boolean }): Promise<void> {
     if (disposed) return Promise.resolve()
     if (opts?.force) {
       refreshAgain = true
+      forceNextRefresh = true
       refreshGeneration++
     }
     if (refreshInFlight) return refreshInFlight
-    if (!opts?.force && Date.now() - lastRefreshAt < 1_000) return Promise.resolve()
     refreshInFlight = (async () => {
       loading.value = true
       error.value = ''
       do {
         refreshAgain = false
+        const force = forceNextRefresh
+        forceNextRefresh = false
         const generation = refreshGeneration
         const controller = new AbortController()
         refreshController = controller
         const timeout = window.setTimeout(() => controller.abort(), 30_000)
         try {
-          const nextSessions = await listWorkspacePreviewSessions(controller.signal)
+          const nextSessions = await listWorkspacePreviewSessions(controller.signal, force)
           if (!disposed && generation === refreshGeneration) {
-            sessions.value = nextSessions
-            ensureActiveSession()
-            ensureSidebarPageInRange()
+            applySessionChanges(nextSessions, [], true)
           }
         } catch (err) {
           if (!disposed && generation === refreshGeneration)
             error.value = err instanceof Error ? err.message : String(err)
         } finally {
           window.clearTimeout(timeout)
-          lastRefreshAt = Date.now()
         }
       } while (refreshAgain && !disposed)
     })().finally(() => {
@@ -369,6 +449,9 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
 
   onScopeDispose(() => {
     disposed = true
+    liveStream?.close()
+    liveRefresh.dispose()
+    document.removeEventListener('visibilitychange', connectLiveSessions)
     refreshController?.abort()
     if (viewportPersistTimer !== null) window.clearTimeout(viewportPersistTimer)
   })
@@ -394,7 +477,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
       targetUrl: input.targetUrl,
       ...(input.agenaSessionId ? { agenaSessionId: input.agenaSessionId } : {}),
     })
-    await refreshSessions({ force: true })
+    applySessionChanges([session])
     if (input.select !== false) {
       selectSession(session.id)
       bumpRefreshToken()
@@ -415,7 +498,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
     },
   ) {
     const session = await updateWorkspacePreviewSession(sessionId, patch)
-    await refreshSessions({ force: true })
+    applySessionChanges([session])
     if (activeSessionId.value === session.id) bumpRefreshToken()
     return session
   }
@@ -423,7 +506,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
   async function deleteSession(sessionId: string) {
     await deleteWorkspacePreviewSession(sessionId)
     if (activeSessionId.value === sessionId) activeSessionId.value = ''
-    await refreshSessions({ force: true })
+    applySessionChanges([], [sessionId])
     bumpRefreshToken()
   }
 
@@ -433,20 +516,20 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
       activeSessionId.value = updated.id
       bumpRefreshToken()
     }
-    await refreshSessions({ force: true })
+    applySessionChanges([updated], [sessionId])
     return updated
   }
 
   async function startSession(sessionId: string) {
     const updated = await startWorkspacePreviewSession(sessionId)
-    await refreshSessions({ force: true })
+    applySessionChanges([updated])
     if (activeSessionId.value === updated.id) bumpRefreshToken()
     return updated
   }
 
   async function stopSession(sessionId: string) {
     const updated = await stopWorkspacePreviewSession(sessionId)
-    await refreshSessions({ force: true })
+    applySessionChanges([updated])
     if (activeSessionId.value === updated.id) bumpRefreshToken()
     return updated
   }
@@ -482,5 +565,6 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
     setTouchSimulation,
     bumpRefreshToken,
     refreshSessions,
+    retainLiveSessions,
   }
 })

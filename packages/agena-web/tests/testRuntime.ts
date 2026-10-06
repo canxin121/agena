@@ -44,10 +44,10 @@ export function ensureBrowserTestRuntime(): Storage {
 
   const currentDocument = globalRecord.document as Record<string, unknown> | undefined
   if (!currentDocument || typeof currentDocument.createElement !== 'function') {
-    const doc = {
+    const doc = Object.assign(new EventTarget(), {
       createElement: () => ({ style: {} }),
       createElementNS: () => ({}),
-    }
+    })
     globalRecord.document = doc
     windowRecord.document = doc
   }

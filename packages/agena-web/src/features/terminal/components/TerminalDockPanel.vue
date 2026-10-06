@@ -11,6 +11,7 @@ import NameInputPrompt from '@/components/ui/NameInputPrompt.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { connectSse } from '@/lib/sse'
+import { isDocumentVisible } from '@/lib/backgroundReads'
 import {
   createTerminalSession,
   getTerminalSessionInfo,
@@ -21,6 +22,7 @@ import {
   startTerminalSession,
   stopTerminalSession,
   terminalStreamUrl,
+  terminalUiStateEventsUrl,
   type TerminalSessionInfo,
   type TerminalUiState,
 } from '@/features/terminal/api/terminalApi'
@@ -69,7 +71,7 @@ const sessionCreateDraft = ref('')
 
 let resizeObserver: ResizeObserver | null = null
 let resizeTimer: number | null = null
-let pollTimer: number | null = null
+let stateStream: ReturnType<typeof connectSse> | null = null
 let lastResizeSignature = ''
 let sessionInfoRequest = 0
 
@@ -355,6 +357,7 @@ let terminalStateController: AbortController | null = null
 let terminalInfoRequest: { sessionId: string; controller: AbortController } | null = null
 
 async function refreshActiveSessionInfo() {
+  if (!isDocumentVisible()) return
   const sid = String(activeSessionId.value || '').trim()
   if (terminalInfoRequest?.sessionId === sid) return
   terminalInfoRequest?.controller.abort()
@@ -597,16 +600,39 @@ function onSessionMenuSelect(item: OptionMenuItem) {
   void activateSession(sid)
 }
 
-function startPolling() {
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer)
-    pollTimer = null
+function watchTerminalState() {
+  stateStream?.close()
+  stateStream = null
+  if (!isDocumentVisible()) {
+    terminalStateController?.abort()
+    terminalInfoRequest?.controller.abort()
+    closeStream()
+    return
   }
-  pollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'hidden') return
-    void refreshState({ silent: true })
-    void refreshActiveSessionInfo()
-  }, 5000)
+  // A resumed output subscription can have exited while hidden.
+  void refreshActiveSessionInfo()
+  stateStream = connectSse({
+    endpoint: terminalUiStateEventsUrl(),
+    debugLabel: 'sse:terminal-dock-state',
+    onEvent(event) {
+      let snapshot: unknown = event.state
+      if (event.type === 'terminal-ui-state.patch') {
+        const ops = event.properties?.ops
+        if (Array.isArray(ops)) for (const op of ops) {
+          if (op && typeof op === 'object' && !Array.isArray(op) && op.type === 'state.replace') snapshot = op.state
+        }
+      }
+      if (!snapshot || typeof snapshot !== 'object' || !('version' in snapshot)) return
+      const next = snapshot as TerminalUiState
+      if (!uiState.value || next.version >= uiState.value.version) uiState.value = normalizeState(next)
+      loading.value = false
+      error.value = null
+    },
+    onError(cause) {
+      loading.value = false
+      error.value = cause instanceof Error ? cause.message : String(cause)
+    },
+  })
 }
 
 defineExpose({
@@ -647,9 +673,8 @@ watch(el, () => {
 
 onMounted(() => {
   ensureTerminalMounted()
-  void refreshState()
-  void refreshActiveSessionInfo()
-  startPolling()
+  watchTerminalState()
+  document.addEventListener('visibilitychange', watchTerminalState)
 
   window.addEventListener('resize', scheduleResize)
   if ('ResizeObserver' in window) {
@@ -666,10 +691,8 @@ onBeforeUnmount(() => {
   terminalStateController?.abort()
   terminalInfoRequest?.controller.abort()
   closeStream()
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer)
-    pollTimer = null
-  }
+  stateStream?.close()
+  document.removeEventListener('visibilitychange', watchTerminalState)
   if (resizeTimer !== null) {
     window.clearTimeout(resizeTimer)
     resizeTimer = null

@@ -60,6 +60,29 @@ test('SSE preserves multiline JSON, UTF-8, and cursors across split CRLF bytes',
   assert.equal(events[0].properties.payload.label, '中文')
 })
 
+test('SSE dispatches current workbench and filesystem event payloads intact', async () => {
+  const payloads = [
+    { type: 'preview.sessions.changed', revision: 'preview-epoch:2' },
+    { type: 'terminal-ui-state.snapshot', state: { version: 7, sessionIds: ['term_1'] }, seq: 0 },
+    {
+      type: 'terminal-ui-state.patch',
+      properties: { ops: [{ type: 'state.replace', state: { version: 8 } }] },
+      seq: 1,
+    },
+    { type: 'connected', seq: 0 },
+    { type: 'data', data: '中文\n', seq: 1 },
+    { type: 'resync', seq: 2 },
+    { type: 'exit', seq: 3 },
+    { type: 'git.watch.status', properties: { worktreeSignature: 'changed', totalFiles: 1 } },
+    { type: 'agena:fs-changed', properties: { paths: ['src/a.rs'] } },
+  ]
+  const events = await consumeNotifications(payloads)
+  assert.deepEqual(
+    events.map(({ lastEventId, ...payload }) => payload),
+    payloads,
+  )
+})
+
 test('SSE metadata notifications retain both enabled and cleared favorite/pinned flags', async () => {
   const events = await consumeNotifications([
     notification({

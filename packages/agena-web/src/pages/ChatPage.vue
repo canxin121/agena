@@ -47,6 +47,8 @@ import {
 } from './chat/composerWordNavigation'
 import { useComposerPromptHistory } from './chat/composerPromptHistory'
 import { useSessionPlan } from './chat/useSessionPlan'
+import { conditionalJson } from '@/lib/conditionalJson'
+import { checkResourceVersions, invalidateResources } from '@/lib/resourceSync'
 import { buildPlanToolInvocationRequest } from './chat/planViewerRequest'
 import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
@@ -1371,12 +1373,19 @@ const {
   async (sessionId, tool, input, signal) => {
     const body = buildPlanToolInvocationRequest(sessionId, tool, input)
     if (!body) throw new Error(String(t('chat.planViewer.requiresSession')))
-    return await apiJson<Record<string, JsonValue>>('/api/v1/plugins/tools/invoke', {
+    const resource = `session:${body.session_id}:plan`
+    if (tool === 'get') {
+      await checkResourceVersions([resource], signal)
+      return conditionalJson(resource, `/api/v1/sessions/${body.session_id}/plan`, { signal })
+    }
+    const result = await apiJson<Record<string, JsonValue>>('/api/v1/plugins/tools/invoke', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
       signal,
     })
+    invalidateResources([resource])
+    return result
   },
 )
 

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { createRenderer, defineComponent, nextTick, ref } from 'vue'
 import { useVisibleResource } from '../src/pages/chat/useVisibleResource'
-import { mergeActivityLog, type ActivityLog } from '../src/types/activity'
+import { activityLogText, mergeActivityLog, type ActivityLog } from '../src/types/activity'
 
 test('session reads cancel on navigation, reject late results, coalesce clicks and pause hidden polling', async () => {
   const original = {
@@ -141,4 +141,25 @@ test('activity logs deduplicate cursor overlap, bound memory, and isolate activi
   expect(new TextEncoder().encode(tail).length).toBeLessThanOrEqual(128 * 1024)
   expect(tail.startsWith('…')).toBe(true)
   expect(tail).not.toContain('\uFFFD')
+})
+
+test('raw pipe chunks preserve whitespace and delegated run snapshots replace their cursor line', () => {
+  const page = (lines: ActivityLog['lines'], last_seq = 3): ActivityLog => ({
+    activity_id: 'shell_a', status: 'running', last_seq, has_more: false, dropped_lines: 0, lines,
+  })
+  const first = page([{ seq: 1, stream: 'stdout', text: 'first', chunk: true }], 1)
+  const next = mergeActivityLog(first, page([
+    { seq: 2, stream: 'stdout', text: 'second\n  indented\n\n', chunk: true },
+    { seq: 3, stream: 'stderr', text: 'warning', chunk: false },
+  ]))
+  expect(activityLogText(next)).toBe('firstsecond\n  indented\n\nwarning\n')
+
+  const task = { ...page([{ seq: 10, stream: 'assistant', text: 'first reply' }], 10), activity_id: 'task_a' }
+  const updated = mergeActivityLog(task, {
+    ...task, status: 'succeeded', lines: [{ seq: 10, stream: 'assistant', text: 'first reply\ncontinued' }],
+  })
+  expect(updated.lines.length).toBe(1)
+  expect(activityLogText(updated)).toBe('first reply\ncontinued\n')
+  expect(updated.status).toBe('succeeded')
+  expect(updated.last_seq).toBe(10)
 })

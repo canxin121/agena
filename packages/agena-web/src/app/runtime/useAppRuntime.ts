@@ -11,6 +11,8 @@ import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 
 import { connectSse } from '@/lib/sse'
 import { createRevalidator } from '@/lib/revalidation'
+import { isDocumentVisible } from '@/lib/backgroundReads'
+import { applyResourceEvent, invalidateResources, startResourceSync } from '@/lib/resourceSync'
 import type { SseClient, SseClientStats } from '@/lib/sse'
 import { subscribeAppBroadcast } from '@/lib/appBroadcast'
 import { installKeyboardInsets } from '@/lib/keyboardInsets'
@@ -43,17 +45,19 @@ export function useAppRuntime() {
   let cleanupShortcuts: (() => void) | null = null
   let cleanupKeyboardTapFix: (() => void) | null = null
   let cleanupBroadcast: (() => void) | null = null
+  let cleanupResourceSync: (() => void) | null = null
   let sseDebugTimer: number | null = null
   let lastSseDebugAt = 0
   let lastSseDebugErrorSum = 0
   const recovery = createRevalidator(
     async () => {
       chat.reconcileLiveState()
+      invalidateResources()
       directorySessions.scheduleSidebarRecoverySync('stream-connected', 0, { force: true })
       activity.invalidate()
       await settings.refresh()
     },
-    { intervalMs: 1000, retryMs: 1000 },
+    { intervalMs: 10_000, retryMs: 10_000, enabled: () => !disposed && isDocumentVisible() },
   )
 
   let globalSseCursor = ''
@@ -98,6 +102,7 @@ export function useAppRuntime() {
   }
 
   function resyncAfterResume(reason: string, opts?: { gapMs?: number }) {
+    if (disposed || !isDocumentVisible()) return
     const now = Date.now()
     if (now - lastResumeSyncAt < 1500) return
     lastResumeSyncAt = now
@@ -187,7 +192,7 @@ export function useAppRuntime() {
   }
 
   function connectActivity() {
-    if (disposed) return
+    if (disposed || !isDocumentVisible()) return
     sse?.close()
     sse = null
 
@@ -207,12 +212,14 @@ export function useAppRuntime() {
             return
           }
           activity.applyEvent(evt)
+          applyResourceEvent(evt)
           chat.applyEvent(evt)
           directory.applyGlobalEvent(evt)
           directorySessions.applyGlobalEvent(evt)
         },
         onError: (err) => {
-          recovery.invalidate(0)
+          // Recovery needs a live connection. Retrying snapshots while the
+          // stream/server is failing multiplies load and cannot close the gap.
           console.warn('[sse] connection error', err)
         },
       })
@@ -261,6 +268,7 @@ export function useAppRuntime() {
   }
 
   onMounted(async () => {
+    cleanupResourceSync = startResourceSync()
     cleanupKeyboard = installKeyboardInsets({ enabled: true })
     cleanupShortcuts = installKeyboardShortcuts()
     cleanupKeyboardTapFix = installKeyboardTapFix({ enabled: true })
@@ -379,6 +387,7 @@ export function useAppRuntime() {
   onBeforeUnmount(() => {
     disposed = true
     recovery.dispose()
+    cleanupResourceSync?.()
     sse?.close()
     sse = null
     cleanupKeyboard?.()

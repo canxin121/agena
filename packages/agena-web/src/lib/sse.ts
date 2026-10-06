@@ -52,6 +52,19 @@ export type SseClient = {
 
 type UnknownRecord = Record<string, JsonLike>
 
+const directEventTypes = new Set([
+  'connected',
+  'data',
+  'resync',
+  'exit',
+  'terminal-ui-state.snapshot',
+  'terminal-ui-state.patch',
+  'git.watch.status',
+  'git.watch.error',
+  'agena:fs-changed',
+  'preview.sessions.changed',
+])
+
 function linkAbortSignals(signals: AbortSignal[]): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController()
   const listeners: Array<() => void> = []
@@ -326,6 +339,8 @@ export function connectSse(opts: SseClientOptions): SseClient {
           const changeKind = getString(change, 'kind')
           const sid = getNumeric(change, 'session_id')
           const props: UnknownRecord = { kind: changeKind }
+          const revisions = getRecord(data, 'revisions')
+          if (revisions) props.resource_revisions = revisions
           if (sid !== null) props.session_id = sid
           if (changeKind === 'part_added' || changeKind === 'part_updated') {
             const part = getRecord(change, 'part')
@@ -351,6 +366,8 @@ export function connectSse(opts: SseClientOptions): SseClient {
           const sid = getNumeric(signal, 'session_id')
           const payload = signal.payload
           const props: UnknownRecord = { kind: signalKind }
+          const revisions = getRecord(data, 'revisions')
+          if (revisions) props.resource_revisions = revisions
           if (sid !== null) props.session_id = sid
           if (payload !== undefined) props.payload = payload
           evt = { type: 'runtime_signal', properties: props }
@@ -365,6 +382,9 @@ export function connectSse(opts: SseClientOptions): SseClient {
       }
     }
 
+    // Workbench, terminal, filesystem and Git feeds send direct typed events
+    // instead of the shared notification envelope. Preserve their payloads.
+    if (!evt && typeof raw.type === 'string' && directEventTypes.has(raw.type)) evt = raw
     if (!evt || typeof evt.type !== 'string') return
     if (typeof meta?.lastEventId === 'string' && meta.lastEventId) {
       evt.lastEventId = meta.lastEventId
@@ -386,6 +406,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
   async function runFetchStream() {
     while (!closed && !controller.signal.aborted) {
       attempt += 1
+      let establishedAt = 0
       let linkedCleanup: (() => void) | null = null
       try {
         debugLog('connect attempt', { attempt, lastEventId: lastEventId || '' })
@@ -446,8 +467,9 @@ export function connectSse(opts: SseClientOptions): SseClient {
         opts.onOpen?.()
         debugLog('connected', { attempt, lastEventId: lastEventId || '' }, { force: true })
 
-        // Successful (re)connect resets exponential backoff attempts.
-        attempt = 0
+        // An HTTP 200 followed by an immediate EOF is still a failed stream.
+        // Reset backoff only after a connection has stayed alive for a while.
+        establishedAt = Date.now()
 
         const reader = resp.body.getReader()
         const decoder = new TextDecoder()
@@ -565,7 +587,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
                 if (line.startsWith('retry:')) {
                   const parsed = Number.parseInt(line.replace(/^retry:\s*/, ''), 10)
                   if (!Number.isNaN(parsed) && parsed > 0) {
-                    retryDelay = parsed
+                    retryDelay = Math.max(1000, Math.min(parsed, 30_000))
                   }
                   continue
                 }
@@ -624,7 +646,9 @@ export function connectSse(opts: SseClientOptions): SseClient {
 
         if (closed || controller.signal.aborted) break
 
-        const backoff = Math.min(retryDelay * 2 ** Math.max(0, attempt - 1), 30000)
+        if (establishedAt && Date.now() - establishedAt >= 20_000) attempt = 1
+        const baseBackoff = Math.min(retryDelay * 2 ** Math.max(0, attempt - 1), 30_000)
+        const backoff = Math.min(30_000, Math.floor(baseBackoff * (1 + Math.random() * 0.2)))
         stats.lastBackoffMs = backoff
         stats.reconnectCount += 1
         await sleep(backoff)

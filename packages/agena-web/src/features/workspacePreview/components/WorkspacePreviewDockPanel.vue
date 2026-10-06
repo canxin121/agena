@@ -710,10 +710,9 @@ const sessionMenuOpen = ref(false)
 const sessionMenuQuery = ref('')
 
 const FRAME_UPDATE_THROTTLE_MS = 220
-const AUTO_REFRESH_MS = 12000
 
 let frameTimer: number | null = null
-let pollTimer: number | null = null
+let releaseLiveSessions: (() => void) | undefined
 let lastFrameUpdateAt = 0
 let frameRequestId = 0
 
@@ -947,7 +946,7 @@ function scheduleFrameUpdate() {
 }
 
 async function refreshPreview(opts?: { forceFrameReload?: boolean }) {
-  await preview.refreshSessions()
+  await preview.refreshSessions({ force: opts?.forceFrameReload })
   if (opts?.forceFrameReload) {
     preview.bumpRefreshToken()
   }
@@ -1088,23 +1087,6 @@ async function stopActiveSession() {
   }
 }
 
-function startAutoRefresh() {
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer)
-    pollTimer = null
-  }
-  pollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'hidden') return
-    void refreshPreview()
-  }, AUTO_REFRESH_MS)
-}
-
-function stopAutoRefresh() {
-  if (pollTimer === null) return
-  window.clearInterval(pollTimer)
-  pollTimer = null
-}
-
 function onIframeLoad() {
   iframeLoading.value = false
   iframeError.value = ''
@@ -1163,12 +1145,12 @@ watch(
 
 onMounted(() => {
   void refreshPreview()
-  startAutoRefresh()
+  releaseLiveSessions = preview.retainLiveSessions()
 })
 
 onBeforeUnmount(() => {
   clearFrameTimer()
-  stopAutoRefresh()
+  releaseLiveSessions?.()
 })
 </script>
 

@@ -1,19 +1,38 @@
 import { computed, onMounted, onScopeDispose, reactive, watch } from 'vue'
 import { usePlanViewer } from './usePlanViewer'
+import { subscribeResource } from '../../lib/resourceSync'
+import { isDocumentVisible } from '../../lib/backgroundReads'
 
 export function useSessionPlan(
   sessionId: () => string | null,
-  busy: () => boolean,
-  changeSignal: () => unknown,
+  _busy: () => boolean,
+  _changeSignal: () => unknown,
   invoke: Parameters<typeof usePlanViewer>[1],
 ) {
   const expandedSessions = reactive(new Set<string>())
   let lastStarted = 0
+  let failures = 0
+  let nextAllowedAt = 0
   const viewer = usePlanViewer(
     () => [Boolean(sessionId()), sessionId()],
-    (...args) => {
+    async (...args) => {
       lastStarted = Date.now()
-      return invoke(...args)
+      const owner = sessionId()
+      try {
+        const result = await Promise.resolve().then(() => invoke(...args))
+        if (owner === sessionId()) {
+          failures = 0
+          nextAllowedAt = Date.now() + 1000
+        }
+        return result
+      } catch (error) {
+        if (owner === sessionId() && !args[3].aborted) {
+          failures = Math.min(failures + 1, 5)
+          nextAllowedAt = Date.now() + Math.min(60_000, 5000 * 2 ** (failures - 1))
+          scheduleRefresh()
+        }
+        throw error
+      }
     },
   )
   const expanded = computed({
@@ -30,10 +49,10 @@ export function useSessionPlan(
   })
   const visible = computed(() => Boolean(viewer.snapshot.value) || expanded.value)
   let timer: ReturnType<typeof setTimeout> | undefined
-  let poll: ReturnType<typeof setInterval> | undefined
+  let unsubscribe: (() => void) | undefined
   let disposed = false
   let dirty = false
-  const isVisible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  const isVisible = isDocumentVisible
 
   function scheduleRefresh() {
     dirty = true
@@ -48,41 +67,45 @@ export function useSessionPlan(
         dirty = false
         void viewer.refresh()
       },
-      Math.max(180, 750 - (Date.now() - lastStarted)),
+      Math.max(180, 1000 - (Date.now() - lastStarted), nextAllowedAt - Date.now()),
     )
   }
 
-  watch(changeSignal, scheduleRefresh)
   watch([viewer.loading, viewer.toggling], ([loading, toggling]) => {
     if (!loading && !toggling && dirty) scheduleRefresh()
   })
   watch(
     sessionId,
-    () => {
+    (id) => {
       clearTimeout(timer)
       timer = undefined
       dirty = false
+      failures = 0
+      nextAllowedAt = 0
+      unsubscribe?.()
+      unsubscribe = id ? subscribeResource(`session:${id}:plan`, scheduleRefresh) : undefined
     },
-    { flush: 'sync' },
+    { flush: 'sync', immediate: true },
   )
   watch(expanded, (value) => {
     if (value && Date.now() - lastStarted >= 5_000) scheduleRefresh()
   })
   onMounted(() => {
-    poll = setInterval(() => {
-      // Nothing rendered means nothing to refresh: a plan appears when the
-      // session signals a change, not from a timer that queries an empty viewer.
-      if (!visible.value) return
-      const interval = busy() || expanded.value ? 5_000 : viewer.snapshot.value ? 30_000 : 60_000
-      if (Date.now() - lastStarted >= interval) scheduleRefresh()
-    }, 1_000)
-    document.addEventListener('visibilitychange', scheduleRefresh)
+    document.addEventListener('visibilitychange', onVisibility)
   })
+  function onVisibility() {
+    if (isVisible()) scheduleRefresh()
+    else {
+      clearTimeout(timer)
+      timer = undefined
+      viewer.pauseRead()
+    }
+  }
   onScopeDispose(() => {
     disposed = true
     clearTimeout(timer)
-    clearInterval(poll)
-    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', scheduleRefresh)
+    unsubscribe?.()
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
   })
   return { viewer, expanded, visible }
 }

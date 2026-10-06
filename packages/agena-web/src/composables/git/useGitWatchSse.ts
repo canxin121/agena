@@ -1,6 +1,8 @@
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 
 import { connectSse } from '@/lib/sse'
+import { apiUrl } from '@/lib/api'
+import { readUiAuthTokenVersion } from '@/lib/uiAuthToken'
 
 export function useGitWatchSse<TPayload>(opts: {
   buildUrl: (directory: string) => string
@@ -8,14 +10,19 @@ export function useGitWatchSse<TPayload>(opts: {
   onError?: () => void
 }) {
   const watchSource = ref<ReturnType<typeof connectSse> | null>(null)
-  const watchRetryTimer = ref<number | null>(null)
   const watchRefreshTimer = ref<number | null>(null)
-  const watchLastPayload = ref<TPayload | null>(null)
+  const watchLastPayload = shallowRef<TPayload | null>(null)
+  let watchDirectory: string | null = null
+  let watchIdentity = ''
+  let generation = 0
+  const previousPayloads = new Map<string, TPayload>()
 
   function stopWatch() {
-    if (watchRetryTimer.value) {
-      window.clearTimeout(watchRetryTimer.value)
-      watchRetryTimer.value = null
+    generation++
+    if (watchIdentity && watchLastPayload.value) {
+      previousPayloads.delete(watchIdentity)
+      previousPayloads.set(watchIdentity, watchLastPayload.value as TPayload)
+      if (previousPayloads.size > 16) previousPayloads.delete(previousPayloads.keys().next().value!)
     }
     if (watchRefreshTimer.value) {
       window.clearTimeout(watchRefreshTimer.value)
@@ -26,15 +33,24 @@ export function useGitWatchSse<TPayload>(opts: {
       watchSource.value = null
     }
     watchLastPayload.value = null
+    watchDirectory = null
+    watchIdentity = ''
   }
 
-  function startWatch(directory: string, canRetry: () => boolean, retry: () => void) {
+  function startWatch(directory: string, identity = directory) {
+    const key = `${readUiAuthTokenVersion()}:${apiUrl(opts.buildUrl(directory))}:${identity}`
+    if (watchSource.value && watchDirectory === directory && watchIdentity === key) return
     stopWatch()
+    watchDirectory = directory
+    watchIdentity = key
+    watchLastPayload.value = previousPayloads.get(key) ?? null
+    const owner = generation
     const endpoint = opts.buildUrl(directory)
     const client = connectSse({
       endpoint,
       debugLabel: 'sse:git-watch',
       onEvent: (evt) => {
+        if (owner !== generation) return
         if (String(evt?.type || '') !== 'git.watch.status') return
         const payload = (evt as unknown as { properties?: unknown }).properties as TPayload | undefined
         if (!payload) return
@@ -44,16 +60,7 @@ export function useGitWatchSse<TPayload>(opts: {
       },
       onError: () => {
         opts.onError?.()
-        // Keep the explicit retry timer so callers can restart the watch after an error.
-        if (watchRetryTimer.value) return
-        watchRetryTimer.value = window.setTimeout(() => {
-          watchRetryTimer.value = null
-          if (!canRetry()) {
-            stopWatch()
-            return
-          }
-          retry()
-        }, 2000)
+        // connectSse owns reconnects and preserves exponential backoff.
       },
     })
     watchSource.value = client
@@ -62,7 +69,6 @@ export function useGitWatchSse<TPayload>(opts: {
   return {
     watchSource,
     watchLastPayload,
-    watchRetryTimer,
     watchRefreshTimer,
     startWatch,
     stopWatch,

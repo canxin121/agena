@@ -117,6 +117,7 @@ fn server_api_router() -> Router<Arc<AppState>> {
             get(crate::server::preview::routes::workspace_preview_sessions_get)
                 .post(crate::server::preview::routes::workspace_preview_sessions_post),
         )
+        .route("/api/v1/workbench/preview/sessions/events", get(crate::server::preview::routes::workspace_preview_sessions_events))
         .route(
             "/api/v1/workbench/preview/sessions/{id}",
             get(crate::server::preview::routes::workspace_preview_sessions_by_id_get)

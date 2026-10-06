@@ -119,18 +119,17 @@ export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, Json
 export async function apiResponse(url: string, init?: RequestInit): Promise<Response> {
   const authHeaders = buildActiveUiAuthHeaders()
   const authTokenVersion = readUiAuthTokenVersion()
+  const headers = new Headers(init?.headers)
+  if (!headers.has('accept')) headers.set('accept', 'application/json')
+  if (authHeaders.authorization && !headers.has('authorization')) headers.set('authorization', authHeaders.authorization)
   const resp = await fetch(apiUrl(url), {
     ...init,
     // Token auth works without cookies; keep cookie compatibility unless caller overrides.
     credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
-    headers: {
-      ...(init?.headers ?? {}),
-      ...(!hasHeader(init?.headers, 'accept') ? { accept: 'application/json' } : {}),
-      ...(authHeaders.authorization && !hasHeader(init?.headers, 'authorization') ? authHeaders : {}),
-    },
+    headers,
   })
 
-  if (!resp.ok) {
+  if (!resp.ok && resp.status !== 304) {
     const txt = await readBodyText(resp)
 
     // Best-effort parse structured backend errors so the UI can show something actionable.

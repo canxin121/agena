@@ -1,33 +1,25 @@
 import { apiJson } from './api'
+import { waitForRuntimeTask, type RuntimeBackgroundTask } from './runtimeTask'
 
 export type RuntimeReloadTaskResponse = {
   started: boolean
-  task: {
-    id: string
-    kind: string
-    status: string
-  }
+  task: RuntimeBackgroundTask
 }
 
-type RuntimeGeneration = { generation?: number }
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, ms))
-}
-
-export async function reloadAgenaRuntime(): Promise<RuntimeReloadTaskResponse> {
-  const before = await apiJson<RuntimeGeneration>('/api/v1/runtime').catch(() => null)
-  const response = await apiJson<RuntimeReloadTaskResponse>('/api/v1/runtime/reload', { method: 'POST' })
-  const previousGeneration = typeof before?.generation === 'number' ? before.generation : null
-
-  // Reload runs as a background task. Wait briefly for the new generation so
-  // callers do not immediately reload the browser against the previous runtime.
-  if (previousGeneration !== null) {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await delay(250)
-      const current = await apiJson<RuntimeGeneration>('/api/v1/runtime').catch(() => null)
-      if (typeof current?.generation === 'number' && current.generation > previousGeneration) break
-    }
+export async function reloadAgenaRuntime(signal?: AbortSignal): Promise<RuntimeReloadTaskResponse> {
+  const response = await apiJson<RuntimeReloadTaskResponse>('/api/v1/runtime/reload', {
+    method: 'POST',
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+  })
+  // Completion is published after the replacement generation is installed.
+  const task = await waitForRuntimeTask(response.task, { signal, timeoutMs: 5000 })
+  if (task.status !== 'succeeded') {
+    throw new Error(
+      task.failure?.fallback ||
+        task.failure?.user?.fallback ||
+        task.message ||
+        'The runtime reload did not complete successfully',
+    )
   }
-  return response
+  return { ...response, task }
 }

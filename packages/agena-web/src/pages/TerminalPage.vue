@@ -658,9 +658,6 @@ function applyTerminalUiStateEventMessage(raw: string, lastEventId: string) {
   if (!raw) return
 
   const seqFromLastEventId = Number.parseInt(String(lastEventId || '').trim(), 10)
-  if (Number.isFinite(seqFromLastEventId) && seqFromLastEventId > terminalStateEventSeq) {
-    terminalStateEventSeq = seqFromLastEventId
-  }
 
   let parsed: TerminalUiStateEvent
   try {
@@ -670,9 +667,9 @@ function applyTerminalUiStateEventMessage(raw: string, lastEventId: string) {
   }
 
   if (parsed.type === 'terminal-ui-state.snapshot') {
-    const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? Math.floor(parsed.seq) : 0
-    if (seq > 0 && seq <= terminalStateEventSeq) return
-    if (seq > 0) terminalStateEventSeq = seq
+    const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? Math.floor(parsed.seq) : seqFromLastEventId || 0
+    // Reconnect snapshots can reset a cursor after a backend restart.
+    terminalStateEventSeq = Math.max(0, seq)
     if (parsed.state) {
       applyTerminalUiStateSnapshot(parsed.state)
     }
@@ -681,7 +678,7 @@ function applyTerminalUiStateEventMessage(raw: string, lastEventId: string) {
 
   if (parsed.type !== 'terminal-ui-state.patch') return
 
-  const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? Math.floor(parsed.seq) : 0
+  const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? Math.floor(parsed.seq) : seqFromLastEventId || 0
   if (seq > 0 && seq <= terminalStateEventSeq) return
   if (seq > 0) terminalStateEventSeq = seq
 
@@ -705,6 +702,7 @@ function closeTerminalUiStateEvents() {
 
 function openTerminalUiStateEvents() {
   closeTerminalUiStateEvents()
+  if (document.visibilityState === 'hidden') return
   const client = connectSse({
     endpoint: terminalUiStateEventsUrl(terminalStateEventSeq > 0 ? terminalStateEventSeq : undefined),
     debugLabel: 'sse:terminal-ui-state',
@@ -727,8 +725,14 @@ function openTerminalUiStateEvents() {
  * resumes from the stored event cursor instead of replaying the whole state.
  */
 function handleTerminalUiStateVisibility() {
-  if (document.visibilityState === 'hidden') closeTerminalUiStateEvents()
-  else openTerminalUiStateEvents()
+  if (document.visibilityState === 'hidden') {
+    closeTerminalUiStateEvents()
+    // Output buffers live on the server; resume from each saved cursor.
+    for (const sid of Array.from(streamSourceById.keys())) closeSessionStream(sid)
+  } else {
+    openTerminalUiStateEvents()
+    ensureTrackedSessionStreams()
+  }
 }
 
 async function bootstrapTerminalUiState() {
@@ -1465,6 +1469,7 @@ function closeAllSessionStreams() {
 function scheduleSessionReconnect(id: string) {
   const sid = normalizeSessionId(id)
   if (!sid) return
+  if (document.visibilityState === 'hidden') return
   if (streamManuallyDisconnected.has(sid)) return
   if (streamReconnectTimerById.has(sid)) return
 
@@ -1472,7 +1477,7 @@ function scheduleSessionReconnect(id: string) {
   const nextAttempts = Math.min(10, currentAttempts + 1)
   streamReconnectAttemptsById.set(sid, nextAttempts)
 
-  const delay = Math.min(15000, 600 * Math.pow(2, currentAttempts))
+  const delay = Math.min(30_000, 1000 * Math.pow(2, currentAttempts))
   setStreamStatusForSession(sid, 'reconnecting')
 
   const timer = window.setTimeout(async () => {
@@ -1501,6 +1506,7 @@ function scheduleSessionReconnect(id: string) {
 function connectSessionStream(id: string) {
   const sid = normalizeSessionId(id)
   if (!sid) return
+  if (document.visibilityState === 'hidden') return
   if (hasSessionStreamSource(sid)) return
 
   ensureTerminalMounted()

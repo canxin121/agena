@@ -14,7 +14,6 @@ test('Plugin Marketplace uses server-owned GitHub search, lifecycle tasks, and i
     '/api/v1/plugins/marketplace/install',
     '/api/v1/plugins/marketplace/uninstall',
     '/api/v1/plugins/marketplace/upgrade',
-    '/api/v1/runtime/tasks',
   ]) {
     assert.ok(source.includes(endpoint), `missing marketplace endpoint ${endpoint}`)
   }
@@ -23,6 +22,7 @@ test('Plugin Marketplace uses server-owned GitHub search, lifecycle tasks, and i
   assert.ok(source.includes('require_signature'))
   assert.ok(source.includes('allow_unverified'))
   assert.ok(source.includes('waitForTask'))
+  assert.ok(source.includes('waitForRuntimeTask'))
   assert.ok(source.includes("task.status === 'succeeded'"))
   assert.ok(source.includes('plugin.repository'))
   assert.ok(source.includes('plugin.tags'))

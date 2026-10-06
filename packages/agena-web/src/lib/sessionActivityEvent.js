@@ -38,9 +38,10 @@ export function extractSessionActivityUpdate(evt) {
     const kind = trimString(props.kind)
     if (kind !== 'activity') return null
     const payload = readRecord(props.payload)
-    const sessionID = readSessionId(payload || {})
+    const activity = readRecord(payload?.activity) || payload
+    const sessionID = readSessionId(props) || readSessionId(activity || {})
     if (!sessionID) return null
-    const status = trimString(payload && payload.status)
+    const status = trimString(activity && activity.status)
     return { sessionID, phase: activityPhaseFromStatus(status) }
   }
 

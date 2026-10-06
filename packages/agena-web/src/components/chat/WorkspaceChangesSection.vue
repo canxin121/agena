@@ -2,7 +2,6 @@
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiArrowLeftLine, RiRefreshLine } from '@remixicon/vue'
-import { useChatStore } from '@/stores/chat'
 import { useWorkspaceChanges } from '@/pages/chat/useWorkspaceChanges'
 import SessionSection from './SessionSection.vue'
 import Button from '@/components/ui/Button.vue'
@@ -11,24 +10,18 @@ import IconButton from '@/components/ui/IconButton.vue'
 const AgenaDiffBlock = defineAsyncComponent(() => import('./AgenaDiffBlock.vue'))
 const props = defineProps<{ sessionId: string; directory: string; busy: boolean }>()
 const { t } = useI18n()
-const chat = useChatStore()
-const directory = computed(
-  () => chat.getSessionExecution(props.sessionId)?.effective_workspace_root?.trim() || props.directory.trim(),
-)
+const sessionId = computed(() => props.sessionId)
 const {
   expanded,
   page,
   selected,
-  staged,
   status,
   current,
   files,
   total,
   hasChanges,
-  notRepository,
+  recordingIncomplete,
   statusPending,
-  hasStaged,
-  hasWorking,
   diff,
   diffIdentity,
   visibleDiff,
@@ -36,22 +29,23 @@ const {
   select,
   refresh,
   moreDiff,
-} = useWorkspaceChanges({ directory, busy: computed(() => props.busy) })
+  moreDiffAvailable,
+} = useWorkspaceChanges({ sessionId, busy: computed(() => props.busy) })
+const detail = computed(() => visibleDiff.value?.files[0])
 const summary = computed(() => {
   if (status.error.value) return t('chat.sessionWork.loadFailed')
-  if (notRepository.value) return t('chat.sessionWork.notRepository')
+  if (recordingIncomplete.value && total.value === 0) return t('chat.sessionWork.recordingIncomplete')
   if (total.value === null) return t('chat.sessionWork.loading')
   return total.value === 0 ? t('chat.sessionWork.clean') : t('chat.sessionWork.files', { count: total.value })
 })
 const bodyRef = ref<HTMLElement | null>(null)
 watch(
-  [() => selected.value?.path, page, directory],
+  [() => selected.value?.path, page, sessionId],
   () => {
     if (bodyRef.value) bodyRef.value.scrollTop = 0
   },
   { flush: 'post' },
 )
-const oldPath = computed(() => (staged.value ? selected.value?.indexOldPath : selected.value?.workingOldPath))
 </script>
 
 <template>
@@ -77,12 +71,11 @@ const oldPath = computed(() => (staged.value ? selected.value?.indexOldPath : se
     <div ref="bodyRef" class="min-h-0 min-w-0 overflow-auto overscroll-contain" :aria-busy="statusPending">
       <div class="mb-2 text-xs text-muted-foreground">
         <p>{{ t('chat.sessionWork.workspaceScope') }}</p>
-        <p class="mt-1 font-mono [overflow-wrap:anywhere]">{{ directory }}</p>
+        <p v-if="recordingIncomplete" class="mt-1">{{ t('chat.sessionWork.recordingIncomplete') }}</p>
       </div>
       <p v-if="status.error.value" role="alert" class="text-xs text-destructive [overflow-wrap:anywhere]">
         {{ status.error.value }}
       </p>
-      <p v-else-if="notRepository" class="text-xs text-muted-foreground">{{ t('chat.sessionWork.notRepository') }}</p>
       <p v-else-if="!current" class="text-xs text-muted-foreground">{{ t('chat.sessionWork.loading') }}</p>
       <p v-else-if="total === 0" class="text-xs text-muted-foreground">{{ t('chat.sessionWork.clean') }}</p>
       <template v-else>
@@ -93,66 +86,77 @@ const oldPath = computed(() => (staged.value ? selected.value?.indexOldPath : se
               :key="file.path"
               type="button"
               class="flex min-h-8 min-w-0 items-center gap-2 rounded px-2 text-left font-mono text-xs hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring"
-              :title="[file.workingOldPath || file.indexOldPath, file.path].filter(Boolean).join(' → ')"
+              :title="file.path"
               @click="select(file)"
             >
-              <span class="w-6 shrink-0 whitespace-pre text-primary" :title="t('chat.sessionWork.indexWorking')"
-                >{{ file.index || ' ' }}{{ file.workingDir || ' ' }}</span
-              >
+              <span class="shrink-0 text-primary">{{ file.operation_count }}×</span>
               <span class="min-w-0 flex-1 truncate">{{ file.path }}</span>
             </button>
           </div>
-          <div v-if="page || current?.hasMore" class="my-2 flex flex-wrap items-center gap-2">
+          <div v-if="page || current?.has_more" class="my-2 flex flex-wrap items-center gap-2">
             <Button size="sm" variant="ghost" :disabled="!page || statusPending" @click="page--">{{
               t('chat.sessionWork.previous')
             }}</Button>
-            <Button size="sm" variant="ghost" :disabled="!current?.hasMore || statusPending" @click="page++">{{
+            <Button size="sm" variant="ghost" :disabled="!current?.has_more || statusPending" @click="page++">{{
               t('chat.sessionWork.next')
             }}</Button>
             <span v-if="current?.files.length" class="text-xs text-muted-foreground">{{
               t('chat.sessionWork.pageRange', {
                 start: current.offset + 1,
                 end: current.offset + current.files.length,
-                total: current.totalFiles,
+                total: current.total_files,
               })
             }}</span>
           </div>
         </template>
         <div v-else class="min-w-0">
-          <p v-if="diff.error.value || !visibleDiff?.diff" class="mb-2 font-mono text-xs [overflow-wrap:anywhere]">
-            <span v-if="oldPath" class="text-muted-foreground">{{ oldPath }} → </span>{{ selected.path }}
-          </p>
+          <p class="mb-2 font-mono text-xs [overflow-wrap:anywhere]">{{ selected.path }}</p>
           <div class="mb-2 flex flex-wrap items-center gap-2">
             <Button size="sm" variant="ghost" @click="selected = null">
               <RiArrowLeftLine class="mr-1 h-3.5 w-3.5" />{{ t('chat.sessionWork.backToFiles') }}
             </Button>
-            <Button
-              size="sm"
-              :variant="staged ? 'ghost' : 'secondary'"
-              :disabled="!hasWorking"
-              :aria-pressed="!staged"
-              @click="staged = false"
-              >{{ t('chat.sessionWork.working') }}</Button
-            >
-            <Button
-              size="sm"
-              :variant="staged ? 'secondary' : 'ghost'"
-              :disabled="!hasStaged"
-              :aria-pressed="staged"
-              @click="staged = true"
-              >{{ t('chat.sessionWork.staged') }}</Button
-            >
           </div>
           <p v-if="diff.error.value" role="alert" class="text-xs text-destructive [overflow-wrap:anywhere]">
             {{ diff.error.value }}
           </p>
-          <p v-else-if="!visibleDiff?.diff" class="text-xs text-muted-foreground">
+          <p v-else-if="!detail" class="text-xs text-muted-foreground">
             {{ t(diffPending ? 'chat.sessionWork.loading' : 'chat.sessionWork.noDiff') }}
           </p>
-          <AgenaDiffBlock v-else :key="diffIdentity" :diff="visibleDiff.diff" />
-          <Button v-if="visibleDiff?.truncated" size="sm" variant="ghost" :disabled="diffPending" @click="moreDiff">{{
-            t('chat.sessionWork.moreDiff')
-          }}</Button>
+          <template v-else>
+            <p v-if="detail.operation_history" class="mb-2 text-xs text-muted-foreground">
+              {{ t('chat.sessionWork.operationHistory') }}
+            </p>
+            <div v-for="op in detail.operations" :key="op.part_id" class="mb-3 min-w-0">
+              <p class="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                #{{ op.part_id }} · {{ op.tool }} · {{ op.kind
+                }}<span v-if="op.from_path"> · {{ op.from_path }} → {{ selected.path }}</span>
+              </p>
+              <p
+                v-if="op.before_sha256 || op.after_sha256"
+                class="font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]"
+              >
+                {{ op.before_sha256 || '?' }} → {{ op.after_sha256 || '?' }}
+              </p>
+              <p v-if="op.diff_scope === 'operation'" class="text-xs text-muted-foreground">
+                {{ t('chat.sessionWork.operationDiff') }}
+              </p>
+              <AgenaDiffBlock v-if="op.diff" :key="`${diffIdentity}:${op.part_id}`" :diff="op.diff" />
+              <p v-else class="text-xs text-muted-foreground">
+                {{ op.diff_unavailable_reason || t('chat.sessionWork.noDiff') }}
+              </p>
+              <p v-if="op.diff_truncated" class="text-xs text-muted-foreground">
+                {{ t('chat.sessionWork.recordedTruncated') }}
+              </p>
+            </div>
+            <Button
+              v-if="detail.operations.some((op) => op.diff_truncated)"
+              size="sm"
+              variant="ghost"
+              :disabled="diffPending || !moreDiffAvailable"
+              @click="moreDiff"
+              >{{ t('chat.sessionWork.moreDiff') }}</Button
+            >
+          </template>
         </div>
       </template>
     </div>

@@ -1,4 +1,5 @@
 import { apiJson } from '@/lib/api'
+import { conditionalJson } from '@/lib/conditionalJson'
 
 import { normalizePreviewProxyBasePath } from '../model/previewUrl'
 
@@ -82,8 +83,8 @@ function normalizePreviewSessions(payload: PreviewSessionsResponse): WorkspacePr
   return sessions
 }
 
-export async function listWorkspacePreviewSessions(signal?: AbortSignal): Promise<WorkspacePreviewSession[]> {
-  const payload = await apiJson<PreviewSessionsResponse>('/api/v1/workbench/preview/sessions', { signal })
+export async function listWorkspacePreviewSessions(signal?: AbortSignal, force = false): Promise<WorkspacePreviewSession[]> {
+  const payload = await conditionalJson<PreviewSessionsResponse>('preview', '/api/v1/workbench/preview/sessions', { signal }, force)
   return normalizePreviewSessions(payload)
 }
 

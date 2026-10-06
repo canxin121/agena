@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RiFileTextLine, RiLoader4Line, RiSearchLine, RiTextWrap } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import MonacoDiffEditor from '@/components/MonacoDiffEditor.vue'
 import { apiJson } from '@/lib/api'
+import { createRevalidator } from '@/lib/revalidation'
+import { isDocumentVisible } from '@/lib/backgroundReads'
 import { confirmAction } from '@/lib/appConfirm'
 import IconButton from '@/components/ui/IconButton.vue'
 import { buildUnifiedDiffModel } from '@/features/git/diff/unifiedDiff'
@@ -327,6 +329,7 @@ async function load(opts: {
     diffMeta.value = null
     original.value = ''
     modified.value = ''
+    throw e
   } finally {
     if (opts.signal.aborted || opts.seq !== loadSeq) return
     loading.value = false
@@ -345,17 +348,17 @@ function revealFile() {
   props.onRevealFile(path)
 }
 
-function refresh() {
+async function readDiff() {
   const directory = (props.directory || '').trim()
   const path = normalizedPath.value
   if (!directory || !path) return
 
-  activeAbort?.abort()
   const ac = new AbortController()
   activeAbort = ac
   const seq = ++loadSeq
 
-  void load({
+  const timeout = setTimeout(() => ac.abort(), 30_000)
+  try { await load({
     directory,
     path,
     staged: Boolean(props.staged),
@@ -363,7 +366,28 @@ function refresh() {
     parentCommit: (props.parentCommit || '').trim(),
     signal: ac.signal,
     seq,
-  })
+  }) } finally {
+    clearTimeout(timeout)
+    if (activeAbort === ac) {
+      activeAbort = null
+      loading.value = false
+      if (ac.signal.aborted && seq === loadSeq && isDocumentVisible()) {
+        error.value = 'Diff request timed out'
+        throw new Error(error.value)
+      }
+    }
+  }
+}
+
+const makeRefreshQueue = () => createRevalidator(readDiff, {
+  intervalMs: 750,
+  retryMs: 5000,
+  enabled: () => isDocumentVisible() && Boolean(props.directory && normalizedPath.value),
+})
+let refreshQueue = makeRefreshQueue()
+function refresh() {
+  refreshQueue.invalidate(0)
+  return refreshQueue.refresh().catch(() => {})
 }
 
 defineExpose({ refresh })
@@ -376,36 +400,42 @@ watch(
     commit: props.commit,
     parentCommit: props.parentCommit,
   }),
-  (next, _prev, onInvalidate) => {
+  (next) => {
     const directory = (next.directory || '').trim()
     const path = (next.path || '').trim()
 
+    refreshQueue.dispose()
+    activeAbort?.abort()
+    activeAbort = null
+    loadSeq += 1
+    loading.value = false
+    refreshQueue = makeRefreshQueue()
     if (!directory || !path) {
-      activeAbort?.abort()
-      activeAbort = null
-      loadSeq += 1
       resetState()
       return
     }
 
-    activeAbort?.abort()
-    const ac = new AbortController()
-    activeAbort = ac
-    const seq = ++loadSeq
-    onInvalidate(() => ac.abort())
-
-    void load({
-      directory,
-      path,
-      staged: Boolean(next.staged),
-      commit: (next.commit || '').trim(),
-      parentCommit: (next.parentCommit || '').trim(),
-      signal: ac.signal,
-      seq,
-    })
+    void refresh()
   },
   { immediate: true },
 )
+const visibility = () => {
+  if (isDocumentVisible()) {
+    refreshQueue.resume()
+  } else {
+    refreshQueue.pause()
+    activeAbort?.abort()
+    loading.value = false
+    refreshQueue.invalidate(0)
+  }
+}
+document.addEventListener('visibilitychange', visibility)
+onBeforeUnmount(() => {
+  refreshQueue.dispose()
+  activeAbort?.abort()
+  loadSeq++
+  document.removeEventListener('visibilitychange', visibility)
+})
 </script>
 
 <template>

@@ -29,6 +29,6 @@ export async function gitJson<T>(
   return await apiJson<T>(gitUrl(path, directory, query), init)
 }
 
-export function gitWatchUrl(directory: string, intervalMs = 1500): string {
-  return gitUrl('watch', directory, { intervalMs })
+export function gitWatchUrl(directory: string, intervalMs = 1500, path?: string | null): string {
+  return gitUrl('watch', directory, { intervalMs, path })
 }

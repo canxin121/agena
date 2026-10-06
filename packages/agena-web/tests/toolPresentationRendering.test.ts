@@ -4,29 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import { createRenderer, createSSRApp, h, nextTick, reactive, ssrContextKey, type Ref } from 'vue'
 import { renderToString } from 'vue/server-renderer'
-import { createPinia } from 'pinia'
+import { createPinia, disposePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { ensureBrowserTestRuntime } from './testRuntime'
 import { transcriptDiffFiles } from '../src/pages/chat/transcriptDiff'
-import { readFileSync } from 'node:fs'
-
-test('a running tool keeps its expanded sections instead of reloading them', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('../src/components/chat/AgenaOperationPart.vue', import.meta.url)),
-    'utf8',
-  )
-
-  // A running tool bumps its revision on every streamed update. The expanded
-  // sections keep the rendered snapshot while the part is live and refresh once
-  // it settles, so the part cannot flash its content away and back while the
-  // reply keeps streaming.
-  assert.match(source, /if \(!previous \|\| !status\.value\.terminal\) return/)
-  assert.match(source, /scheduleStaleSectionRetry/)
-  assert.match(source, /async function loadSection\(section: ToolDetailSection, options: SectionLoadOptions = \{\}\)/)
-  assert.match(source, /if \(!options\.force && !sectionError\(section\) && sectionLoaded\(section\)\) return/)
-  // Only a different part may drop what is already rendered.
-  assert.equal((source.match(/sectionValues\.value = \{\}/g) || []).length, 1)
-})
 
 const vite = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
@@ -58,9 +39,67 @@ async function render(path: string, props: Record<string, unknown>) {
   const { default: component } = await vite.ssrLoadModule(path)
   const { default: messages } = await vite.ssrLoadModule('/src/i18n/messages/en-US.ts')
   const app = createSSRApp(component, props)
-  app.use(createPinia())
+  const pinia = createPinia()
+  app.use(pinia)
   app.use(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': messages } }))
-  return renderToString(app)
+  try {
+    return await renderToString(app)
+  } finally {
+    disposePinia(pinia)
+  }
+}
+
+function controlTimers() {
+  const original = {
+    now: Date.now,
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout,
+    windowSetTimeout: window.setTimeout,
+    windowClearTimeout: window.clearTimeout,
+  }
+  let now = original.now(),
+    serial = 0
+  const timers = new Map<number, { at: number; callback: () => void }>()
+  Date.now = () => now
+  globalThis.setTimeout = ((callback: () => void, delay = 0) => {
+    const id = ++serial
+    timers.set(id, { at: now + delay, callback })
+    return id
+  }) as typeof setTimeout
+  globalThis.clearTimeout = ((id: number) => {
+    timers.delete(id)
+  }) as typeof clearTimeout
+  window.setTimeout = globalThis.setTimeout as typeof window.setTimeout
+  window.clearTimeout = globalThis.clearTimeout as typeof window.clearTimeout
+  const flush = async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await nextTick()
+  }
+  return {
+    async advance(ms: number) {
+      const end = now + ms
+      for (let iteration = 0; iteration < 1000; iteration++) {
+        await flush()
+        const next = [...timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0]
+        if (!next) {
+          now = end
+          await flush()
+          return
+        }
+        now = next[1].at
+        timers.delete(next[0])
+        next[1].callback()
+      }
+      throw new Error('timers did not converge')
+    },
+    restore() {
+      Date.now = original.now
+      globalThis.setTimeout = original.setTimeout
+      globalThis.clearTimeout = original.clearTimeout
+      window.setTimeout = original.windowSetTimeout
+      window.clearTimeout = original.windowClearTimeout
+    },
+  }
 }
 
 const diff = '--- a/src/a.rs\n+++ b/src/a.rs\n@@ -99,2 +99,2 @@\n-old\n+new\n context\n'
@@ -207,12 +246,17 @@ test('technical details load only visible children, reject stale responses and s
   })
   const app = renderer.createApp({ setup: () => () => h(subject, props) })
   app.provide(ssrContextKey, {})
-  app.use(createPinia())
+  const pinia = createPinia()
+  app.use(pinia)
   app.use(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': {} } }))
   const requests: Array<{ url: string; resolve: (response: Response) => void }> = []
   const originalFetch = globalThis.fetch
-  globalThis.fetch = ((url: string | URL | Request) =>
-    new Promise<Response>((resolve) => requests.push({ url: String(url), resolve }))) as typeof fetch
+  const clock = controlTimers()
+  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      requests.push({ url: String(url), resolve })
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true })
+    })) as typeof fetch
   const reply = (index: number, value: unknown) => {
     const request = requests[index]!
     const match = /\/parts\/(\d+)\/tool-sections\/(\w+)/.exec(request.url)!
@@ -229,9 +273,11 @@ test('technical details load only visible children, reject stale responses and s
     await nextTick()
     assert.equal(requests.length, 0, 'opening the parent must not load collapsed children')
     const oldOutput = state!.toggleSection('output')
+    await flush()
     assert.equal(requests.length, 1)
     props.part.status = 'completed'
     await nextTick()
+    await clock.advance(1000)
     assert.equal(requests.length, 2)
     reply(1, 'completed result')
     await flush()
@@ -245,18 +291,24 @@ test('technical details load only visible children, reject stale responses and s
     assert.equal(requests.length, 2, 'closed parent must defer refresh')
     state!.toggleDetails()
     await nextTick()
+    await clock.advance(1000)
     assert.equal(requests.length, 3, 'reopening refreshes a previously open child')
     requests[2]!.resolve(Response.json({ message: 'temporary failure' }, { status: 500 }))
     await flush()
     assert.match(state!.sectionErrors.value.output!, /temporary failure/)
     assert.equal(state!.loadingSections.value.size, 0)
     const retry = state!.loadSection('output')
+    await flush()
+    assert.equal(requests.length, 3, 'an explicit retry respects failure backoff')
+    await clock.advance(5100)
     reply(3, 'retried result')
     await retry
+    await flush()
     assert.equal(state!.sectionValues.value.output, 'retried result')
     assert.equal(state!.sectionErrors.value.output, '')
 
     const input = state!.toggleSection('input')
+    await clock.advance(1000)
     props.part.id = '5'
     await nextTick()
     reply(4, 'previous part input')
@@ -270,6 +322,130 @@ test('technical details load only visible children, reject stale responses and s
     assert.equal(state!.detailsExpanded.value, false)
   } finally {
     app.unmount()
+    disposePinia(pinia)
+    clock.restore()
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('a real expanded tool subscribes by section and output changes read no input or metadata after cache eviction', async () => {
+  prepareRuntime()
+  const { default: component } = await vite.ssrLoadModule('/src/components/chat/AgenaOperationPart.vue')
+  const resourceSync = (await vite.ssrLoadModule(
+    '/src/lib/resourceSync.ts',
+  )) as typeof import('../src/lib/resourceSync')
+  const { conditionalJson } = (await vite.ssrLoadModule(
+    '/src/lib/conditionalJson.ts',
+  )) as typeof import('../src/lib/conditionalJson')
+  let state!: {
+    toggleDetails(): void
+    toggleSection(section: string): Promise<void>
+    sectionValues: Ref<Record<string, unknown>>
+  }
+  const subject = {
+    ...component,
+    setup(props: object, context: object) {
+      state = component.setup(props, context)
+      return () => null
+    },
+  }
+  const renderer = createRenderer<object, object>({
+    patchProp() {},
+    insert() {},
+    remove() {},
+    setText() {},
+    setElementText() {},
+    createElement: () => ({}),
+    createText: () => ({}),
+    createComment: () => ({}),
+    parentNode: () => null,
+    nextSibling: () => null,
+  })
+  const props = reactive({
+    part: { id: '8401', status: 'in_progress', source: { revision: 1, updatedAt: 1, partState: 'in_progress' } },
+    expanded: true,
+    collapseSignal: 0,
+    sessionId: '8400',
+  })
+  const app = renderer.createApp({ setup: () => () => h(subject, props) })
+  app.provide(ssrContextKey, {})
+  const pinia = createPinia()
+  app.use(pinia)
+  app.use(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': {} } }))
+  const originalFetch = globalThis.fetch
+  const clock = controlTimers()
+  const calls: string[] = []
+  const versions = new Map(['input', 'metadata', 'output'].map((section) => [`part:8401:${section}`, 'tool-grain:1']))
+  globalThis.fetch = (async (input) => {
+    const url = new URL(String(input), 'http://agena.test')
+    if (url.pathname === '/api/v1/changes/revisions')
+      return Response.json(
+        Object.fromEntries(
+          JSON.parse(url.searchParams.get('resources')!).map((key: string) => [
+            key,
+            versions.get(key) || 'tool-grain:1',
+          ]),
+        ),
+      )
+    const match = /\/tool-sections\/(\w+)/.exec(url.pathname)
+    if (match) {
+      calls.push(match[1]!)
+      return Response.json(
+        {
+          part_id: 8401,
+          section: match[1],
+          value: { version: versions.get(`part:8401:${match[1]}`) },
+          part_state: props.part.source.partState,
+          revision: 1,
+          updated_at_ms: props.part.source.updatedAt,
+        },
+        { headers: { etag: `W/"${versions.get(`part:8401:${match[1]}`)}"` } },
+      )
+    }
+    if (url.pathname.startsWith('/evict-tool/')) return Response.json({}, { headers: { etag: 'W/"tool-grain:1"' } })
+    throw new Error(`Unexpected request ${url}`)
+  }) as typeof fetch
+  try {
+    app.mount({})
+    state.toggleDetails()
+    await nextTick()
+    for (const section of ['input', 'metadata', 'output']) {
+      const opening = state.toggleSection(section)
+      await clock.advance(1100)
+      await opening
+    }
+    assert.deepEqual(calls.sort(), ['input', 'metadata', 'output'])
+    const savedInput = state.sectionValues.value.input
+    const savedMetadata = state.sectionValues.value.metadata
+    await Promise.all(Array.from({ length: 90 }, (_, i) => conditionalJson('sessions', `/evict-tool/${i}`)))
+    calls.length = 0
+    versions.set('part:8401:output', 'tool-grain:2')
+    resourceSync.applyResourceEvent({
+      type: 'session_changed',
+      properties: { kind: 'part_updated', session_id: 8400, resource_revisions: Object.fromEntries(versions) },
+    })
+    props.part.source.updatedAt = 2
+    await clock.advance(2100)
+    assert.deepEqual(calls, ['output'])
+    assert.equal(state.sectionValues.value.input, savedInput)
+    assert.equal(state.sectionValues.value.metadata, savedMetadata)
+    assert.equal((state.sectionValues.value.output as { version: string }).version, 'tool-grain:2')
+
+    await state.toggleSection('input')
+    await nextTick()
+    calls.length = 0
+    versions.set('part:8401:input', 'tool-grain:3')
+    versions.set('part:8401:output', 'tool-grain:3')
+    resourceSync.applyResourceEvent({
+      type: 'session_changed',
+      properties: { kind: 'part_updated', resource_revisions: Object.fromEntries(versions) },
+    })
+    await clock.advance(2100)
+    assert.deepEqual(calls, ['output'], 'a closed input disclosure sends no request even when its own token changes')
+  } finally {
+    app.unmount()
+    disposePinia(pinia)
+    clock.restore()
     globalThis.fetch = originalFetch
   }
 })

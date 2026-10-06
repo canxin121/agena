@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { useAuthStore } from '@/stores/auth'
@@ -19,11 +19,7 @@ const password = ref('')
 const busy = ref(false)
 const formError = ref<string | null>(null)
 
-// The health probe below is a safety net: App.vue already probes health + auth
-// on a timer and only mounts this page once the server is reachable, so this
-// branch is rarely visible. Keeping it lets the login page degrade gracefully
-// if the server goes away while the form is open.
-let probeTimer: ReturnType<typeof setInterval> | null = null
+// App.vue owns the serial health/auth recovery probe for the login page too.
 
 const connecting = computed(() => health.data === null)
 
@@ -44,53 +40,6 @@ const canSubmit = computed(() => {
   if (busy.value) return false
   if (connecting.value) return false
   return true
-})
-
-async function refreshBootState() {
-  try {
-    await health.refresh().catch(() => {})
-    if (health.data !== null) {
-      await auth.refresh().catch(() => {})
-    }
-  } catch {
-    // ignore
-  }
-}
-
-function scheduleProbe() {
-  if (!connecting.value) return
-  if (probeTimer) return
-  probeTimer = setInterval(() => {
-    void refreshBootState()
-  }, 2000)
-}
-
-function clearProbeTimer() {
-  if (!probeTimer) return
-  clearInterval(probeTimer)
-  probeTimer = null
-}
-
-watch(
-  () => connecting.value,
-  (value) => {
-    if (value) {
-      scheduleProbe()
-      return
-    }
-    clearProbeTimer()
-  },
-  { immediate: true },
-)
-
-onMounted(() => {
-  if (health.data === null) {
-    void refreshBootState()
-  }
-})
-
-onBeforeUnmount(() => {
-  clearProbeTimer()
 })
 
 async function submit() {

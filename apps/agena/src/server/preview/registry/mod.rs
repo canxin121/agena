@@ -88,6 +88,8 @@ pub(crate) struct WorkspacePreviewRegistry {
     db: Arc<crate::server::persistence::db::ServerStateDb>,
     ttl: Duration,
     cache: RwLock<Option<RegistryCache>>,
+    epoch: uuid::Uuid,
+    changes: tokio::sync::watch::Sender<u64>,
 }
 
 impl WorkspacePreviewRegistry {
@@ -100,6 +102,8 @@ impl WorkspacePreviewRegistry {
             db,
             ttl,
             cache: RwLock::new(None),
+            epoch: uuid::Uuid::new_v4(),
+            changes: tokio::sync::watch::channel(0).0,
         }
     }
 
@@ -118,6 +122,15 @@ impl WorkspacePreviewRegistry {
     pub(crate) async fn invalidate(&self) {
         let mut cache = self.cache.write().await;
         *cache = None;
+        self.changes.send_modify(|revision| *revision += 1);
+    }
+
+    pub(crate) fn revision(&self) -> String {
+        format!("{}:{}", self.epoch, *self.changes.borrow())
+    }
+
+    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
     }
 
     async fn load_server_state_file(&self) -> ApiResult<PreviewSessionsFile> {

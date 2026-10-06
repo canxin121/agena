@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
+import ActivityLogView from '@/components/chat/ActivityLogView.vue'
+import { useChatStore } from '@/stores/chat'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import {
   operationPresentation,
@@ -14,6 +16,13 @@ import {
   structuredValueMarkdown,
 } from '@/pages/chat/transcriptPartPresentation'
 import { getToolPartDetail, type ToolDetailSection } from '@/stores/chat/api'
+import { isDocumentVisible } from '@/lib/backgroundReads'
+import {
+  canReuseResource,
+  captureResourceObservation,
+  checkResourceVersions,
+  subscribeResource,
+} from '@/lib/resourceSync'
 import type { JsonValue } from '@/types/json'
 
 const props = defineProps<{
@@ -35,12 +44,26 @@ const inputExpanded = ref(false)
 const outputExpanded = ref(false)
 const presentationExpanded = ref(false)
 let partGeneration = 0
+let liveRefreshTimer: ReturnType<typeof setTimeout> | undefined
+let liveRefreshScheduledAt = Infinity
+let lastLiveRefreshAt = -Infinity
+let liveRefreshAllowedAt = -Infinity
+const sectionFailures = new Map<ToolDetailSection, number>()
+const sectionAllowedAt = new Map<ToolDetailSection, number>()
 const sectionControllers = new Map<ToolDetailSection, AbortController>()
+const queuedSections = new Set<ToolDetailSection>()
+const sectionSubscriptions = new Map<string, () => void>()
+const sectionVersions = new Map<ToolDetailSection, string>()
 function cancelSectionRequests() {
+  clearTimeout(liveRefreshTimer)
+  liveRefreshTimer = undefined
+  liveRefreshScheduledAt = Infinity
   for (const controller of sectionControllers.values()) controller.abort()
   sectionControllers.clear()
+  queuedSections.clear()
+  loadingSections.value = new Set()
 }
-const sectionValues = ref<Partial<Record<ToolDetailSection, JsonValue>>>({})
+const sectionValues = shallowRef<Partial<Record<ToolDetailSection, JsonValue>>>({})
 const loadingSections = ref<Set<ToolDetailSection>>(new Set())
 const sectionErrors = ref<Partial<Record<ToolDetailSection, string>>>({})
 const loadedPartKey = ref('')
@@ -48,6 +71,14 @@ const toolDetailSections: ToolDetailSection[] = ['input', 'output', 'metadata', 
 
 const operation = computed(() => operationPresentation(props.part, sectionValues.value))
 const status = computed(() => partStatusPresentation(props.part.status))
+const chat = useChatStore()
+const linkedActivity = computed(() =>
+  props.sessionId
+    ? (chat
+        .sessionBackgroundActivities(props.sessionId)
+        .find((activity) => activity.source_part_id === Number(props.part.id)) ?? null)
+    : null,
+)
 
 function sectionLoaded(section: ToolDetailSection): boolean {
   return Object.prototype.hasOwnProperty.call(sectionValues.value, section)
@@ -75,58 +106,101 @@ function setSectionExpanded(section: ToolDetailSection, expanded: boolean) {
   else presentationExpanded.value = expanded
 }
 
-type SectionLoadOptions = { force?: boolean; attempt?: number }
+type SectionLoadOptions = { force?: boolean }
 
 async function loadSection(section: ToolDetailSection, options: SectionLoadOptions = {}) {
   // Presentation is part of every transcript snapshot. The other sections
   // are deliberately fetched only after their disclosure row is opened, and a
   // forced refresh keeps the rendered snapshot on screen until the new one
   // arrives.
-  if (section === 'presentation' || sectionLoading(section)) return
+  if (section === 'presentation') return
+  if (sectionLoading(section)) {
+    if (options.force) queuedSections.add(section)
+    return
+  }
   if (!options.force && !sectionError(section) && sectionLoaded(section)) return
   const sessionId = String(props.sessionId || '').trim()
   const partId = String(props.part.id || '').trim()
   if (!sessionId || !partId) return
-  const attempt = options.attempt ?? 0
+  if (Date.now() < Math.max(liveRefreshAllowedAt, sectionAllowedAt.get(section) ?? -Infinity)) {
+    scheduleLiveSectionRefresh([section])
+    return
+  }
   const requestGeneration = partGeneration
+  const hadSectionError = Boolean(sectionError(section))
   const controller = new AbortController()
+  queuedSections.delete(section)
   sectionControllers.set(section, controller)
   const timeout = setTimeout(() => controller.abort(), 30_000)
 
   loadingSections.value = new Set([...loadingSections.value, section])
   sectionErrors.value = { ...sectionErrors.value, [section]: '' }
   try {
+    const key = `part:${partId}:${section}`
+    if (sectionLoaded(section) && sectionVersions.has(section) && !hadSectionError) {
+      await checkResourceVersions([key], controller.signal)
+      if (canReuseResource(key, sectionVersions.get(section)!)) return
+    }
     const resource = await getToolPartDetail(sessionId, partId, section, controller.signal)
-    if (partGeneration !== requestGeneration) return
+    if (
+      partGeneration !== requestGeneration ||
+      controller.signal.aborted ||
+      sectionControllers.get(section) !== controller
+    )
+      return
     if (resource.part_id !== Number(partId) || resource.section !== section) {
       throw new Error('The server returned a mismatched tool detail section')
     }
     const revision = props.part.source.revision ?? 0
     const updatedAt = props.part.source.updatedAt ?? 0
-    if (resource.revision < revision || (resource.revision === revision && resource.updated_at_ms < updatedAt)) {
+    const olderEnvelope =
+      resource.revision < revision || (resource.revision === revision && resource.updated_at_ms < updatedAt)
+    const staleOutput = resource.part_state
+      ? resource.part_state !== props.part.source.partState && (status.value.terminal || olderEnvelope)
+      : olderEnvelope
+    if (section === 'output' && staleOutput) {
       // The tool moved on while this section was loading. While it is still
       // streaming, retry quietly and keep the rendered snapshot instead of
       // flashing an error into the part the reader has expanded.
-      if (!status.value.terminal && attempt < MAX_STALE_SECTION_RETRIES) {
-        scheduleStaleSectionRetry(section, attempt + 1, requestGeneration)
-        return
-      }
-      throw new Error('This tool changed while loading its details. Retry this section.')
+      if (status.value.terminal) throw new Error('This tool changed while loading its details. Retry this section.')
+      // Live snapshots are best effort. Keep this useful intermediate value
+      // on screen and schedule catch-up, rather than starving a section while
+      // its source advances faster than HTTP can round-trip.
+      scheduleLiveSectionRefresh([section])
     }
-    sectionValues.value = { ...sectionValues.value, [section]: resource.value }
+    if (!sectionLoaded(section) || sectionValues.value[section] !== resource.value)
+      sectionValues.value = { ...sectionValues.value, [section]: resource.value }
+    const token = captureResourceObservation(key).token
+    if (token && !queuedSections.has(section)) sectionVersions.set(section, token)
+    sectionFailures.delete(section)
+    sectionAllowedAt.set(section, Date.now() + 750)
+    liveRefreshAllowedAt = Math.max(liveRefreshAllowedAt, Date.now() + 750)
   } catch (error) {
-    if (partGeneration !== requestGeneration) return
+    if (partGeneration !== requestGeneration || sectionControllers.get(section) !== controller) return
     sectionErrors.value = {
       ...sectionErrors.value,
       [section]: error instanceof Error ? error.message : 'Unable to load this section',
     }
+    const failures = Math.min((sectionFailures.get(section) ?? 0) + 1, 6)
+    sectionFailures.set(section, failures)
+    sectionAllowedAt.set(section, Date.now() + Math.min(60_000, 5000 * 2 ** (failures - 1)))
   } finally {
     clearTimeout(timeout)
-    if (sectionControllers.get(section) === controller) sectionControllers.delete(section)
-    if (partGeneration === requestGeneration) {
+    const ownsRequest = sectionControllers.get(section) === controller
+    if (ownsRequest) sectionControllers.delete(section)
+    if (partGeneration === requestGeneration && ownsRequest) {
       const next = new Set(loadingSections.value)
       next.delete(section)
       loadingSections.value = next
+      if (sectionError(section)) queuedSections.add(section)
+      if (
+        queuedSections.has(section) &&
+        props.expanded &&
+        detailsExpanded.value &&
+        sectionExpanded(section) &&
+        !document.hidden
+      )
+        scheduleLiveSectionRefresh([])
     }
   }
 }
@@ -135,7 +209,7 @@ async function toggleSection(section: ToolDetailSection) {
   emit('select')
   const expanded = !sectionExpanded(section)
   setSectionExpanded(section, expanded)
-  if (expanded) await loadSection(section)
+  if (expanded) await loadSection(section, { force: sectionLoaded(section) })
 }
 
 function toggleDetails() {
@@ -170,8 +244,12 @@ watch(
       sectionValues.value = {}
       loadingSections.value = new Set()
       sectionErrors.value = {}
+      sectionVersions.clear()
     }
     loadedPartKey.value = key
+    lastLiveRefreshAt = liveRefreshAllowedAt = -Infinity
+    sectionFailures.clear()
+    sectionAllowedAt.clear()
     resetSectionState()
   },
   { immediate: true },
@@ -183,51 +261,153 @@ watch(
 )
 
 watch([() => props.expanded, detailsExpanded], loadVisibleSections)
+watch(
+  () =>
+    [
+      props.expanded && detailsExpanded.value,
+      metadataExpanded.value,
+      inputExpanded.value,
+      outputExpanded.value,
+    ] as const,
+  ([open]) => {
+    if (!open) {
+      cancelSectionRequests()
+      return
+    }
+    for (const [section, controller] of sectionControllers) {
+      if (sectionExpanded(section)) continue
+      controller.abort()
+      sectionControllers.delete(section)
+      queuedSections.delete(section)
+      const next = new Set(loadingSections.value)
+      next.delete(section)
+      loadingSections.value = next
+    }
+    for (const section of queuedSections) if (!sectionExpanded(section)) queuedSections.delete(section)
+    if (!queuedSections.size) {
+      clearTimeout(liveRefreshTimer)
+      liveRefreshTimer = undefined
+      liveRefreshScheduledAt = Infinity
+    }
+  },
+  { flush: 'sync' },
+)
+function syncSectionSubscriptions() {
+  const open = props.expanded && detailsExpanded.value && isDocumentVisible()
+  const keys = new Map<string, ToolDetailSection>(
+    open
+      ? toolDetailSections
+          .filter((section) => section !== 'presentation' && sectionExpanded(section))
+          .map((section) => [`part:${props.part.id}:${section}`, section] as const)
+      : [],
+  )
+  for (const [key, release] of sectionSubscriptions)
+    if (!keys.has(key)) {
+      release()
+      sectionSubscriptions.delete(key)
+    }
+  for (const [key, section] of keys)
+    if (!sectionSubscriptions.has(key))
+      sectionSubscriptions.set(
+        key,
+        subscribeResource(key, () => scheduleLiveSectionRefresh([section])),
+      )
+}
+watch(
+  () => [
+    props.part.id,
+    props.expanded,
+    detailsExpanded.value,
+    metadataExpanded.value,
+    inputExpanded.value,
+    outputExpanded.value,
+  ],
+  syncSectionSubscriptions,
+  { immediate: true, flush: 'sync' },
+)
 
-const STALE_SECTION_RETRY_MS = 400
-const MAX_STALE_SECTION_RETRIES = 2
-
-function scheduleStaleSectionRetry(section: ToolDetailSection, attempt: number, generation: number) {
-  window.setTimeout(() => {
-    if (partGeneration !== generation || !sectionExpanded(section)) return
-    void loadSection(section, { force: true, attempt })
-  }, STALE_SECTION_RETRY_MS)
+function scheduleLiveSectionRefresh(sections = toolDetailSections) {
+  if (!isDocumentVisible() || !props.expanded || !detailsExpanded.value) return
+  for (const section of sections)
+    if (section !== 'presentation' && sectionExpanded(section)) queuedSections.add(section)
+  const ready = [...queuedSections].filter((section) => sectionExpanded(section) && !sectionLoading(section))
+  if (!ready.length) return
+  const now = Date.now()
+  const earliest = Math.min(...ready.map((section) => sectionAllowedAt.get(section) ?? -Infinity))
+  const delay = Math.max(750, 1000 - (now - lastLiveRefreshAt), liveRefreshAllowedAt - now, earliest - now)
+  const due = now + delay
+  if (liveRefreshTimer && liveRefreshScheduledAt <= due) return
+  clearTimeout(liveRefreshTimer)
+  liveRefreshScheduledAt = due
+  liveRefreshTimer = setTimeout(() => {
+    liveRefreshTimer = undefined
+    liveRefreshScheduledAt = Infinity
+    if (!isDocumentVisible() || !props.expanded || !detailsExpanded.value) return
+    // A response/error arriving after scheduling can extend the cooldown.
+    if (Date.now() < liveRefreshAllowedAt) {
+      scheduleLiveSectionRefresh([])
+      return
+    }
+    const now = Date.now()
+    for (const section of [...queuedSections]) {
+      if (!sectionExpanded(section)) {
+        queuedSections.delete(section)
+        continue
+      }
+      if (sectionLoading(section) || now < (sectionAllowedAt.get(section) ?? -Infinity)) continue
+      queuedSections.delete(section)
+      lastLiveRefreshAt = now
+      void loadSection(section, { force: true })
+    }
+    scheduleLiveSectionRefresh([])
+  }, delay)
 }
 
-// A running tool bumps its revision on every streamed update. Refetching on
-// each bump dropped the rendered sections and reloaded them over and over
-// while the reply kept streaming, which is the flashing an expanded part must
-// not do. Keep the rendered snapshot while the part is live and refresh the
-// expanded sections once it settles, so a stale running snapshot still cannot
-// overwrite the completed result.
+// Coalesce live updates without clearing the rendered value. Terminal
+// transitions cancel old requests, so no running value can replace a result.
 /**
  * Refresh the expanded sections of a settled part. Reloading them is display
  * work, so a hidden tab defers it until the reader is looking again.
  */
-function refreshSettledSections() {
+function refreshSettledSections(sections: ToolDetailSection[] = ['output']) {
   if (document.hidden || !props.expanded || !detailsExpanded.value) return
-  for (const section of toolDetailSections) {
-    if (sectionExpanded(section)) void loadSection(section, { force: true })
-  }
+  scheduleLiveSectionRefresh(sections)
 }
 
 watch(
   () => [props.part.status, props.part.source.revision, props.part.source.updatedAt] as const,
   (next, previous) => {
-    if (!previous || !status.value.terminal) return
+    if (!previous) return
     const changed = next[0] !== previous[0] || next[1] !== previous[1] || next[2] !== previous[2]
     if (!changed) return
+    // Input/metadata follow their own clocks. Status and live output only
+    // affect output; a part update must not reload every open disclosure.
+    if (!status.value.terminal || next[0] === previous[0]) {
+      scheduleLiveSectionRefresh(['output'])
+      return
+    }
+    const interrupted = [...new Set([...sectionControllers.keys(), ...queuedSections, 'output' as const])]
     partGeneration += 1
     cancelSectionRequests()
     loadingSections.value = new Set()
-    refreshSettledSections()
+    refreshSettledSections(interrupted)
   },
 )
-document.addEventListener('visibilitychange', refreshSettledSections)
+function handleVisibilityChange() {
+  syncSectionSubscriptions()
+  if (document.hidden) {
+    partGeneration += 1
+    cancelSectionRequests()
+    loadingSections.value = new Set()
+  } else loadVisibleSections()
+  syncSectionSubscriptions()
+}
+document.addEventListener('visibilitychange', handleVisibilityChange)
 onBeforeUnmount(() => {
   partGeneration += 1
   cancelSectionRequests()
-  document.removeEventListener('visibilitychange', refreshSettledSections)
+  for (const release of sectionSubscriptions.values()) release()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 function toggleOuter() {
@@ -305,6 +485,7 @@ function toggleOuter() {
       </section>
 
       <div class="space-y-3 py-1" data-tool-presentation>
+        <ActivityLogView v-if="linkedActivity && sessionId" :session-id="sessionId" :activity="linkedActivity" />
         <MarkdownRenderer
           v-if="operation.commandMarkdown"
           :content="operation.commandMarkdown"
@@ -365,7 +546,7 @@ function toggleOuter() {
                 {{ t('common.retry') }}
               </button>
             </div>
-            <template v-else-if="sectionLoading(section)" />
+            <template v-else-if="sectionLoading(section) && !sectionLoaded(section)" />
             <template v-else-if="section === 'metadata'">
               <MarkdownRenderer
                 :content="structuredValueMarkdown(operation.metadata)"

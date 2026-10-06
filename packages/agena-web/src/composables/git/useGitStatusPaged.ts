@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 
 import type { GitStatusFile, GitStatusResponse } from '@/types/git'
+import { limitBackgroundReads } from '../../lib/backgroundReads'
 
 export function useGitStatusPaged(opts: {
   gitReady: { value: boolean }
@@ -11,6 +12,7 @@ export function useGitStatusPaged(opts: {
     scope: 'staged' | 'unstaged' | 'untracked' | 'merge'
     offset: number
     limit: number
+    signal?: AbortSignal
   }) => Promise<GitStatusResponse>
 }) {
   const mergeList = ref<GitStatusFile[]>([])
@@ -40,19 +42,15 @@ export function useGitStatusPaged(opts: {
   )
 
   let generation = 0
-
-  const pendingReloadByScope: Record<Scope, boolean> = {
-    merge: false,
-    staged: false,
-    unstaged: false,
-    untracked: false,
+  type PageRead = {
+    directory: string
+    controller: AbortController
+    promise: Promise<void>
+    reload: boolean
   }
-  const latestDirectoryByScope: Record<Scope, string> = {
-    merge: '',
-    staged: '',
-    unstaged: '',
-    untracked: '',
-  }
+  const flights = new Map<Scope, PageRead>()
+  const allowedAt = new Map<Scope, number>()
+  const failures = new Map<Scope, number>()
 
   function listForScope(scope: Scope) {
     if (scope === 'merge') return mergeList
@@ -82,118 +80,136 @@ export function useGitStatusPaged(opts: {
     })
   }
 
-  async function reloadScopeFirstPage(directory: string, scope: Scope) {
-    if (!opts.gitReady.value) return
-    const trimmedDirectory = directory.trim()
-    if (!trimmedDirectory) return
-
-    latestDirectoryByScope[scope] = trimmedDirectory
-    const list = listForScope(scope)
-    const loading = loadingForScope(scope)
-
-    if (loading.value) {
-      pendingReloadByScope[scope] = true
-      return
-    }
-
-    const requestGeneration = generation
-    loading.value = true
-    try {
-      const resp = await opts.loadStatusPage({
-        directory: trimmedDirectory,
-        scope,
-        offset: 0,
-        limit: opts.pageSize,
-      })
-      if (
-        requestGeneration === generation &&
-        latestDirectoryByScope[scope] === trimmedDirectory &&
-        !pendingReloadByScope[scope]
-      ) {
-        list.value = mapFiles(resp)
-        pageByScope.value[scope] = { offset: list.value.length, hasMore: resp.hasMore && list.value.length > 0 }
+  async function waitForCooldown(scope: Scope, signal: AbortSignal) {
+    signal.throwIfAborted()
+    const delay = Math.max(0, (allowedAt.get(scope) ?? 0) - Date.now())
+    if (!delay) return
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => {
+        clearTimeout(timer)
+        reject(signal.reason)
       }
-    } finally {
-      loading.value = false
-      if (pendingReloadByScope[scope]) {
-        pendingReloadByScope[scope] = false
-        const queuedDirectory = latestDirectoryByScope[scope]
-        if (queuedDirectory) {
-          void reloadScopeFirstPage(queuedDirectory, scope).catch(() => {})
-        }
-      }
-    }
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', abort)
+        resolve()
+      }, delay)
+      signal.addEventListener('abort', abort, { once: true })
+    })
   }
 
-  async function loadMore(directory: string, scope: Scope) {
-    if (!opts.gitReady.value) return
+  function readPage(directory: string, scope: Scope, firstPage: boolean): Promise<void> {
     const trimmedDirectory = directory.trim()
-    if (!trimmedDirectory) return
-
-    latestDirectoryByScope[scope] = trimmedDirectory
-
-    const list = listForScope(scope)
-    const loading = loadingForScope(scope)
-
-    if (loading.value) return
-    const requestGeneration = generation
-    loading.value = true
-    try {
-      const offset = pageByScope.value[scope]?.offset ?? list.value.length
-      const resp = await opts.loadStatusPage({
-        directory: trimmedDirectory,
-        scope,
-        offset,
-        limit: opts.pageSize,
-      })
-      const next = mapFiles(resp)
-      if (
-        requestGeneration === generation &&
-        latestDirectoryByScope[scope] === trimmedDirectory &&
-        !pendingReloadByScope[scope]
-      ) {
-        // Progress follows server rows, including overlaps, rather than the
-        // deduplicated display length. An empty final page retires the control.
-        pageByScope.value[scope] = { offset: offset + next.length, hasMore: resp.hasMore && next.length > 0 }
-        const existing = new Set(list.value.map((file) => file.path))
-        list.value = [...list.value, ...next.filter((file) => !existing.has(file.path))]
-      }
-    } finally {
-      loading.value = false
-      if (pendingReloadByScope[scope]) {
-        pendingReloadByScope[scope] = false
-        const queuedDirectory = latestDirectoryByScope[scope] || trimmedDirectory
-        if (queuedDirectory) {
-          void reloadScopeFirstPage(queuedDirectory, scope).catch(() => {})
-        }
-      }
+    if (!opts.gitReady.value || !trimmedDirectory) return Promise.resolve()
+    const existing = flights.get(scope)
+    if (existing && existing.directory === trimmedDirectory && !existing.controller.signal.aborted) {
+      if (firstPage) existing.reload = true
+      // The returned promise includes the one trailing reload, including its
+      // failure. Callers cannot consume an invalidation before it was read.
+      return existing.promise
     }
+    existing?.controller.abort()
+    const requestGeneration = generation
+    const controller = new AbortController()
+    const { signal } = controller
+    const loading = loadingForScope(scope)
+    const list = listForScope(scope)
+    const current: PageRead = { directory: trimmedDirectory, controller, promise: undefined!, reload: false }
+    loading.value = true
+    current.promise = Promise.resolve()
+      .then(async () => {
+        let reload = firstPage
+        do {
+          await waitForCooldown(scope, signal)
+          let offset = 0
+          const resp = await limitBackgroundReads(() => {
+            // A first-page invalidation received while a load-more request
+            // waits for cooldown / a permit changes that queued read itself.
+            // Consume it only after choosing the actual dispatch offset.
+            reload ||= current.reload
+            current.reload = false
+            offset = reload ? 0 : (pageByScope.value[scope]?.offset ?? list.value.length)
+            return opts.loadStatusPage({
+              directory: trimmedDirectory,
+              scope,
+              offset,
+              limit: opts.pageSize,
+              signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+            })
+          }, signal)
+          signal.throwIfAborted()
+          if (requestGeneration !== generation || flights.get(scope) !== current) return
+          failures.delete(scope)
+          allowedAt.set(scope, Date.now() + 750)
+          if (!current.reload) {
+            const next = mapFiles(resp)
+            pageByScope.value[scope] = { offset: offset + next.length, hasMore: resp.hasMore && next.length > 0 }
+            if (reload) list.value = next
+            else {
+              const existingPaths = new Set(list.value.map((file) => file.path))
+              list.value = [...list.value, ...next.filter((file) => !existingPaths.has(file.path))]
+            }
+          }
+          reload = true
+        } while (current.reload)
+      })
+      .catch((error) => {
+        if (!signal.aborted && requestGeneration === generation && flights.get(scope) === current) {
+          const count = Math.min(5, (failures.get(scope) ?? 0) + 1)
+          failures.set(scope, count)
+          allowedAt.set(scope, Date.now() + Math.min(60_000, 5000 * 2 ** (count - 1)))
+        }
+        throw error
+      })
+      .finally(() => {
+        if (flights.get(scope) === current) {
+          flights.delete(scope)
+          loading.value = false
+        }
+      })
+    flights.set(scope, current)
+    return current.promise
+  }
+
+  function reloadScopeFirstPage(directory: string, scope: Scope) {
+    return readPage(directory, scope, true)
+  }
+
+  function loadMore(directory: string, scope: Scope) {
+    if (pageByScope.value[scope]?.hasMore === false) return Promise.resolve()
+    return readPage(directory, scope, false)
   }
 
   async function reloadFirstPages(directory: string) {
-    if (!opts.gitReady.value) return
-    const trimmedDirectory = directory.trim()
-    if (!trimmedDirectory) return
-
     const scopes: Scope[] = ['merge', 'staged', 'unstaged', 'untracked']
-    await Promise.all(scopes.map((scope) => reloadScopeFirstPage(trimmedDirectory, scope)))
+    await Promise.all(scopes.map((scope) => reloadScopeFirstPage(directory, scope)))
+  }
+
+  function cancelRequests() {
+    generation++
+    for (const [scope, read] of flights) {
+      read.controller.abort()
+      loadingForScope(scope).value = false
+    }
+    flights.clear()
+  }
+
+  function clearScope(scope: Scope) {
+    flights.get(scope)?.controller.abort()
+    flights.delete(scope)
+    loadingForScope(scope).value = false
+    listForScope(scope).value = []
+    pageByScope.value[scope] = { offset: 0, hasMore: false }
   }
 
   function resetAll() {
-    generation++
+    cancelRequests()
     pageByScope.value = {}
     mergeList.value = []
     stagedList.value = []
     changesList.value = []
     untrackedList.value = []
-    pendingReloadByScope.merge = false
-    pendingReloadByScope.staged = false
-    pendingReloadByScope.unstaged = false
-    pendingReloadByScope.untracked = false
-    latestDirectoryByScope.merge = ''
-    latestDirectoryByScope.staged = ''
-    latestDirectoryByScope.unstaged = ''
-    latestDirectoryByScope.untracked = ''
+    allowedAt.clear()
+    failures.clear()
   }
 
   return {
@@ -215,6 +231,9 @@ export function useGitStatusPaged(opts: {
     hasMoreUntracked,
     loadMore,
     reloadFirstPages,
+    reloadScopeFirstPage,
+    cancelRequests,
+    clearScope,
     resetAll,
   }
 }

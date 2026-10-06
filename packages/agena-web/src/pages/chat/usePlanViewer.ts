@@ -34,15 +34,16 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
     const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
       const response = await invoke(sessionId, 'get', { view: 'full' }, controller.signal)
-      if (owner !== generation || controller.signal.aborted) return
+      if (owner !== generation || read !== controller || controller.signal.aborted) return
       snapshot.value = readPlanSnapshot(response)
       markdown.value = snapshot.value ? planDocument(response) : ''
       autorun.value = snapshot.value?.autorun ?? null
     } catch (reason) {
-      if (owner === generation) error.value = reason instanceof Error ? reason.message : String(reason)
+      if (owner === generation && read === controller && !controller.signal.aborted)
+        error.value = reason instanceof Error ? reason.message : String(reason)
     } finally {
       clearTimeout(timeout)
-      if (owner === generation) {
+      if (owner === generation && read === controller) {
         loading.value = false
         read = undefined
       }
@@ -85,6 +86,12 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
     snapshot.value = null
   }
 
+  function pauseRead() {
+    read?.abort()
+    read = undefined
+    loading.value = false
+  }
+
   watch(
     scope,
     ([open]) => {
@@ -94,5 +101,5 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
     { immediate: true, flush: 'sync' },
   )
   onScopeDispose(invalidate)
-  return { loading, toggling, markdown, error, autorun, snapshot, refresh, toggleAutorun }
+  return { loading, toggling, markdown, error, autorun, snapshot, refresh, toggleAutorun, pauseRead }
 }

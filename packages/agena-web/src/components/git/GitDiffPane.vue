@@ -39,7 +39,7 @@ const diffViewerRef = ref<InstanceType<typeof GitEditorDiffViewer> | null>(null)
 const forceDiffForPath = ref('')
 
 function refreshDiff() {
-  diffViewerRef.value?.refresh?.()
+  return diffViewerRef.value?.refresh?.() ?? Promise.resolve()
 }
 
 defineExpose({ refreshDiff })

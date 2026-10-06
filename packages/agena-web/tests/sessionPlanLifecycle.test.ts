@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { createRenderer, defineComponent, nextTick, ref } from 'vue'
 import { useSessionPlan } from '../src/pages/chat/useSessionPlan'
+import { noteResourceVersion } from '../src/lib/resourceSync'
 import type { JsonValue } from '../src/types/json'
 
 // Exercise real Vue mount/disposal and scheduled reads without a browser or
@@ -89,6 +90,7 @@ test('inline plans coalesce refreshes, pause hidden polling, and retain only the
   })
   try {
     app.mount({})
+    await settle()
     expect(calls.length).toBe(1)
     state.expanded.value = true
     calls[0]!.resolve(response('First'))
@@ -100,15 +102,20 @@ test('inline plans coalesce refreshes, pause hidden polling, and retain only the
     await advance(28_000)
     expect(calls.length).toBe(1)
     await advance(1200)
-    expect(calls.length).toBe(2) // an idle collapsed plan backs off to 30 seconds
+    expect(calls.length).toBe(1) // idle time only checks shared revision tokens
+    noteResourceVersion('session:7:plan', 'test:1')
+    noteResourceVersion('session:7:plan', 'test:2')
+    await advance(180)
+    expect(calls.length).toBe(2)
 
     for (let i = 0; i < 20; i++) change.value++
+    noteResourceVersion('session:7:plan', 'test:3')
     await settle()
     await advance(2000)
     expect(calls.length).toBe(2) // one request in flight, one pending invalidation
     calls[1]!.resolve(response('Updated'))
     await settle()
-    await advance(750)
+    await advance(1000)
     expect(calls.length).toBe(3)
     calls[2]!.resolve(response('Fresh'))
     await settle()
@@ -122,6 +129,7 @@ test('inline plans coalesce refreshes, pause hidden polling, and retain only the
     expect(calls.length).toBe(4)
 
     session.value = '9'
+    await settle()
     expect(calls[3]!.signal.aborted).toBe(true)
     expect(state.viewer.snapshot.value).toBeNull()
     expect(state.expanded.value).toBe(false)
@@ -130,6 +138,7 @@ test('inline plans coalesce refreshes, pause hidden polling, and retain only the
     await settle()
     expect(state.viewer.snapshot.value?.title).toBe('Second session')
     session.value = '7'
+    await settle()
     expect(state.expanded.value).toBe(true)
     expect(state.viewer.markdown.value).toBe('')
     app.unmount()

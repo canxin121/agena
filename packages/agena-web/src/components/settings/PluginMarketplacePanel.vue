@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onScopeDispose, ref } from 'vue'
 import { RiDownloadCloud2Line, RiRefreshLine, RiSearchLine, RiUploadCloud2Line } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -7,6 +7,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import { settingsText as st } from '@/i18n/settingsText'
 import { apiJson } from '@/lib/api'
+import { waitForRuntimeTask, type RuntimeBackgroundTask as BackgroundTask } from '@/lib/runtimeTask'
 import { useToastsStore } from '@/stores/toasts'
 
 type MarketplacePlugin = {
@@ -65,15 +66,6 @@ type OutdatedPlugin = {
 
 type ItemEnvelope<T> = { items?: T[] }
 
-type BackgroundTask = {
-  id: string
-  kind: string
-  title: string
-  status: 'running' | 'succeeded' | 'failed' | 'cancelled' | string
-  message?: string | null
-  failure?: { fallback?: string; title?: string; detail?: string } | null
-}
-
 type BackgroundTaskStart = {
   started: boolean
   task: BackgroundTask
@@ -91,14 +83,16 @@ const allowUnverified = ref(false)
 const searchResponse = ref<MarketplaceSearchResponse | null>(null)
 const installed = ref<InstalledPlugin[]>([])
 const outdated = ref<OutdatedPlugin[]>([])
+const taskWaitController = new AbortController()
+let disposed = false
+onScopeDispose(() => {
+  disposed = true
+  taskWaitController.abort()
+})
 
 const entries = computed(() => searchResponse.value?.entries || [])
 const installedById = computed(() => new Map(installed.value.map((entry) => [entry.plugin_id, entry])))
 const outdatedById = computed(() => new Map(outdated.value.map((entry) => [entry.plugin_id, entry])))
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds))
-}
 
 function marketplaceRegistryBody(): { registry_id?: string; registry_url?: string } {
   const value = source.value.trim()
@@ -106,18 +100,25 @@ function marketplaceRegistryBody(): { registry_id?: string; registry_url?: strin
 }
 
 function taskFailure(task: BackgroundTask): string {
-  return String(task.failure?.fallback || task.failure?.detail || task.failure?.title || task.message || '').trim()
+  return String(
+    task.failure?.fallback ||
+      task.failure?.user?.fallback ||
+      task.failure?.detail ||
+      task.failure?.title ||
+      task.message ||
+      '',
+  ).trim()
 }
 
 async function waitForTask(start: BackgroundTaskStart): Promise<BackgroundTask> {
-  if (!start.started || start.task.status !== 'running') return start.task
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    await delay(250)
-    const response = await apiJson<ItemEnvelope<BackgroundTask>>('/api/v1/runtime/tasks')
-    const task = (response.items || []).find((entry) => entry.id === start.task.id)
-    if (task && task.status !== 'running') return task
+  try {
+    return await waitForRuntimeTask(start.task, { signal: taskWaitController.signal })
+  } catch (reason) {
+    if (reason instanceof DOMException && reason.name === 'TimeoutError') {
+      throw new Error(st('The marketplace operation is still running. Check Runtime background tasks for progress.'))
+    }
+    throw reason
   }
-  throw new Error(st('The marketplace operation is still running. Check Runtime background tasks for progress.'))
 }
 
 async function runTask(key: string, request: Promise<BackgroundTaskStart>) {
@@ -126,6 +127,7 @@ async function runTask(key: string, request: Promise<BackgroundTaskStart>) {
   error.value = ''
   try {
     const task = await waitForTask(await request)
+    if (disposed) return
     if (task.status === 'succeeded') {
       toasts.push('success', task.message || st('Marketplace operation completed'))
     } else {
@@ -134,6 +136,7 @@ async function runTask(key: string, request: Promise<BackgroundTaskStart>) {
     await refreshInstalled()
     await search(false)
   } catch (reason) {
+    if (disposed) return
     const message = reason instanceof Error ? reason.message : String(reason)
     error.value = message
     toasts.push('error', message)

@@ -36,6 +36,7 @@ import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 import { apiUrl } from '@/lib/api'
+import { isDocumentVisible, limitBackgroundReads } from '@/lib/backgroundReads'
 import { useChatStore } from '@/stores/chat'
 import { useDirectoryStore } from '@/stores/directory'
 import { useToastsStore } from '@/stores/toasts'
@@ -98,16 +99,15 @@ const rowMenuSession = computed(
 )
 
 type SessionHealthState = 'unknown' | 'checking' | 'ok' | 'error'
-type SessionHealthEntry = { state: SessionHealthState; checkedAt: number }
+type SessionHealthEntry = { state: SessionHealthState; checkedAt: number; target: string; failures: number }
 
-const HEALTH_TTL_MS = 15_000
-const HEALTH_POLL_MS = 15_000
+const HEALTH_TTL_MS = 60_000
 const HEALTH_TIMEOUT_MS = 3_500
 
 const healthBySessionId = ref<Record<string, SessionHealthEntry>>({})
 const healthInFlight = new Set<string>()
 const healthControllers = new Map<string, AbortController>()
-let healthPollTimer: number | null = null
+let releaseLiveSessions: (() => void) | undefined
 
 const createPreviewIdNorm = computed(() => String(createPreviewId.value || '').trim())
 const createPreviewIdValid = computed(() => /^[A-Za-z0-9_-]+$/.test(createPreviewIdNorm.value))
@@ -227,6 +227,7 @@ function sessionDotLabel(session: WorkspacePreviewSession): string {
 }
 
 async function probeSessionHealth(session: WorkspacePreviewSession) {
+  if (!isDocumentVisible()) return
   const sessionId = String(session.id || '').trim()
   if (!sessionId) return
   const state = normalizeSessionState(session.state)
@@ -235,8 +236,11 @@ async function probeSessionHealth(session: WorkspacePreviewSession) {
   if (healthInFlight.has(sessionId)) return
 
   const now = Date.now()
+  const target = `${session.proxyBasePath}:${session.targetUrl}:${session.state}:${session.pid ?? ''}`
   const prev = healthBySessionId.value[sessionId]
-  if (prev && now - prev.checkedAt < HEALTH_TTL_MS && (prev.state === 'ok' || prev.state === 'error')) {
+  const retryAfter =
+    prev?.state === 'ok' ? HEALTH_TTL_MS : Math.min(300_000, HEALTH_TTL_MS * 2 ** (prev?.failures ?? 0))
+  if (prev?.target === target && now - prev.checkedAt < retryAfter) {
     return
   }
 
@@ -252,7 +256,7 @@ async function probeSessionHealth(session: WorkspacePreviewSession) {
   const controller = new AbortController()
   healthControllers.set(sessionId, controller)
   healthInFlight.add(sessionId)
-  setSessionHealth(sessionId, { state: 'checking', checkedAt: now })
+  setSessionHealth(sessionId, { state: 'checking', checkedAt: now, target, failures: prev?.failures ?? 0 })
 
   const timeoutId = window.setTimeout(() => {
     try {
@@ -265,23 +269,44 @@ async function probeSessionHealth(session: WorkspacePreviewSession) {
   try {
     const src = buildPreviewFrameSrc(session.proxyBasePath, now)
     if (!src) {
-      setSessionHealth(sessionId, { state: 'error', checkedAt: Date.now() })
+      setSessionHealth(sessionId, {
+        state: 'error',
+        checkedAt: Date.now(),
+        target,
+        failures: (prev?.failures ?? 0) + 1,
+      })
       return
     }
 
-    const resp = await fetch(apiUrl(src), {
-      method: 'GET',
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: {
-        accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
-      },
-    })
+    const resp = await limitBackgroundReads(
+      () =>
+        fetch(apiUrl(src), {
+          method: 'HEAD',
+          credentials: 'include',
+          cache: 'no-store',
+          signal: controller.signal,
+          headers: {
+            accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
+          },
+        }),
+      controller.signal,
+    )
+    if (controller.signal.aborted || !isDocumentVisible()) return
     const ok = resp.ok || resp.status === 304
-    setSessionHealth(sessionId, { state: ok ? 'ok' : 'error', checkedAt: Date.now() })
+    setSessionHealth(sessionId, {
+      state: ok ? 'ok' : 'error',
+      checkedAt: Date.now(),
+      target,
+      failures: ok ? 0 : (prev?.failures ?? 0) + 1,
+    })
   } catch {
-    setSessionHealth(sessionId, { state: 'error', checkedAt: Date.now() })
+    if (isDocumentVisible() && healthControllers.get(sessionId) === controller)
+      setSessionHealth(sessionId, {
+        state: 'error',
+        checkedAt: Date.now(),
+        target,
+        failures: Math.min(4, (prev?.failures ?? 0) + 1),
+      })
   } finally {
     window.clearTimeout(timeoutId)
     healthInFlight.delete(sessionId)
@@ -381,7 +406,11 @@ const visibleSessionsForHealth = computed(() => {
   return out
 })
 
-const visibleSessionIdKey = computed(() => visibleSessionsForHealth.value.map((session) => session.id).join('|'))
+const visibleSessionIdKey = computed(() =>
+  visibleSessionsForHealth.value
+    .map((session) => `${session.id}:${session.targetUrl}:${session.state}:${session.pid ?? ''}`)
+    .join('|'),
+)
 
 function probeVisibleSessions() {
   if (preview.loading) return
@@ -461,7 +490,7 @@ const rowMenuGroups = computed<OptionMenuGroup[]>(() => {
 
 async function refreshSessions(opts?: { forceFrameReload?: boolean }) {
   clearSessionHealth()
-  await preview.refreshSessions()
+  await preview.refreshSessions({ force: true })
   if (opts?.forceFrameReload) preview.bumpRefreshToken()
   probeVisibleSessions()
 }
@@ -923,18 +952,23 @@ watch(currentDirectoryNorm, (next, prev) => {
 })
 
 onMounted(() => {
+  releaseLiveSessions = preview.retainLiveSessions()
   probeVisibleSessions()
-  healthPollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'hidden') return
-    probeVisibleSessions()
-  }, HEALTH_POLL_MS)
+  document.addEventListener('visibilitychange', onHealthVisibility)
 })
 
-onBeforeUnmount(() => {
-  if (healthPollTimer !== null) {
-    window.clearInterval(healthPollTimer)
-    healthPollTimer = null
+function onHealthVisibility() {
+  if (isDocumentVisible()) probeVisibleSessions()
+  else {
+    for (const controller of healthControllers.values()) controller.abort()
+    for (const [id, entry] of Object.entries(healthBySessionId.value))
+      if (entry.state === 'checking') clearSessionHealth(id)
   }
+}
+
+onBeforeUnmount(() => {
+  releaseLiveSessions?.()
+  document.removeEventListener('visibilitychange', onHealthVisibility)
   clearSessionHealth()
 })
 

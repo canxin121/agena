@@ -3,11 +3,11 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { apiJson } from '@/lib/api'
-import { sessionStateIsBusy } from '@/types/chat'
-import { activityIsActive, mergeActivityLog, type ActivityLog, type SessionActivity } from '@/types/activity'
-import { useVisibleResource } from '@/pages/chat/useVisibleResource'
+import { activityLogText, type SessionActivity } from '@/types/activity'
+import { useActivityLogs } from '@/composables/useActivityLogs'
 import SessionSection from './SessionSection.vue'
 import Button from '@/components/ui/Button.vue'
+import CodeBlock from '@/components/ui/CodeBlock.vue'
 
 const props = defineProps<{
   sessionId: string
@@ -22,34 +22,18 @@ const mutation = ref('')
 const mutationError = ref('')
 const limit = ref(20)
 const activities = computed(() => chat.sessionBackgroundActivities(props.sessionId))
-// Reconcile ephemeral provider backoff as well as task controls. The store
-// coalesces this with SSE-driven refreshes; hidden tabs suspend the heartbeat.
-useVisibleResource<boolean>({
-  key: computed(() =>
-    sessionStateIsBusy(chat.selectedSessionState) || activities.value.length ? props.sessionId : '',
-  ),
-  interval: () => 2500,
-  load: async (sid) => {
-    await chat.refreshExecutionStatus(sid)
-    return true
-  },
-})
 const logKey = computed(() => (expanded.value && selected.value ? `${props.sessionId}/${selected.value.id}` : ''))
-const logs = useVisibleResource<ActivityLog>({
-  key: logKey,
-  interval: () =>
-    logs.data.value?.has_more || activityIsActive(logs.data.value?.status || selected.value?.status || '')
-      ? 2000
-      : 30_000,
-  async load(key, signal, previous) {
-    const id = key.slice(key.indexOf('/') + 1)
-    const next = await apiJson<ActivityLog>(
-      `/api/v1/activities/${encodeURIComponent(id)}/logs?since_seq=${previous?.last_seq ?? Math.max(0, (selected.value?.last_seq || 0) - 200)}&limit=200&wait_ms=0`,
-      { signal },
-    )
-    return mergeActivityLog(previous, next)
+const logs = useActivityLogs(logKey, () => selected.value)
+watch(
+  () => props.sessionId,
+  () => {
+    selected.value = null
+    expanded.value = false
+    mutationError.value = ''
+    limit.value = 20
   },
-})
+  { flush: 'sync' },
+)
 watch(activities, (rows) => {
   const current = rows.find((row) => row.id === selected.value?.id)
   if (current) selected.value = current
@@ -59,13 +43,14 @@ async function control(activity: SessionActivity, action: string) {
   mutation.value = activity.id
   mutationError.value = ''
   const sid = props.sessionId
+  const generation = chat.sessionActivityGeneration(sid)
   try {
     const result = await apiJson<SessionActivity>(
       `/api/v1/activities/${encodeURIComponent(activity.id)}/${encodeURIComponent(action)}`,
       { method: 'POST', signal: AbortSignal.timeout(15_000) },
     )
     if (props.sessionId === sid && selected.value?.id === activity.id) selected.value = result
-    await chat.refreshExecutionStatus(sid)
+    chat.applySessionActivity(sid, result, action === 'dismiss' || action === 'delete', generation)
   } catch (cause) {
     if (props.sessionId === sid) mutationError.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -147,8 +132,9 @@ async function control(activity: SessionActivity, action: string) {
             ></span
           >
         </div>
+        <CodeBlock v-if="selected.command" :code="selected.command" lang="sh" compact />
         <p
-          v-if="selected.description && selected.description !== selected.title"
+          v-else-if="selected.description && selected.description !== selected.title"
           class="mb-2 whitespace-pre-wrap break-words text-xs text-muted-foreground"
         >
           {{ selected.description }}
@@ -159,9 +145,8 @@ async function control(activity: SessionActivity, action: string) {
           class="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-xs"
           :aria-busy="logs.loading.value"
           >{{
-            logs.data.value?.lines
-              .map((line) => (line.stream === 'stderr' ? 'stderr › ' : '') + line.text)
-              .join('\n') || t(logs.loading.value ? 'chat.sessionWork.loading' : 'chat.sessionWork.noOutput')
+            activityLogText(logs.data.value) ||
+            t(logs.loading.value ? 'chat.sessionWork.loading' : 'chat.sessionWork.noOutput')
           }}</pre
         >
         <p v-if="logs.data.value?.dropped_lines" class="text-xs text-muted-foreground">

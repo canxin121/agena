@@ -8,6 +8,7 @@ import { useSettingsStore } from './stores/settings'
 
 import { applyAppearanceSettingsToDom } from './lib/appearance'
 import { useDeviceRuntime } from './app/runtime/useDeviceRuntime'
+import { usePolling } from './composables/usePolling'
 
 import LoginPage from './pages/LoginPage.vue'
 import MainLayout from './layout/MainLayout.vue'
@@ -28,7 +29,7 @@ const showLogin = computed(() => !showLoading.value && (auth.needsLogin || !back
 // page into existence before the auth state has settled.
 const showLoading = computed(() => health.data === null || !auth.checked)
 
-let probeTimer: ReturnType<typeof setInterval> | null = null
+// A single serial boot probe pauses hidden and backs off while unavailable.
 let probeBusy = false
 let systemThemeMedia: MediaQueryList | null = null
 
@@ -40,7 +41,8 @@ async function refreshBootState() {
   if (probeBusy) return
   probeBusy = true
   try {
-    await health.refresh().catch(() => {})
+    await health.refresh()
+    if (health.error) throw new Error(health.error)
     if (health.data !== null) {
       await auth.refresh().catch(() => {})
     }
@@ -49,22 +51,9 @@ async function refreshBootState() {
   }
 }
 
-function clearProbeTimer() {
-  if (!probeTimer) return
-  clearInterval(probeTimer)
-  probeTimer = null
-}
-
-function scheduleProbe() {
-  if (!showLoading.value) return
-  if (probeTimer) return
-  probeTimer = setInterval(() => {
-    void refreshBootState()
-  }, 2000)
-}
+const bootProbe = usePolling(refreshBootState, 5000, () => showLoading.value)
 
 onMounted(() => {
-  void refreshBootState()
   if (typeof window.matchMedia === 'function') {
     systemThemeMedia = window.matchMedia('(prefers-color-scheme: light)')
     systemThemeMedia.addEventListener?.('change', handleSystemThemeChange)
@@ -75,16 +64,15 @@ watch(
   () => showLoading.value,
   (loading) => {
     if (loading) {
-      scheduleProbe()
+      bootProbe.invalidate(0)
       return
     }
-    clearProbeTimer()
+    bootProbe.pause()
   },
   { immediate: true },
 )
 
 onBeforeUnmount(() => {
-  clearProbeTimer()
   systemThemeMedia?.removeEventListener?.('change', handleSystemThemeChange)
   systemThemeMedia = null
 })

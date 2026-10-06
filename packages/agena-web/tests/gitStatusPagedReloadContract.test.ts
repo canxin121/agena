@@ -30,6 +30,10 @@ test('useGitStatusPaged queues first-page reload while a scope is loading', asyn
 
   let releaseStagedLoad: (() => void) | null = null
   let stagedLoadMorePending = true
+  let started!: () => void
+  const firstReadStarted = new Promise<void>((resolve) => {
+    started = resolve
+  })
 
   const paged = useGitStatusPaged({
     gitReady,
@@ -41,6 +45,7 @@ test('useGitStatusPaged queues first-page reload while a scope is loading', asyn
       if (scope === 'staged' && offset === 0 && stagedLoadMorePending) {
         await new Promise<void>((resolve) => {
           releaseStagedLoad = resolve
+          started()
         })
         stagedLoadMorePending = false
         return makeStatus([{ path: 'staged-old.txt', index: 'M', workingDir: '' }], scope)
@@ -55,7 +60,7 @@ test('useGitStatusPaged queues first-page reload while a scope is loading', asyn
   })
 
   const loadMorePromise = paged.loadMore('/repo', 'staged')
-  await Promise.resolve()
+  await firstReadStarted
 
   const reloadPromise = paged.reloadFirstPages('/repo')
   releaseStagedLoad?.()
@@ -75,6 +80,10 @@ test('useGitStatusPaged queues first-page reload while a scope is loading', asyn
 
 test('resetting or switching repositories cannot publish an obsolete Git page', async () => {
   let release!: (value: ReturnType<typeof makeStatus>) => void
+  let started!: () => void
+  const firstReadStarted = new Promise<void>((resolve) => {
+    started = resolve
+  })
   const paged = useGitStatusPaged({
     gitReady: ref(true),
     status: ref(makeStatus([], 'summary')),
@@ -82,12 +91,15 @@ test('resetting or switching repositories cannot publish an obsolete Git page', 
     loadStatusPage: async () =>
       new Promise((resolve) => {
         release = resolve
+        started()
       }),
   })
   const old = paged.loadMore('/old', 'staged')
+  const aborted = assert.rejects(old, { name: 'AbortError' })
+  await firstReadStarted
   paged.resetAll()
   release(makeStatus([{ path: 'old.txt', index: 'M', workingDir: '' }], 'staged'))
-  await old
+  await aborted
   assert.equal(paged.stagedList.value.length, 0)
   assert.equal(paged.stagedListLoading.value, false)
 })

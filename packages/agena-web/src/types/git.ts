@@ -42,6 +42,10 @@ export interface GitWatchStatusPayload {
   mergeCount: number
   isClean: boolean
   worktreeSignature?: string
+  updatedAtMs?: number
+  totalFiles?: number
+  selectedPathSignature?: string
+  scopeSignatures?: Partial<Record<'merge' | 'staged' | 'unstaged' | 'untracked', string>>
 }
 
 export interface GitBranch {

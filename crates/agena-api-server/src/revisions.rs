@@ -52,10 +52,14 @@ struct Clock {
     deleted_sessions: std::collections::HashSet<i64>,
 }
 
-// Invalidation needs scalar fields, never retained session configs or
-// provider continuation bodies. Keep mutation-time bookkeeping lightweight.
+// Invalidation retains only navigation fields, never session configs or
+// provider continuation bodies. The content version alone is not a reason
+// to reload a navigation list.
 struct SessionRevision {
     version: i64,
+    updated_at_ms: i64,
+    title: String,
+    subtask_status: Option<String>,
     workspace_id: i64,
     previous_workspace_id: Option<i64>,
     parent_id: Option<i64>,
@@ -63,6 +67,18 @@ struct SessionRevision {
     favorite: bool,
     lifecycle_state: SessionLifecycleState,
     state: Option<SessionStateKind>,
+}
+
+fn awaiting_interaction(state: PartState, user_input: &serde_json::Value) -> bool {
+    state.is_in_flight()
+        && user_input
+            .get("requests")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|requests| {
+                requests
+                    .iter()
+                    .any(|record| record.get("reply").is_none_or(serde_json::Value::is_null))
+            })
 }
 
 struct FileRevision {
@@ -264,6 +280,16 @@ impl Clock {
                 {
                     return;
                 }
+                let list_changed = self.sessions.get(&id).is_none_or(|previous| {
+                    previous.updated_at_ms != meta.updated_at_ms
+                        || previous.title != meta.title
+                        || previous.subtask_status != meta.subtask_status
+                        || previous.pinned != meta.pinned
+                        || previous.favorite != meta.favorite
+                        || previous.workspace_id != meta.workspace_id
+                        || previous.parent_id != meta.parent_id
+                        || previous.lifecycle_state != meta.lifecycle_state
+                });
                 let stats_changed = self.sessions.get(&id).is_none_or(|previous| {
                     previous.pinned != meta.pinned
                         || previous.workspace_id != meta.workspace_id
@@ -304,6 +330,9 @@ impl Clock {
                     id,
                     SessionRevision {
                         version: meta.version,
+                        updated_at_ms: meta.updated_at_ms,
+                        title: meta.title.clone(),
+                        subtask_status: meta.subtask_status.clone(),
                         workspace_id: meta.workspace_id,
                         previous_workspace_id,
                         parent_id: meta.parent_id,
@@ -329,7 +358,10 @@ impl Clock {
                     None if meta.version > 1 => self.bump("workspace-sessions-baseline"),
                     _ => {}
                 }
-                self.lists_changed(id);
+                if list_changed {
+                    self.lists_changed(id);
+                    self.buckets_changed(id, previous_flags);
+                }
                 if let Some((workspace, parent)) =
                     previous_parent.filter(|old| old.1 != meta.parent_id)
                 {
@@ -337,7 +369,6 @@ impl Clock {
                         parent.map_or_else(|| "roots".into(), |parent| format!("parent:{parent}"));
                     self.bump(format!("workspace:{workspace}:sessions:{suffix}"));
                 }
-                self.buckets_changed(id, previous_flags);
                 if previous_parent.is_none()
                     || previous_parent.is_some_and(|old| old.1 != meta.parent_id)
                 {
@@ -426,6 +457,37 @@ impl Clock {
                 let state_changed = previous.is_none_or(|(_, _, state, user_input)| {
                     *state != part.state || *user_input != interaction
                 });
+                // Ordinary tool progress cannot change the derived session
+                // state. Only run liveness and entering/leaving a user-input
+                // gate affect navigation; pending -> in_progress is still
+                // the same live message.
+                let navigation_changed = if part.origin_session_id != id {
+                    false
+                } else if part.is_run_marker() {
+                    match previous {
+                        Some((_, _, state, _)) => state.is_in_flight() != part.state.is_in_flight(),
+                        None => {
+                            part.role != agena_storage::store::PartRole::Runtime
+                                || part.state.is_in_flight()
+                        }
+                    }
+                } else if part.kind == "tool_call" {
+                    let pending = awaiting_interaction(part.state, &interaction);
+                    match previous {
+                        Some((_, _, state, user_input)) => {
+                            pending != awaiting_interaction(*state, user_input)
+                        }
+                        // A gate can predate this server's first observation.
+                        // Its retained request/reply history still identifies
+                        // its first observed settlement as a navigation change.
+                        None => interaction
+                            .get("requests")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|requests| !requests.is_empty()),
+                    }
+                } else {
+                    false
+                };
                 if self.parts.len() >= 8192 && !self.parts.contains_key(&key) {
                     self.parts.clear();
                 }
@@ -465,13 +527,26 @@ impl Clock {
                 if state_changed && matches!(part.kind.as_str(), "run" | "tool_call") {
                     self.bump(format!("session:{id}:state"));
                 }
-                if state_changed && matches!(part.kind.as_str(), "run" | "tool_call") {
+                if navigation_changed {
                     self.lists_changed(id);
-                    if let Some(meta) = self.sessions.get_mut(&id) {
+                    let previous_flags = self
+                        .sessions
+                        .get(&id)
+                        .map(|meta| (meta.pinned, meta.favorite, meta.state));
+                    // A submitted user message is already terminal: it changes
+                    // row counts/recency, but cannot change running/attention
+                    // membership or workspace statistics.
+                    let state_membership_changed =
+                        !(matches!(change, SessionChange::PartAdded { .. })
+                            && part.is_run_marker()
+                            && part.state.is_terminal());
+                    if state_membership_changed && let Some(meta) = self.sessions.get_mut(&id) {
                         meta.state = None;
                     }
-                    self.buckets_changed(id, None);
-                    self.stats_changed(id);
+                    self.buckets_changed(id, previous_flags);
+                    if state_membership_changed {
+                        self.stats_changed(id);
+                    }
                 }
             }
             SessionChange::PartRemoved { part_id, .. } => {
@@ -923,6 +998,9 @@ impl ResourceRevisions {
                 row.id,
                 SessionRevision {
                     version: row.version,
+                    updated_at_ms: row.updated_at.timestamp_millis(),
+                    title: row.title.clone(),
+                    subtask_status: row.subtask_status.map(|status| status.as_ref().to_owned()),
                     workspace_id: row.workspace_id,
                     previous_workspace_id,
                     parent_id: row.parent_id,

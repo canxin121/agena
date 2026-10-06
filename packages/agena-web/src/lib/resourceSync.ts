@@ -287,14 +287,11 @@ export function applyResourceEvent(event: SseEvent) {
   const props = event.properties ?? {}
   const announced = props.resource_revisions
   if (announced && typeof announced === 'object' && !Array.isArray(announced)) {
-    const part = props.part && typeof props.part === 'object' && !Array.isArray(props.part) ? props.part : null
     for (const [key, token] of Object.entries(announced)) {
       if (typeof token !== 'string' || (!listeners.has(key) && !versions.has(key))) continue
-      // Text is rendered directly from the stream. Navigation ordering and
-      // optimistic versions catch up at the shared 30s check; a token stream
-      // must not repeatedly reload list/state representations.
-      if ((part?.kind === 'text' || part?.kind === 'think') && !key.startsWith('part:') && !key.endsWith(':transcript'))
-        continue
+      // Backend navigation clocks advance at message endings and visible
+      // metadata/state changes. Honor a changed token even on a delayed text
+      // event: unchanged streaming/tool tokens do not reload the lists.
       if (noteResourceVersion(key, token, undefined, event)) {
         checkedAt.set(key, Date.now())
       }

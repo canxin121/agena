@@ -174,6 +174,11 @@ const directoryFallbackText = computed(() => {
 })
 
 const updatedAt = computed(() => {
+  const completedAt = props.session?.updated_at
+  if (typeof completedAt === 'string') {
+    const parsed = Date.parse(completedAt)
+    if (Number.isFinite(parsed)) return parsed
+  }
   const session = props.session as { time?: { updated?: number | string | null } } | null | undefined
   const next = Number(session?.time?.updated ?? 0)
   return Number.isFinite(next) ? next : 0

@@ -111,15 +111,21 @@ impl InMemoryEngine {
         self.next_session_id.fetch_add(1, Ordering::SeqCst)
     }
 
-    /// Advance the persisted position for one session mutation (8.6). Callers
-    /// invoke this only after releasing part/membership locks.
-    fn bump_session_version(&self, session_id: i64, now_ms: i64) -> Result<(), StoreError> {
+    /// Advance the content version; advance navigation recency only at a
+    /// message ending. Callers release part/membership locks first.
+    fn bump_session_version(
+        &self,
+        session_id: i64,
+        message_ended_at_ms: Option<i64>,
+    ) -> Result<(), StoreError> {
         let mut sessions = self.sessions.write().expect("sessions lock");
         let meta = sessions
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
         meta.version += 1;
-        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
+        if let Some(at) = message_ended_at_ms {
+            meta.updated_at_ms = at.max(meta.updated_at_ms.saturating_add(1));
+        }
         Ok(())
     }
 
@@ -128,7 +134,7 @@ impl InMemoryEngine {
     fn bump_member_session_versions(
         &self,
         part_ids: &[i64],
-        now_ms: i64,
+        message_ended: Option<(i64, i64)>,
     ) -> Result<(), StoreError> {
         if part_ids.is_empty() {
             return Ok(());
@@ -152,7 +158,13 @@ impl InMemoryEngine {
                 .get_mut(&session_id)
                 .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
             meta.version += 1;
-            meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
+            // Shared history invalidates the fork's content version without
+            // making that fork look like it received a new message.
+            if let Some((origin, at)) = message_ended
+                && origin == session_id
+            {
+                meta.updated_at_ms = at.max(meta.updated_at_ms.saturating_add(1));
+            }
         }
         Ok(())
     }
@@ -250,7 +262,10 @@ impl InMemoryEngine {
                 .expect("idempotency lock")
                 .insert((session_id, key), marker_id);
         }
-        self.bump_session_version(session_id, now_ms)?;
+        self.bump_session_version(
+            session_id,
+            created[0].is_terminal_message().then_some(now_ms),
+        )?;
         Ok(SubmitOutcome {
             run_id: marker_id,
             created: true,
@@ -371,7 +386,12 @@ impl InMemoryEngine {
             .iter()
             .map(|part| part.part_id)
             .collect::<Vec<_>>();
-        self.bump_member_session_versions(&changed_ids, now_ms)?;
+        let message_ended = outcome
+            .updated_parts
+            .iter()
+            .any(Part::is_terminal_message)
+            .then_some((session_id, now_ms));
+        self.bump_member_session_versions(&changed_ids, message_ended)?;
         Ok(outcome)
     }
 }
@@ -651,7 +671,6 @@ impl PersistenceEngine for InMemoryEngine {
         session_id: i64,
         title: String,
     ) -> Result<SessionMeta, StoreError> {
-        let now_ms = self.now_ms();
         let mut sessions = self.sessions.write().expect("sessions lock");
         let meta = sessions
             .get_mut(&session_id)
@@ -661,7 +680,6 @@ impl PersistenceEngine for InMemoryEngine {
         }
         meta.title = title;
         meta.version += 1;
-        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -675,7 +693,6 @@ impl PersistenceEngine for InMemoryEngine {
                 "session metadata patch cannot be empty".to_owned(),
             ));
         }
-        let now_ms = self.now_ms();
         let mut sessions = self.sessions.write().expect("sessions lock");
         let meta = sessions
             .get_mut(&session_id)
@@ -694,7 +711,6 @@ impl PersistenceEngine for InMemoryEngine {
             return Ok(meta.clone());
         }
         meta.version += 1;
-        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -703,7 +719,6 @@ impl PersistenceEngine for InMemoryEngine {
         session_id: i64,
         anchors: Option<Value>,
     ) -> Result<SessionMeta, StoreError> {
-        let now_ms = self.now_ms();
         let mut sessions = self.sessions.write().expect("sessions lock");
         let meta = sessions
             .get_mut(&session_id)
@@ -713,7 +728,6 @@ impl PersistenceEngine for InMemoryEngine {
         }
         meta.provider_anchors_json = anchors;
         meta.version += 1;
-        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -722,7 +736,6 @@ impl PersistenceEngine for InMemoryEngine {
         session_id: i64,
         config: Option<Value>,
     ) -> Result<SessionMeta, StoreError> {
-        let now_ms = self.now_ms();
         let mut sessions = self.sessions.write().expect("sessions lock");
         let meta = sessions
             .get_mut(&session_id)
@@ -732,7 +745,6 @@ impl PersistenceEngine for InMemoryEngine {
         }
         meta.config_json = config;
         meta.version += 1;
-        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -821,7 +833,6 @@ impl PersistenceEngine for InMemoryEngine {
         finished_at_ms: Option<i64>,
         failure: Option<Value>,
     ) -> Result<SessionMeta, StoreError> {
-        let now_ms = self.now_ms();
         let mut sessions = self.sessions.write().expect("sessions lock");
         let meta = sessions
             .get_mut(&session_id)
@@ -838,7 +849,6 @@ impl PersistenceEngine for InMemoryEngine {
         meta.subtask_finished_at_ms = finished_at_ms;
         meta.subtask_failure = failure;
         meta.version += 1;
-        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -921,7 +931,8 @@ impl PersistenceEngine for InMemoryEngine {
                     .get(&meta.id)
                     .into_iter()
                     .flat_map(|ids| ids.iter().filter_map(|id| parts.get(id)))
-                    .map(|part| part.created_at_ms)
+                    .filter(|part| part.is_terminal_message())
+                    .filter_map(|part| part.finished_at_ms)
                     .max();
                 SessionSummary {
                     id: meta.id,
@@ -1018,7 +1029,8 @@ impl PersistenceEngine for InMemoryEngine {
             .get(&meta.id)
             .into_iter()
             .flat_map(|ids| ids.iter().filter_map(|id| parts.get(id)))
-            .map(|part| part.created_at_ms)
+            .filter(|part| part.is_terminal_message())
+            .filter_map(|part| part.finished_at_ms)
             .max();
         Ok(Some(SessionSummary {
             id: meta.id,
@@ -1082,7 +1094,8 @@ impl PersistenceEngine for InMemoryEngine {
                     .get(&meta.id)
                     .into_iter()
                     .flat_map(|ids| ids.iter().filter_map(|id| parts.get(id)))
-                    .map(|part| part.created_at_ms)
+                    .filter(|part| part.is_terminal_message())
+                    .filter_map(|part| part.finished_at_ms)
                     .max();
                 SessionSummary {
                     id: meta.id,
@@ -1504,7 +1517,7 @@ impl PersistenceEngine for InMemoryEngine {
                 .entry(current.session_id)
                 .or_default()
                 .insert(id);
-            self.bump_session_version(current.session_id, now_ms)?;
+            self.bump_session_version(current.session_id, None)?;
             part
         } else {
             notification.role = PartRole::Runtime;
@@ -1844,6 +1857,7 @@ impl PersistenceEngine for InMemoryEngine {
         // Transition the launching tool part when supplied. An InProgress
         // transition is the atomic background-launch checkpoint; terminal
         // transitions settle the operation.
+        let tool_part_id = tool_part.as_ref().map(|(id, _, _)| *id);
         if let Some((part_id, next_state, content)) = tool_part {
             let mut part = self
                 .parts
@@ -1902,6 +1916,8 @@ impl PersistenceEngine for InMemoryEngine {
             .get(&run_id)
             .cloned()
             .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
+        let mut message_ended = None;
+        let mut run_ended = false;
         if run.is_run_marker() && run.state.is_in_flight() {
             let remaining = self.parts.read().expect("parts lock").values().any(|part| {
                 part.origin_session_id == session_id
@@ -1911,6 +1927,8 @@ impl PersistenceEngine for InMemoryEngine {
             });
             if !remaining {
                 run.state = PartState::Completed;
+                run_ended = true;
+                message_ended = run.is_terminal_message().then_some((session_id, now_ms));
                 run.finished_at_ms = Some(now_ms);
                 if let serde_json::Value::Object(map) = &mut run.content {
                     map.insert("abort_reason".to_owned(), serde_json::Value::Null);
@@ -1920,9 +1938,12 @@ impl PersistenceEngine for InMemoryEngine {
                 self.parts.write().expect("parts lock").insert(run_id, run);
             }
         }
-        if !created.is_empty() {
-            self.bump_session_version(session_id, now_ms)?;
-        }
+        let changed_ids = tool_part_id
+            .into_iter()
+            .chain(created.iter().map(|part| part.part_id))
+            .chain(run_ended.then_some(run_id))
+            .collect::<Vec<_>>();
+        self.bump_member_session_versions(&changed_ids, message_ended)?;
         Ok(created)
     }
 
@@ -1975,7 +1996,7 @@ impl PersistenceEngine for InMemoryEngine {
             }
         }
         if !created.is_empty() {
-            self.bump_session_version(session_id, now_ms)?;
+            self.bump_session_version(session_id, None)?;
         }
         Ok(created)
     }
@@ -1987,7 +2008,7 @@ impl PersistenceEngine for InMemoryEngine {
         delta: PartDelta,
         now_ms: i64,
     ) -> Result<Part, StoreError> {
-        let updated = {
+        let (updated, message_ended) = {
             let mut parts = self.parts.write().expect("parts lock");
             let part = parts
                 .get_mut(&part_id)
@@ -2002,10 +2023,12 @@ impl PersistenceEngine for InMemoryEngine {
             if updated.revision == part.revision {
                 return Ok(updated);
             }
+            let message_ended = (!part.state.is_terminal() && updated.is_terminal_message())
+                .then_some((session_id, updated.updated_at_ms));
             *part = updated;
-            part.clone()
+            (part.clone(), message_ended)
         };
-        self.bump_member_session_versions(&[part_id], updated.updated_at_ms)?;
+        self.bump_member_session_versions(&[part_id], message_ended)?;
         Ok(updated)
     }
 
@@ -2016,7 +2039,7 @@ impl PersistenceEngine for InMemoryEngine {
         outcome: RunOutcome,
         now_ms: i64,
     ) -> Result<Part, StoreError> {
-        let updated = {
+        let (updated, message_ended) = {
             let mut parts = self.parts.write().expect("parts lock");
             let part = parts
                 .get_mut(&run_id)
@@ -2035,10 +2058,12 @@ impl PersistenceEngine for InMemoryEngine {
             if updated.revision == part.revision {
                 return Ok(updated);
             }
+            let message_ended = (!part.state.is_terminal() && updated.is_terminal_message())
+                .then_some((session_id, updated.updated_at_ms));
             *part = updated;
-            part.clone()
+            (part.clone(), message_ended)
         };
-        self.bump_member_session_versions(&[run_id], updated.updated_at_ms)?;
+        self.bump_member_session_versions(&[run_id], message_ended)?;
         Ok(updated)
     }
 
@@ -2085,7 +2110,7 @@ impl PersistenceEngine for InMemoryEngine {
         &self,
         session_id: i64,
         run_id: i64,
-        now_ms: i64,
+        _now_ms: i64,
     ) -> Result<Vec<Part>, StoreError> {
         let member_ids = self
             .membership
@@ -2138,7 +2163,7 @@ impl PersistenceEngine for InMemoryEngine {
             .write()
             .expect("idempotency lock")
             .retain(|(sid, _), mapped_run_id| *sid != session_id || *mapped_run_id != run_id);
-        self.bump_session_version(session_id, now_ms)?;
+        self.bump_session_version(session_id, None)?;
         Ok(removed)
     }
 
@@ -2340,7 +2365,7 @@ impl PersistenceEngine for InMemoryEngine {
         &self,
         workspace_id: i64,
         bundle: &str,
-        now_ms: i64,
+        _now_ms: i64,
     ) -> Result<i64, StoreError> {
         let parsed = jsonl::parse(bundle)?;
         let meta = self
@@ -2379,7 +2404,7 @@ impl PersistenceEngine for InMemoryEngine {
             }
         }
         if !parsed.parts.is_empty() {
-            self.bump_session_version(session_id, now_ms)?;
+            self.bump_session_version(session_id, None)?;
         }
         Ok(session_id)
     }

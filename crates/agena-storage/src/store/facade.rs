@@ -1667,21 +1667,21 @@ where
                 part: part.clone(),
             });
         }
-        if let Some(tool_part_id) = tool_part_id {
-            let view = self.engine.load_session(session_id).await?;
-            let mut emitted = Vec::new();
-            if let Some(part) = view.parts.iter().find(|part| part.part_id == tool_part_id) {
-                emitted.push(part.clone());
-            }
-            if let Some(part) = view.parts.iter().find(|part| part.part_id == run_id) {
-                emitted.push(part.clone());
-            }
-            for part in emitted {
-                self.bus
-                    .emit(SessionChange::PartUpdated { session_id, part });
+        // A settlement can end the run without a tool transition. Always
+        // announce that marker so navigation observes the state boundary as
+        // well as its ending timestamp. Read only these rows, not the whole
+        // transcript, and reuse the metadata returned by that bounded read.
+        let changed_ids = tool_part_id.into_iter().chain([run_id]).collect::<Vec<_>>();
+        let view = self.engine.load_part_ids(session_id, &changed_ids).await?;
+        for id in changed_ids {
+            if let Some(part) = view.parts.iter().find(|part| part.part_id == id) {
+                self.bus.emit(SessionChange::PartUpdated {
+                    session_id,
+                    part: part.clone(),
+                });
             }
         }
-        let meta = self.engine.session_meta(session_id).await?;
+        let meta = view.meta;
         self.bus
             .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         Ok(created)

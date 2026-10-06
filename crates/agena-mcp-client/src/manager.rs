@@ -39,6 +39,48 @@ use crate::protocol::{
 };
 use crate::{KeyringOAuthCredentialStore, OAuthCredentialHealth};
 
+static TOOL_CATALOGS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static TOOL_SNAPSHOTS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static MCP_PAYLOADS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+fn projection_error(error: tokio::task::JoinError) -> McpError {
+    McpError::Transport(format!("MCP projection worker failed: {error}"))
+}
+
+async fn prepare_tools(
+    tools: Vec<Tool>,
+    policy: McpToolPolicy,
+) -> McpResult<Arc<Vec<ToolDescriptor>>> {
+    TOOL_CATALOGS
+        .run(move || Arc::new(filter_tools(tools, &policy)))
+        .await
+        .map_err(projection_error)
+}
+
+async fn replace_tools(events: &ServerEventState, tools: Arc<Vec<ToolDescriptor>>) {
+    let retired = {
+        let mut cache = events.tools.write().await;
+        let retired = std::mem::replace(&mut *cache, tools);
+        // Publish the generation before the next await. Cancellation while
+        // releasing the old catalog must not leave a changed cache unmarked.
+        events.tool_generation.fetch_add(1, Ordering::Relaxed);
+        retired
+    };
+    release_tools(retired).await;
+}
+
+async fn release_tools(retired: Arc<Vec<ToolDescriptor>>) {
+    if let Err(error) = TOOL_CATALOGS.run(move || drop(retired)).await {
+        tracing::error!(%error, "MCP tool catalog release worker failed");
+    }
+}
+
+async fn project_payload<T: Send + 'static>(
+    project: impl FnOnce() -> T + Send + 'static,
+) -> McpResult<T> {
+    MCP_PAYLOADS.run(project).await.map_err(projection_error)
+}
+
 #[derive(Debug, Clone)]
 /// Specification of an MCP server.
 pub enum ServerSpec {
@@ -368,7 +410,7 @@ const SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct ServerEventState {
-    tools: RwLock<Vec<ToolDescriptor>>,
+    tools: RwLock<Arc<Vec<ToolDescriptor>>>,
     tool_generation: AtomicU64,
     resource_generation: AtomicU64,
     prompt_generation: AtomicU64,
@@ -435,9 +477,16 @@ impl ClientHandler for AgenaMcpClientHandler {
                     _ = events.shutdown.cancelled() => return,
                     result = refresh => match result {
                         Ok(Ok(tools)) => {
-                            *events.tools.write().await = filter_tools(tools, &tool_policy);
-                            events.tool_generation.fetch_add(1, Ordering::Relaxed);
-                            *events.last_refresh_failure.write().await = None;
+                            match prepare_tools(tools, tool_policy.clone()).await {
+                                Ok(tools) => {
+                                    replace_tools(&events, tools).await;
+                                    *events.last_refresh_failure.write().await = None;
+                                }
+                                Err(error) => {
+                                    warn!(%error, server = %server_name, "MCP tool catalog projection failed");
+                                    *events.last_refresh_failure.write().await = Some(mcp_failure(&error));
+                                }
+                            }
                         }
                         Ok(Err(error)) => {
                             let error = McpError::from(error);
@@ -793,40 +842,37 @@ impl McpConnectionManager {
             .peer_info()
             .and_then(|info| info.instructions.clone())
             .filter(|value| !value.trim().is_empty());
-        let tools = match tokio::time::timeout(self.request_timeout, peer.list_all_tools()).await {
-            Ok(Ok(tools)) => filter_tools(tools, &tool_policy),
-            Ok(Err(error)) => {
-                let error = McpError::from(error);
-                self.record_error(name, &error).await;
-                if let Err(cancel_error) = running.cancel().await {
-                    tracing::warn!(
-                        server = name,
-                        diagnostic = %agena_failure::diagnostic::format_error_chain(&cancel_error),
-                        "failed to cancel an MCP connection after tool listing failed"
-                    );
-                }
-                return Err(error);
-            }
-            Err(timeout_error) => {
-                let error = McpError::timeout_error(
+        let tools_result =
+            match tokio::time::timeout(self.request_timeout, peer.list_all_tools()).await {
+                Ok(Ok(tools)) => prepare_tools(tools, tool_policy.clone()).await,
+                Ok(Err(error)) => Err(McpError::from(error)),
+                Err(timeout_error) => Err(McpError::timeout_error(
                     format!(
                         "initial MCP tool listing timed out after {}ms",
                         self.request_timeout.as_millis()
                     ),
                     &timeout_error,
-                );
+                )),
+            };
+        let tools = match tools_result {
+            Ok(tools) => tools,
+            Err(error) => {
                 self.record_error(name, &error).await;
                 if let Err(cancel_error) = running.cancel().await {
                     tracing::warn!(
                         server = name,
                         diagnostic = %agena_failure::diagnostic::format_error_chain(&cancel_error),
-                        "failed to cancel a timed-out MCP connection"
+                        "failed to cancel an MCP connection after tool catalog initialization failed"
                     );
                 }
                 return Err(error);
             }
         };
-        *events.tools.write().await = tools;
+        let retired = {
+            let mut cache = events.tools.write().await;
+            std::mem::replace(&mut *cache, tools)
+        };
+        release_tools(retired).await;
         let connected = Arc::new(ConnectedServer::new(
             name.to_string(),
             peer,
@@ -943,12 +989,24 @@ impl McpConnectionManager {
             let inner = self.inner.read().await;
             inner.servers.values().cloned().collect::<Vec<_>>()
         };
-        let mut out = Vec::new();
+        let mut snapshots = Vec::with_capacity(servers.len());
         for server in servers {
             let tools = server.events.tools.read().await.clone();
-            out.extend(tools.into_iter().map(|tool| (server.name.clone(), tool)));
+            snapshots.push((server.name.clone(), tools));
         }
-        out
+        TOOL_SNAPSHOTS
+            .run(move || {
+                let mut out = Vec::new();
+                for (name, tools) in snapshots {
+                    out.extend(tools.iter().map(|tool| (name.clone(), tool.clone())));
+                }
+                out
+            })
+            .await
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "MCP tool catalog snapshot worker failed");
+                Vec::new()
+            })
     }
 
     /// Non-blocking risk lookup for the execution permission path. A cache
@@ -986,7 +1044,7 @@ impl McpConnectionManager {
 
     pub async fn refresh_tools(&self, name: &str) -> McpResult<Vec<ToolDescriptor>> {
         let server = self.get(name).await?;
-        let tools = filter_tools(
+        let tools = prepare_tools(
             tokio::time::timeout(self.request_timeout, server.peer.list_all_tools())
                 .await
                 .map_err(|error| {
@@ -998,15 +1056,15 @@ impl McpConnectionManager {
                         &error,
                     )
                 })??,
-            &server.tool_policy,
-        );
-        *server.events.tools.write().await = tools.clone();
-        server
-            .events
-            .tool_generation
-            .fetch_add(1, Ordering::Relaxed);
+            server.tool_policy.clone(),
+        )
+        .await?;
+        replace_tools(&server.events, Arc::clone(&tools)).await;
         *server.events.last_refresh_failure.write().await = None;
-        Ok(tools)
+        TOOL_SNAPSHOTS
+            .run(move || tools.as_ref().clone())
+            .await
+            .map_err(projection_error)
     }
 
     pub async fn call_tool(
@@ -1023,7 +1081,7 @@ impl McpConnectionManager {
             });
         }
         let mut params = rmcp::model::CallToolRequestParams::new(tool.to_string());
-        if let Some(arguments) = value_to_json_object(arguments)? {
+        if let Some(arguments) = value_to_json_object(arguments).await? {
             params.arguments = Some(arguments);
         }
         let result = tokio::time::timeout(self.request_timeout, server.peer.call_tool(params))
@@ -1037,7 +1095,7 @@ impl McpConnectionManager {
                     &error,
                 )
             })??;
-        Ok(convert_call_tool_result(result))
+        project_payload(move || convert_call_tool_result(result)).await
     }
 
     pub async fn list_resources(
@@ -1060,7 +1118,7 @@ impl McpConnectionManager {
                 &error,
             )
         })??;
-        Ok(ListResourcesResult {
+        project_payload(move || ListResourcesResult {
             resources: result
                 .resources
                 .into_iter()
@@ -1068,6 +1126,7 @@ impl McpConnectionManager {
                 .collect(),
             next_cursor: result.next_cursor,
         })
+        .await
     }
 
     pub async fn list_resource_templates(
@@ -1092,7 +1151,7 @@ impl McpConnectionManager {
                 &error,
             )
         })??;
-        Ok(ListResourceTemplatesResult {
+        project_payload(move || ListResourceTemplatesResult {
             resource_templates: result
                 .resource_templates
                 .into_iter()
@@ -1100,6 +1159,7 @@ impl McpConnectionManager {
                 .collect(),
             next_cursor: result.next_cursor,
         })
+        .await
     }
 
     pub async fn read_resource(&self, server: &str, uri: &str) -> McpResult<ReadResourceResult> {
@@ -1120,13 +1180,14 @@ impl McpConnectionManager {
                 &error,
             )
         })??;
-        Ok(ReadResourceResult {
+        project_payload(move || ReadResourceResult {
             contents: result
                 .contents
                 .into_iter()
                 .filter_map(convert_resource_contents)
                 .collect(),
         })
+        .await
     }
 
     pub async fn list_prompts(
@@ -1149,7 +1210,7 @@ impl McpConnectionManager {
                 &error,
             )
         })??;
-        Ok(ListPromptsResult {
+        project_payload(move || ListPromptsResult {
             prompts: result
                 .prompts
                 .into_iter()
@@ -1157,6 +1218,7 @@ impl McpConnectionManager {
                 .collect(),
             next_cursor: result.next_cursor,
         })
+        .await
     }
 
     pub async fn get_prompt(
@@ -1186,7 +1248,7 @@ impl McpConnectionManager {
                     &error,
                 )
             })??;
-        Ok(GetPromptResult {
+        project_payload(move || GetPromptResult {
             description: result.description,
             messages: result
                 .messages
@@ -1194,6 +1256,7 @@ impl McpConnectionManager {
                 .map(convert_prompt_message)
                 .collect(),
         })
+        .await
     }
 
     pub async fn shutdown_all(&self) {
@@ -1642,14 +1705,15 @@ fn parse_header_value(value: &str) -> McpResult<HeaderValue> {
         .map_err(|err| McpError::Http(format!("invalid HTTP header value: {err}")))
 }
 
-fn value_to_json_object(value: Option<Value>) -> McpResult<Option<rmcp::model::JsonObject>> {
+async fn value_to_json_object(value: Option<Value>) -> McpResult<Option<rmcp::model::JsonObject>> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(map)) if map.is_empty() => Ok(None),
         Some(Value::Object(map)) => Ok(Some(map)),
-        Some(other) => Err(McpError::Malformed(format!(
-            "tool arguments must be a JSON object, got {other}"
-        ))),
+        Some(other) => Err(project_payload(move || {
+            McpError::Malformed(format!("tool arguments must be a JSON object, got {other}"))
+        })
+        .await?),
     }
 }
 

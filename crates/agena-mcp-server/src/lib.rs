@@ -45,6 +45,21 @@ mod stateless_tool_policy;
 pub use stateless_tool_policy::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
 
 const LIST_CACHE_TTL_MS: u64 = 30_000;
+static PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+async fn project<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, McpServerError> + Send + 'static,
+) -> Result<T, ErrorData> {
+    PROJECTIONS
+        .run(operation)
+        .await
+        .map_err(|error| {
+            to_rmcp_error(McpServerError::Backend(format!(
+                "MCP projection worker failed: {error}"
+            )))
+        })?
+        .map_err(to_rmcp_error)
+}
 const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
     ProtocolVersion::V_2026_07_28,
     ProtocolVersion::V_2025_11_25,
@@ -223,11 +238,13 @@ where
         let backend = Arc::clone(&self.backend);
         async move {
             let tools = backend.list_tools().await.map_err(to_rmcp_error)?;
-            let tools = tools
-                .into_iter()
-                .map(convert_tool_descriptor)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(to_rmcp_error)?;
+            let tools = project(move || {
+                tools
+                    .into_iter()
+                    .map(convert_tool_descriptor)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .await?;
             Ok(ListToolsResult::with_all_items(tools)
                 .with_ttl_ms(LIST_CACHE_TTL_MS)
                 .with_cache_scope(CacheScope::Private))
@@ -246,9 +263,7 @@ where
                 arguments: request.arguments.map(serde_json::Value::Object),
             };
             let result = backend.call_tool(params).await.map_err(to_rmcp_error)?;
-            convert_call_tool_result(result)
-                .map(Into::into)
-                .map_err(to_rmcp_error)
+            project(move || convert_call_tool_result(result).map(Into::into)).await
         }
     }
 
@@ -266,10 +281,13 @@ where
                 )));
             }
             let resources = backend.list_resources().await.map_err(to_rmcp_error)?;
-            let resources = resources
-                .into_iter()
-                .map(convert_resource_descriptor)
-                .collect();
+            let resources = project(move || {
+                Ok(resources
+                    .into_iter()
+                    .map(convert_resource_descriptor)
+                    .collect())
+            })
+            .await?;
             Ok(ListResourcesResult::with_all_items(resources)
                 .with_ttl_ms(LIST_CACHE_TTL_MS)
                 .with_cache_scope(CacheScope::Private))
@@ -294,14 +312,17 @@ where
                 .read_resource(ReadResourceParams { uri: request.uri })
                 .await
                 .map_err(to_rmcp_error)?;
-            Ok(RmcpReadResourceResult::new(
-                result
-                    .contents
-                    .into_iter()
-                    .map(convert_resource_contents)
-                    .collect(),
-            )
-            .into())
+            project(move || {
+                Ok(RmcpReadResourceResult::new(
+                    result
+                        .contents
+                        .into_iter()
+                        .map(convert_resource_contents)
+                        .collect(),
+                )
+                .into())
+            })
+            .await
         }
     }
 
@@ -319,7 +340,9 @@ where
                 )));
             }
             let prompts = backend.list_prompts().await.map_err(to_rmcp_error)?;
-            let prompts = prompts.into_iter().map(convert_prompt_descriptor).collect();
+            let prompts =
+                project(move || Ok(prompts.into_iter().map(convert_prompt_descriptor).collect()))
+                    .await?;
             Ok(ListPromptsResult::with_all_items(prompts)
                 .with_ttl_ms(LIST_CACHE_TTL_MS)
                 .with_cache_scope(CacheScope::Private))
@@ -339,14 +362,15 @@ where
                     "prompts are not exposed by this MCP server".to_owned(),
                 )));
             }
-            let params = GetPromptParams {
-                name: request.name,
-                arguments: request.arguments.map(json_object_to_string_map),
-            };
+            let params = project(move || {
+                Ok(GetPromptParams {
+                    name: request.name,
+                    arguments: request.arguments.map(json_object_to_string_map),
+                })
+            })
+            .await?;
             let result = backend.get_prompt(params).await.map_err(to_rmcp_error)?;
-            convert_get_prompt_result(result)
-                .map(Into::into)
-                .map_err(to_rmcp_error)
+            project(move || convert_get_prompt_result(result).map(Into::into)).await
         }
     }
 }

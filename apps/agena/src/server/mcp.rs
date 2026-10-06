@@ -52,6 +52,92 @@ const REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const AUTHORIZATION_CODE_TTL: Duration = Duration::from_secs(5 * 60);
 const CIMD_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_MCP_METADATA_BODY_BYTES: usize = 8 * 1024 * 1024;
+static MCP_METADATA: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static MCP_REWRITES: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+#[derive(Default)]
+struct McpRequestMetadata {
+    rpc_method: Option<String>,
+    has_id: bool,
+    tools_list: bool,
+    is_batch: bool,
+    root_tool_call_id: Option<serde_json::Value>,
+    tool_calls: Vec<(String, Option<serde_json::Value>)>,
+}
+
+impl McpRequestMetadata {
+    fn parse(body: &[u8]) -> Self {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return Self::default();
+        };
+        let mut metadata = Self {
+            rpc_method: jsonrpc_method(&value).map(|method| method.chars().take(128).collect()),
+            has_id: jsonrpc_request_id(&value).is_some(),
+            tools_list: contains_tools_list(&value),
+            is_batch: value.is_array(),
+            root_tool_call_id: (value.get("method").and_then(serde_json::Value::as_str)
+                == Some("tools/call"))
+            .then(|| value.get("id").cloned().filter(|id| !id.is_null()))
+            .flatten(),
+            tool_calls: Vec::new(),
+        };
+        let mut capture = |request: &serde_json::Value| {
+            if request.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
+                return;
+            }
+            let Some(name) = request
+                .get("params")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|params| params.get("name"))
+                .and_then(serde_json::Value::as_str)
+            else {
+                return;
+            };
+            metadata.tool_calls.push((
+                name.to_owned(),
+                request.get("id").cloned().filter(|id| !id.is_null()),
+            ));
+        };
+        if let Some(requests) = value.as_array() {
+            for request in requests {
+                capture(request);
+            }
+        } else {
+            capture(&value);
+        }
+        metadata
+    }
+}
+
+async fn request_metadata(
+    parts: &mut axum::http::request::Parts,
+    body: axum::body::Bytes,
+) -> Result<Arc<McpRequestMetadata>, String> {
+    if let Some(metadata) = parts.extensions.get::<Arc<McpRequestMetadata>>() {
+        return Ok(Arc::clone(metadata));
+    }
+    let inline = body.len() < 64 * 1024;
+    let parse = move || Arc::new(McpRequestMetadata::parse(&body));
+    let metadata = if inline {
+        parse()
+    } else {
+        MCP_METADATA
+            .run(parse)
+            .await
+            .map_err(|error| format!("MCP request metadata worker failed: {error}"))?
+    };
+    parts.extensions.insert(Arc::clone(&metadata));
+    Ok(metadata)
+}
+
+fn mcp_worker_unavailable(error: String) -> Response {
+    tracing::error!(target: "agena::server::mcp", %error, "MCP worker failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({"error": "MCP processing is temporarily unavailable"})),
+    )
+        .into_response()
+}
 const MAX_CIMD_DOCUMENT_BYTES: usize = 256 * 1024;
 const MAX_MCP_OAUTH_PASSWORD_BYTES: usize = 4096;
 const MAX_CACHED_CIMD_CLIENTS: usize = 128;
@@ -1408,13 +1494,17 @@ async fn trace_mcp_http_request(
         .unwrap_or_default()
         .to_owned();
     let has_bearer = request.headers().contains_key(header::AUTHORIZATION);
-    let (parts, body) = request.into_parts();
+    let (mut parts, body) = request.into_parts();
     let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
         Ok(body) => body,
         Err(error) => return mcp_request_body_error(&error),
     };
-    let rpc_method = jsonrpc_method_from_bytes(&body);
-    let has_id = jsonrpc_request_id_from_bytes(&body).is_some();
+    let metadata = match request_metadata(&mut parts, body.clone()).await {
+        Ok(metadata) => metadata,
+        Err(error) => return mcp_worker_unavailable(error),
+    };
+    let rpc_method = &metadata.rpc_method;
+    let has_id = metadata.has_id;
     let response = next
         .run(axum::http::Request::from_parts(parts, Body::from(body)))
         .await;
@@ -1580,48 +1670,36 @@ fn add_tool_security_schemes(
     rewrite_message(&mut payload, auth_mode, auth_requirements).then_some(payload)
 }
 
-fn is_tools_list_request(body: &[u8]) -> bool {
-    fn contains_tools_list(value: &serde_json::Value) -> bool {
-        match value {
-            serde_json::Value::Object(object) => {
-                object.get("method").and_then(serde_json::Value::as_str) == Some("tools/list")
-            }
-            serde_json::Value::Array(messages) => messages.iter().any(contains_tools_list),
-            _ => false,
+fn contains_tools_list(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.get("method").and_then(serde_json::Value::as_str) == Some("tools/list")
         }
+        serde_json::Value::Array(messages) => messages.iter().any(contains_tools_list),
+        _ => false,
     }
+}
 
+#[cfg(test)]
+fn is_tools_list_request(body: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
         .is_some_and(|value| contains_tools_list(&value))
 }
 
-fn jsonrpc_request_id_from_bytes(body: &[u8]) -> Option<serde_json::Value> {
-    serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| jsonrpc_request_id(&value))
-}
-
-fn jsonrpc_method_from_bytes(body: &[u8]) -> Option<String> {
-    serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| jsonrpc_method(&value))
-}
-
-fn jsonrpc_method(value: &serde_json::Value) -> Option<String> {
+fn jsonrpc_method(value: &serde_json::Value) -> Option<&str> {
     match value {
-        serde_json::Value::Object(object) => object
-            .get("method")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned),
+        serde_json::Value::Object(object) => {
+            object.get("method").and_then(serde_json::Value::as_str)
+        }
         serde_json::Value::Array(messages) => messages.first().and_then(jsonrpc_method),
         _ => None,
     }
 }
 
-fn jsonrpc_request_id(value: &serde_json::Value) -> Option<serde_json::Value> {
+fn jsonrpc_request_id(value: &serde_json::Value) -> Option<&serde_json::Value> {
     match value {
-        serde_json::Value::Object(object) => object.get("id").cloned().filter(|id| !id.is_null()),
+        serde_json::Value::Object(object) => object.get("id").filter(|id| !id.is_null()),
         serde_json::Value::Array(messages) => messages.first().and_then(jsonrpc_request_id),
         _ => None,
     }
@@ -1747,12 +1825,16 @@ async fn rewrite_tool_security_schemes(
         return next.run(request).await;
     }
 
-    let (parts, body) = request.into_parts();
+    let (mut parts, body) = request.into_parts();
     let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
         Ok(body) => body,
         Err(error) => return mcp_request_body_error(&error),
     };
-    let should_rewrite = is_tools_list_request(&body);
+    let metadata = match request_metadata(&mut parts, body.clone()).await {
+        Ok(metadata) => metadata,
+        Err(error) => return mcp_worker_unavailable(error),
+    };
+    let should_rewrite = metadata.tools_list;
     let auth_mode = state.auth_mode();
     let auth_requirements = if should_rewrite {
         state.exposed_tool_auth_requirements().await
@@ -1762,7 +1844,7 @@ async fn rewrite_tool_security_schemes(
     let request = axum::http::Request::from_parts(parts, Body::from(body));
     let response = next.run(request).await;
     if should_rewrite {
-        rewrite_tool_list_response(response, auth_mode, &auth_requirements).await
+        rewrite_tool_list_response(response, auth_mode, auth_requirements).await
     } else {
         response
     }
@@ -1771,7 +1853,7 @@ async fn rewrite_tool_security_schemes(
 async fn rewrite_tool_list_response(
     response: Response,
     auth_mode: McpAuthMode,
-    auth_requirements: &HashMap<String, bool>,
+    auth_requirements: HashMap<String, bool>,
 ) -> Response {
     let content_type = response
         .headers()
@@ -1790,10 +1872,21 @@ async fn rewrite_tool_list_response(
         Ok(body) => body,
         Err(error) => return mcp_response_body_error(&error),
     };
-    let rewritten = if is_json {
-        rewrite_tool_list_json(&body, auth_mode, auth_requirements)
-    } else {
-        rewrite_tool_list_sse(&body, auth_mode, auth_requirements)
+    let (body, rewritten) = match MCP_REWRITES
+        .run(move || {
+            let rewritten = if is_json {
+                rewrite_tool_list_json(&body, auth_mode, &auth_requirements)
+            } else {
+                rewrite_tool_list_sse(&body, auth_mode, &auth_requirements)
+            };
+            (body, rewritten)
+        })
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return mcp_worker_unavailable(format!("MCP metadata rewrite worker failed: {error}"));
+        }
     };
     let Some(rewritten) = rewritten else {
         return Response::from_parts(parts, Body::from(body));
@@ -3211,51 +3304,29 @@ enum McpAuthRequirement {
     Transport,
 }
 
-async fn mixed_auth_requirement(state: &McpServerState, body: &[u8]) -> McpAuthRequirement {
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
-        // Let the MCP parser return the protocol-level parse error.
-        return McpAuthRequirement::NotRequired;
-    };
-    let requirements = state.exposed_tool_auth_requirements().await;
-    let protected_call = |request: &serde_json::Value| {
-        let object = request.as_object()?;
-        if object.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
-            return None;
-        }
-        let name = object
-            .get("params")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|params| params.get("name"))
-            .and_then(serde_json::Value::as_str)?;
-        // Unknown names fail closed. Authenticated calls still reach the
-        // authoritative backend exposure check and receive a normal not-found
-        // error, but anonymous callers cannot use guessed names as an oracle.
-        requirements
-            .get(name)
-            .copied()
-            .unwrap_or(true)
-            .then(|| object.get("id").cloned().filter(|id| !id.is_null()))
-    };
-    match value {
-        serde_json::Value::Object(_) => match protected_call(&value) {
-            Some(Some(id)) => McpAuthRequirement::ToolCall(id),
-            Some(None) => McpAuthRequirement::Transport,
-            None => McpAuthRequirement::NotRequired,
-        },
-        serde_json::Value::Array(requests) => {
-            if requests
-                .iter()
-                .any(|request| protected_call(request).is_some())
-            {
-                // A batch can contain both public and protected calls. Use the
-                // transport challenge instead of dropping unrelated responses.
-                McpAuthRequirement::Transport
-            } else {
-                McpAuthRequirement::NotRequired
-            }
-        }
-        _ => McpAuthRequirement::NotRequired,
+async fn mixed_auth_requirement(
+    state: &McpServerState,
+    metadata: Arc<McpRequestMetadata>,
+) -> Result<McpAuthRequirement, String> {
+    if metadata.tool_calls.is_empty() {
+        return Ok(McpAuthRequirement::NotRequired);
     }
+    let requirements = state.exposed_tool_auth_requirements().await;
+    MCP_METADATA
+        .run(move || {
+            let protected = metadata
+                .tool_calls
+                .iter()
+                .find(|(name, _)| requirements.get(name).copied().unwrap_or(true));
+            match protected {
+                Some(_) if metadata.is_batch => McpAuthRequirement::Transport,
+                Some((_, Some(id))) => McpAuthRequirement::ToolCall(id.clone()),
+                Some((_, None)) => McpAuthRequirement::Transport,
+                None => McpAuthRequirement::NotRequired,
+            }
+        })
+        .await
+        .map_err(|error| format!("MCP authentication metadata worker failed: {error}"))
 }
 
 async fn require_mcp_bearer(
@@ -3287,17 +3358,38 @@ async fn require_mcp_bearer(
         };
     }
 
-    let (parts, body) = request.into_parts();
+    let (mut parts, body) = request.into_parts();
     let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
         Ok(body) => body,
         Err(error) => return mcp_request_body_error(&error),
     };
+    let metadata = match request_metadata(&mut parts, body.clone()).await {
+        Ok(metadata) => metadata,
+        Err(error) => return mcp_worker_unavailable(error),
+    };
     let requirement = match auth_mode {
         McpAuthMode::None => McpAuthRequirement::NotRequired,
-        McpAuthMode::Oauth => unauthorized_tool_call_id(&body)
-            .map(McpAuthRequirement::ToolCall)
-            .unwrap_or(McpAuthRequirement::Transport),
-        McpAuthMode::Mixed => mixed_auth_requirement(&state, &body).await,
+        McpAuthMode::Oauth => match MCP_METADATA
+            .run(move || {
+                metadata
+                    .root_tool_call_id
+                    .clone()
+                    .map(McpAuthRequirement::ToolCall)
+                    .unwrap_or(McpAuthRequirement::Transport)
+            })
+            .await
+        {
+            Ok(requirement) => requirement,
+            Err(error) => {
+                return mcp_worker_unavailable(format!(
+                    "MCP authentication worker failed: {error}"
+                ));
+            }
+        },
+        McpAuthMode::Mixed => match mixed_auth_requirement(&state, metadata).await {
+            Ok(requirement) => requirement,
+            Err(error) => return mcp_worker_unavailable(error),
+        },
     };
     match requirement {
         McpAuthRequirement::NotRequired => {
@@ -3305,7 +3397,15 @@ async fn require_mcp_bearer(
                 .await
         }
         McpAuthRequirement::ToolCall(id) => {
-            mcp_tool_authentication_required(&issuer, &resource, id)
+            match MCP_REWRITES
+                .run(move || mcp_tool_authentication_required(&issuer, &resource, id))
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => mcp_worker_unavailable(format!(
+                    "MCP authentication response worker failed: {error}"
+                )),
+            }
         }
         McpAuthRequirement::Transport => mcp_unauthorized(&issuer, &resource),
     }
@@ -3341,6 +3441,7 @@ fn mcp_unauthorized(issuer: &str, resource: &str) -> Response {
     response
 }
 
+#[cfg(test)]
 fn unauthorized_tool_call_id(body: &[u8]) -> Option<serde_json::Value> {
     let request = match serde_json::from_slice::<serde_json::Value>(body) {
         Ok(request) => request,

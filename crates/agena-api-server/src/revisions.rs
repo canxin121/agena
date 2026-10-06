@@ -1193,8 +1193,11 @@ impl ConditionalRead {
             });
         matches.then(|| self.headers(StatusCode::NOT_MODIFIED.into_response()))
     }
-    pub(crate) fn json<T: Serialize>(&self, data: T) -> Response {
-        self.headers(axum::Json(data).into_response())
+    pub(crate) async fn json<T: Serialize + Send + 'static>(
+        &self,
+        data: T,
+    ) -> Result<Response, ServerError> {
+        Ok(self.headers(crate::json_codec::response(data).await?))
     }
     pub(crate) fn headers(&self, mut response: Response) -> Response {
         if let Some((_, updated_at)) = self.token.rsplit_once(':') {

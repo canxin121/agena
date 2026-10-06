@@ -11,10 +11,7 @@ use std::collections::HashMap;
 
 use agena_api::live::{SessionPartsResource, SessionTranscriptFoldResource};
 use agena_storage::store::{Part, PartCursor, SessionStore};
-use axum::{
-    Json,
-    extract::{Path, Query as AxumQuery, State},
-};
+use axum::extract::{Path, Query as AxumQuery, State};
 use serde::Deserialize;
 
 use crate::{
@@ -118,18 +115,20 @@ pub async fn list_session_transcript(
 
     let mut projected = project_parts_for_user(&state, &page.parts).await;
     assign_user_message_ordinals(store.as_ref(), session_id, &mut projected).await?;
-    Ok(read.json(SessionPartsResource {
-        session_id,
-        version: page.version,
-        parts: projected,
-        folds: page.folds,
-        user_message_count: Some(user_message_count),
-        page: agena_api::pagination::PageInfo {
-            next_cursor,
-            has_more: page.has_more,
-            returned: page.parts.len() as u64,
-        },
-    }))
+    Ok(read
+        .json(SessionPartsResource {
+            session_id,
+            version: page.version,
+            parts: projected,
+            folds: page.folds,
+            user_message_count: Some(user_message_count),
+            page: agena_api::pagination::PageInfo {
+                next_cursor,
+                has_more: page.has_more,
+                returned: page.parts.len() as u64,
+            },
+        })
+        .await?)
 }
 
 pub async fn list_session_transcript_run_parts(
@@ -165,7 +164,7 @@ pub async fn list_session_transcript_run_parts(
     parts.reverse();
 
     let projected = project_parts_for_user(&state, &parts).await;
-    Ok(Json(SessionPartsResource {
+    Ok(crate::json_codec::response(SessionPartsResource {
         session_id,
         version: page.meta.version,
         parts: projected,
@@ -176,7 +175,8 @@ pub async fn list_session_transcript_run_parts(
             has_more: page.has_more,
             returned: parts.len() as u64,
         },
-    }))
+    })
+    .await?)
 }
 
 pub async fn list_session_transcript_fold_parts(
@@ -230,7 +230,7 @@ pub async fn list_session_transcript_fold_parts(
         .filter(transcript_visible_to_user)
         .collect::<Vec<_>>();
     let projected = project_parts_for_user(&state, &selected).await;
-    Ok(Json(SessionPartsResource {
+    Ok(crate::json_codec::response(SessionPartsResource {
         session_id,
         version: store
             .load_page(session_id, None, 1)
@@ -246,7 +246,8 @@ pub async fn list_session_transcript_fold_parts(
             has_more,
             returned: selected.len() as u64,
         },
-    }))
+    })
+    .await?)
 }
 
 struct VisiblePage {

@@ -49,9 +49,8 @@ pub(super) async fn execute_create_async(
         }
     }
     job.owner_workspace = Some(
-        executor
-            .workspace_root()
-            .canonicalize()
+        tokio::fs::canonicalize(executor.workspace_root())
+            .await
             .map_err(ToolError::Io)?
             .display()
             .to_string(),
@@ -89,9 +88,8 @@ pub(super) async fn execute_list_async(
     _input: &CronListToolInput,
     context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let workspace = executor
-        .workspace_root()
-        .canonicalize()
+    let workspace = tokio::fs::canonicalize(executor.workspace_root())
+        .await
         .map_err(ToolError::Io)?
         .display()
         .to_string();
@@ -131,9 +129,8 @@ pub(super) async fn execute_delete_async(
     input: &CronDeleteToolInput,
     context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let workspace = executor
-        .workspace_root()
-        .canonicalize()
+    let workspace = tokio::fs::canonicalize(executor.workspace_root())
+        .await
         .map_err(ToolError::Io)?
         .display()
         .to_string();
@@ -174,9 +171,8 @@ pub(super) async fn execute_update_async(
                 .to_string(),
         ));
     }
-    let workspace = executor
-        .workspace_root()
-        .canonicalize()
+    let workspace = tokio::fs::canonicalize(executor.workspace_root())
+        .await
         .map_err(ToolError::Io)?
         .display()
         .to_string();
@@ -222,9 +218,8 @@ pub(super) async fn execute_pause_async(
     input: &CronJobControlToolInput,
     context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let workspace = executor
-        .workspace_root()
-        .canonicalize()
+    let workspace = tokio::fs::canonicalize(executor.workspace_root())
+        .await
         .map_err(ToolError::Io)?
         .display()
         .to_string();
@@ -256,9 +251,8 @@ pub(super) async fn execute_resume_async(
     input: &CronJobControlToolInput,
     context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let workspace = executor
-        .workspace_root()
-        .canonicalize()
+    let workspace = tokio::fs::canonicalize(executor.workspace_root())
+        .await
         .map_err(ToolError::Io)?
         .display()
         .to_string();
@@ -298,9 +292,8 @@ pub(super) async fn execute_history_async(
     input: &CronHistoryToolInput,
     context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let workspace = executor
-        .workspace_root()
-        .canonicalize()
+    let workspace = tokio::fs::canonicalize(executor.workspace_root())
+        .await
         .map_err(ToolError::Io)?
         .display()
         .to_string();

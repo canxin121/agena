@@ -20,6 +20,71 @@ use super::{
     resolve_project_directory, to_api_path,
 };
 
+static WATCH_SETUP: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
+// Include watchers waiting for close in admission. A reconnect burst cannot
+// accumulate unlimited native resources while the close workers are occupied.
+static WATCH_LIFETIMES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+type WatchClose = (
+    notify::RecommendedWatcher,
+    tokio::sync::SemaphorePermit<'static>,
+);
+
+fn watcher_closer() -> Result<std::sync::mpsc::Sender<WatchClose>, AppError> {
+    static CLOSER: std::sync::OnceLock<Result<std::sync::mpsc::Sender<WatchClose>, String>> =
+        std::sync::OnceLock::new();
+    CLOSER
+        .get_or_init(|| {
+            let (sender, receiver) = std::sync::mpsc::channel::<WatchClose>();
+            let receiver = Arc::new(Mutex::new(receiver));
+            for index in 0..2 {
+                let receiver = Arc::clone(&receiver);
+                std::thread::Builder::new()
+                    .name(format!("agena-watch-close-{index}"))
+                    .spawn(move || {
+                        loop {
+                            let next = receiver
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .recv();
+                            let Ok((watcher, permit)) = next else { return };
+                            // notify's shutdown may join a native thread. Keep both the
+                            // resource and its admission permit on this close thread.
+                            drop(watcher);
+                            drop(permit);
+                        }
+                    })
+                    .map_err(|error| format!("start filesystem watcher close thread: {error}"))?;
+            }
+            Ok(sender)
+        })
+        .as_ref()
+        .cloned()
+        .map_err(|error| AppError::internal(error.clone()))
+}
+
+struct OwnedWatcher {
+    resource: Option<WatchClose>,
+    closer: std::sync::mpsc::Sender<WatchClose>,
+}
+
+impl Drop for OwnedWatcher {
+    fn drop(&mut self) {
+        let Some(resource) = self.resource.take() else {
+            return;
+        };
+        if let Err(error) = self.closer.send(resource) {
+            // Exceptional worker failure: keep the resource off the async
+            // thread even then. At most 64 close resources can exist.
+            let resource = error.0;
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn_blocking(move || drop(resource));
+            } else {
+                drop(resource);
+            }
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct WatchQuery {
     directory: String,
@@ -63,85 +128,122 @@ pub async fn fs_watch(
         ensure_within_base(&base, &path)?;
         watched.insert(path);
     }
-    let (watcher, mut events, changes) = tokio::task::spawn_blocking(move || {
-        let changes = Arc::new(Mutex::new(Changes::default()));
-        let (wake, events) = tokio::sync::watch::channel(0_u64);
-        let pending = changes.clone();
-        let watch_paths = watched.clone();
-        // notify may report canonical OS paths even when the UI opened a
-        // symlinked workspace. Preserve every watched alias in the events.
-        let aliases = watched
-            .iter()
-            .filter_map(|path| {
-                std::fs::canonicalize(path)
-                    .ok()
-                    .map(|canonical| (canonical, path.clone()))
-            })
-            .collect::<Vec<_>>();
-        let mut watcher =
-            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                let mut pending = pending.lock().expect("filesystem changes lock");
-                match event {
-                    Ok(event) => {
-                        if matches!(event.kind, notify::EventKind::Access(_)) {
-                            return;
-                        }
-                        pending.truncated |= event.need_rescan();
-                        // OS watches can be detached by directory deletion or
-                        // replacement. Reopen the stream to watch the new inode.
-                        let topology_change = matches!(
-                            event.kind,
-                            notify::EventKind::Create(_)
-                                | notify::EventKind::Remove(_)
-                                | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
-                        );
-                        for path in event.paths {
-                            let mut mapped = aliases
-                                .iter()
-                                .filter_map(|(canonical, alias)| {
-                                    path.strip_prefix(canonical)
-                                        .ok()
-                                        .map(|relative| alias.join(relative))
-                                })
-                                .collect::<Vec<_>>();
-                            if mapped.is_empty() {
-                                mapped.push(path);
+    let lifetime = WATCH_LIFETIMES
+        .acquire()
+        .await
+        .expect("private watcher admission is never closed");
+    let (watcher, mut events, changes) = WATCH_SETUP
+        .run(move || {
+            // Initialize native close threads on the setup worker, too.
+            let closer = watcher_closer()?;
+            let changes = Arc::new(Mutex::new(Changes::default()));
+            let (wake, events) = tokio::sync::watch::channel(0_u64);
+            let pending = changes.clone();
+            let watch_paths = watched.clone();
+            // notify may report canonical OS paths even when the UI opened a
+            // symlinked workspace. Preserve every watched alias in the events.
+            let aliases = watched
+                .iter()
+                .filter_map(|path| {
+                    std::fs::canonicalize(path)
+                        .ok()
+                        .map(|canonical| (canonical, path.clone()))
+                })
+                .collect::<Vec<_>>();
+            let mut watcher =
+                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                    // Path mapping can be expensive during large OS event bursts.
+                    // Prepare a bounded batch outside the mutex read by the stream.
+                    let mut batch = Changes::default();
+                    match event {
+                        Ok(event) => {
+                            if matches!(event.kind, notify::EventKind::Access(_)) {
+                                return;
                             }
-                            for path in mapped {
-                                pending.reconnect |= topology_change && watch_paths.contains(&path);
-                                if pending.paths.len() < 256 {
-                                    pending.paths.insert(to_api_path(&path));
-                                } else {
-                                    pending.truncated = true;
+                            batch.truncated |= event.need_rescan();
+                            // OS watches can be detached by directory deletion or
+                            // replacement. Reopen the stream to watch the new inode.
+                            let topology_change = matches!(
+                                event.kind,
+                                notify::EventKind::Create(_)
+                                    | notify::EventKind::Remove(_)
+                                    | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+                            );
+                            if event.paths.len() > 256 {
+                                batch.truncated = true;
+                                batch.reconnect |= topology_change;
+                            }
+                            for path in event.paths.into_iter().take(256) {
+                                if batch.paths.len() >= 256 {
+                                    batch.truncated = true;
+                                    batch.reconnect |= topology_change;
+                                    break;
+                                }
+                                let mut mapped = aliases
+                                    .iter()
+                                    .filter_map(|(canonical, alias)| {
+                                        path.strip_prefix(canonical)
+                                            .ok()
+                                            .map(|relative| alias.join(relative))
+                                    })
+                                    .collect::<Vec<_>>();
+                                if mapped.is_empty() {
+                                    mapped.push(path);
+                                }
+                                for path in mapped {
+                                    batch.reconnect |=
+                                        topology_change && watch_paths.contains(&path);
+                                    if batch.paths.len() < 256 {
+                                        batch.paths.insert(to_api_path(&path));
+                                    } else {
+                                        batch.truncated = true;
+                                    }
                                 }
                             }
                         }
+                        Err(_) => batch.truncated = true,
                     }
-                    Err(_) => pending.truncated = true,
-                }
-                wake.send_modify(|version| *version = version.wrapping_add(1));
-            })
-            .map_err(|error| {
-                AppError::internal_error_with_context("start filesystem watcher", &error)
-            })?;
-        for path in watched {
-            // An expanded directory may just have been removed. Its parent watch
-            // and the initial reconciliation will remove the stale row.
-            if !path.is_dir() {
-                continue;
-            }
-            watcher
-                .watch(&path, RecursiveMode::NonRecursive)
+                    let mut pending = pending.lock().expect("filesystem changes lock");
+                    pending.truncated |= batch.truncated;
+                    pending.reconnect |= batch.reconnect;
+                    for path in batch.paths {
+                        if pending.paths.len() < 256 {
+                            pending.paths.insert(path);
+                        } else {
+                            pending.truncated = true;
+                        }
+                    }
+                    drop(pending);
+                    wake.send_modify(|version| *version = version.wrapping_add(1));
+                })
                 .map_err(|error| {
-                    AppError::internal_error_with_context("watch a visible directory", &error)
+                    AppError::internal_error_with_context("start filesystem watcher", &error)
                 })?;
-        }
-        Ok::<_, AppError>((watcher, events, changes))
-    })
-    .await
-    .map_err(|error| {
-        AppError::internal_error_with_context("initialize filesystem watches", &error)
-    })??;
+            for path in watched {
+                // An expanded directory may just have been removed. Its parent watch
+                // and the initial reconciliation will remove the stale row.
+                if !path.is_dir() {
+                    continue;
+                }
+                watcher
+                    .watch(&path, RecursiveMode::NonRecursive)
+                    .map_err(|error| {
+                        AppError::internal_error_with_context("watch a visible directory", &error)
+                    })?;
+            }
+            Ok::<_, AppError>((
+                OwnedWatcher {
+                    resource: Some((watcher, lifetime)),
+                    closer,
+                },
+                events,
+                changes,
+            ))
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal_error_with_context("initialize filesystem watches", &error)
+        })??;
     let directory = to_api_path(&base);
     let stream = async_stream::stream! {
         let _watcher = watcher;

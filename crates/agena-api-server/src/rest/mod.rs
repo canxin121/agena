@@ -219,23 +219,23 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
     }))
 }
 
-async fn json_http<T>(
+async fn json_http<T: serde::Serialize + Send + 'static>(
     future: impl Future<Output = Result<T, ApplicationError>>,
-) -> Result<Json<T>, ServerError> {
-    Ok(Json(future.await.map_err(server_error_from_application)?))
+) -> Result<axum::response::Response, ServerError> {
+    crate::json_codec::response(future.await.map_err(server_error_from_application)?).await
 }
 
-async fn json_http_found<T>(
+async fn json_http_found<T: serde::Serialize + Send + 'static>(
     future: impl Future<Output = Result<Option<T>, ApplicationError>>,
     not_found: impl FnOnce() -> String,
-) -> Result<Json<T>, ServerError> {
+) -> Result<axum::response::Response, ServerError> {
     let value = future
         .await
         .map_err(server_error_from_application)?
         .ok_or_else(|| {
             ServerError::not_found_with_diagnostic("The resource was not found.", not_found())
         })?;
-    Ok(Json(value))
+    crate::json_codec::response(value).await
 }
 
 fn items_json<T>(items: Vec<T>) -> Json<ItemsResponse<T>> {

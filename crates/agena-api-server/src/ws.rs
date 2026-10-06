@@ -70,7 +70,7 @@ async fn run(socket: WebSocket, state: AppState) {
     let mut writer = tokio::spawn(async move {
         let mut sink = sink;
         while let Some(msg) = rx.recv().await {
-            let payload = match serde_json::to_string(&msg) {
+            let payload = match crate::json_codec::encode(msg).await {
                 Ok(p) => p,
                 Err(err) => {
                     tracing::error!(
@@ -89,15 +89,17 @@ async fn run(socket: WebSocket, state: AppState) {
             }
         }
     });
+    let _writer_owner = agena_async::AbortOnDrop::new(&writer);
 
     let registry = SubscriptionRegistry::default();
     let registry = Arc::new(Mutex::new(registry));
 
     while let Some(message) = stream.next().await {
+        tokio::task::consume_budget().await;
         let Ok(message) = message else { break };
         match message {
             Message::Text(text) => {
-                let parsed: Result<ClientMessage, _> = serde_json::from_str(&text);
+                let parsed = crate::json_codec::decode::<ClientMessage>(text).await;
                 match parsed {
                     Ok(client_msg) => {
                         handle_client_message(
@@ -172,6 +174,14 @@ async fn run(socket: WebSocket, state: AppState) {
 
 #[derive(Default)]
 struct SubscriptionRegistry(HashMap<SubscriptionId, tokio::task::JoinHandle<()>>);
+
+impl Drop for SubscriptionRegistry {
+    fn drop(&mut self) {
+        for task in self.0.values() {
+            task.abort();
+        }
+    }
+}
 
 async fn handle_client_message(
     msg: ClientMessage,
@@ -304,12 +314,12 @@ async fn spawn_subscription(
                 LiveItem::SessionChanged(change) => Notification::SessionChanged {
                     subscription: id_for_task.clone(),
                     change: Box::new(change),
-                revisions,
+                    revisions,
                 },
                 LiveItem::RuntimeSignal(signal) => Notification::RuntimeSignal {
                     subscription: id_for_task.clone(),
                     signal: Box::new(signal),
-                revisions,
+                    revisions,
                 },
                 LiveItem::Lagged(skipped) => Notification::Lagged {
                     subscription: id_for_task.clone(),

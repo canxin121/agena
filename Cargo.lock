@@ -177,6 +177,7 @@ version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-application",
+ "agena-async",
  "agena-client",
  "agena-domain",
  "agena-failure",

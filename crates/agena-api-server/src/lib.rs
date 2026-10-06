@@ -35,6 +35,8 @@ pub mod dispatch;
 pub mod error;
 #[cfg(feature = "ipc")]
 pub mod ipc;
+#[cfg(any(feature = "http", feature = "ws", feature = "sse"))]
+mod json_codec;
 #[cfg(feature = "jsonrpc")]
 pub mod jsonrpc;
 #[cfg(any(feature = "http", feature = "ws", feature = "sse"))]
@@ -331,7 +333,10 @@ pub fn router(state: AppState) -> Router {
                 get(rest::list_workspaces).post(rest::create_workspace),
             )
             .route("/api/v1/workspaces/resolve", post(rest::resolve_workspace))
-            .route("/api/v1/workspaces/session-stats", get(rest::workspace_session_stats))
+            .route(
+                "/api/v1/workspaces/session-stats",
+                get(rest::workspace_session_stats),
+            )
             .route(
                 "/api/v1/workspaces/{workspace_id}",
                 get(rest::get_workspace)

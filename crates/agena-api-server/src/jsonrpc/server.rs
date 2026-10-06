@@ -11,7 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::broadcast,
 };
 
@@ -21,6 +21,9 @@ use super::protocol::{
     ListSessionsParams, ListSessionsResult, PermissionReplyParams, PermissionReplyResult,
     ReadPartsParams, ReadPartsResult, SubmitRunParams, SubmitRunResult,
 };
+
+static RPC_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 /// Error from the JSON-RPC app server.
@@ -35,6 +38,8 @@ pub enum AppServerError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("JSON-RPC codec worker failed: {0}")]
+    Worker(#[from] tokio::task::JoinError),
 }
 
 #[async_trait]
@@ -66,7 +71,7 @@ pub trait AppServerBackend: Send + Sync + 'static {
 #[derive(Clone)]
 /// Broadcaster of server notifications to subscribers.
 pub struct EventBroadcaster {
-    sender: broadcast::Sender<AppServerNotification>,
+    sender: broadcast::Sender<Arc<AppServerNotification>>,
 }
 
 impl EventBroadcaster {
@@ -75,12 +80,12 @@ impl EventBroadcaster {
         Self { sender }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<AppServerNotification> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<AppServerNotification>> {
         self.sender.subscribe()
     }
 
     pub fn publish(&self, notification: AppServerNotification) {
-        if self.sender.send(notification).is_err() {
+        if self.sender.send(Arc::new(notification)).is_err() {
             tracing::debug!("JSON-RPC notification had no active subscribers");
         }
     }
@@ -113,17 +118,48 @@ where
         R: AsyncBufRead + Unpin,
         W: AsyncWrite + Unpin,
     {
-        let mut lines = reader.lines();
+        let mut reader = reader;
         let mut writer = writer;
-        while let Some(line) = lines.next_line().await? {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+        loop {
+            tokio::task::consume_budget().await;
+            let mut frame = Vec::new();
+            let count = (&mut reader)
+                .take(MAX_FRAME_BYTES as u64 + 3)
+                .read_until(b'\n', &mut frame)
+                .await?;
+            if count == 0 {
+                break;
             }
-            let value: Value = serde_json::from_str(line)?;
+            if frame.last() == Some(&b'\n') {
+                frame.pop();
+                if frame.last() == Some(&b'\r') {
+                    frame.pop();
+                }
+            }
+            if frame.len() > MAX_FRAME_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "JSON-RPC frame exceeds 64 MiB",
+                )
+                .into());
+            }
+            let value: Option<Value> = RPC_CODECS
+                .run(move || {
+                    if frame.iter().all(u8::is_ascii_whitespace) {
+                        return Ok(None);
+                    }
+                    serde_json::from_slice(&frame).map(Some)
+                })
+                .await??;
+            let Some(value) = value else { continue };
             if let Some(response) = self.handle_value(value).await? {
-                let mut encoded = serde_json::to_vec(&response)?;
-                encoded.push(b'\n');
+                let encoded = RPC_CODECS
+                    .run(move || {
+                        let mut encoded = serde_json::to_vec(&response)?;
+                        encoded.push(b'\n');
+                        Ok::<_, serde_json::Error>(encoded)
+                    })
+                    .await??;
                 writer.write_all(&encoded).await?;
                 writer.flush().await?;
             }
@@ -135,7 +171,10 @@ where
         &self,
         value: Value,
     ) -> Result<Option<JsonRpcResponse>, AppServerError> {
-        match InboundMessage::from_value(value)? {
+        match RPC_CODECS
+            .run(move || InboundMessage::from_value(value))
+            .await??
+        {
             InboundMessage::Request(request) => Ok(Some(self.handle_request(request).await)),
             InboundMessage::Notification(_) | InboundMessage::Response(_) => Ok(None),
         }
@@ -155,26 +194,30 @@ where
                     request.params,
                     |params| async move {
                         let result = self.backend.submit_message(params).await?;
-                        self.events
-                            .publish(AppServerNotification::SessionStateChanged {
-                                session_id: result.session_id,
-                                // The run marker (first part of the returned
-                                // run) mirrors the run/reply status.
-                                status: result
-                                    .parts
-                                    .first()
-                                    .map(|part| part.state.clone())
-                                    .unwrap_or_else(|| "submitted".to_owned()),
-                            });
-                        // Deliver the accepted parts as part patches so live
-                        // clients can reconcile without re-reading the session.
-                        for part in &result.parts {
-                            self.events.publish(AppServerNotification::PartAdded {
-                                session_id: result.session_id,
-                                part: Box::new(part.clone()),
-                            });
-                        }
-                        Ok(result)
+                        let events = self.events.clone();
+                        Ok(RPC_CODECS
+                            .run(move || {
+                                events.publish(AppServerNotification::SessionStateChanged {
+                                    session_id: result.session_id,
+                                    // The run marker (first part of the returned
+                                    // run) mirrors the run/reply status.
+                                    status: result
+                                        .parts
+                                        .first()
+                                        .map(|part| part.state.clone())
+                                        .unwrap_or_else(|| "submitted".to_owned()),
+                                });
+                                // Deliver the accepted parts as part patches so live
+                                // clients can reconcile without re-reading the session.
+                                for part in &result.parts {
+                                    events.publish(AppServerNotification::PartAdded {
+                                        session_id: result.session_id,
+                                        part: Box::new(part.clone()),
+                                    });
+                                }
+                                result
+                            })
+                            .await?)
                     },
                 )
                 .await
@@ -235,13 +278,19 @@ where
         f: impl FnOnce(P) -> Fut,
     ) -> Result<Value, JsonRpcError>
     where
-        P: serde::de::DeserializeOwned,
-        R: serde::Serialize,
+        P: serde::de::DeserializeOwned + Send + 'static,
+        R: serde::Serialize + Send + 'static,
         Fut: std::future::Future<Output = Result<R, AppServerError>>,
     {
-        let params = decode_params::<P>(params)?;
+        let params = RPC_CODECS
+            .run(move || decode_params::<P>(params))
+            .await
+            .map_err(|error| to_json_rpc_error(AppServerError::Worker(error)))??;
         let value = f(params).await.map_err(to_json_rpc_error)?;
-        serialize_result(value)
+        RPC_CODECS
+            .run(move || serialize_result(value))
+            .await
+            .map_err(|error| to_json_rpc_error(AppServerError::Worker(error)))?
     }
 }
 
@@ -265,10 +314,24 @@ async fn websocket_events(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| async move {
-        let (mut sender, _) = socket.split();
+        let (mut sender, mut reader) = socket.split();
         let mut rx = events.subscribe();
-        while let Ok(notification) = rx.recv().await {
-            let text = match serde_json::to_string(&notification) {
+        loop {
+            tokio::task::consume_budget().await;
+            let notification = tokio::select! {
+                incoming = reader.next() => {
+                    if matches!(incoming, None | Some(Err(_)) | Some(Ok(Message::Close(_)))) { break; }
+                    continue;
+                }
+                next = rx.recv() => {
+                    match next { Ok(notification) => notification, Err(_) => break }
+                }
+            };
+            let text = match RPC_CODECS.run(move || serde_json::to_string(notification.as_ref())).await {
+                Ok(result) => result,
+                Err(error) => { tracing::error!(%error, "JSON-RPC notification worker failed"); break; }
+            };
+            let text = match text {
                 Ok(text) => text,
                 Err(error) => {
                     tracing::error!(

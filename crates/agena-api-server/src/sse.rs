@@ -9,7 +9,7 @@ use axum::{
     extract::{Query, State},
     response::sse::{Event, KeepAlive, Sse},
 };
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt as _};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -46,11 +46,12 @@ pub async fn handler(
     let mut subscription = live::subscribe(&state)?;
     let _ = tx.try_send(Ok(Event::default().comment("subscribed")));
 
-    tokio::spawn(async move {
+    let producer = tokio::spawn(async move {
         while let Some(item) = tokio::select! {
             _ = tx.closed() => None,
             item = subscription.recv() => item,
         } {
+            tokio::task::consume_budget().await;
             if !live::matches_scope(&item, &scope, store.as_ref()).await {
                 continue;
             }
@@ -59,19 +60,19 @@ pub async fn handler(
                 LiveItem::SessionChanged(change) => Notification::SessionChanged {
                     subscription: subscription_id.clone(),
                     change: Box::new(change),
-                revisions,
+                    revisions,
                 },
                 LiveItem::RuntimeSignal(signal) => Notification::RuntimeSignal {
                     subscription: subscription_id.clone(),
                     signal: Box::new(signal),
-                revisions,
+                    revisions,
                 },
                 LiveItem::Lagged(skipped) => Notification::Lagged {
                     subscription: subscription_id.clone(),
                     skipped,
                 },
             };
-            let payload = match serde_json::to_string(&notification) {
+            let payload = match crate::json_codec::encode(notification).await {
                 Ok(p) => p,
                 Err(error) => {
                     tracing::error!(
@@ -92,8 +93,25 @@ pub async fn handler(
         }
     });
 
-    Ok(Sse::new(ReceiverStream::new(rx))
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(25))))
+    let owner = agena_async::AbortOnDrop::new(&producer);
+    let stream = ReceiverStream::new(rx).map(move |item| {
+        let _ = &owner;
+        item
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(25))))
+}
+
+async fn notification_event(
+    message: agena_api::resource::NotificationStreamEvent,
+) -> Option<Event> {
+    let name = message.event_name();
+    match crate::json_codec::encode_with(move || message.payload()).await {
+        Ok(payload) => Some(Event::default().event(name).data(payload)),
+        Err(error) => {
+            tracing::error!(%error, "notification stream JSON worker failed");
+            None
+        }
+    }
 }
 
 impl StreamQuery {
@@ -205,14 +223,14 @@ pub async fn notifications_stream(
     }
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
-    tokio::spawn(async move {
+    let producer = tokio::spawn(async move {
         for notification in replayed.iter().filter(|n| n.created_at_ms > since_ms) {
             let message = NotificationStreamEvent::Notification(Box::new(
                 NotificationResource::from(notification),
             ));
-            let event = Event::default()
-                .event(message.event_name())
-                .data(message.payload().to_string());
+            let Some(event) = notification_event(message).await else {
+                continue;
+            };
             if tx.send(Ok(event)).await.is_err() {
                 return;
             }
@@ -220,14 +238,15 @@ pub async fn notifications_stream(
         let resumed = NotificationStreamEvent::Resumed {
             up_to_ms: watermark,
         };
-        let event = Event::default()
-            .event(resumed.event_name())
-            .data(resumed.payload().to_string());
+        let Some(event) = notification_event(resumed).await else {
+            return;
+        };
         if tx.send(Ok(event)).await.is_err() {
             return;
         }
 
         loop {
+            tokio::task::consume_budget().await;
             let item = tokio::select! {
                 _ = tx.closed() => break,
                 item = events.recv() => item,
@@ -263,15 +282,19 @@ pub async fn notifications_stream(
                     reason: "notification store closed".into(),
                 },
             };
-            let event = Event::default()
-                .event(message.event_name())
-                .data(message.payload().to_string());
+            let Some(event) = notification_event(message).await else {
+                continue;
+            };
             if tx.send(Ok(event)).await.is_err() {
                 break;
             }
         }
     });
 
-    Ok(Sse::new(ReceiverStream::new(rx))
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(25))))
+    let owner = agena_async::AbortOnDrop::new(&producer);
+    let stream = ReceiverStream::new(rx).map(move |item| {
+        let _ = &owner;
+        item
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(25))))
 }

@@ -1,106 +1,116 @@
+static MARKETPLACE_READS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
+static MARKETPLACE_MUTATIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 pub async fn search_marketplace_plugins(
     State(_): State<AppState>,
     Json(request): Json<MarketplaceSearchRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let registry_spec = marketplace_registry_spec(
-        request.registry.registry_id.as_deref(),
-        request.registry.registry_url.as_deref(),
-        false,
-    )?;
-    let registry_id = registry_spec.id.clone();
-    let registry_url = registry_spec.url.clone();
+    MARKETPLACE_READS
+        .run(move || {
+            let registry_spec = marketplace_registry_spec(
+                request.registry.registry_id.as_deref(),
+                request.registry.registry_url.as_deref(),
+                false,
+            )?;
+            let registry_id = registry_spec.id.clone();
+            let registry_url = registry_spec.url.clone();
 
-    let client = marketplace_client();
-    let registry = client.registry(registry_spec);
-    let index = registry
-        .fetch_index(request.refresh)
-        .map_err(ServerError::service_unavailable)?;
-    let needle = request
-        .query
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
+            let client = marketplace_client();
+            let registry = client.registry(registry_spec);
+            let index = registry
+                .fetch_index(request.refresh)
+                .map_err(ServerError::service_unavailable)?;
+            let needle = request
+                .query
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
 
-    let marketplace = MarketplaceIdentityResource {
-        name: index.marketplace.name.clone(),
-        description: index.marketplace.description.clone(),
-        homepage: index.marketplace.homepage.clone(),
-        repository: index.marketplace.repository.clone(),
-        owner_name: index
-            .marketplace
-            .owner
-            .as_ref()
-            .map(|owner| owner.name.clone()),
-        owner_url: index
-            .marketplace
-            .owner
-            .as_ref()
-            .and_then(|owner| owner.url.clone()),
-    };
-    let mut entries = index
-        .plugins
-        .into_iter()
-        .filter(|plugin| {
-            if needle.is_empty() {
-                return true;
-            }
-            let blob = format!(
-                "{} {} {} {} {} {}",
-                plugin.id,
-                plugin.name,
-                plugin.description,
-                plugin.category.as_deref().unwrap_or_default(),
-                plugin.repository.as_deref().unwrap_or_default(),
-                plugin.tags.join(" ")
-            )
-            .to_ascii_lowercase();
-            blob.contains(&needle)
+            let marketplace = MarketplaceIdentityResource {
+                name: index.marketplace.name.clone(),
+                description: index.marketplace.description.clone(),
+                homepage: index.marketplace.homepage.clone(),
+                repository: index.marketplace.repository.clone(),
+                owner_name: index
+                    .marketplace
+                    .owner
+                    .as_ref()
+                    .map(|owner| owner.name.clone()),
+                owner_url: index
+                    .marketplace
+                    .owner
+                    .as_ref()
+                    .and_then(|owner| owner.url.clone()),
+            };
+            let mut entries = index
+                .plugins
+                .into_iter()
+                .filter(|plugin| {
+                    if needle.is_empty() {
+                        return true;
+                    }
+                    let blob = format!(
+                        "{} {} {} {} {} {}",
+                        plugin.id,
+                        plugin.name,
+                        plugin.description,
+                        plugin.category.as_deref().unwrap_or_default(),
+                        plugin.repository.as_deref().unwrap_or_default(),
+                        plugin.tags.join(" ")
+                    )
+                    .to_ascii_lowercase();
+                    blob.contains(&needle)
+                })
+                .map(|plugin| {
+                    let latest = plugin.versions.iter().max_by(|left, right| {
+                        let left_semver = semver::Version::parse(&left.version).ok();
+                        let right_semver = semver::Version::parse(&right.version).ok();
+                        match (left_semver, right_semver) {
+                            (Some(left_version), Some(right_version)) => {
+                                left_version.cmp(&right_version)
+                            }
+                            _ => left.version.cmp(&right.version),
+                        }
+                    });
+                    MarketplacePluginResource {
+                        plugin_id: plugin.id,
+                        name: plugin.name,
+                        description: plugin.description,
+                        homepage: plugin.homepage,
+                        repository: plugin.repository,
+                        license: plugin.license,
+                        category: plugin.category,
+                        tags: plugin.tags,
+                        version_count: plugin.versions.len(),
+                        latest_version: latest.map(|version| version.version.clone()),
+                        latest_kind: latest.map(|version| version.kind.to_string()),
+                        latest_platform: latest.map(|version| version.platform.clone()),
+                        latest_source_repository: latest
+                            .and_then(|version| version.source.as_ref())
+                            .map(|source| source.repository.clone()),
+                        latest_source_tag: latest
+                            .and_then(|version| version.source.as_ref())
+                            .map(|source| source.tag.clone()),
+                        latest_source_commit: latest
+                            .and_then(|version| version.source.as_ref())
+                            .map(|source| source.commit.clone()),
+                        review_tier: plugin.review_tier.as_str().to_string(),
+                        featured: plugin.featured,
+                    }
+                })
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+
+            Ok(Json(MarketplaceSearchResponse {
+                registry_id,
+                registry_url,
+                marketplace,
+                entries,
+            }))
         })
-        .map(|plugin| {
-            let latest = plugin.versions.iter().max_by(|left, right| {
-                let left_semver = semver::Version::parse(&left.version).ok();
-                let right_semver = semver::Version::parse(&right.version).ok();
-                match (left_semver, right_semver) {
-                    (Some(left_version), Some(right_version)) => left_version.cmp(&right_version),
-                    _ => left.version.cmp(&right.version),
-                }
-            });
-            MarketplacePluginResource {
-                plugin_id: plugin.id,
-                name: plugin.name,
-                description: plugin.description,
-                homepage: plugin.homepage,
-                repository: plugin.repository,
-                license: plugin.license,
-                category: plugin.category,
-                tags: plugin.tags,
-                version_count: plugin.versions.len(),
-                latest_version: latest.map(|version| version.version.clone()),
-                latest_kind: latest.map(|version| version.kind.to_string()),
-                latest_platform: latest.map(|version| version.platform.clone()),
-                latest_source_repository: latest
-                    .and_then(|version| version.source.as_ref())
-                    .map(|source| source.repository.clone()),
-                latest_source_tag: latest
-                    .and_then(|version| version.source.as_ref())
-                    .map(|source| source.tag.clone()),
-                latest_source_commit: latest
-                    .and_then(|version| version.source.as_ref())
-                    .map(|source| source.commit.clone()),
-                review_tier: plugin.review_tier.as_str().to_string(),
-                featured: plugin.featured,
-            }
-        })
-        .collect::<Vec<_>>();
-    entries.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-
-    Ok(Json(MarketplaceSearchResponse {
-        registry_id,
-        registry_url,
-        marketplace,
-        entries,
-    }))
+        .await
+        .map_err(|error| ServerError::internal_error(&error))?
 }
 
 pub async fn sync_marketplace_registry(
@@ -141,46 +151,56 @@ pub async fn sync_marketplace_registry(
 pub async fn list_marketplace_installed_plugins(
     State(_): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let client = marketplace_client();
-    let mut entries = client
-        .list_installed()
-        .map_err(ServerError::internal)?
-        .into_iter()
-        .map(|record| MarketplaceInstalledPluginResource {
-            plugin_id: record.plugin_id,
-            version: record.version,
-            kind: record.kind.to_string(),
-            platform: record.platform,
-            binary_path: record.binary_path.display().to_string(),
-            config_path: record.config_path.display().to_string(),
-            sha256: record.sha256,
-            installed_at: record.installed_at,
-            registry_id: record.registry_id,
-            registry_url: record.registry_url,
-            require_signature: record.require_signature,
-            require_github_distribution: record.require_github_distribution,
-            archive_extracted: record.archive_extracted,
+    MARKETPLACE_READS
+        .run(move || {
+            let client = marketplace_client();
+            let mut entries = client
+                .list_installed()
+                .map_err(ServerError::internal)?
+                .into_iter()
+                .map(|record| MarketplaceInstalledPluginResource {
+                    plugin_id: record.plugin_id,
+                    version: record.version,
+                    kind: record.kind.to_string(),
+                    platform: record.platform,
+                    binary_path: record.binary_path.display().to_string(),
+                    config_path: record.config_path.display().to_string(),
+                    sha256: record.sha256,
+                    installed_at: record.installed_at,
+                    registry_id: record.registry_id,
+                    registry_url: record.registry_url,
+                    require_signature: record.require_signature,
+                    require_github_distribution: record.require_github_distribution,
+                    archive_extracted: record.archive_extracted,
+                })
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+            Ok(items_json(entries))
         })
-        .collect::<Vec<_>>();
-    entries.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-    Ok(items_json(entries))
+        .await
+        .map_err(|error| ServerError::internal_error(&error))?
 }
 
 pub async fn list_marketplace_outdated_plugins(
     State(_): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let client = marketplace_client();
-    let entries = client
-        .list_outdated()
-        .map_err(ServerError::internal)?
-        .into_iter()
-        .map(|record| MarketplaceOutdatedPluginResource {
-            plugin_id: record.plugin_id,
-            installed_version: record.installed_version,
-            latest_version: record.latest_version,
+    MARKETPLACE_READS
+        .run(move || {
+            let client = marketplace_client();
+            let entries = client
+                .list_outdated()
+                .map_err(ServerError::internal)?
+                .into_iter()
+                .map(|record| MarketplaceOutdatedPluginResource {
+                    plugin_id: record.plugin_id,
+                    installed_version: record.installed_version,
+                    latest_version: record.latest_version,
+                })
+                .collect::<Vec<_>>();
+            Ok(items_json(entries))
         })
-        .collect::<Vec<_>>();
-    Ok(items_json(entries))
+        .await
+        .map_err(|error| ServerError::internal_error(&error))?
 }
 
 pub async fn install_marketplace_plugin(
@@ -504,23 +524,24 @@ where
 {
     let work: agena_runtime::RuntimeBackgroundTaskWork = Box::new(move |_| {
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                task().map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
-            })
-            .await
-            .map_err(|error| {
-                agena_runtime::RuntimeControlServiceError::new(
-                    agena_failure::diagnostic::format_error_chain_with_context(
-                        task_error_context,
-                        &error,
-                    ),
-                )
-            })?
-            .map_err(|diagnostic| {
-                agena_runtime::RuntimeControlServiceError::new(format!(
-                    "{task_error_context}: {diagnostic}"
-                ))
-            })
+            MARKETPLACE_MUTATIONS
+                .run(move || {
+                    task().map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
+                })
+                .await
+                .map_err(|error| {
+                    agena_runtime::RuntimeControlServiceError::new(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            task_error_context,
+                            &error,
+                        ),
+                    )
+                })?
+                .map_err(|diagnostic| {
+                    agena_runtime::RuntimeControlServiceError::new(format!(
+                        "{task_error_context}: {diagnostic}"
+                    ))
+                })
         })
     });
     let start = state

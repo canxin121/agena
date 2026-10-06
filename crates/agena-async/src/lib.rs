@@ -53,3 +53,19 @@ impl Drop for AbortQueuedWork {
         self.0.abort();
     }
 }
+
+/// Tie a spawned async child to its owner, including early returns and
+/// cancellation. Keep the JoinHandle separately when orderly joining is needed.
+pub struct AbortOnDrop(AbortHandle);
+
+impl AbortOnDrop {
+    pub fn new<T>(task: &tokio::task::JoinHandle<T>) -> Self {
+        Self(task.abort_handle())
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}

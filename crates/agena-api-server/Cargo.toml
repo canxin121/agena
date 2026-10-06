@@ -7,13 +7,14 @@ rust-version.workspace = true
 [features]
 default = ["http", "ws", "sse", "ipc", "jsonrpc"]
 http = []
-ws = []
-sse = []
+ws = ["http"]
+sse = ["http"]
 ipc = ["ws"]
-jsonrpc = []
+jsonrpc = ["http"]
 
 [dependencies]
 portable-atomic = { workspace = true }
+agena-async = { workspace = true }
 agena-application = { workspace = true }
 agena-api = { workspace = true }
 agena-failure = { workspace = true }

@@ -88,7 +88,7 @@ pub async fn list_sessions(
         .await
         .map_err(server_error_from_application)?;
     revisions.seed_session_list(&page.items, &observed);
-    Ok(read.json(page))
+    Ok(read.json(page).await?)
 }
 
 pub async fn get_session(
@@ -112,12 +112,14 @@ pub async fn get_session_state(
     if let Some(response) = read.not_modified(&headers) {
         return Ok(response);
     }
-    Ok(read.json(
-        state
-            .application()
-            .session_execution_shell(session_id)
-            .await?,
-    ))
+    Ok(read
+        .json(
+            state
+                .application()
+                .session_execution_shell(session_id)
+                .await?,
+        )
+        .await?)
 }
 
 pub async fn get_session_cost(
@@ -318,7 +320,7 @@ pub async fn get_session_tool_detail(
     let detail = crate::live::project_tool_detail(&state, &part, section)
         .await
         .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
-    Ok(read.json(detail))
+    Ok(read.json(detail).await?)
 }
 
 pub async fn get_session_plan(
@@ -345,7 +347,7 @@ pub async fn get_session_plan(
             Some(session_id),
         )
         .await?;
-    Ok(read.json(result))
+    Ok(read.json(result).await?)
 }
 
 fn select_user_visible_part_page(

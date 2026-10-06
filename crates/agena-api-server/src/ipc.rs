@@ -24,7 +24,7 @@ mod unix {
         subscribe::SubscriptionId,
         ws::{ClientMessage, ServerMessage},
     };
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{Mutex, mpsc};
 
@@ -34,6 +34,20 @@ mod unix {
         live::{self, LiveItem},
         state::AppState,
     };
+
+    // Match the WebSocket protocol's existing 64 MiB message ceiling.
+    const MAX_FRAME_BYTES: u64 = 64 * 1024 * 1024;
+
+    #[derive(Default)]
+    struct SubscriptionRegistry(HashMap<SubscriptionId, tokio::task::JoinHandle<()>>);
+
+    impl Drop for SubscriptionRegistry {
+        fn drop(&mut self) {
+            for task in self.0.values() {
+                task.abort();
+            }
+        }
+    }
 
     async fn queue_server_message(
         tx: &mpsc::Sender<ServerMessage>,
@@ -75,7 +89,7 @@ mod unix {
 
     async fn handle_connection(stream: UnixStream, state: AppState) -> std::io::Result<()> {
         let (read, mut write) = stream.into_split();
-        let mut lines = BufReader::new(read).lines();
+        let mut reader = BufReader::new(read);
         let (tx, mut rx) = mpsc::channel::<ServerMessage>(256);
 
         if tx
@@ -91,7 +105,7 @@ mod unix {
 
         let mut writer = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                let payload = match serde_json::to_string(&msg) {
+                let payload = match crate::json_codec::encode(msg).await {
                     Ok(p) => p,
                     Err(error) => {
                         tracing::error!(
@@ -117,19 +131,41 @@ mod unix {
                 }
             }
         });
+        let _writer_owner = agena_async::AbortOnDrop::new(&writer);
 
-        let registry: Arc<Mutex<HashMap<SubscriptionId, tokio::task::JoinHandle<()>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let registry = Arc::new(Mutex::new(SubscriptionRegistry::default()));
 
-        while let Some(line) = lines.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
+        loop {
+            tokio::task::consume_budget().await;
+            let mut bytes = Vec::new();
+            let count = (&mut reader)
+                .take(MAX_FRAME_BYTES + 3)
+                .read_until(b'\n', &mut bytes)
+                .await?;
+            if count == 0 {
+                break;
             }
-            let parsed: Result<ClientMessage, _> = serde_json::from_str(&line);
+            if bytes.last() == Some(&b'\n') {
+                bytes.pop();
+                if bytes.last() == Some(&b'\r') {
+                    bytes.pop();
+                }
+            }
+            if bytes.len() as u64 > MAX_FRAME_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "IPC protocol frame exceeds the 64 MiB limit",
+                ));
+            }
+            let parsed = crate::json_codec::decode_line::<ClientMessage>(bytes).await;
             match parsed {
-                Ok(msg) => {
+                Ok(Some(msg)) => {
                     handle_client_message(msg, state.clone(), tx.clone(), Arc::clone(&registry))
                         .await;
+                }
+                Ok(None) => continue,
+                Err(crate::json_codec::CodecError::Utf8(error)) => {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
                 }
                 Err(err) => {
                     let error = ApiError::protocol(format!("invalid frame: {err}"));
@@ -145,7 +181,7 @@ mod unix {
         }
 
         let mut guard = registry.lock().await;
-        for (_, handle) in guard.drain() {
+        for (_, handle) in guard.0.drain() {
             handle.abort();
         }
         drop(guard);
@@ -182,7 +218,7 @@ mod unix {
         msg: ClientMessage,
         state: AppState,
         tx: mpsc::Sender<ServerMessage>,
-        registry: Arc<Mutex<HashMap<SubscriptionId, tokio::task::JoinHandle<()>>>>,
+        registry: Arc<Mutex<SubscriptionRegistry>>,
     ) {
         match msg {
             ClientMessage::Command { id, command } => {
@@ -266,7 +302,7 @@ mod unix {
             }
             ClientMessage::Unsubscribe { id } => {
                 let mut guard = registry.lock().await;
-                if let Some(handle) = guard.remove(&id) {
+                if let Some(handle) = guard.0.remove(&id) {
                     handle.abort();
                 }
                 drop(guard);
@@ -290,7 +326,7 @@ mod unix {
         mut subscription: live::LiveSubscription,
         store: Arc<dyn agena_storage::store::SessionStore>,
         tx: mpsc::Sender<ServerMessage>,
-        registry: Arc<Mutex<HashMap<SubscriptionId, tokio::task::JoinHandle<()>>>>,
+        registry: Arc<Mutex<SubscriptionRegistry>>,
     ) {
         let id_for_task = id.clone();
         let tx_clone = tx.clone();
@@ -334,7 +370,7 @@ mod unix {
         });
 
         let mut guard = registry.lock().await;
-        if let Some(prev) = guard.insert(id.clone(), handle) {
+        if let Some(prev) = guard.0.insert(id.clone(), handle) {
             prev.abort();
         }
         drop(guard);

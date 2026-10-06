@@ -44,7 +44,7 @@ pub async fn get_session_file_changes(
         .await
         .map_err(super::server_error_from_store)?;
     state.revisions()?.register_file_facts(id, &session.parts);
-    Ok(read.json(project(id, &session.parts, &query)))
+    Ok(read.json(project(id, &session.parts, &query)).await?)
 }
 
 fn string(value: &Value, key: &str) -> Option<String> {

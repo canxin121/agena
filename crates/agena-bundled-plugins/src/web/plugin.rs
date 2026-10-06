@@ -2197,27 +2197,11 @@ impl WebPlugin {
             ));
         }
         let limit = content::bounded(input.max_results, 5, 20, "max_results")?;
-        let hits = {
-            let _guard = self.crawl_lock.lock().await;
-            let store = self.store()?;
-            let query = input.query.clone();
-            let permit = crate::BLOCKING_PLUGIN_WORKERS
-                .acquire()
-                .await
-                .map_err(|error| PluginError::internal_error(&error))?;
-            tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                agena_web::ensure_index_exists(&store)?;
-                store
-                    .search(&query, limit)?
-                    .into_iter()
-                    .map(|hit| store.get_document(&hit.id).map(|document| (hit, document)))
-                    .collect::<Result<Vec<_>, agena_web::CrawlError>>()
-            })
+        let hits = self
+            .store()?
+            .search_async(input.query.clone(), limit)
             .await
-            .map_err(|error| PluginError::internal_error(&error))?
-            .map_err(crawl_error_to_plugin)?
-        };
+            .map_err(crawl_error_to_plugin)?;
         let mut results = Vec::new();
         let mut omitted_count = 0usize;
         for (hit, document) in hits {

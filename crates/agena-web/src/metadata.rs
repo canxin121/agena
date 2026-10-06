@@ -15,16 +15,39 @@ const MARKDOWN_HASH_TO_ID_TABLE: TableDefinition<&str, &str> =
 const RAW_HASH_TO_ID_TABLE: TableDefinition<&str, &str> =
     TableDefinition::new("web_raw_hash_to_id");
 
-static OPEN_DATABASES: LazyLock<Mutex<HashMap<PathBuf, Weak<Database>>>> =
+static OPEN_DATABASES: LazyLock<Mutex<HashMap<PathBuf, Weak<DatabaseSlot>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Default)]
+struct DatabaseSlot {
+    database: Mutex<Weak<Database>>,
+}
 
 /// Store of crawl metadata.
 #[derive(Clone)]
 pub struct CrawlMetadataStore {
-    db: Arc<Database>,
+    db: Option<Arc<Database>>,
+    _slot: Arc<DatabaseSlot>,
+}
+
+impl Drop for CrawlMetadataStore {
+    fn drop(&mut self) {
+        // redb's last-handle close flushes synchronously. Async owners hand
+        // this entire handle to a cleanup worker before dropping it. Keep
+        // opening this file serialized until the actual close has finished.
+        let _guard = self
+            ._slot
+            .database
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        drop(self.db.take());
+    }
 }
 
 impl CrawlMetadataStore {
+    fn db(&self) -> &Database {
+        self.db.as_deref().expect("metadata database is open")
+    }
     pub fn open(path: &Path) -> Result<Self, CrawlError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -36,18 +59,36 @@ impl CrawlMetadataStore {
             .file_name()
             .ok_or_else(|| CrawlError::InvalidInput("metadata path has no filename".into()))?;
         let path = parent.canonicalize()?.join(name);
-        let mut open = OPEN_DATABASES.lock().map_err(|_| {
-            CrawlError::InvalidInput("metadata database mutex poisoned".to_string())
+        let slot = {
+            let mut open = OPEN_DATABASES.lock().map_err(|_| {
+                CrawlError::InvalidInput("metadata database registry mutex poisoned".into())
+            })?;
+            open.retain(|_, slot| slot.strong_count() > 0);
+            if let Some(slot) = open.get(&path).and_then(Weak::upgrade) {
+                slot
+            } else {
+                let slot = Arc::new(DatabaseSlot::default());
+                open.insert(path.clone(), Arc::downgrade(&slot));
+                slot
+            }
+        };
+        // File opening and schema I/O must not hold the registry lock for
+        // every workspace. Only callers opening this same file serialize.
+        let mut retained = slot.database.lock().map_err(|_| {
+            CrawlError::InvalidInput("metadata database initialization mutex poisoned".into())
         })?;
-        open.retain(|_, database| database.strong_count() > 0);
-        let db = if let Some(existing) = open.get(&path).and_then(Weak::upgrade) {
+        let db = if let Some(existing) = retained.upgrade() {
             existing
         } else {
             let created = Arc::new(Database::create(&path)?);
-            open.insert(path, Arc::downgrade(&created));
+            *retained = Arc::downgrade(&created);
             created
         };
-        let store = Self { db };
+        drop(retained);
+        let store = Self {
+            db: Some(db),
+            _slot: slot,
+        };
         store.initialize_or_validate_tables()?;
         Ok(store)
     }
@@ -59,7 +100,7 @@ impl CrawlMetadataStore {
             "web_raw_hash_to_id",
         ];
 
-        let read_txn = self.db.begin_read()?;
+        let read_txn = self.db().begin_read()?;
         let mut tables = read_txn
             .list_tables()?
             .map(|table| table.name().to_owned())
@@ -86,7 +127,7 @@ impl CrawlMetadataStore {
         }
         drop(read_txn);
 
-        let write_txn = self.db.begin_write()?;
+        let write_txn = self.db().begin_write()?;
         {
             let _ = write_txn.open_table(URL_TO_ID_TABLE)?;
         }
@@ -105,7 +146,7 @@ impl CrawlMetadataStore {
         document: &StoredDocument,
         previous: Option<&StoredDocument>,
     ) -> Result<(), CrawlError> {
-        let write_txn = self.db.begin_write()?;
+        let write_txn = self.db().begin_write()?;
         if let Some(previous) = previous {
             remove_owned_mappings(&write_txn, previous)?;
         }
@@ -126,7 +167,7 @@ impl CrawlMetadataStore {
     }
 
     pub fn delete_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
-        let write_txn = self.db.begin_write()?;
+        let write_txn = self.db().begin_write()?;
         remove_owned_mappings(&write_txn, document)?;
         write_txn.commit()?;
         Ok(())
@@ -136,7 +177,7 @@ impl CrawlMetadataStore {
         &self,
         canonical_url: &str,
     ) -> Result<Option<String>, CrawlError> {
-        let read_txn = self.db.begin_read()?;
+        let read_txn = self.db().begin_read()?;
         let url_to_id = match read_txn.open_table(URL_TO_ID_TABLE) {
             Ok(table) => table,
             Err(TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -151,7 +192,7 @@ impl CrawlMetadataStore {
         &self,
         markdown_hash: &str,
     ) -> Result<Option<String>, CrawlError> {
-        let read_txn = self.db.begin_read()?;
+        let read_txn = self.db().begin_read()?;
         let hash_to_id = match read_txn.open_table(MARKDOWN_HASH_TO_ID_TABLE) {
             Ok(table) => table,
             Err(TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -166,7 +207,7 @@ impl CrawlMetadataStore {
         &self,
         raw_hash: &str,
     ) -> Result<Option<String>, CrawlError> {
-        let read_txn = self.db.begin_read()?;
+        let read_txn = self.db().begin_read()?;
         let hash_to_id = match read_txn.open_table(RAW_HASH_TO_ID_TABLE) {
             Ok(table) => table,
             Err(TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -222,7 +263,7 @@ mod tests {
         let path = dir.path().join("metadata.redb");
         let store = CrawlMetadataStore::open(&path).expect("create current metadata database");
         assert_eq!(
-            table_names(store.db.as_ref()),
+            table_names(store.db()),
             vec![
                 "web_markdown_hash_to_id".to_owned(),
                 "web_raw_hash_to_id".to_owned(),
@@ -237,8 +278,11 @@ mod tests {
         let path = dir.path().join("metadata.redb");
         let first = CrawlMetadataStore::open(&path).unwrap();
         let second = CrawlMetadataStore::open(&dir.path().join(".").join("metadata.redb")).unwrap();
-        assert!(Arc::ptr_eq(&first.db, &second.db));
-        let weak = Arc::downgrade(&first.db);
+        assert!(Arc::ptr_eq(
+            first.db.as_ref().unwrap(),
+            second.db.as_ref().unwrap()
+        ));
+        let weak = Arc::downgrade(first.db.as_ref().unwrap());
         drop(first);
         assert!(weak.upgrade().is_some());
         drop(second);

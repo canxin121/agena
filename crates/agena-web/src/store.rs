@@ -7,6 +7,10 @@ use crate::{
     prepare_fetch_url, rebuild_search_index, search_documents,
 };
 
+static CRAWL_READS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
+static CRAWL_WRITES: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static CRAWL_CLOSES: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Retention policy of the crawl store.
 pub struct CrawlStoreRetention {
@@ -27,7 +31,38 @@ pub struct CrawlStorePruneReport {
 /// On-disk store for crawled documents.
 pub struct CrawlStore {
     dir: CrawlDir,
-    metadata: std::sync::Arc<std::sync::Mutex<Option<CrawlMetadataStore>>>,
+    metadata: std::sync::Arc<SharedMetadata>,
+}
+
+#[derive(Default)]
+struct SharedMetadata {
+    retained: std::sync::Mutex<Option<CrawlMetadataStore>>,
+}
+
+impl Drop for SharedMetadata {
+    fn drop(&mut self) {
+        // Arc invokes this exactly once, including when multiple CrawlStore
+        // clones drop concurrently. Checking Arc::get_mut in each clone's
+        // destructor could miss the last release in that race.
+        let metadata = self
+            .retained
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let Some(metadata) = metadata else { return };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            // Cleanup owns the handle even if the crawl caller is gone. Use
+            // a separate class so close/fsync can make progress independently
+            // of readers waiting for that same file's initialization lock.
+            runtime.spawn(async move {
+                if let Err(error) = CRAWL_CLOSES.run(move || drop(metadata)).await {
+                    tracing::error!(%error, "crawl metadata close worker failed");
+                }
+            });
+        } else {
+            drop(metadata);
+        }
+    }
 }
 
 impl CrawlStore {
@@ -43,6 +78,72 @@ impl CrawlStore {
             dir: CrawlDir::from_workspace(workspace_root),
             metadata: Default::default(),
         }
+    }
+
+    pub(crate) async fn read_async<T, F>(&self, operation: F) -> Result<T, CrawlError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Self) -> Result<T, CrawlError> + Send + 'static,
+    {
+        let store = self.clone();
+        CRAWL_READS
+            .run(move || operation(&store))
+            .await
+            .map_err(|error| {
+                CrawlError::Io(std::io::Error::other(format!(
+                    "crawl storage worker failed: {error}"
+                )))
+            })?
+    }
+
+    pub(crate) async fn mutate_async<T, F>(
+        &self,
+        writer: &std::sync::Arc<agena_async::WriteQueue>,
+        operation: F,
+    ) -> Result<T, CrawlError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Self) -> Result<T, CrawlError> + Send + 'static,
+    {
+        let permit = writer
+            .acquire()
+            .await
+            .map_err(|error| CrawlError::Io(std::io::Error::other(error)))?;
+        let store = self.clone();
+        CRAWL_WRITES
+            .run(move || {
+                // A started operation retains write admission if the caller is
+                // cancelled. redb transactions never outlive this sync closure.
+                let _permit = permit;
+                operation(&store)
+            })
+            .await
+            .map_err(|error| {
+                CrawlError::Io(std::io::Error::other(format!(
+                    "crawl mutation worker failed: {error}"
+                )))
+            })?
+    }
+
+    /// Search a consistent index snapshot without waiting for a crawl's
+    /// network phase. Directory replacement and initial index creation share
+    /// the same short storage gate as the crawl's final index commit.
+    pub async fn search_async(
+        &self,
+        query: String,
+        limit: usize,
+    ) -> Result<Vec<(crate::CrawlSearchHit, StoredDocument)>, CrawlError> {
+        self.read_async(|store| store.ensure_exists()).await?;
+        let writer = agena_async::WriteQueue::for_file(self.dir()).await?;
+        self.mutate_async(&writer, move |store| {
+            crate::ensure_index_exists(store)?;
+            store
+                .search(&query, limit)?
+                .into_iter()
+                .map(|hit| store.get_document(&hit.id).map(|document| (hit, document)))
+                .collect()
+        })
+        .await
     }
 
     pub fn dir(&self) -> &Path {
@@ -200,10 +301,10 @@ impl CrawlStore {
     }
 
     fn metadata(&self) -> Result<CrawlMetadataStore, CrawlError> {
-        let mut retained = self
-            .metadata
-            .lock()
-            .map_err(|_| CrawlError::InvalidInput("crawl metadata handle mutex poisoned".into()))?;
+        let mut retained =
+            self.metadata.retained.lock().map_err(|_| {
+                CrawlError::InvalidInput("crawl metadata handle mutex poisoned".into())
+            })?;
         if retained.is_none() {
             *retained = Some(CrawlMetadataStore::open(
                 self.dir.metadata_db_path().as_path(),

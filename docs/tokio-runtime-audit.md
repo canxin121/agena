@@ -107,6 +107,88 @@ Synchronous public helpers retained for synchronous callers still require an
 appropriate worker boundary when reused by new async code. The audit does not
 claim that every CPU-heavy projection in the repository has become asynchronous.
 
+## Follow-up: database contention and storage locks
+
+The second pass follows database callers through transaction ownership, codecs,
+connection checkout, retry, cleanup, and cancellation. Async SQL alone did not
+prevent a writer queue from monopolizing connections or CPU preparation from
+prolonging a write transaction.
+
+### Database topology and write admission
+
+Chat/session data, the scheduler, and web-server state use separate SQLite
+files. Crawl metadata uses a workspace-specific redb file and document/index
+files. A single SQLite database remains a single writer in WAL mode; extra
+connections permit concurrent reads, not parallel writes.
+
+`agena-async::WriteQueue` now provides process-local FIFO writer admission:
+
+- Each canonical database file has one shared queue, including independently
+  opened connection pools and path aliases. Different files have independent
+  queues. Named/anonymous memory databases use their SQLx identities.
+- Admission precedes connection checkout and transaction creation. At most 128
+  writers are admitted, including the active writer; queued admission expires
+  after 15 seconds. Capacity is returned on cancellation/error.
+- SQL write permits are retained through commit/rollback and released before
+  transaction effects. SQLite/SQLx still handles statement execution and queued
+  rollback cleanup when an async future is cancelled.
+- Runtime file-backed pools retain 16 connections, with a three-second checkout
+  timeout. SQLite busy waits are one second per connection instead of 15.
+- The session transaction fence still acquires SQLite's write lock before
+  application reads. Cross-process fence conflicts roll back before backoff;
+  at most five retries occur, checking a ten-second budget between attempts.
+  The mutation/effects closure is not replayed. The budget does not forcibly
+  interrupt an in-flight SQL operation or impose a deadline on an entire import.
+- Queue/checkout congestion preserves a transient failure classification.
+  Session/runtime API boundaries expose dependency-unavailable/503 responses;
+  an exhausted optimistic message update exposes a conflict/409 response.
+
+The queue coordinates this process. Other processes are coordinated by SQLite's
+write lock and version/claim predicates, not by the in-process semaphore.
+
+### Call paths reviewed and repaired
+
+| Boundary | Finding | Change |
+| --- | --- | --- |
+| Session engine and shared transaction helpers | Writers occupied pool connections while racing the one SQLite write lock | Shared bounded admission before checkout; short driver waits and bounded fence retries |
+| Message delta and run completion | Large decode/compare/clone/encode work occurred while holding the writer transaction | Read and prepare outside the transaction; update with a part revision predicate; bump member-session versions atomically after a successful CAS; reload/reapply pure deltas on a bounded conflict loop |
+| New user messages, appended parts, background companion parts | One encoder admission and one allocator UPDATE per part inside the transaction | Encode the owned batch first; reserve the ID range with one transactional allocator UPDATE; insert in existing reference order |
+| Background launch validation, fork cutoff validation | Validation fetched whole tool results/provider continuations | Select only part identity, role, state, ownership, references, and timestamps |
+| Background events and transitions | Replacement outcome/failure/notification payloads were serialized under the write lock, sometimes twice | Prepare replacements before admission; SQL COALESCE preserves omitted fields; move rather than clone the runtime-ingress notification |
+| Delivery retry/failure and usage detail | Potentially large JSON encoding ran on the async caller or in a transaction | Bounded encoding before write admission; direct usage/cancellation statements also join the shared writer queue |
+| Cancel/reconcile | One full result read/decoder per changed part under the write lock | One result-row query; decode the captured rows after commit and release of write admission |
+| In-flight session/run listing | Pure SELECTs opened fenced write transactions | Read directly through the pool without writer admission |
+| Session fork/rewind | Fetch every history edge and issue one insert per included edge | One INSERT ... SELECT with the original cutoff comparison, inside the atomic transaction |
+| JSONL export/import | Full serialization/parsing and repeated payload encoding ran on the async task or in the write transaction | Bounded workers prepare payloads first; import retains atomicity and remaps IDs without cloning large part payloads under the lock |
+| Orphan maintenance | Unbounded deletion scans held the writer lock; empty ticks also acquired it | Select candidates using reads, revalidate/delete at most 256 leaves per transaction, at most four batches per tick; commit/yield between batches; preserve membership, parent/run and background foreign-key references |
+| Workspace resolution | Known workspaces still issued INSERT ... DO NOTHING on common request paths | Return the read lookup for known paths; only misses join the writer queue |
+| Workspace/permission CRUD | Independent writes bypassed shared admission; read/write/read sequences raced other writers | Shared admission and RETURNING where appropriate; permission upsert's insert/update/read-back is one fenced transaction |
+| Model catalog | Per-model serialization/search-text preparation and one SQL round trip per model under the lock | Prepare statements on a bounded worker before admission; insert up to 100 models per statement; retain the atomic freshness gate |
+| Model catalog reads/invalid-cache cleanup | Metadata and entries could come from different snapshots; stale corruption cleanup could clear a newer refresh | Capture state and entries in one read transaction, release before decoding, and recheck the captured timestamp before clearing |
+| Scheduler writes and audit history | Claim/renew/edit/finalize writes competed for connections; history encoding ran after the job update | Per-file writer admission on every mutation; prepare job/history JSON first; preserve claim CAS, renewal ownership, and job/history atomicity |
+| Scheduler reads | JSON decoding ran on async callers; a boolean pending-jobs query materialized all pending job payloads | Bounded row decoding after checkout release; SELECT EXISTS for the boolean query |
+| Server-state KV | Every snapshot wrote again and typed JSON passed through two conversions | Per-file writer queue; encode/decode owned typed values once on bounded workers; unchanged payloads skip the UPSERT update |
+| Database bootstrap/schema locks | Directory creation, schema-lock file open/try_lock ran synchronously inside async bootstrap | Bounded worker boundaries; retry advisory-lock contention with async sleeps |
+| Revision safety refresh | Concurrent browsers queued behind one slow cross-process metadata read; failures immediately retriggered reads | One refresh proceeds; other polls use the locally observed revision clock; retain a two-second attempt cooldown on errors/cancellation and the existing 30-second successful-check interval |
+| Async web crawl | redb access, document/cache file I/O, content preparation, prune, and index rebuild were invoked directly on Tokio workers | Bounded read/content/write workers; per-store mutation admission with permits retained inside started closures; network fetch/authorization futures stay in the original task |
+| Crawl metadata handle registry | Opening/validating one file held the global registry mutex across disk I/O | Snapshot a per-file initialization slot under the registry lock; open/validate outside the global lock; retain/release shared redb handles correctly |
+| redb last-handle release | Closing the database can synchronously flush its shutdown header on the async caller | The shared resource destructor hands the retained metadata handle to a separate bounded close worker, including concurrent clone releases; serialize actual close and new open under the same per-file slot lock |
+| Web local search | A local query waited on the crawl mutex throughout a crawl's network phase | Share only the storage/index gate needed for a consistent snapshot; no wait on the crawl's network phase |
+
+SQLite statement execution remains asynchronous through SeaORM/SQLx. Neither
+transactions nor async driver operations are wrapped in `spawn_blocking`.
+Some reads required for atomic metadata/background validation still decode
+inside a transaction; these have a reserved decoder limit of one and do not
+queue behind transcript reads or message preparation. Normal payload decoders
+and mutation preparation remain separately limited to two workers per class.
+
+These changes do not alter the persistent table/index/trigger schema or require
+recreating a database. GC is now incremental: a tick reports only the parts
+removed by its bounded batches, and later ticks drain the remaining orphans.
+Long atomic imports/catalog replacement can still hold a writer while their SQL
+statements execute; preparation and avoidable round trips have been removed,
+while splitting a single logical import across commits would change its contract.
+
 ## Verification and practical limits
 
 Only compilation and source checks were requested. No new tests were added and

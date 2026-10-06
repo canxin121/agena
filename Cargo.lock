@@ -1471,6 +1471,7 @@ dependencies = [
 name = "agena-web"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-failure",
  "agena-process",
  "base64 0.22.1",

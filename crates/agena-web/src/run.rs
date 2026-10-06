@@ -112,6 +112,8 @@ pub trait CrawlPageFetcher: Sync {
     >;
 }
 
+static CRAWL_CONTENT: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 pub async fn crawl_site(
     start_url: &Url,
     store: &CrawlStore,
@@ -141,10 +143,16 @@ pub async fn crawl_site(
     let mut duplicate_count = 0usize;
     let mut near_duplicate_count = 0usize;
     let mut known_simhashes = store
-        .list_documents()?
-        .into_iter()
-        .map(|document| (document.id, document.simhash))
-        .collect::<HashMap<_, _>>();
+        .read_async(|store| {
+            store.ensure_exists()?;
+            Ok(store
+                .list_documents()?
+                .into_iter()
+                .map(|document| (document.id, document.simhash))
+                .collect::<HashMap<_, _>>())
+        })
+        .await?;
+    let writer = agena_async::WriteQueue::for_file(store.dir()).await?;
 
     while !queue.is_empty() {
         let remaining = options
@@ -164,7 +172,10 @@ pub async fn crawl_site(
         {
             let (url, depth) = queue.pop_front().expect("checked front");
             let cached = if options.use_cache {
-                store.find_by_url(url.as_str())?
+                let cache_url = url.to_string();
+                store
+                    .read_async(move |store| store.find_by_url(&cache_url))
+                    .await?
             } else {
                 None
             };
@@ -261,26 +272,30 @@ pub async fn crawl_site(
                             &mut truncated,
                         );
                     }
-                    let document = StoredDocument::from_fetched_page(
-                        page.clone(),
-                        depth,
-                        options.max_chunk_chars,
-                    );
+                    let max_chunk_chars = options.max_chunk_chars;
+                    let document = CRAWL_CONTENT
+                        .run(move || {
+                            StoredDocument::from_fetched_page(page, depth, max_chunk_chars)
+                        })
+                        .await
+                        .map_err(|error| {
+                            CrawlError::Io(std::io::Error::other(format!(
+                                "crawl content worker failed: {error}"
+                            )))
+                        })?;
                     // A refresh of the same document must replace old text and
                     // timestamps even when its hash is unchanged or similar.
                     let refreshing = known_simhashes.contains_key(&document.id);
+                    let hash_document = &document;
+                    let raw_hash = hash_document.raw_html_hash.clone();
+                    let markdown_hash = hash_document.markdown_hash.clone();
                     if !refreshing
                         && store
-                            .find_by_raw_hash(document.raw_html_hash.as_str())?
-                            .is_some()
-                    {
-                        duplicate_count += 1;
-                        continue;
-                    }
-                    if !refreshing
-                        && store
-                            .find_by_markdown_hash(document.markdown_hash.as_str())?
-                            .is_some()
+                            .read_async(move |store| {
+                                Ok(store.find_by_raw_hash(&raw_hash)?.is_some()
+                                    || store.find_by_markdown_hash(&markdown_hash)?.is_some())
+                            })
+                            .await?
                     {
                         duplicate_count += 1;
                         continue;
@@ -296,7 +311,12 @@ pub async fn crawl_site(
                         continue;
                     }
 
-                    store.save_document(&document)?;
+                    let document = store
+                        .mutate_async(&writer, move |store| {
+                            store.save_document(&document)?;
+                            Ok(document)
+                        })
+                        .await?;
                     known_simhashes.insert(document.id.clone(), document.simhash);
                     stored_count += 1;
                     documents.push(document.summary());
@@ -322,12 +342,17 @@ pub async fn crawl_site(
         }
     }
 
-    let prune_report = match options.store_retention {
-        Some(retention) => store.prune(retention)?,
-        None => CrawlStorePruneReport::default(),
-    };
-    store.rebuild_index()?;
-    let total_documents = store.list_documents()?.len();
+    let retention = options.store_retention;
+    let (prune_report, total_documents) = store
+        .mutate_async(&writer, move |store| {
+            let prune = match retention {
+                Some(retention) => store.prune(retention)?,
+                None => CrawlStorePruneReport::default(),
+            };
+            store.rebuild_index()?;
+            Ok((prune, store.list_documents()?.len()))
+        })
+        .await?;
     Ok(CrawlRunReport {
         start_url: start_url.to_string(),
         concurrency: options.concurrency,

@@ -61,6 +61,7 @@ pub async fn dispatch_query(
                 offset,
                 bucket,
                 include_total,
+                count_only: false,
             }))
             .await?,
         )),

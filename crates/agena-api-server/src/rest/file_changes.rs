@@ -33,13 +33,14 @@ pub async fn get_session_file_changes(
     Query(query): Query<FileChangesQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
-    let read = crate::revisions::ConditionalRead::new(&state, &format!("session:{id}:files")).await?;
+    let read =
+        crate::revisions::ConditionalRead::new(&state, &format!("session:{id}:files")).await?;
     if let Some(response) = read.not_modified(&headers) {
         return Ok(response);
     }
     let session = state
         .session_store()?
-        .load(id)
+        .load_owned_parts_by_kind(id, "tool_call")
         .await
         .map_err(super::server_error_from_store)?;
     state.revisions()?.register_file_facts(id, &session.parts);
@@ -132,22 +133,35 @@ fn recorded_file_facts(part: &Part) -> RecordedFileFacts {
         if part.kind != "tool_call" {
             break 'record;
         }
-        let name = part.content.get("name").and_then(Value::as_str).unwrap_or("");
+        let name = part
+            .content
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         if name.starts_with("shell.") {
             // A queued command has not executed yet. Once it can have run,
             // writes remain a declaration, even when the command fails.
             incomplete = part.state != PartState::Pending
-                && part.content.pointer("/input/writes")
-                    .and_then(Value::as_array).is_some_and(|writes| !writes.is_empty());
+                && part
+                    .content
+                    .pointer("/input/writes")
+                    .and_then(Value::as_array)
+                    .is_some_and(|writes| !writes.is_empty());
             break 'record;
         }
-        if !matches!(name, "fs.write" | "fs.replace" | "code.rewrite_ast" | "fs.apply_patch") {
+        if !matches!(
+            name,
+            "fs.write" | "fs.replace" | "code.rewrite_ast" | "fs.apply_patch"
+        ) {
             break 'record;
         }
         let Ok(tool) = ToolCallContent::try_from(&part.content) else {
             break 'record;
         };
-        if part.state != PartState::Completed || tool.state != ToolResultState::Completed || tool.error.is_some() {
+        if part.state != PartState::Completed
+            || tool.state != ToolResultState::Completed
+            || tool.error.is_some()
+        {
             break 'record;
         }
         // Preview is never an edit, even if an older/malformed result lacks
@@ -256,14 +270,25 @@ pub(crate) fn recorded_file_source(part: &Part) -> u64 {
     if part.kind != "tool_call" {
         return 0;
     }
-    let name = part.content.get("name").and_then(Value::as_str).unwrap_or("");
+    let name = part
+        .content
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if name.starts_with("shell.") {
         // Running output, error messages and terminal status cannot change
         // this declaration's contribution after the command started.
         (part.state != PartState::Pending
-            && part.content.pointer("/input/writes").and_then(Value::as_array)
-                .is_some_and(|writes| !writes.is_empty())).hash(&mut hasher);
-    } else if matches!(name, "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast") {
+            && part
+                .content
+                .pointer("/input/writes")
+                .and_then(Value::as_array)
+                .is_some_and(|writes| !writes.is_empty()))
+        .hash(&mut hasher);
+    } else if matches!(
+        name,
+        "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast"
+    ) {
         (
             part.state,
             name,
@@ -273,7 +298,8 @@ pub(crate) fn recorded_file_source(part: &Part) -> u64 {
             part.content.pointer("/input/expected_sha256"),
             part.content.pointer("/output/payload"),
             part.content.pointer("/output/truncated"),
-        ).hash(&mut hasher);
+        )
+            .hash(&mut hasher);
     } else {
         return 0;
     }
@@ -318,6 +344,9 @@ fn project(id: i64, parts: &[Part], query: &FileChangesQuery) -> SessionFileChan
             .skip(if query.path.is_some() { 0 } else { offset })
             .take(limit)
             .map(|(path, mut operations)| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                operations.hash(&mut hasher);
+                let revision = format!("{:016x}", hasher.finish());
                 let operation_count = operations.len();
                 if query.path.is_none() {
                     operations.clear();
@@ -337,6 +366,7 @@ fn project(id: i64, parts: &[Part], query: &FileChangesQuery) -> SessionFileChan
                 }
                 SessionFileChangeResource {
                     path,
+                    revision,
                     operation_count,
                     operation_history: operation_count > 1,
                     operations,
@@ -463,6 +493,28 @@ mod tests {
         assert_eq!(unknown.total_files, 1);
         assert_eq!(unknown.files[0].operations.len(), 2);
         assert!(unknown.files[0].operation_history);
+    }
+
+    #[test]
+    fn per_file_fingerprint_ignores_changes_to_other_files_and_diff_truncation() {
+        let a = replace(1, "a", "b");
+        let b = part(
+            2,
+            "fs.write",
+            json!({"path":"b.txt","kind":"created","sha256":"c","diff":"+B"}),
+        );
+        let first = project(1, &[a.clone()], &detail());
+        let second = project(
+            1,
+            &[a.clone(), b],
+            &FileChangesQuery {
+                max_bytes: Some(1),
+                ..detail()
+            },
+        );
+        assert_eq!(first.files[0].revision, second.files[0].revision);
+        let changed = project(1, &[a, replace(3, "b", "c")], &detail());
+        assert_ne!(first.files[0].revision, changed.files[0].revision);
     }
 
     #[test]

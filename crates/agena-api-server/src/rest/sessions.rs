@@ -45,18 +45,36 @@ pub async fn list_sessions(
     AxumQuery(query): AxumQuery<SessionListQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
+    let bucket = query.bucket.map(|bucket| {
+        serde_json::to_value(bucket)
+            .expect("bucket")
+            .as_str()
+            .expect("bucket string")
+            .to_owned()
+    });
     let key = query.workspace_id.map_or_else(
         || match query.bucket {
-            Some(bucket) => format!(
-                "sessions:bucket:{}",
-                serde_json::to_value(bucket)
-                    .expect("bucket")
-                    .as_str()
-                    .expect("bucket string")
+            Some(_) => format!(
+                "sessions:bucket:{}{}",
+                bucket.as_ref().unwrap(),
+                if query.count_only { ":count" } else { "" }
             ),
             None => "sessions".into(),
         },
-        |id| format!("workspace:{id}:sessions"),
+        |id| {
+            let base = format!("workspace:{id}:sessions");
+            // Bucket keys cover every hierarchy subset of that bucket. Other
+            // lists have clocks for roots or one parent's immediate children.
+            if let Some(bucket) = &bucket {
+                format!("{base}:bucket:{bucket}")
+            } else if let Some(parent) = query.parent_id {
+                format!("{base}:parent:{parent}")
+            } else if query.roots {
+                format!("{base}:roots")
+            } else {
+                base
+            }
+        },
     );
     let read = crate::revisions::ConditionalRead::new(&state, &key).await?;
     if let Some(response) = read.not_modified(&headers) {

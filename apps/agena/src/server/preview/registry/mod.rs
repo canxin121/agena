@@ -78,9 +78,54 @@ struct PreviewSessionsFile {
 
 #[derive(Debug, Clone)]
 struct RegistryCache {
+    revision: u64,
     loaded_at: Instant,
     server_state_db_path: PathBuf,
     snapshot: PreviewSessionsResponse,
+}
+
+/// Build and serialize once per registry revision, shared by every browser.
+/// Slow consumers receive a reset when they missed the delta's base revision.
+#[derive(Debug)]
+struct PreviewEventSnapshot {
+    revision: String,
+    base_revision: Option<String>,
+    snapshot: PreviewSessionsResponse,
+    delta: Arc<str>,
+    reset: Option<Arc<str>>,
+}
+
+impl PreviewEventSnapshot {
+    fn new(revision: String, previous: Option<&Self>, snapshot: PreviewSessionsResponse) -> Self {
+        let delta: Arc<str> =
+            serde_json::json!({"type":"preview.sessions.changed", "revision":revision,
+            "delta":preview_session_delta(previous.map(|old| &old.snapshot), &snapshot)})
+            .to_string()
+            .into();
+        Self {
+            revision,
+            base_revision: previous.map(|old| old.revision.clone()),
+            snapshot,
+            reset: previous.is_none().then(|| delta.clone()),
+            delta,
+        }
+    }
+
+    fn payload(&mut self, previous: Option<&str>) -> Option<Arc<str>> {
+        if previous == Some(self.revision.as_str()) {
+            return None;
+        }
+        if previous.is_some() && previous == self.base_revision.as_deref() {
+            return Some(self.delta.clone());
+        }
+        let reset = self.reset.get_or_insert_with(|| {
+            serde_json::json!({"type":"preview.sessions.changed",
+            "revision":self.revision, "delta":preview_session_delta(None, &self.snapshot)})
+            .to_string()
+            .into()
+        });
+        Some(reset.clone())
+    }
 }
 
 #[derive(Debug)]
@@ -90,6 +135,7 @@ pub(crate) struct WorkspacePreviewRegistry {
     cache: RwLock<Option<RegistryCache>>,
     epoch: uuid::Uuid,
     changes: tokio::sync::watch::Sender<u64>,
+    events: tokio::sync::Mutex<Option<PreviewEventSnapshot>>,
 }
 
 impl WorkspacePreviewRegistry {
@@ -104,11 +150,12 @@ impl WorkspacePreviewRegistry {
             cache: RwLock::new(None),
             epoch: uuid::Uuid::new_v4(),
             changes: tokio::sync::watch::channel(0).0,
+            events: tokio::sync::Mutex::new(None),
         }
     }
 
-    pub(crate) async fn list_all(&self) -> PreviewSessionsResponse {
-        self.snapshot().await
+    pub(crate) async fn list_all(&self) -> ApiResult<PreviewSessionsResponse> {
+        self.try_snapshot().await
     }
 
     pub(crate) async fn get_by_id(&self, id: &str) -> Option<PreviewSessionRecord> {
@@ -131,6 +178,34 @@ impl WorkspacePreviewRegistry {
 
     pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
         self.changes.subscribe()
+    }
+
+    pub(crate) async fn event_payload(
+        &self,
+        previous: Option<&str>,
+    ) -> ApiResult<(String, Option<Arc<str>>)> {
+        let mut events = self.events.lock().await;
+        let revision = self.revision();
+        if events
+            .as_ref()
+            .is_none_or(|cached| cached.revision != revision)
+        {
+            // Never memoize a failed database read as an authoritative empty
+            // registry for the rest of this revision's lifetime.
+            let snapshot = self.try_snapshot().await?;
+            *events = Some(PreviewEventSnapshot::new(
+                revision.clone(),
+                events.as_ref(),
+                snapshot,
+            ));
+        }
+        Ok((
+            revision,
+            events
+                .as_mut()
+                .expect("preview event snapshot")
+                .payload(previous),
+        ))
     }
 
     async fn load_server_state_file(&self) -> ApiResult<PreviewSessionsFile> {
@@ -468,38 +543,42 @@ impl WorkspacePreviewRegistry {
     }
 
     async fn snapshot(&self) -> PreviewSessionsResponse {
+        self.try_snapshot().await.unwrap_or_else(|error| {
+            tracing::warn!(target: "agena.preview_registry", error = %error,
+                "Failed to load server preview registry from db");
+            empty_snapshot()
+        })
+    }
+
+    async fn try_snapshot(&self) -> ApiResult<PreviewSessionsResponse> {
+        let revision = *self.changes.borrow();
         let server_state_db_path = self.db.path().to_path_buf();
         {
             let cache = self.cache.read().await;
             if let Some(cache) = cache.as_ref()
+                && cache.revision == revision
                 && cache.server_state_db_path == server_state_db_path
                 && cache.loaded_at.elapsed() < self.ttl
             {
-                return cache.snapshot.clone();
+                return Ok(cache.snapshot.clone());
             }
         }
 
-        let server_snapshot = match self.load_server_state_file().await {
-            Ok(file) => parse_preview_sessions(file),
-            Err(error) => {
-                tracing::warn!(
-                    target: "agena.preview_registry",
-                    error = %error,
-                    "Failed to load server preview registry from db"
-                );
-                empty_snapshot()
-            }
-        };
-        let snapshot = server_snapshot;
+        let snapshot = parse_preview_sessions(self.load_server_state_file().await?);
         let cache_entry = RegistryCache {
+            revision,
             loaded_at: Instant::now(),
             server_state_db_path,
             snapshot: snapshot.clone(),
         };
 
         let mut cache = self.cache.write().await;
-        *cache = Some(cache_entry);
-        snapshot
+        // A read started before a mutation cannot repopulate the cache that
+        // mutation just invalidated, or tag the stale snapshot as current.
+        if *self.changes.borrow() == revision {
+            *cache = Some(cache_entry);
+        }
+        Ok(snapshot)
     }
 }
 
@@ -845,4 +924,179 @@ pub(crate) fn websocket_target_url(
     };
     let _ = upstream.set_scheme(scheme);
     upstream
+}
+
+fn preview_session_delta(
+    previous: Option<&PreviewSessionsResponse>,
+    snapshot: &PreviewSessionsResponse,
+) -> serde_json::Value {
+    let old = previous
+        .into_iter()
+        .flat_map(|snapshot| &snapshot.sessions)
+        .map(|session| (session.id.as_str(), session))
+        .collect::<std::collections::HashMap<_, _>>();
+    let ids = snapshot
+        .sessions
+        .iter()
+        .map(|session| session.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let upsert = snapshot
+        .sessions
+        .iter()
+        .filter(|session| old.get(session.id.as_str()).copied() != Some(*session))
+        .collect::<Vec<_>>();
+    let removed = old
+        .keys()
+        .filter(|id| !ids.contains(**id))
+        .collect::<Vec<_>>();
+    serde_json::json!({"reset": previous.is_none(), "upsert": upsert, "removed": removed})
+}
+
+#[cfg(test)]
+mod preview_delta_tests {
+    use super::*;
+
+    fn record(id: &str, directory: &str) -> PreviewSessionRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "directory": directory, "runDirectory": directory, "state": "running",
+            "proxyBasePath": format!("/api/v1/workbench/preview/s/{id}/"), "targetUrl": "http://localhost:3000",
+            "command": "bun", "args": ["dev"], "logsPath": "/tmp/preview.log", "updatedAt": 1,
+        })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn preview_delta_failed_reads_do_not_cache_an_empty_registry() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            db::ServerStateDb::open_at_path(directory.path().join("state.sqlite"))
+                .await
+                .unwrap(),
+        );
+        db.set_value(
+            db::KV_KEY_WORKSPACE_PREVIEW_SERVER_STATE,
+            &serde_json::json!({"invalid":"snapshot"}),
+        )
+        .await
+        .unwrap();
+        let registry = WorkspacePreviewRegistry::new(db.clone());
+        assert!(registry.list_all().await.is_err());
+        assert!(registry.event_payload(None).await.is_err());
+        let revision = registry.revision();
+        db.set_json(
+            db::KV_KEY_WORKSPACE_PREVIEW_SERVER_STATE,
+            &PreviewSessionsFile {
+                updated_at: 1,
+                sessions: vec![record("A", "/repo-A")],
+            },
+        )
+        .await
+        .unwrap();
+        let (recovered_revision, payload) = registry.event_payload(None).await.unwrap();
+        assert_eq!(
+            recovered_revision, revision,
+            "storage recovery requires no unrelated mutation"
+        );
+        let recovered: serde_json::Value = serde_json::from_str(&payload.unwrap()).unwrap();
+        assert_eq!(recovered["delta"]["reset"], true);
+        assert_eq!(recovered["delta"]["upsert"][0]["id"], "A");
+        assert_eq!(registry.list_all().await.unwrap().sessions.len(), 1);
+    }
+
+    #[test]
+    fn preview_delta_transmits_only_changed_records_and_deleted_ids() {
+        let a = record("A", "/repo-A");
+        let b = record("B", "/repo-B");
+        let old = PreviewSessionsResponse {
+            updated_at: 1,
+            sessions: vec![a.clone(), b.clone()],
+        };
+        let mut changed = a;
+        changed.state = "stopped".into();
+        changed.updated_at = 2;
+        let next = PreviewSessionsResponse {
+            updated_at: 2,
+            sessions: vec![changed, b.clone()],
+        };
+        let delta = preview_session_delta(Some(&old), &next);
+        assert_eq!(delta["reset"], false);
+        assert_eq!(delta["upsert"].as_array().unwrap().len(), 1);
+        assert_eq!(delta["upsert"][0]["id"], "A");
+        assert!(delta["removed"].as_array().unwrap().is_empty());
+        let renamed = PreviewSessionsResponse {
+            updated_at: 3,
+            sessions: vec![record("renamed-A", "/repo-A"), b],
+        };
+        let delta = preview_session_delta(Some(&next), &renamed);
+        assert_eq!(delta["removed"], serde_json::json!(["A"]));
+        assert_eq!(delta["upsert"][0]["id"], "renamed-A");
+        assert_eq!(delta["upsert"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn preview_delta_reconnect_replaces_the_snapshot_and_idle_is_empty() {
+        let snapshot = PreviewSessionsResponse {
+            updated_at: 1,
+            sessions: vec![record("A", "/repo-A"), record("B", "/repo-B")],
+        };
+        let initial = preview_session_delta(None, &snapshot);
+        assert_eq!(initial["reset"], true);
+        assert_eq!(initial["upsert"].as_array().unwrap().len(), 2);
+        let idle = preview_session_delta(Some(&snapshot), &snapshot);
+        assert_eq!(idle["reset"], false);
+        assert!(idle["upsert"].as_array().unwrap().is_empty());
+        assert!(idle["removed"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn preview_delta_shares_serialized_frames_and_resets_consumers_that_missed_a_revision() {
+        let initial = PreviewEventSnapshot::new(
+            "preview:1".into(),
+            None,
+            PreviewSessionsResponse {
+                updated_at: 1,
+                sessions: vec![record("A", "/repo-A"), record("B", "/repo-B")],
+            },
+        );
+        let mut changed = record("A", "/repo-A");
+        changed.state = "stopped".into();
+        let mut next = PreviewEventSnapshot::new(
+            "preview:2".into(),
+            Some(&initial),
+            PreviewSessionsResponse {
+                updated_at: 2,
+                sessions: vec![changed.clone(), record("B", "/repo-B")],
+            },
+        );
+        let first = next.payload(Some("preview:1")).unwrap();
+        let second = next.payload(Some("preview:1")).unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "all browsers reuse one serialized delta"
+        );
+        let delta: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(delta["delta"]["reset"], false);
+        assert_eq!(delta["delta"]["upsert"].as_array().unwrap().len(), 1);
+        assert_eq!(delta["delta"]["upsert"][0]["id"], "A");
+        assert!(next.payload(Some("preview:2")).is_none());
+
+        let mut newest = PreviewEventSnapshot::new(
+            "preview:3".into(),
+            Some(&next),
+            PreviewSessionsResponse {
+                updated_at: 3,
+                sessions: vec![changed, record("B", "/repo-B")],
+            },
+        );
+        let reset = newest.payload(Some("preview:1")).unwrap();
+        let fresh = newest.payload(None).unwrap();
+        assert!(
+            Arc::ptr_eq(&reset, &fresh),
+            "slow and new browsers reuse the same reset"
+        );
+        let delta: serde_json::Value = serde_json::from_str(&reset).unwrap();
+        assert_eq!(delta["revision"], "preview:3");
+        assert_eq!(delta["delta"]["reset"], true);
+        assert_eq!(delta["delta"]["upsert"].as_array().unwrap().len(), 2);
+        assert!(newest.payload(Some("preview:3")).is_none());
+    }
 }

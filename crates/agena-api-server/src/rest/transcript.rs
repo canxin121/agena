@@ -88,7 +88,14 @@ pub async fn list_session_transcript(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
     AxumQuery(query): AxumQuery<SessionTranscriptQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, ServerError> {
+    let read =
+        crate::revisions::ConditionalRead::new(&state, &format!("session:{session_id}:transcript"))
+            .await?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
     let store = state.session_store()?;
     let user_message_count = store
         .user_message_count(session_id)
@@ -111,7 +118,7 @@ pub async fn list_session_transcript(
 
     let mut projected = project_parts_for_user(&state, &page.parts).await;
     assign_user_message_ordinals(store.as_ref(), session_id, &mut projected).await?;
-    Ok(Json(SessionPartsResource {
+    Ok(read.json(SessionPartsResource {
         session_id,
         version: page.version,
         parts: projected,

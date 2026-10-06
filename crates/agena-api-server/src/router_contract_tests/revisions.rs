@@ -102,6 +102,7 @@ async fn resource_versions_are_scoped_and_conditional_reads_survive_mutation_and
         format!("workspace:{}:sessions", server.workspace_id),
         format!("workspace:{second_id}:sessions"),
         format!("session:{}:state", session.id),
+        format!("session:{}:transcript", session.id),
     ];
     let initial = tokens(&server.url, &keys).await;
     assert_eq!(
@@ -129,6 +130,26 @@ async fn resource_versions_are_scoped_and_conditional_reads_survive_mutation_and
         .unwrap();
     assert_eq!(unchanged.status(), reqwest::StatusCode::NOT_MODIFIED);
     assert!(unchanged.bytes().await.unwrap().is_empty());
+    let transcript_endpoint = format!("{}/api/v1/sessions/{}/transcript", server.url, session.id);
+    let transcript = http
+        .get(&transcript_endpoint)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let transcript_etag = transcript.headers()["etag"].to_str().unwrap().to_owned();
+    let unchanged_transcript = http
+        .get(&transcript_endpoint)
+        .header("if-none-match", &transcript_etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        unchanged_transcript.status(),
+        reqwest::StatusCode::NOT_MODIFIED
+    );
+    assert!(unchanged_transcript.bytes().await.unwrap().is_empty());
     http.put(format!("{}/api/v1/sessions/{}", server.url, session.id))
         .json(&serde_json::json!({"title": "after"}))
         .send()
@@ -149,6 +170,10 @@ async fn resource_versions_are_scoped_and_conditional_reads_survive_mutation_and
     );
     assert_ne!(initial["sessions"], changed["sessions"]);
     assert_ne!(initial[&keys[2]], changed[&keys[2]]);
+    assert_ne!(
+        initial[&keys[5]], changed[&keys[5]],
+        "transcript envelope version follows the changed session"
+    );
     assert_eq!(
         initial[&keys[3]], changed[&keys[3]],
         "another workspace must retain its list revision"
@@ -474,4 +499,139 @@ async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships
         reqwest::StatusCode::NOT_FOUND,
         "a deleted membership cannot return a cached section"
     );
+}
+
+#[tokio::test]
+async fn directory_tree_pages_and_closed_bucket_counts_have_independent_revisions() {
+    let server = start_test_server("http://127.0.0.1:9").await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let http = reqwest::Client::new();
+    let a = client
+        .create_session(server.workspace_id, "root A", None)
+        .await
+        .unwrap();
+    let b = client
+        .create_session(server.workspace_id, "root B", None)
+        .await
+        .unwrap();
+    let child = client
+        .create_session(server.workspace_id, "child A", Some(a.id))
+        .await
+        .unwrap();
+    let base = format!("workspace:{}:sessions", server.workspace_id);
+    let keys = vec![
+        format!("{base}:roots"),
+        format!("{base}:parent:{}", a.id),
+        format!("{base}:parent:{}", b.id),
+        format!("{base}:bucket:pinned"),
+        "sessions:bucket:recent".into(),
+        "sessions:bucket:recent:count".into(),
+    ];
+    let queries = [
+        "roots=true".to_owned(),
+        format!("parent_id={}", a.id),
+        format!("parent_id={}", b.id),
+        "bucket=pinned".to_owned(),
+    ];
+    let mut etags = Vec::new();
+    for query in &queries {
+        let response = http
+            .get(format!(
+                "{}/api/v1/sessions?workspace_id={}&{query}",
+                server.url, server.workspace_id
+            ))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        etags.push(response.headers()["etag"].to_str().unwrap().to_owned());
+    }
+    let count_url = format!(
+        "{}/api/v1/sessions?bucket=recent&exclude_subagents=true&count_only=true",
+        server.url
+    );
+    let response = http
+        .get(&count_url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let count_etag = response.headers()["etag"].to_str().unwrap().to_owned();
+    let count: serde_json::Value = response.json().await.unwrap();
+    assert!(count["items"].as_array().unwrap().is_empty());
+    assert_eq!(count["total"], 3);
+    let before = tokens(&server.url, &keys).await;
+    http.put(format!("{}/api/v1/sessions/{}", server.url, child.id))
+        .json(&serde_json::json!({"title":"new child title"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let after = tokens(&server.url, &keys).await;
+    assert_ne!(before[&keys[1]], after[&keys[1]]);
+    assert_ne!(
+        before[&keys[4]], after[&keys[4]],
+        "the recent rows contain the renamed child"
+    );
+    for index in [0, 2, 3, 5] {
+        assert_eq!(
+            before[&keys[index]], after[&keys[index]],
+            "child title must retain {}",
+            keys[index]
+        );
+    }
+    for index in [0, 2, 3] {
+        assert_eq!(
+            http.get(format!(
+                "{}/api/v1/sessions?workspace_id={}&{}",
+                server.url, server.workspace_id, queries[index]
+            ))
+            .header("if-none-match", &etags[index])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+            reqwest::StatusCode::NOT_MODIFIED
+        );
+    }
+    assert_eq!(
+        http.get(&count_url)
+            .header("if-none-match", &count_etag)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::NOT_MODIFIED
+    );
+    http.delete(format!("{}/api/v1/sessions/{}", server.url, child.id))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let removed = tokens(&server.url, &keys).await;
+    assert_ne!(
+        after[&keys[0]], removed[&keys[0]],
+        "parent's child count changes in the roots page"
+    );
+    assert_ne!(after[&keys[1]], removed[&keys[1]]);
+    assert_eq!(after[&keys[2]], removed[&keys[2]]);
+    assert_eq!(after[&keys[3]], removed[&keys[3]]);
+    assert_ne!(after[&keys[5]], removed[&keys[5]]);
+    let count: serde_json::Value = http
+        .get(&count_url)
+        .header("if-none-match", &count_etag)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(count["total"], 2);
+    assert!(count["items"].as_array().unwrap().is_empty());
 }

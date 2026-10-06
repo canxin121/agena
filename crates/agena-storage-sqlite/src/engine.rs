@@ -905,6 +905,21 @@ impl PersistenceEngine for SqliteEngine {
         Ok(SessionView { meta, parts })
     }
 
+    async fn load_owned_parts_by_kind(
+        &self,
+        session_id: i64,
+        kind: &str,
+    ) -> Result<SessionView, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let parts = self.db().query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.origin_session_id = ? AND p.kind = ? ORDER BY p.created_at_ms, p.part_id"),
+            [session_id.into(), session_id.into(), kind.to_owned().into()],
+        )).await.map_err(map_db_err)?.into_iter().map(part_from_row)
+            .collect::<Result<Vec<_>, _>>().map_err(map_db_err)?;
+        Ok(SessionView { meta, parts })
+    }
+
     async fn load_session_page(
         &self,
         session_id: i64,
@@ -1061,9 +1076,15 @@ impl PersistenceEngine for SqliteEngine {
         run_write(db, move |txn| {
             Box::pin(async move {
                 let previous = session_meta_tx(txn, session_id).await?;
-                if patch.title.as_ref().is_none_or(|title| *title == previous.title)
-                    && patch.favorite.is_none_or(|favorite| favorite == previous.favorite)
-                    && patch.pinned.is_none_or(|pinned| pinned == previous.pinned) {
+                if patch
+                    .title
+                    .as_ref()
+                    .is_none_or(|title| *title == previous.title)
+                    && patch
+                        .favorite
+                        .is_none_or(|favorite| favorite == previous.favorite)
+                    && patch.pinned.is_none_or(|pinned| pinned == previous.pinned)
+                {
                     return Ok(previous);
                 }
                 let now = wall_clock_ms();
@@ -1248,8 +1269,11 @@ impl PersistenceEngine for SqliteEngine {
         run_write(db, move |txn| {
             Box::pin(async move {
                 let previous = session_meta_tx(txn, session_id).await?;
-                if previous.subtask_status == status && previous.subtask_started_at_ms == started_at_ms
-                    && previous.subtask_finished_at_ms == finished_at_ms && previous.subtask_failure == failure {
+                if previous.subtask_status == status
+                    && previous.subtask_started_at_ms == started_at_ms
+                    && previous.subtask_finished_at_ms == finished_at_ms
+                    && previous.subtask_failure == failure
+                {
                     return Ok(previous);
                 }
                 let now = wall_clock_ms();
@@ -2622,7 +2646,8 @@ impl PersistenceEngine for SqliteEngine {
                 ))
                 .await
                 .map_err(map_db_err)?;
-                bump_member_session_versions_for_parts_tx(txn, &[part_id], part.updated_at_ms).await?;
+                bump_member_session_versions_for_parts_tx(txn, &[part_id], part.updated_at_ms)
+                    .await?;
                 Ok(part)
             })
         })
@@ -2688,7 +2713,8 @@ impl PersistenceEngine for SqliteEngine {
                 ))
                 .await
                 .map_err(map_db_err)?;
-                bump_member_session_versions_for_parts_tx(txn, &[run_id], part.updated_at_ms).await?;
+                bump_member_session_versions_for_parts_tx(txn, &[run_id], part.updated_at_ms)
+                    .await?;
                 Ok(part)
             })
         })

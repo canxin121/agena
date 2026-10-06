@@ -35,6 +35,21 @@ async fn session_file_changes_reads_full_durable_membership_through_http_client(
         )
     }));
     store.submit_user_run(source.id, parts, None).await.unwrap();
+    let owned = store
+        .load_owned_parts_by_kind(source.id, "tool_call")
+        .await
+        .unwrap();
+    assert_eq!(
+        owned.parts.len(),
+        1,
+        "file evidence reads no text, reasoning or run marker bodies"
+    );
+    assert!(
+        owned
+            .parts
+            .iter()
+            .all(|part| part.origin_session_id == source.id && part.kind == "tool_call")
+    );
     let summary = client
         .session_file_changes(source.id, 0, true, None, 256 * 1024)
         .await
@@ -63,6 +78,15 @@ async fn session_file_changes_reads_full_durable_membership_through_http_client(
         panic!("fork returns execution");
     };
     assert!(!store.load(fork.session.id).await.unwrap().parts.is_empty());
+    assert!(
+        store
+            .load_owned_parts_by_kind(fork.session.id, "tool_call")
+            .await
+            .unwrap()
+            .parts
+            .is_empty(),
+        "inherited tool bodies are excluded in the persistence query"
+    );
     assert_eq!(
         client
             .session_file_changes(fork.session.id, 0, false, None, 256 * 1024)

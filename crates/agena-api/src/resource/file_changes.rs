@@ -15,6 +15,10 @@ pub struct SessionFileChangesResource {
 pub struct SessionFileChangeResource {
     /// Literal path recorded by the tool, not a current filesystem/Git lookup.
     pub path: String,
+    /// Fingerprint of this path's persisted operations, independent of other
+    /// files. Clients use it to keep an already displayed diff unchanged.
+    #[serde(default)]
+    pub revision: String,
     pub operation_count: usize,
     /// Multiple edits without a complete baseline are an operation history,
     /// never a synthesized session net diff.

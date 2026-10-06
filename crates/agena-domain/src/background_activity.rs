@@ -216,6 +216,8 @@ pub struct BackgroundActivityLogRead {
 pub enum BackgroundActivityEventReason {
     Started,
     Updated,
+    /// Log text changed in place without changing the activity descriptor.
+    LogsChanged,
     Finished,
     Dismissed,
 }

@@ -58,6 +58,7 @@ struct SessionRevision {
     version: i64,
     workspace_id: i64,
     previous_workspace_id: Option<i64>,
+    parent_id: Option<i64>,
     pinned: bool,
     favorite: bool,
     lifecycle_state: SessionLifecycleState,
@@ -96,8 +97,42 @@ impl Clock {
         self.bump("sessions");
         if let Some(workspace) = self.workspaces.get(&id).copied() {
             self.bump(format!("workspace:{workspace}:sessions"));
+            if let Some(meta) = self.sessions.get(&id) {
+                let suffix = meta
+                    .parent_id
+                    .map_or_else(|| "roots".into(), |parent| format!("parent:{parent}"));
+                self.bump(format!("workspace:{workspace}:sessions:{suffix}"));
+            } else {
+                self.bump(format!("workspace:{workspace}:sessions-baseline"));
+            }
         } else {
             self.bump("workspace-sessions-baseline");
+        }
+    }
+
+    fn parent_row_changed(&mut self, parent: i64) {
+        // The parent's child count changed, so validate the list containing
+        // that parent too. A child title/status change doesn't call this.
+        self.lists_changed(parent);
+        let previous = self
+            .sessions
+            .get(&parent)
+            .map(|meta| (meta.pinned, meta.favorite, meta.state));
+        self.buckets_changed(parent, previous);
+    }
+
+    fn bucket_changed(&mut self, id: i64, bucket: &str, count_changed: bool) {
+        self.bump(format!("sessions:bucket:{bucket}"));
+        if count_changed {
+            self.bump(format!("sessions:bucket:{bucket}:count"));
+        }
+        if let Some(meta) = self.sessions.get(&id) {
+            let workspace = meta.workspace_id;
+            let old = meta.previous_workspace_id;
+            self.bump(format!("workspace:{workspace}:sessions:bucket:{bucket}"));
+            if let Some(old) = old {
+                self.bump(format!("workspace:{old}:sessions:bucket:{bucket}"));
+            }
         }
     }
 
@@ -127,7 +162,14 @@ impl Clock {
                 || previous.is_some_and(member)
                 || (current.is_none() && previous.is_none())
             {
-                self.bump(format!("sessions:bucket:{bucket}"));
+                let uncertain = current.is_none() && previous.is_none()
+                    || current.is_some_and(|flags| flags.2.is_none())
+                    || previous.is_some_and(|flags| flags.2.is_none());
+                self.bucket_changed(
+                    id,
+                    bucket,
+                    uncertain || current.is_some_and(member) != previous.is_some_and(member),
+                );
             }
         }
         for (index, bucket) in ["pinned", "favorite"].into_iter().enumerate() {
@@ -138,7 +180,12 @@ impl Clock {
                 || previous.is_some_and(member)
                 || (current.is_none() && previous.is_none())
             {
-                self.bump(format!("sessions:bucket:{bucket}"));
+                self.bucket_changed(
+                    id,
+                    bucket,
+                    current.is_none() && previous.is_none()
+                        || current.is_some_and(member) != previous.is_some_and(member),
+                );
             }
         }
     }
@@ -220,6 +267,7 @@ impl Clock {
                 let stats_changed = self.sessions.get(&id).is_none_or(|previous| {
                     previous.pinned != meta.pinned
                         || previous.workspace_id != meta.workspace_id
+                        || previous.parent_id != meta.parent_id
                         || previous.lifecycle_state != meta.lifecycle_state
                 });
                 let previous_flags = self
@@ -242,6 +290,10 @@ impl Clock {
                     .get(&id)
                     .copied()
                     .filter(|old| *old != meta.workspace_id);
+                let previous_parent = self
+                    .sessions
+                    .get(&id)
+                    .map(|old| (old.workspace_id, old.parent_id));
                 if self.sessions.len() >= 4096 && !self.sessions.contains_key(&id) {
                     self.sessions.clear();
                     self.workspaces.clear();
@@ -254,6 +306,7 @@ impl Clock {
                         version: meta.version,
                         workspace_id: meta.workspace_id,
                         previous_workspace_id,
+                        parent_id: meta.parent_id,
                         pinned: meta.pinned,
                         favorite: meta.favorite,
                         lifecycle_state: meta.lifecycle_state,
@@ -265,16 +318,41 @@ impl Clock {
                     Some(old) if old != meta.workspace_id => {
                         self.bump(format!("workspace:{old}:sessions"));
                         self.bump(format!("workspace:{old}:stats"));
+                        if let Some((_, parent)) = previous_parent {
+                            let suffix = parent.map_or_else(
+                                || "roots".into(),
+                                |parent| format!("parent:{parent}"),
+                            );
+                            self.bump(format!("workspace:{old}:sessions:{suffix}"));
+                        }
                     }
                     None if meta.version > 1 => self.bump("workspace-sessions-baseline"),
                     _ => {}
                 }
                 self.lists_changed(id);
+                if let Some((workspace, parent)) =
+                    previous_parent.filter(|old| old.1 != meta.parent_id)
+                {
+                    let suffix =
+                        parent.map_or_else(|| "roots".into(), |parent| format!("parent:{parent}"));
+                    self.bump(format!("workspace:{workspace}:sessions:{suffix}"));
+                }
                 self.buckets_changed(id, previous_flags);
+                if previous_parent.is_none()
+                    || previous_parent.is_some_and(|old| old.1 != meta.parent_id)
+                {
+                    if let Some(parent) = meta.parent_id {
+                        self.parent_row_changed(parent);
+                    }
+                    if let Some((_, Some(parent))) = previous_parent {
+                        self.parent_row_changed(parent);
+                    }
+                }
                 if stats_changed {
                     self.stats_changed(id);
                 }
                 self.bump(format!("session:{id}:state"));
+                self.bump(format!("session:{id}:transcript"));
             }
             SessionChange::SessionDeleted {
                 workspace_id,
@@ -284,12 +362,24 @@ impl Clock {
                 if *temporary {
                     return;
                 }
+                // Invalidate the deleted row's precise list before dropping
+                // the association, including the old bucket's workspace.
+                self.lists_changed(id);
+                let parent = self.sessions.get(&id).and_then(|meta| meta.parent_id);
+                let previous_buckets = self
+                    .sessions
+                    .get(&id)
+                    .map(|meta| (meta.pinned, meta.favorite, meta.state));
+                self.buckets_changed(id, previous_buckets);
                 self.workspaces.remove(&id);
                 let previous_flags = self
                     .sessions
                     .remove(&id)
                     .map(|meta| (meta.pinned, meta.favorite, meta.state));
                 self.buckets_changed(id, previous_flags);
+                if let Some(parent) = parent {
+                    self.parent_row_changed(parent);
+                }
                 if self.deleted_sessions.len() >= 4096 {
                     self.deleted_sessions.clear();
                 }
@@ -321,12 +411,10 @@ impl Clock {
                 self.bump(format!("session:{id}:state"));
                 self.bump(format!("session:{id}:files"));
                 self.bump(format!("session:{id}:plan"));
+                self.bump(format!("session:{id}:transcript"));
             }
             SessionChange::PartAdded { part, .. } | SessionChange::PartUpdated { part, .. } => {
                 self.record_file_fact(id, part, matches!(change, SessionChange::PartAdded { .. }));
-                if !part.visibility.visible_to_user() {
-                    return;
-                }
                 let key = (id, part.part_id);
                 let interaction = part.content.get("user_input").cloned().unwrap_or_default();
                 let previous = self.parts.get(&key);
@@ -345,6 +433,12 @@ impl Clock {
                     key,
                     (part.revision, part.updated_at_ms, part.state, interaction),
                 );
+                // The transcript carries the session version as well as its
+                // user-visible projection, including hidden-part mutations.
+                self.bump(format!("session:{id}:transcript"));
+                if !part.visibility.visible_to_user() {
+                    return;
+                }
                 self.bump(format!("part:{}", part.part_id));
                 if part.kind == "tool_call" {
                     let next = tool_section_hashes(part);
@@ -381,6 +475,7 @@ impl Clock {
                 }
             }
             SessionChange::PartRemoved { part_id, .. } => {
+                self.bump(format!("session:{id}:transcript"));
                 self.invalidate_part(*part_id);
                 self.parts.remove(&(id, *part_id));
                 self.tool_sections.remove(part_id);
@@ -426,7 +521,24 @@ impl Clock {
                         .is_none_or(|(_, previous, removed)| {
                             previous != &event.activity || *removed != dismissed
                         });
-                self.bump(format!("activity:{id}"));
+                let logs_changed = event.reason == BackgroundActivityEventReason::LogsChanged
+                    || self
+                        .activities
+                        .get(id)
+                        .is_none_or(|(_, previous, removed)| {
+                            previous.last_seq != event.activity.last_seq
+                                || previous.has_more != event.activity.has_more
+                                || previous.dropped_lines != event.activity.dropped_lines
+                                || previous.status != event.activity.status
+                                || previous.exit_code != event.activity.exit_code
+                                || *removed != dismissed
+                        });
+                if logs_changed {
+                    self.bump(format!("activity:{id}:logs"));
+                }
+                if representation_changed {
+                    self.bump(format!("activity:{id}"));
+                }
                 // The JSON representations contain log cursors too, so their
                 // ETags must advance. Web consumers apply these complete SSE
                 // descriptors directly and do not reload list/state bodies.
@@ -468,16 +580,31 @@ impl Clock {
     fn revision(&self, key: &str) -> i64 {
         let revision = self.resources.get(key).copied().unwrap_or(self.baseline);
         if key.starts_with("workspace:") {
-            revision.max(
-                self.resources
-                    .get(if key.ends_with(":stats") {
-                        "workspace-stats-baseline"
-                    } else {
-                        "workspace-sessions-baseline"
-                    })
-                    .copied()
-                    .unwrap_or(self.baseline),
-            )
+            let workspace_baseline = key
+                .split(':')
+                .nth(1)
+                .and_then(|id| {
+                    self.resources
+                        .get(&format!("workspace:{id}:sessions-baseline"))
+                })
+                .copied()
+                .unwrap_or(self.baseline);
+            revision
+                .max(if key.ends_with(":stats") {
+                    self.baseline
+                } else {
+                    workspace_baseline
+                })
+                .max(
+                    self.resources
+                        .get(if key.ends_with(":stats") {
+                            "workspace-stats-baseline"
+                        } else {
+                            "workspace-sessions-baseline"
+                        })
+                        .copied()
+                        .unwrap_or(self.baseline),
+                )
         } else {
             if key.starts_with("sessions:bucket:") {
                 revision.max(
@@ -712,15 +839,17 @@ impl ResourceRevisions {
                 }
                 for id in &changed {
                     // Plan storage has a separate revision from transcripts.
-                    for suffix in ["state", "files"] {
+                    for suffix in ["state", "files", "transcript"] {
                         clock.bump(format!("session:{id}:{suffix}"));
                     }
                     if let Some((workspace, _)) = durable.sessions.get(id) {
                         clock.bump(format!("workspace:{workspace}:sessions"));
+                        clock.bump(format!("workspace:{workspace}:sessions-baseline"));
                         clock.bump(format!("workspace:{workspace}:stats"));
                     }
                     if let Some((workspace, _)) = next.get(id) {
                         clock.bump(format!("workspace:{workspace}:sessions"));
+                        clock.bump(format!("workspace:{workspace}:sessions-baseline"));
                         clock.bump(format!("workspace:{workspace}:stats"));
                     }
                 }
@@ -796,6 +925,7 @@ impl ResourceRevisions {
                     version: row.version,
                     workspace_id: row.workspace_id,
                     previous_workspace_id,
+                    parent_id: row.parent_id,
                     pinned: row.pinned,
                     favorite: row.favorite,
                     lifecycle_state: row.lifecycle_state,
@@ -835,10 +965,15 @@ impl ResourceRevisions {
                 "workspaces:catalog".to_owned(),
                 format!("session:{id}:state"),
                 format!("session:{id}:files"),
+                format!("session:{id}:transcript"),
             ]);
             keys.extend(
                 ["pinned", "favorite", "recent", "running", "attention"]
                     .map(|bucket| format!("sessions:bucket:{bucket}")),
+            );
+            keys.extend(
+                ["pinned", "favorite", "recent", "running", "attention"]
+                    .map(|bucket| format!("sessions:bucket:{bucket}:count")),
             );
             match change {
                 SessionChangeResource::PartAdded { part, .. }
@@ -882,6 +1017,23 @@ impl ResourceRevisions {
                 );
             }
         }
+        // Fine list clocks are registered by the first read. Sending their
+        // unchanged tokens is cheap and only changed clocks wake consumers.
+        if change.is_some() {
+            let prefixes = keys
+                .iter()
+                .filter(|key| key.starts_with("workspace:"))
+                .filter_map(|key| key.split(':').nth(1))
+                .map(|id| format!("workspace:{id}:sessions:"))
+                .collect::<std::collections::HashSet<_>>();
+            keys.extend(
+                clock
+                    .resources
+                    .keys()
+                    .filter(|key| prefixes.iter().any(|prefix| key.starts_with(prefix)))
+                    .cloned(),
+            );
+        }
         if let Some(signal) = signal {
             if signal.kind == "activity" {
                 keys.push("activities".to_owned());
@@ -891,6 +1043,7 @@ impl ResourceRevisions {
                     .and_then(serde_json::Value::as_str)
                 {
                     keys.push(format!("activity:{id}"));
+                    keys.push(format!("activity:{id}:logs"));
                 }
                 if let Some(id) = signal.session_id {
                     keys.push(format!("session:{id}:state"));
@@ -1025,5 +1178,49 @@ mod tests {
         clock.signal(&RuntimeLiveSignal::Activity(Box::new(event)));
         assert!(clock.revision("activity:proc_test") > progress);
         assert!(clock.revision("activities") > descriptor);
+    }
+}
+
+#[cfg(test)]
+mod log_granularity_tests {
+    use super::*;
+
+    #[test]
+    fn activity_progress_keeps_log_clock_and_same_cursor_streaming_keeps_descriptor_clock() {
+        let activity: BackgroundActivity = serde_json::from_value(serde_json::json!({
+            "id":"task_test", "kind":"task", "status":"running", "title":"test", "description":"test",
+            "session_id":7, "created_at_ms":1, "started_at_ms":1, "last_seq":1,
+            "has_more":false, "dropped_lines":0, "cancellable":true, "dismissible":true
+        })).unwrap();
+        let mut event = agena_domain::BackgroundActivityChangedEvent {
+            activity_id: activity.id.clone(),
+            reason: BackgroundActivityEventReason::Started,
+            activity,
+            ts_ms: 1,
+        };
+        let mut clock = Clock::default();
+        clock.signal(&RuntimeLiveSignal::Activity(Box::new(event.clone())));
+        let logs = clock.revision("activity:task_test:logs");
+        event.ts_ms = 2;
+        event.reason = BackgroundActivityEventReason::Updated;
+        event.activity.message = Some("installing 2/3".into());
+        clock.signal(&RuntimeLiveSignal::Activity(Box::new(event.clone())));
+        assert_eq!(clock.revision("activity:task_test:logs"), logs);
+        let descriptor = clock.revision("activity:task_test");
+        let list = clock.revision("activities");
+        let state = clock.revision("session:7:state");
+        event.ts_ms = 3;
+        event.reason = BackgroundActivityEventReason::LogsChanged;
+        clock.signal(&RuntimeLiveSignal::Activity(Box::new(event.clone())));
+        assert!(clock.revision("activity:task_test:logs") > logs);
+        assert_eq!(clock.revision("activity:task_test"), descriptor);
+        assert_eq!(clock.revision("activities"), list);
+        assert_eq!(clock.revision("session:7:state"), state);
+        let logs = clock.revision("activity:task_test:logs");
+        event.ts_ms = 4;
+        event.reason = BackgroundActivityEventReason::Finished;
+        event.activity.status = agena_domain::BackgroundActivityStatus::Succeeded;
+        clock.signal(&RuntimeLiveSignal::Activity(Box::new(event)));
+        assert!(clock.revision("activity:task_test:logs") > logs);
     }
 }

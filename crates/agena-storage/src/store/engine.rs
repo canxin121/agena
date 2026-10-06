@@ -100,6 +100,19 @@ pub trait PersistenceEngine: Send + Sync {
         Ok(view)
     }
 
+    /// Read one kind of owned membership without loading inherited parts or
+    /// unrelated transcript content. Backends can filter before deserializing.
+    async fn load_owned_parts_by_kind(
+        &self,
+        session_id: i64,
+        kind: &str,
+    ) -> Result<SessionView, StoreError> {
+        let mut view = self.load_session(session_id).await?;
+        view.parts
+            .retain(|part| part.origin_session_id == session_id && part.kind == kind);
+        Ok(view)
+    }
+
     /// Load one newest-first keyset page of session parts. `before` excludes
     /// that position and is interpreted against the canonical
     /// `(created_at_ms, part_id)` ordering. The backend fetches one extra row
@@ -203,8 +216,12 @@ pub trait PersistenceEngine: Send + Sync {
     /// Durable `(session_id, workspace_id, version)` rows for bounded
     /// cross-process revalidation. This projection never reads part content.
     async fn session_revision_rows(&self) -> Result<Vec<(i64, i64, i64)>, StoreError> {
-        Ok(self.list_session_summaries(SessionListQuery::default()).await?
-            .into_iter().map(|row| (row.id, row.workspace_id, row.version)).collect())
+        Ok(self
+            .list_session_summaries(SessionListQuery::default())
+            .await?
+            .into_iter()
+            .map(|row| (row.id, row.workspace_id, row.version))
+            .collect())
     }
 
     async fn workspace_session_stats(

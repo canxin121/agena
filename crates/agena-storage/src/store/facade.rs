@@ -97,6 +97,17 @@ pub trait SessionStore: Send + Sync {
     /// A bounded membership read, including in-memory stream checkpoints.
     async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError>;
 
+    async fn load_owned_parts_by_kind(
+        &self,
+        session_id: i64,
+        kind: &str,
+    ) -> Result<SessionView, StoreError> {
+        let mut view = self.load(session_id).await?;
+        view.parts
+            .retain(|part| part.origin_session_id == session_id && part.kind == kind);
+        Ok(view)
+    }
+
     /// Count durable user-send run markers without loading transcript parts.
     async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError>;
 
@@ -174,8 +185,12 @@ pub trait SessionStore: Send + Sync {
 
     /// Read durable identity/revision metadata without loading transcripts.
     async fn session_revision_rows(&self) -> Result<Vec<(i64, i64, i64)>, StoreError> {
-        Ok(self.list_session_summaries(SessionListQuery::default()).await?
-            .into_iter().map(|row| (row.id, row.workspace_id, row.version)).collect())
+        Ok(self
+            .list_session_summaries(SessionListQuery::default())
+            .await?
+            .into_iter()
+            .map(|row| (row.id, row.workspace_id, row.version))
+            .collect())
     }
 
     async fn workspace_session_stats(
@@ -673,8 +688,12 @@ impl MemoryLayer {
     }
 
     fn invalidate_changed_meta(&self, meta: &SessionMeta) {
-        let unchanged = self.cache.lock().expect("cache lock")
-            .get(&meta.id).is_some_and(|entry| entry.version == meta.version);
+        let unchanged = self
+            .cache
+            .lock()
+            .expect("cache lock")
+            .get(&meta.id)
+            .is_some_and(|entry| entry.version == meta.version);
         if !unchanged {
             self.invalidate(meta.id);
         }
@@ -819,11 +838,17 @@ impl NotificationBus {
             let mut positions = self.positions.lock().expect("notification positions lock");
             let next = match &change {
                 SessionChange::PartAdded { session_id, part }
-                | SessionChange::PartUpdated { session_id, part } =>
-                    Some(((*session_id, part.part_id), (part.revision, part.updated_at_ms))),
-                SessionChange::SessionMetaUpdated { session_id, meta } =>
-                    Some(((*session_id, 0), (meta.version, meta.updated_at_ms))),
-                SessionChange::PartRemoved { session_id, part_id } => {
+                | SessionChange::PartUpdated { session_id, part } => Some((
+                    (*session_id, part.part_id),
+                    (part.revision, part.updated_at_ms),
+                )),
+                SessionChange::SessionMetaUpdated { session_id, meta } => {
+                    Some(((*session_id, 0), (meta.version, meta.updated_at_ms)))
+                }
+                SessionChange::PartRemoved {
+                    session_id,
+                    part_id,
+                } => {
                     positions.remove(&(*session_id, *part_id));
                     None
                 }
@@ -833,7 +858,10 @@ impl NotificationBus {
                 }
             };
             if let Some((key, position)) = next {
-                if positions.get(&key).is_some_and(|previous| *previous >= position) {
+                if positions
+                    .get(&key)
+                    .is_some_and(|previous| *previous >= position)
+                {
                     return;
                 }
                 if positions.len() >= 8192 && !positions.contains_key(&key) {
@@ -1162,7 +1190,8 @@ where
             let meta = self.engine.session_meta(session_id).await?;
             self.memory
                 .apply_committed(session_id, &flushed, Some(meta.version));
-            self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            self.bus
+                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
             for part in flushed {
                 self.bus
                     .emit(SessionChange::PartUpdated { session_id, part });
@@ -1216,6 +1245,19 @@ where
 
     async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError> {
         let mut view = self.engine.load_part_ids(session_id, ids).await?;
+        self.memory.overlay_streaming(session_id, &mut view);
+        Ok(view)
+    }
+
+    async fn load_owned_parts_by_kind(
+        &self,
+        session_id: i64,
+        kind: &str,
+    ) -> Result<SessionView, StoreError> {
+        let mut view = self
+            .engine
+            .load_owned_parts_by_kind(session_id, kind)
+            .await?;
         self.memory.overlay_streaming(session_id, &mut view);
         Ok(view)
     }
@@ -1658,7 +1700,8 @@ where
         let meta = self.engine.session_meta(session_id).await?;
         self.memory
             .apply_committed(session_id, &created, Some(meta.version));
-        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        self.bus
+            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         for part in &created {
             self.bus.emit(SessionChange::PartAdded {
                 session_id,
@@ -1710,7 +1753,8 @@ where
                     std::slice::from_ref(&updated),
                     Some(meta.version),
                 );
-                self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+                self.bus
+                    .emit(SessionChange::SessionMetaUpdated { session_id, meta });
                 self.bus.emit(SessionChange::PartUpdated {
                     session_id,
                     part: updated.clone(),
@@ -1741,7 +1785,8 @@ where
             std::slice::from_ref(&updated),
             Some(meta.version),
         );
-        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        self.bus
+            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
             part: updated.clone(),

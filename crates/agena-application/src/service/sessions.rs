@@ -55,7 +55,7 @@ impl ApplicationService {
                 _ => Vec::new(),
             },
         };
-        let total = if query.include_total {
+        let total = if query.include_total || query.count_only {
             Some(
                 self.session_store
                     .count_session_summaries(storage_query.clone())
@@ -65,6 +65,17 @@ impl ApplicationService {
         } else {
             None
         };
+        if query.count_only {
+            let mut page = build_page::<SessionResource, SessionCursor>(
+                Vec::new(),
+                false,
+                None,
+                PageOrder::Desc,
+                limit,
+            )?;
+            page.total = total;
+            return Ok(page);
+        }
         let rows = self
             .session_store
             .list_session_summaries(storage_query)

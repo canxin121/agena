@@ -526,6 +526,26 @@ impl PersistenceEngine for InMemoryEngine {
         Ok(SessionView { meta, parts })
     }
 
+    async fn load_owned_parts_by_kind(
+        &self,
+        session_id: i64,
+        kind: &str,
+    ) -> Result<SessionView, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let membership = self.membership.read().expect("membership lock");
+        let all_parts = self.parts.read().expect("parts lock");
+        let mut parts = membership
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter_map(|id| all_parts.get(id))
+            .filter(|part| part.origin_session_id == session_id && part.kind == kind)
+            .cloned()
+            .collect::<Vec<_>>();
+        parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
+        Ok(SessionView { meta, parts })
+    }
+
     async fn load_session_page(
         &self,
         session_id: i64,
@@ -806,8 +826,11 @@ impl PersistenceEngine for InMemoryEngine {
         let meta = sessions
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
-        if meta.subtask_status == status && meta.subtask_started_at_ms == started_at_ms
-            && meta.subtask_finished_at_ms == finished_at_ms && meta.subtask_failure == failure {
+        if meta.subtask_status == status
+            && meta.subtask_started_at_ms == started_at_ms
+            && meta.subtask_finished_at_ms == finished_at_ms
+            && meta.subtask_failure == failure
+        {
             return Ok(meta.clone());
         }
         meta.subtask_status = status;
@@ -820,9 +843,14 @@ impl PersistenceEngine for InMemoryEngine {
     }
 
     async fn session_revision_rows(&self) -> Result<Vec<(i64, i64, i64)>, StoreError> {
-        Ok(self.sessions.read().expect("sessions lock").values()
+        Ok(self
+            .sessions
+            .read()
+            .expect("sessions lock")
+            .values()
             .filter(|meta| !meta.is_temporary())
-            .map(|meta| (meta.id, meta.workspace_id, meta.version)).collect())
+            .map(|meta| (meta.id, meta.workspace_id, meta.version))
+            .collect())
     }
 
     async fn list_session_summaries(

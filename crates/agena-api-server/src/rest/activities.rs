@@ -104,7 +104,8 @@ pub async fn get_activity_logs(
     headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
     let revision =
-        crate::revisions::ConditionalRead::new(&state, &format!("activity:{activity_id}")).await?;
+        crate::revisions::ConditionalRead::new(&state, &format!("activity:{activity_id}:logs"))
+            .await?;
     if query.wait_ms == 0 {
         if let Some(response) = revision.not_modified(&headers) {
             return Ok(response);

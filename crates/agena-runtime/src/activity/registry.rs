@@ -7,7 +7,10 @@
 //! the runtime event bus so TUI/Web can react live.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicI64, Ordering},
+};
 
 use agena_domain::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,
@@ -39,7 +42,10 @@ impl ActivityStore {
         self.activities.get(id).cloned()
     }
 
-    fn upsert(&mut self, activity: BackgroundActivity) -> (Option<BackgroundActivity>, Vec<BackgroundActivity>) {
+    fn upsert(
+        &mut self,
+        activity: BackgroundActivity,
+    ) -> (Option<BackgroundActivity>, Vec<BackgroundActivity>) {
         let previous = self
             .activities
             .insert(activity.id.clone(), activity.clone());
@@ -110,7 +116,9 @@ impl ActivityStore {
                 continue;
             }
             let _ = self.order.remove(index);
-            if let Some(activity) = self.activities.remove(id.as_str()) { removed.push(activity); }
+            if let Some(activity) = self.activities.remove(id.as_str()) {
+                removed.push(activity);
+            }
         }
         removed
     }
@@ -140,7 +148,9 @@ impl ActivityRegistry {
 
     pub(crate) fn with_signals(signals: Arc<crate::live_signal::LiveSignalHub>) -> Self {
         Self {
-            store: Arc::new(Mutex::new(ActivityStore::new(DEFAULT_ACTIVITY_HISTORY_LIMIT))),
+            store: Arc::new(Mutex::new(ActivityStore::new(
+                DEFAULT_ACTIVITY_HISTORY_LIMIT,
+            ))),
             tx: None,
             signals: Some(signals),
             published_at_ms: Arc::new(AtomicI64::new(0)),
@@ -160,19 +170,21 @@ impl ActivityRegistry {
     /// `Updated`.
     pub(crate) fn upsert(&self, activity: BackgroundActivity) {
         let mut store = self.store.lock();
-            if store.activities.get(&activity.id) == Some(&activity) {
-                return;
+        if store.activities.get(&activity.id) == Some(&activity) {
+            return;
+        }
+        let (previous, removed) = store.upsert(activity.clone());
+        let reason = match previous {
+            None => BackgroundActivityEventReason::Started,
+            Some(previous) if previous.is_active() && !activity.is_active() => {
+                BackgroundActivityEventReason::Finished
             }
-            let (previous, removed) = store.upsert(activity.clone());
-            let reason = match previous {
-                None => BackgroundActivityEventReason::Started,
-                Some(previous) if previous.is_active() && !activity.is_active() => {
-                    BackgroundActivityEventReason::Finished
-                }
-                Some(_) => BackgroundActivityEventReason::Updated,
-            };
+            Some(_) => BackgroundActivityEventReason::Updated,
+        };
         self.publish(activity, reason);
-        for activity in removed { self.publish(activity, BackgroundActivityEventReason::Dismissed); }
+        for activity in removed {
+            self.publish(activity, BackgroundActivityEventReason::Dismissed);
+        }
     }
 
     /// Dismiss a record from the store (does not stop the underlying work).
@@ -188,9 +200,13 @@ impl ActivityRegistry {
     /// Remove every finished record; returns the ids that were removed.
     pub(crate) fn clear_finished(&self) -> Vec<String> {
         let mut store = self.store.lock();
-            let finished = store.activities.values()
-                .filter(|activity| !activity.is_active()).cloned().collect::<Vec<_>>();
-            store.clear_finished();
+        let finished = store
+            .activities
+            .values()
+            .filter(|activity| !activity.is_active())
+            .cloned()
+            .collect::<Vec<_>>();
+        store.clear_finished();
         for activity in &finished {
             self.publish(activity.clone(), BackgroundActivityEventReason::Dismissed);
         }
@@ -202,9 +218,11 @@ impl ActivityRegistry {
     /// unchanged; it must wake an expanded log without rewriting the list.
     pub(crate) fn touch_task_logs(&self, session_id: i64) {
         let store = self.store.lock();
-        for activity in store.activities.values().filter(|activity|
-            activity.kind == agena_domain::BackgroundActivityKind::Task && activity.session_id == Some(session_id)) {
-            self.publish(activity.clone(), BackgroundActivityEventReason::Updated);
+        for activity in store.activities.values().filter(|activity| {
+            activity.kind == agena_domain::BackgroundActivityKind::Task
+                && activity.session_id == Some(session_id)
+        }) {
+            self.publish(activity.clone(), BackgroundActivityEventReason::LogsChanged);
         }
     }
 
@@ -216,8 +234,12 @@ impl ActivityRegistry {
     /// task drains this channel and persists/broadcasts each event.
     fn publish(&self, activity: BackgroundActivity, reason: BackgroundActivityEventReason) {
         let now = Utc::now().timestamp_millis();
-        let previous = self.published_at_ms.fetch_update(Ordering::AcqRel, Ordering::Acquire,
-            |previous| Some(now.max(previous.saturating_add(1)))).expect("activity clock update");
+        let previous = self
+            .published_at_ms
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |previous| {
+                Some(now.max(previous.saturating_add(1)))
+            })
+            .expect("activity clock update");
         let event = BackgroundActivityChangedEvent {
             activity_id: activity.id.clone(),
             reason,
@@ -228,7 +250,9 @@ impl ActivityRegistry {
             signals.emit(crate::RuntimeLiveSignal::Activity(Box::new(event)));
             return;
         }
-        let Some(tx) = &self.tx else { return; };
+        let Some(tx) = &self.tx else {
+            return;
+        };
         if let Err(error) = tx.try_send(event) {
             match error {
                 mpsc::error::TrySendError::Full(event) => tracing::debug!(

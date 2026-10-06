@@ -27,6 +27,9 @@ pub struct SessionListQuery {
     pub bucket: Option<agena_api::queries::SessionListBucket>,
     #[serde(default)]
     pub include_total: bool,
+    /// Return the count with no session rows or per-session state projection.
+    #[serde(default)]
+    pub count_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

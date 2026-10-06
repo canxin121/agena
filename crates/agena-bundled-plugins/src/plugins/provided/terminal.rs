@@ -137,9 +137,7 @@ impl TerminalPlugin {
     /// write is non-fatal because the TUI retains a local fallback.
     async fn set_and_publish(&self, activity: TerminalActivity, notify: Option<TerminalNotify>) {
         *recover_write(&self.activity, "update terminal activity") = activity;
-        if notify.is_some() {
-            *recover_write(&self.notify, "update terminal notification intent") = notify;
-        }
+        *recover_write(&self.notify, "update terminal notification intent") = notify;
         self.publish_display().await;
     }
 
@@ -156,7 +154,7 @@ impl TerminalPlugin {
         };
         // One-shot attention notification via the unified notify entry. The
         // host decides surface; the TUI consumes it for terminal bells.
-        let notify = *recover_read(&self.notify, "read terminal notification intent");
+        let notify = recover_write(&self.notify, "take terminal notification intent").take();
         if let Some(kind) = notify
             && let Err(error) = host.notify(notify_request(kind)).await
         {
@@ -226,8 +224,9 @@ impl TerminalPlugin {
             self.set_and_publish(TerminalActivity::Blocked, Some(TerminalNotify::Blocked))
                 .await;
         } else {
-            self.set_and_publish(TerminalActivity::Idle, Some(TerminalNotify::Done))
-                .await;
+            // run.post is a provider round boundary, not agent completion.
+            // Only the final normal agent.stop may send Done.
+            self.set_and_publish(TerminalActivity::Idle, None).await;
         }
         Ok(())
     }
@@ -259,9 +258,14 @@ impl TerminalPlugin {
     }
 
     #[hook(agent.stop)]
-    async fn agent_stop(&self, _input: AgentStopInput) -> SdkResult<Option<AgentStopPatch>> {
-        self.set_and_publish(TerminalActivity::Idle, Some(TerminalNotify::Done))
-            .await;
+    async fn agent_stop(&self, input: AgentStopInput) -> SdkResult<Option<AgentStopPatch>> {
+        if input.run_error.is_some() {
+            self.set_and_publish(TerminalActivity::Blocked, Some(TerminalNotify::Blocked))
+                .await;
+        } else {
+            self.set_and_publish(TerminalActivity::Idle, Some(TerminalNotify::Done))
+                .await;
+        }
         Ok(None)
     }
 }
@@ -309,5 +313,37 @@ mod tests {
             serde_json::to_value(TerminalActivity::Blocked).unwrap(),
             serde_json::json!("blocked")
         );
+    }
+    #[tokio::test]
+    async fn terminal_stop_failure_never_emits_done() {
+        let plugin = TerminalPlugin::new();
+        plugin
+            .agent_stop(AgentStopInput {
+                session_id: 1,
+                stop_hook_active: false,
+                last_assistant_message: None,
+                run_error: Some("provider failed".to_owned()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            *plugin.notify.read().unwrap(),
+            Some(TerminalNotify::Blocked)
+        );
+        plugin
+            .agent_stop(AgentStopInput {
+                session_id: 1,
+                stop_hook_active: false,
+                last_assistant_message: None,
+                run_error: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(*plugin.notify.read().unwrap(), Some(TerminalNotify::Done));
+        // A subsequent provider round must clear the old one-shot intent.
+        plugin
+            .set_and_publish(TerminalActivity::Running, None)
+            .await;
+        assert_eq!(*plugin.notify.read().unwrap(), None);
     }
 }

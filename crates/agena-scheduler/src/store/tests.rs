@@ -729,3 +729,42 @@ async fn owner_cannot_be_changed_by_any_store_update() {
         );
     }
 }
+
+#[tokio::test]
+async fn pending_jobs_query_is_session_scoped_and_tracks_pause_delete_complete_and_claims() {
+    for store in stores().await {
+        let now = Utc::now();
+        let mut unrelated = ScheduledJob::new_once(now, "other session");
+        unrelated.owner_session_id = Some(10);
+        store.put(unrelated).await.unwrap();
+        assert!(!store.session_has_pending_jobs(20).await.unwrap());
+        let mut job = ScheduledJob::new_once(now + Duration::days(1), "future wake");
+        job.owner_session_id = Some(20);
+        let id = job.id;
+        store.put(job).await.unwrap();
+        assert!(store.session_has_pending_jobs(20).await.unwrap());
+        let old = snapshot(store.as_ref(), id).await;
+        let mut paused = old.job.clone();
+        paused.paused = true;
+        assert!(store.replace(&old, paused).await.unwrap());
+        assert!(!store.session_has_pending_jobs(20).await.unwrap());
+        let old = snapshot(store.as_ref(), id).await;
+        let mut resumed = old.job.clone();
+        resumed.paused = false;
+        assert!(store.replace(&old, resumed).await.unwrap());
+        assert!(store.session_has_pending_jobs(20).await.unwrap());
+        assert!(store.remove(id).await.unwrap());
+        assert!(!store.session_has_pending_jobs(20).await.unwrap());
+        let mut due = ScheduledJob::new_once(now, "claimed wake");
+        due.owner_session_id = Some(20);
+        let id = due.id;
+        store.put(due).await.unwrap();
+        let old = snapshot(store.as_ref(), id).await;
+        let (claimed, _) = claim(store.as_ref(), &old, "test", now).await;
+        assert!(store.session_has_pending_jobs(20).await.unwrap());
+        let mut completed = claimed.job.clone();
+        completed.completed = true;
+        assert!(store.replace(&claimed, completed).await.unwrap());
+        assert!(!store.session_has_pending_jobs(20).await.unwrap());
+    }
+}

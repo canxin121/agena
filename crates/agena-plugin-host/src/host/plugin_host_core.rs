@@ -1885,7 +1885,12 @@ impl PluginHost {
         let mut continue_with_message = None;
         let mut reason = None;
         let mut runs = Vec::new();
-        for plugin in &self.plugins {
+        // Terminal success is an observer of the final decision, not a stop
+        // veto. Run it after all decision hooks; a continuation breaks before
+        // it can emit a misleading Done notification.
+        let mut stop_plugins = self.plugins.iter().collect::<Vec<_>>();
+        stop_plugins.sort_by_key(|plugin| plugin.key().to_string() == "agena.terminal");
+        for plugin in stop_plugins {
             if !plugin.subscribes(HookSubscription::AGENT_STOP) {
                 continue;
             }

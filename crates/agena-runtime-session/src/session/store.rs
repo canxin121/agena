@@ -272,6 +272,16 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
+    pub(crate) async fn session_has_active_background_operations(
+        &self,
+        session_id: i64,
+    ) -> Result<bool, AppError> {
+        self.facade
+            .session_has_active_background_operations(session_id)
+            .await
+            .map_err(store_error)
+    }
+
     pub(crate) async fn transition_background_operation(
         &self,
         transition: BackgroundOperationTransition,

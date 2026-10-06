@@ -7079,3 +7079,500 @@ async fn a_settle_whose_steer_reaches_a_turn_that_never_drains_it_still_wakes_th
 mod adapter_gate;
 mod auto_approval;
 mod provider_retry;
+
+struct StopCounterFixture {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    continue_once: bool,
+}
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "test",
+    name = "stop-counter",
+    version = "test",
+    summary = "Counts final stop hooks."
+)]
+impl StopCounterFixture {
+    #[hook(agent.stop)]
+    async fn agent_stop(
+        &self,
+        _input: agena_plugin_host::sdk::AgentStopInput,
+    ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::sdk::AgentStopPatch>> {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(
+            (self.continue_once && n == 0).then(|| agena_plugin_host::sdk::AgentStopPatch {
+                continue_with_message: Some("Finish the remaining work.".to_owned()),
+                reason: Some("test continuation".to_owned()),
+            }),
+        )
+    }
+}
+
+async fn manager_with_stop_counter(
+    provider: Arc<dyn ModelRuntime>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    continue_once: bool,
+    scheduler: Option<Arc<agena_scheduler::Scheduler>>,
+) -> SessionManager {
+    let workspace_root = std::env::current_dir().expect("resolve test workspace");
+    let mut plugin_config = PluginsConfig::default();
+    plugin_config.list.insert(
+        "test.stop-counter".to_owned(),
+        ConfiguredPlugin::static_default(),
+    );
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            "test.stop-counter".parse().unwrap(),
+            StopCounterFixture {
+                calls,
+                continue_once,
+            },
+        )],
+        config: plugin_config,
+        workspace_root: workspace_root.clone(),
+        agena_version: "test".to_owned(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .expect("build empty plugin host");
+    let executor = ToolExecutor::new(
+        workspace_root.clone(),
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        Arc::clone(&plugins),
+        scheduler,
+        None,
+    );
+    let mut registry = ProviderRegistry::new();
+    registry.register_arc(provider);
+    let provider_registry = Arc::new(registry);
+    let context_governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
+    let processor = SessionProcessor::new(plugins);
+    let database = Database::connect("sqlite::memory:")
+        .await
+        .expect("open test database");
+    initialize(&database).await;
+    SessionManager::new(
+        database,
+        provider_registry,
+        context_governor,
+        processor,
+        executor,
+        RuntimeSessionManagerConfig::default(),
+    )
+}
+
+#[tokio::test]
+async fn stop_hooks_wait_for_all_durable_background_sources_but_execution_releases() {
+    use agena_storage::store::BackgroundOperationKind as Kind;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["waiting for background sources".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_stop_counter(provider, calls.clone(), false, None).await;
+    let session = create_with_model(&manager, "durable quiet stop", "fake", "fake-model").await;
+    for (kind, external_id) in [
+        (Kind::Task, "stop-task"),
+        (Kind::Shell, "stop-shell"),
+        (Kind::Monitor, "stop-monitor"),
+    ] {
+        let run_id = manager
+            .store
+            .start_run(
+                session.id,
+                "continue",
+                run_marker_content("continue", Some("fake"), Some("fake-model"), None, None),
+            )
+            .await
+            .unwrap();
+        install_test_background_operation(&manager, session.id, run_id, kind, external_id).await;
+    }
+    // Even completed launch receipts cannot cause normal stop while any
+    // aggregate is active. This run must release rather than wait on delivery.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        manager.wake_idle_notification(session.id),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!manager.execution_registry.is_active(session.id).await);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    for (index, (kind, external_id, state, status)) in [
+        (Kind::Task, "stop-task", PartState::Cancelled, "cancelled"),
+        (Kind::Shell, "stop-shell", PartState::Completed, "completed"),
+        (
+            Kind::Monitor,
+            "stop-monitor",
+            PartState::Completed,
+            "completed",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            manager.settle_background_operation(
+                session.id,
+                kind.as_str(),
+                external_id,
+                state,
+                Ok("background result".to_owned()),
+                SystemNotificationContent {
+                    operation_id: external_id.to_owned(),
+                    operation_kind: kind.as_str().to_owned(),
+                    status: status.to_owned(),
+                    summary: "source settled".to_owned(),
+                    body: "background result".to_owned(),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), usize::from(index == 2));
+    }
+    let fresh = manager.get_session(session.id).await.unwrap();
+    for part in fresh
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+    {
+        assert!(
+            crate::session::prompt_window::notification_has_completed_provider_round(
+                fresh.parts(),
+                part.part_id
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn stop_hook_can_continue_then_stop_once_more() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["done".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_stop_counter(provider, calls.clone(), true, None).await;
+    let session = create_with_model(&manager, "stop continuation", "fake", "fake-model").await;
+    manager.wake_idle_notification(session.id).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(!manager.execution_registry.is_active(session.id).await);
+}
+
+struct StopScheduleSink;
+#[async_trait::async_trait]
+impl agena_scheduler::JobSink for StopScheduleSink {
+    async fn deliver(
+        &self,
+        _job: &agena_scheduler::ScheduledJob,
+        _delivery: &agena_scheduler::JobDeliveryAttempt,
+    ) -> agena_scheduler::JobDeliveryResult {
+        panic!("stop snapshot tests never start the scheduler")
+    }
+}
+
+#[tokio::test]
+async fn stop_hooks_defer_future_cron_but_handled_once_claim_does_not_wait_for_ack() {
+    use agena_scheduler::store::{InMemoryJobStore, JobStore};
+    use agena_scheduler::{ClaimDueDelivery, ScheduledJob, Scheduler};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let store = Arc::new(InMemoryJobStore::new());
+    let scheduler = Scheduler::new(
+        store.clone(),
+        Arc::new(StopScheduleSink),
+        std::time::Duration::from_secs(1),
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["cron handled".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager =
+        manager_with_stop_counter(provider, calls.clone(), false, Some(scheduler.clone())).await;
+    let session = create_with_model(&manager, "cron quiet stop", "fake", "fake-model").await;
+    let now = chrono::Utc::now();
+    let mut job = ScheduledJob::new_once(now + chrono::Duration::days(1), "future");
+    job.owner_session_id = Some(session.id);
+    let id = job.id;
+    scheduler.add(job).await.unwrap();
+    manager.wake_idle_notification(session.id).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(!manager.execution_registry.is_active(session.id).await);
+    scheduler.pause(id).await.unwrap();
+    manager.wake_idle_notification(session.id).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    scheduler.resume(id).await.unwrap();
+    manager.wake_idle_notification(session.id).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    scheduler.remove(id).await.unwrap();
+    manager.wake_idle_notification(session.id).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let mut job = ScheduledJob::new_once(now, "fire");
+    job.owner_session_id = Some(session.id);
+    let id = job.id;
+    scheduler.add(job).await.unwrap();
+    let snapshot = store.get(id).await.unwrap().unwrap();
+    let mut claimed = snapshot.job.clone();
+    let ClaimDueDelivery::Deliver(delivery) = claimed.claim_due_delivery(now).unwrap() else {
+        panic!("due");
+    };
+    store
+        .claim(
+            &snapshot,
+            claimed,
+            "stop-test".to_owned(),
+            now.timestamp_millis(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        manager.deliver_scheduled_job(
+            session.id,
+            id.to_string(),
+            delivery.delivery_key,
+            "run once".to_owned(),
+            None,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        store
+            .get(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .job
+            .pending_delivery
+            .is_some(),
+        "sink ack is still pending"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "provider receipt suffices for final normal stop"
+    );
+    let mut recurring = ScheduledJob::new_cron("0 * * * * *", "recurring", 7).unwrap();
+    recurring.owner_session_id = Some(session.id);
+    recurring.next_fire_at = Some(now);
+    let recurring_id = recurring.id;
+    scheduler.add(recurring).await.unwrap();
+    let snapshot = store.get(recurring_id).await.unwrap().unwrap();
+    let mut claimed = snapshot.job.clone();
+    let ClaimDueDelivery::Deliver(delivery) = claimed.claim_due_delivery(now).unwrap() else {
+        panic!("recurring fire is due");
+    };
+    store
+        .claim(
+            &snapshot,
+            claimed,
+            "recurring-test".to_owned(),
+            now.timestamp_millis(),
+        )
+        .await
+        .unwrap();
+    manager
+        .deliver_scheduled_job(
+            session.id,
+            recurring_id.to_string(),
+            delivery.delivery_key,
+            "recurring fire".to_owned(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "handled recurring fire still has a next fire"
+    );
+    scheduler.remove(recurring_id).await.unwrap();
+    manager.wake_idle_notification(session.id).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
+async fn stop_hook_failure_path_is_not_suppressed_by_background_waiting() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(StartupFailureProvider {
+        model: ModelId::new("startup-failure-model"),
+    });
+    let manager = manager_with_stop_counter(provider, calls.clone(), false, None).await;
+    let session = create_with_model(
+        &manager,
+        "failure stop",
+        "startup-failure",
+        "startup-failure-model",
+    )
+    .await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .unwrap();
+    install_test_background_operation(
+        &manager,
+        session.id,
+        run_id,
+        agena_storage::store::BackgroundOperationKind::Shell,
+        "failure-shell",
+    )
+    .await;
+    assert!(manager.wake_idle_notification(session.id).await.is_err());
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "errors still reach stop hooks"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_hooks_do_not_fire_for_stale_provider_output_when_multiple_notifications_race() {
+    use agena_storage::store::{
+        BackgroundEventRequest, BackgroundOperationKind as Kind, BackgroundOperationPhase,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let provider = Arc::new(AssistantHookBoundaryProvider::text_only());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let manager =
+        Arc::new(manager_with_stop_counter(provider.clone(), calls.clone(), false, None).await);
+    let session = create_with_model(
+        &manager,
+        "multi-source stop race",
+        "assistant-hook-boundary",
+        "assistant-hook-boundary-model",
+    )
+    .await;
+    for (kind, id) in [
+        (Kind::Shell, "quick-shell"),
+        (Kind::Monitor, "quick-monitor"),
+    ] {
+        let run_id = manager
+            .store
+            .start_run(
+                session.id,
+                "continue",
+                run_marker_content("continue", None, None, None, None),
+            )
+            .await
+            .unwrap();
+        install_test_background_operation(&manager, session.id, run_id, kind, id).await;
+    }
+    let runner = manager.clone();
+    let session_id = session.id;
+    let execution = tokio::spawn(async move { runner.wake_idle_notification(session_id).await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        provider.first_request_entered.notified(),
+    )
+    .await
+    .unwrap();
+    let mut deliveries = Vec::new();
+    for (kind, id) in [
+        (Kind::Shell, "quick-shell"),
+        (Kind::Monitor, "quick-monitor"),
+    ] {
+        let operation = manager
+            .store
+            .background_operation_by_external_id(kind, id)
+            .await
+            .unwrap()
+            .unwrap();
+        let notification = SystemNotificationContent {
+            operation_id: id.to_owned(),
+            operation_kind: kind.as_str().to_owned(),
+            status: "completed".to_owned(),
+            summary: "quick completion".to_owned(),
+            body: "quick completion".to_owned(),
+            ..Default::default()
+        };
+        let part = new_part_from_content(
+            "system_notification",
+            PartRole::Assistant,
+            &TypedContent::SystemNotification(notification.clone()),
+            PartState::Completed,
+        )
+        .unwrap();
+        let settled = manager
+            .session_mutations
+            .run(session_id, async {
+                manager
+                    .store
+                    .record_background_event(BackgroundEventRequest {
+                        operation_id: operation.operation_id,
+                        event_key: "terminal".to_owned(),
+                        event_seq: None,
+                        next_phase: Some(BackgroundOperationPhase::Completed),
+                        outcome: None,
+                        failure: None,
+                        notification: part,
+                    })
+                    .await
+            })
+            .await
+            .unwrap();
+        manager
+            .steer_input(
+                session_id,
+                vec![TypedContent::SystemNotification(notification.clone())],
+            )
+            .await
+            .unwrap();
+        deliveries.push((settled.delivery, notification));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(provider.requests().len(), 1);
+    provider.release_first_request.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(10), execution)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        provider.requests().len(),
+        2,
+        "stale first output does not consume either new input"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "only the final quiet boundary dispatches stop"
+    );
+    // Deliveries are still unacknowledged. Durable prompt receipts, not their
+    // consumed phase, must let final stop happen and recovery avoid a re-wake.
+    for (delivery, notification) in deliveries {
+        manager
+            .dispatch_background_delivery(delivery, notification)
+            .await
+            .unwrap();
+    }
+    assert_eq!(provider.requests().len(), 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}

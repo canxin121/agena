@@ -260,7 +260,7 @@ pub(crate) use invocation_guard::try_enter_invocation;
 pub(crate) use live_signal::LiveSignalHub;
 pub use live_signal::{
     RuntimeLiveSignal, RuntimeLiveSignalItem, RuntimeLiveSignalService,
-    RuntimeLiveSignalSubscription,
+    RuntimeLiveSignalSubscription, RuntimeLiveSignalObservation, RuntimeLiveSignalObserver,
 };
 pub(crate) use lsp_config::compose_lsp_services;
 pub(crate) use mcp_runtime::{

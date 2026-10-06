@@ -11,6 +11,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::{collections::BTreeMap, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}};
 
 use agena_domain::BackgroundActivityChangedEvent;
 use agena_plugin_host::PluginKey;
@@ -52,27 +53,59 @@ pub trait RuntimeLiveSignalSubscription: Send {
 /// it is `SessionChange` on the facade.
 pub trait RuntimeLiveSignalService: Send + Sync {
     fn subscribe(&self) -> Box<dyn RuntimeLiveSignalSubscription>;
+    /// Cheap mutation observers run before publication. Resource clocks must
+    /// not depend on an asynchronous consumer keeping up with the stream.
+    fn observe(&self, _observer: RuntimeLiveSignalObserver) -> Option<RuntimeLiveSignalObservation> { None }
+}
+
+pub type RuntimeLiveSignalObserver = Arc<dyn Fn(&RuntimeLiveSignal) + Send + Sync>;
+
+pub struct RuntimeLiveSignalObservation {
+    cleanup: Box<dyn Fn() + Send + Sync>,
+}
+
+impl Drop for RuntimeLiveSignalObservation {
+    fn drop(&mut self) { (self.cleanup)(); }
 }
 
 /// A `tokio::sync::broadcast`-backed live signal stream.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct LiveSignalHub {
     tx: broadcast::Sender<RuntimeLiveSignal>,
+    observers: Arc<Mutex<BTreeMap<u64, RuntimeLiveSignalObserver>>>,
+    next_observer: Arc<AtomicU64>,
+}
+
+impl std::fmt::Debug for LiveSignalHub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveSignalHub").field("subscribers", &self.tx.receiver_count()).finish_non_exhaustive()
+    }
 }
 
 impl LiveSignalHub {
     pub(crate) fn new(capacity: usize) -> Self {
         let (tx, _rx) = broadcast::channel(capacity);
-        Self { tx }
+        Self { tx, observers: Arc::new(Mutex::new(BTreeMap::new())), next_observer: Arc::new(AtomicU64::new(0)) }
     }
 
     /// Publish one signal to every subscriber. If the channel is full the
     /// oldest unread signals are dropped and subscribers observe `Lagged`
     /// (14.4); the signal itself is never persisted.
     pub(crate) fn emit(&self, signal: RuntimeLiveSignal) {
+        let observers = self.observers.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect::<Vec<_>>();
+        for observer in observers { observer(&signal); }
         if self.tx.send(signal).is_err() {
             tracing::debug!("runtime live signal had no active subscribers");
         }
+    }
+
+    pub(crate) fn observe(&self, observer: RuntimeLiveSignalObserver) -> RuntimeLiveSignalObservation {
+        let id = self.next_observer.fetch_add(1, Ordering::Relaxed);
+        self.observers.lock().unwrap_or_else(|e| e.into_inner()).insert(id, observer);
+        let observers = Arc::downgrade(&self.observers);
+        RuntimeLiveSignalObservation { cleanup: Box::new(move || {
+            if let Some(observers) = observers.upgrade() { observers.lock().unwrap_or_else(|e| e.into_inner()).remove(&id); }
+        }) }
     }
 
     /// Subscribe to the stream. Returns `None` when no Tokio runtime is

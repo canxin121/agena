@@ -186,6 +186,8 @@ pub struct BackgroundActivityLogLine {
     pub stream: String,
     pub ts_ms: i64,
     pub text: String,
+    #[serde(default)]
+    pub chunk: bool,
 }
 
 /// Unified log read result. Mirrors the shell monitor read contract so every

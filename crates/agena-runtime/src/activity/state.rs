@@ -142,11 +142,13 @@ fn carry_provenance_forward(
 
 impl crate::MonitorListener for MonitorActivityBridge {
     fn on_started(&self, summary: &ProcessSummary) {
-        self.registry.upsert(self.carry_forward(shell_activity(summary)));
+        self.registry
+            .upsert(self.carry_forward(shell_activity(summary)));
     }
 
     fn on_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {
-        self.registry.upsert(self.carry_forward(shell_activity(summary)));
+        self.registry
+            .upsert(self.carry_forward(shell_activity(summary)));
         if let Some(callback) = self
             .on_event
             .lock()
@@ -158,7 +160,8 @@ impl crate::MonitorListener for MonitorActivityBridge {
     }
 
     fn on_finished(&self, summary: &ProcessSummary) {
-        self.registry.upsert(self.carry_forward(shell_activity(summary)));
+        self.registry
+            .upsert(self.carry_forward(shell_activity(summary)));
         if let Some(callback) = self
             .on_finished
             .lock()
@@ -192,7 +195,11 @@ fn shell_activity(summary: &ProcessSummary) -> BackgroundActivity {
             // more background process.
             format!(
                 "{} · {label}",
-                if summary.tty { "Terminal" } else { "Run process" }
+                if summary.tty {
+                    "Terminal"
+                } else {
+                    "Run process"
+                }
             )
         },
         description: summary.command.clone(),
@@ -886,6 +893,7 @@ pub(crate) fn read_shell_logs(
                 },
                 ts_ms: event.ts_ms,
                 text: event.line,
+                chunk: event.chunk,
             })
             .collect(),
         last_seq: read.last_seq,
@@ -909,7 +917,10 @@ pub(crate) async fn read_task_logs(
         return empty_task_logs(task_id, after_cursor);
     };
     match manager
-        .read_subtask_output(parent_session_id, task_id, after_cursor, 200)
+        // A provider keeps appending to one run. Re-read the cursor run as
+        // well, so its log line can be replaced while it streams; an exclusive
+        // cursor only ever exposed the first fragment of that reply.
+        .read_subtask_output(parent_session_id, task_id, after_cursor.saturating_sub(1), 200)
         .await
     {
         Ok(output) => {
@@ -927,6 +938,7 @@ pub(crate) async fn read_task_logs(
                     stream: "message".to_string(),
                     ts_ms: chunk.created_at_ms,
                     text,
+                    chunk: false,
                 });
             }
             BackgroundActivityLogRead {
@@ -1014,7 +1026,8 @@ mod tests {
         previous.operation_id = Some("op_1".to_string());
         previous.source_part_id = Some(9);
 
-        let merged = carry_provenance_forward(shell_activity(&summary(false, None)), Some(&previous));
+        let merged =
+            carry_provenance_forward(shell_activity(&summary(false, None)), Some(&previous));
 
         assert_eq!(merged.session_id, Some(7));
         assert_eq!(merged.parent_session_id, Some(3));

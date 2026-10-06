@@ -7,7 +7,7 @@
 //! the runtime event bus so TUI/Web can react live.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
 
 use agena_domain::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,
@@ -39,15 +39,14 @@ impl ActivityStore {
         self.activities.get(id).cloned()
     }
 
-    fn upsert(&mut self, activity: BackgroundActivity) -> Option<BackgroundActivity> {
+    fn upsert(&mut self, activity: BackgroundActivity) -> (Option<BackgroundActivity>, Vec<BackgroundActivity>) {
         let previous = self
             .activities
             .insert(activity.id.clone(), activity.clone());
         if previous.is_none() {
             self.order.push_front(activity.id.clone());
         }
-        self.trim_history();
-        previous
+        (previous, self.trim_history())
     }
 
     fn list(&self, filter: &BackgroundActivityFilter) -> Vec<BackgroundActivity> {
@@ -88,9 +87,10 @@ impl ActivityStore {
         finished
     }
 
-    fn trim_history(&mut self) {
+    fn trim_history(&mut self) -> Vec<BackgroundActivity> {
+        let mut removed = Vec::new();
         if self.order.len() <= self.history_limit {
-            return;
+            return removed;
         }
         // Keep the newest `history_limit` entries; drop only terminal ones so
         // running work is never silently evicted from the UI.
@@ -110,8 +110,9 @@ impl ActivityStore {
                 continue;
             }
             let _ = self.order.remove(index);
-            self.activities.remove(id.as_str());
+            if let Some(activity) = self.activities.remove(id.as_str()) { removed.push(activity); }
         }
+        removed
     }
 }
 
@@ -119,16 +120,30 @@ impl ActivityStore {
 #[derive(Debug, Clone)]
 pub(crate) struct ActivityRegistry {
     store: Arc<Mutex<ActivityStore>>,
-    tx: mpsc::Sender<BackgroundActivityChangedEvent>,
+    tx: Option<mpsc::Sender<BackgroundActivityChangedEvent>>,
+    signals: Option<Arc<crate::live_signal::LiveSignalHub>>,
+    published_at_ms: Arc<AtomicI64>,
 }
 
 impl ActivityRegistry {
+    #[cfg(test)]
     pub(crate) fn new(tx: mpsc::Sender<BackgroundActivityChangedEvent>) -> Self {
         Self {
             store: Arc::new(Mutex::new(ActivityStore::new(
                 DEFAULT_ACTIVITY_HISTORY_LIMIT,
             ))),
-            tx,
+            tx: Some(tx),
+            signals: None,
+            published_at_ms: Arc::new(AtomicI64::new(0)),
+        }
+    }
+
+    pub(crate) fn with_signals(signals: Arc<crate::live_signal::LiveSignalHub>) -> Self {
+        Self {
+            store: Arc::new(Mutex::new(ActivityStore::new(DEFAULT_ACTIVITY_HISTORY_LIMIT))),
+            tx: None,
+            signals: Some(signals),
+            published_at_ms: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -144,23 +159,26 @@ impl ActivityRegistry {
     /// transitions into a terminal status are `Finished`, everything else is
     /// `Updated`.
     pub(crate) fn upsert(&self, activity: BackgroundActivity) {
-        let reason = {
-            let mut store = self.store.lock();
-            let previous = store.upsert(activity.clone());
-            match previous {
+        let mut store = self.store.lock();
+            if store.activities.get(&activity.id) == Some(&activity) {
+                return;
+            }
+            let (previous, removed) = store.upsert(activity.clone());
+            let reason = match previous {
                 None => BackgroundActivityEventReason::Started,
                 Some(previous) if previous.is_active() && !activity.is_active() => {
                     BackgroundActivityEventReason::Finished
                 }
                 Some(_) => BackgroundActivityEventReason::Updated,
-            }
-        };
+            };
         self.publish(activity, reason);
+        for activity in removed { self.publish(activity, BackgroundActivityEventReason::Dismissed); }
     }
 
     /// Dismiss a record from the store (does not stop the underlying work).
     pub(crate) fn dismiss(&self, id: &str) -> Option<BackgroundActivity> {
-        let removed = self.store.lock().remove(id);
+        let mut store = self.store.lock();
+        let removed = store.remove(id);
         if let Some(activity) = &removed {
             self.publish(activity.clone(), BackgroundActivityEventReason::Dismissed);
         }
@@ -169,7 +187,25 @@ impl ActivityRegistry {
 
     /// Remove every finished record; returns the ids that were removed.
     pub(crate) fn clear_finished(&self) -> Vec<String> {
-        self.store.lock().clear_finished()
+        let mut store = self.store.lock();
+            let finished = store.activities.values()
+                .filter(|activity| !activity.is_active()).cloned().collect::<Vec<_>>();
+            store.clear_finished();
+        for activity in &finished {
+            self.publish(activity.clone(), BackgroundActivityEventReason::Dismissed);
+        }
+        finished.into_iter().map(|activity| activity.id).collect()
+    }
+
+    /// A task log cursor denotes a run, whose text can change in place. A
+    /// transcript mutation is a real log update even when its descriptor is
+    /// unchanged; it must wake an expanded log without rewriting the list.
+    pub(crate) fn touch_task_logs(&self, session_id: i64) {
+        let store = self.store.lock();
+        for activity in store.activities.values().filter(|activity|
+            activity.kind == agena_domain::BackgroundActivityKind::Task && activity.session_id == Some(session_id)) {
+            self.publish(activity.clone(), BackgroundActivityEventReason::Updated);
+        }
     }
 
     pub(crate) fn list(&self, filter: &BackgroundActivityFilter) -> Vec<BackgroundActivity> {
@@ -179,13 +215,21 @@ impl ActivityRegistry {
     /// Push the record and event onto the bus-facing channel. The publisher
     /// task drains this channel and persists/broadcasts each event.
     fn publish(&self, activity: BackgroundActivity, reason: BackgroundActivityEventReason) {
+        let now = Utc::now().timestamp_millis();
+        let previous = self.published_at_ms.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |previous| Some(now.max(previous.saturating_add(1)))).expect("activity clock update");
         let event = BackgroundActivityChangedEvent {
             activity_id: activity.id.clone(),
             reason,
             activity,
-            ts_ms: Utc::now().timestamp_millis(),
+            ts_ms: now.max(previous.saturating_add(1)),
         };
-        if let Err(error) = self.tx.try_send(event) {
+        if let Some(signals) = &self.signals {
+            signals.emit(crate::RuntimeLiveSignal::Activity(Box::new(event)));
+            return;
+        }
+        let Some(tx) = &self.tx else { return; };
+        if let Err(error) = tx.try_send(event) {
             match error {
                 mpsc::error::TrySendError::Full(event) => tracing::debug!(
                     activity_id = %event.activity_id,

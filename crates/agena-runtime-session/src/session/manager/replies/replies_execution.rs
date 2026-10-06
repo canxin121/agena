@@ -580,6 +580,36 @@ impl SessionManager {
             }
 
             if !model_requested && !force_model_retry {
+                // A launch receipt is completed independently of its durable
+                // operation. Release this execution while background work waits;
+                // do not block delivery (which waits for execution release), and
+                // do not tell stop hooks the overall agent has finished.
+                session = self
+                    .drain_steer_input(session, &mut steer_rx, &current_options, state.clone())
+                    .await?;
+                let (fresh, waiting) = self.normal_stop_snapshot(session.id, &state).await?;
+                session = fresh;
+                if last_input_message_id(session.parts()) != observed_input_message_id
+                    || newest_notification_part_id(session.parts()) != observed_notification_id
+                {
+                    continue;
+                }
+                if prompt_window::provider_visible_notification_part_ids(&session)
+                    .iter()
+                    .any(|part_id| {
+                        !prompt_window::notification_has_completed_provider_round(
+                            session.parts(),
+                            *part_id,
+                        )
+                    })
+                {
+                    turn_run_id = None;
+                    model_requested = true;
+                    continue;
+                }
+                if waiting {
+                    return Ok(session);
+                }
                 let last_assistant_text = crate::session::store::parts_into_runs(session.parts())
                     .into_iter()
                     .rev()
@@ -3083,13 +3113,11 @@ impl SessionManager {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Session, AppError> {
         let stream_id = stream.stream_id.clone();
-        // Streaming output is accumulated in memory only. The durable record
-        // never grows per-delta: the streamed text is written once, truncated,
-        // at completion. Every 2s we emit a header-only checkpoint that only
-        // refreshes the running title (a tiny UPDATE), so a long stream costs
-        // O(delta) writes instead of re-persisting the cumulative output.
-        const TITLE_REFRESH_MS: u64 = 2_000;
-        let mut last_title_refresh = std::time::Instant::now();
+        // Keep a bounded display tail, not a second cumulative result. The
+        // facade overlays InProgress updates in memory and coalesces trailing
+        // live notifications at 100 ms; terminal facts are committed once.
+        // Publishing only on a two-second heartbeat loses the last chunk when
+        // a command pauses, and makes short commands appear non-streaming.
         let mut streamed_output = String::new();
         loop {
             let chunk = match cancellation.as_ref() {
@@ -3099,19 +3127,6 @@ impl SessionManager {
                         return self.apply_tool_cancellation(session, pending_tool, state).await;
                     },
                     chunk = stream.chunks.recv() => chunk,
-                    // Idle heartbeat: refresh the running title so a silent
-                    // long-running command still shows live progress.
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(TITLE_REFRESH_MS)) => {
-                        session = self
-                            .refresh_streaming_title(
-                                session.id,
-                                pending_tool,
-                                Some(Self::bounded_live_output(&streamed_output)),
-                                state.clone(),
-                            )
-                            .await?;
-                        continue;
-                    },
                 },
                 None => stream.chunks.recv().await,
             };
@@ -3124,18 +3139,21 @@ impl SessionManager {
             if delta.is_empty() {
                 continue;
             }
-            streamed_output.push_str(delta);
-            if last_title_refresh.elapsed() >= std::time::Duration::from_millis(TITLE_REFRESH_MS) {
-                last_title_refresh = std::time::Instant::now();
-                session = self
-                    .refresh_streaming_title(
-                        session.id,
-                        pending_tool,
-                        Some(Self::bounded_live_output(&streamed_output)),
-                        state.clone(),
-                    )
-                    .await?;
+            if stream.output_mode == agena_domain::DeltaMode::Replace {
+                streamed_output.clear();
             }
+            streamed_output.push_str(delta);
+            let retained = Self::bounded_live_output(&streamed_output);
+            let discarded = streamed_output.len() - retained.len();
+            streamed_output.drain(..discarded);
+            session = self
+                .refresh_streaming_title(
+                    session.id,
+                    pending_tool,
+                    Some(&streamed_output),
+                    state.clone(),
+                )
+                .await?;
         }
         session = self
             .apply_streaming_terminal_output(session.id, state.clone())
@@ -3249,12 +3267,10 @@ impl SessionManager {
         &text[start..]
     }
 
-    /// Refresh the running title of a streaming tool and emit a checkpoint. This
-    /// is the only durable write during a stream: it updates the compact title
-    /// plus, at most, the bounded tail of what the process has produced so far
-    /// (see [`Self::bounded_live_output`]), never the cumulative output, so a
-    /// long stream costs O(1) writes rather than re-persisting the growing text
-    /// every 2s.
+    /// Update the bounded live tail through the shared facade overlay. Its
+    /// trailing notification publishes even if no further chunks arrive.
+    /// Reconnect reads observe the same overlay; lifecycle completion flushes
+    /// the terminal result, rather than persisting each display increment.
     pub(in crate::session::manager) async fn refresh_streaming_title(
         &self,
         session_id: i64,

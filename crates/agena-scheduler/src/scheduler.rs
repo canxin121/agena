@@ -94,6 +94,19 @@ impl Scheduler {
             .collect())
     }
 
+    /// Exact session-scoped snapshots, including claims not yet acknowledged by the sink.
+    pub async fn pending_jobs_for_session(
+        &self,
+        session_id: i64,
+    ) -> SchedulerResult<Vec<ScheduledJob>> {
+        self.store.pending_jobs_for_session(session_id).await
+    }
+
+    /// Pending session-owned schedules, including future fires and claimed deliveries.
+    pub async fn session_has_pending_jobs(&self, session_id: i64) -> SchedulerResult<bool> {
+        self.store.session_has_pending_jobs(session_id).await
+    }
+
     pub async fn get(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
         Ok(self.store.get(id).await?.map(|snapshot| snapshot.job))
     }

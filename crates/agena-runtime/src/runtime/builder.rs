@@ -139,12 +139,10 @@ impl AgenaRuntime {
             }
         };
 
-        // Unified background-activity registry: sources push in, the publisher
-        // task drains events onto the runtime bus, and the same registry backs
-        // the application-facing activity service.
-        let (activity_tx, activity_rx) =
-            tokio::sync::mpsc::channel::<agena_domain::BackgroundActivityChangedEvent>(256);
-        let activity_registry = crate::activity::ActivityRegistry::new(activity_tx);
+        // Publish directly to the bounded signal hub. Its synchronous clock
+        // observers see every mutation; slow clients receive an explicit lag.
+        let live_signals = Arc::new(agena_runtime::LiveSignalHub::new(256));
+        let activity_registry = crate::activity::ActivityRegistry::with_signals(live_signals.clone());
         // Background-completion bridge: correlates launched-in-background
         // operations (monitored shells, delegated tasks) with their transcript
         // parts. The manager may not exist yet on a control-only bootstrap;
@@ -209,7 +207,7 @@ impl AgenaRuntime {
                     activity_registry.clone(),
                     monitor_service,
                 )),
-                live_signals: Arc::new(agena_runtime::LiveSignalHub::new(256)),
+                live_signals,
                 subtask_bridge: Arc::new(std::sync::Mutex::new(None)),
                 background_completion,
                 automatic_maintenance,
@@ -238,15 +236,6 @@ impl AgenaRuntime {
         agena_runtime::ownership_audit::record_runtime_ownership(
             runtime.inner.workspace_root.as_path(),
         )?;
-        {
-            let live_signals = Arc::clone(&runtime.live_signals);
-            let mut rx = activity_rx;
-            tokio::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    live_signals.emit(agena_runtime::RuntimeLiveSignal::Activity(Box::new(event)));
-                }
-            });
-        }
 
         // The candidate client already serves generation configuration during
         // init. Runtime-dependent operations become available at publication.
@@ -338,6 +327,17 @@ impl AgenaRuntime {
         let subscription = store.subscribe_all(Arc::new(move |change| {
             if let agena_storage::store::SessionChange::SessionMetaUpdated { meta, .. } = &change {
                 crate::activity::upsert_task_activity_from_meta(&registry, meta);
+            } else if match &change {
+                agena_storage::store::SessionChange::PartAdded { part, .. }
+                | agena_storage::store::SessionChange::PartUpdated { part, .. } => {
+                    // Task log rows omit thinking and run-marker bodies.
+                    // Their progress does not change an observable log value.
+                    !matches!(part.kind.as_str(), "think" | "run")
+                }
+                agena_storage::store::SessionChange::PartRemoved { .. } => true,
+                _ => false,
+            } {
+                registry.touch_task_logs(change.session_id());
             }
             completion_observer(change);
         }));
@@ -836,13 +836,15 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     .ok_or_else(|| {
                         agena_runtime::ActivityControlError::no_log_source(activity_id)
                     })?;
-                Ok(crate::activity::read_task_logs(
+                let mut logs = crate::activity::read_task_logs(
                     self.current_snapshot().session_manager().as_ref(),
                     parent_session_id,
                     task_id,
                     since_seq as i64,
                 )
-                .await)
+                .await;
+                logs.status = activity.status;
+                Ok(logs)
             }
             // Kinds without a registered source adapter (runtime maintenance
             // tasks today, browser sessions before the web plugin registers
@@ -2310,6 +2312,9 @@ impl AgenaRuntime {
                 live_signals: {
                     struct Adapter(Arc<agena_runtime::LiveSignalHub>);
                     impl agena_runtime::RuntimeLiveSignalService for Adapter {
+                        fn observe(&self, observer: agena_runtime::RuntimeLiveSignalObserver) -> Option<agena_runtime::RuntimeLiveSignalObservation> {
+                            Some(self.0.observe(observer))
+                        }
                         fn subscribe(
                             &self,
                         ) -> Box<dyn agena_runtime::RuntimeLiveSignalSubscription>

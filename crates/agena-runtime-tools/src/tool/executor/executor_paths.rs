@@ -45,7 +45,7 @@ impl ToolExecutor {
     pub(crate) async fn execute_shell_command_with_live(
         &self,
         request: &ShellRequest,
-        live: Option<tokio::sync::mpsc::UnboundedSender<crate::tool::shell::ShellOutputChunk>>,
+        live: Option<crate::tool::shell::ShellOutputSink>,
     ) -> Result<ShellOutput, ToolError> {
         match shell::execute_with_sink(request, self.cancellation_token(), live).await {
             Err(agena_tool::ShellError::Cancelled) => Err(ToolError::Cancelled),

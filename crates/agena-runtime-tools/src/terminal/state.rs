@@ -173,6 +173,7 @@ impl State {
             stream: ProcessStream::Stdout,
             ts_ms: Utc::now().timestamp_millis(),
             line,
+            chunk: true,
         };
         inner.buffered_bytes += event.line.len();
         inner.events.push_back(event.clone());

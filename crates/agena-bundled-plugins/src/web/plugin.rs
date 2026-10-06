@@ -692,6 +692,7 @@ impl BrowserSessionLog {
             text.push_str(" [truncated]");
         }
         let line = BackgroundActivityLogLine {
+            chunk: false,
             seq: self.next_seq,
             stream: stream.to_string(),
             ts_ms: chrono::Utc::now().timestamp_millis(),

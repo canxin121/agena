@@ -40,7 +40,7 @@ use super::{
     PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionPresentation, SessionState, SessionSummary,
     SessionView, StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
-    apply_part_transition, presentation,
+    prepare_part_update, presentation,
 };
 
 /// Safety ceiling for streaming deltas buffered in memory before one durable
@@ -172,6 +172,12 @@ pub trait SessionStore: Send + Sync {
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError>;
 
+    /// Read durable identity/revision metadata without loading transcripts.
+    async fn session_revision_rows(&self) -> Result<Vec<(i64, i64, i64)>, StoreError> {
+        Ok(self.list_session_summaries(SessionListQuery::default()).await?
+            .into_iter().map(|row| (row.id, row.workspace_id, row.version)).collect())
+    }
+
     async fn workspace_session_stats(
         &self,
         workspace_ids: &[i64],
@@ -279,6 +285,11 @@ pub trait SessionStore: Send + Sync {
         kind: Option<BackgroundOperationKind>,
         limit: usize,
     ) -> Result<Vec<BackgroundOperation>, StoreError>;
+
+    async fn session_has_active_background_operations(
+        &self,
+        session_id: i64,
+    ) -> Result<bool, StoreError>;
 
     async fn transition_background_operation(
         &self,
@@ -556,6 +567,7 @@ struct StreamingBuffer {
     part: Part,
     pending_deltas: usize,
     notification_pending: bool,
+    notified_at_ms: i64,
 }
 
 /// The internal memory layer (15.3): a per-session LRU cache of
@@ -660,6 +672,14 @@ impl MemoryLayer {
         self.lru.lock().expect("lru lock").remove(&session_id);
     }
 
+    fn invalidate_changed_meta(&self, meta: &SessionMeta) {
+        let unchanged = self.cache.lock().expect("cache lock")
+            .get(&meta.id).is_some_and(|entry| entry.version == meta.version);
+        if !unchanged {
+            self.invalidate(meta.id);
+        }
+    }
+
     /// Merge parts that were just committed (or are in an in-progress
     /// streaming buffer) into the cached view, keeping the entry's position
     /// in sync so the very next `load` is a cache hit instead of a redundant
@@ -744,6 +764,9 @@ pub struct NotificationBus {
     next_observer_id: AtomicU64,
     observers: Mutex<HashMap<i64, HashMap<u64, SessionObserver>>>,
     global_observers: Mutex<HashMap<u64, SessionObserver>>,
+    // Streaming checkpoints use the committed revision plus a monotonic
+    // timestamp. Remember both so identical engine results emit no event.
+    positions: Mutex<HashMap<(i64, i64), (i64, i64)>>,
 }
 
 impl NotificationBus {
@@ -792,6 +815,33 @@ impl NotificationBus {
     /// Never persisted, never replayed; an observer must not rely on
     /// receiving every change.
     fn emit(&self, change: SessionChange) {
+        {
+            let mut positions = self.positions.lock().expect("notification positions lock");
+            let next = match &change {
+                SessionChange::PartAdded { session_id, part }
+                | SessionChange::PartUpdated { session_id, part } =>
+                    Some(((*session_id, part.part_id), (part.revision, part.updated_at_ms))),
+                SessionChange::SessionMetaUpdated { session_id, meta } =>
+                    Some(((*session_id, 0), (meta.version, meta.updated_at_ms))),
+                SessionChange::PartRemoved { session_id, part_id } => {
+                    positions.remove(&(*session_id, *part_id));
+                    None
+                }
+                SessionChange::SessionDeleted { session_id, .. } => {
+                    positions.retain(|(id, _), _| id != session_id);
+                    None
+                }
+            };
+            if let Some((key, position)) = next {
+                if positions.get(&key).is_some_and(|previous| *previous >= position) {
+                    return;
+                }
+                if positions.len() >= 8192 && !positions.contains_key(&key) {
+                    positions.clear();
+                }
+                positions.insert(key, position);
+            }
+        }
         let observers = self
             .observers
             .lock()
@@ -967,10 +1017,14 @@ where
 
         let flush = {
             let mut streaming = self.memory.streaming.lock().expect("streaming lock");
-            let buffer = streaming.entry(key).or_insert_with(|| StreamingBuffer {
-                part: persisted_base.expect("missing stream buffer has a persisted base"),
-                pending_deltas: 0,
-                notification_pending: false,
+            let buffer = streaming.entry(key).or_insert_with(|| {
+                let part = persisted_base.expect("missing stream buffer has a persisted base");
+                StreamingBuffer {
+                    notified_at_ms: part.updated_at_ms,
+                    part,
+                    pending_deltas: 0,
+                    notification_pending: false,
+                }
             });
             if buffer.part.origin_session_id != session_id {
                 return Err(StoreError::InvalidState(format!(
@@ -980,6 +1034,9 @@ where
             let now = self.now();
             let mut next_part = buffer.part.clone();
             let state_changed = apply_buffered_delta(&mut next_part, delta, now)?;
+            if next_part.updated_at_ms == buffer.part.updated_at_ms {
+                return Ok(None);
+            }
             buffer.part = next_part;
             buffer.pending_deltas += 1;
             // End-only streaming: commit once when the part transitions state
@@ -1026,7 +1083,7 @@ where
                     provider_state: part.provider_state,
                     finished_at_ms: part.finished_at_ms,
                 },
-                self.now(),
+                part.updated_at_ms.max(self.now()),
             )
             .await
     }
@@ -1044,7 +1101,7 @@ where
             let Some(buffer) = buffers.get_mut(&(session_id, part_id)) else {
                 return;
             };
-            if buffer.notification_pending {
+            if buffer.notification_pending || buffer.notified_at_ms == buffer.part.updated_at_ms {
                 return;
             }
             buffer.notification_pending = true;
@@ -1063,6 +1120,7 @@ where
                     return;
                 };
                 buffer.notification_pending = false;
+                buffer.notified_at_ms = buffer.part.updated_at_ms;
                 buffer.part.clone()
             };
             bus.emit(SessionChange::PartUpdated { session_id, part });
@@ -1104,6 +1162,7 @@ where
             let meta = self.engine.session_meta(session_id).await?;
             self.memory
                 .apply_committed(session_id, &flushed, Some(meta.version));
+            self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
             for part in flushed {
                 self.bus
                     .emit(SessionChange::PartUpdated { session_id, part });
@@ -1282,6 +1341,10 @@ where
         self.engine.list_session_summaries(query).await
     }
 
+    async fn session_revision_rows(&self) -> Result<Vec<(i64, i64, i64)>, StoreError> {
+        self.engine.session_revision_rows().await
+    }
+
     async fn workspace_session_stats(
         &self,
         workspace_ids: &[i64],
@@ -1356,6 +1419,15 @@ where
         limit: usize,
     ) -> Result<Vec<BackgroundOperation>, StoreError> {
         self.engine.active_background_operations(kind, limit).await
+    }
+
+    async fn session_has_active_background_operations(
+        &self,
+        session_id: i64,
+    ) -> Result<bool, StoreError> {
+        self.engine
+            .session_has_active_background_operations(session_id)
+            .await
     }
 
     async fn transition_background_operation(
@@ -1586,6 +1658,7 @@ where
         let meta = self.engine.session_meta(session_id).await?;
         self.memory
             .apply_committed(session_id, &created, Some(meta.version));
+        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
         for part in &created {
             self.bus.emit(SessionChange::PartAdded {
                 session_id,
@@ -1637,6 +1710,7 @@ where
                     std::slice::from_ref(&updated),
                     Some(meta.version),
                 );
+                self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
                 self.bus.emit(SessionChange::PartUpdated {
                     session_id,
                     part: updated.clone(),
@@ -1667,6 +1741,7 @@ where
             std::slice::from_ref(&updated),
             Some(meta.version),
         );
+        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
             part: updated.clone(),
@@ -1736,7 +1811,7 @@ where
             .engine
             .set_provider_anchors(session_id, anchors)
             .await?;
-        self.memory.invalidate(session_id);
+        self.memory.invalidate_changed_meta(&meta);
         self.bus.emit(SessionChange::SessionMetaUpdated {
             session_id,
             meta: meta.clone(),
@@ -1750,7 +1825,7 @@ where
         config: Option<Value>,
     ) -> Result<SessionMeta, StoreError> {
         let meta = self.engine.set_config_json(session_id, config).await?;
-        self.memory.invalidate(session_id);
+        self.memory.invalidate_changed_meta(&meta);
         self.bus.emit(SessionChange::SessionMetaUpdated {
             session_id,
             meta: meta.clone(),
@@ -1846,7 +1921,7 @@ where
             .engine
             .update_session_metadata(session_id, patch)
             .await?;
-        self.memory.invalidate(session_id);
+        self.memory.invalidate_changed_meta(&meta);
         self.bus.emit(SessionChange::SessionMetaUpdated {
             session_id,
             meta: meta.clone(),
@@ -2087,54 +2162,12 @@ fn apply_buffered_delta(
     delta: PartDelta,
     now_ms: i64,
 ) -> Result<bool, StoreError> {
-    let now_ms = now_ms.max(part.updated_at_ms.saturating_add(1));
-    let state_changed = delta.state.is_some_and(|state| state != part.state);
-    if let Some(state) = delta.state {
-        apply_part_transition(part, state, now_ms, true)?;
-    }
-    if let Some(content) = delta.content {
-        part.content = content;
-    } else if let Some(delta_text) = delta.content_text_delta {
-        append_buffered_text_delta(&mut part.content, &delta_text)?;
-    }
-    if let Some(summary) = delta.summary {
-        part.summary = Some(summary);
-    }
-    if let Some(provider_state) = delta.provider_state {
-        part.provider_state = Some(provider_state);
-    }
-    if let Some(finished_at_ms) = delta.finished_at_ms {
-        part.finished_at_ms = Some(finished_at_ms);
-    }
-    if part.state.is_terminal() && part.finished_at_ms.is_none() {
-        part.finished_at_ms = Some(now_ms);
-    }
-    if part.state == super::PartState::InProgress {
-        part.finished_at_ms = None;
-    }
-    part.updated_at_ms = now_ms;
+    let revision = part.revision;
+    let mut next = prepare_part_update(part.clone(), delta, now_ms)?;
+    let state_changed = next.state != part.state;
+    next.revision = revision;
+    *part = next;
     Ok(state_changed)
-}
-
-fn append_buffered_text_delta(content: &mut Value, delta: &str) -> Result<(), StoreError> {
-    match content {
-        Value::String(text) => {
-            text.push_str(delta);
-            Ok(())
-        }
-        Value::Object(map) => match map.get_mut("text") {
-            Some(Value::String(text)) => {
-                text.push_str(delta);
-                Ok(())
-            }
-            _ => Err(StoreError::InvalidState(
-                "content_text_delta requires a text-shaped content".to_owned(),
-            )),
-        },
-        _ => Err(StoreError::InvalidState(
-            "content_text_delta requires a text-shaped content".to_owned(),
-        )),
-    }
 }
 
 #[cfg(test)]
@@ -3812,6 +3845,15 @@ mod tests {
             limit: usize,
         ) -> Result<Vec<BackgroundOperation>, StoreError> {
             self.inner.active_background_operations(kind, limit).await
+        }
+
+        async fn session_has_active_background_operations(
+            &self,
+            session_id: i64,
+        ) -> Result<bool, StoreError> {
+            self.inner
+                .session_has_active_background_operations(session_id)
+                .await
         }
 
         async fn transition_background_operation(

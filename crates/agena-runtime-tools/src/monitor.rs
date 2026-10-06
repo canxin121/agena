@@ -1229,6 +1229,45 @@ async fn stream_lines<R>(
 ) where
     R: tokio::io::AsyncRead + Unpin + Send,
 {
+    // Ordinary background commands produce raw segments, just like foreground
+    // commands and PTYs. Only regex monitors need newline framing.
+    if !state.monitored && include.is_none() && success.is_none() && failure.is_none() {
+        use tokio::io::AsyncReadExt;
+        let mut reader = reader;
+        let mut bytes = [0_u8; 8 * 1024];
+        let mut pending_utf8 = Vec::new();
+        loop {
+            match reader.read(&mut bytes).await {
+                Ok(count) => {
+                    if count > 0 {
+                        state
+                            .last_activity_ms
+                            .store(Utc::now().timestamp_millis(), Ordering::Release);
+                    }
+                    let text = crate::tool::shell::decode_output(
+                        &mut pending_utf8,
+                        &bytes[..count],
+                        count == 0,
+                    );
+                    if !text.is_empty() {
+                        push_output_event(&state, stream, text, true);
+                    }
+                    if count == 0 {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    push_event(
+                        &state,
+                        ProcessStream::Stderr,
+                        format!("background output pipe read failed: {error}"),
+                    );
+                    break;
+                }
+            }
+        }
+        return;
+    }
     let mut reader = FramedRead::new(
         reader,
         MonitorLinesCodec(LinesCodec::new_with_max_length(READER_LINE_BYTE_CAP)),
@@ -1312,12 +1351,17 @@ async fn wait_for_quiet(state: &MonitorState, quiet_period_ms: u64) {
 }
 
 fn push_event(state: &MonitorState, stream: ProcessStream, line: String) {
+    push_output_event(state, stream, line, false);
+}
+
+fn push_output_event(state: &MonitorState, stream: ProcessStream, line: String, chunk: bool) {
     let seq = state.last_seq.fetch_add(1, Ordering::AcqRel) + 1;
     let event = ProcessEvent {
         seq,
         stream,
         ts_ms: Utc::now().timestamp_millis(),
         line,
+        chunk,
     };
     {
         let mut inner = state.inner.lock().unwrap();
@@ -1409,6 +1453,61 @@ mod tests {
             capture_stderr: true,
             env: std::env::vars().collect(),
         }
+    }
+
+    #[tokio::test]
+    async fn plain_background_output_without_a_newline_arrives_before_exit() {
+        let registry = MonitorRegistry::from_handle(tokio::runtime::Handle::current());
+        let mut params = start_params("printf 'first'; sleep 0.6; printf 'second'");
+        params.monitored = false;
+        let started = registry.start(params).unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let read = registry
+                    .read(ReadParams {
+                        monitor_id: started.summary.process_id.clone(),
+                        since_seq: 0,
+                        limit: Some(200),
+                        wait_ms: 0,
+                    })
+                    .unwrap();
+                if !read.events.is_empty() {
+                    break read;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(first.status, ProcessStatus::Running);
+        assert_eq!(first.events[0].line, "first");
+        assert!(first.events[0].chunk);
+        let final_read = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let read = registry
+                    .read(ReadParams {
+                        monitor_id: started.summary.process_id.clone(),
+                        since_seq: 0,
+                        limit: Some(200),
+                        wait_ms: 0,
+                    })
+                    .unwrap();
+                if read.status != ProcessStatus::Running {
+                    break read;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            final_read
+                .events
+                .iter()
+                .map(|event| event.line.as_str())
+                .collect::<String>(),
+            "firstsecond"
+        );
     }
 
     async fn wait_for_pid_file(path: &std::path::Path) -> i32 {

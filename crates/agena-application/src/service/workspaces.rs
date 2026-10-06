@@ -4,6 +4,14 @@ use path_clean::PathClean;
 use uuid::Uuid;
 
 impl ApplicationService {
+    /// Metadata-only catalog check; avoids session counts/tree projections.
+    pub async fn workspace_revision_rows(&self) -> ApplicationResult<Vec<(i64, i64, String)>> {
+        Ok(self.workspace_repository.list(StorageWorkspaceListQuery {
+            limit: i64::MAX as u64, ..Default::default()
+        }).await.map_err(|error| ApplicationError::internal_error(&error))?
+            .into_iter().map(|row| (row.id, row.updated_at_ms, row.path)).collect())
+    }
+
     pub async fn list_workspaces(
         &self,
         query: WorkspaceListQuery,
@@ -513,6 +521,7 @@ impl ApplicationService {
         let path = canonical_workspace_identity(request.path.as_str()).map_err(|error| {
             ApplicationError::bad_request_with_diagnostic("The workspace path is invalid.", error)
         })?;
+        if path == existing.path { return self.get_workspace(workspace_id).await?.ok_or_else(|| ApplicationError::not_found("The workspace was not found.")); }
         if path != existing.path
             && let Some(existing_id) = self.workspace_id_by_path(path.as_str()).await?
             && existing_id != workspace_id

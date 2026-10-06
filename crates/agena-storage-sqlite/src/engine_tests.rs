@@ -24,6 +24,27 @@ use crate::{SeaWorkspaceRepository, SqliteEngine, initialize_schema};
 
 mod part_integrity;
 
+#[tokio::test]
+async fn revision_projection_observes_external_writes_without_loading_part_tables() {
+    let db = in_memory_db().await;
+    let (engine, id) = setup(db.clone()).await;
+    let facade = SessionFacade::new(engine, 8);
+    let before = facade.session_revision_rows().await.unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].0, id);
+    db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+        "UPDATE agena_sessions SET version = version + 1 WHERE id = ?", [id.into()]))
+        .await.unwrap();
+    // A version check has no dependency on the transcript's membership,
+    // content or state projection tables, even if they cannot be read.
+    db.execute(Statement::from_string(DatabaseBackend::Sqlite, "DROP TABLE agena_session_parts")).await.unwrap();
+    db.execute(Statement::from_string(DatabaseBackend::Sqlite, "DROP TABLE agena_parts")).await.unwrap();
+    let after = facade.session_revision_rows().await.unwrap();
+    assert_eq!(after[0].0, id);
+    assert_eq!(after[0].1, before[0].1);
+    assert_eq!(after[0].2, before[0].2 + 1);
+}
+
 /// A workspace-scoped engine with a ready session at `now_ms = 1_000_000`.
 async fn setup(db: Arc<sea_orm::DatabaseConnection>) -> (SqliteEngine, i64) {
     initialize_schema(&db).await.expect("schema");
@@ -2653,4 +2674,93 @@ async fn bounded_part_ids_respect_memberships_and_do_not_scan_other_parts() {
         engine.load_part_ids(i64::MAX, &ids).await,
         Err(agena_storage::store::StoreError::NotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn active_background_query_is_exactly_session_scoped_without_global_limits() {
+    let (engine, session_id) = setup(in_memory_db().await).await;
+    let workspace_id = engine.session_meta(session_id).await.unwrap().workspace_id;
+    let other = engine
+        .create_session(NewSession {
+            workspace_id,
+            parent_id: None,
+            relation_kind: SessionRelationKind::Root,
+            cutoff_part_id: None,
+            title: "unrelated".to_owned(),
+            task_id: None,
+            config_json: None,
+            provider_anchors_json: None,
+        })
+        .await
+        .unwrap();
+    let unrelated = engine
+        .create_background_operation(
+            NewBackgroundOperation {
+                operation_id: "unrelated-op".to_owned(),
+                session_id: other.id,
+                launch_run_id: None,
+                launch_tool_part_id: None,
+                kind: BackgroundOperationKind::ScheduledDelivery,
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !engine
+            .session_has_active_background_operations(session_id)
+            .await
+            .unwrap()
+    );
+    let operation = engine
+        .create_background_operation(
+            NewBackgroundOperation {
+                operation_id: "owned-op".to_owned(),
+                session_id,
+                launch_run_id: None,
+                launch_tool_part_id: None,
+                kind: BackgroundOperationKind::ScheduledDelivery,
+            },
+            2,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.active_background_operations(None, 1).await.unwrap()[0].operation_id,
+        unrelated.operation_id
+    );
+    assert!(
+        engine
+            .session_has_active_background_operations(session_id)
+            .await
+            .unwrap()
+    );
+    engine
+        .transition_background_operation(
+            BackgroundOperationTransition {
+                operation_id: operation.operation_id,
+                expected_revision: operation.revision,
+                next_phase: BackgroundOperationPhase::Cancelled,
+                external_id: None,
+                outcome: None,
+                failure: None,
+                owner_id: None,
+                lease_until_ms: None,
+            },
+            3,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !engine
+            .session_has_active_background_operations(session_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        engine
+            .session_has_active_background_operations(other.id)
+            .await
+            .unwrap()
+    );
 }

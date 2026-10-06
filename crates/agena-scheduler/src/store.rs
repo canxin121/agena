@@ -84,6 +84,26 @@ pub trait JobStore: Send + Sync {
             .collect())
     }
     async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>>;
+    async fn pending_jobs_for_session(
+        &self,
+        session_id: i64,
+    ) -> SchedulerResult<Vec<ScheduledJob>> {
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .map(|snapshot| snapshot.job)
+            .filter(|job| {
+                job.owner_session_id == Some(session_id)
+                    && !job.paused
+                    && !job.completed
+                    && (job.next_fire_at.is_some() || job.pending_delivery.is_some())
+            })
+            .collect())
+    }
+    async fn session_has_pending_jobs(&self, session_id: i64) -> SchedulerResult<bool> {
+        Ok(!self.pending_jobs_for_session(session_id).await?.is_empty())
+    }
     async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>>;
     /// Due unclaimed jobs and abandoned, unpaused claims. Callers claim each
     /// candidate immediately before delivery, never a batch ahead of time.
@@ -486,6 +506,16 @@ impl JobStore for SqliteJobStore {
         self.db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
             "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id",
         )).await?.iter().map(Self::decode).collect()
+    }
+
+    async fn pending_jobs_for_session(
+        &self,
+        session_id: i64,
+    ) -> SchedulerResult<Vec<ScheduledJob>> {
+        self.db.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE json_extract(job_json, '$.owner_session_id') = ? AND paused = 0 AND completed = 0 AND (next_fire_at_ms IS NOT NULL OR json_extract(job_json, '$.pending_delivery') IS NOT NULL) ORDER BY id",
+            [session_id.into()],
+        )).await?.iter().map(|row| Self::decode(row).map(|snapshot| snapshot.job)).collect()
     }
 
     async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>> {

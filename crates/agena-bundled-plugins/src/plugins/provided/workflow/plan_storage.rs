@@ -64,6 +64,15 @@ impl WorkflowPlugin {
                 "no changes were applied: the plan was edited, replaced, or cleared while this request was pending; call plan.get before retrying",
             ));
         }
+        if let Some(actual) = actual.as_ref() {
+            let mut candidate = plan.clone();
+            candidate.revision = actual.revision.clone();
+            candidate.display_warning = actual.display_warning.clone();
+            if &candidate == actual {
+                *plan = actual.clone();
+                return Ok(());
+            }
+        }
         plan.revision = uuid::Uuid::new_v4().to_string();
         plan.display_warning = None;
         let value = serde_json::to_string_pretty(plan)
@@ -82,6 +91,7 @@ impl WorkflowPlugin {
                 value,
             })
             .await?;
+        self.publish_plan_revision(Some(&plan.revision)).await;
         if let Err(error) = self.sync_plan_display(Some(plan)).await {
             plan.display_warning = Some(format!(
                 "Plan committed, but display refresh failed: {}",
@@ -101,6 +111,9 @@ impl WorkflowPlugin {
                 "the plan changed before it could be deleted; call plan.get and retry",
             ));
         }
+        if actual.is_none() {
+            return Ok(None);
+        }
         self.host()?
             .storage_delete(HostStorageDeleteRequest {
                 scope: HostStorageScope::Session,
@@ -109,12 +122,26 @@ impl WorkflowPlugin {
                 key: PLAN_KEY_ACTIVE.into(),
             })
             .await?;
+        self.publish_plan_revision(None).await;
         Ok(self.sync_plan_display(None).await.err().map(|error| {
             format!(
                 "Plan cleared, but display refresh failed: {}",
                 error.failure.user.fallback
             )
         }))
+    }
+
+    async fn publish_plan_revision(&self, revision: Option<&str>) {
+        let Ok(host) = self.host() else { return; };
+        let Ok(session) = host.get_session(HostGetSessionRequest::default()).await else { return; };
+        if let Err(error) = host.publish_event(agena_plugin_host::sdk::EventEnvelope {
+            kind: "plan.changed".into(),
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            session_id: Some(session.session.id),
+            payload: serde_json::json!({ "revision": revision }),
+        }).await {
+            tracing::warn!(%error, "could not publish plan revision invalidation");
+        }
     }
     pub(super) fn require_activation_grant(&self, requested: Option<bool>) -> SdkResult<()> {
         if requested == Some(false) && !self.config()?.plan.allow_unreviewed_activation {

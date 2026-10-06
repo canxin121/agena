@@ -33,7 +33,13 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
                     Some(command_reference_from_command_ref(&command).summary())
                 }
                 Ok(TypedContent::ToolCall(tool)) => {
-                    tool_visible_text_lossy(&operation_from_tool_call(&tool))
+                    // A foreground command inside a delegated task is still
+                    // running. Project its independent display tail so the
+                    // task log's existing run cursor can update in place.
+                    (part.state == PartState::InProgress)
+                        .then(|| tool.live_output().filter(|text| !text.trim().is_empty()).map(str::to_owned))
+                        .flatten()
+                        .or_else(|| tool_visible_text_lossy(&operation_from_tool_call(&tool)))
                 }
                 Ok(TypedContent::Think(_)) => None,
                 _ => part.summary.clone(),

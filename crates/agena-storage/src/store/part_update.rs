@@ -34,7 +34,8 @@ pub fn prepare_part_update(
     delta: PartDelta,
     now_ms: i64,
 ) -> Result<Part, StoreError> {
-    let previous_updated_at_ms = part.updated_at_ms;
+    let previous = part.clone();
+    let now_ms = now_ms.max(part.updated_at_ms);
     if let Some(to) = delta.state {
         apply_part_transition(&mut part, to, now_ms, true)?;
     }
@@ -58,7 +59,7 @@ pub fn prepare_part_update(
     if part.state == PartState::InProgress {
         part.finished_at_ms = None;
     }
-    finish_update(previous_updated_at_ms, part, now_ms)
+    finish_update(&previous, part, now_ms)
 }
 
 pub fn prepare_run_completion(
@@ -83,7 +84,8 @@ pub fn prepare_run_completion(
             "terminal run markers require an abort_reason".to_owned(),
         ));
     }
-    let previous_updated_at_ms = part.updated_at_ms;
+    let previous = part.clone();
+    let now_ms = now_ms.max(part.updated_at_ms);
     if let Some(content) = outcome.content {
         part.content = content;
     }
@@ -94,23 +96,25 @@ pub fn prepare_run_completion(
         "abort_reason".to_owned(),
         outcome.abort_reason.map_or(Value::Null, Value::String),
     );
+    if part.state != outcome.status || part.finished_at_ms.is_none() {
+        part.finished_at_ms = Some(now_ms);
+    }
     part.state = outcome.status;
-    part.finished_at_ms = Some(now_ms);
     if let Some(provider_state) = outcome.provider_state {
         part.provider_state = Some(provider_state);
     }
-    finish_update(previous_updated_at_ms, part, now_ms)
+    finish_update(&previous, part, now_ms)
 }
 
 fn finish_update(
-    previous_updated_at_ms: i64,
+    previous: &Part,
     mut part: Part,
     now_ms: i64,
 ) -> Result<Part, StoreError> {
     if part.started_at_ms < 0
         || part.created_at_ms < 0
         || now_ms < part.created_at_ms
-        || now_ms < previous_updated_at_ms
+        || now_ms < previous.updated_at_ms
     {
         return Err(StoreError::InvalidState(
             "invalid part lifecycle timestamps".to_owned(),
@@ -128,11 +132,17 @@ fn finish_update(
     if part.is_run_marker() {
         validate_run_content(part.state, &part.content)?;
     }
+    // Lifecycle helpers may write updated_at_ms while applying a transition.
+    // Compare the actual facts before touching the revision or update clock.
+    part.updated_at_ms = previous.updated_at_ms;
+    if &part == previous {
+        return Ok(part);
+    }
     part.revision = part
         .revision
         .checked_add(1)
         .ok_or_else(|| StoreError::InvalidState("part revision is exhausted".to_owned()))?;
-    part.updated_at_ms = now_ms;
+    part.updated_at_ms = now_ms.max(previous.updated_at_ms.saturating_add(1));
     Ok(part)
 }
 

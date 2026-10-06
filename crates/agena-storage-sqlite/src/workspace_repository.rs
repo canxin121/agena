@@ -69,8 +69,8 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
         self.db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                format!("UPDATE {TABLE} SET path = ?, updated_at_ms = ? WHERE id = ?"),
-                [path.into(), Utc::now().timestamp_millis().into(), id.into()],
+                format!("UPDATE {TABLE} SET path = ?, updated_at_ms = MAX(?, updated_at_ms + 1) WHERE id = ? AND path != ?"),
+                [path.clone().into(), Utc::now().timestamp_millis().into(), id.into(), path.into()],
             ))
             .await
             .map_err(map_error)?;

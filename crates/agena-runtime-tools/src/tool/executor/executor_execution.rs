@@ -245,22 +245,27 @@ impl ToolExecutor {
                 let invocation = invocation.clone();
                 let stream_id_for_task = stream_id.clone();
                 tokio::spawn(async move {
-                    let (live_tx, mut live_rx) = tokio::sync::mpsc::unbounded_channel::<
-                        crate::tool::shell::ShellOutputChunk,
-                    >();
+                    let (live_tx, mut live_rx) = crate::tool::shell::ShellOutputSink::channel();
                     let forward_stream_id = stream_id_for_task.clone();
                     let forward = tokio::spawn(async move {
-                        while let Some(chunk) = live_rx.recv().await {
+                        let mut allowed_at = tokio::time::Instant::now();
+                        while live_rx.changed().await.is_ok() {
+                            // Coalesce at the source, before loading sessions or
+                            // making part updates. Pipe drains only replace the
+                            // watch tail and never wait for this display cadence.
+                            tokio::time::sleep_until(allowed_at).await;
+                            let text = live_rx.borrow_and_update().clone();
                             let sent = chunk_tx
                                 .send(agena_plugin_host::sdk::ToolStreamChunk {
                                     stream_id: forward_stream_id.clone(),
-                                    text_delta: Some(chunk.text),
+                                    text_delta: Some(text),
                                     metadata: std::collections::BTreeMap::new(),
                                 })
                                 .await;
                             if sent.is_err() {
                                 break;
                             }
+                            allowed_at = tokio::time::Instant::now() + std::time::Duration::from_millis(100);
                         }
                     });
                     let context = crate::tool::ToolRuntimeContext {
@@ -270,7 +275,7 @@ impl ToolExecutor {
                         launch_provenance: None,
                         live_output: Some(live_tx),
                     };
-                    let lifecycle = async {
+                    let mut lifecycle = Box::pin(async {
                         let execution = Box::pin(crate::tool::process_tool::execute_async(
                             &executor, &input, context,
                         ))
@@ -285,8 +290,7 @@ impl ToolExecutor {
                                 execution.into(),
                             )
                             .await
-                    };
-                    tokio::pin!(lifecycle);
+                    });
                     let result = match cancellation.as_ref() {
                         Some(cancellation) => tokio::select! {
                             biased;
@@ -300,6 +304,10 @@ impl ToolExecutor {
                             result = &mut lifecycle => result,
                         },
                     };
+                    // Cancellation leaves a pending future owning the shell
+                    // sink. Drop it before joining the forwarder, or the watch
+                    // channel can never close and terminal delivery deadlocks.
+                    drop(lifecycle);
                     let _ = forward.await;
                     if end_tx.send(result).is_err() {
                         tracing::debug!(
@@ -312,6 +320,7 @@ impl ToolExecutor {
                     stream_id,
                     chunks,
                     end,
+                    output_mode: agena_domain::DeltaMode::Replace,
                 }));
             }
             // An executor-backed payload without a live sink is buffered: only
@@ -428,6 +437,7 @@ impl ToolExecutor {
             stream_id,
             chunks,
             end: end_rx,
+            output_mode: agena_domain::DeltaMode::Append,
         }))
     }
 

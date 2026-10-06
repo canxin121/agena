@@ -64,12 +64,15 @@ pub enum ProcessStatus {
     Failed,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-/// One line of process output.
+/// One line or raw chunk of process output.
 pub struct ProcessEvent {
     pub seq: u64,
     pub stream: ProcessStream,
     pub ts_ms: i64,
     pub line: String,
+    /// Raw pipe/PTY bytes already contain their line endings.
+    #[serde(default)]
+    pub chunk: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Summary of a monitored process.

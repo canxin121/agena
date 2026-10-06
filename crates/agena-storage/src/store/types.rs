@@ -484,7 +484,7 @@ impl NewPart {
 
 /// A streaming update applied to an existing part. Every field is optional;
 /// `Some` fields are applied, `None` fields are left unchanged. The engine
-/// bumps `revision` and `updated_at_ms` on every update.
+/// bumps `revision` and `updated_at_ms` only when the resulting facts change.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PartDelta {
     pub state: Option<PartState>,

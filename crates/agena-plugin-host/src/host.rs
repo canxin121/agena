@@ -628,7 +628,7 @@ pub struct PluginToolInvokeResponse {
 /// Host-resolved declarative display contribution: the contributing plugin
 /// plus its pure content contribution. The host owns placement and priority
 /// ordering; plugins never target a location or color (Phase 6).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostDisplayContribution {
     pub plugin_id: PluginKey,
     pub contribution: PluginDisplayContribution,

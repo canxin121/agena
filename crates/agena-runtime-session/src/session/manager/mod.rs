@@ -1896,6 +1896,61 @@ impl SessionManager {
             )));
     }
 
+    /// Linearize a normal-stop decision against notification commits. The lane
+    /// is released before plugin RPC: later arrivals belong to a subsequent wake,
+    /// whose observation/release handshake remains responsible for delivery.
+    async fn normal_stop_snapshot(
+        &self,
+        session_id: i64,
+        state: &SessionManagerState,
+    ) -> Result<(Session, bool), AppError> {
+        self.session_mutations
+            .run(session_id, async {
+                let session = self.load_session_with_workspace_root(session_id).await?;
+                let mut waiting = self
+                    .store
+                    .session_has_active_background_operations(session_id)
+                    .await?;
+                if let Some(scheduler) = state.tool_executor.scheduler() {
+                    let jobs = scheduler
+                        .pending_jobs_for_session(session_id)
+                        .await
+                        .map_err(|error| {
+                            AppError::Internal(format!("stop scheduler query failed: {error}"))
+                        })?;
+                    for mut job in jobs {
+                        let handled = job.pending_delivery.as_ref().is_some_and(|delivery| {
+                            session.parts().iter().any(|part| {
+                                part.kind == "system_notification"
+                                    && part.content.get("operation_kind")
+                                        .and_then(serde_json::Value::as_str)
+                                        == Some("scheduled_delivery")
+                                    && part.content.get("operation_id")
+                                        .and_then(serde_json::Value::as_str)
+                                        == Some(delivery.delivery_key.as_str())
+                                    && crate::session::prompt_window::notification_has_completed_provider_round(
+                                        session.parts(), part.part_id,
+                                    )
+                            })
+                        });
+                        if handled {
+                            // The scheduler cannot finalize its claim until the wake
+                            // execution releases. Derive its post-success schedule
+                            // from the actual provider receipt, never outbox ack.
+                            // This is a read-only projection, not scheduler mutation.
+                            job.advance(Utc::now()).map_err(|error| {
+                                AppError::Internal(format!("stop scheduler projection failed: {error}"))
+                            })?;
+                        }
+                        waiting |= !job.completed && !job.paused
+                            && (job.next_fire_at.is_some() || job.pending_delivery.is_some());
+                    }
+                }
+                Ok((session, waiting))
+            })
+            .await
+    }
+
     /// Settle one durable background-operation aggregate and enqueue its
     /// unique terminal delivery. AI-launched work appends the notification to
     /// the assistant run that launched it; work with no assistant launch run
@@ -1945,15 +2000,19 @@ impl SessionManager {
             PartState::Completed,
         )?;
         let settled = self
-            .store
-            .record_background_event(BackgroundEventRequest {
-                operation_id: operation.operation_id,
-                event_key: "terminal".to_owned(),
-                event_seq: None,
-                next_phase: Some(next_phase),
-                outcome: outcome_value,
-                failure: failure_value,
-                notification: new_part,
+            .session_mutations
+            .run(session_id, async {
+                self.store
+                    .record_background_event(BackgroundEventRequest {
+                        operation_id: operation.operation_id,
+                        event_key: "terminal".to_owned(),
+                        event_seq: None,
+                        next_phase: Some(next_phase),
+                        outcome: outcome_value,
+                        failure: failure_value,
+                        notification: new_part,
+                    })
+                    .await
             })
             .await?;
         self.dispatch_background_delivery(settled.delivery, notification)
@@ -2149,15 +2208,19 @@ impl SessionManager {
             PartState::Completed,
         )?;
         let settled = self
-            .store
-            .record_background_event(BackgroundEventRequest {
-                operation_id: operation.operation_id,
-                event_key: format!("event:{event_seq}"),
-                event_seq: Some(event_seq),
-                next_phase: None,
-                outcome: None,
-                failure: None,
-                notification: new_part,
+            .session_mutations
+            .run(session_id, async {
+                self.store
+                    .record_background_event(BackgroundEventRequest {
+                        operation_id: operation.operation_id,
+                        event_key: format!("event:{event_seq}"),
+                        event_seq: Some(event_seq),
+                        next_phase: None,
+                        outcome: None,
+                        failure: None,
+                        notification: new_part,
+                    })
+                    .await
             })
             .await?;
         self.dispatch_background_delivery(settled.delivery, notification)
@@ -2277,15 +2340,19 @@ impl SessionManager {
             PartState::Completed,
         )?;
         let settled = self
-            .store
-            .record_background_event(BackgroundEventRequest {
-                operation_id,
-                event_key: "terminal".to_owned(),
-                event_seq: None,
-                next_phase: Some(BackgroundOperationPhase::Completed),
-                outcome: Some(serde_json::json!({ "job_id": job_id })),
-                failure: None,
-                notification: new_part,
+            .session_mutations
+            .run(session_id, async {
+                self.store
+                    .record_background_event(BackgroundEventRequest {
+                        operation_id,
+                        event_key: "terminal".to_owned(),
+                        event_seq: None,
+                        next_phase: Some(BackgroundOperationPhase::Completed),
+                        outcome: Some(serde_json::json!({ "job_id": job_id })),
+                        failure: None,
+                        notification: new_part,
+                    })
+                    .await
             })
             .await?;
         self.dispatch_background_delivery(settled.delivery, notification)
@@ -2732,15 +2799,19 @@ impl SessionManager {
             PartState::Completed,
         )?;
         let settled = self
-            .store
-            .record_background_event(BackgroundEventRequest {
-                operation_id: operation.operation_id,
-                event_key: "terminal".to_owned(),
-                event_seq: None,
-                next_phase: Some(BackgroundOperationPhase::Interrupted),
-                outcome: None,
-                failure: Some(serde_json::json!({ "message": reason })),
-                notification: notification_part,
+            .session_mutations
+            .run(operation.session_id, async {
+                self.store
+                    .record_background_event(BackgroundEventRequest {
+                        operation_id: operation.operation_id,
+                        event_key: "terminal".to_owned(),
+                        event_seq: None,
+                        next_phase: Some(BackgroundOperationPhase::Interrupted),
+                        outcome: None,
+                        failure: Some(serde_json::json!({ "message": reason })),
+                        notification: notification_part,
+                    })
+                    .await
             })
             .await?;
         self.dispatch_background_delivery(settled.delivery, notification)
@@ -2943,7 +3014,12 @@ impl SessionManager {
             self.execution_registry
                 .wait_until_released(session_id)
                 .await;
-            self.wake_idle_notification(session_id).await?;
+            if !self
+                .notification_has_completed_assistant_response(session_id, notification_part_id)
+                .await?
+            {
+                self.wake_idle_notification(session_id).await?;
+            }
             return Ok(());
         }
         // The steer was queued for a live execution. Verify it lands: the loop
@@ -2957,7 +3033,7 @@ impl SessionManager {
         };
         let acknowledged_before_release = tokio::select! {
             biased;
-            _ = ack_rx => true,
+            result = ack_rx => result.is_ok(),
             _ = self.execution_registry.wait_until_released(session_id) => {
                 tracing::debug!(
                     target: "agena_background",
@@ -2965,11 +3041,19 @@ impl SessionManager {
                     operation_id = %notification.operation_id,
                     "notification steer acknowledged no new turn; waking idle"
                 );
-                self.wake_idle_notification(session_id).await?;
                 false
             }
         };
         if !acknowledged_before_release {
+            self.execution_registry
+                .wait_until_released(session_id)
+                .await;
+            if !self
+                .notification_has_completed_assistant_response(session_id, notification_part_id)
+                .await?
+            {
+                self.wake_idle_notification(session_id).await?;
+            }
             return Ok(());
         }
 

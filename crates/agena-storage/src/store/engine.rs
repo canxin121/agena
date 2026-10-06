@@ -200,6 +200,13 @@ pub trait PersistenceEngine: Send + Sync {
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError>;
 
+    /// Durable `(session_id, workspace_id, version)` rows for bounded
+    /// cross-process revalidation. This projection never reads part content.
+    async fn session_revision_rows(&self) -> Result<Vec<(i64, i64, i64)>, StoreError> {
+        Ok(self.list_session_summaries(SessionListQuery::default()).await?
+            .into_iter().map(|row| (row.id, row.workspace_id, row.version)).collect())
+    }
+
     async fn workspace_session_stats(
         &self,
         workspace_ids: &[i64],
@@ -320,6 +327,12 @@ pub trait PersistenceEngine: Send + Sync {
         kind: Option<super::BackgroundOperationKind>,
         limit: usize,
     ) -> Result<Vec<BackgroundOperation>, StoreError>;
+
+    /// Exact session-scoped existence query; never apply a global limit first.
+    async fn session_has_active_background_operations(
+        &self,
+        session_id: i64,
+    ) -> Result<bool, StoreError>;
 
     /// Advance one aggregate through the validated state machine with an
     /// optimistic revision check.

@@ -347,8 +347,7 @@ pub struct ToolRuntimeContext {
     /// Live output of a foreground process, forwarded while it still runs.
     /// Only a streaming invocation attaches one; every other call leaves it
     /// empty and keeps the collect-at-exit behaviour.
-    pub live_output:
-        Option<tokio::sync::mpsc::UnboundedSender<crate::tool::shell::ShellOutputChunk>>,
+    pub live_output: Option<crate::tool::shell::ShellOutputSink>,
 }
 
 /// Handle to a streaming tool execution.
@@ -356,6 +355,8 @@ pub struct StreamingToolExecution {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<agena_plugin_host::sdk::ToolStreamChunk>,
     pub end: tokio::sync::oneshot::Receiver<Result<ToolInvocationExecution, ToolError>>,
+    /// Native process snapshots replace the tail; plugin text deltas append.
+    pub output_mode: agena_domain::DeltaMode,
 }
 
 /// Internal-only diagnostic carried to the failure projection boundary.

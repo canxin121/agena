@@ -39,12 +39,25 @@ impl<V: Clone + Send + Sync + 'static> ContributionRegistry<V> {
         label: String,
         value: V,
     ) -> Result<(), PluginEffectScopeError> {
+        self.insert_checked(scope, kind, label, value, |_, _| false)
+    }
+
+    pub(super) fn insert_if_changed(&self, scope: &Arc<PluginEffectScope>, kind: &'static str, label: String, value: V) -> Result<(), PluginEffectScopeError>
+    where V: PartialEq {
+        self.insert_checked(scope, kind, label, value, |previous, next| previous == next)
+    }
+
+    fn insert_checked(&self, scope: &Arc<PluginEffectScope>, kind: &'static str, label: String, value: V, equal: impl Fn(&V, &V) -> bool) -> Result<(), PluginEffectScopeError> {
         let _lease = scope.lease()?;
         let key = (scope.plugin_id().clone(), label.clone());
         let registry = Arc::downgrade(&self.entries);
         let registry_label = self.label;
         let cleanup_key = key.clone();
         let mut entries = recover_write(&self.entries, self.label);
+        if entries.get(&key.0).and_then(|items| items.get(&key.1))
+            .is_some_and(|previous| previous.owner.belongs_to(scope) && equal(&previous.value, &value)) {
+            return Ok(());
+        }
         let owner = RegistrationOwner::new(scope, kind, label, move |id| {
             if let Some(registry) = registry.upgrade() {
                 let mut entries = recover_write(&registry, registry_label);

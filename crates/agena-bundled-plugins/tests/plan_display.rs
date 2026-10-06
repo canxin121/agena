@@ -800,3 +800,87 @@ async fn plan_get_restores_status_line_contribution_after_host_rebuild() {
         other => panic!("expected Text content, got {other:?}"),
     }
 }
+
+struct TerminalStopObserver(Arc<std::sync::atomic::AtomicUsize>);
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "terminal",
+    version = "test",
+    summary = "Stop decision observer fixture"
+)]
+impl TerminalStopObserver {
+    #[hook(agent.stop)]
+    async fn agent_stop(
+        &self,
+        _input: agena_plugin_host::sdk::AgentStopInput,
+    ) -> SdkResult<Option<agena_plugin_host::sdk::AgentStopPatch>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(None)
+    }
+}
+struct WorkflowStopVeto;
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "test",
+    name = "workflow",
+    version = "test",
+    summary = "Stop continuation fixture"
+)]
+impl WorkflowStopVeto {
+    #[hook(agent.stop)]
+    async fn agent_stop(
+        &self,
+        _input: agena_plugin_host::sdk::AgentStopInput,
+    ) -> SdkResult<Option<agena_plugin_host::sdk::AgentStopPatch>> {
+        Ok(Some(agena_plugin_host::sdk::AgentStopPatch {
+            continue_with_message: Some("continue workflow".to_owned()),
+            reason: None,
+        }))
+    }
+}
+#[tokio::test]
+async fn agent_stop_continuation_never_reaches_terminal_done_observer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let config = PluginsConfig {
+        list: BTreeMap::from([
+            (
+                "agena.terminal".to_owned(),
+                ConfiguredPlugin::static_default(),
+            ),
+            (
+                "test.workflow".to_owned(),
+                ConfiguredPlugin::static_default(),
+            ),
+        ]),
+        ..Default::default()
+    };
+    let host = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![
+            StaticPluginRegistration::new(
+                "agena.terminal".parse().unwrap(),
+                TerminalStopObserver(calls.clone()),
+            ),
+            StaticPluginRegistration::new("test.workflow".parse().unwrap(), WorkflowStopVeto),
+        ],
+        config,
+        workspace_root: tmp.path().to_path_buf(),
+        agena_version: "test".to_owned(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .unwrap();
+    let patch = host
+        .dispatch_agent_stop(agena_plugin_host::AgentStopInput {
+            session_id: 42,
+            stop_hook_active: false,
+            last_assistant_message: None,
+            run_error: None,
+        })
+        .await
+        .unwrap();
+    assert!(patch.continue_with_message.is_some());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}

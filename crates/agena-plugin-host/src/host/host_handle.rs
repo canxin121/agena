@@ -1882,7 +1882,7 @@ impl HostHandle {
         let plugin_id = plugin_id.parse::<PluginKey>()?;
         let owner = self.ensure_effect_scope(&plugin_id);
         self.display
-            .insert(
+            .insert_if_changed(
                 &owner,
                 "host.display",
                 req.contribution.id.clone(),

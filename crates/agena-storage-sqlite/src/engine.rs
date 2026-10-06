@@ -209,7 +209,7 @@ async fn bump_session_version_tx(
         .execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "UPDATE agena_sessions \
-             SET version = version + 1, updated_at_ms = ? WHERE id = ?",
+             SET version = version + 1, updated_at_ms = MAX(?, updated_at_ms + 1) WHERE id = ?",
             [now_ms.into(), session_id.into()],
         ))
         .await
@@ -236,7 +236,7 @@ async fn bump_member_session_versions_for_parts_tx(
             DatabaseBackend::Sqlite,
             format!(
                 "UPDATE agena_sessions \
-                 SET version = version + 1, updated_at_ms = ? \
+                 SET version = version + 1, updated_at_ms = MAX(?, updated_at_ms + 1) \
                  WHERE id IN ( \
                      SELECT DISTINCT session_id FROM agena_session_parts \
                      WHERE part_id IN ({part_list}) \
@@ -1028,11 +1028,15 @@ impl PersistenceEngine for SqliteEngine {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
+                let previous = session_meta_tx(txn, session_id).await?;
+                if previous.title == title {
+                    return Ok(previous);
+                }
                 let now = wall_clock_ms();
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_sessions \
-                     SET title = ?, version = version + 1, updated_at_ms = ? WHERE id = ?",
+                     SET title = ?, version = version + 1, updated_at_ms = MAX(?, updated_at_ms + 1) WHERE id = ?",
                     [title.into(), now.into(), session_id.into()],
                 ))
                 .await
@@ -1056,6 +1060,12 @@ impl PersistenceEngine for SqliteEngine {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
+                let previous = session_meta_tx(txn, session_id).await?;
+                if patch.title.as_ref().is_none_or(|title| *title == previous.title)
+                    && patch.favorite.is_none_or(|favorite| favorite == previous.favorite)
+                    && patch.pinned.is_none_or(|pinned| pinned == previous.pinned) {
+                    return Ok(previous);
+                }
                 let now = wall_clock_ms();
                 let has_title = patch.title.is_some();
                 let has_favorite = patch.favorite.is_some();
@@ -1066,7 +1076,7 @@ impl PersistenceEngine for SqliteEngine {
                      title = CASE WHEN ? THEN ? ELSE title END, \
                      favorite = CASE WHEN ? THEN ? ELSE favorite END, \
                      pinned = CASE WHEN ? THEN ? ELSE pinned END, \
-                     version = version + 1, updated_at_ms = ? WHERE id = ?",
+                     version = version + 1, updated_at_ms = MAX(?, updated_at_ms + 1) WHERE id = ?",
                     [
                         has_title.into(),
                         text_value(patch.title),
@@ -1094,6 +1104,10 @@ impl PersistenceEngine for SqliteEngine {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
+                let previous = session_meta_tx(txn, session_id).await?;
+                if previous.provider_anchors_json == anchors {
+                    return Ok(previous);
+                }
                 let now = wall_clock_ms();
                 let anchors_json = anchors
                     .as_ref()
@@ -1105,7 +1119,7 @@ impl PersistenceEngine for SqliteEngine {
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_sessions \
-                     SET provider_anchors_json = ?, version = version + 1, updated_at_ms = ? \
+                     SET provider_anchors_json = ?, version = version + 1, updated_at_ms = MAX(?, updated_at_ms + 1) \
                      WHERE id = ?",
                     [text_value(anchors_json), now.into(), session_id.into()],
                 ))
@@ -1125,6 +1139,10 @@ impl PersistenceEngine for SqliteEngine {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
+                let previous = session_meta_tx(txn, session_id).await?;
+                if previous.config_json == config {
+                    return Ok(previous);
+                }
                 let now = wall_clock_ms();
                 let config_json = config
                     .as_ref()
@@ -1136,7 +1154,7 @@ impl PersistenceEngine for SqliteEngine {
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_sessions \
-                     SET config_json = ?, version = version + 1, updated_at_ms = ? WHERE id = ?",
+                     SET config_json = ?, version = version + 1, updated_at_ms = MAX(?, updated_at_ms + 1) WHERE id = ?",
                     [text_value(config_json), now.into(), session_id.into()],
                 ))
                 .await
@@ -1229,6 +1247,11 @@ impl PersistenceEngine for SqliteEngine {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
+                let previous = session_meta_tx(txn, session_id).await?;
+                if previous.subtask_status == status && previous.subtask_started_at_ms == started_at_ms
+                    && previous.subtask_finished_at_ms == finished_at_ms && previous.subtask_failure == failure {
+                    return Ok(previous);
+                }
                 let now = wall_clock_ms();
                 let failure_json = failure
                     .as_ref()
@@ -1242,7 +1265,7 @@ impl PersistenceEngine for SqliteEngine {
                     "UPDATE agena_sessions \
                      SET subtask_status = ?, subtask_started_at_ms = ?, \
                          subtask_finished_at_ms = ?, subtask_failure_json = ?, \
-                         version = version + 1, updated_at_ms = ? \
+                         version = version + 1, updated_at_ms = MAX(?, updated_at_ms + 1) \
                      WHERE id = ?",
                     [
                         text_value(status),
@@ -1259,6 +1282,16 @@ impl PersistenceEngine for SqliteEngine {
             })
         })
         .await
+    }
+
+    async fn session_revision_rows(&self) -> Result<Vec<(i64, i64, i64)>, StoreError> {
+        self.db().query_all(Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT id, workspace_id, version FROM agena_sessions WHERE json_extract(config_json, '$.conversation.mode') IS NOT 'btw'"))
+            .await.map_err(map_db_err)?.into_iter().map(|row| {
+                Ok((row.try_get("", "id").map_err(map_db_err)?,
+                    row.try_get("", "workspace_id").map_err(map_db_err)?,
+                    row.try_get("", "version").map_err(map_db_err)?))
+            }).collect()
     }
 
     async fn list_session_summaries(
@@ -1686,6 +1719,17 @@ impl PersistenceEngine for SqliteEngine {
             .map(background_operation_from_row)
             .collect::<Result<Vec<_>, _>>()
             .map_err(map_db_err)
+    }
+
+    async fn session_has_active_background_operations(
+        &self,
+        session_id: i64,
+    ) -> Result<bool, StoreError> {
+        Ok(self.db().query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT 1 FROM agena_background_operations WHERE session_id = ? AND phase IN ('launch_requested','launching','running') LIMIT 1",
+            [session_id.into()],
+        )).await.map_err(map_db_err)?.is_some())
     }
 
     async fn transition_background_operation(
@@ -2539,8 +2583,12 @@ impl PersistenceEngine for SqliteEngine {
                         "part {part_id} is shared; only its origin session may update it in place"
                     )));
                 }
+                let previous_revision = part.revision;
                 part = prepare_part_update(part, delta, now_ms)?;
-                let updated_at = now_ms;
+                if part.revision == previous_revision {
+                    return Ok(part);
+                }
+                let updated_at = part.updated_at_ms;
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_parts \
@@ -2574,7 +2622,7 @@ impl PersistenceEngine for SqliteEngine {
                 ))
                 .await
                 .map_err(map_db_err)?;
-                bump_member_session_versions_for_parts_tx(txn, &[part_id], now_ms).await?;
+                bump_member_session_versions_for_parts_tx(txn, &[part_id], part.updated_at_ms).await?;
                 Ok(part)
             })
         })
@@ -2604,7 +2652,11 @@ impl PersistenceEngine for SqliteEngine {
                         "run marker {run_id} is shared; only its origin session may complete it"
                     )));
                 }
+                let previous_revision = part.revision;
                 part = prepare_run_completion(part, outcome, now_ms)?;
+                if part.revision == previous_revision {
+                    return Ok(part);
+                }
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_parts \
@@ -2630,13 +2682,13 @@ impl PersistenceEngine for SqliteEngine {
                                 })?,
                         ),
                         part.finished_at_ms.into(),
-                        now_ms.into(),
+                        part.updated_at_ms.into(),
                         run_id.into(),
                     ],
                 ))
                 .await
                 .map_err(map_db_err)?;
-                bump_member_session_versions_for_parts_tx(txn, &[run_id], now_ms).await?;
+                bump_member_session_versions_for_parts_tx(txn, &[run_id], part.updated_at_ms).await?;
                 Ok(part)
             })
         })

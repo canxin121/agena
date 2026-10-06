@@ -119,7 +119,7 @@ impl InMemoryEngine {
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
         meta.version += 1;
-        meta.updated_at_ms = now_ms;
+        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(())
     }
 
@@ -152,7 +152,7 @@ impl InMemoryEngine {
                 .get_mut(&session_id)
                 .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
             meta.version += 1;
-            meta.updated_at_ms = now_ms;
+            meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         }
         Ok(())
     }
@@ -636,9 +636,12 @@ impl PersistenceEngine for InMemoryEngine {
         let meta = sessions
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+        if meta.title == title {
+            return Ok(meta.clone());
+        }
         meta.title = title;
         meta.version += 1;
-        meta.updated_at_ms = now_ms;
+        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -657,6 +660,7 @@ impl PersistenceEngine for InMemoryEngine {
         let meta = sessions
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+        let previous = meta.clone();
         if let Some(title) = patch.title {
             meta.title = title;
         }
@@ -666,8 +670,11 @@ impl PersistenceEngine for InMemoryEngine {
         if let Some(pinned) = patch.pinned {
             meta.pinned = pinned;
         }
+        if *meta == previous {
+            return Ok(meta.clone());
+        }
         meta.version += 1;
-        meta.updated_at_ms = now_ms;
+        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -681,9 +688,12 @@ impl PersistenceEngine for InMemoryEngine {
         let meta = sessions
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+        if meta.provider_anchors_json == anchors {
+            return Ok(meta.clone());
+        }
         meta.provider_anchors_json = anchors;
         meta.version += 1;
-        meta.updated_at_ms = now_ms;
+        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -697,9 +707,12 @@ impl PersistenceEngine for InMemoryEngine {
         let meta = sessions
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+        if meta.config_json == config {
+            return Ok(meta.clone());
+        }
         meta.config_json = config;
         meta.version += 1;
-        meta.updated_at_ms = now_ms;
+        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
     }
 
@@ -793,13 +806,23 @@ impl PersistenceEngine for InMemoryEngine {
         let meta = sessions
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+        if meta.subtask_status == status && meta.subtask_started_at_ms == started_at_ms
+            && meta.subtask_finished_at_ms == finished_at_ms && meta.subtask_failure == failure {
+            return Ok(meta.clone());
+        }
         meta.subtask_status = status;
         meta.subtask_started_at_ms = started_at_ms;
         meta.subtask_finished_at_ms = finished_at_ms;
         meta.subtask_failure = failure;
         meta.version += 1;
-        meta.updated_at_ms = now_ms;
+        meta.updated_at_ms = now_ms.max(meta.updated_at_ms.saturating_add(1));
         Ok(meta.clone())
+    }
+
+    async fn session_revision_rows(&self) -> Result<Vec<(i64, i64, i64)>, StoreError> {
+        Ok(self.sessions.read().expect("sessions lock").values()
+            .filter(|meta| !meta.is_temporary())
+            .map(|meta| (meta.id, meta.workspace_id, meta.version)).collect())
     }
 
     async fn list_session_summaries(
@@ -1244,6 +1267,18 @@ impl PersistenceEngine for InMemoryEngine {
             .sort_by_key(|operation| (operation.created_at_ms, operation.operation_id.clone()));
         operations.truncate(limit);
         Ok(operations)
+    }
+
+    async fn session_has_active_background_operations(
+        &self,
+        session_id: i64,
+    ) -> Result<bool, StoreError> {
+        Ok(self
+            .background_operations
+            .read()
+            .expect("background operations lock")
+            .values()
+            .any(|operation| operation.session_id == session_id && !operation.phase.is_terminal()))
     }
 
     async fn transition_background_operation(
@@ -1936,10 +1971,13 @@ impl PersistenceEngine for InMemoryEngine {
                 )));
             }
             let updated = prepare_part_update(part.clone(), delta, now_ms)?;
+            if updated.revision == part.revision {
+                return Ok(updated);
+            }
             *part = updated;
             part.clone()
         };
-        self.bump_member_session_versions(&[part_id], now_ms)?;
+        self.bump_member_session_versions(&[part_id], updated.updated_at_ms)?;
         Ok(updated)
     }
 
@@ -1966,10 +2004,13 @@ impl PersistenceEngine for InMemoryEngine {
                 )));
             }
             let updated = prepare_run_completion(part.clone(), outcome, now_ms)?;
+            if updated.revision == part.revision {
+                return Ok(updated);
+            }
             *part = updated;
             part.clone()
         };
-        self.bump_member_session_versions(&[run_id], now_ms)?;
+        self.bump_member_session_versions(&[run_id], updated.updated_at_ms)?;
         Ok(updated)
     }
 
@@ -3713,6 +3754,95 @@ mod tests {
                     part.role == PartRole::Assistant && part.run_id == Some(submitted.run_id)
                 }),
             "AI-launched events append to their assistant launch run"
+        );
+    }
+
+    #[tokio::test]
+    async fn active_background_query_is_exactly_session_scoped_without_global_limits() {
+        let (engine, session_id) = setup().await;
+        let workspace_id = engine.session_meta(session_id).await.unwrap().workspace_id;
+        let other = engine
+            .create_session(NewSession {
+                workspace_id,
+                parent_id: None,
+                relation_kind: SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: "unrelated".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .unwrap();
+        let unrelated = engine
+            .create_background_operation(
+                NewBackgroundOperation {
+                    operation_id: "unrelated-op".to_owned(),
+                    session_id: other.id,
+                    launch_run_id: None,
+                    launch_tool_part_id: None,
+                    kind: BackgroundOperationKind::ScheduledDelivery,
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !engine
+                .session_has_active_background_operations(session_id)
+                .await
+                .unwrap()
+        );
+        let operation = engine
+            .create_background_operation(
+                NewBackgroundOperation {
+                    operation_id: "owned-op".to_owned(),
+                    session_id,
+                    launch_run_id: None,
+                    launch_tool_part_id: None,
+                    kind: BackgroundOperationKind::ScheduledDelivery,
+                },
+                2,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.active_background_operations(None, 1).await.unwrap()[0].operation_id,
+            unrelated.operation_id
+        );
+        assert!(
+            engine
+                .session_has_active_background_operations(session_id)
+                .await
+                .unwrap()
+        );
+        engine
+            .transition_background_operation(
+                BackgroundOperationTransition {
+                    operation_id: operation.operation_id,
+                    expected_revision: operation.revision,
+                    next_phase: BackgroundOperationPhase::Cancelled,
+                    external_id: None,
+                    outcome: None,
+                    failure: None,
+                    owner_id: None,
+                    lease_until_ms: None,
+                },
+                3,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !engine
+                .session_has_active_background_operations(session_id)
+                .await
+                .unwrap()
+        );
+        assert!(
+            engine
+                .session_has_active_background_operations(other.id)
+                .await
+                .unwrap()
         );
     }
 }

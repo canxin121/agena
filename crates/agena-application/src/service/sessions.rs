@@ -86,22 +86,7 @@ impl ApplicationService {
             updated_at_ms: row.updated_at_ms,
             id: row.id,
         });
-        let session_ids = slice.iter().map(|summary| summary.id).collect::<Vec<_>>();
-        let states = self
-            .session_store
-            .session_states(session_ids.as_slice())
-            .await
-            .map_err(|error| ApplicationError::internal_error(&error))?;
-        let mut resources = Vec::with_capacity(slice.len());
-        for summary in slice {
-            let state = states.get(&summary.id).copied().ok_or_else(|| {
-                ApplicationError::internal(format!(
-                    "session {} disappeared while listing processing states",
-                    summary.id
-                ))
-            })?;
-            resources.push(session_resource_from_storage_summary(&summary, state)?);
-        }
+        let resources = session_list_resources(self.session_store.as_ref(), &slice).await?;
 
         let mut page = build_page(resources, has_more, next_cursor, PageOrder::Desc, limit)?;
         page.total = total;
@@ -225,6 +210,32 @@ impl ApplicationService {
             .map_err(|error| ApplicationError::internal_error(&error))?;
         Ok(resource)
     }
+}
+
+async fn session_list_resources(
+    store: &dyn agena_storage::store::SessionStore,
+    summaries: &[agena_storage::store::SessionSummary],
+) -> ApplicationResult<Vec<SessionResource>> {
+    let ids = summaries
+        .iter()
+        .map(|summary| summary.id)
+        .collect::<Vec<_>>();
+    let states = store
+        .session_states(&ids)
+        .await
+        .map_err(|error| ApplicationError::internal_error(&error))?;
+    let mut resources = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        // Listing and state projection are separate reads. A committed
+        // deletion between them is ordinary concurrency, not a server error.
+        // Keep the cursor from the original slice so a removed final row does
+        // not prevent the caller from advancing through the remaining pages.
+        let Some(state) = states.get(&summary.id).copied() else {
+            continue;
+        };
+        resources.push(session_resource_from_storage_summary(summary, state)?);
+    }
+    Ok(resources)
 }
 
 pub(crate) fn session_resource_from_summary(
@@ -425,6 +436,47 @@ mod tests {
     /// One user content part. `submit_user_run` creates the D9 run marker.
     fn marker_part() -> NewPart {
         NewPart::pending("text", PartRole::User, json!({ "text": "hello" }))
+    }
+
+    #[tokio::test]
+    async fn session_list_survives_deletion_between_summary_and_state_reads() {
+        let (service, store, workspace_id) = test_service().await;
+        let mut sessions = Vec::new();
+        for index in 0..3 {
+            sessions.push(
+                service
+                    .create_session(crate::dto::SessionCreateRequest {
+                        workspace_id,
+                        session: crate::dto::SessionHierarchyRequest {
+                            parent_id: None,
+                            title: format!("Concurrent session {index}"),
+                        },
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+        let summaries = store
+            .list_session_summaries(SessionListQuery::default())
+            .await
+            .unwrap();
+        service.delete_session(sessions[1].id).await.unwrap();
+        let resources = session_list_resources(store.as_ref(), &summaries)
+            .await
+            .unwrap();
+        assert_eq!(resources.len(), 2);
+        assert!(resources.iter().all(|row| row.id != sessions[1].id));
+        assert!(resources.iter().any(|row| row.id == sessions[0].id));
+        assert!(resources.iter().any(|row| row.id == sessions[2].id));
+
+        service.delete_session(sessions[0].id).await.unwrap();
+        service.delete_session(sessions[2].id).await.unwrap();
+        assert!(
+            session_list_resources(store.as_ref(), &summaries)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

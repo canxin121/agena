@@ -145,19 +145,34 @@ impl Drop for ManagedBrowser {
 /// process after the host exits.
 struct LocalBrowserState {
     browser: Option<ManagedBrowser>,
-    last_used: Option<Instant>,
     idle_timeout: Option<Duration>,
+}
+
+// Async actions and their Drop handlers touch only this short critical
+// section. Browser startup can hold LOCAL_BROWSER for seconds; sharing that
+// lock made even releasing a lease block a Tokio worker behind startup.
+struct BrowserActivity {
+    last_used: Option<Instant>,
     active_uses: usize,
 }
 
 static LOCAL_BROWSER: LazyLock<Mutex<LocalBrowserState>> = LazyLock::new(|| {
     Mutex::new(LocalBrowserState {
         browser: None,
-        last_used: None,
         idle_timeout: None,
-        active_uses: 0,
     })
 });
+
+static BROWSER_ACTIVITY: Mutex<BrowserActivity> = Mutex::new(BrowserActivity {
+    last_used: None,
+    active_uses: 0,
+});
+
+fn browser_activity() -> Result<std::sync::MutexGuard<'static, BrowserActivity>, CrawlError> {
+    BROWSER_ACTIVITY.lock().map_err(|error| {
+        CrawlError::InvalidInput(format!("local browser activity mutex is poisoned: {error}"))
+    })
+}
 
 /// Return the DevTools WebSocket endpoint of the managed browser, spawning it
 /// lazily on first use. The browser is reused for the process lifetime and is
@@ -174,7 +189,7 @@ pub fn local_browser_endpoint(options: &LocalBrowserOptions) -> Result<String, C
         && existing.is_running()?
     {
         let endpoint = existing.endpoint.clone();
-        state.last_used = Some(Instant::now());
+        browser_activity()?.last_used = Some(Instant::now());
         state.idle_timeout = options.idle_timeout;
         if options.idle_timeout.is_some() {
             ensure_idle_janitor();
@@ -187,7 +202,7 @@ pub fn local_browser_endpoint(options: &LocalBrowserOptions) -> Result<String, C
     let browser = ManagedBrowser::spawn(options)?;
     let endpoint = browser.endpoint.clone();
     state.idle_timeout = options.idle_timeout;
-    state.last_used = Some(Instant::now());
+    browser_activity()?.last_used = Some(Instant::now());
     state.browser = Some(browser);
     if options.idle_timeout.is_some() {
         ensure_idle_janitor();
@@ -213,16 +228,9 @@ pub fn local_browser_running() -> Result<bool, CrawlError> {
 /// Mark the managed browser as recently used so the idle auto-close timer
 /// restarts. No-op when no browser is running.
 pub fn local_browser_touch() -> Result<(), CrawlError> {
-    let mut state = LOCAL_BROWSER.lock().map_err(|error| {
-        CrawlError::InvalidInput(agena_failure::diagnostic::format_error_chain_with_context(
-            "local browser registry mutex is poisoned",
-            &error,
-        ))
-    })?;
-    if let Some(browser) = state.browser.as_mut()
-        && browser.is_running()?
-    {
-        state.last_used = Some(Instant::now());
+    let mut activity = browser_activity()?;
+    if activity.last_used.is_some() {
+        activity.last_used = Some(Instant::now());
     }
     Ok(())
 }
@@ -232,29 +240,27 @@ pub fn local_browser_touch() -> Result<(), CrawlError> {
 pub struct LocalBrowserLease;
 
 pub fn local_browser_lease() -> Result<LocalBrowserLease, CrawlError> {
-    let mut state = LOCAL_BROWSER.lock().map_err(|error| {
-        CrawlError::InvalidInput(format!("local browser registry mutex is poisoned: {error}"))
-    })?;
-    state.active_uses += 1;
-    state.last_used = Some(Instant::now());
+    let mut activity = browser_activity()?;
+    activity.active_uses += 1;
+    activity.last_used = Some(Instant::now());
     Ok(LocalBrowserLease)
 }
 
 impl Drop for LocalBrowserLease {
     fn drop(&mut self) {
-        match LOCAL_BROWSER.lock() {
-            Ok(mut state) => {
-                state.active_uses = state.active_uses.saturating_sub(1);
-                state.last_used = Some(Instant::now());
+        match browser_activity() {
+            Ok(mut activity) => {
+                activity.active_uses = activity.active_uses.saturating_sub(1);
+                activity.last_used = Some(Instant::now());
             }
             Err(error) => tracing::error!(%error, "failed to release browser activity lease"),
         }
     }
 }
 
-fn idle_deadline_reached(state: &LocalBrowserState) -> bool {
-    state.active_uses == 0
-        && matches!((state.idle_timeout, state.last_used),
+fn idle_deadline_reached(state: &LocalBrowserState, activity: &BrowserActivity) -> bool {
+    activity.active_uses == 0
+        && matches!((state.idle_timeout, activity.last_used),
             (Some(timeout), Some(last_used)) if last_used.elapsed() >= timeout)
 }
 
@@ -264,12 +270,16 @@ fn shutdown_idle_browser() -> Result<bool, CrawlError> {
     })?;
     // Check and remove the exact entry under one lock. A concurrent touch or
     // replacement cannot make this close a newly active browser.
-    if !idle_deadline_reached(&state) {
+    // Lock order is always registry -> activity. Lease/touch/drop never lock
+    // the registry, and the activity guard covers only in-memory updates.
+    let mut activity = browser_activity()?;
+    if !idle_deadline_reached(&state, &activity) {
         return Ok(false);
     }
     let browser = state.browser.take();
-    state.last_used = None;
+    activity.last_used = None;
     state.idle_timeout = None;
+    drop(activity);
     drop(state);
     if let Some(mut browser) = browser {
         browser.shutdown()?;
@@ -298,7 +308,7 @@ pub fn shutdown_local_browser() -> Result<bool, CrawlError> {
     // lock. Explicit shutdown returns cleanup failures to the caller; Drop is
     // only the logged last-resort retry.
     let browser = state.browser.take();
-    state.last_used = None;
+    browser_activity()?.last_used = None;
     state.idle_timeout = None;
     drop(state);
     if let Some(mut browser) = browser {
@@ -477,17 +487,19 @@ mod tests {
     fn idle_shutdown_requires_no_active_lease_and_an_expired_timer() {
         let mut state = LocalBrowserState {
             browser: None,
-            last_used: Some(Instant::now() - Duration::from_secs(5)),
             idle_timeout: Some(Duration::from_secs(1)),
+        };
+        let mut activity = BrowserActivity {
+            last_used: Some(Instant::now() - Duration::from_secs(5)),
             active_uses: 1,
         };
-        assert!(!idle_deadline_reached(&state));
-        state.active_uses = 0;
-        assert!(idle_deadline_reached(&state));
-        state.last_used = Some(Instant::now());
-        assert!(!idle_deadline_reached(&state));
+        assert!(!idle_deadline_reached(&state, &activity));
+        activity.active_uses = 0;
+        assert!(idle_deadline_reached(&state, &activity));
+        activity.last_used = Some(Instant::now());
+        assert!(!idle_deadline_reached(&state, &activity));
         state.idle_timeout = None;
-        assert!(!idle_deadline_reached(&state));
+        assert!(!idle_deadline_reached(&state, &activity));
     }
 
     #[test]

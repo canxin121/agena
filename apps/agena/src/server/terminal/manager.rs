@@ -30,6 +30,9 @@ use crate::{ApiResult, AppError};
 use crate::server::persistence::db;
 
 const MAX_TERMINAL_SESSIONS: usize = 20;
+static TERMINAL_LIFECYCLE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
+static TERMINAL_CONTROL_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
+static TERMINAL_IO_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(16);
 const TERMINAL_IDLE_TIMEOUT_ENV: &str = "AGENA_SERVER_TERMINAL_IDLE_TIMEOUT_SECS";
 const TERMINAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TERMINAL_HEARTBEAT: Duration = Duration::from_secs(15);
@@ -292,7 +295,10 @@ impl TerminalManager {
         db: Arc<crate::server::persistence::db::ServerStateDb>,
     ) -> Result<Self, String> {
         let session_registry = load_session_registry_from_store(db.as_ref()).await?;
-        let prefer_tmux = *TMUX_AVAILABLE;
+        let prefer_tmux = TERMINAL_LIFECYCLE_WORKERS
+            .run(|| *TMUX_AVAILABLE)
+            .await
+            .map_err(|error| format!("tmux probe worker failed: {error}"))?;
         let idle_timeout = terminal_idle_timeout();
 
         if prefer_tmux {
@@ -495,16 +501,18 @@ impl TerminalManager {
         let manager = self.clone();
         let mut exit_rx = session.subscribe_exit();
         tokio::spawn(async move {
-            if *exit_rx.borrow() {
-                manager.handle_session_exit(&session_id, session.as_ref());
-                return;
-            }
-
-            while exit_rx.changed().await.is_ok() {
-                if *exit_rx.borrow() {
-                    manager.handle_session_exit(&session_id, session.as_ref());
-                    break;
+            if !*exit_rx.borrow() {
+                while exit_rx.changed().await.is_ok() {
+                    if *exit_rx.borrow() {
+                        break;
+                    }
                 }
+            }
+            if let Err(error) = TERMINAL_CONTROL_WORKERS
+                .run(move || manager.handle_session_exit(&session_id, session.as_ref()))
+                .await
+            {
+                tracing::error!(%error, "terminal exit cleanup worker failed");
             }
         });
     }
@@ -520,6 +528,9 @@ impl TerminalManager {
         }
 
         let _restore_guard = recover_terminal_mutex(&self.restore_lock, "session restore");
+        if self.sessions.len() >= MAX_TERMINAL_SESSIONS {
+            return None;
+        }
 
         if let Some(existing) = self.sessions.get(sid) {
             return Some(existing.value().clone());
@@ -606,7 +617,10 @@ impl TerminalManager {
                 for id in to_remove {
                     if let Some((_, session)) = manager.sessions.remove(&id) {
                         tracing::info!("Cleaning up idle terminal session: {}", id);
-                        if let Err(error) = session.kill() {
+                        let stopped = TERMINAL_CONTROL_WORKERS.run(move || session.kill()).await;
+                        if let Err(error) =
+                            stopped.unwrap_or_else(|error| Err(anyhow::Error::new(error)))
+                        {
                             tracing::error!(
                                 session_id = id,
                                 diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
@@ -631,6 +645,50 @@ impl TerminalManager {
         }
 
         self.try_restore_session(sid)
+    }
+
+    pub async fn get_async(&self, session_id: &str) -> ApiResult<Option<Arc<TerminalSession>>> {
+        // Already-running sessions have a memory-only fast path. Restore can
+        // lock, stat files, launch a native PTY and invoke tmux.
+        if let Some(session) = self.sessions.get(session_id.trim()) {
+            return Ok(Some(Arc::clone(session.value())));
+        }
+        let manager = self.clone();
+        let session_id = session_id.to_owned();
+        TERMINAL_LIFECYCLE_WORKERS
+            .run(move || manager.get(&session_id))
+            .await
+            .map_err(|error| AppError::internal_error(&error))
+    }
+
+    pub async fn peek_info_async(&self, session_id: &str) -> ApiResult<Option<(String, bool)>> {
+        if let Some(session) = self.sessions.get(session_id.trim()) {
+            return Ok(Some((session.cwd.clone(), true)));
+        }
+        let manager = self.clone();
+        let session_id = session_id.to_owned();
+        TERMINAL_LIFECYCLE_WORKERS
+            .run(move || manager.peek_info(&session_id))
+            .await
+            .map_err(|error| AppError::internal_error(&error))
+    }
+
+    pub async fn kill_session_async(&self, session_id: &str) -> Result<(), TerminalError> {
+        let manager = self.clone();
+        let session_id = session_id.to_owned();
+        TERMINAL_CONTROL_WORKERS
+            .run(move || manager.kill_session(&session_id))
+            .await
+            .map_err(|error| TerminalError::Kill(anyhow::Error::new(error)))?
+    }
+
+    pub async fn stop_session_async(&self, session_id: &str) -> Result<(), TerminalError> {
+        let manager = self.clone();
+        let session_id = session_id.to_owned();
+        TERMINAL_CONTROL_WORKERS
+            .run(move || manager.stop_session(&session_id))
+            .await
+            .map_err(|error| TerminalError::Kill(anyhow::Error::new(error)))?
     }
 
     pub fn peek_info(&self, session_id: &str) -> Option<(String, bool)> {
@@ -684,28 +742,39 @@ impl TerminalManager {
             return Err(TerminalError::InvalidWorkingDirectory);
         }
 
-        let session_id = crate::server::issue_token();
+        let manager = self.clone();
+        TERMINAL_LIFECYCLE_WORKERS
+            .run(move || {
+                // Creation and restoration share the capacity check. Publish inside
+                // the worker so caller cancellation cannot leave an untracked PTY.
+                let _create_guard = recover_terminal_mutex(&manager.restore_lock, "session create");
+                if manager.sessions.len() >= MAX_TERMINAL_SESSIONS {
+                    return Err(TerminalError::LimitReached);
+                }
+                let session_id = crate::server::issue_token();
+                let session = TerminalSession::spawn(
+                    session_id.clone(),
+                    cwd.clone(),
+                    cols,
+                    rows,
+                    manager.prefer_tmux,
+                )
+                .map_err(TerminalError::Spawn)?;
 
-        let session = TerminalSession::spawn(
-            session_id.clone(),
-            cwd.clone(),
-            cols,
-            rows,
-            self.prefer_tmux,
-        )
-        .map_err(TerminalError::Spawn)?;
+                let backend = session.backend().to_persisted();
 
-        let backend = session.backend().to_persisted();
+                manager.sessions.insert(session_id.clone(), session.clone());
+                manager.track_session_lifecycle(session_id.clone(), session);
+                manager.upsert_persisted_session(&session_id, &cwd, cols, rows, backend);
 
-        self.sessions.insert(session_id.clone(), session.clone());
-        self.track_session_lifecycle(session_id.clone(), session);
-        self.upsert_persisted_session(&session_id, &cwd, cols, rows, backend);
-
-        Ok(TerminalCreateResponse {
-            session_id,
-            cols,
-            rows,
-        })
+                Ok(TerminalCreateResponse {
+                    session_id,
+                    cols,
+                    rows,
+                })
+            })
+            .await
+            .map_err(|error| TerminalError::Spawn(anyhow::Error::new(error)))?
     }
 
     pub fn remember_dimensions(&self, session_id: &str, cols: u16, rows: u16) {
@@ -900,8 +969,14 @@ impl TerminalSession {
             history: Mutex::new(TerminalHistory::default()),
         });
 
-        Self::spawn_reader_task(session.clone(), reader);
-        Self::spawn_wait_task(session.clone(), child);
+        if let Err(error) = Self::spawn_reader_task(session.clone(), reader) {
+            session.stop_runtime()?;
+            return Err(error.into());
+        }
+        if let Err(error) = Self::spawn_wait_task(session.clone(), child) {
+            session.stop_runtime()?;
+            return Err(error.into());
+        }
 
         Ok(session)
     }
@@ -925,8 +1000,13 @@ impl TerminalSession {
         }
     }
 
-    fn spawn_reader_task(session: Arc<Self>, mut reader: Box<dyn Read + Send>) {
-        tokio::task::spawn_blocking(move || {
+    fn spawn_reader_task(
+        session: Arc<Self>,
+        mut reader: Box<dyn Read + Send>,
+    ) -> std::io::Result<()> {
+        // PTY reads last for the lifetime of a session. Dedicated threads keep
+        // them out of Tokio's shared blocking pool; session capacity bounds them.
+        std::thread::Builder::new().name("agena-ui-pty-read".into()).spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
@@ -975,7 +1055,7 @@ impl TerminalSession {
                     }
                 }
             }
-        });
+        }).map(|_| ())
     }
 
     fn snapshot_history_chunks(&self) -> Vec<(u64, String)> {
@@ -983,8 +1063,11 @@ impl TerminalSession {
         hist.chunks.iter().cloned().collect()
     }
 
-    fn spawn_wait_task(session: Arc<Self>, mut child: Box<dyn portable_pty::Child + Send + Sync>) {
-        tokio::task::spawn_blocking(move || {
+    fn spawn_wait_task(
+        session: Arc<Self>,
+        mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    ) -> std::io::Result<()> {
+        std::thread::Builder::new().name("agena-ui-pty-wait".into()).spawn(move || {
             // Wait for the child process to exit.
             let status = child.wait();
             let (exit_code, signal) = match status {
@@ -1005,12 +1088,8 @@ impl TerminalSession {
                     (None, None)
                 }
             };
-            if session.exit_state.send(true).is_err() {
-                tracing::debug!(
-                    terminal_cwd = %session.cwd,
-                    "terminal exit state had no active receivers"
-                );
-            }
+            // Preserve the exit state even before lifecycle tracking subscribes.
+            session.exit_state.send_replace(true);
             if session
                 .tx
                 .send(TerminalEvent::Exit { exit_code, signal })
@@ -1021,7 +1100,7 @@ impl TerminalSession {
                     "terminal exit event had no active subscribers"
                 );
             }
-        });
+        }).map(|_| ())
     }
 
     pub async fn write(self: &Arc<Self>, data: Bytes) -> Result<(), anyhow::Error> {
@@ -1035,17 +1114,18 @@ impl TerminalSession {
                 ))
             })?;
         let session = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            session.write_blocking(data)
-        })
-        .await
-        .map_err(|error| {
-            anyhow::anyhow!(agena_failure::diagnostic::format_error_chain_with_context(
-                "terminal write worker failed",
-                &error,
-            ))
-        })?
+        TERMINAL_IO_WORKERS
+            .run(move || {
+                let _permit = permit;
+                session.write_blocking(data)
+            })
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(agena_failure::diagnostic::format_error_chain_with_context(
+                    "terminal write worker failed",
+                    &error,
+                ))
+            })?
     }
 
     fn write_blocking(&self, data: Bytes) -> Result<(), anyhow::Error> {
@@ -1067,17 +1147,18 @@ impl TerminalSession {
                 ))
             })?;
         let session = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            session.resize_blocking(cols, rows)
-        })
-        .await
-        .map_err(|error| {
-            anyhow::anyhow!(agena_failure::diagnostic::format_error_chain_with_context(
-                "terminal resize worker failed",
-                &error,
-            ))
-        })?
+        TERMINAL_IO_WORKERS
+            .run(move || {
+                let _permit = permit;
+                session.resize_blocking(cols, rows)
+            })
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(agena_failure::diagnostic::format_error_chain_with_context(
+                    "terminal resize worker failed",
+                    &error,
+                ))
+            })?
     }
 
     fn resize_blocking(&self, cols: u16, rows: u16) -> Result<(), anyhow::Error> {
@@ -1308,7 +1389,8 @@ pub async fn terminal_stream(
 ) -> ApiResult<Response> {
     let session = state
         .terminal
-        .get(&session_id)
+        .get_async(&session_id)
+        .await?
         .ok_or_else(|| AppError::not_found("Terminal session not found"))?;
 
     *recover_terminal_mutex(&session.last_activity, "session last activity") = Instant::now();
@@ -1455,7 +1537,8 @@ pub async fn terminal_input(
 ) -> ApiResult<Json<TerminalSuccessResponse>> {
     let session = state
         .terminal
-        .get(&session_id)
+        .get_async(&session_id)
+        .await?
         .ok_or_else(|| AppError::not_found("Terminal session not found"))?;
 
     const MAX_TERMINAL_INPUT_BYTES: usize = 1024 * 1024;
@@ -1496,7 +1579,8 @@ pub async fn terminal_resize(
 ) -> ApiResult<Json<TerminalResizeResponse>> {
     let session = state
         .terminal
-        .get(&session_id)
+        .get_async(&session_id)
+        .await?
         .ok_or_else(|| AppError::not_found("Terminal session not found"))?;
 
     let (Some(cols), Some(rows)) = (body.cols, body.rows) else {
@@ -1520,7 +1604,7 @@ pub async fn terminal_delete(
     State(state): State<Arc<crate::AppState>>,
     AxumPath(session_id): AxumPath<String>,
 ) -> ApiResult<Json<TerminalSuccessResponse>> {
-    match state.terminal.kill_session(&session_id) {
+    match state.terminal.kill_session_async(&session_id).await {
         Ok(()) => Ok(Json(TerminalSuccessResponse { success: true })),
         Err(TerminalError::NotFound) => Err(AppError::not_found("Terminal session not found")),
         Err(err) => Err(AppError::internal_error(&err)),
@@ -1541,7 +1625,8 @@ pub async fn terminal_get(
 ) -> ApiResult<Json<TerminalInfoResponse>> {
     let (cwd, running) = state
         .terminal
-        .peek_info(&session_id)
+        .peek_info_async(&session_id)
+        .await?
         .ok_or_else(|| AppError::not_found("Terminal session not found"))?;
     Ok(Json(TerminalInfoResponse {
         session_id,
@@ -1556,7 +1641,8 @@ pub async fn terminal_start(
 ) -> ApiResult<Json<TerminalInfoResponse>> {
     let session = state
         .terminal
-        .get(&session_id)
+        .get_async(&session_id)
+        .await?
         .ok_or_else(|| AppError::not_found("Terminal session not found"))?;
     Ok(Json(TerminalInfoResponse {
         session_id,
@@ -1569,7 +1655,7 @@ pub async fn terminal_stop(
     State(state): State<Arc<crate::AppState>>,
     AxumPath(session_id): AxumPath<String>,
 ) -> ApiResult<Json<TerminalSuccessResponse>> {
-    match state.terminal.stop_session(&session_id) {
+    match state.terminal.stop_session_async(&session_id).await {
         Ok(()) => Ok(Json(TerminalSuccessResponse { success: true })),
         Err(TerminalError::NotFound) => Err(AppError::not_found("Terminal session not found")),
         Err(err) => Err(AppError::internal_error(&err)),
@@ -1594,7 +1680,7 @@ pub async fn terminal_restart(
     // A missing replaced-session id is acceptable for an idempotent restart.
     // Every actual stop failure must abort the restart so the server never
     // reports two overlapping terminals as a successful replacement.
-    if let Err(error) = state.terminal.kill_session(&old_session_id)
+    if let Err(error) = state.terminal.kill_session_async(&old_session_id).await
         && !matches!(error, TerminalError::NotFound)
     {
         return Err(AppError::internal_error(&error));

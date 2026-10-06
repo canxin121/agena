@@ -10,6 +10,8 @@ use tokio::process::Command;
 use crate::server::preview::registry::{PreviewSessionRecord, WorkspacePreviewRegistry};
 use crate::{ApiResult, AppError};
 
+static PREVIEW_FILE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
+
 struct ResolvedLogsPaths {
     stdout: PathBuf,
     stderr: PathBuf,
@@ -178,37 +180,49 @@ impl WorkspacePreviewRuntime {
             ));
         }
 
-        let run_dir = resolve_run_directory(&session.run_directory)?;
-        let logs = resolve_logs_paths(&session.logs_path, &run_dir)?;
+        let run_directory = session.run_directory.clone();
+        let logs_path = session.logs_path.clone();
+        let (run_dir, stdout_file, stderr_file) = PREVIEW_FILE_WORKERS
+            .run(move || {
+                let run_dir = resolve_run_directory(&run_directory)?;
+                let logs = resolve_logs_paths(&logs_path, &run_dir)?;
 
-        let stdout_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&logs.stdout)
-            .map_err(|err| {
-                AppError::internal(format!(
-                    "failed to open stdout logs file {}: {err}",
-                    logs.stdout.to_string_lossy()
-                ))
-            })?;
-        let stderr_file = if logs.stdout == logs.stderr {
-            stdout_file.try_clone().map_err(|err| {
-                AppError::internal_error_with_context("clone the preview logs file handle", &err)
-            })?
-        } else {
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&logs.stderr)
-                .map_err(|err| {
-                    AppError::internal(format!(
-                        "failed to open stderr logs file {}: {err}",
-                        logs.stderr.to_string_lossy()
-                    ))
-                })?
-        };
+                let stdout_file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&logs.stdout)
+                    .map_err(|err| {
+                        AppError::internal(format!(
+                            "failed to open stdout logs file {}: {err}",
+                            logs.stdout.to_string_lossy()
+                        ))
+                    })?;
+                let stderr_file = if logs.stdout == logs.stderr {
+                    stdout_file.try_clone().map_err(|err| {
+                        AppError::internal_error_with_context(
+                            "clone the preview logs file handle",
+                            &err,
+                        )
+                    })?
+                } else {
+                    OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(&logs.stderr)
+                        .map_err(|err| {
+                            AppError::internal(format!(
+                                "failed to open stderr logs file {}: {err}",
+                                logs.stderr.to_string_lossy()
+                            ))
+                        })?
+                };
+
+                Ok::<_, AppError>((run_dir, stdout_file, stderr_file))
+            })
+            .await
+            .map_err(|error| AppError::internal_error(&error))??;
 
         let program = resolve_preview_program(&session.command);
         let mut cmd = Command::new(&program);

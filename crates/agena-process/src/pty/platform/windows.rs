@@ -1,5 +1,8 @@
 //! ConPTY uses synchronous pipes. Dedicated bounded workers turn those into
 //! nonblocking driver operations; closing the job and console releases the pipes.
+//! Input bytes are normalized for the pseudoconsole before they are queued, and
+//! the acknowledged count stays in terms of the caller's input bytes.
+use super::super::windows_input::TtyInputNormalizer;
 use portable_pty::{Child, MasterPty};
 use std::{
     io::{self, Read, Write},
@@ -17,12 +20,19 @@ use windows_sys::Win32::{
 
 type WriteRequest = (Vec<u8>, mpsc::SyncSender<io::Result<usize>>);
 
+/// Largest normalized chunk queued to the ConPTY writer thread per call.
+const MAX_QUEUED_INPUT_BYTES: usize = 8192;
+
 pub(crate) struct PtyIo {
     output: mpsc::Receiver<io::Result<Vec<u8>>>,
     buffered: Vec<u8>,
     offset: usize,
     input: mpsc::SyncSender<WriteRequest>,
     pending: Option<mpsc::Receiver<io::Result<usize>>>,
+    /// How many input bytes the queued write covers, so the caller's offset
+    /// advances over its own bytes rather than over normalized bytes.
+    pending_input: usize,
+    normalizer: TtyInputNormalizer,
 }
 
 impl PtyIo {
@@ -68,6 +78,8 @@ impl PtyIo {
             offset: 0,
             input,
             pending: None,
+            pending_input: 0,
+            normalizer: TtyInputNormalizer::default(),
         })
     }
 
@@ -89,19 +101,32 @@ impl PtyIo {
     pub(crate) fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if let Some(reply) = &self.pending {
             match reply.try_recv() {
-                Ok(result) => {
+                Ok(Ok(_written)) => {
                     self.pending = None;
-                    return result;
+                    let acknowledged = std::mem::take(&mut self.pending_input);
+                    return Ok(acknowledged);
+                }
+                Ok(Err(error)) => {
+                    self.pending = None;
+                    self.pending_input = 0;
+                    return Err(error);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => return Err(super::super::closed()),
                 Err(mpsc::TryRecvError::Empty) => return Err(io::ErrorKind::WouldBlock.into()),
             }
         }
+        let (consumed, normalized) = self
+            .normalizer
+            .normalize_bounded(bytes, MAX_QUEUED_INPUT_BYTES);
+        if normalized.is_empty() {
+            return Ok(consumed);
+        }
         let (reply, result) = mpsc::sync_channel(1);
         self.input
-            .try_send((bytes[..bytes.len().min(8192)].to_vec(), reply))
+            .try_send((normalized, reply))
             .map_err(|_| super::super::closed())?;
         self.pending = Some(result);
+        self.pending_input = consumed;
         Err(io::ErrorKind::WouldBlock.into())
     }
 

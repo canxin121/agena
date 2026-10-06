@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Bounded blocking work at Agena's asynchronous service boundaries"
 
 [dependencies]
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["fs", "rt", "sync", "time"] }
 
 [lints]
 workspace = true

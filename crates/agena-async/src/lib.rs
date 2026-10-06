@@ -3,6 +3,9 @@
 use tokio::sync::Semaphore;
 use tokio::task::{AbortHandle, JoinError};
 
+mod write_queue;
+pub use write_queue::{WritePermit, WriteQueue, WriteQueueError};
+
 /// A process-wide limit for a class of blocking operations. Admission waits
 /// asynchronously, before creating a blocking task. Keep separate pools for
 /// long waits, filesystem operations, credentials, and CPU-heavy work to

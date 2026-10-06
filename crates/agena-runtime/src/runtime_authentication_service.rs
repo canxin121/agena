@@ -27,7 +27,7 @@ pub trait RuntimeAuthenticationService: Send + Sync {
     ) -> Result<RuntimeAuthBrowserStart, RuntimeAuthenticationError>;
     /// Waits for the Runtime-owned local browser callback listener without
     /// exposing its TCP/parser implementation to a process consumer.
-    fn wait_auth_browser_callback(
+    async fn wait_auth_browser_callback(
         &self,
         port: u16,
         expected_state: &str,

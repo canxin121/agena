@@ -25,6 +25,9 @@ const GLOBAL_LOGIN_FAILURE_LIMIT: u32 = 64;
 const GLOBAL_LOGIN_LOCKOUT_DURATION: Duration = Duration::from_secs(5 * 60);
 const GLOBAL_LOGIN_ATTEMPT_KEY: &str = "__global__";
 const MAX_LOGIN_PASSWORD_BYTES: usize = 4096;
+// Argon2 consumes CPU and tens of MiB per check. Its admission limit is
+// independent of request concurrency and ordinary filesystem workers.
+static PASSWORD_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 #[derive(Clone)]
 pub(crate) enum UiAuth {
@@ -173,6 +176,41 @@ fn verify_password(phc: &str, candidate: &str) -> bool {
     Argon2::default()
         .verify_password(candidate.as_bytes(), &hash)
         .is_ok()
+}
+
+async fn verify_password_async(phc: String, candidate: String) -> Result<bool, String> {
+    PASSWORD_WORKERS
+        .run(move || verify_password(&phc, &candidate))
+        .await
+        .map_err(|error| format!("password verification worker failed: {error}"))
+}
+
+pub(crate) async fn hash_password_async(candidate: String) -> Result<String, String> {
+    PASSWORD_WORKERS
+        .run(move || hash_password(&candidate))
+        .await
+        .map_err(|error| format!("password hashing worker failed: {error}"))?
+}
+
+pub(crate) async fn init_ui_auth_async(password: Option<String>) -> Result<UiAuth, String> {
+    PASSWORD_WORKERS
+        .run(move || init_ui_auth(password))
+        .await
+        .map_err(|error| format!("UI authentication worker failed: {error}"))
+}
+
+pub(crate) async fn verify_password_for_oauth_async(
+    ui_auth: UiAuth,
+    candidate: String,
+    headers: HeaderMap,
+) -> Result<(), OAuthPasswordError> {
+    PASSWORD_WORKERS
+        .run(move || verify_password_for_oauth(&ui_auth, &candidate, &headers))
+        .await
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, "OAuth password verification worker failed");
+            Err(OAuthPasswordError::Invalid)
+        })
 }
 
 fn get_token_from_authorization(headers: &HeaderMap) -> Option<String> {
@@ -507,7 +545,24 @@ pub(crate) async fn auth_session_create(
                     .into_response();
             }
 
-            if !verify_password(&inner.password_phc, &candidate) {
+            let verified = match verify_password_async(inner.password_phc.clone(), candidate).await
+            {
+                Ok(verified) => verified,
+                Err(error) => {
+                    tracing::error!(%error, "UI password verification failed");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(agena_api::ApiError::internal(
+                            "Password verification is unavailable.",
+                        )),
+                    )
+                        .into_response();
+                }
+            };
+            // Admission can wait behind another Argon2 check; use completion
+            // time for failure windows and the new session's activity stamp.
+            let now = OffsetDateTime::now_utc();
+            if !verified {
                 if let Some(retry_after_seconds) =
                     record_failed_login_attempts(inner, &attempt_key, now)
                 {

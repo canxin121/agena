@@ -56,8 +56,8 @@ mod unix {
     /// Bind a Unix socket at `path` and serve the WS-equivalent protocol
     /// until the future is dropped.
     pub async fn serve(path: PathBuf, state: AppState) -> std::io::Result<()> {
-        if path.exists() {
-            std::fs::remove_file(&path)?;
+        if tokio::fs::try_exists(&path).await? {
+            tokio::fs::remove_file(&path).await?;
         }
         let listener = UnixListener::bind(&path)?;
         let mut connections = tokio::task::JoinSet::new();
@@ -307,12 +307,12 @@ mod unix {
                     LiveItem::SessionChanged(change) => Notification::SessionChanged {
                         subscription: id_for_task.clone(),
                         change: Box::new(change),
-                    revisions,
+                        revisions,
                     },
                     LiveItem::RuntimeSignal(signal) => Notification::RuntimeSignal {
                         subscription: id_for_task.clone(),
                         signal: Box::new(signal),
-                    revisions,
+                        revisions,
                     },
                     LiveItem::Lagged(skipped) => Notification::Lagged {
                         subscription: id_for_task.clone(),

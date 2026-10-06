@@ -52,6 +52,21 @@ pub(super) fn owner(
     })
 }
 
+pub(super) async fn owner_async(
+    executor: &ToolExecutor,
+    session_id: Option<i64>,
+) -> Result<TerminalOwner, ToolError> {
+    let workspace = tokio::fs::canonicalize(executor.workspace_root())
+        .await
+        .map_err(|error| {
+            ToolError::invalid_input(format!("resolve terminal workspace: {error}"))
+        })?;
+    Ok(TerminalOwner {
+        workspace,
+        session_id,
+    })
+}
+
 pub(super) fn registry(executor: &ToolExecutor) -> Result<&crate::TerminalRegistry, ToolError> {
     executor
         .monitor_registry()

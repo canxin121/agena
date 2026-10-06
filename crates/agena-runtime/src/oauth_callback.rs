@@ -136,11 +136,13 @@ pub async fn wait_for_oauth_callback_async(
         .with_state(state);
     let shutdown = CancellationToken::new();
     let server_shutdown = shutdown.clone();
-    let mut server = tokio::spawn(async move {
+    // A disconnected/cancelled login must release its listener instead of
+    // detaching the server task and leaving this callback port occupied.
+    let mut server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(server_shutdown.cancelled_owned())
             .await
-    });
+    }));
 
     let result = match tokio::time::timeout(timeout, result_rx).await {
         Ok(Ok(result)) => result,

@@ -978,6 +978,7 @@ async fn run_ws_monitor(
     let lifetime = async {
         let mut stream = stream;
         loop {
+            tokio::task::consume_budget().await;
             match stream.next().await {
                 Some(Ok(WsMessage::Text(text))) => {
                     push_event(&state, ProcessStream::Stdout, text.to_string());
@@ -1273,6 +1274,9 @@ async fn stream_lines<R>(
         MonitorLinesCodec(LinesCodec::new_with_max_length(READER_LINE_BYTE_CAP)),
     );
     while let Some(event) = reader.next().await {
+        // FramedRead can return an entire buffered batch without polling the
+        // pipe. Filtered lines must also consume a cooperative poll budget.
+        tokio::task::consume_budget().await;
         match event {
             Ok(Ok(line)) => {
                 state

@@ -138,6 +138,44 @@ impl ServerSpec {
         }
     }
 
+    async fn credential_projection(
+        &self,
+        server: &str,
+        token_store: Option<Arc<dyn TokenStore>>,
+    ) -> (Option<OAuthCredentialHealth>, Option<McpCredentialConflict>) {
+        let mode = self.auth_mode();
+        if !matches!(
+            mode,
+            McpServerAuthMode::OAuth | McpServerAuthMode::BearerFromStore
+        ) {
+            return (None, None);
+        }
+        let spec = self.clone();
+        let name = server.to_owned();
+        match crate::token_store::KEYRING_WORKERS
+            .run(move || {
+                (
+                    spec.oauth_health(&name),
+                    spec.credential_conflict(&name, token_store.as_deref()),
+                )
+            })
+            .await
+        {
+            Ok(projection) => projection,
+            Err(error) => {
+                tracing::warn!(server, %error, "MCP credential status worker failed");
+                (
+                    matches!(mode, McpServerAuthMode::OAuth).then_some(OAuthCredentialHealth {
+                        credential_state: crate::OAuthCredentialState::Unreadable,
+                        expiry_state: None,
+                        refresh_available: None,
+                    }),
+                    None,
+                )
+            }
+        }
+    }
+
     fn credential_conflict(
         &self,
         server: &str,
@@ -723,7 +761,7 @@ impl McpConnectionManager {
                         url,
                         headers,
                         auth,
-                        self.token_store.as_deref(),
+                        self.token_store.clone(),
                     )
                     .await?;
                     Ok::<_, McpError>((running, target))
@@ -867,6 +905,9 @@ impl McpConnectionManager {
                 Some(server) => server.events.last_refresh_failure.read().await.clone(),
                 None => None,
             };
+            let (oauth_health, credential_conflict) = spec
+                .credential_projection(&name, self.token_store.clone())
+                .await;
             statuses.push(McpServerStatus {
                 name: name.clone(),
                 connected: server.is_some(),
@@ -890,9 +931,8 @@ impl McpConnectionManager {
                 last_refresh_failure,
                 reconnect_supervisor_running,
                 auth_mode: spec.auth_mode(),
-                oauth_health: spec.oauth_health(name.as_str()),
-                credential_conflict: spec
-                    .credential_conflict(name.as_str(), self.token_store.as_deref()),
+                oauth_health,
+                credential_conflict,
             });
         }
         statuses
@@ -1408,7 +1448,7 @@ async fn connect_http(
     url: Url,
     mut headers: HashMap<String, String>,
     auth: Option<HttpAuth>,
-    token_store: Option<&dyn TokenStore>,
+    token_store: Option<Arc<dyn TokenStore>>,
 ) -> McpResult<RunningClient> {
     let has_authorization = headers
         .keys()
@@ -1420,7 +1460,20 @@ async fn connect_http(
     if oauth_scopes.is_none()
         && let Some(auth) = auth
     {
-        apply_http_auth(server_name, auth, &mut headers, token_store);
+        // TokenStore is a synchronous port and may access the OS keyring.
+        // Its wait must be outside Tokio workers for connect_timeout to work.
+        if matches!(auth, HttpAuth::BearerFromStore) {
+            let server_name = server_name.to_owned();
+            headers = crate::token_store::KEYRING_WORKERS
+                .run(move || {
+                    apply_http_auth(&server_name, auth, &mut headers, token_store.as_deref());
+                    headers
+                })
+                .await
+                .map_err(|error| McpError::auth_error(&error))?;
+        } else {
+            apply_http_auth(server_name, auth, &mut headers, token_store.as_deref());
+        }
     }
 
     let mut custom_headers = HashMap::new();

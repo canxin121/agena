@@ -145,14 +145,9 @@ async fn next_part_id_tx(txn: &DatabaseTransaction) -> Result<i64, DbErr> {
 
 /// Insert one part row.
 async fn insert_part_tx(txn: &DatabaseTransaction, part: &Part) -> Result<(), DbErr> {
-    let content = serde_json::to_string(&part.content)
-        .map_err(|error| DbErr::Custom(format!("encode part content: {error}")))?;
-    let provider_state = part
-        .provider_state
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|error| DbErr::Custom(format!("encode provider state: {error}")))?;
+    let (_, content, provider_state) = encode_part_payload(part.clone())
+        .await
+        .map_err(|error| DbErr::Custom(error.to_string()))?;
     txn.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "INSERT INTO agena_parts \
@@ -674,22 +669,73 @@ fn session_list_filter(query: &SessionListQuery) -> (String, Vec<Value>) {
     (where_sql, values)
 }
 
+static PART_DECODERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+// Mutation work cannot queue behind large read-only history requests while
+// holding a SQLite transaction. Codec closures never perform database I/O.
+static PART_MUTATION_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+async fn encode_part_payload(part: Part) -> Result<(Part, String, Option<String>), StoreError> {
+    PART_MUTATION_CODECS
+        .run(move || {
+            let content = serde_json::to_string(&part.content).map_err(|error| {
+                StoreError::Serialization(format!("encode part content: {error}"))
+            })?;
+            let provider_state = part
+                .provider_state
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|error| {
+                    StoreError::Serialization(format!("encode provider state: {error}"))
+                })?;
+            Ok((part, content, provider_state))
+        })
+        .await
+        .map_err(|error| StoreError::Database(format!("part encode worker failed: {error}")))?
+}
+
+/// History rows can contain large tool results and inline media. Database I/O
+/// is asynchronous, but parsing all their JSON on the caller is CPU work.
+async fn decode_part_rows(rows: Vec<sea_orm::QueryResult>) -> Result<Vec<Part>, StoreError> {
+    decode_part_rows_in(&PART_DECODERS, rows).await
+}
+
+async fn decode_part_rows_in(
+    pool: &'static agena_async::BlockingPool,
+    rows: Vec<sea_orm::QueryResult>,
+) -> Result<Vec<Part>, StoreError> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    pool.run(move || {
+        rows.into_iter()
+            .map(part_from_row)
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|error| StoreError::Database(format!("part decode worker failed: {error}")))?
+    .map_err(map_db_err)
+}
+
 /// Load a single part by id through any connection (db or transaction).
 async fn load_part_by_id<C: ConnectionTrait>(
     connection: &C,
     part_id: i64,
 ) -> Result<Option<Part>, StoreError> {
-    connection
+    let row = connection
         .query_one(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             format!("SELECT {PART_COLS} FROM agena_parts p WHERE p.part_id = ?"),
             [part_id.into()],
         ))
         .await
-        .map_err(map_db_err)?
-        .map(part_from_row)
-        .transpose()
-        .map_err(map_db_err)
+        .map_err(map_db_err)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(decode_part_rows_in(&PART_MUTATION_CODECS, vec![row])
+        .await?
+        .pop())
 }
 
 async fn load_background_operation<C: ConnectionTrait>(
@@ -894,11 +940,8 @@ impl PersistenceEngine for SqliteEngine {
                 [session_id.into()],
             ))
             .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(part_from_row)
-            .collect::<Result<Vec<_>, _>>()
             .map_err(map_db_err)?;
+        let parts = decode_part_rows(parts).await?;
         Ok(SessionView { meta, parts })
     }
 
@@ -910,11 +953,11 @@ impl PersistenceEngine for SqliteEngine {
             let values = std::iter::once(Value::from(session_id))
                 .chain(chunk.iter().copied().map(Value::from))
                 .collect::<Vec<_>>();
-            parts.extend(self.db().query_all(Statement::from_sql_and_values(
+            parts.extend(decode_part_rows(self.db().query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.part_id IN ({placeholders})"),
                 values,
-            )).await.map_err(map_db_err)?.into_iter().map(part_from_row).collect::<Result<Vec<_>, _>>().map_err(map_db_err)?);
+            )).await.map_err(map_db_err)?).await?);
         }
         parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
         parts.dedup_by_key(|part| part.part_id);
@@ -931,8 +974,8 @@ impl PersistenceEngine for SqliteEngine {
             DatabaseBackend::Sqlite,
             format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.origin_session_id = ? AND p.kind = ? ORDER BY p.created_at_ms, p.part_id"),
             [session_id.into(), session_id.into(), kind.to_owned().into()],
-        )).await.map_err(map_db_err)?.into_iter().map(part_from_row)
-            .collect::<Result<Vec<_>, _>>().map_err(map_db_err)?;
+        )).await.map_err(map_db_err)?;
+        let parts = decode_part_rows(parts).await?;
         Ok(SessionView { meta, parts })
     }
 
@@ -966,11 +1009,8 @@ impl PersistenceEngine for SqliteEngine {
                 values,
             ))
             .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(part_from_row)
-            .collect::<Result<Vec<_>, _>>()
             .map_err(map_db_err)?;
+        let rows = decode_part_rows(rows).await?;
         let has_more = rows.len() > usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
         let mut parts = rows;
         parts.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
@@ -1012,11 +1052,8 @@ impl PersistenceEngine for SqliteEngine {
                 values,
             ))
             .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(part_from_row)
-            .collect::<Result<Vec<_>, _>>()
             .map_err(map_db_err)?;
+        let rows = decode_part_rows(rows).await?;
         let has_more = rows.len() > usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
         let mut parts = rows;
         parts.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
@@ -2638,6 +2675,8 @@ impl PersistenceEngine for SqliteEngine {
                     return Ok(part);
                 }
                 let updated_at = part.updated_at_ms;
+                let (part, encoded_content, encoded_provider_state) =
+                    encode_part_payload(part).await?;
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_parts \
@@ -2647,23 +2686,9 @@ impl PersistenceEngine for SqliteEngine {
                      WHERE part_id = ?",
                     [
                         part.state.as_str().into(),
-                        text_value(Some(serde_json::to_string(&part.content).map_err(
-                            |error| {
-                                StoreError::Serialization(format!("encode part content: {error}"))
-                            },
-                        )?)),
+                        text_value(Some(encoded_content)),
                         text_value(part.summary.clone()),
-                        text_value(
-                            part.provider_state
-                                .as_ref()
-                                .map(serde_json::to_string)
-                                .transpose()
-                                .map_err(|error| {
-                                    StoreError::Serialization(format!(
-                                        "encode provider state: {error}"
-                                    ))
-                                })?,
-                        ),
+                        text_value(encoded_provider_state),
                         Value::BigInt(part.finished_at_ms),
                         updated_at.into(),
                         part_id.into(),
@@ -2709,6 +2734,8 @@ impl PersistenceEngine for SqliteEngine {
                 if part.revision == previous_revision {
                     return Ok(part);
                 }
+                let (part, encoded_content, encoded_provider_state) =
+                    encode_part_payload(part).await?;
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_parts \
@@ -2717,22 +2744,8 @@ impl PersistenceEngine for SqliteEngine {
                      WHERE part_id = ?",
                     [
                         part.state.as_str().into(),
-                        text_value(Some(serde_json::to_string(&part.content).map_err(
-                            |error| {
-                                StoreError::Serialization(format!("encode part content: {error}"))
-                            },
-                        )?)),
-                        text_value(
-                            part.provider_state
-                                .as_ref()
-                                .map(serde_json::to_string)
-                                .transpose()
-                                .map_err(|error| {
-                                    StoreError::Serialization(format!(
-                                        "encode provider state: {error}"
-                                    ))
-                                })?,
-                        ),
+                        text_value(Some(encoded_content)),
+                        text_value(encoded_provider_state),
                         part.finished_at_ms.into(),
                         part.updated_at_ms.into(),
                         run_id.into(),
@@ -2851,11 +2864,7 @@ impl PersistenceEngine for SqliteEngine {
                 if rows.is_empty() {
                     return Ok(Vec::new());
                 }
-                let removed = rows
-                    .into_iter()
-                    .map(part_from_row)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(map_db_err)?;
+                let removed = decode_part_rows_in(&PART_MUTATION_CODECS, rows).await?;
                 let part_ids = removed
                     .iter()
                     .map(|part| part.part_id.to_string())
@@ -3458,20 +3467,18 @@ async fn submit_batch_tx(
 
 /// Parts of a run, ordered by `(created_at_ms, part_id)`.
 async fn run_parts_tx(txn: &DatabaseTransaction, run_id: i64) -> Result<Vec<Part>, StoreError> {
-    txn.query_all(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        format!(
-            "SELECT {PART_COLS} FROM agena_parts p WHERE p.run_id = ? \
+    let rows = txn
+        .query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!(
+                "SELECT {PART_COLS} FROM agena_parts p WHERE p.run_id = ? \
              ORDER BY p.created_at_ms, p.part_id"
-        ),
-        [run_id.into()],
-    ))
-    .await
-    .map_err(map_db_err)?
-    .into_iter()
-    .map(part_from_row)
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(map_db_err)
+            ),
+            [run_id.into()],
+        ))
+        .await
+        .map_err(map_db_err)?;
+    decode_part_rows_in(&PART_MUTATION_CODECS, rows).await
 }
 
 /// Refcount-guarded orphan GC (7.6 + invariant 4): delete parts with zero

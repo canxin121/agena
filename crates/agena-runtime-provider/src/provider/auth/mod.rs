@@ -10,3 +10,4 @@ pub use oauth::{
     start_openai_headless_device_code,
 };
 pub use store::AuthStore;
+pub(crate) use store::run_auth_store_operation;

@@ -22,7 +22,9 @@ pub async fn run_reload_watch_loop<I, P, R, Fut>(
     R: FnMut(Vec<PathBuf>) -> Fut + Send + 'static,
     Fut: Future<Output = Result<(), String>> + Send,
 {
-    let mut known_stamps = capture_watch_path_stamps(initial_paths.as_slice());
+    let Some(mut known_stamps) = capture_stamps(&task_control, initial_paths).await else {
+        return;
+    };
 
     loop {
         if wait_for_tick_or_shutdown(&task_control, interval()).await {
@@ -30,7 +32,9 @@ pub async fn run_reload_watch_loop<I, P, R, Fut>(
         }
 
         let observed_paths = paths();
-        let observed = capture_watch_path_stamps(observed_paths.as_slice());
+        let Some(observed) = capture_stamps(&task_control, observed_paths).await else {
+            break;
+        };
         let changed_paths = diff_watch_path_stamps(&known_stamps, &observed);
         if !changed_paths.is_empty()
             && let Err(error) = reload(changed_paths.clone()).await
@@ -42,6 +46,25 @@ pub async fn run_reload_watch_loop<I, P, R, Fut>(
             );
         }
         known_stamps = observed;
+    }
+}
+
+async fn capture_stamps(
+    control: &TaskControl,
+    paths: WatchPathSet,
+) -> Option<std::collections::HashMap<PathBuf, crate::watch::WatchPathStamp>> {
+    tokio::select! {
+        biased;
+        _ = control.cancelled() => None,
+        result = crate::blocking::FILE_OPERATIONS.run(move || capture_watch_path_stamps(paths.as_slice())) => {
+            match result {
+                Ok(stamps) => Some(stamps),
+                Err(error) => {
+                    tracing::error!(%error, "runtime path watch worker failed");
+                    None
+                }
+            }
+        }
     }
 }
 

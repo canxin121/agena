@@ -22,10 +22,15 @@ pub async fn refresh_provider_client_versions(
 }
 
 pub async fn list_aws_profile_names(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let profiles = state
+        .application()
+        .run_blocking(|_| agena_application::provider_queries::list_aws_profile_names())
+        .await
+        .map_err(ServerError::from)?;
     Ok(Json(serde_json::json!({
-        "profiles": agena_application::provider_queries::list_aws_profile_names(),
+        "profiles": profiles,
     })))
 }
 
@@ -213,12 +218,16 @@ pub async fn get_provider_studio_model_draft(
 ) -> Result<impl IntoResponse, ServerError> {
     let value = state
         .application()
-        .provider_model_draft_value(
-            &request.draft,
-            request.adapter_id.as_str(),
-            request.model_id.as_str(),
-            request.provider_model.as_ref(),
-        )
+        .run_blocking(move |app| {
+            app.provider_model_draft_value(
+                &request.draft,
+                request.adapter_id.as_str(),
+                request.model_id.as_str(),
+                request.provider_model.as_ref(),
+            )
+        })
+        .await
+        .map_err(server_error_from_application)?
         .map_err(server_error_from_application)?;
     Ok(Json(serde_json::json!({ "value": value })))
 }

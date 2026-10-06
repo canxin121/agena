@@ -21,6 +21,7 @@ use crate::{McpCredentialState, TokenStore};
 pub const MCP_KEYRING_SERVICE: &str = "agena.mcp";
 const KEYRING_KEY_PREFIX: &str = "mcp-bearer-";
 const OAUTH_KEYRING_KEY_PREFIX: &str = "mcp-oauth-";
+pub(crate) static KEYRING_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
 /// Keep this aligned with rmcp's refresh threshold. The health projection is
 /// intentionally read-only: it tells callers that a connection is likely to
 /// refresh soon, but never performs that refresh itself.
@@ -330,29 +331,38 @@ impl KeyringOAuthCredentialStore {
 #[async_trait]
 impl CredentialStore for KeyringOAuthCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
-        let raw = self
-            .store
-            .get_secret(oauth_keyring_key(self.server.as_str()).as_str())
-            .map_err(Self::auth_error)?;
-        raw.filter(|value| !value.trim().is_empty())
-            .map(|value| serde_json::from_str(value.as_str()).map_err(Self::auth_error))
-            .transpose()
+        let store = Arc::clone(&self.store);
+        let key = oauth_keyring_key(&self.server);
+        KEYRING_WORKERS
+            .run(move || {
+                let raw = store.get_secret(&key).map_err(Self::auth_error)?;
+                raw.filter(|value| !value.trim().is_empty())
+                    .map(|value| serde_json::from_str(value.as_str()).map_err(Self::auth_error))
+                    .transpose()
+            })
+            .await
+            .map_err(Self::auth_error)?
     }
 
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
-        let raw = serde_json::to_string(&credentials).map_err(Self::auth_error)?;
-        self.store
-            .set_secret(
-                oauth_keyring_key(self.server.as_str()).as_str(),
-                raw.as_str(),
-            )
-            .map_err(Self::auth_error)
+        let store = Arc::clone(&self.store);
+        let key = oauth_keyring_key(&self.server);
+        KEYRING_WORKERS
+            .run(move || {
+                let raw = serde_json::to_string(&credentials).map_err(Self::auth_error)?;
+                store.set_secret(&key, &raw).map_err(Self::auth_error)
+            })
+            .await
+            .map_err(Self::auth_error)?
     }
 
     async fn clear(&self) -> Result<(), AuthError> {
-        self.store
-            .delete_secret(oauth_keyring_key(self.server.as_str()).as_str())
-            .map_err(Self::auth_error)
+        let store = Arc::clone(&self.store);
+        let key = oauth_keyring_key(&self.server);
+        KEYRING_WORKERS
+            .run(move || store.delete_secret(&key).map_err(Self::auth_error))
+            .await
+            .map_err(Self::auth_error)?
     }
 }
 

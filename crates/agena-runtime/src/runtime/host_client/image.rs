@@ -57,6 +57,23 @@ async fn prepare_attachment_image(
         AttachmentSource::LocalPath { path } => {
             prepare_path_image(executor, path, capabilities).await
         }
+        _ => {
+            let attachment = attachment.clone();
+            let capabilities = capabilities.clone();
+            crate::blocking::IMAGE_PROCESSING
+                .run(move || prepare_embedded_attachment_image(&attachment, &capabilities))
+                .await
+                .map_err(|error| format!("image preparation worker failed: {error}"))?
+        }
+    }
+}
+
+fn prepare_embedded_attachment_image(
+    attachment: &AttachmentItem,
+    capabilities: &ProviderImageCapabilities,
+) -> Result<ProviderImageInput, String> {
+    match &attachment.source {
+        AttachmentSource::LocalPath { .. } => unreachable!("local images use the async file reader"),
         AttachmentSource::Base64 { data } => prepare_image_bytes(
             data,
             attachment.mime.as_str(),
@@ -145,7 +162,11 @@ async fn prepare_path_image(
         .file_name()
         .and_then(|value| value.to_str())
         .map(ToOwned::to_owned);
-    prepare_decoded_image(bytes, None, filename, None, None, capabilities)
+    let capabilities = capabilities.clone();
+    crate::blocking::IMAGE_PROCESSING
+        .run(move || prepare_decoded_image(bytes, None, filename, None, None, &capabilities))
+        .await
+        .map_err(|error| format!("image preparation worker failed: {error}"))?
 }
 
 fn prepare_image_bytes(
@@ -254,7 +275,7 @@ pub(super) async fn persist_provider_image_artifacts(
     workspace_root: &Path,
     session_id: i64,
     call_id: i64,
-    artifacts: &[ProviderNativeToolArtifact],
+    artifacts: Vec<ProviderNativeToolArtifact>,
 ) -> Result<Vec<AttachmentItem>, PluginError> {
     if artifacts.is_empty() {
         return Err(PluginError::internal(
@@ -263,31 +284,11 @@ pub(super) async fn persist_provider_image_artifacts(
     }
     let artifact_id = format!("image-tool-{call_id}");
     let mut attachments = Vec::with_capacity(artifacts.len());
-    for (index, artifact) in artifacts.iter().enumerate() {
-        let (data_mime, encoded) = agena_runtime_tools::parse_base64_image_data_url(&artifact.uri)
-            .ok_or_else(|| {
-                PluginError::internal(
-                    "provider image response was not a base64 data URL; transient URLs and file ids are not exposed by the direct image host API",
-                )
-            })?;
-        let bytes = STANDARD.decode(encoded.as_bytes()).map_err(|error| {
-            PluginError::internal(format!(
-                "provider returned invalid base64 image data: {error}"
-            ))
-        })?;
-        let detected_mime = detect_image_mime(bytes.as_slice()).ok_or_else(|| {
-            PluginError::internal("provider returned an unrecognized image payload")
-        })?;
-        let declared_mime = normalize_image_mime(if data_mime.trim().is_empty() {
-            artifact.mime.as_str()
-        } else {
-            data_mime.as_str()
-        });
-        if declared_mime != detected_mime {
-            return Err(PluginError::internal(format!(
-                "provider image MIME `{declared_mime}` does not match detected payload `{detected_mime}`"
-            )));
-        }
+    for (index, artifact) in artifacts.into_iter().enumerate() {
+        let (artifact, detected_mime) = crate::blocking::IMAGE_PROCESSING
+            .run(move || validate_provider_image_artifact(artifact))
+            .await
+            .map_err(super::plugin_error)??;
         let saved = agena_runtime_tools::persist_generated_image_artifact(
             workspace_root,
             session_id,
@@ -317,6 +318,35 @@ pub(super) async fn persist_provider_image_artifacts(
         });
     }
     Ok(attachments)
+}
+
+fn validate_provider_image_artifact(
+    artifact: ProviderNativeToolArtifact,
+) -> Result<(ProviderNativeToolArtifact, &'static str), PluginError> {
+    let (data_mime, encoded) = agena_runtime_tools::parse_base64_image_data_url(&artifact.uri)
+        .ok_or_else(|| {
+            PluginError::internal(
+                "provider image response was not a base64 data URL; transient URLs and file ids are not exposed by the direct image host API",
+            )
+        })?;
+    let bytes = STANDARD.decode(encoded.as_bytes()).map_err(|error| {
+        PluginError::internal(format!(
+            "provider returned invalid base64 image data: {error}"
+        ))
+    })?;
+    let detected_mime = detect_image_mime(bytes.as_slice())
+        .ok_or_else(|| PluginError::internal("provider returned an unrecognized image payload"))?;
+    let declared_mime = normalize_image_mime(if data_mime.trim().is_empty() {
+        artifact.mime.as_str()
+    } else {
+        data_mime.as_str()
+    });
+    if declared_mime != detected_mime {
+        return Err(PluginError::internal(format!(
+            "provider image MIME `{declared_mime}` does not match detected payload `{detected_mime}`"
+        )));
+    }
+    Ok((artifact, detected_mime))
 }
 
 fn normalize_image_mime(value: &str) -> String {
@@ -401,7 +431,7 @@ mod tests {
             workspace.path(),
             17,
             23,
-            &[ProviderNativeToolArtifact {
+            vec![ProviderNativeToolArtifact {
                 uri: format!("data:image/png;base64,{data}"),
                 mime: "image/png".to_owned(),
                 name: Some("fixture.png".to_owned()),

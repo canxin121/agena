@@ -11,7 +11,7 @@ const MAX_WORKSPACE_KEY_LEN: usize = 80;
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 const TOOL_OUTPUT_SPILL_DIR: &str = "tool_output";
 pub const MAX_GENERATED_IMAGE_BYTES: usize = 50 * 1024 * 1024;
-static GENERATED_IMAGE_FILE_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
+static GENERATED_IMAGE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// A generated image artifact managed by the runtime.
@@ -120,6 +120,36 @@ pub async fn persist_generated_image_artifact(
     filename_hint: Option<&str>,
     uri: &str,
 ) -> Result<Option<ManagedGeneratedImageArtifact>, ManagedGeneratedImageError> {
+    let workspace = workspace_root.to_owned();
+    let artifact_id = artifact_id.to_owned();
+    let mime_type = mime_type.to_owned();
+    let filename_hint = filename_hint.map(ToOwned::to_owned);
+    let uri = uri.to_owned();
+    GENERATED_IMAGE_WORKERS
+        .run(move || {
+            persist_generated_image_artifact_sync(
+                &workspace,
+                session_id,
+                &artifact_id,
+                media_index,
+                &mime_type,
+                filename_hint.as_deref(),
+                &uri,
+            )
+        })
+        .await
+        .map_err(|error| std::io::Error::other(format!("generated image worker failed: {error}")))?
+}
+
+fn persist_generated_image_artifact_sync(
+    workspace_root: &Path,
+    session_id: i64,
+    artifact_id: &str,
+    media_index: usize,
+    mime_type: &str,
+    filename_hint: Option<&str>,
+    uri: &str,
+) -> Result<Option<ManagedGeneratedImageArtifact>, ManagedGeneratedImageError> {
     let Some((decoded_mime, encoded)) = parse_base64_image_data_url(uri) else {
         return Ok(None);
     };
@@ -159,21 +189,11 @@ pub async fn persist_generated_image_artifact(
         extension.as_str(),
     );
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        std::fs::create_dir_all(parent)?;
     }
     let size_bytes = bytes.len() as u64;
     let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
-    let write_path = path.clone();
-    let worker_permit = GENERATED_IMAGE_FILE_WORKERS
-        .acquire()
-        .await
-        .expect("the static generated-image semaphore is never closed");
-    tokio::task::spawn_blocking(move || {
-        let _worker_permit = worker_permit;
-        crate::atomic_write_file(&write_path, bytes.as_slice())
-    })
-    .await
-    .map_err(|error| std::io::Error::other(format!("generated image worker failed: {error}")))??;
+    crate::atomic_write_file(&path, bytes.as_slice())?;
 
     let filename = path
         .file_name()

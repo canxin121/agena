@@ -15,6 +15,8 @@ use crate::dto::{
 };
 use crate::service::ApplicationService;
 
+static APPLICATION_FILE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
+
 /// Shared in-process application handle.
 ///
 /// Construction remains in the app/runtime composition layer. Presentation
@@ -89,6 +91,22 @@ pub enum AuthLoginKind {
 }
 
 impl Application {
+    /// Execute a synchronous application projection or persisted edit outside
+    /// Tokio's workers. The owned application keeps its selected service
+    /// handles alive, and the bounded pool also covers cancelled callers.
+    pub async fn run_blocking<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&Self) -> T + Send + 'static,
+    ) -> Result<T, ApplicationError> {
+        let application = self.clone();
+        APPLICATION_FILE_WORKERS
+            .run(move || operation(&application))
+            .await
+            .map_err(|error| {
+                ApplicationError::internal(format!("application worker failed: {error}"))
+            })
+    }
+
     /// Build an application handle from the complete Runtime-owned capability
     /// bundle. Normal consumers must use this path: Runtime has already
     /// selected the concrete storage adapters, while Application receives only
@@ -187,9 +205,13 @@ impl Application {
         provider_id: &str,
         api_key: String,
     ) -> Result<AuthProviderResource, ApplicationError> {
-        self.runtime_authentication
-            .set_auth_api_key(provider_id, api_key)
-            .map_err(application_error_from_runtime_authentication)?;
+        let stored_provider_id = provider_id.to_owned();
+        self.run_blocking(move |app| {
+            app.runtime_authentication
+                .set_auth_api_key(&stored_provider_id, api_key)
+        })
+        .await?
+        .map_err(application_error_from_runtime_authentication)?;
         self.reload_after_authentication_change().await?;
         self.auth_provider(provider_id)
     }
@@ -198,9 +220,13 @@ impl Application {
         &self,
         provider_id: &str,
     ) -> Result<AuthProviderResource, ApplicationError> {
-        self.runtime_authentication
-            .remove_auth_provider(provider_id)
-            .map_err(application_error_from_runtime_authentication)?;
+        let stored_provider_id = provider_id.to_owned();
+        self.run_blocking(move |app| {
+            app.runtime_authentication
+                .remove_auth_provider(&stored_provider_id)
+        })
+        .await?
+        .map_err(application_error_from_runtime_authentication)?;
         self.reload_after_authentication_change().await?;
         self.auth_provider(provider_id)
     }
@@ -280,18 +306,13 @@ impl Application {
         pkce_verifier: String,
         redirect_uri: String,
     ) -> Result<AuthLoginResultResource, ApplicationError> {
-        // The callback server uses a synchronous loopback listener. Keep its
-        // potentially minutes-long poll loop off Tokio's async worker threads.
-        let authentication = Arc::clone(&self.runtime_authentication);
-        let expected_state = expected_state.to_owned();
-        let callback = tokio::task::spawn_blocking(move || {
-            authentication.wait_auth_browser_callback(port, expected_state.as_str(), timeout)
-        })
-        .await
-        .map_err(|error| {
-            ApplicationError::internal(format!("OAuth callback worker failed: {error}"))
-        })?
-        .map_err(application_error_from_runtime_authentication)?;
+        // The runtime owns an async listener; waiting for a browser redirect
+        // consumes neither a blocking-pool slot nor an additional runtime.
+        let callback = self
+            .runtime_authentication
+            .wait_auth_browser_callback(port, expected_state, timeout)
+            .await
+            .map_err(application_error_from_runtime_authentication)?;
         self.finish_auth_browser(
             provider_id,
             kind,
@@ -694,6 +715,10 @@ impl Application {
             project_file,
             effective,
         })
+    }
+
+    pub async fn config_json_sources_async(&self) -> Result<ConfigJsonSources, ApplicationError> {
+        self.run_blocking(Self::config_json_sources).await?
     }
 
     /// Resolves the active configuration path for an editor/process effect.

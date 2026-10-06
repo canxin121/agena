@@ -51,17 +51,21 @@ impl Application {
                 .delete_plugin_settings_setting(plugin_id.as_str(), config_segments.as_slice())
                 .await;
         }
+        let path = path.trim().to_owned();
         let response = self
-            .runtime_config_settings()
-            .delete_file_setting(ConfigSettingsDeleteInput {
-                path: path.trim().to_owned(),
-                options: ConfigSettingsEditOptions {
-                    expected_revision: None,
-                    dry_run: false,
-                    validate: true,
-                    reload: true,
-                },
+            .run_blocking(move |app| {
+                app.runtime_config_settings()
+                    .delete_file_setting(ConfigSettingsDeleteInput {
+                        path,
+                        options: ConfigSettingsEditOptions {
+                            expected_revision: None,
+                            dry_run: false,
+                            validate: true,
+                            reload: true,
+                        },
+                    })
             })
+            .await?
             .map_err(|error| {
                 ApplicationError::internal(format!("failed to delete config setting: {error}"))
             })?;
@@ -83,7 +87,7 @@ impl Application {
         config_segments: &[String],
         value: serde_json::Value,
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
-        let sources = self.config_json_sources()?;
+        let sources = self.config_json_sources_async().await?;
         let mut record = plugin_record_for_settings_edit(&sources, plugin_id);
         let config = normalize_plugin_record_for_settings_edit(&mut record)
             .map_err(ApplicationError::internal)?;
@@ -97,7 +101,7 @@ impl Application {
         plugin_id: &str,
         config_segments: &[String],
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
-        let sources = self.config_json_sources()?;
+        let sources = self.config_json_sources_async().await?;
         let mut record = plugin_record_for_settings_edit(&sources, plugin_id);
         let config = normalize_plugin_record_for_settings_edit(&mut record)
             .map_err(ApplicationError::internal)?;
@@ -111,18 +115,22 @@ impl Application {
         path: &str,
         value: serde_json::Value,
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
+        let path = path.trim().to_owned();
         let response = self
-            .runtime_config_settings()
-            .set_file_setting(ConfigSettingsSetInput {
-                path: path.trim().to_owned(),
-                value,
-                options: ConfigSettingsEditOptions {
-                    expected_revision: None,
-                    dry_run: false,
-                    validate: true,
-                    reload: true,
-                },
+            .run_blocking(move |app| {
+                app.runtime_config_settings()
+                    .set_file_setting(ConfigSettingsSetInput {
+                        path,
+                        value,
+                        options: ConfigSettingsEditOptions {
+                            expected_revision: None,
+                            dry_run: false,
+                            validate: true,
+                            reload: true,
+                        },
+                    })
             })
+            .await?
             .map_err(|error| {
                 ApplicationError::internal(format!("failed to set config setting: {error}"))
             })?;

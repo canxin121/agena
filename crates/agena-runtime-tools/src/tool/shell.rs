@@ -44,7 +44,9 @@ impl ShellOutputSink {
                 while !text.is_char_boundary(start) {
                     start += 1;
                 }
-                if tail.as_str() == &text[start..] { return false; }
+                if tail.as_str() == &text[start..] {
+                    return false;
+                }
                 tail.clear();
                 tail.push_str(&text[start..]);
             } else {
@@ -55,7 +57,8 @@ impl ShellOutputSink {
                 let retained = tail.len() - start;
                 if tail.len() == retained + text.len()
                     && tail.as_bytes()[..retained] == tail.as_bytes()[start..]
-                    && &tail.as_bytes()[retained..] == text.as_bytes() {
+                    && &tail.as_bytes()[retained..] == text.as_bytes()
+                {
                     return false;
                 }
                 tail.drain(..start);
@@ -71,34 +74,38 @@ impl ShellOutputSink {
 pub(crate) fn decode_output(pending: &mut Vec<u8>, bytes: &[u8], eof: bool) -> String {
     pending.extend_from_slice(bytes);
     let mut text = String::new();
-    loop {
-        match std::str::from_utf8(pending) {
+    let mut consumed = 0;
+    while consumed < pending.len() {
+        match std::str::from_utf8(&pending[consumed..]) {
             Ok(valid) => {
                 text.push_str(valid);
-                pending.clear();
-                break;
+                consumed = pending.len();
             }
             Err(error) => {
                 let valid = error.valid_up_to();
                 text.push_str(
-                    std::str::from_utf8(&pending[..valid]).expect("validated UTF-8 prefix"),
+                    std::str::from_utf8(&pending[consumed..consumed + valid])
+                        .expect("validated UTF-8 prefix"),
                 );
-                pending.drain(..valid);
+                consumed += valid;
                 if let Some(invalid) = error.error_len() {
                     text.push('\u{fffd}');
-                    pending.drain(..invalid);
+                    consumed += invalid;
                 } else {
                     if eof {
-                        text.push_str(&String::from_utf8_lossy(pending));
-                        pending.clear();
+                        text.push_str(&String::from_utf8_lossy(&pending[consumed..]));
+                        consumed = pending.len();
                     }
                     break;
                 }
             }
         }
     }
+    // Retain only an incomplete trailing code point, shifting the buffer once.
+    pending.drain(..consumed);
     text
 }
+
 static SHELL_WORKERS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SHELL_WORKERS)));
 
@@ -123,7 +130,7 @@ pub async fn execute_with_sink(
     cancellation: Option<&CancellationToken>,
     live: Option<ShellOutputSink>,
 ) -> Result<ShellOutput, ShellError> {
-    validate(request)?;
+    validate(request).await?;
 
     let env = sanitize_env(&request.env);
     let (program, args) = request
@@ -230,7 +237,7 @@ pub async fn execute_with_sink(
     })
 }
 
-fn validate(request: &ShellRequest) -> Result<(), ShellError> {
+async fn validate(request: &ShellRequest) -> Result<(), ShellError> {
     if request.command.is_empty() {
         return Err(ShellError::InvalidRequest(
             "command must contain at least one token".to_string(),
@@ -241,13 +248,13 @@ fn validate(request: &ShellRequest) -> Result<(), ShellError> {
             "command executable must not be empty".to_string(),
         ));
     }
-    if !request.cwd.exists() {
-        return Err(ShellError::InvalidRequest(format!(
+    let metadata = tokio::fs::metadata(&request.cwd).await.map_err(|_| {
+        ShellError::InvalidRequest(format!(
             "shell cwd does not exist: {}",
             request.cwd.display()
-        )));
-    }
-    if !request.cwd.is_dir() {
+        ))
+    })?;
+    if !metadata.is_dir() {
         return Err(ShellError::InvalidRequest(format!(
             "shell cwd is not a directory: {}",
             request.cwd.display()

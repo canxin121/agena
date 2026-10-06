@@ -23,6 +23,29 @@ static POLICY: LazyLock<Result<bool, String>> =
 pub fn enabled() -> Result<bool, ToolError> {
     POLICY.clone().map_err(ToolError::invalid_input)
 }
+
+static POLICY_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
+
+pub(crate) async fn protect_async(
+    executor: &ToolExecutor,
+    command: Vec<String>,
+    input: &ShellCommandInput,
+    mut env: HashMap<String, String>,
+) -> Result<(Vec<String>, HashMap<String, String>), ToolError> {
+    if !enabled()? {
+        return Ok((command, env));
+    }
+    let executor = executor.clone();
+    let input = input.clone();
+    POLICY_WORKERS
+        .run(move || {
+            let command = protect(&executor, command, &input, &mut env)?;
+            Ok((command, env))
+        })
+        .await
+        .map_err(|error| ToolError::plugin(format!("shell policy worker failed: {error}")))?
+}
+
 pub(crate) fn protect(
     executor: &ToolExecutor,
     command: Vec<String>,

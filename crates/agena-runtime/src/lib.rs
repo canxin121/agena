@@ -59,6 +59,7 @@ mod background_task_completion;
 mod background_task_registry;
 mod background_task_spec;
 mod background_task_state;
+mod blocking;
 mod bootstrap_error;
 mod bootstrap_request;
 mod bootstrap_result;
@@ -259,8 +260,8 @@ pub(crate) use control_state::RuntimeControlState;
 pub(crate) use invocation_guard::try_enter_invocation;
 pub(crate) use live_signal::LiveSignalHub;
 pub use live_signal::{
-    RuntimeLiveSignal, RuntimeLiveSignalItem, RuntimeLiveSignalService,
-    RuntimeLiveSignalSubscription, RuntimeLiveSignalObservation, RuntimeLiveSignalObserver,
+    RuntimeLiveSignal, RuntimeLiveSignalItem, RuntimeLiveSignalObservation,
+    RuntimeLiveSignalObserver, RuntimeLiveSignalService, RuntimeLiveSignalSubscription,
 };
 pub(crate) use lsp_config::compose_lsp_services;
 pub(crate) use mcp_runtime::{

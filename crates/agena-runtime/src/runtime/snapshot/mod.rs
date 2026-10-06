@@ -123,7 +123,12 @@ impl RuntimeSnapshot {
             chat: database,
             scheduler: scheduler_database,
         } = databases;
-        let mut resolution = loader.load(load_request)?;
+        let worker_loader = loader.clone();
+        let request = load_request.clone();
+        let mut resolution = crate::blocking::FILE_OPERATIONS
+            .run(move || worker_loader.load(&request))
+            .await
+            .map_err(|error| AppError::Internal(format!("config load worker failed: {error}")))??;
         // Bundled implementations are a composition concern: the pure
         // config crate cannot depend on concrete plugin factories. Inject the
         // bundled entries before any plugin-dependent service is built so

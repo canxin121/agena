@@ -1,5 +1,7 @@
 use super::{AdapterId, ModelId, ModelRef, ProviderError, ProviderId, ProviderRegistry};
 
+static PROMPT_IDENTITY_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
+
 impl ProviderRegistry {
     /// Resolve the actual model adapter without discovery or a network call.
     pub fn tool_execution_adapter(
@@ -49,6 +51,24 @@ impl ProviderRegistry {
         self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.prompt_cache_shape_for_adapter(adapter_id, model_id)
         })
+    }
+
+    /// Some adapters inspect credential files to build their cache identity.
+    /// Resolve the provider in memory, then compute the identity on a worker.
+    pub async fn prompt_cache_shape_async(
+        &self,
+        model: &ModelRef,
+    ) -> Result<Option<agena_provider::PromptCacheShape>, ProviderError> {
+        let provider = self.provider_for_model_ref(model)?;
+        let model = model.clone();
+        PROMPT_IDENTITY_WORKERS
+            .run(move || {
+                provider.prompt_cache_shape_for_adapter(model.adapter_id.as_ref(), &model.model_id)
+            })
+            .await
+            .map_err(|error| {
+                ProviderError::Config(format!("prompt identity worker failed: {error}"))
+            })
     }
 
     pub fn image_capabilities(

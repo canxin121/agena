@@ -271,7 +271,8 @@ pub(crate) async fn save_provider_draft(
     .map_err(ProviderStudioSaveError::Validation)?;
     if let Some(source_provider_id) = draft.source_provider_id.as_deref()
         && source_provider_id != provider_id
-        && read_file_provider_settings(app, provider_id)
+        && read_file_provider_settings_async(app, provider_id)
+            .await
             .map_err(ProviderStudioSaveError::other)?
             .is_some()
     {
@@ -312,7 +313,8 @@ pub(crate) async fn save_provider_draft(
     // being dropped. For a plain save the source id equals the target id
     // and this reads the provider being edited.
     let existing_base_id = draft.source_provider_id.as_deref().unwrap_or(provider_id);
-    let mut provider_value = read_file_provider_settings(app, existing_base_id)
+    let mut provider_value = read_file_provider_settings_async(app, existing_base_id)
+        .await
         .map_err(ProviderStudioSaveError::other)?
         .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
     let provider_object = provider_value
@@ -445,7 +447,8 @@ pub(crate) async fn save_provider_adapter_matches(
             .flat_map(provider_model_catalog_lookup_candidates)
             .collect::<Vec<_>>(),
     );
-    let existing_models = read_file_provider_settings(app, provider_id)
+    let existing_models = read_file_provider_settings_async(app, provider_id)
+        .await
         .map_err(ProviderStudioSaveError::other)?
         .as_ref()
         .and_then(JsonValue::as_object)
@@ -659,6 +662,15 @@ pub(crate) fn read_file_provider_settings(
     }
 }
 
+async fn read_file_provider_settings_async(
+    app: &Application,
+    provider_id: &str,
+) -> anyhow::Result<Option<JsonValue>> {
+    let provider_id = provider_id.to_owned();
+    app.run_blocking(move |app| read_file_provider_settings(app, &provider_id))
+        .await?
+}
+
 pub(crate) async fn save_provider_model_value(
     app: &Application,
     draft: ProviderConfigDraft,
@@ -686,22 +698,23 @@ pub(crate) async fn save_provider_model_value(
     draft
         .validate_for_adapters_for_save(&effective_adapter_ids)
         .map_err(ProviderStudioSaveError::Validation)?;
-    let existing_adapter = draft
-        .source_provider_id
-        .as_deref()
-        .or(Some(provider_id))
-        .map(|provider_id| {
+    let path = provider_adapter_settings_path(
+        draft.source_provider_id.as_deref().unwrap_or(provider_id),
+        adapter_id,
+    );
+    let existing_adapter = Some(
+        app.run_blocking(move |app| {
             app.runtime_config_settings()
                 .read_file_settings(agena_runtime::ConfigSettingsGetInput {
-                    target: agena_runtime::ConfigSettingsPathInput {
-                        path: Some(provider_adapter_settings_path(provider_id, adapter_id)),
-                    },
+                    target: agena_runtime::ConfigSettingsPathInput { path: Some(path) },
                     source: agena_runtime::ConfigSettingsSource::File,
                 })
-                .map_err(ProviderStudioSaveError::other)
                 .map(|response| response.value)
         })
-        .transpose()?;
+        .await
+        .map_err(ProviderStudioSaveError::other)?
+        .map_err(ProviderStudioSaveError::other)?,
+    );
     let model_overlay =
         serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(model_value)
             .map_err(ProviderStudioSaveError::other)?;
@@ -763,7 +776,8 @@ pub(crate) async fn delete_provider_model(
     let model_id = canonical_provider_model_id(adapter_id, model_id);
     let _ = draft;
 
-    let mut provider_value = read_file_provider_settings(app, provider_id)
+    let mut provider_value = read_file_provider_settings_async(app, provider_id)
+        .await
         .map_err(ProviderStudioSaveError::other)?
         .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
     let provider_object = provider_value
@@ -800,7 +814,8 @@ pub(crate) async fn delete_provider(
     let provider_id =
         required_provider_save_field(provider_id, ProviderStudioSaveField::ProviderId)
             .map_err(ProviderStudioSaveError::Validation)?;
-    let provider_value = read_file_provider_settings(app, provider_id)
+    let provider_value = read_file_provider_settings_async(app, provider_id)
+        .await
         .map_err(ProviderStudioSaveError::other)?
         .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
     if !provider_value.is_object() {
@@ -830,7 +845,8 @@ pub(crate) async fn delete_provider_adapter(
     let adapter_id = required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
         .map_err(ProviderStudioSaveError::Validation)?;
 
-    let mut provider_value = read_file_provider_settings(app, provider_id)
+    let mut provider_value = read_file_provider_settings_async(app, provider_id)
+        .await
         .map_err(ProviderStudioSaveError::other)?
         .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
     let provider_object = provider_value
@@ -877,22 +893,28 @@ pub(crate) async fn patch_provider_settings(
     provider_id: &str,
     provider_patch: JsonValue,
 ) -> std::result::Result<agena_runtime::ConfigSettingsEditResponse, ProviderStudioSaveError> {
-    let response = app.runtime_config_settings().patch_file_settings(
-        agena_runtime::ConfigSettingsPatchInput {
-            target: agena_runtime::ConfigSettingsPathInput {
-                path: Some("providers".to_owned()),
-            },
-            changes: json!({
-                provider_id: provider_patch,
-            }),
-            options: agena_runtime::ConfigSettingsEditOptions {
-                expected_revision: None,
-                dry_run: false,
-                validate: true,
-                reload: true,
-            },
-        },
-    )?;
+    let provider_id = provider_id.to_owned();
+    let response = app
+        .run_blocking(move |app| {
+            app.runtime_config_settings().patch_file_settings(
+                agena_runtime::ConfigSettingsPatchInput {
+                    target: agena_runtime::ConfigSettingsPathInput {
+                        path: Some("providers".to_owned()),
+                    },
+                    changes: json!({
+                        provider_id: provider_patch,
+                    }),
+                    options: agena_runtime::ConfigSettingsEditOptions {
+                        expected_revision: None,
+                        dry_run: false,
+                        validate: true,
+                        reload: true,
+                    },
+                },
+            )
+        })
+        .await
+        .map_err(ProviderStudioSaveError::other)??;
 
     if response.reload_required {
         app.runtime_control()
@@ -910,20 +932,25 @@ pub(crate) async fn patch_provider_settings_root(
     app: &Application,
     changes: JsonValue,
 ) -> std::result::Result<agena_runtime::ConfigSettingsEditResponse, ProviderStudioSaveError> {
-    let response = app.runtime_config_settings().patch_file_settings(
-        agena_runtime::ConfigSettingsPatchInput {
-            target: agena_runtime::ConfigSettingsPathInput {
-                path: Some("providers".to_owned()),
-            },
-            changes,
-            options: agena_runtime::ConfigSettingsEditOptions {
-                expected_revision: None,
-                dry_run: false,
-                validate: true,
-                reload: true,
-            },
-        },
-    )?;
+    let response = app
+        .run_blocking(move |app| {
+            app.runtime_config_settings().patch_file_settings(
+                agena_runtime::ConfigSettingsPatchInput {
+                    target: agena_runtime::ConfigSettingsPathInput {
+                        path: Some("providers".to_owned()),
+                    },
+                    changes,
+                    options: agena_runtime::ConfigSettingsEditOptions {
+                        expected_revision: None,
+                        dry_run: false,
+                        validate: true,
+                        reload: true,
+                    },
+                },
+            )
+        })
+        .await
+        .map_err(ProviderStudioSaveError::other)??;
 
     if response.reload_required {
         app.runtime_control()
@@ -940,18 +967,23 @@ pub(crate) async fn set_provider_settings(
     provider_id: &str,
     provider_value: JsonValue,
 ) -> std::result::Result<agena_runtime::ConfigSettingsEditResponse, ProviderStudioSaveError> {
-    let response =
-        app.runtime_config_settings()
-            .set_file_setting(agena_runtime::ConfigSettingsSetInput {
-                path: format!("providers.{}", quoted_settings_segment(provider_id)),
-                value: provider_value,
-                options: agena_runtime::ConfigSettingsEditOptions {
-                    expected_revision: None,
-                    dry_run: false,
-                    validate: true,
-                    reload: true,
-                },
-            })?;
+    let provider_id = provider_id.to_owned();
+    let response = app
+        .run_blocking(move |app| {
+            app.runtime_config_settings()
+                .set_file_setting(agena_runtime::ConfigSettingsSetInput {
+                    path: format!("providers.{}", quoted_settings_segment(&provider_id)),
+                    value: provider_value,
+                    options: agena_runtime::ConfigSettingsEditOptions {
+                        expected_revision: None,
+                        dry_run: false,
+                        validate: true,
+                        reload: true,
+                    },
+                })
+        })
+        .await
+        .map_err(ProviderStudioSaveError::other)??;
 
     if response.reload_required {
         app.runtime_control()

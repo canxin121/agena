@@ -81,12 +81,20 @@ impl AgenaRuntime {
             workspace_root: _,
         } = config;
         let loader = ConfigLoader::new(ProcessEnvironment);
-        let initial_resolution = bootstrap_preflight
-            .is_none()
-            .then(|| loader.load(&load_request));
-        let initial_resolution = match initial_resolution {
-            Some(result) => Some(result?),
-            None => None,
+        let initial_resolution = match &bootstrap_preflight {
+            None => {
+                let loader = loader.clone();
+                let request = load_request.clone();
+                Some(
+                    crate::blocking::FILE_OPERATIONS
+                        .run(move || loader.load(&request))
+                        .await
+                        .map_err(|error| {
+                            AppError::Internal(format!("config load worker failed: {error}"))
+                        })??,
+                )
+            }
+            Some(_) => None,
         };
         let tracing = match (&bootstrap_preflight, &initial_resolution) {
             (Some(preflight), _) => &preflight.tracing,
@@ -142,7 +150,8 @@ impl AgenaRuntime {
         // Publish directly to the bounded signal hub. Its synchronous clock
         // observers see every mutation; slow clients receive an explicit lag.
         let live_signals = Arc::new(agena_runtime::LiveSignalHub::new(256));
-        let activity_registry = crate::activity::ActivityRegistry::with_signals(live_signals.clone());
+        let activity_registry =
+            crate::activity::ActivityRegistry::with_signals(live_signals.clone());
         // Background-completion bridge: correlates launched-in-background
         // operations (monitored shells, delegated tasks) with their transcript
         // parts. The manager may not exist yet on a control-only bootstrap;
@@ -233,9 +242,13 @@ impl AgenaRuntime {
         let runtime = Arc::new(runtime);
         // Finish fallible publication preflight before starting maintenance
         // futures, which intentionally retain runtime handles until shutdown.
-        agena_runtime::ownership_audit::record_runtime_ownership(
-            runtime.inner.workspace_root.as_path(),
-        )?;
+        let audit_workspace = runtime.inner.workspace_root.clone();
+        crate::blocking::FILE_OPERATIONS
+            .run(move || agena_runtime::ownership_audit::record_runtime_ownership(&audit_workspace))
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("ownership audit worker failed: {error}"))
+            })??;
 
         // The candidate client already serves generation configuration during
         // init. Runtime-dependent operations become available at publication.
@@ -812,22 +825,23 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                 };
                 let monitor = Arc::clone(monitor);
                 let activity_id = activity_id.to_string();
-                tokio::task::spawn_blocking(move || {
-                    crate::activity::read_shell_logs(
-                        monitor.as_ref(),
-                        activity_id.as_str(),
-                        since_seq,
-                        limit,
-                        wait_ms,
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    agena_runtime::ActivityControlError::internal(format!(
-                        "shell log worker failed: {error}"
-                    ))
-                })?
-                .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))
+                crate::blocking::PROCESS_LOG_READS
+                    .run(move || {
+                        crate::activity::read_shell_logs(
+                            monitor.as_ref(),
+                            activity_id.as_str(),
+                            since_seq,
+                            limit,
+                            wait_ms,
+                        )
+                    })
+                    .await
+                    .map_err(|error| {
+                        agena_runtime::ActivityControlError::internal(format!(
+                            "shell log worker failed: {error}"
+                        ))
+                    })?
+                    .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))
             }
             agena_domain::BackgroundActivityKind::Task => {
                 let (parent_session_id, task_id) = activity
@@ -1426,15 +1440,17 @@ impl agena_runtime::RuntimeAuthenticationService for AgenaRuntime {
         }
     }
 
-    fn wait_auth_browser_callback(
+    async fn wait_auth_browser_callback(
         &self,
         port: u16,
         expected_state: &str,
         timeout: std::time::Duration,
     ) -> Result<agena_provider::OAuthCallback, agena_runtime::RuntimeAuthenticationError> {
-        agena_runtime::wait_for_oauth_callback(port, expected_state, timeout).map_err(|error| {
-            agena_runtime::RuntimeAuthenticationError::bad_request(error.to_string())
-        })
+        agena_runtime::wait_for_oauth_callback_async(port, expected_state, timeout)
+            .await
+            .map_err(|error| {
+                agena_runtime::RuntimeAuthenticationError::bad_request(error.to_string())
+            })
     }
 
     async fn finish_auth_browser(
@@ -2312,7 +2328,11 @@ impl AgenaRuntime {
                 live_signals: {
                     struct Adapter(Arc<agena_runtime::LiveSignalHub>);
                     impl agena_runtime::RuntimeLiveSignalService for Adapter {
-                        fn observe(&self, observer: agena_runtime::RuntimeLiveSignalObserver) -> Option<agena_runtime::RuntimeLiveSignalObservation> {
+                        fn observe(
+                            &self,
+                            observer: agena_runtime::RuntimeLiveSignalObserver,
+                        ) -> Option<agena_runtime::RuntimeLiveSignalObservation>
+                        {
                             Some(self.0.observe(observer))
                         }
                         fn subscribe(

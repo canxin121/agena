@@ -117,7 +117,10 @@ fn server_api_router() -> Router<Arc<AppState>> {
             get(crate::server::preview::routes::workspace_preview_sessions_get)
                 .post(crate::server::preview::routes::workspace_preview_sessions_post),
         )
-        .route("/api/v1/workbench/preview/sessions/events", get(crate::server::preview::routes::workspace_preview_sessions_events))
+        .route(
+            "/api/v1/workbench/preview/sessions/events",
+            get(crate::server::preview::routes::workspace_preview_sessions_events),
+        )
         .route(
             "/api/v1/workbench/preview/sessions/{id}",
             get(crate::server::preview::routes::workspace_preview_sessions_by_id_get)
@@ -640,7 +643,9 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     .await
     .context("failed to build agena runtime")?;
 
-    let ui_auth = crate::server::auth::init_ui_auth(args.ui_password.clone());
+    let ui_auth = crate::server::auth::init_ui_auth_async(args.ui_password.clone())
+        .await
+        .map_err(anyhow::Error::msg)?;
     let server_state_db = Arc::new(
         crate::server::persistence::db::ServerStateDb::open()
             .await

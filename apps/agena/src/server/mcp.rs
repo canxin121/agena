@@ -813,10 +813,12 @@ impl McpServerState {
             .expect("MCP OAuth password lock poisoned")
             .as_ref()
             .map(|password| password.verifier.clone());
-        match custom_verifier {
-            Some(verifier) => auth::verify_password_for_oauth(&verifier, candidate, headers),
-            None => auth::verify_password_for_oauth(&self.ui_auth, candidate, headers),
-        }
+        auth::verify_password_for_oauth_async(
+            custom_verifier.unwrap_or_else(|| self.ui_auth.clone()),
+            candidate.to_owned(),
+            headers.clone(),
+        )
+        .await
     }
 
     async fn clear_oauth_runtime_state(&self) -> Result<(), String> {
@@ -967,7 +969,7 @@ impl McpServerState {
                 "MCP OAuth password must be at most {MAX_MCP_OAUTH_PASSWORD_BYTES} bytes"
             ));
         }
-        let phc = auth::hash_password(password)?;
+        let phc = auth::hash_password_async(password.to_owned()).await?;
         let verifier = auth::init_ui_auth_from_phc(phc.clone())?;
         let _guard = self.control.update_lock.lock().await;
         let enabled = self.is_enabled();

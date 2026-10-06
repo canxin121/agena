@@ -6,6 +6,7 @@ use crate::{
 pub use crate::{ConfigEnvironment, ProcessEnvironment};
 
 /// Loads and layers configuration from defaults, files, and the environment.
+#[derive(Clone)]
 pub struct ConfigLoader<E = ProcessEnvironment> {
     env: E,
 }

@@ -651,7 +651,7 @@ async fn resolve_inline_auth_credential(
 ) -> Result<CachedCredential, ProviderError> {
     let mut current = auth.lock().await.clone();
     if let Some(config_path) = config_path
-        && let Some(stored) = load_auth_data_from_store(config_path, provider_id)?
+        && let Some(stored) = load_auth_data_from_store(config_path, provider_id).await?
     {
         if stored != current {
             *auth.lock().await = stored.clone();
@@ -742,19 +742,24 @@ async fn resolve_inline_auth_credential(
     }
 }
 
-fn load_auth_data_from_store(
+async fn load_auth_data_from_store(
     config_path: &Path,
     provider_id: &str,
 ) -> Result<Option<AuthData>, ProviderError> {
-    ProviderConfigCredentialStore::new(config_path.to_path_buf()).get(provider_id)
+    let store = ProviderConfigCredentialStore::new(config_path.to_path_buf());
+    let provider_id = provider_id.to_owned();
+    crate::provider::auth::run_auth_store_operation(move || store.get(&provider_id)).await
 }
 
-fn persist_auth_data_to_store(
+async fn persist_auth_data_to_store(
     config_path: &Path,
     provider_id: &str,
     auth: &AuthData,
 ) -> Result<(), ProviderError> {
-    ProviderConfigCredentialStore::new(config_path.to_path_buf()).set(provider_id, auth.clone())
+    let store = ProviderConfigCredentialStore::new(config_path.to_path_buf());
+    let provider_id = provider_id.to_owned();
+    let auth = auth.clone();
+    crate::provider::auth::run_auth_store_operation(move || store.set(&provider_id, auth)).await
 }
 
 async fn write_auth_data(
@@ -764,7 +769,7 @@ async fn write_auth_data(
     updated: AuthData,
 ) -> Result<(), ProviderError> {
     if let Some(config_path) = config_path {
-        persist_auth_data_to_store(config_path, provider_id, &updated)?;
+        persist_auth_data_to_store(config_path, provider_id, &updated).await?;
     }
     *auth.lock().await = updated;
     Ok(())

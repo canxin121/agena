@@ -268,8 +268,6 @@ async fn execute_background_run_async(
     };
 
     let worker_executor = executor.clone();
-    let process_owner = super::terminal_tool::owner(executor, session_id)?;
-    let terminal_owner = command.tty.then(|| process_owner.clone());
     let worker_command = command.clone();
     let worker_monitor = monitor.cloned();
     let worker_permit = PROCESS_BLOCKING_WORKERS.acquire().await.map_err(|error| {
@@ -280,6 +278,8 @@ async fn execute_background_run_async(
     })?;
     super::terminal_tool::blocking(executor, move |cancel| {
         let _worker_permit = worker_permit;
+        let process_owner = super::terminal_tool::owner(&worker_executor, session_id)?;
+        let terminal_owner = worker_command.tty.then(|| process_owner.clone());
         if let Some(owner) = terminal_owner {
             return super::terminal_tool::start_prepared(
                 &worker_executor,

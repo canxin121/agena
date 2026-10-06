@@ -36,7 +36,9 @@ pub(crate) async fn execute_async(
             let started = registry
                 .start(StartParams {
                     argv: None,
-                    owner: Some(super::terminal_tool::owner(executor, context.session_id)?),
+                    owner: Some(
+                        super::terminal_tool::owner_async(executor, context.session_id).await?,
+                    ),
                     process_id: context.session_id.zip(context.call_id).map(
                         |(session_id, call_id)| crate::managed_process_id(session_id, call_id),
                     ),

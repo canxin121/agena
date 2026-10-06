@@ -301,24 +301,38 @@ impl RuntimeHostClient {
         Ok(self.snapshot()?.plugin_manager())
     }
 
-    fn use_plugin_storage<T>(
+    async fn use_plugin_storage<T: Send + 'static>(
         &self,
         scope: agena_plugin_host::sdk::host_api::HostStorageScope,
         visibility: agena_plugin_host::sdk::host_api::HostStorageVisibility,
-        use_store: impl FnOnce(&dyn PluginStorage, &StorageLocator) -> Result<T, PluginStorageError>,
+        use_store: impl FnOnce(&dyn PluginStorage, &StorageLocator) -> Result<T, PluginStorageError>
+        + Send
+        + 'static,
     ) -> Result<T, PluginError> {
         let locator = self.storage_locator(scope, visibility)?;
         let store = self.plugin_storage()?;
-        use_store(store.as_ref(), &locator).map_err(map_storage_error)
+        // Resolve callback-scoped authorization on this Tokio task before
+        // moving the explicit store identity to a blocking worker.
+        crate::blocking::PLUGIN_STORAGE
+            .run(move || use_store(store.as_ref(), &locator))
+            .await
+            .map_err(plugin_error)?
+            .map_err(map_storage_error)
     }
 
-    fn use_plugin_secret_store<T>(
+    async fn use_plugin_secret_store<T: Send + 'static>(
         &self,
-        use_store: impl FnOnce(&dyn PluginSecretStore, &PluginKey) -> Result<T, PluginStorageError>,
+        use_store: impl FnOnce(&dyn PluginSecretStore, &PluginKey) -> Result<T, PluginStorageError>
+        + Send
+        + 'static,
     ) -> Result<T, PluginError> {
         let plugin_id = self.callback_plugin_key()?;
         let store = self.plugin_secret_store()?;
-        use_store(store.as_ref(), &plugin_id).map_err(map_storage_error)
+        crate::blocking::PLUGIN_SECRETS
+            .run(move || use_store(store.as_ref(), &plugin_id))
+            .await
+            .map_err(plugin_error)?
+            .map_err(map_storage_error)
     }
 
     fn callback_or_requested_session_id(
@@ -983,7 +997,7 @@ impl HostClient for RuntimeHostClient {
             workspace_root.as_path(),
             callback_session_id,
             call_id,
-            response.artifacts.as_slice(),
+            response.artifacts,
         )
         .await?;
         Ok(HostImageExecuteResponse {
@@ -1057,21 +1071,22 @@ impl HostClient for RuntimeHostClient {
             |executor| executor.monitor_registry().cloned(),
             "background process registry is not enabled in this runtime",
         )?;
-        let read = tokio::task::spawn_blocking(move || {
-            registry.read(MonitorReadParams {
-                monitor_id: req.id,
-                since_seq: req.since_seq,
-                limit: req.limit,
-                wait_ms: if req.follow && req.wait_ms == 0 {
-                    30_000
-                } else {
-                    req.wait_ms
-                },
+        let read = crate::blocking::PROCESS_LOG_READS
+            .run(move || {
+                registry.read(MonitorReadParams {
+                    monitor_id: req.id,
+                    since_seq: req.since_seq,
+                    limit: req.limit,
+                    wait_ms: if req.follow && req.wait_ms == 0 {
+                        30_000
+                    } else {
+                        req.wait_ms
+                    },
+                })
             })
-        })
-        .await
-        .map_err(|error| PluginError::internal(format!("monitor read worker failed: {error}")))?
-        .map_err(map_monitor_error)?;
+            .await
+            .map_err(|error| PluginError::internal(format!("monitor read worker failed: {error}")))?
+            .map_err(map_monitor_error)?;
         Ok(render_monitor_read(read))
     }
 
@@ -1088,14 +1103,16 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostStorageGetRequest,
     ) -> Result<HostStorageGetResponse, PluginError> {
-        let value = self.use_plugin_storage(req.scope, req.visibility, |store, locator| {
-            store.get(locator, req.namespace.as_str(), req.key.as_str())
-        })?;
+        let value = self
+            .use_plugin_storage(req.scope, req.visibility, move |store, locator| {
+                store.get(locator, req.namespace.as_str(), req.key.as_str())
+            })
+            .await?;
         Ok(HostStorageGetResponse { value })
     }
 
     async fn storage_set(&self, req: HostStorageSetRequest) -> Result<(), PluginError> {
-        self.use_plugin_storage(req.scope, req.visibility, |store, locator| {
+        self.use_plugin_storage(req.scope, req.visibility, move |store, locator| {
             store.set(
                 locator,
                 req.namespace.as_str(),
@@ -1103,12 +1120,14 @@ impl HostClient for RuntimeHostClient {
                 req.value.as_str(),
             )
         })
+        .await
     }
 
     async fn storage_delete(&self, req: HostStorageDeleteRequest) -> Result<(), PluginError> {
-        self.use_plugin_storage(req.scope, req.visibility, |store, locator| {
+        self.use_plugin_storage(req.scope, req.visibility, move |store, locator| {
             store.delete(locator, req.namespace.as_str(), req.key.as_str())
         })
+        .await
     }
 
     async fn storage_list(
@@ -1116,9 +1135,10 @@ impl HostClient for RuntimeHostClient {
         req: HostStorageListRequest,
     ) -> Result<HostStorageListResponse, PluginError> {
         let records = self
-            .use_plugin_storage(req.scope, req.visibility, |store, locator| {
+            .use_plugin_storage(req.scope, req.visibility, move |store, locator| {
                 store.list(locator, req.namespace.as_deref(), req.prefix.as_deref())
-            })?
+            })
+            .await?
             .into_iter()
             .map(|entry| HostStorageRecord {
                 namespace: entry.namespace,
@@ -1133,22 +1153,31 @@ impl HostClient for RuntimeHostClient {
         req: HostSecretGetRequest,
     ) -> Result<HostSecretGetResponse, PluginError> {
         let value = self
-            .use_plugin_secret_store(|store, plugin_id| store.get(plugin_id, req.name.as_str()))?;
+            .use_plugin_secret_store(move |store, plugin_id| {
+                store.get(plugin_id, req.name.as_str())
+            })
+            .await?;
         Ok(HostSecretGetResponse { value })
     }
 
     async fn secret_set(&self, req: HostSecretSetRequest) -> Result<(), PluginError> {
-        self.use_plugin_secret_store(|store, plugin_id| {
+        self.use_plugin_secret_store(move |store, plugin_id| {
             store.set(plugin_id, req.name.as_str(), req.value.as_str())
         })
+        .await
     }
 
     async fn secret_delete(&self, req: HostSecretDeleteRequest) -> Result<(), PluginError> {
-        self.use_plugin_secret_store(|store, plugin_id| store.delete(plugin_id, req.name.as_str()))
+        self.use_plugin_secret_store(move |store, plugin_id| {
+            store.delete(plugin_id, req.name.as_str())
+        })
+        .await
     }
 
     async fn secret_list(&self) -> Result<HostSecretListResponse, PluginError> {
-        let names = self.use_plugin_secret_store(|store, plugin_id| store.list(plugin_id))?;
+        let names = self
+            .use_plugin_secret_store(|store, plugin_id| store.list(plugin_id))
+            .await?;
         Ok(HostSecretListResponse { names })
     }
 

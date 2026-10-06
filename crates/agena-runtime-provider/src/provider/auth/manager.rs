@@ -23,13 +23,13 @@ struct StoredOAuthCredential {
 /// Manages provider authentication state.
 pub struct AuthManager<S: AuthStore> {
     client_identity: crate::ProviderClientIdentity,
-    store: S,
+    store: std::sync::Arc<S>,
 }
 
-impl<S: AuthStore> AuthManager<S> {
+impl<S: AuthStore + 'static> AuthManager<S> {
     pub fn new(store: S) -> Self {
         Self {
-            store,
+            store: std::sync::Arc::new(store),
             client_identity: Default::default(),
         }
     }
@@ -99,7 +99,7 @@ impl<S: AuthStore> AuthManager<S> {
             token.chatgpt_account_is_fedramp,
             None,
         )?;
-        self.persist_auth(provider_id, auth)
+        self.persist_auth(provider_id, auth).await
     }
 
     pub async fn start_openai_headless_login(&self) -> Result<DeviceCodeStart, ProviderError> {
@@ -135,11 +135,11 @@ impl<S: AuthStore> AuthManager<S> {
             token.chatgpt_account_is_fedramp,
             None,
         )?;
-        self.persist_auth(provider_id, auth).map(Some)
+        self.persist_auth(provider_id, auth).await.map(Some)
     }
 
     pub async fn refresh_openai_login(&self, provider_id: &str) -> Result<AuthData, ProviderError> {
-        let stored = self.stored_oauth_credential(provider_id)?;
+        let stored = self.stored_oauth_credential(provider_id).await?;
         let token = refresh_openai_token(&self.client_identity, stored.refresh.as_str()).await?;
         let auth = oauth_auth_data_with_user(
             provider_id,
@@ -153,7 +153,7 @@ impl<S: AuthStore> AuthManager<S> {
             stored.enterprise_url,
             stored.user,
         )?;
-        self.persist_auth(provider_id, auth)
+        self.persist_auth(provider_id, auth).await
     }
 
     pub async fn start_copilot_login(
@@ -198,7 +198,7 @@ impl<S: AuthStore> AuthManager<S> {
             token.chatgpt_account_is_fedramp,
             enterprise_url,
         )?;
-        self.persist_auth(provider_id, auth).map(Some)
+        self.persist_auth(provider_id, auth).await.map(Some)
     }
 
     pub fn start_gitlab_login(
@@ -240,7 +240,7 @@ impl<S: AuthStore> AuthManager<S> {
             token.chatgpt_account_is_fedramp,
             None,
         )?;
-        self.persist_auth(provider_id, auth)
+        self.persist_auth(provider_id, auth).await
     }
 
     pub async fn refresh_gitlab_login(
@@ -248,7 +248,7 @@ impl<S: AuthStore> AuthManager<S> {
         provider_id: &str,
         instance_url: impl Into<String>,
     ) -> Result<AuthData, ProviderError> {
-        let stored = self.stored_oauth_credential(provider_id)?;
+        let stored = self.stored_oauth_credential(provider_id).await?;
         let instance_url = instance_url.into();
         let token = refresh_gitlab_token(instance_url.as_str(), stored.refresh.as_str()).await?;
         let auth = oauth_auth_data_with_user(
@@ -263,18 +263,29 @@ impl<S: AuthStore> AuthManager<S> {
             None,
             stored.user,
         )?;
-        self.persist_auth(provider_id, auth)
+        self.persist_auth(provider_id, auth).await
     }
 
-    fn persist_auth(&self, provider_id: &str, auth: AuthData) -> Result<AuthData, ProviderError> {
-        self.store.set(provider_id, auth.clone())?;
+    async fn persist_auth(
+        &self,
+        provider_id: &str,
+        auth: AuthData,
+    ) -> Result<AuthData, ProviderError> {
+        let store = std::sync::Arc::clone(&self.store);
+        let provider_id = provider_id.to_owned();
+        let stored = auth.clone();
+        super::run_auth_store_operation(move || store.set(&provider_id, stored)).await?;
         Ok(auth)
     }
 
-    fn stored_oauth_credential(
+    async fn stored_oauth_credential(
         &self,
         provider_id: &str,
     ) -> Result<StoredOAuthCredential, ProviderError> {
+        let store = std::sync::Arc::clone(&self.store);
+        let stored_provider_id = provider_id.to_owned();
+        let stored =
+            super::run_auth_store_operation(move || store.get(&stored_provider_id)).await?;
         let Some(AuthData::OAuth {
             refresh,
             id_token,
@@ -283,7 +294,7 @@ impl<S: AuthStore> AuthManager<S> {
             enterprise_url,
             user,
             ..
-        }) = self.store.get(provider_id)?
+        }) = stored
         else {
             return Err(missing_oauth_credential_error(provider_id));
         };

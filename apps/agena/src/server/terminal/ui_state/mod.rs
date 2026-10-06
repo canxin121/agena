@@ -3,8 +3,9 @@ use std::{
     collections::{BTreeMap, HashSet},
     convert::Infallible,
     hash::{Hash, Hasher},
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, atomic::Ordering},
+    sync::{Arc, LazyLock, Mutex, atomic::Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,12 +21,15 @@ use axum::{
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex as AsyncMutex, RwLock, broadcast};
+use tokio::sync::{Mutex as AsyncMutex, broadcast};
 
 const DEFAULT_FOLDER_ID: &str = "terminal-default";
 const DEFAULT_FOLDER_NAME: &str = "Default";
 const TERMINAL_UI_STATE_FILENAME: &str = "terminal-ui-state.json";
 const MAX_WORKSPACE_KEY_LEN: usize = 80;
+const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
+static STATE_READS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static STATE_WRITES: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -37,7 +41,7 @@ pub(crate) struct TerminalUiFolder {
 #[derive(Debug, Clone)]
 struct SequencedTerminalUiStateEvent {
     seq: u64,
-    payload: String,
+    payload: Arc<str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -84,113 +88,191 @@ impl Default for TerminalUiState {
     }
 }
 
+#[derive(Clone)]
 struct TerminalUiStateStore {
     path: PathBuf,
-    cache: RwLock<Option<TerminalUiState>>,
-    put_lock: AsyncMutex<()>,
+    cache: Arc<Mutex<Option<Arc<TerminalUiState>>>>,
+    put_lock: Arc<AsyncMutex<()>>,
     tx: broadcast::Sender<SequencedTerminalUiStateEvent>,
-    next_seq: AtomicU64,
+    next_seq: Arc<AtomicU64>,
 }
 
 impl TerminalUiStateStore {
     fn new(path: PathBuf) -> Self {
-        let (tx, _) = broadcast::channel(1024);
+        // Every patch contains the complete state. Bound retained snapshots;
+        // lagging clients already reconnect and receive the current snapshot.
+        let (tx, _) = broadcast::channel(64);
         Self {
             path,
-            cache: RwLock::new(None),
-            put_lock: AsyncMutex::new(()),
+            cache: Arc::new(Mutex::new(None)),
+            put_lock: Arc::new(AsyncMutex::new(())),
             tx,
-            next_seq: AtomicU64::new(1),
+            next_seq: Arc::new(AtomicU64::new(1)),
         }
     }
 
-    async fn read(&self) -> Result<TerminalUiState, String> {
+    fn cached(&self) -> Option<Arc<TerminalUiState>> {
+        self.cache
+            .lock()
+            .expect("terminal state cache lock")
+            .clone()
+    }
+
+    async fn read(&self) -> Result<Arc<TerminalUiState>, String> {
+        if let Some(state) = self.cached() {
+            return Ok(state);
+        }
+        // Share initialization with mutations. A started worker owns the gate
+        // through publication even if the HTTP request is cancelled.
+        let gate = Arc::clone(&self.put_lock).lock_owned().await;
+        if let Some(state) = self.cached() {
+            return Ok(state);
+        }
+        let store = self.clone();
+        STATE_READS
+            .run(move || {
+                let _gate = gate;
+                let loaded = Arc::new(store.load_from_disk()?);
+                store.write_cache(Arc::clone(&loaded));
+                Ok(loaded)
+            })
+            .await
+            .map_err(|error| format!("terminal state read worker failed: {error}"))?
+    }
+
+    async fn replace(&self, body: TerminalUiState) -> Result<Arc<TerminalUiState>, String> {
+        let gate = Arc::clone(&self.put_lock).lock_owned().await;
+        let store = self.clone();
+        STATE_WRITES
+            .run(move || {
+                let _gate = gate;
+                let current = store.load_from_disk()?;
+                let version = current.version;
+                store.write_cache(Arc::new(current));
+                let mut next = sanitize_state(body);
+                next.version = version.saturating_add(1);
+                next.updated_at = now_millis();
+                store.persist_to_disk(&next)?;
+                let next = Arc::new(next);
+                store.write_cache(Arc::clone(&next));
+                store.publish_state_replace(&next);
+                Ok(next)
+            })
+            .await
+            .map_err(|error| format!("terminal state write worker failed: {error}"))?
+    }
+
+    fn load_from_disk(&self) -> Result<TerminalUiState, String> {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        // Opening a named pipe must not occupy a state worker indefinitely.
+        // Inspect the opened handle so a concurrent rename cannot bypass the
+        // regular-file check. O_NONBLOCK has no effect on regular files.
+        #[cfg(unix)]
         {
-            let guard = self.cache.read().await;
-            if let Some(state) = guard.as_ref() {
-                return Ok(state.clone());
-            }
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NONBLOCK);
         }
-
-        let loaded = self.load_from_disk().await?;
-        let mut guard = self.cache.write().await;
-        if let Some(existing) = guard.as_ref() {
-            return Ok(existing.clone());
-        }
-        *guard = Some(loaded.clone());
-        Ok(loaded)
-    }
-
-    async fn replace(&self, body: TerminalUiState) -> Result<TerminalUiState, String> {
-        let _guard = self.put_lock.lock().await;
-        let current = self.load_from_disk().await?;
-        self.write_cache(current.clone()).await;
-
-        let mut next = sanitize_state(body);
-        next.version = current.version.saturating_add(1);
-        next.updated_at = now_millis();
-
-        self.persist_to_disk(&next).await?;
-        self.write_cache(next.clone()).await;
-        self.publish_state_replace(&next);
-        Ok(next)
-    }
-
-    async fn load_from_disk(&self) -> Result<TerminalUiState, String> {
-        let raw = match tokio::fs::read_to_string(&self.path).await {
-            Ok(raw) => raw,
+        let file = match options.open(&self.path) {
+            Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(TerminalUiState::default());
             }
             Err(error) => {
-                return Err(agena_failure::diagnostic::format_error_chain_with_context(
-                    format!(
-                        "failed to read persisted terminal UI state at {}",
-                        self.path.display()
-                    ),
-                    &error,
+                return Err(format!(
+                    "read terminal UI state {}: {error}",
+                    self.path.display()
                 ));
             }
         };
-
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
+        let metadata = file.metadata().map_err(|error| {
+            format!("inspect terminal UI state {}: {error}", self.path.display())
+        })?;
+        if !metadata.is_file() {
+            return Err("terminal UI state must be a regular file".to_owned());
+        }
+        if metadata.len() > MAX_STATE_BYTES as u64 {
+            return Err("persisted terminal UI state exceeds the 8 MiB limit".to_owned());
+        }
+        let mut raw = Vec::new();
+        file.take((MAX_STATE_BYTES + 1) as u64)
+            .read_to_end(&mut raw)
+            .map_err(|error| format!("read terminal UI state {}: {error}", self.path.display()))?;
+        if raw.len() > MAX_STATE_BYTES {
+            return Err("persisted terminal UI state exceeds the 8 MiB limit".to_owned());
+        }
+        if raw.iter().all(u8::is_ascii_whitespace) {
             return Err(format!(
                 "persisted terminal UI state at {} is empty; delete it and recreate current state",
                 self.path.display()
             ));
         }
-
-        serde_json::from_str::<TerminalUiState>(trimmed)
-            .map(sanitize_state)
-            .map_err(|error| {
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    format!(
-                        "persisted terminal UI state at {} does not match this Agena build; delete it and recreate current state",
-                        self.path.display()
-                    ),
-                    &error,
-                )
-            })
+        serde_json::from_slice::<TerminalUiState>(&raw).map(sanitize_state).map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context(
+                format!("persisted terminal UI state at {} does not match this Agena build; delete it and recreate current state", self.path.display()),
+                &error,
+            )
+        })
     }
 
-    async fn persist_to_disk(&self, state: &TerminalUiState) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|error| format!("create terminal ui state dir: {error}"))?;
-        }
-
+    fn persist_to_disk(&self, state: &TerminalUiState) -> Result<(), String> {
+        // Preserve existing file aliases: atomically replace their target.
+        let destination = match std::fs::canonicalize(&self.path) {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.path.clone(),
+            Err(error) => return Err(format!("resolve terminal UI state: {error}")),
+        };
+        let parent = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create terminal UI state dir: {error}"))?;
         let bytes = serde_json::to_vec_pretty(state)
-            .map_err(|error| format!("serialize terminal ui state: {error}"))?;
-        tokio::fs::write(&self.path, bytes)
-            .await
-            .map_err(|error| format!("persist terminal ui state: {error}"))
+            .map_err(|error| format!("serialize terminal UI state: {error}"))?;
+        if bytes.len() > MAX_STATE_BYTES {
+            return Err("terminal UI state exceeds the 8 MiB limit".to_owned());
+        }
+        let permissions = match std::fs::metadata(&self.path) {
+            Ok(metadata) => {
+                if !metadata.is_file() || metadata.permissions().readonly() {
+                    return Err("terminal UI state must be a writable regular file".to_owned());
+                }
+                Some(metadata.permissions())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(format!("inspect terminal UI state: {error}")),
+        };
+        let mut staged = tempfile::Builder::new()
+            .prefix(".terminal-ui-state-")
+            .tempfile_in(parent)
+            .map_err(|error| format!("stage terminal UI state: {error}"))?;
+        if let Some(permissions) = permissions {
+            staged
+                .as_file()
+                .set_permissions(permissions)
+                .map_err(|error| format!("set terminal UI state permissions: {error}"))?;
+        }
+        staged
+            .write_all(&bytes)
+            .map_err(|error| format!("write terminal UI state: {error}"))?;
+        staged
+            .as_file()
+            .sync_all()
+            .map_err(|error| format!("sync terminal UI state: {error}"))?;
+        staged
+            .persist(&destination)
+            .map_err(|error| format!("publish terminal UI state: {error}"))?;
+        Ok(())
     }
 
-    async fn write_cache(&self, state: TerminalUiState) {
-        let mut guard = self.cache.write().await;
-        *guard = Some(state);
+    fn write_cache(&self, state: Arc<TerminalUiState>) {
+        let retired = self
+            .cache
+            .lock()
+            .expect("terminal state cache lock")
+            .replace(state);
+        drop(retired);
     }
 
     fn subscribe(&self) -> broadcast::Receiver<SequencedTerminalUiStateEvent> {
@@ -228,7 +310,10 @@ impl TerminalUiStateStore {
 
         if self
             .tx
-            .send(SequencedTerminalUiStateEvent { seq, payload })
+            .send(SequencedTerminalUiStateEvent {
+                seq,
+                payload: payload.into(),
+            })
             .is_err()
         {
             tracing::debug!(seq, "terminal UI state event had no active subscribers");
@@ -441,6 +526,31 @@ fn snapshot_payload(state: &TerminalUiState) -> Result<String, serde_json::Error
     }))
 }
 
+async fn state_response(state: Arc<TerminalUiState>) -> Response {
+    match STATE_READS
+        .run(move || serde_json::to_vec(state.as_ref()))
+        .await
+    {
+        Ok(Ok(bytes)) => (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            bytes,
+        )
+            .into_response(),
+        result => {
+            let error = match result {
+                Ok(Err(error)) => error.to_string(),
+                Err(error) => format!("terminal state response worker failed: {error}"),
+                Ok(Ok(_)) => unreachable!(),
+            };
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct TerminalUiStateEventsQuery {
     pub since: Option<String>,
@@ -449,7 +559,7 @@ pub(crate) struct TerminalUiStateEventsQuery {
 pub(crate) async fn terminal_ui_state_get(State(state): State<Arc<crate::AppState>>) -> Response {
     let store = store_for_workspace(state.application.workspace_root());
     match store.read().await {
-        Ok(snapshot) => Json(snapshot).into_response(),
+        Ok(snapshot) => state_response(snapshot).await,
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
@@ -464,7 +574,7 @@ pub(crate) async fn terminal_ui_state_put(
 ) -> Response {
     let store = store_for_workspace(state.application.workspace_root());
     match store.replace(body).await {
-        Ok(next) => Json(next).into_response(),
+        Ok(next) => state_response(next).await,
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
@@ -490,13 +600,15 @@ pub(crate) async fn terminal_ui_state_events(
                 .into_response();
         }
     };
-    let initial = match snapshot_payload(&current) {
+    let initial = match STATE_READS
+        .run(move || snapshot_payload(&current))
+        .await
+        .map_err(|error| format!("terminal state snapshot worker failed: {error}"))
+        .and_then(|result| result.map_err(|error| error.to_string()))
+    {
         Ok(initial) => initial,
         Err(error) => {
-            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
-                "serialize the initial terminal UI state snapshot",
-                &error,
-            );
+            let diagnostic = format!("serialize the initial terminal UI state snapshot: {error}");
             tracing::error!(
                 diagnostic = %diagnostic,
                 "terminal UI state event stream could not be initialized"
@@ -520,13 +632,23 @@ pub(crate) async fn terminal_ui_state_events(
         yield Ok::<Event, Infallible>(Event::default().data(initial));
 
         loop {
+            tokio::task::consume_budget().await;
             match rx.recv().await {
                 Ok(event) => {
-                    yield Ok::<Event, Infallible>(
-                        Event::default()
+                    let large = event.payload.len() >= 64 * 1024;
+                    let build = move || Event::default()
                             .id(event.seq.to_string())
-                            .data(event.payload),
-                    );
+                            .data(event.payload.as_ref());
+                    let event = if large {
+                        match STATE_READS.run(build).await {
+                            Ok(event) => event,
+                            Err(error) => {
+                                tracing::error!(%error, "terminal state event worker failed");
+                                break;
+                            }
+                        }
+                    } else { build() };
+                    yield Ok::<Event, Infallible>(event);
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
                     tracing::warn!(

@@ -82,20 +82,21 @@ impl OpenAiTransport {
         adapter_kind: &'static str,
     ) -> Result<Vec<Model>, ProviderError> {
         let endpoint = self.list_models_endpoint()?;
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let headers = self.auth_headers(RequestHeaderContext::none(), api_key);
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                adapter_kind,
-                "list_models",
-                "GET",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                None,
-            );
-            utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
-        })
-        .await?;
+        let response =
+            utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                let headers = self.auth_headers(RequestHeaderContext::none(), api_key);
+                utils::adapter_log_http_request_prepared(
+                    self.id.as_str(),
+                    adapter_kind,
+                    "list_models",
+                    "GET",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    None,
+                );
+                utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
+            })
+            .await?;
 
         let payload: OpenAiModelListResponse = utils::parse_json_response_logged(
             self.id.as_str(),
@@ -228,99 +229,104 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 self.id
             ))
         })?;
-        let prompt = request.prompt.trim();
-        if prompt.is_empty() {
-            return Err(ProviderError::Config(
-                "direct image request prompt must not be empty".to_owned(),
-            ));
-        }
-        match request.operation {
-            ProviderImageOperation::Generate if !request.inputs.is_empty() => {
+        let wire_model = model.clone();
+        let body_json = utils::prepare_request_with(move || {
+            let prompt = request.prompt.trim();
+            if prompt.is_empty() {
                 return Err(ProviderError::Config(
-                    "image generate requests must not contain edit inputs".to_owned(),
+                    "direct image request prompt must not be empty".to_owned(),
                 ));
             }
-            ProviderImageOperation::Edit if request.inputs.is_empty() => {
-                return Err(ProviderError::Config(
-                    "image edit requests require at least one input image".to_owned(),
-                ));
+            match request.operation {
+                ProviderImageOperation::Generate if !request.inputs.is_empty() => {
+                    return Err(ProviderError::Config(
+                        "image generate requests must not contain edit inputs".to_owned(),
+                    ));
+                }
+                ProviderImageOperation::Edit if request.inputs.is_empty() => {
+                    return Err(ProviderError::Config(
+                        "image edit requests require at least one input image".to_owned(),
+                    ));
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        if request.inputs.len() > capabilities.max_input_images.unwrap_or(u32::MAX) as usize {
-            return Err(ProviderError::Config(format!(
-                "direct image request contains {} inputs, exceeding the route limit of {}",
-                request.inputs.len(),
-                capabilities.max_input_images.unwrap_or(u32::MAX)
-            )));
-        }
+            if request.inputs.len() > capabilities.max_input_images.unwrap_or(u32::MAX) as usize {
+                return Err(ProviderError::Config(format!(
+                    "direct image request contains {} inputs, exceeding the route limit of {}",
+                    request.inputs.len(),
+                    capabilities.max_input_images.unwrap_or(u32::MAX)
+                )));
+            }
 
-        let mut content = vec![OpenAiInputContent::InputText {
-            text: prompt.to_owned(),
-        }];
-        for (index, input) in request.inputs.iter().enumerate() {
-            if !capabilities
-                .accepted_input_mime_types
-                .iter()
-                .any(|mime| mime == &input.mime)
-            {
-                return Err(ProviderError::Config(format!(
-                    "direct image input {index} uses unsupported MIME type `{}`",
-                    input.mime
-                )));
+            let mut content = vec![OpenAiInputContent::InputText {
+                text: prompt.to_owned(),
+            }];
+            for (index, input) in request.inputs.iter().enumerate() {
+                if !capabilities
+                    .accepted_input_mime_types
+                    .iter()
+                    .any(|mime| mime == &input.mime)
+                {
+                    return Err(ProviderError::Config(format!(
+                        "direct image input {index} uses unsupported MIME type `{}`",
+                        input.mime
+                    )));
+                }
+                if input.data_base64.trim().is_empty() {
+                    return Err(ProviderError::Config(format!(
+                        "direct image input {index} has an empty base64 payload"
+                    )));
+                }
+                if capabilities
+                    .max_input_bytes
+                    .is_some_and(|limit| input.size_bytes > limit)
+                {
+                    return Err(ProviderError::Config(format!(
+                        "direct image input {index} exceeds the route size limit"
+                    )));
+                }
+                content.push(OpenAiInputContent::Image {
+                    image_url: format!(
+                        "data:{};base64,{}",
+                        input.mime.trim(),
+                        input.data_base64.trim()
+                    ),
+                });
             }
-            if input.data_base64.trim().is_empty() {
-                return Err(ProviderError::Config(format!(
-                    "direct image input {index} has an empty base64 payload"
-                )));
-            }
-            if capabilities
-                .max_input_bytes
-                .is_some_and(|limit| input.size_bytes > limit)
-            {
-                return Err(ProviderError::Config(format!(
-                    "direct image input {index} exceeds the route size limit"
-                )));
-            }
-            content.push(OpenAiInputContent::Image {
-                image_url: format!(
-                    "data:{};base64,{}",
-                    input.mime.trim(),
-                    input.data_base64.trim()
-                ),
-            });
-        }
 
-        let body = OpenAiResponsesRequest {
-            model: model.to_string(),
-            instructions: None,
-            input: vec![OpenAiResponsesInputItem::Message(OpenAiInputMessage {
-                role: "user".to_owned(),
-                content,
-                copilot_cache_control: None,
-            })],
-            tools: vec![OpenAiTransport::image_generation_tool_definition(
-                &request.options,
-            )?],
-            // This is the key direct-execution invariant: the adapter forces
-            // the only declared hosted tool in this request and returns its
-            // terminal artifact from the same API call.
-            tool_choice: Some("required".to_owned()),
-            parallel_tool_calls: false,
-            include: None,
-            max_output_tokens: None,
-            temperature: None,
-            prompt_cache_key: None,
-            previous_response_id: None,
-            store: Some(false),
-            stream: Some(false),
-            top_p: None,
-            reasoning: None,
-            service_tier: None,
-            text: None,
-            client_metadata: None,
-        };
-        let body_json = serde_json::to_value(&body)?;
+            let body = OpenAiResponsesRequest {
+                model: wire_model.to_string(),
+                instructions: None,
+                input: vec![OpenAiResponsesInputItem::Message(OpenAiInputMessage {
+                    role: "user".to_owned(),
+                    content,
+                    copilot_cache_control: None,
+                })],
+                tools: vec![OpenAiTransport::image_generation_tool_definition(
+                    &request.options,
+                )?],
+                // This is the key direct-execution invariant: the adapter forces
+                // the only declared hosted tool in this request and returns its
+                // terminal artifact from the same API call.
+                tool_choice: Some("required".to_owned()),
+                parallel_tool_calls: false,
+                include: None,
+                max_output_tokens: None,
+                temperature: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                store: Some(false),
+                stream: Some(false),
+                top_p: None,
+                reasoning: None,
+                service_tier: None,
+                text: None,
+                client_metadata: None,
+            };
+            let body_json = utils::prepare_request_body_sync(&body, &Default::default())?;
+            Ok(body_json)
+        })
+        .await?;
         let response: OpenAiResponsesResponse = self
             .send_json(
                 "image.execute.responses",
@@ -329,77 +335,85 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 RequestHeaderContext::none(),
             )
             .await?;
-        if let Some(event) = response.failure_event() {
-            return Err(
-                utils::responses_stream_error(self.id.as_str(), &event)?.unwrap_or_else(|| {
-                    ProviderError::Provider(format!("{} image response failed", self.id))
-                }),
-            );
-        }
-        if let Some(status) = response.unexpected_nonstream_status() {
-            return Err(ProviderError::Provider(format!(
-                "{} returned non-terminal image response status `{status}`",
-                self.id
-            )));
-        }
-
-        let mut artifacts = Vec::new();
-        let mut revised_prompt = None;
-        for item in response.output.as_deref().into_iter().flatten() {
-            if item.kind.as_deref() != Some("image_generation_call") {
-                continue;
+        let adapter = self.clone();
+        let wire_model = model.clone();
+        utils::project_response_with(move || {
+            if let Some(event) = response.failure_event() {
+                return Err(utils::responses_stream_error(adapter.id.as_str(), &event)?
+                    .unwrap_or_else(|| {
+                        ProviderError::Provider(format!("{} image response failed", adapter.id))
+                    }));
             }
-            if revised_prompt.is_none() {
-                revised_prompt = item
-                    .revised_prompt
+            if let Some(status) = response.unexpected_nonstream_status() {
+                return Err(ProviderError::Provider(format!(
+                    "{} returned non-terminal image response status `{status}`",
+                    adapter.id
+                )));
+            }
+
+            let mut artifacts = Vec::new();
+            let mut revised_prompt = None;
+            for item in response.output.as_deref().into_iter().flatten() {
+                if item.kind.as_deref() != Some("image_generation_call") {
+                    continue;
+                }
+                if revised_prompt.is_none() {
+                    revised_prompt = item
+                        .revised_prompt
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned);
+                }
+                let Some(result) = item
+                    .result
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned);
+                else {
+                    continue;
+                };
+                let mime = item
+                    .mime_type
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| value.starts_with("image/"))
+                    .unwrap_or("image/png")
+                    .to_owned();
+                let extension = mime
+                    .strip_prefix("image/")
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("png")
+                    .to_owned();
+                artifacts.push(ProviderNativeToolArtifact {
+                    uri: format!("data:{mime};base64,{result}"),
+                    mime,
+                    name: Some(format!("generated-image.{extension}")),
+                    size_bytes: None,
+                    sha256: None,
+                });
             }
-            let Some(result) = item
-                .result
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
-                continue;
-            };
-            let mime = item
-                .mime_type
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| value.starts_with("image/"))
-                .unwrap_or("image/png")
-                .to_owned();
-            let extension = mime
-                .strip_prefix("image/")
-                .filter(|value| !value.is_empty())
-                .unwrap_or("png")
-                .to_owned();
-            artifacts.push(ProviderNativeToolArtifact {
-                uri: format!("data:{mime};base64,{result}"),
-                mime,
-                name: Some(format!("generated-image.{extension}")),
-                size_bytes: None,
-                sha256: None,
-            });
-        }
-        if artifacts.is_empty() {
-            return Err(ProviderError::Provider(format!(
-                "{} direct image response contained no completed image_generation_call result",
-                self.id
-            )));
-        }
-        let response_model =
-            ModelId::new(response.model.clone().unwrap_or_else(|| model.to_string()));
-        Ok(ProviderImageResponse {
-            provider_id: ProviderId::new(self.id.as_str()),
-            model: response_model,
-            revised_prompt,
-            artifacts,
-            usage: OpenAiTransport::map_usage(response.usage),
+            if artifacts.is_empty() {
+                return Err(ProviderError::Provider(format!(
+                    "{} direct image response contained no completed image_generation_call result",
+                    adapter.id
+                )));
+            }
+            let response_model = ModelId::new(
+                response
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| wire_model.to_string()),
+            );
+            Ok(ProviderImageResponse {
+                provider_id: ProviderId::new(adapter.id.as_str()),
+                model: response_model,
+                revised_prompt,
+                artifacts,
+                usage: OpenAiTransport::map_usage(response.usage),
+            })
         })
+        .await
     }
 
     #[tracing::instrument(
@@ -411,46 +425,55 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
-        let model = request.model.clone();
+        let adapter = self.clone();
+        let (request, model, body_json) = utils::prepare_request_with(move || {
+            let model = request.model.clone();
 
-        let input = self.responses_input_for_request(&request)?;
-        let tool_plan = self.responses_tool_plan_for_request(&request)?;
-        let reasoning = OpenAiTransport::responses_reasoning_config(&request, model.as_ref());
+            let input = adapter.responses_input_for_request(&request)?;
+            let tool_plan = adapter.responses_tool_plan_for_request(&request)?;
+            let reasoning = OpenAiTransport::responses_reasoning_config(&request, model.as_ref());
 
-        let body = OpenAiResponsesRequest {
-            model: model.to_string(),
-            instructions: OpenAiTransport::responses_instructions(&request),
-            input,
-            tools: tool_plan.tools,
-            tool_choice: Some("auto".to_owned()),
-            parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
-            include: OpenAiTransport::responses_include(
-                tool_plan.include,
-                reasoning.as_ref(),
-                self.supports_codex_compat_headers() || self.is_official_openai_endpoint(),
-            ),
-            max_output_tokens: self.responses_request_max_output_tokens(&request),
-            temperature: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then_some(request.temperature)
-                .flatten(),
-            prompt_cache_key: request.prompt_cache_key.clone(),
-            previous_response_id: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
+            let body = OpenAiResponsesRequest {
+                model: model.to_string(),
+                instructions: OpenAiTransport::responses_instructions(&request),
+                input,
+                tools: tool_plan.tools,
+                tool_choice: Some("auto".to_owned()),
+                parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
+                include: OpenAiTransport::responses_include(
+                    tool_plan.include,
+                    reasoning.as_ref(),
+                    adapter.supports_codex_compat_headers()
+                        || adapter.is_official_openai_endpoint(),
+                ),
+                max_output_tokens: adapter.responses_request_max_output_tokens(&request),
+                temperature: (!matches!(adapter.backend, OpenAiResponsesBackend::ChatgptCodex))
+                    .then_some(request.temperature)
+                    .flatten(),
+                prompt_cache_key: request.prompt_cache_key.clone(),
+                previous_response_id: (!matches!(
+                    adapter.backend,
+                    OpenAiResponsesBackend::ChatgptCodex
+                ))
                 .then(|| request.previous_response_id.clone())
                 .flatten(),
-            store: Some(false),
-            stream: Some(false),
-            top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then_some(request.top_p)
-                .flatten(),
-            reasoning,
-            service_tier: OpenAiTransport::responses_service_tier(&request),
-            text: OpenAiTransport::responses_text_config(&request),
-            client_metadata: OpenAiTransport::responses_client_metadata(
-                RequestHeaderContext::from_request(&request),
-            ),
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+                store: Some(false),
+                stream: Some(false),
+                top_p: (!matches!(adapter.backend, OpenAiResponsesBackend::ChatgptCodex))
+                    .then_some(request.top_p)
+                    .flatten(),
+                reasoning,
+                service_tier: OpenAiTransport::responses_service_tier(&request),
+                text: OpenAiTransport::responses_text_config(&request),
+                client_metadata: OpenAiTransport::responses_client_metadata(
+                    RequestHeaderContext::from_request(&request),
+                ),
+            };
+            let body_json =
+                utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+            Ok((request, model, body_json))
+        })
+        .await?;
 
         let response: OpenAiResponsesResponse = self
             .send_json(
@@ -524,33 +547,40 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             return Ok(None);
         }
 
-        let mut input_request = request.clone();
-        input_request.system = None;
-        input_request.previous_response_id = None;
-        let input = self.responses_input_for_request(&input_request)?;
-        let tool_plan = self.responses_tool_plan_for_request(&request)?;
-        let body = OpenAiResponsesRequest {
-            model: model.to_string(),
-            instructions: OpenAiTransport::responses_instructions(&request),
-            input,
-            tools: tool_plan.tools,
-            tool_choice: None,
-            parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
-            include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
-            max_output_tokens: None,
-            temperature: None,
-            prompt_cache_key: request.prompt_cache_key.clone(),
-            previous_response_id: None,
-            store: None,
-            stream: None,
-            top_p: None,
-            reasoning: OpenAiTransport::responses_reasoning_config(&request, model.as_ref()),
-            service_tier: OpenAiTransport::responses_service_tier(&request),
-            text: OpenAiTransport::responses_text_config(&request),
-            client_metadata: None,
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+        let adapter = self.clone();
+        let (request, body_json) = utils::prepare_request_with(move || {
+            let mut request = request;
+            let system = request.system.take();
+            let previous_response_id = request.previous_response_id.take();
+            let input = adapter.responses_input_for_request(&request)?;
+            request.system = system;
+            request.previous_response_id = previous_response_id;
+            let tool_plan = adapter.responses_tool_plan_for_request(&request)?;
+            let body = OpenAiResponsesRequest {
+                model: model.to_string(),
+                instructions: OpenAiTransport::responses_instructions(&request),
+                input,
+                tools: tool_plan.tools,
+                tool_choice: None,
+                parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
+                include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
+                max_output_tokens: None,
+                temperature: None,
+                prompt_cache_key: request.prompt_cache_key.clone(),
+                previous_response_id: None,
+                store: None,
+                stream: None,
+                top_p: None,
+                reasoning: OpenAiTransport::responses_reasoning_config(&request, model.as_ref()),
+                service_tier: OpenAiTransport::responses_service_tier(&request),
+                text: OpenAiTransport::responses_text_config(&request),
+                client_metadata: None,
+            };
+            let body_json =
+                utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+            Ok((request, body_json))
+        })
+        .await?;
         let response: OpenAiResponsesCompactResponse = self
             .send_json(
                 "compact.responses",
@@ -578,16 +608,25 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         ProviderError,
     > {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
-        let model = request.model.clone();
+        let adapter = self.clone();
+        let (mut request, model, mut input, mut tool_plan, mut reasoning, mut include) =
+            utils::prepare_request_with(move || {
+                let model = request.model.clone();
 
-        let mut input = self.responses_input_for_request(&request)?;
-        let tool_plan = self.responses_tool_plan_for_request(&request)?;
-        let reasoning = OpenAiTransport::responses_reasoning_config(&request, model.as_ref());
-        let include = OpenAiTransport::responses_include(
-            tool_plan.include,
-            reasoning.as_ref(),
-            self.supports_codex_compat_headers() || self.is_official_openai_endpoint(),
-        );
+                let input = adapter.responses_input_for_request(&request)?;
+                let mut tool_plan = adapter.responses_tool_plan_for_request(&request)?;
+                let reasoning =
+                    OpenAiTransport::responses_reasoning_config(&request, model.as_ref());
+                let include = OpenAiTransport::responses_include(
+                    std::mem::take(&mut tool_plan.include),
+                    reasoning.as_ref(),
+                    adapter.supports_codex_compat_headers()
+                        || adapter.is_official_openai_endpoint(),
+                );
+
+                Ok((request, model, input, tool_plan, reasoning, include))
+            })
+            .await?;
 
         // Some Responses-compatible gateways reject reasoning items that carry
         // both opaque `encrypted_content` and a plaintext `content` array
@@ -598,76 +637,94 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         // kill the whole turn.
         let mut retry_without_reasoning_content = false;
         let response = loop {
-            let attempt_input = if retry_without_reasoning_content {
-                let mut cleaned = self.responses_input_for_request(&request)?;
-                OpenAiTransport::strip_responses_reasoning_content(cleaned.as_mut_slice());
-                cleaned
-            } else {
-                std::mem::take(&mut input)
-            };
-            let body = OpenAiResponsesRequest {
-                model: model.to_string(),
-                instructions: OpenAiTransport::responses_instructions(&request),
-                input: attempt_input,
-                tools: tool_plan.tools.clone(),
-                tool_choice: Some("auto".to_owned()),
-                parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
-                include: include.clone(),
-                max_output_tokens: self.responses_request_max_output_tokens(&request),
-                temperature: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                    .then_some(request.temperature)
-                    .flatten(),
-                prompt_cache_key: request.prompt_cache_key.clone(),
-                previous_response_id: (!matches!(
-                    self.backend,
-                    OpenAiResponsesBackend::ChatgptCodex
-                ))
-                .then(|| request.previous_response_id.clone())
-                .flatten(),
-                store: Some(false),
-                stream: Some(true),
-                top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                    .then_some(request.top_p)
-                    .flatten(),
-                reasoning: reasoning.clone(),
-                service_tier: OpenAiTransport::responses_service_tier(&request),
-                text: OpenAiTransport::responses_text_config(&request),
-                client_metadata: OpenAiTransport::responses_client_metadata(
-                    RequestHeaderContext::from_request(&request),
-                ),
-            };
-            let body_json = utils::serialize_request_body_with_patch(
-                &body,
-                &request.request_override.body_patch,
-            )?;
+            let adapter = self.clone();
+            let worker_model = model.clone();
+            let (next_request, next_input, next_tool_plan, next_reasoning, next_include, body_json) =
+                utils::prepare_request_with(move || {
+                    let attempt_input = if retry_without_reasoning_content {
+                        let mut cleaned = adapter.responses_input_for_request(&request)?;
+                        OpenAiTransport::strip_responses_reasoning_content(cleaned.as_mut_slice());
+                        cleaned
+                    } else {
+                        std::mem::take(&mut input)
+                    };
+                    let body = OpenAiResponsesRequest {
+                        model: worker_model.to_string(),
+                        instructions: OpenAiTransport::responses_instructions(&request),
+                        input: attempt_input,
+                        tools: tool_plan.tools.clone(),
+                        tool_choice: Some("auto".to_owned()),
+                        parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(
+                            &request,
+                        ),
+                        include: include.clone(),
+                        max_output_tokens: adapter.responses_request_max_output_tokens(&request),
+                        temperature: (!matches!(
+                            adapter.backend,
+                            OpenAiResponsesBackend::ChatgptCodex
+                        ))
+                        .then_some(request.temperature)
+                        .flatten(),
+                        prompt_cache_key: request.prompt_cache_key.clone(),
+                        previous_response_id: (!matches!(
+                            adapter.backend,
+                            OpenAiResponsesBackend::ChatgptCodex
+                        ))
+                        .then(|| request.previous_response_id.clone())
+                        .flatten(),
+                        store: Some(false),
+                        stream: Some(true),
+                        top_p: (!matches!(adapter.backend, OpenAiResponsesBackend::ChatgptCodex))
+                            .then_some(request.top_p)
+                            .flatten(),
+                        reasoning: reasoning.clone(),
+                        service_tier: OpenAiTransport::responses_service_tier(&request),
+                        text: OpenAiTransport::responses_text_config(&request),
+                        client_metadata: OpenAiTransport::responses_client_metadata(
+                            RequestHeaderContext::from_request(&request),
+                        ),
+                    };
+                    let body_json = utils::prepare_request_body_sync(
+                        &body,
+                        &request.request_override.body_patch,
+                    )?;
+                    Ok((request, input, tool_plan, reasoning, include, body_json))
+                })
+                .await?;
+            request = next_request;
+            input = next_input;
+            tool_plan = next_tool_plan;
+            reasoning = next_reasoning;
+            include = next_include;
 
-            let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-                let endpoint = self
-                    .responses_endpoint()
-                    .expect("responses endpoint should resolve");
-                let mut headers =
-                    self.auth_headers(RequestHeaderContext::from_request(&request), api_key);
-                headers.insert(
-                    reqwest::header::ACCEPT.as_str().to_owned(),
-                    "text/event-stream".to_owned(),
-                );
-                headers.insert(
-                    reqwest::header::CONTENT_TYPE.as_str().to_owned(),
-                    "application/json".to_owned(),
-                );
-                utils::adapter_log_http_request_json(
-                    self.id.as_str(),
-                    RESPONSES_ADAPTER_KIND,
-                    "complete_stream.responses",
-                    "POST",
-                    endpoint.as_str(),
-                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                    Some(&body_json),
-                );
-                utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
-                    .json(&body_json)
-            })
-            .await?;
+            let response =
+                utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                    let endpoint = self
+                        .responses_endpoint()
+                        .expect("responses endpoint should resolve");
+                    let mut headers =
+                        self.auth_headers(RequestHeaderContext::from_request(&request), api_key);
+                    headers.insert(
+                        reqwest::header::ACCEPT.as_str().to_owned(),
+                        "text/event-stream".to_owned(),
+                    );
+                    headers.insert(
+                        reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                        "application/json".to_owned(),
+                    );
+                    utils::adapter_log_http_request_prepared(
+                        self.id.as_str(),
+                        RESPONSES_ADAPTER_KIND,
+                        "complete_stream.responses",
+                        "POST",
+                        endpoint.as_str(),
+                        headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                        Some(&body_json),
+                    );
+                    utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                        .body(body_json.bytes())
+                })
+                .await?;
 
             if response.status().is_success() {
                 break response;
@@ -941,6 +998,7 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
+        let request = std::sync::Arc::new(request);
         self.complete_with_chat_api(&request, request.model.to_string())
             .await
     }
@@ -952,6 +1010,7 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>,
         ProviderError,
     > {
+        let request = std::sync::Arc::new(request);
         self.complete_stream_with_chat_api(&request, request.model.to_string())
             .await
     }

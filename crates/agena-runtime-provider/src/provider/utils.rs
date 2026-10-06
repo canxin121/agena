@@ -22,6 +22,9 @@ pub use agena_provider::{
 
 pub const ADAPTER_LOG_TARGET: &str = "agena::adapter";
 const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
+static REQUEST_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static RESPONSE_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static HEADER_HOOKS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
 const MAX_PROVIDER_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_PROVIDER_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
 
@@ -107,12 +110,27 @@ pub fn resolved_request_headers(
     provider_id: &str,
     extra_headers: &HashMap<String, String>,
 ) -> BTreeMap<String, String> {
-    let mut combined: BTreeMap<String, String> = extra_headers
+    let mut combined = configured_request_headers(extra_headers);
+
+    if let Some(hook) = request_header_hook() {
+        combined = hook.resolve(provider_id, combined, current_request_cancellation());
+    }
+    combined
+}
+
+/// Pure header projection. Async transports resolve the potentially blocking
+/// plugin hook separately, after the request has been prepared.
+pub fn configured_request_headers(
+    extra_headers: &HashMap<String, String>,
+) -> BTreeMap<String, String> {
+    extra_headers
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+        .collect()
+}
 
-    let hook = REQUEST_HEADER_HOOK
+fn request_header_hook() -> Option<Arc<dyn ProviderRequestHeaderHook>> {
+    REQUEST_HEADER_HOOK
         .get()
         .and_then(|slot| match slot.read() {
             Ok(guard) => guard.clone(),
@@ -124,12 +142,58 @@ pub fn resolved_request_headers(
                 );
                 error.into_inner().clone()
             }
-        });
-    if let Some(hook) = hook {
-        combined = hook.resolve(provider_id, combined, current_request_cancellation());
-    }
+        })
+}
 
-    combined
+pub async fn resolved_request_headers_async(
+    provider_id: &str,
+    headers: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, ProviderError> {
+    let Some(hook) = request_header_hook() else {
+        return Ok(headers);
+    };
+    let provider_id = provider_id.to_owned();
+    // Tokio task-local authority must be captured before entering a worker.
+    let cancellation = current_request_cancellation();
+    HEADER_HOOKS
+        .run(move || hook.resolve(&provider_id, headers, cancellation))
+        .await
+        .map_err(|error| ProviderError::Internal(format!("provider header worker failed: {error}")))
+}
+
+pub async fn send_request_builder(
+    provider_id: &str,
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ProviderError> {
+    if request_header_hook().is_none() {
+        return Ok(builder.send().await?);
+    }
+    let (client, request) = builder.build_split();
+    let mut request = request?;
+    let headers = request
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            Ok((
+                name.as_str().to_owned(),
+                value
+                    .to_str()
+                    .map_err(|error| ProviderError::Config(error.to_string()))?
+                    .to_owned(),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, ProviderError>>()?;
+    let headers = resolved_request_headers_async(provider_id, headers).await?;
+    request.headers_mut().clear();
+    for (name, value) in headers {
+        request.headers_mut().insert(
+            reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|error| ProviderError::Config(error.to_string()))?,
+            reqwest::header::HeaderValue::from_str(&value)
+                .map_err(|error| ProviderError::Config(error.to_string()))?,
+        );
+    }
+    Ok(client.execute(request).await?)
 }
 
 pub fn apply_resolved_request_headers(
@@ -161,6 +225,93 @@ pub fn serialize_request_body_with_patch(
     Ok(value)
 }
 
+/// Owned wire body, encoded once before credential retries. Bytes clones are
+/// shared handles; diagnostic preparation also happens on the codec worker.
+#[derive(Clone)]
+pub struct PreparedJsonBody {
+    json: Arc<serde_json::Value>,
+    bytes: bytes::Bytes,
+    fingerprint: Option<String>,
+    trace_body: Option<String>,
+}
+
+impl std::ops::Deref for PreparedJsonBody {
+    type Target = serde_json::Value;
+    fn deref(&self) -> &Self::Target {
+        &self.json
+    }
+}
+
+impl PreparedJsonBody {
+    pub fn bytes(&self) -> bytes::Bytes {
+        self.bytes.clone()
+    }
+
+    fn prepare(json: serde_json::Value) -> Result<Self, ProviderError> {
+        let bytes = bytes::Bytes::from(serde_json::to_vec(&json)?);
+        let fingerprint = tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::DEBUG)
+            .then(|| request_shape_fingerprint(&json));
+        let trace_body =
+            tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE).then(|| {
+                pretty_adapter_log_json(
+                    &sanitize_json_value(&json),
+                    "serialize adapter request body",
+                )
+            });
+        Ok(Self {
+            json: Arc::new(json),
+            bytes,
+            fingerprint,
+            trace_body,
+        })
+    }
+}
+
+pub async fn prepare_request_body<T: serde::Serialize + Send + 'static>(
+    body: T,
+    patch: BTreeMap<String, serde_json::Value>,
+) -> Result<PreparedJsonBody, ProviderError> {
+    REQUEST_CODECS
+        .run(move || PreparedJsonBody::prepare(serialize_request_body_with_patch(&body, &patch)?))
+        .await
+        .map_err(|error| {
+            ProviderError::Internal(format!("provider request codec worker failed: {error}"))
+        })?
+}
+
+/// Use only within an already admitted blocking worker or synchronous code.
+/// Async callers should use `prepare_request_body` or `prepare_request_with`.
+pub fn prepare_request_body_sync(
+    body: &impl serde::Serialize,
+    patch: &BTreeMap<String, serde_json::Value>,
+) -> Result<PreparedJsonBody, ProviderError> {
+    PreparedJsonBody::prepare(serialize_request_body_with_patch(body, patch)?)
+}
+
+/// Owned provider-specific projection, including any prompt/media copies and
+/// request encoding. No async driver or network operation belongs in the closure.
+pub async fn prepare_request_with<T: Send + 'static>(
+    build: impl FnOnce() -> Result<T, ProviderError> + Send + 'static,
+) -> Result<T, ProviderError> {
+    REQUEST_CODECS.run(build).await.map_err(|error| {
+        ProviderError::Internal(format!(
+            "provider request preparation worker failed: {error}"
+        ))
+    })?
+}
+
+/// Project an owned, decoded response on the response pool when its payload
+/// copies or artifact preparation would otherwise monopolize an async worker.
+pub async fn project_response_with<T: Send + 'static>(
+    project: impl FnOnce() -> Result<T, ProviderError> + Send + 'static,
+) -> Result<T, ProviderError> {
+    RESPONSE_CODECS.run(project).await.map_err(|error| {
+        ProviderError::Internal(format!(
+            "provider response projection worker failed: {error}"
+        ))
+    })?
+}
+
 // ─── HTTP response helpers ────────────────────────────────────────────────────
 
 pub(crate) async fn response_text_bounded(
@@ -178,6 +329,7 @@ pub(crate) async fn response_text_bounded(
     }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
+        tokio::task::consume_budget().await;
         if body.len().saturating_add(chunk.len()) > max_bytes {
             return Err(ProviderError::Provider(format!(
                 "{context} exceeds the {max_bytes}-byte response limit"
@@ -185,11 +337,19 @@ pub(crate) async fn response_text_bounded(
         }
         body.extend_from_slice(&chunk);
     }
-    String::from_utf8(body)
-        .map_err(|_| ProviderError::Provider(format!("{context} is not UTF-8 text")))
+    let context = context.to_owned();
+    RESPONSE_CODECS
+        .run(move || {
+            String::from_utf8(body)
+                .map_err(|_| ProviderError::Provider(format!("{context} is not UTF-8 text")))
+        })
+        .await
+        .map_err(|error| {
+            ProviderError::Internal(format!("provider UTF-8 worker failed: {error}"))
+        })?
 }
 
-pub async fn parse_json_response_logged<T: DeserializeOwned>(
+pub async fn parse_json_response_logged<T: DeserializeOwned + Send + 'static>(
     provider_id: &str,
     adapter_kind: &str,
     operation: &str,
@@ -205,15 +365,25 @@ pub async fn parse_json_response_logged<T: DeserializeOwned>(
             "provider JSON response",
         )
         .await?;
-        adapter_log_http_response_text(
-            provider_id,
-            adapter_kind,
-            operation,
-            status,
-            &headers,
-            body.as_str(),
-        );
-        return serde_json::from_str::<T>(body.as_str()).map_err(ProviderError::from);
+        let provider_id = provider_id.to_owned();
+        let adapter_kind = adapter_kind.to_owned();
+        let operation = operation.to_owned();
+        return RESPONSE_CODECS
+            .run(move || {
+                adapter_log_http_response_text(
+                    &provider_id,
+                    &adapter_kind,
+                    &operation,
+                    status,
+                    &headers,
+                    &body,
+                );
+                serde_json::from_str::<T>(&body).map_err(ProviderError::from)
+            })
+            .await
+            .map_err(|error| {
+                ProviderError::Internal(format!("provider response codec worker failed: {error}"))
+            })?;
     }
     Err(
         http_status_error_from_response_logged(provider_id, adapter_kind, operation, response)
@@ -257,6 +427,41 @@ pub fn parse_json_value<T: DeserializeOwned>(
     })
 }
 
+/// Decode an owned transport frame without copying its bytes on the async
+/// worker. Small frames stay inline; large UTF-8/JSON projections are admitted
+/// to the response pool. Keep Value-to-typed semantics used by the adapters.
+pub async fn parse_json_frame<T: DeserializeOwned + Send + 'static>(
+    provider_id: &str,
+    context: &str,
+    bytes: bytes::Bytes,
+) -> Result<T, ProviderError> {
+    if bytes.len() > MAX_PROVIDER_JSON_RESPONSE_BYTES {
+        return Err(ProviderError::Provider(format!(
+            "{provider_id} {context} exceeds the {MAX_PROVIDER_JSON_RESPONSE_BYTES}-byte frame limit"
+        )));
+    }
+    let inline = bytes.len() < 64 * 1024;
+    let provider_id = provider_id.to_owned();
+    let context = context.to_owned();
+    let decode = move || {
+        let text = std::str::from_utf8(&bytes).map_err(|err| {
+            ProviderError::Provider(format!("{provider_id} returned non-UTF-8 {context}: {err}"))
+        })?;
+        let value = serde_json::from_str::<serde_json::Value>(text).map_err(|err| {
+            ProviderError::Provider(format!(
+                "{provider_id} returned invalid {context} JSON: {err}"
+            ))
+        })?;
+        parse_json_value(&provider_id, &context, value)
+    };
+    if inline {
+        return decode();
+    }
+    RESPONSE_CODECS.run(decode).await.map_err(|error| {
+        ProviderError::Internal(format!("provider frame codec worker failed: {error}"))
+    })?
+}
+
 /// Classify a provider JSON stream error (SSE / JSON-lines) into a
 /// [`ProviderError`] carrying the real provider id. Transport/body errors map
 /// to `ProviderError::Http` (retryable for timeout/connect/body/decode); a
@@ -269,6 +474,17 @@ pub fn json_stream_error(
 ) -> ProviderError {
     match error {
         crate::ProviderJsonStreamError::Http(error) => ProviderError::Http(error),
+        crate::ProviderJsonStreamError::Worker(error) => {
+            ProviderError::Internal(format!("provider stream decoder worker failed: {error}"))
+        }
+        error @ crate::ProviderJsonStreamError::FrameLimit { .. } => {
+            ProviderError::ProviderClassified {
+                provider: provider_id.to_owned(),
+                message: error.to_string(),
+                kind: ProviderErrorKind::MalformedResponse,
+                retryable: false,
+            }
+        }
         crate::ProviderJsonStreamError::InvalidJson { format, source } => {
             ProviderError::ProviderClassified {
                 provider: provider_id.to_owned(),
@@ -296,53 +512,63 @@ pub async fn http_status_error_from_response_logged(
     .await
     .unwrap_or_else(|error| format!("<unavailable: {error}>"));
 
-    adapter_log_http_response_text(
-        provider_id,
-        adapter_kind,
-        operation,
-        status,
-        &headers,
-        raw_body.as_str(),
-    );
+    let provider_id = provider_id.to_owned();
+    let adapter_kind = adapter_kind.to_owned();
+    let operation = operation.to_owned();
+    RESPONSE_CODECS
+        .run(move || {
+            adapter_log_http_response_text(
+                &provider_id,
+                &adapter_kind,
+                &operation,
+                status,
+                &headers,
+                raw_body.as_str(),
+            );
 
-    let mut body = serde_json::from_str::<ProviderErrorEnvelope>(&raw_body)
-        .map(|parsed| {
-            let mut message = parsed.error.message;
-            if let Some(param) = parsed.error.param {
-                message.push_str(&format!(" (param={param})"));
+            let mut body = serde_json::from_str::<ProviderErrorEnvelope>(&raw_body)
+                .map(|parsed| {
+                    let mut message = parsed.error.message;
+                    if let Some(param) = parsed.error.param {
+                        message.push_str(&format!(" (param={param})"));
+                    }
+                    if let Some(kind) = parsed.error.kind {
+                        message.push_str(&format!(" (type={kind})"));
+                    }
+                    if let Some(code) = parsed.error.code {
+                        message.push_str(&format!(" (code={code})"));
+                    }
+                    message
+                })
+                .unwrap_or(raw_body);
+
+            let upstream_refs = [
+                response_header_value(&headers, "x-request-id")
+                    .map(|value| format!("x-request-id={value}")),
+                response_header_value(&headers, "cf-ray").map(|value| format!("cf-ray={value}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            if !upstream_refs.is_empty() {
+                body.push_str(" [");
+                body.push_str(upstream_refs.join(", ").as_str());
+                body.push(']');
             }
-            if let Some(kind) = parsed.error.kind {
-                message.push_str(&format!(" (type={kind})"));
+
+            let classified = classify_http_error(&provider_id, status, body.as_str());
+            ProviderError::HttpStatus {
+                provider: provider_id.to_owned(),
+                status,
+                body,
+                kind: classified.kind,
+                retryable: classified.retryable,
             }
-            if let Some(code) = parsed.error.code {
-                message.push_str(&format!(" (code={code})"));
-            }
-            message
         })
-        .unwrap_or(raw_body);
-
-    let upstream_refs = [
-        response_header_value(&headers, "x-request-id")
-            .map(|value| format!("x-request-id={value}")),
-        response_header_value(&headers, "cf-ray").map(|value| format!("cf-ray={value}")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    if !upstream_refs.is_empty() {
-        body.push_str(" [");
-        body.push_str(upstream_refs.join(", ").as_str());
-        body.push(']');
-    }
-
-    let classified = classify_http_error(provider_id, status, body.as_str());
-    ProviderError::HttpStatus {
-        provider: provider_id.to_owned(),
-        status,
-        body,
-        kind: classified.kind,
-        retryable: classified.retryable,
-    }
+        .await
+        .unwrap_or_else(|error| {
+            ProviderError::Internal(format!("provider error codec worker failed: {error}"))
+        })
 }
 
 fn response_header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
@@ -352,6 +578,44 @@ fn response_header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Op
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+pub fn adapter_log_http_request_prepared<I, K, V>(
+    provider_id: &str,
+    adapter_kind: &str,
+    operation: &str,
+    method: &str,
+    url: &str,
+    headers: I,
+    body: Option<&PreparedJsonBody>,
+) where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    if !tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::DEBUG) {
+        return;
+    }
+    let sanitized_url = sanitize_url(url);
+    let sanitized_headers = sanitize_headers(headers);
+    let header_count = sanitized_headers
+        .as_object()
+        .map(|object| object.len())
+        .unwrap_or_default();
+    tracing::debug!(target: ADAPTER_LOG_TARGET,
+        provider = provider_id, adapter = adapter_kind, operation, method,
+        url = sanitized_url.as_str(), header_count, has_body = body.is_some(),
+        body_fingerprint = body.and_then(|body| body.fingerprint.as_deref()).unwrap_or(""),
+        "adapter http request");
+    if tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE) {
+        let headers_json =
+            pretty_adapter_log_json(&sanitized_headers, "serialize adapter request headers");
+        tracing::trace!(target: ADAPTER_LOG_TARGET,
+            provider = provider_id, adapter = adapter_kind, operation,
+            request_headers = headers_json.as_str(),
+            request_body = body.and_then(|body| body.trace_body.as_deref()).unwrap_or(""),
+            "adapter http request payload");
+    }
 }
 
 pub fn adapter_log_http_request_json<I, K, V>(
@@ -687,6 +951,7 @@ fn is_sensitive_key(key: &str) -> bool {
 }
 
 pub async fn send_with_credential_refresh<F>(
+    provider_id: &str,
     api_key: &ManagedCredential,
     mut build: F,
 ) -> Result<reqwest::Response, ProviderError>
@@ -700,7 +965,7 @@ where
         } else {
             api_key.resolve().await?
         };
-        let response = build(key.as_str()).send().await?;
+        let response = send_request_builder(provider_id, build(key.as_str())).await?;
         if !force_refresh && should_retry_credential(response.status()) {
             force_refresh = true;
             continue;

@@ -141,14 +141,14 @@ impl ModelRuntime for GeminiAdapter {
         let response = self
             .send_request(|api_key| {
                 let endpoint = self.endpoint_with_auth(endpoint.clone(), api_key);
-                let mut headers = utils::resolved_request_headers(PROVIDER_ID, &self.extra_headers);
+                let mut headers = utils::configured_request_headers(&self.extra_headers);
                 if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
                     headers.insert(
                         name.clone(),
                         utils::auth_header_value(scheme.as_deref(), api_key),
                     );
                 }
-                utils::adapter_log_http_request_json(
+                utils::adapter_log_http_request_prepared(
                     PROVIDER_ID,
                     ADAPTER_KIND,
                     "list_models",
@@ -193,18 +193,24 @@ impl ModelRuntime for GeminiAdapter {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
-        let model = request.model.clone();
-        let stream_fallback_request = request.clone();
-        let body = self.generate_request(&request)?;
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
-        let request_headers = self.completion_request_headers(&request);
+        let adapter = self.clone();
+        let (model, stream_fallback_request, body_json, request_headers) =
+            utils::prepare_request_with(move || {
+                let model = request.model.clone();
+                let stream_fallback_request = request.clone();
+                let body = adapter.generate_request(&request)?;
+                let body_json =
+                    utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+                let request_headers = adapter.completion_request_headers(&request);
+                Ok((model, stream_fallback_request, body_json, request_headers))
+            })
+            .await?;
 
         let response = self
             .send_request(|api_key| {
                 let endpoint =
                     self.endpoint_with_auth(self.generate_endpoint(model.as_ref()), api_key);
-                let mut headers = utils::resolved_request_headers(PROVIDER_ID, &request_headers);
+                let mut headers = utils::configured_request_headers(&request_headers);
                 if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
                     headers.insert(
                         name.clone(),
@@ -215,7 +221,7 @@ impl ModelRuntime for GeminiAdapter {
                     reqwest::header::CONTENT_TYPE.as_str().to_owned(),
                     "application/json".to_owned(),
                 );
-                utils::adapter_log_http_request_json(
+                utils::adapter_log_http_request_prepared(
                     PROVIDER_ID,
                     ADAPTER_KIND,
                     "complete.generate_content",
@@ -225,7 +231,7 @@ impl ModelRuntime for GeminiAdapter {
                     Some(&body_json),
                 );
                 utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
-                    .json(&body_json)
+                    .body(body_json.bytes())
             })
             .await?;
 
@@ -286,20 +292,25 @@ impl ModelRuntime for GeminiAdapter {
             && !Self::request_contains_tool_results(&request)
         {
             return self
-                .complete_stream_with_realtime_ws(&request, model.clone())
+                .complete_stream_with_realtime_ws(request, model.clone())
                 .await;
         }
 
-        let body = self.generate_request(&request)?;
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
-        let request_headers = self.completion_request_headers(&request);
+        let adapter = self.clone();
+        let (body_json, request_headers) = utils::prepare_request_with(move || {
+            let body = adapter.generate_request(&request)?;
+            let body_json =
+                utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+            let request_headers = adapter.completion_request_headers(&request);
+            Ok((body_json, request_headers))
+        })
+        .await?;
 
         let response = self
             .send_request(|api_key| {
                 let endpoint =
                     self.endpoint_with_auth(self.stream_generate_endpoint(model.as_ref()), api_key);
-                let mut headers = utils::resolved_request_headers(PROVIDER_ID, &request_headers);
+                let mut headers = utils::configured_request_headers(&request_headers);
                 if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
                     headers.insert(
                         name.clone(),
@@ -310,7 +321,7 @@ impl ModelRuntime for GeminiAdapter {
                     reqwest::header::CONTENT_TYPE.as_str().to_owned(),
                     "application/json".to_owned(),
                 );
-                utils::adapter_log_http_request_json(
+                utils::adapter_log_http_request_prepared(
                     PROVIDER_ID,
                     ADAPTER_KIND,
                     "complete_stream.generate_content",
@@ -320,7 +331,7 @@ impl ModelRuntime for GeminiAdapter {
                     Some(&body_json),
                 );
                 utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
-                    .json(&body_json)
+                    .body(body_json.bytes())
             })
             .await?;
 

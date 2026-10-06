@@ -245,15 +245,25 @@ impl AmazonBedrockAdapter {
         let credentials = self
             .resolve_sigv4_credentials(profile, static_credentials)
             .await?;
-        let signing_headers = agena_provider_bedrock_signing::signed_headers(
-            method.as_str(),
-            url.as_str(),
-            body.as_deref().unwrap_or(&[]),
-            headers.as_slice(),
-            &credentials,
-            self.region.as_str(),
-        )
-        .map_err(|error| match error {
+        let region = self.region.clone();
+        static SIGNING: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+        let (method, url, body, signed) = SIGNING
+            .run(move || {
+                let signed = agena_provider_bedrock_signing::signed_headers(
+                    method.as_str(),
+                    &url,
+                    body.as_deref().unwrap_or(&[]),
+                    &headers,
+                    &credentials,
+                    &region,
+                );
+                (method, url, body, signed)
+            })
+            .await
+            .map_err(|error| {
+                ProviderError::Internal(format!("bedrock signing worker failed: {error}"))
+            })?;
+        let signing_headers = signed.map_err(|error| match error {
             agena_provider_bedrock_signing::BedrockSigningError::HeaderName { name, error } => {
                 ProviderError::Config(format!("bedrock invalid header name `{name}`: {error}"))
             }
@@ -281,7 +291,11 @@ impl AmazonBedrockAdapter {
             request = request.header(name, value);
         }
         let plugin_headers: HashMap<String, String> = Default::default();
-        let plugin_headers = utils::resolved_request_headers(PROVIDER_ID, &plugin_headers);
+        let plugin_headers = utils::resolved_request_headers_async(
+            PROVIDER_ID,
+            utils::configured_request_headers(&plugin_headers),
+        )
+        .await?;
         let mut final_headers = signing_headers
             .iter()
             .filter_map(|(name, value)| {
@@ -292,7 +306,7 @@ impl AmazonBedrockAdapter {
             })
             .collect::<BTreeMap<_, _>>();
         final_headers.extend(plugin_headers.clone());
-        utils::adapter_log_http_request_json(
+        utils::adapter_log_http_request_prepared(
             PROVIDER_ID,
             ADAPTER_KIND,
             operation,
@@ -925,17 +939,20 @@ impl AmazonBedrockAdapter {
         static_credentials: Option<&Credentials>,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
-        let request_override = request.request_override.clone();
-        let (model, body) = Self::build_anthropic_request(request);
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
-        let mut headers = Self::anthropic_invoke_headers(false);
-        headers.extend(
-            request_override
-                .headers
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone())),
-        );
+        let (model, body_json, headers) = utils::prepare_request_with(move || {
+            let request_override = request.request_override.clone();
+            let (model, body) = Self::build_anthropic_request(request);
+            let body_json = utils::prepare_request_body_sync(&body, &request_override.body_patch)?;
+            let mut headers = Self::anthropic_invoke_headers(false);
+            headers.extend(
+                request_override
+                    .headers
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+            Ok((model, body_json, headers))
+        })
+        .await?;
 
         let response = self
             .send_sigv4_request(
@@ -945,7 +962,7 @@ impl AmazonBedrockAdapter {
                 Sigv4Request {
                     method: reqwest::Method::POST,
                     url: self.native_anthropic_invoke_endpoint(model.as_ref(), false)?,
-                    body: Some(serde_json::to_vec(&body_json)?),
+                    body: Some(body_json.bytes()),
                     headers,
                     body_debug: Some(&body_json),
                 },
@@ -971,20 +988,26 @@ impl AmazonBedrockAdapter {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>,
         ProviderError,
     > {
-        let request_override = request.request_override.clone();
-        let (model, body) = Self::build_anthropic_request(request);
-        let include_thinking = body.thinking.as_ref().is_some_and(|thinking| {
-            !matches!(thinking, super::BedrockAnthropicThinkingConfig::Disabled)
-        });
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
-        let mut headers = Self::anthropic_invoke_headers(true);
-        headers.extend(
-            request_override
-                .headers
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone())),
-        );
+        let (model, body_json, headers, include_thinking) =
+            utils::prepare_request_with(move || {
+                let request_override = request.request_override.clone();
+                let (model, body) = Self::build_anthropic_request(request);
+                let include_thinking = body.thinking.as_ref().is_some_and(|thinking| {
+                    !matches!(thinking, super::BedrockAnthropicThinkingConfig::Disabled)
+                });
+                let body_json =
+                    utils::prepare_request_body_sync(&body, &request_override.body_patch)?;
+                let mut headers = Self::anthropic_invoke_headers(true);
+                headers.extend(
+                    request_override
+                        .headers
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+                Ok((model, body_json, headers, include_thinking))
+            })
+            .await?;
+
         let response = self
             .send_sigv4_request(
                 "complete_stream.native_anthropic",
@@ -993,7 +1016,7 @@ impl AmazonBedrockAdapter {
                 Sigv4Request {
                     method: reqwest::Method::POST,
                     url: self.native_anthropic_invoke_endpoint(model.as_ref(), true)?,
-                    body: Some(serde_json::to_vec(&body_json)?),
+                    body: Some(body_json.bytes()),
                     headers,
                     body_debug: Some(&body_json),
                 },
@@ -1327,58 +1350,63 @@ impl AmazonBedrockAdapter {
                 .await;
         }
 
-        let prompt_cache_key = request.prompt_cache_key.clone();
-        let model = self.resolve_model(request.model.as_ref());
-        let messages = Self::chat_messages_for_request(&request);
-        let body = ChatCompletionRequest {
-            model,
-            messages,
-            tools: (!request.tool_api_functions.is_empty()).then(|| {
+        let adapter = self.clone();
+        let (body_json, headers) = utils::prepare_request_with(move || {
+            let prompt_cache_key = request.prompt_cache_key.clone();
+            let model = adapter.resolve_model(request.model.as_ref());
+            let messages = Self::chat_messages_for_request(&request);
+            let body = ChatCompletionRequest {
+                model,
+                messages,
+                tools: (!request.tool_api_functions.is_empty()).then(|| {
+                    request
+                        .tool_api_functions
+                        .iter()
+                        .cloned()
+                        .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
+                            kind: "function".to_owned(),
+                            function: crate::provider::chat_wire::ChatFunctionDefinition {
+                                name: bedrock_wire_tool_name(tool.name.as_str()),
+                                description: tool.description,
+                                parameters: tool.input_schema,
+                            },
+                        })
+                        .collect()
+                }),
+                temperature: request.temperature,
+                max_tokens: request.max_output_tokens,
+                max_completion_tokens: None,
+                cache_control: None,
+                stream: false,
+                stream_options: None,
+                stop: Vec::new(),
+                top_p: None,
+                seed: None,
+                response_format: None,
+                reasoning_effort: None,
+                verbosity: None,
+                prompt_cache_key: prompt_cache_key.clone(),
+                parallel_tool_calls: request.request_override.parallel_tool_calls(),
+            };
+            let body_json =
+                utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+            let mut headers = vec![(
+                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                JSON_CONTENT_TYPE.to_owned(),
+            )];
+            if let Some(session_affinity) = prompt_cache_key {
+                headers.push(("x-session-affinity".to_owned(), session_affinity));
+            }
+            headers.extend(
                 request
-                    .tool_api_functions
+                    .request_override
+                    .headers
                     .iter()
-                    .cloned()
-                    .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
-                        kind: "function".to_owned(),
-                        function: crate::provider::chat_wire::ChatFunctionDefinition {
-                            name: bedrock_wire_tool_name(tool.name.as_str()),
-                            description: tool.description,
-                            parameters: tool.input_schema,
-                        },
-                    })
-                    .collect()
-            }),
-            temperature: request.temperature,
-            max_tokens: request.max_output_tokens,
-            max_completion_tokens: None,
-            cache_control: None,
-            stream: false,
-            stream_options: None,
-            stop: Vec::new(),
-            top_p: None,
-            seed: None,
-            response_format: None,
-            reasoning_effort: None,
-            verbosity: None,
-            prompt_cache_key: prompt_cache_key.clone(),
-            parallel_tool_calls: request.request_override.parallel_tool_calls(),
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
-        let mut headers = vec![(
-            reqwest::header::CONTENT_TYPE.as_str().to_owned(),
-            JSON_CONTENT_TYPE.to_owned(),
-        )];
-        if let Some(session_affinity) = prompt_cache_key {
-            headers.push(("x-session-affinity".to_owned(), session_affinity));
-        }
-        headers.extend(
-            request
-                .request_override
-                .headers
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone())),
-        );
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+            Ok((body_json, headers))
+        })
+        .await?;
 
         let response = self
             .send_sigv4_request(
@@ -1388,7 +1416,7 @@ impl AmazonBedrockAdapter {
                 Sigv4Request {
                     method: reqwest::Method::POST,
                     url: self.completions_endpoint(),
-                    body: Some(serde_json::to_vec(&body_json)?),
+                    body: Some(body_json.bytes()),
                     headers,
                     body_debug: Some(&body_json),
                 },
@@ -1416,61 +1444,66 @@ impl AmazonBedrockAdapter {
                 .await;
         }
 
-        let prompt_cache_key = request.prompt_cache_key.clone();
-        let model = self.resolve_model(request.model.as_ref());
-        let messages = Self::chat_messages_for_request(&request);
+        let adapter = self.clone();
+        let (model, body_json, headers) = utils::prepare_request_with(move || {
+            let prompt_cache_key = request.prompt_cache_key.clone();
+            let model = adapter.resolve_model(request.model.as_ref());
+            let messages = Self::chat_messages_for_request(&request);
 
-        let body = ChatCompletionRequest {
-            model: model.clone(),
-            messages,
-            tools: (!request.tool_api_functions.is_empty()).then(|| {
+            let body = ChatCompletionRequest {
+                model: model.clone(),
+                messages,
+                tools: (!request.tool_api_functions.is_empty()).then(|| {
+                    request
+                        .tool_api_functions
+                        .iter()
+                        .cloned()
+                        .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
+                            kind: "function".to_owned(),
+                            function: crate::provider::chat_wire::ChatFunctionDefinition {
+                                name: bedrock_wire_tool_name(tool.name.as_str()),
+                                description: tool.description,
+                                parameters: tool.input_schema,
+                            },
+                        })
+                        .collect()
+                }),
+                temperature: request.temperature,
+                max_tokens: request.max_output_tokens,
+                max_completion_tokens: None,
+                cache_control: None,
+                stream: true,
+                stream_options: Some(ChatStreamOptions {
+                    include_usage: true,
+                }),
+                stop: Vec::new(),
+                top_p: None,
+                seed: None,
+                response_format: None,
+                reasoning_effort: None,
+                verbosity: None,
+                prompt_cache_key: prompt_cache_key.clone(),
+                parallel_tool_calls: request.request_override.parallel_tool_calls(),
+            };
+            let body_json =
+                utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+            let mut headers = vec![(
+                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                JSON_CONTENT_TYPE.to_owned(),
+            )];
+            if let Some(session_affinity) = prompt_cache_key {
+                headers.push(("x-session-affinity".to_owned(), session_affinity));
+            }
+            headers.extend(
                 request
-                    .tool_api_functions
+                    .request_override
+                    .headers
                     .iter()
-                    .cloned()
-                    .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
-                        kind: "function".to_owned(),
-                        function: crate::provider::chat_wire::ChatFunctionDefinition {
-                            name: bedrock_wire_tool_name(tool.name.as_str()),
-                            description: tool.description,
-                            parameters: tool.input_schema,
-                        },
-                    })
-                    .collect()
-            }),
-            temperature: request.temperature,
-            max_tokens: request.max_output_tokens,
-            max_completion_tokens: None,
-            cache_control: None,
-            stream: true,
-            stream_options: Some(ChatStreamOptions {
-                include_usage: true,
-            }),
-            stop: Vec::new(),
-            top_p: None,
-            seed: None,
-            response_format: None,
-            reasoning_effort: None,
-            verbosity: None,
-            prompt_cache_key: prompt_cache_key.clone(),
-            parallel_tool_calls: request.request_override.parallel_tool_calls(),
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
-        let mut headers = vec![(
-            reqwest::header::CONTENT_TYPE.as_str().to_owned(),
-            JSON_CONTENT_TYPE.to_owned(),
-        )];
-        if let Some(session_affinity) = prompt_cache_key {
-            headers.push(("x-session-affinity".to_owned(), session_affinity));
-        }
-        headers.extend(
-            request
-                .request_override
-                .headers
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone())),
-        );
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+            Ok((model, body_json, headers))
+        })
+        .await?;
 
         let response = self
             .send_sigv4_request(
@@ -1480,7 +1513,7 @@ impl AmazonBedrockAdapter {
                 Sigv4Request {
                     method: reqwest::Method::POST,
                     url: self.completions_endpoint(),
-                    body: Some(serde_json::to_vec(&body_json)?),
+                    body: Some(body_json.bytes()),
                     headers,
                     body_debug: Some(&body_json),
                 },

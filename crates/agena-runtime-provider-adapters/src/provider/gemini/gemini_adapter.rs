@@ -354,7 +354,7 @@ impl GeminiAdapter {
                 .insert(auth_header_name, auth_header_value);
         }
 
-        for (key, value) in utils::resolved_request_headers(PROVIDER_ID, request_headers) {
+        for (key, value) in utils::configured_request_headers(request_headers) {
             let header_name =
                 http::header::HeaderName::from_bytes(key.as_bytes()).map_err(|err| {
                     ProviderError::Config(format!(
@@ -571,7 +571,8 @@ impl GeminiAdapter {
                 self.api_key.resolve().await?
             };
 
-            let response = build(api_key.as_str()).send().await?;
+            let response =
+                utils::send_request_builder(PROVIDER_ID, build(api_key.as_str())).await?;
             if !force_refresh && should_retry_credential(response.status()) {
                 force_refresh = true;
                 continue;
@@ -583,7 +584,7 @@ impl GeminiAdapter {
 
     pub(super) async fn complete_stream_with_realtime_ws(
         &self,
-        request: &CompletionRequest,
+        request: CompletionRequest,
         model: ModelId,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>,
@@ -591,7 +592,64 @@ impl GeminiAdapter {
     > {
         let ws_endpoint = self.realtime_ws_endpoint()?;
         let api_key = self.api_key.resolve().await?;
-        let request_headers = self.completion_request_headers(request);
+        let adapter = self.clone();
+        let wire_model = model.clone();
+        let (setup, client_content, request_headers) = utils::prepare_request_with(move || {
+            let (system_chunks, contents) = Self::request_system_and_contents(&request);
+            let live_request = GeminiLiveConversationRequest {
+                setup: GeminiLiveSetup {
+                    model: if wire_model.as_ref().starts_with("models/") {
+                        wire_model.to_string()
+                    } else {
+                        format!("models/{wire_model}")
+                    },
+                    generation_config: Self::generation_config(
+                        wire_model.as_ref(),
+                        &request,
+                        Some(vec!["TEXT".to_owned()]),
+                    ),
+                    system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
+                        parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
+                    }),
+                    tools: build_gemini_tools(&request)?,
+                },
+                client_content: GeminiLiveClientContent {
+                    turns: contents,
+                    turn_complete: Some(true),
+                },
+            };
+            let live_json = utils::serialize_request_body_with_patch(
+                &live_request,
+                &request.request_override.body_patch,
+            )?;
+            let setup = live_json.get("setup").ok_or_else(|| {
+                ProviderError::Config(
+                    "gemini realtime request patch removed `setup`; restore it or disable the patch"
+                        .to_owned(),
+                )
+            })?;
+            let client_content = live_json.get("clientContent").ok_or_else(|| {
+                ProviderError::Config(
+                    "gemini realtime request patch removed `clientContent`; restore it or disable the patch"
+                        .to_owned(),
+                )
+            })?;
+            // Serialize references directly instead of cloning both JSON trees.
+            let setup = serde_json::to_string(&std::collections::BTreeMap::from([("setup", setup)]))?;
+            let client_content = serde_json::to_string(&std::collections::BTreeMap::from([
+                ("clientContent", client_content),
+            ]))?;
+            let headers = adapter.completion_request_headers(&request);
+            Ok((setup, client_content, headers))
+        })
+        .await?;
+        let request_headers = utils::resolved_request_headers_async(
+            PROVIDER_ID,
+            utils::configured_request_headers(&request_headers),
+        )
+        .await?
+        .into_iter()
+        .collect();
         let handshake =
             self.realtime_handshake_request(&ws_endpoint, api_key.as_str(), &request_headers)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(handshake)
@@ -599,46 +657,6 @@ impl GeminiAdapter {
             .map_err(|err| {
                 ProviderError::Provider(format!("gemini realtime websocket connect failed: {err}"))
             })?;
-
-        let (system_chunks, contents) = Self::request_system_and_contents(request);
-        let live_request = GeminiLiveConversationRequest {
-            setup: GeminiLiveSetup {
-                model: if model.as_ref().starts_with("models/") {
-                    model.to_string()
-                } else {
-                    format!("models/{model}")
-                },
-                generation_config: Self::generation_config(
-                    model.as_ref(),
-                    request,
-                    Some(vec!["TEXT".to_owned()]),
-                ),
-                system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
-                    parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
-                }),
-                tools: build_gemini_tools(request)?,
-            },
-            client_content: GeminiLiveClientContent {
-                turns: contents,
-                turn_complete: Some(true),
-            },
-        };
-        let live_json = utils::serialize_request_body_with_patch(
-            &live_request,
-            &request.request_override.body_patch,
-        )?;
-        let setup = live_json.get("setup").cloned().ok_or_else(|| {
-            ProviderError::Config(
-                "gemini realtime request patch removed `setup`; restore it or disable the patch"
-                    .to_owned(),
-            )
-        })?;
-        let client_content = live_json.get("clientContent").cloned().ok_or_else(|| {
-            ProviderError::Config(
-                "gemini realtime request patch removed `clientContent`; restore it or disable the patch"
-                    .to_owned(),
-            )
-        })?;
 
         let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = model;
@@ -648,7 +666,7 @@ impl GeminiAdapter {
 
             ws_writer
                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                    serde_json::json!({ "setup": setup }).to_string().into(),
+                    setup.into(),
                 ))
                 .await
                 .map_err(|err| {
@@ -659,35 +677,26 @@ impl GeminiAdapter {
 
             let mut setup_complete = false;
             while let Some(message) = ws_reader.next().await {
+                tokio::task::consume_budget().await;
                 let message = message.map_err(|err| {
                     ProviderError::Provider(format!(
                         "gemini realtime websocket receive failed before setup complete: {err}"
                     ))
                 })?;
-                let text = match message {
-                    tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
-                    tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
-                        String::from_utf8(bytes.to_vec()).map_err(|err| {
-                            ProviderError::Provider(format!(
-                                "gemini realtime websocket setup message was not utf-8: {err}"
-                            ))
-                        })?
-                    }
+                let bytes = match message {
+                    tokio_tungstenite::tungstenite::Message::Text(text) => bytes::Bytes::from(text),
+                    tokio_tungstenite::tungstenite::Message::Binary(bytes) => bytes,
                     tokio_tungstenite::tungstenite::Message::Close(_) => break,
                     tokio_tungstenite::tungstenite::Message::Ping(_) => continue,
                     tokio_tungstenite::tungstenite::Message::Pong(_) => continue,
                     tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
                 };
 
-                let payload: GeminiLiveServerMessage = utils::parse_json_value(
+                let payload: GeminiLiveServerMessage = utils::parse_json_frame(
                     PROVIDER_ID,
                     "realtime setup message",
-                    serde_json::from_str::<serde_json::Value>(text.as_str()).map_err(|err| {
-                        ProviderError::Provider(format!(
-                            "gemini realtime websocket returned invalid setup json: {err}"
-                        ))
-                    })?,
-                )?;
+                    bytes,
+                ).await?;
                 if payload.setup_complete.is_some() {
                     setup_complete = true;
                     break;
@@ -702,9 +711,7 @@ impl GeminiAdapter {
 
             ws_writer
                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                    serde_json::json!({ "clientContent": client_content })
-                        .to_string()
-                        .into(),
+                    client_content.into(),
                 ))
                 .await
                 .map_err(|err| {
@@ -721,36 +728,27 @@ impl GeminiAdapter {
             let mut fallback_provider_metadata: Option<serde_json::Value> = None;
 
             while let Some(message) = ws_reader.next().await {
+                tokio::task::consume_budget().await;
                 let message = message.map_err(|err| {
                     ProviderError::Provider(format!(
                         "gemini realtime websocket receive failed: {err}"
                     ))
                 })?;
 
-                let text = match message {
-                    tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
-                    tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
-                        String::from_utf8(bytes.to_vec()).map_err(|err| {
-                            ProviderError::Provider(format!(
-                                "gemini realtime websocket message was not utf-8: {err}"
-                            ))
-                        })?
-                    }
+                let bytes = match message {
+                    tokio_tungstenite::tungstenite::Message::Text(text) => bytes::Bytes::from(text),
+                    tokio_tungstenite::tungstenite::Message::Binary(bytes) => bytes,
                     tokio_tungstenite::tungstenite::Message::Close(_) => break,
                     tokio_tungstenite::tungstenite::Message::Ping(_) => continue,
                     tokio_tungstenite::tungstenite::Message::Pong(_) => continue,
                     tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
                 };
 
-                let payload: GeminiLiveServerMessage = utils::parse_json_value(
+                let payload: GeminiLiveServerMessage = utils::parse_json_frame(
                     PROVIDER_ID,
                     "realtime stream message",
-                    serde_json::from_str::<serde_json::Value>(text.as_str()).map_err(|err| {
-                        ProviderError::Provider(format!(
-                            "gemini realtime websocket returned invalid json: {err}"
-                        ))
-                    })?,
-                )?;
+                    bytes,
+                ).await?;
 
                 if let Some(usage) = payload
                     .usage_metadata

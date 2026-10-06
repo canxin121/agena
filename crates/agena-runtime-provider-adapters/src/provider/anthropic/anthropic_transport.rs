@@ -10,32 +10,33 @@ impl AnthropicAdapter {
         &self,
         operation: &str,
         endpoint: String,
-        body: &serde_json::Value,
+        body: &utils::PreparedJsonBody,
         request: Option<&CompletionRequest>,
     ) -> Result<R, ProviderError>
     where
-        R: for<'de> Deserialize<'de>,
+        R: for<'de> Deserialize<'de> + Send + 'static,
     {
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let mut headers = self.auth_headers(api_key, request);
-            headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
-            headers.insert(
-                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
-                "application/json".to_owned(),
-            );
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                ADAPTER_KIND,
-                operation,
-                "POST",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                Some(body),
-            );
-            utils::apply_resolved_request_headers(self.client.post(endpoint.clone()), &headers)
-                .json(body)
-        })
-        .await?;
+        let response =
+            utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                let mut headers = self.auth_headers(api_key, request);
+                headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
+                headers.insert(
+                    reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                    "application/json".to_owned(),
+                );
+                utils::adapter_log_http_request_prepared(
+                    self.id.as_str(),
+                    ADAPTER_KIND,
+                    operation,
+                    "POST",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    Some(body),
+                );
+                utils::apply_resolved_request_headers(self.client.post(endpoint.clone()), &headers)
+                    .body(body.bytes())
+            })
+            .await?;
 
         utils::parse_json_response_logged(self.id.as_str(), ADAPTER_KIND, operation, response).await
     }
@@ -102,6 +103,6 @@ impl AnthropicAdapter {
             self.auth_header.clone(),
             utils::auth_header_value(self.auth_scheme.as_deref(), api_key),
         );
-        utils::resolved_request_headers(self.id.as_str(), &headers)
+        utils::configured_request_headers(&headers)
     }
 }

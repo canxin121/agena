@@ -157,7 +157,7 @@ impl ModelRuntime for OllamaAdapter {
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
         let endpoint = self.tags_endpoint();
-        utils::adapter_log_http_request_json(
+        utils::adapter_log_http_request_prepared(
             self.id.as_str(),
             ADAPTER_KIND,
             "list_models",
@@ -182,10 +182,15 @@ impl ModelRuntime for OllamaAdapter {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         let fallback_model = request.model.clone();
-        let body = self.to_chat_request(&request, false);
+        let adapter = self.clone();
+        let body_json = utils::prepare_request_with(move || {
+            let body = adapter.to_chat_request(&request, false);
+            let body_json = utils::prepare_request_body_sync(&body, &Default::default())?;
+            Ok(body_json)
+        })
+        .await?;
         let endpoint = self.chat_endpoint();
-        let body_json = serde_json::to_value(&body).map_err(ProviderError::from)?;
-        utils::adapter_log_http_request_json(
+        utils::adapter_log_http_request_prepared(
             self.id.as_str(),
             ADAPTER_KIND,
             "complete.chat",
@@ -198,7 +203,7 @@ impl ModelRuntime for OllamaAdapter {
             .client
             .post(endpoint.as_str())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
+            .body(body_json.bytes())
             .send()
             .await?;
         let payload: OllamaChatResponse = utils::parse_json_response_logged(
@@ -218,10 +223,15 @@ impl ModelRuntime for OllamaAdapter {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>,
         ProviderError,
     > {
-        let body = self.to_chat_request(&request, true);
+        let adapter = self.clone();
+        let (request, body_json) = utils::prepare_request_with(move || {
+            let body = adapter.to_chat_request(&request, true);
+            let body_json = utils::prepare_request_body_sync(&body, &Default::default())?;
+            Ok((request, body_json))
+        })
+        .await?;
         let endpoint = self.chat_endpoint();
-        let body_json = serde_json::to_value(&body).map_err(ProviderError::from)?;
-        utils::adapter_log_http_request_json(
+        utils::adapter_log_http_request_prepared(
             self.id.as_str(),
             ADAPTER_KIND,
             "complete_stream.chat",
@@ -234,7 +244,7 @@ impl ModelRuntime for OllamaAdapter {
             .client
             .post(endpoint.as_str())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
+            .body(body_json.bytes())
             .send()
             .await?;
         if !response.status().is_success() {

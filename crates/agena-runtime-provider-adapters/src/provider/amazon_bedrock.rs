@@ -79,9 +79,9 @@ enum BedrockAuthMode {
 struct Sigv4Request<'a> {
     method: reqwest::Method,
     url: String,
-    body: Option<Vec<u8>>,
+    body: Option<bytes::Bytes>,
     headers: Vec<(String, String)>,
-    body_debug: Option<&'a Value>,
+    body_debug: Option<&'a utils::PreparedJsonBody>,
 }
 
 #[derive(Clone)]

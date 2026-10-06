@@ -139,11 +139,12 @@ impl HttpTransport {
 
     pub(super) async fn run_bound<T>(
         &self,
-        request: &Request,
+        method: &str,
+        context: Option<crate::sdk::host_api::HostCallbackContext>,
         future: impl std::future::Future<Output = Result<T, TransportError>>,
     ) -> Result<T, TransportError> {
         if matches!(
-            request.method.as_str(),
+            method,
             method::META_MANIFEST | method::META_PING | method::META_SHUTDOWN
         ) {
             return future.await;
@@ -156,7 +157,7 @@ impl HttpTransport {
             .host
             .upgrade()
             .ok_or_else(|| TransportError::disconnected("HTTP plugin host was dropped"))?;
-        let _lease = host.lease_http_request(&binding.scope, request.context.clone())?;
+        let _lease = host.lease_http_request(&binding.scope, context)?;
         let stop = binding.scope.cancellation_token();
         tokio::select! {
             biased;
@@ -177,7 +178,7 @@ impl HttpTransport {
             params: Some(serde_json::to_value(HttpCallbackRebind { expected, next })?),
             context: None,
         };
-        let response = self.send(&request).await?;
+        let response = self.send(request).await?;
         match response.payload {
             ResponsePayload::Ok { .. } => Ok(()),
             ResponsePayload::Err { error } => {

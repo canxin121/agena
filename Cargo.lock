@@ -983,6 +983,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "futures-core",
  "futures-util",
@@ -1006,6 +1007,7 @@ dependencies = [
 name = "agena-runtime-provider-adapters"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-bundled-plugins",
  "agena-domain",
  "agena-failure",
@@ -1021,6 +1023,7 @@ dependencies = [
  "agena-storage",
  "async-stream",
  "async-trait",
+ "bytes",
  "chrono",
  "futures-core",
  "futures-util",

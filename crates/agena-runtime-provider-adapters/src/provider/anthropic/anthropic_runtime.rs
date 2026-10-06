@@ -93,21 +93,22 @@ impl ModelRuntime for AnthropicAdapter {
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
         let endpoint = self.models_endpoint()?;
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let mut headers = self.auth_headers(api_key, None);
-            headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                ADAPTER_KIND,
-                "list_models",
-                "GET",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                None,
-            );
-            utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
-        })
-        .await?;
+        let response =
+            utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                let mut headers = self.auth_headers(api_key, None);
+                headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
+                utils::adapter_log_http_request_prepared(
+                    self.id.as_str(),
+                    ADAPTER_KIND,
+                    "list_models",
+                    "GET",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    None,
+                );
+                utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
+            })
+            .await?;
 
         let payload: AnthropicModelListResponse = utils::parse_json_response_logged(
             self.id.as_str(),
@@ -163,87 +164,107 @@ impl ModelRuntime for AnthropicAdapter {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
-        let model = ModelId::new(agena_provider::normalize_anthropic_model_id(
-            request.model.as_ref(),
-        ));
-        let stream_fallback_request = request.clone();
+        let adapter = self.clone();
+        let (
+            request,
+            _model,
+            structured_output,
+            stream_fallback_request,
+            include_thinking,
+            body_json,
+        ) = utils::prepare_request_with(move || {
+            let model = ModelId::new(agena_provider::normalize_anthropic_model_id(
+                request.model.as_ref(),
+            ));
+            let stream_fallback_request = request.clone();
 
-        let max_tokens = request.max_output_tokens.unwrap_or(4096);
-        let thinking_parts =
-            anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
-        let include_thinking = thinking_parts.include_thinking();
-        let omit_sampling = include_thinking || anthropic_model_rejects_sampling(model.as_ref());
+            let max_tokens = request.max_output_tokens.unwrap_or(4096);
+            let thinking_parts =
+                anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
+            let include_thinking = thinking_parts.include_thinking();
+            let omit_sampling =
+                include_thinking || anthropic_model_rejects_sampling(model.as_ref());
 
-        // Structured output (e.g. the auto-approval classifier's JSON verdict)
-        // is enforced on Anthropic by forcing a single tool whose
-        // `input_schema` is the requested JSON schema. The model's tool input
-        // is surfaced as the response text below, so the classifier receives
-        // clean JSON instead of relying on best-effort text parsing.
-        let structured_output = AnthropicAdapter::structured_output_tool_and_choice(&request);
+            // Structured output (e.g. the auto-approval classifier's JSON verdict)
+            // is enforced on Anthropic by forcing a single tool whose
+            // `input_schema` is the requested JSON schema. The model's tool input
+            // is surfaced as the response text below, so the classifier receives
+            // clean JSON instead of relying on best-effort text parsing.
+            let structured_output = AnthropicAdapter::structured_output_tool_and_choice(&request);
 
-        let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(AnthropicTextBlock::text(system.clone()));
-        }
-        let mut tools = (!request.tool_api_functions.is_empty()
-            || !request.provider_native_tools.bindings().is_empty()
-            || structured_output.is_some())
-        .then(|| self.tools(&request))
-        .transpose()?;
-        if let Some((tool, _)) = &structured_output {
-            tools.get_or_insert_with(Vec::new).push(tool.clone());
-        }
-        let tool_choice = structured_output.as_ref().map(|(_, choice)| choice.clone());
-
-        let mut messages = Vec::new();
-        for msg in &request.turns {
-            match msg.role {
-                Role::System => {
-                    let text = msg.as_text_lossy();
-                    if !text.trim().is_empty() {
-                        system_chunks.push(AnthropicTextBlock::text(text));
-                    }
-                }
-                Role::Assistant => Self::extend_request_messages(
-                    &mut messages,
-                    Self::assistant_messages_from_parts(msg),
-                ),
-                Role::User => Self::push_request_message(
-                    &mut messages,
-                    AnthropicMessage {
-                        role: "user".to_owned(),
-                        content: Self::content_to_blocks(msg),
-                    },
-                ),
-                Role::Tool => Self::extend_request_messages(
-                    &mut messages,
-                    Self::tool_messages_from_parts(msg),
-                ),
+            let mut system_chunks = Vec::new();
+            if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
+                system_chunks.push(AnthropicTextBlock::text(system.clone()));
             }
-        }
-        Self::apply_prompt_cache_hints(
-            system_chunks.as_mut_slice(),
-            tools.as_deref_mut().unwrap_or(&mut []),
-            messages.as_mut_slice(),
-        );
+            let mut tools = (!request.tool_api_functions.is_empty()
+                || !request.provider_native_tools.bindings().is_empty()
+                || structured_output.is_some())
+            .then(|| adapter.tools(&request))
+            .transpose()?;
+            if let Some((tool, _)) = &structured_output {
+                tools.get_or_insert_with(Vec::new).push(tool.clone());
+            }
+            let tool_choice = structured_output.as_ref().map(|(_, choice)| choice.clone());
 
-        let body = AnthropicMessagesRequest {
-            model: model.to_string(),
-            max_tokens,
-            system: (!system_chunks.is_empty()).then_some(system_chunks),
-            messages,
-            tools,
-            tool_choice,
-            temperature: (!omit_sampling).then_some(request.temperature).flatten(),
-            stream: None,
-            thinking: thinking_parts.thinking,
-            output_config: thinking_parts.output_config,
-            stop_sequences: request.stop_sequences.clone(),
-            top_p: (!omit_sampling).then_some(request.top_p).flatten(),
-            top_k: (!omit_sampling).then_some(request.top_k).flatten(),
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+            let mut messages = Vec::new();
+            for msg in &request.turns {
+                match msg.role {
+                    Role::System => {
+                        let text = msg.as_text_lossy();
+                        if !text.trim().is_empty() {
+                            system_chunks.push(AnthropicTextBlock::text(text));
+                        }
+                    }
+                    Role::Assistant => Self::extend_request_messages(
+                        &mut messages,
+                        Self::assistant_messages_from_parts(msg),
+                    ),
+                    Role::User => Self::push_request_message(
+                        &mut messages,
+                        AnthropicMessage {
+                            role: "user".to_owned(),
+                            content: Self::content_to_blocks(msg),
+                        },
+                    ),
+                    Role::Tool => Self::extend_request_messages(
+                        &mut messages,
+                        Self::tool_messages_from_parts(msg),
+                    ),
+                }
+            }
+            Self::apply_prompt_cache_hints(
+                system_chunks.as_mut_slice(),
+                tools.as_deref_mut().unwrap_or(&mut []),
+                messages.as_mut_slice(),
+            );
+
+            let body = AnthropicMessagesRequest {
+                model: model.to_string(),
+                max_tokens,
+                system: (!system_chunks.is_empty()).then_some(system_chunks),
+                messages,
+                tools,
+                tool_choice,
+                temperature: (!omit_sampling).then_some(request.temperature).flatten(),
+                stream: None,
+                thinking: thinking_parts.thinking,
+                output_config: thinking_parts.output_config,
+                stop_sequences: request.stop_sequences.clone(),
+                top_p: (!omit_sampling).then_some(request.top_p).flatten(),
+                top_k: (!omit_sampling).then_some(request.top_k).flatten(),
+            };
+            let body_json =
+                utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+            Ok((
+                request,
+                model,
+                structured_output,
+                stream_fallback_request,
+                include_thinking,
+                body_json,
+            ))
+        })
+        .await?;
 
         let response: AnthropicMessagesResponse = self
             .send_json(
@@ -354,109 +375,124 @@ impl ModelRuntime for AnthropicAdapter {
         ProviderError,
     > {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
-        let model = ModelId::new(agena_provider::normalize_anthropic_model_id(
-            request.model.as_ref(),
-        ));
+        let adapter = self.clone();
+        let (request, model, structured_output, include_thinking, body_json) =
+            utils::prepare_request_with(move || {
+                let model = ModelId::new(agena_provider::normalize_anthropic_model_id(
+                    request.model.as_ref(),
+                ));
 
-        // Mirror the non-streaming path: structured-output requests force a
-        // single tool whose input_schema is the requested JSON schema, and the
-        // tool input is surfaced as text deltas below so aggregated streaming
-        // (including the complete() empty-response fallback) yields clean JSON
-        // instead of prose or an empty text field.
-        let structured_output = AnthropicAdapter::structured_output_tool_and_choice(&request);
+                // Mirror the non-streaming path: structured-output requests force a
+                // single tool whose input_schema is the requested JSON schema, and the
+                // tool input is surfaced as text deltas below so aggregated streaming
+                // (including the complete() empty-response fallback) yields clean JSON
+                // instead of prose or an empty text field.
+                let structured_output =
+                    AnthropicAdapter::structured_output_tool_and_choice(&request);
 
-        let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(AnthropicTextBlock::text(system.clone()));
-        }
-        let mut tools = (!request.tool_api_functions.is_empty()
-            || !request.provider_native_tools.bindings().is_empty()
-            || structured_output.is_some())
-        .then(|| self.tools(&request))
-        .transpose()?;
-        if let Some((tool, _)) = &structured_output {
-            tools.get_or_insert_with(Vec::new).push(tool.clone());
-        }
-        let tool_choice = structured_output.as_ref().map(|(_, choice)| choice.clone());
+                let mut system_chunks = Vec::new();
+                if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
+                    system_chunks.push(AnthropicTextBlock::text(system.clone()));
+                }
+                let mut tools = (!request.tool_api_functions.is_empty()
+                    || !request.provider_native_tools.bindings().is_empty()
+                    || structured_output.is_some())
+                .then(|| adapter.tools(&request))
+                .transpose()?;
+                if let Some((tool, _)) = &structured_output {
+                    tools.get_or_insert_with(Vec::new).push(tool.clone());
+                }
+                let tool_choice = structured_output.as_ref().map(|(_, choice)| choice.clone());
 
-        let mut messages = Vec::new();
-        for msg in &request.turns {
-            match msg.role {
-                Role::System => {
-                    let text = msg.as_text_lossy();
-                    if !text.trim().is_empty() {
-                        system_chunks.push(AnthropicTextBlock::text(text));
+                let mut messages = Vec::new();
+                for msg in &request.turns {
+                    match msg.role {
+                        Role::System => {
+                            let text = msg.as_text_lossy();
+                            if !text.trim().is_empty() {
+                                system_chunks.push(AnthropicTextBlock::text(text));
+                            }
+                        }
+                        Role::Assistant => Self::extend_request_messages(
+                            &mut messages,
+                            Self::assistant_messages_from_parts(msg),
+                        ),
+                        Role::User => Self::push_request_message(
+                            &mut messages,
+                            AnthropicMessage {
+                                role: "user".to_owned(),
+                                content: Self::content_to_blocks(msg),
+                            },
+                        ),
+                        Role::Tool => Self::extend_request_messages(
+                            &mut messages,
+                            Self::tool_messages_from_parts(msg),
+                        ),
                     }
                 }
-                Role::Assistant => Self::extend_request_messages(
-                    &mut messages,
-                    Self::assistant_messages_from_parts(msg),
-                ),
-                Role::User => Self::push_request_message(
-                    &mut messages,
-                    AnthropicMessage {
-                        role: "user".to_owned(),
-                        content: Self::content_to_blocks(msg),
-                    },
-                ),
-                Role::Tool => Self::extend_request_messages(
-                    &mut messages,
-                    Self::tool_messages_from_parts(msg),
-                ),
-            }
-        }
-        Self::apply_prompt_cache_hints(
-            system_chunks.as_mut_slice(),
-            tools.as_deref_mut().unwrap_or(&mut []),
-            messages.as_mut_slice(),
-        );
+                Self::apply_prompt_cache_hints(
+                    system_chunks.as_mut_slice(),
+                    tools.as_deref_mut().unwrap_or(&mut []),
+                    messages.as_mut_slice(),
+                );
 
-        let max_tokens = request.max_output_tokens.unwrap_or(4096);
-        let thinking_parts =
-            anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
-        let include_thinking = thinking_parts.include_thinking();
-        let omit_sampling = include_thinking || anthropic_model_rejects_sampling(model.as_ref());
-        let body = AnthropicMessagesRequest {
-            model: model.to_string(),
-            max_tokens,
-            system: (!system_chunks.is_empty()).then_some(system_chunks),
-            messages,
-            tools,
-            tool_choice,
-            temperature: (!omit_sampling).then_some(request.temperature).flatten(),
-            stream: Some(true),
-            thinking: thinking_parts.thinking,
-            output_config: thinking_parts.output_config,
-            stop_sequences: request.stop_sequences.clone(),
-            top_p: (!omit_sampling).then_some(request.top_p).flatten(),
-            top_k: (!omit_sampling).then_some(request.top_k).flatten(),
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+                let max_tokens = request.max_output_tokens.unwrap_or(4096);
+                let thinking_parts =
+                    anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
+                let include_thinking = thinking_parts.include_thinking();
+                let omit_sampling =
+                    include_thinking || anthropic_model_rejects_sampling(model.as_ref());
+                let body = AnthropicMessagesRequest {
+                    model: model.to_string(),
+                    max_tokens,
+                    system: (!system_chunks.is_empty()).then_some(system_chunks),
+                    messages,
+                    tools,
+                    tool_choice,
+                    temperature: (!omit_sampling).then_some(request.temperature).flatten(),
+                    stream: Some(true),
+                    thinking: thinking_parts.thinking,
+                    output_config: thinking_parts.output_config,
+                    stop_sequences: request.stop_sequences.clone(),
+                    top_p: (!omit_sampling).then_some(request.top_p).flatten(),
+                    top_k: (!omit_sampling).then_some(request.top_k).flatten(),
+                };
+                let body_json =
+                    utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+                Ok((
+                    request,
+                    model,
+                    structured_output,
+                    include_thinking,
+                    body_json,
+                ))
+            })
+            .await?;
 
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let endpoint = self
-                .messages_endpoint()
-                .expect("messages endpoint should resolve");
-            let mut headers = self.auth_headers(api_key, Some(&request));
-            headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
-            headers.insert(
-                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
-                "application/json".to_owned(),
-            );
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                ADAPTER_KIND,
-                "complete_stream.messages",
-                "POST",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                Some(&body_json),
-            );
-            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
-                .json(&body_json)
-        })
-        .await?;
+        let response =
+            utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                let endpoint = self
+                    .messages_endpoint()
+                    .expect("messages endpoint should resolve");
+                let mut headers = self.auth_headers(api_key, Some(&request));
+                headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
+                headers.insert(
+                    reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                    "application/json".to_owned(),
+                );
+                utils::adapter_log_http_request_prepared(
+                    self.id.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.messages",
+                    "POST",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    Some(&body_json),
+                );
+                utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                    .body(body_json.bytes())
+            })
+            .await?;
 
         if !response.status().is_success() {
             return Err(utils::http_status_error_from_response_logged(

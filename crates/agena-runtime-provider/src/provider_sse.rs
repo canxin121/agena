@@ -16,6 +16,10 @@ pub enum ProviderJsonStreamError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("provider stream frame exceeds the {limit}-byte limit")]
+    FrameLimit { limit: usize },
+    #[error("provider stream decoder worker failed: {0}")]
+    Worker(#[from] tokio::task::JoinError),
 }
 
 /// Decode the longest UTF-8 prefix of `bytes` and return the leftover
@@ -23,27 +27,31 @@ pub enum ProviderJsonStreamError {
 /// arrive). Naive `String::from_utf8_lossy` per chunk would replace any
 /// multi-byte character split across a chunk boundary with U+FFFD.
 fn decode_utf8_prefix(bytes: &[u8]) -> (String, Vec<u8>) {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => (text.to_owned(), Vec::new()),
-        Err(err) => {
-            let valid_up_to = err.valid_up_to();
-            // SAFETY: valid_up_to is the length of the longest valid UTF-8 prefix.
-            let head = unsafe { std::str::from_utf8_unchecked(&bytes[..valid_up_to]) }.to_owned();
-            match err.error_len() {
-                // Truncated trailing sequence — keep it for the next chunk.
-                None => (head, bytes[valid_up_to..].to_vec()),
-                // A genuinely invalid byte — replace with U+FFFD and discard it.
-                Some(invalid_len) => {
-                    let mut out = head;
-                    out.push('\u{FFFD}');
-                    let tail_start = valid_up_to + invalid_len;
-                    let (tail_text, leftover) = decode_utf8_prefix(&bytes[tail_start..]);
-                    out.push_str(tail_text.as_str());
-                    (out, leftover)
+    let mut text = String::with_capacity(bytes.len());
+    let mut consumed = 0;
+    while consumed < bytes.len() {
+        let remaining = &bytes[consumed..];
+        match std::str::from_utf8(remaining) {
+            Ok(valid) => {
+                text.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                // SAFETY: the decoder identified this entire prefix as UTF-8.
+                text.push_str(unsafe { std::str::from_utf8_unchecked(&remaining[..valid]) });
+                consumed += valid;
+                match error.error_len() {
+                    Some(length) => {
+                        text.push('\u{FFFD}');
+                        consumed += length;
+                    }
+                    None => return (text, bytes[consumed..].to_vec()),
                 }
             }
         }
     }
+    (text, Vec::new())
 }
 
 #[derive(Debug, PartialEq)]
@@ -80,11 +88,6 @@ fn flush_json_event_data_lines(
     parse_json_event_payload(payload.as_str()).map(Some)
 }
 
-fn payload_is_complete_json_or_done(payload: &str) -> bool {
-    let payload = payload.trim();
-    payload == "[DONE]" || serde_json::from_str::<Value>(payload).is_ok()
-}
-
 fn starts_new_json_event(data: &str) -> bool {
     let data = data.trim_start();
     data == "[DONE]" || data.starts_with('{') || data.starts_with('[')
@@ -100,12 +103,16 @@ fn consume_json_event_line(
 
     if let Some(data) = line.strip_prefix("data:") {
         let data = data.trim_start();
-        let current_payload = data_lines.join("\n");
-        let should_flush = !current_payload.is_empty()
-            && payload_is_complete_json_or_done(current_payload.as_str())
-            && starts_new_json_event(data);
-        let flushed = if should_flush {
-            flush_json_event_data_lines(data_lines)?
+        // Only probe completion when another frame begins, and reuse the
+        // parsed value instead of decoding the same complete JSON twice.
+        let flushed = if !data_lines.is_empty() && starts_new_json_event(data) {
+            match parse_json_event_payload(&data_lines.join("\n")) {
+                Ok(payload) => {
+                    data_lines.clear();
+                    Some(payload)
+                }
+                Err(_) => None,
+            }
         } else {
             None
         };
@@ -117,80 +124,199 @@ fn consume_json_event_line(
     Ok(None)
 }
 
-pub fn json_events_with_done(
-    response: reqwest::Response,
-) -> std::pin::Pin<Box<dyn Stream<Item = Result<JsonEventPayload, ProviderJsonStreamError>> + Send>>
-{
-    Box::pin(try_stream! {
-        let mut buffer = String::new();
-        let mut byte_carry: Vec<u8> = Vec::new();
-        let mut data_lines: Vec<String> = Vec::new();
-        let mut stream = response.bytes_stream();
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+const INLINE_DECODE_BYTES: usize = 64 * 1024;
+static STREAM_DECODERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
-        let mut done = false;
-        'body: while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            let combined = if byte_carry.is_empty() {
-                chunk.to_vec()
+type FrameResult = Result<JsonEventPayload, ProviderJsonStreamError>;
+
+struct FrameDecoder {
+    buffer: String,
+    byte_carry: Vec<u8>,
+    data_lines: Vec<String>,
+    data_bytes: usize,
+    sse: bool,
+    done: bool,
+}
+
+impl FrameDecoder {
+    fn new(sse: bool) -> Self {
+        Self {
+            buffer: String::new(),
+            byte_carry: Vec::new(),
+            data_lines: Vec::new(),
+            data_bytes: 0,
+            sse,
+            done: false,
+        }
+    }
+
+    fn line(&mut self, line: &str) -> Result<Option<JsonEventPayload>, ProviderJsonStreamError> {
+        if line.len() > MAX_FRAME_BYTES {
+            return Err(ProviderJsonStreamError::FrameLimit {
+                limit: MAX_FRAME_BYTES,
+            });
+        }
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if !self.sse {
+            let line = line.trim();
+            if line.is_empty() {
+                return Ok(None);
+            }
+            return serde_json::from_str(line)
+                .map(JsonEventPayload::Event)
+                .map(Some)
+                .map_err(|source| ProviderJsonStreamError::InvalidJson {
+                    format: "JSON line",
+                    source,
+                });
+        }
+        let payload = consume_json_event_line(line, &mut self.data_lines)?;
+        if self.data_lines.is_empty() {
+            self.data_bytes = 0;
+        } else if let Some(data) = line.strip_prefix("data:") {
+            let length = data.trim_start().len();
+            self.data_bytes = if payload.is_some() {
+                length
             } else {
-                let mut merged = std::mem::take(&mut byte_carry);
-                merged.extend_from_slice(&chunk);
-                merged
+                self.data_bytes.saturating_add(length).saturating_add(1)
             };
-            let (text, leftover) = decode_utf8_prefix(&combined);
-            byte_carry = leftover;
-            buffer.push_str(text.as_str());
-
-            while let Some(idx) = buffer.find('\n') {
-                let mut line = buffer[..idx].to_owned();
-                buffer = buffer[idx + 1..].to_owned();
-
-                if let Some(stripped) = line.strip_suffix('\r') {
-                    line = stripped.to_owned();
-                }
-
-                if let Some(payload) = consume_json_event_line(line.as_str(), &mut data_lines)? {
-                    match payload {
-                        JsonEventPayload::Event(value) => {
-                            yield JsonEventPayload::Event(value);
-                        }
-                        JsonEventPayload::Done => {
-                            done = true;
-                            yield JsonEventPayload::Done;
-                            break 'body;
-                        }
-                    }
-                }
-            }
         }
-
-        if !done && !buffer.is_empty() {
-            if let Some(stripped) = buffer.strip_suffix('\r') {
-                buffer = stripped.to_owned();
-            }
-
-            if let Some(payload) = consume_json_event_line(buffer.as_str(), &mut data_lines)? {
-                match payload {
-                    JsonEventPayload::Event(value) => {
-                        yield JsonEventPayload::Event(value);
-                    }
-                    JsonEventPayload::Done => {
-                        done = true;
-                        yield JsonEventPayload::Done;
-                    }
-                }
-            }
+        if self.data_bytes > MAX_FRAME_BYTES {
+            return Err(ProviderJsonStreamError::FrameLimit {
+                limit: MAX_FRAME_BYTES,
+            });
         }
+        Ok(payload)
+    }
 
-        if !done {
-            match flush_json_event_data_lines(&mut data_lines)? {
-                Some(JsonEventPayload::Event(value)) => {
-                    yield JsonEventPayload::Event(value);
-                }
-                Some(JsonEventPayload::Done) | None => {}
+    fn push_payload(&mut self, output: &mut Vec<FrameResult>, payload: Option<JsonEventPayload>) {
+        if let Some(payload) = payload {
+            self.done = matches!(payload, JsonEventPayload::Done);
+            output.push(Ok(payload));
+        }
+    }
+
+    fn feed(&mut self, chunk: &[u8], eof: bool) -> Vec<FrameResult> {
+        let mut output = Vec::new();
+        if self.done {
+            return output;
+        }
+        let result = (|| -> Result<(), ProviderJsonStreamError> {
+            if chunk.len() > MAX_FRAME_BYTES {
+                return Err(ProviderJsonStreamError::FrameLimit {
+                    limit: MAX_FRAME_BYTES,
+                });
             }
+            let (text, leftover) = if self.byte_carry.is_empty() {
+                decode_utf8_prefix(chunk)
+            } else {
+                let mut combined = std::mem::take(&mut self.byte_carry);
+                combined.extend_from_slice(chunk);
+                decode_utf8_prefix(&combined)
+            };
+            self.byte_carry = leftover;
+            let mut buffer = std::mem::take(&mut self.buffer);
+            buffer.push_str(&text);
+            let mut consumed = 0;
+            while let Some(offset) = buffer[consumed..].find('\n') {
+                let end = consumed + offset;
+                let payload = self.line(&buffer[consumed..end])?;
+                self.push_payload(&mut output, payload);
+                consumed = end + 1;
+                if self.done {
+                    break;
+                }
+            }
+            if !self.done {
+                // Shift the unfinished tail once per network chunk, not once
+                // per line. A chunk of many tiny frames stays linear to scan.
+                buffer.drain(..consumed);
+                if buffer.len() > MAX_FRAME_BYTES {
+                    return Err(ProviderJsonStreamError::FrameLimit {
+                        limit: MAX_FRAME_BYTES,
+                    });
+                }
+                self.buffer = buffer;
+                if eof {
+                    if !self.byte_carry.is_empty() {
+                        self.buffer
+                            .push_str(&String::from_utf8_lossy(&self.byte_carry));
+                        self.byte_carry.clear();
+                    }
+                    let tail = std::mem::take(&mut self.buffer);
+                    if !tail.is_empty() {
+                        let payload = self.line(&tail)?;
+                        self.push_payload(&mut output, payload);
+                    }
+                    if self.sse && !self.done {
+                        let payload = flush_json_event_data_lines(&mut self.data_lines)?;
+                        self.push_payload(&mut output, payload);
+                    }
+                    self.done = true;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.done = true;
+            output.push(Err(error));
+        }
+        output
+    }
+}
+
+async fn decode_chunk(
+    mut decoder: FrameDecoder,
+    chunk: bytes::Bytes,
+    eof: bool,
+) -> Result<(FrameDecoder, Vec<FrameResult>), ProviderJsonStreamError> {
+    if chunk
+        .len()
+        .saturating_add(decoder.buffer.len())
+        .saturating_add(decoder.data_bytes)
+        < INLINE_DECODE_BYTES
+    {
+        let output = decoder.feed(&chunk, eof);
+        return Ok((decoder, output));
+    }
+    Ok(STREAM_DECODERS
+        .run(move || {
+            let output = decoder.feed(&chunk, eof);
+            (decoder, output)
+        })
+        .await?)
+}
+
+fn framed_json(
+    response: reqwest::Response,
+    sse: bool,
+) -> std::pin::Pin<Box<dyn Stream<Item = FrameResult> + Send>> {
+    Box::pin(try_stream! {
+        let mut decoder = FrameDecoder::new(sse);
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            tokio::task::consume_budget().await;
+            let (next, events) = decode_chunk(decoder, chunk?, false).await?;
+            decoder = next;
+            for event in events {
+                tokio::task::consume_budget().await;
+                yield event?;
+            }
+            if decoder.done { return; }
+        }
+        let (_, events) = decode_chunk(decoder, bytes::Bytes::new(), true).await?;
+        for event in events {
+            tokio::task::consume_budget().await;
+            yield event?;
         }
     })
+}
+
+pub fn json_events_with_done(
+    response: reqwest::Response,
+) -> std::pin::Pin<Box<dyn Stream<Item = FrameResult> + Send>> {
+    framed_json(response, true)
 }
 
 pub fn json_events(
@@ -199,6 +325,7 @@ pub fn json_events(
     let mut events = json_events_with_done(response);
     Box::pin(try_stream! {
         while let Some(event) = events.next().await {
+            tokio::task::consume_budget().await;
             match event? {
                 JsonEventPayload::Event(value) => yield value,
                 JsonEventPayload::Done => break,
@@ -210,56 +337,11 @@ pub fn json_events(
 pub fn json_lines(
     response: reqwest::Response,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<Value, ProviderJsonStreamError>> + Send>> {
+    let mut frames = framed_json(response, false);
     Box::pin(try_stream! {
-        let mut buffer = String::new();
-        let mut byte_carry: Vec<u8> = Vec::new();
-        let mut stream = response.bytes_stream();
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            let combined = if byte_carry.is_empty() {
-                chunk.to_vec()
-            } else {
-                let mut merged = std::mem::take(&mut byte_carry);
-                merged.extend_from_slice(&chunk);
-                merged
-            };
-            let (text, leftover) = decode_utf8_prefix(&combined);
-            byte_carry = leftover;
-            buffer.push_str(text.as_str());
-
-            while let Some(idx) = buffer.find('\n') {
-                let mut line = buffer[..idx].to_owned();
-                buffer = buffer[idx + 1..].to_owned();
-
-                if let Some(stripped) = line.strip_suffix('\r') {
-                    line = stripped.to_owned();
-                }
-
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-
-                let value = serde_json::from_str::<Value>(line).map_err(|source| {
-                    ProviderJsonStreamError::InvalidJson {
-                        format: "JSON line",
-                        source,
-                    }
-                })?;
-                yield value;
-            }
-        }
-
-        let remaining = buffer.trim();
-        if !remaining.is_empty() {
-            let value = serde_json::from_str::<Value>(remaining).map_err(|source| {
-                ProviderJsonStreamError::InvalidJson {
-                    format: "JSON line",
-                    source,
-                }
-            })?;
-            yield value;
+        while let Some(frame) = frames.next().await {
+            tokio::task::consume_budget().await;
+            if let JsonEventPayload::Event(value) = frame? { yield value; }
         }
     })
 }

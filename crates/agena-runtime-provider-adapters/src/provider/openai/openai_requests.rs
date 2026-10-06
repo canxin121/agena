@@ -61,7 +61,7 @@ impl OpenAiTransport {
 
     pub(super) async fn complete_with_chat_api(
         &self,
-        request: &CompletionRequest,
+        request: &std::sync::Arc<CompletionRequest>,
         model: String,
     ) -> Result<CompletionResponse, ProviderError> {
         if !request.provider_native_tools.bindings().is_empty() {
@@ -70,78 +70,90 @@ impl OpenAiTransport {
                 self.id, model
             )));
         }
-        let model_id = ModelId::new(model.clone());
-        let prompt_cache_key = self
-            .supports_chat_prompt_cache_key()
-            .then(|| request.prompt_cache_key.clone())
-            .flatten();
+        let adapter = self.clone();
+        let owned_request = std::sync::Arc::clone(request);
+        let (model, body_json, assistant_reasoning_field) =
+            utils::prepare_request_with(move || {
+                let request = owned_request.as_ref();
+                let model_id = ModelId::new(model.clone());
+                let prompt_cache_key = adapter
+                    .supports_chat_prompt_cache_key()
+                    .then(|| request.prompt_cache_key.clone())
+                    .flatten();
+                let mut request_override = request.request_override.clone();
+                let assistant_reasoning_field =
+                    adapter.assistant_reasoning_field_for_model(&model_id);
+                adapter.apply_dashscope_reasoning_overrides(
+                    &model_id,
+                    request.thinking.as_ref(),
+                    &mut request_override,
+                );
+
+                let official_openai_chat = adapter.is_official_openai_endpoint();
+                let body = ChatCompletionRequest {
+                    model: model.clone(),
+                    messages: adapter.chat_messages_for_request(request, assistant_reasoning_field),
+                    tools: adapter.chat_tools_for_request(request),
+                    temperature: request.temperature,
+                    max_tokens: (!official_openai_chat)
+                        .then_some(request.max_output_tokens)
+                        .flatten(),
+                    max_completion_tokens: official_openai_chat
+                        .then_some(request.max_output_tokens)
+                        .flatten(),
+                    cache_control: adapter
+                        .supports_top_level_prompt_cache()
+                        .then(prompt_cache::PromptCacheControl::ephemeral),
+                    prompt_cache_key: prompt_cache_key.clone(),
+                    parallel_tool_calls: request.request_override.parallel_tool_calls(),
+                    stream: false,
+                    stream_options: None,
+                    stop: request.stop_sequences.clone(),
+                    top_p: request.top_p,
+                    seed: request.seed,
+                    response_format: chat_wire::map_response_format(
+                        request.response_format.as_ref(),
+                    ),
+                    reasoning_effort: chat_wire::reasoning_effort(
+                        request.thinking.as_ref(),
+                        model.as_str(),
+                    ),
+                    verbosity: request.verbosity.clone(),
+                };
+                let body_json =
+                    utils::prepare_request_body_sync(&body, &request_override.body_patch)?;
+                Ok((model, body_json, assistant_reasoning_field))
+            })
+            .await?;
         let session_affinity = self
             .uses_chat_compatible_request_fields()
             .then_some(request.prompt_cache_key.as_deref())
             .flatten();
-        let mut request_override = request.request_override.clone();
-        let assistant_reasoning_field = self.assistant_reasoning_field_for_model(&model_id);
-        self.apply_dashscope_reasoning_overrides(
-            &model_id,
-            request.thinking.as_ref(),
-            &mut request_override,
-        );
 
-        let official_openai_chat = self.is_official_openai_endpoint();
-        let body = ChatCompletionRequest {
-            model: model.clone(),
-            messages: self.chat_messages_for_request(request, assistant_reasoning_field),
-            tools: self.chat_tools_for_request(request),
-            temperature: request.temperature,
-            max_tokens: (!official_openai_chat)
-                .then_some(request.max_output_tokens)
-                .flatten(),
-            max_completion_tokens: official_openai_chat
-                .then_some(request.max_output_tokens)
-                .flatten(),
-            cache_control: self
-                .supports_top_level_prompt_cache()
-                .then(prompt_cache::PromptCacheControl::ephemeral),
-            prompt_cache_key: prompt_cache_key.clone(),
-            parallel_tool_calls: request.request_override.parallel_tool_calls(),
-            stream: false,
-            stream_options: None,
-            stop: request.stop_sequences.clone(),
-            top_p: request.top_p,
-            seed: request.seed,
-            response_format: chat_wire::map_response_format(request.response_format.as_ref()),
-            reasoning_effort: chat_wire::reasoning_effort(
-                request.thinking.as_ref(),
-                model.as_str(),
-            ),
-            verbosity: request.verbosity.clone(),
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
-
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let endpoint = self.chat_endpoint().expect("chat endpoint should resolve");
-            let mut headers = self.auth_headers(
-                RequestHeaderContext::from_chat_request(request, session_affinity),
-                api_key,
-            );
-            headers.insert(
-                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
-                "application/json".to_owned(),
-            );
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                CHAT_COMPLETIONS_ADAPTER_KIND,
-                "complete.chat",
-                "POST",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                Some(&body_json),
-            );
-            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
-                .json(&body_json)
-        })
-        .await?;
+        let response =
+            utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                let endpoint = self.chat_endpoint().expect("chat endpoint should resolve");
+                let mut headers = self.auth_headers(
+                    RequestHeaderContext::from_chat_request(request, session_affinity),
+                    api_key,
+                );
+                headers.insert(
+                    reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                    "application/json".to_owned(),
+                );
+                utils::adapter_log_http_request_prepared(
+                    self.id.as_str(),
+                    CHAT_COMPLETIONS_ADAPTER_KIND,
+                    "complete.chat",
+                    "POST",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    Some(&body_json),
+                );
+                utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                    .body(body_json.bytes())
+            })
+            .await?;
 
         let payload: OpenAiChatCompletionResponse = utils::parse_json_response_logged(
             self.id.as_str(),
@@ -181,7 +193,7 @@ impl OpenAiTransport {
 
     pub(super) async fn complete_stream_with_chat_api(
         &self,
-        request: &CompletionRequest,
+        request: &std::sync::Arc<CompletionRequest>,
         model: String,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>,
@@ -193,81 +205,98 @@ impl OpenAiTransport {
                 self.id, model
             )));
         }
-        let model_id = ModelId::new(model.clone());
-        let prompt_cache_key = self
-            .supports_chat_prompt_cache_key()
-            .then(|| request.prompt_cache_key.clone())
-            .flatten();
+        let adapter = self.clone();
+        let owned_request = std::sync::Arc::clone(request);
+        let (model, body_json, assistant_reasoning_field, stream_usage_requested) =
+            utils::prepare_request_with(move || {
+                let request = owned_request.as_ref();
+                let model_id = ModelId::new(model.clone());
+                let prompt_cache_key = adapter
+                    .supports_chat_prompt_cache_key()
+                    .then(|| request.prompt_cache_key.clone())
+                    .flatten();
+                let mut request_override = request.request_override.clone();
+                let assistant_reasoning_field =
+                    adapter.assistant_reasoning_field_for_model(&model_id);
+                adapter.apply_dashscope_reasoning_overrides(
+                    &model_id,
+                    request.thinking.as_ref(),
+                    &mut request_override,
+                );
+
+                let official_openai_chat = adapter.is_official_openai_endpoint();
+                let stream_usage_requested = adapter.supports_chat_stream_usage();
+                let body = ChatCompletionRequest {
+                    model: model.clone(),
+                    messages: adapter.chat_messages_for_request(request, assistant_reasoning_field),
+                    tools: adapter.chat_tools_for_request(request),
+                    temperature: request.temperature,
+                    max_tokens: (!official_openai_chat)
+                        .then_some(request.max_output_tokens)
+                        .flatten(),
+                    max_completion_tokens: official_openai_chat
+                        .then_some(request.max_output_tokens)
+                        .flatten(),
+                    cache_control: adapter
+                        .supports_top_level_prompt_cache()
+                        .then(prompt_cache::PromptCacheControl::ephemeral),
+                    prompt_cache_key: prompt_cache_key.clone(),
+                    parallel_tool_calls: request.request_override.parallel_tool_calls(),
+                    stream: true,
+                    stream_options: stream_usage_requested.then_some(ChatStreamOptions {
+                        include_usage: true,
+                    }),
+                    stop: request.stop_sequences.clone(),
+                    top_p: request.top_p,
+                    seed: request.seed,
+                    response_format: chat_wire::map_response_format(
+                        request.response_format.as_ref(),
+                    ),
+                    reasoning_effort: chat_wire::reasoning_effort(
+                        request.thinking.as_ref(),
+                        model.as_str(),
+                    ),
+                    verbosity: request.verbosity.clone(),
+                };
+                let body_json =
+                    utils::prepare_request_body_sync(&body, &request_override.body_patch)?;
+                Ok((
+                    model,
+                    body_json,
+                    assistant_reasoning_field,
+                    stream_usage_requested,
+                ))
+            })
+            .await?;
         let session_affinity = self
             .uses_chat_compatible_request_fields()
             .then_some(request.prompt_cache_key.as_deref())
             .flatten();
-        let mut request_override = request.request_override.clone();
-        let assistant_reasoning_field = self.assistant_reasoning_field_for_model(&model_id);
-        self.apply_dashscope_reasoning_overrides(
-            &model_id,
-            request.thinking.as_ref(),
-            &mut request_override,
-        );
 
-        let official_openai_chat = self.is_official_openai_endpoint();
-        let stream_usage_requested = self.supports_chat_stream_usage();
-        let body = ChatCompletionRequest {
-            model: model.clone(),
-            messages: self.chat_messages_for_request(request, assistant_reasoning_field),
-            tools: self.chat_tools_for_request(request),
-            temperature: request.temperature,
-            max_tokens: (!official_openai_chat)
-                .then_some(request.max_output_tokens)
-                .flatten(),
-            max_completion_tokens: official_openai_chat
-                .then_some(request.max_output_tokens)
-                .flatten(),
-            cache_control: self
-                .supports_top_level_prompt_cache()
-                .then(prompt_cache::PromptCacheControl::ephemeral),
-            prompt_cache_key: prompt_cache_key.clone(),
-            parallel_tool_calls: request.request_override.parallel_tool_calls(),
-            stream: true,
-            stream_options: stream_usage_requested.then_some(ChatStreamOptions {
-                include_usage: true,
-            }),
-            stop: request.stop_sequences.clone(),
-            top_p: request.top_p,
-            seed: request.seed,
-            response_format: chat_wire::map_response_format(request.response_format.as_ref()),
-            reasoning_effort: chat_wire::reasoning_effort(
-                request.thinking.as_ref(),
-                model.as_str(),
-            ),
-            verbosity: request.verbosity.clone(),
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
-
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let endpoint = self.chat_endpoint().expect("chat endpoint should resolve");
-            let mut headers = self.auth_headers(
-                RequestHeaderContext::from_chat_request(request, session_affinity),
-                api_key,
-            );
-            headers.insert(
-                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
-                "application/json".to_owned(),
-            );
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                CHAT_COMPLETIONS_ADAPTER_KIND,
-                "complete_stream.chat",
-                "POST",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                Some(&body_json),
-            );
-            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
-                .json(&body_json)
-        })
-        .await?;
+        let response =
+            utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                let endpoint = self.chat_endpoint().expect("chat endpoint should resolve");
+                let mut headers = self.auth_headers(
+                    RequestHeaderContext::from_chat_request(request, session_affinity),
+                    api_key,
+                );
+                headers.insert(
+                    reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                    "application/json".to_owned(),
+                );
+                utils::adapter_log_http_request_prepared(
+                    self.id.as_str(),
+                    CHAT_COMPLETIONS_ADAPTER_KIND,
+                    "complete_stream.chat",
+                    "POST",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    Some(&body_json),
+                );
+                utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                    .body(body_json.bytes())
+            })
+            .await?;
 
         if !response.status().is_success() {
             return Err(utils::http_status_error_from_response_logged(

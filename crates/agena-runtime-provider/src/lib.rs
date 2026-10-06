@@ -109,6 +109,15 @@ impl From<ProviderJsonStreamError> for ProviderError {
     fn from(error: ProviderJsonStreamError) -> Self {
         match error {
             ProviderJsonStreamError::Http(error) => Self::Http(error),
+            ProviderJsonStreamError::Worker(error) => {
+                Self::Internal(format!("provider stream decoder worker failed: {error}"))
+            }
+            error @ ProviderJsonStreamError::FrameLimit { .. } => Self::ProviderClassified {
+                provider: "stream".to_owned(),
+                message: error.to_string(),
+                kind: ProviderErrorKind::MalformedResponse,
+                retryable: false,
+            },
             // A malformed SSE/JSON-lines payload is normally a transient stream
             // corruption (truncated chunk, proxy mangling) worth resampling,
             // not a permanent rejection of the request. Adapters additionally

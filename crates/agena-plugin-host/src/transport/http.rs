@@ -22,6 +22,8 @@ mod hosted;
 mod streams;
 use streams::{StreamEvent, StreamRegistry};
 
+static HTTP_JSON: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Plugin transport over HTTP callbacks.
@@ -84,40 +86,52 @@ impl HttpTransport {
         }
     }
 
-    async fn send(&self, req: &Request) -> Result<Response, TransportError> {
-        let mut builder = self
-            .client
-            .post(self.url.clone())
-            .timeout(Duration::from_secs(60))
-            .header(
-                crate::sdk::drivers::http::INSTANCE_HEADER,
-                &self.instance_id,
-            )
-            .json(req);
-        if req.method == method::META_INIT {
-            let revision = self
-                .expected_revision
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone();
-            builder = builder.header(
-                crate::sdk::drivers::http::EXPECTED_REVISION_HEADER,
-                revision.as_deref().unwrap_or("-"),
-            );
-        }
-        if let Some(h) = &self.auth_header {
-            builder = builder.header("authorization", h);
-        }
+    async fn send(&self, req: Request) -> Result<Response, TransportError> {
         let request = async {
+            let init = req.method == method::META_INIT;
+            let (id, body) = HTTP_JSON
+                .run(move || {
+                    let body = serde_json::to_vec(&req)?;
+                    Ok::<_, serde_json::Error>((req.id, body))
+                })
+                .await
+                .map_err(|error| {
+                    TransportError::Io(format!("plugin HTTP encode worker failed: {error}"))
+                })??;
+            let mut builder = self
+                .client
+                .post(self.url.clone())
+                .timeout(Duration::from_secs(60))
+                .header(
+                    crate::sdk::drivers::http::INSTANCE_HEADER,
+                    &self.instance_id,
+                )
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body);
+            if init {
+                let revision = self
+                    .expected_revision
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone();
+                builder = builder.header(
+                    crate::sdk::drivers::http::EXPECTED_REVISION_HEADER,
+                    revision.as_deref().unwrap_or("-"),
+                );
+            }
+            if let Some(h) = &self.auth_header {
+                builder = builder.header("authorization", h);
+            }
             let response = builder.send().await.map_err(|error| {
                 TransportError::Io(agena_failure::diagnostic::format_error_chain_with_context(
                     "plugin HTTP transport request failed",
                     &error,
                 ))
             })?;
-            if response.content_length().is_some_and(|length| {
-                length > u64::try_from(MAX_HTTP_RESPONSE_BYTES).unwrap_or(u64::MAX)
-            }) {
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_HTTP_RESPONSE_BYTES as u64)
+            {
                 return Err(TransportError::Rpc(format!(
                     "plugin HTTP response exceeds the {MAX_HTTP_RESPONSE_BYTES}-byte limit"
                 )));
@@ -125,6 +139,7 @@ impl HttpTransport {
             let mut body = Vec::new();
             let mut stream = response.bytes_stream();
             while let Some(chunk) = stream.next().await {
+                tokio::task::consume_budget().await;
                 let chunk = chunk.map_err(|error| {
                     TransportError::Rpc(agena_failure::diagnostic::format_error_chain_with_context(
                         "failed to read the plugin HTTP transport response body",
@@ -138,8 +153,13 @@ impl HttpTransport {
                 }
                 body.extend_from_slice(&chunk);
             }
-            let response: Response = serde_json::from_slice(&body)?;
-            if response.id != req.id {
+            let response: Response = HTTP_JSON
+                .run(move || serde_json::from_slice(&body))
+                .await
+                .map_err(|error| {
+                    TransportError::Io(format!("plugin HTTP decode worker failed: {error}"))
+                })??;
+            if response.id != id {
                 return Err(TransportError::Rpc(
                     "plugin HTTP response ID does not match its request".into(),
                 ));
@@ -149,8 +169,7 @@ impl HttpTransport {
         tokio::select! {
             biased;
             _ = self.shutdown.cancelled() => Err(TransportError::disconnected(
-                "HTTP plugin transport was shut down while a request was active",
-            )),
+                "HTTP plugin transport was shut down while a request was active")),
             result = request => result,
         }
     }
@@ -232,7 +251,9 @@ impl PluginTransport for HttpTransport {
             params: Some(params),
             context: crate::sdk::host_api::current_host_callback_context(),
         };
-        let resp = self.run_bound(&req, self.send(&req)).await?;
+        let method = req.method.clone();
+        let context = req.context.clone();
+        let resp = self.run_bound(&method, context, self.send(req)).await?;
         match resp.payload {
             ResponsePayload::Ok { result } => Ok(result),
             ResponsePayload::Err { error } => {
@@ -254,29 +275,39 @@ impl PluginTransport for HttpTransport {
             jsonrpc: JsonRpcVersion,
             id: RequestId::Num(self.next_request_id()),
             method: method::HOOK_TOOL_INVOKE_STREAM.to_string(),
-            params: Some(serde_json::to_value(&input)?),
+            params: Some(
+                HTTP_JSON
+                    .run(move || serde_json::to_value(input))
+                    .await
+                    .map_err(|error| {
+                        TransportError::Io(format!("plugin stream input worker failed: {error}"))
+                    })??,
+            ),
             context: Some(context),
         };
-        self.run_bound(&req, async {
-            let pending = self
-                .streams
-                .begin(req.context.clone().unwrap_or_default())?;
-            let resp = self.send(&req).await?;
-            let handle: ToolInvokeStreamHandle = match resp.payload {
-                ResponsePayload::Ok { result } => {
-                    serde_json::from_value(result).map_err(TransportError::from)?
-                }
-                ResponsePayload::Err { error } => {
-                    let pe = super::plugin_error_from_rpc(
-                        error,
-                        "decode HTTP plugin streaming-dispatch error",
-                    );
-                    return Err(TransportError::Plugin(pe));
-                }
-            };
+        let context = req.context.clone().unwrap_or_default();
+        self.run_bound(
+            method::HOOK_TOOL_INVOKE_STREAM,
+            Some(context.clone()),
+            async move {
+                let pending = self.streams.begin(context)?;
+                let resp = self.send(req).await?;
+                let handle: ToolInvokeStreamHandle = match resp.payload {
+                    ResponsePayload::Ok { result } => {
+                        serde_json::from_value(result).map_err(TransportError::from)?
+                    }
+                    ResponsePayload::Err { error } => {
+                        let pe = super::plugin_error_from_rpc(
+                            error,
+                            "decode HTTP plugin streaming-dispatch error",
+                        );
+                        return Err(TransportError::Plugin(pe));
+                    }
+                };
 
-            Ok(Some(pending.register(handle.stream_id)?))
-        })
+                Ok(Some(pending.register(handle.stream_id)?))
+            },
+        )
         .await
     }
 

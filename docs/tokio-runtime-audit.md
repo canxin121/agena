@@ -189,6 +189,78 @@ Long atomic imports/catalog replacement can still hold a writer while their SQL
 statements execute; preparation and avoidable round trips have been removed,
 while splitting a single logical import across commits would change its contract.
 
+## Follow-up: transport, snapshots, streaming, and native cleanup
+
+The third pass checks the CPU and resource-lifetime work around otherwise async
+database and network calls. Async SQL or `reqwest` does not move a caller's
+history clones, JSON codecs, filesystem validation, or native destructors off
+Tokio workers. Cancellation also does not stop an already-running blocking job.
+
+| Boundary | Finding | Change |
+| --- | --- | --- |
+| Workspace file/list APIs | Canonical path checks, metadata, directory scans, file reads, hash/base64 work, writes and fsync ran in application async methods | Move the complete filesystem operation to admitted workers; leave SQL in its async driver; use bounded reads rather than trusting metadata size |
+| Plugin marketplace | Async REST handlers invoked a synchronous marketplace client using `reqwest::blocking`, including client construction/destruction | Separate read and mutation worker admission; construct, use and release the blocking client on the worker |
+| Memory REST and cron tools | Memory file helpers and workspace canonicalization remained synchronous at some async entrypoints | Use application file workers for all memory routes and Tokio filesystem canonicalization for cron ownership checks |
+| HTTP, WS, SSE, and IPC payloads | Large snapshots and protocol JSON were serialized or decoded on Tokio | Separate bounded encode/decode pools; pre-encode principal HTTP/conditional transcript responses; move large incoming frames to workers without first copying their full string |
+| Connection task ownership | Dropping a writer handle or subscription map could leave writer/producer/subscription children running after the connection owner disappeared | Abort-on-drop ownership for WS/IPC writers, subscription children and the SSE producer; consume cooperative budget in buffered loops |
+| Legacy JSON-RPC | Envelope, params, response-value conversion and result encoding ran on async callers; notification subscribers copied full payloads | Bound the complete codecs, share notifications through Arc, poll the WS reader during event subscriptions, and bound stdio records |
+| Filesystem watcher lifetime | macOS notify shutdown can synchronously join its native thread when an SSE stream is dropped | Worker setup, two dedicated close threads, and a 64-resource lifetime limit that includes queued closes; Drop only hands ownership to the closer |
+| Watcher event callback | A native event could map many paths while holding the mutex used by the async stream | Prepare at most 256 source paths and a 256-path output batch outside the shared mutex; retain truncation/rescan/reconnect recovery |
+| Session snapshots and cache | Full histories were cloned/projected on async callers or under a cache-wide payload mutex; each part merge scanned history | Registry holds handles/recency only; per-session payload locks and deep copies live on workers; part-index lookup merges only changed parts; stale/version-gap updates cannot make a cache look current |
+| Streaming text and reasoning | Every text increment copied the accumulated content; each reasoning increment decoded/cloned/encoded the entire summary array; stream initialization loaded full history | Append in place on a per-part worker, return a lightweight revision/time checkpoint, initialize from one part row, and retain the original flush-count/terminal-boundary rules |
+| Streaming flush failure/cancellation | Removing buffers before durable success lost retry state; cancellation could release a part gate while detached worker cleanup still ran | Keep buffers until successful flush, remember requested flushes across errors, and let each started mutation/cleanup worker retain the acquired part gate until it finishes; release the gate before observer notification |
+| Plugin HTTP transport | Owned request/response JSON and stream request values were copied/encoded/decoded on async tasks | Two-slot HTTP codec admission; capture callback context before offloading, preserve frame/ID/authority checks and shutdown selection |
+| Provider request/response path | Large prompt/media projection, request JSON and diagnostics repeated on async callers or credential retries | Owned worker projections for OpenAI Chat/Responses, Anthropic, Gemini HTTP/realtime, Ollama and both Bedrock protocols; encode once into shared Bytes; offload normal/error response decoding and diagnostic preparation; Bedrock signing has separate bounded admission |
+| OpenAI compact/direct-image paths | Compact preparation cloned the entire history; image inputs and image result data URIs were copied before/after the wire codec on Tokio | Project compact/image requests on the request worker, temporarily take/restore compact input fields instead of cloning history, and project image artifacts on the independent response worker |
+| Provider extension headers | The synchronous header-enrichment port can call arbitrary extension code from an async request path | Four-slot worker boundary, with the original task's cancellation context captured before the move; no installed production hook was found during this review |
+| Provider SSE/JSON-lines | Recursive UTF-8 repair and repeated tail draining copied noisy buffers; large frame JSON parsed inline; buffered loops could stay ready | Iterative UTF-8 handling, one tail drain per chunk, reuse parsed JSON for completion checks, offload large chunks, bound frames/pending data and consume cooperative budget |
+| Gemini realtime frames | Text/binary WS messages were copied into new strings and decoded inline; outgoing setup/content copied their JSON subtrees | Move owned/shared bytes into size-aware decoding; project and encode both outbound records on the request worker without subtree copies |
+
+Additional admission limits introduced in this pass:
+
+| Class | Concurrent operations |
+| --- | ---: |
+| Workspace scans / transfers / canonical identity | 4 / 2 / 8 |
+| Marketplace reads / mutations | 4 / 2 |
+| API JSON encoding / large-frame decoding | 2 / 2 |
+| Legacy JSON-RPC codecs | 2 |
+| Watcher setup / native close threads / admitted live-or-closing watchers | 4 / 2 / 64 |
+| Session snapshot/projection / updates and notification preparation | 2 / 4 |
+| Runtime SessionView-to-Session projection | 2 |
+| Plugin HTTP codecs | 2 |
+| Provider request projection/codecs / response codecs / stream decoders | 2 / 2 / 2 |
+| Provider header hooks / Bedrock signing | 4 / 2 |
+
+The per-part streaming gate is an async mutex. Buffer payload mutexes are only
+taken on admitted workers. A clone of the *already acquired* owned gate moves
+with a started mutation or cleanup; no worker uses `block_on` to reacquire it.
+The async caller retains the gate across its durable flush, then releases it
+before observer fanout. Timer notifications clone only the relevant live part,
+and do not announce terminal state while its flush is still pending. Run-tail
+flushes announce earlier successful parts even if a later part fails. A failed
+or cancelled flush retains its registered buffer for retry.
+
+Workspace download/media/upload bounds remain 100/20/50 MiB. Reads use a
+limit-plus-one check, and uploads check encoded length before base64 allocation.
+IPC and legacy JSON-RPC stdio now accept at most 64 MiB of record content, with
+separate LF/CRLF allowance. Provider SSE frames/pending data and realtime JSON
+frames are bounded at 64 MiB. Small incoming JSON frames below 64 KiB stay
+inline; large ones pass worker admission. These are size and concurrency bounds,
+not a universal memory budget or a measured latency guarantee.
+
+Wire JSON and conditional-response headers are preserved. The Rust-only legacy
+JSON-RPC notification subscription now returns `Receiver<Arc<...>>`; consumers
+share the immutable notification instead of cloning its payload. The API Cargo
+features declare the HTTP common-code dependencies of WS/SSE/JSON-RPC, with IPC
+depending on WS, so reduced-feature builds do not rely on default features.
+
+The audit follows the production call paths recorded above; it is not a proof
+that every possible future or public synchronous helper has an async boundary.
+Some typed response-to-domain projections and small per-event projections
+remain synchronous. Short handle-registry locks remain synchronous where their
+critical sections perform no I/O or deep payload copies. Those boundaries
+should be reviewed again when payload shapes or extension callers change.
+
 ## Verification and practical limits
 
 Only compilation and source checks were requested. No new tests were added and
@@ -204,6 +276,14 @@ cargo check --offline --locked -p agena --release --target aarch64-apple-darwin
 cargo check --offline --locked --workspace \
   --features agena-plugin-host/wasm,agena-plugin-host/signing \
   --release --target aarch64-apple-darwin
+cargo check --offline --locked -p agena-api-server --no-default-features \
+  --features http --release --target aarch64-apple-darwin
+cargo check --offline --locked -p agena-api-server --no-default-features \
+  --features sse --release --target aarch64-apple-darwin
+cargo check --offline --locked -p agena-api-server --no-default-features \
+  --features ws --release --target aarch64-apple-darwin
+cargo check --offline --locked -p agena-api-server --no-default-features \
+  --features jsonrpc --release --target aarch64-apple-darwin
 ```
 
 No dependency version upgrade or increase of Tokio runtime worker counts is

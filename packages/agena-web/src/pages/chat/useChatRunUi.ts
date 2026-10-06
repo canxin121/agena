@@ -7,6 +7,7 @@ import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
 import type { SessionState } from '@/types/chat'
 import type { CancellationOutcome } from '@/stores/chat/api'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 type ToastsStore = { push: (kind: 'success' | 'error', message: string) => void }
 
@@ -250,10 +251,11 @@ export function useChatRunUi(opts: {
     }, 1000)
   }
 
+  const pane = useWorkspacePaneContext()
   watch(
-    () => retryStatus.value?.next,
-    (next) => {
-      if (typeof next === 'number' && Number.isFinite(next)) startRetryTimer()
+    () => [retryStatus.value?.next, !pane || pane.isVisible.value] as const,
+    ([next, visible]) => {
+      if (visible && typeof next === 'number' && Number.isFinite(next)) startRetryTimer()
       else stopRetryTimer()
     },
     { immediate: true },

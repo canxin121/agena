@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref } from 'vue'
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -10,7 +10,7 @@ import { clearFinishedActivities, controlActivity } from '../../lib/activityApi'
 import { createLatestRequestGuard } from '../../lib/latestRequest'
 import { createRevalidator } from '../../lib/revalidation'
 import { captureResourceObservation, subscribeResource } from '../../lib/resourceSync'
-import { isDocumentVisible } from '../../lib/backgroundReads'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { useToastsStore } from '../../stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
 
@@ -35,6 +35,8 @@ const loading = ref(false)
 const error = ref('')
 const activities = ref<Activity[]>([])
 const busyId = ref<string | null>(null)
+const visible = usePaneVisibility()
+let readController: AbortController | undefined
 
 const sortedActivities = computed(() =>
   [...activities.value].sort((a, b) => Number(b.created_at_ms || 0) - Number(a.created_at_ms || 0)),
@@ -75,18 +77,22 @@ function controlLabel(control: ActivityControl): string {
 
 const beginRead = createLatestRequestGuard(() => captureResourceObservation('activities').scope, activities)
 async function readActivities() {
+  if (!visible.value) return
+  const controller = new AbortController()
+  readController = controller
   const isCurrent = beginRead()
   loading.value = true
   error.value = ''
   try {
-    const data = await conditionalJson<Activity[]>('activities', '/api/v1/activities')
-    if (!isCurrent()) return
+    const data = await conditionalJson<Activity[]>('activities', '/api/v1/activities', { signal: controller.signal })
+    if (controller.signal.aborted || !isCurrent()) return
     activities.value = Array.isArray(data) ? data : []
   } catch (err) {
-    if (!isCurrent()) return
+    if (controller.signal.aborted || !isCurrent()) return
     error.value = err instanceof Error ? err.message : String(err)
     throw err
   } finally {
+    if (readController === controller) readController = undefined
     if (isCurrent()) loading.value = false
   }
 }
@@ -129,16 +135,30 @@ async function clearFinished() {
 onMounted(() => {
   void queue.refresh().catch(() => {})
 })
-const queue = createRevalidator(readActivities, { intervalMs: 250, retryMs: 5000, enabled: isDocumentVisible })
+const queue = createRevalidator(readActivities, { intervalMs: 250, retryMs: 5000, enabled: () => visible.value })
 const refresh = () => queue.refresh().catch(() => {})
 const release = subscribeResource('activities', () => queue.invalidate(150))
-const visibility = () => (isDocumentVisible() ? queue.resume() : queue.pause())
-document.addEventListener('visibilitychange', visibility)
+watch(
+  visible,
+  (shown) => {
+    if (shown) queue.resume()
+    else {
+      queue.pause()
+      if (readController) {
+        readController.abort()
+        beginRead()
+        loading.value = false
+        queue.invalidate(0)
+      }
+    }
+  },
+  { flush: 'sync' },
+)
 onScopeDispose(() => {
   release()
   queue.dispose()
+  readController?.abort()
   beginRead()
-  document.removeEventListener('visibilitychange', visibility)
 })
 </script>
 
@@ -152,18 +172,20 @@ onScopeDispose(() => {
     </div>
 
     <div class="grid gap-3">
-      <div v-if="loading" class="text-sm text-muted-foreground">{{ $st('Loading activities...') }}</div>
+      <div v-if="loading && activities.length === 0" class="text-sm text-muted-foreground">
+        {{ $st('Loading activities...') }}
+      </div>
       <div
-        v-else-if="error"
+        v-if="error"
         class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
         {{ error }}
       </div>
-      <div v-else-if="sortedActivities.length === 0" class="text-sm text-muted-foreground">
+      <div v-if="!loading && sortedActivities.length === 0" class="text-sm text-muted-foreground">
         {{ $st('No background activities.') }}
       </div>
 
-      <div v-else class="space-y-2">
+      <div v-if="sortedActivities.length > 0" class="space-y-2">
         <div
           v-for="activity in sortedActivities"
           :key="activityId(activity)"

@@ -18,7 +18,11 @@ type InvokePlan = (
 ) => Promise<PlanResponse>
 
 /** Each opening/session owns its requests; completions cannot change another plan. */
-export function usePlanViewer(scope: () => readonly [boolean, string | null], invoke: InvokePlan) {
+export function usePlanViewer(
+  scope: () => readonly [boolean, string | null],
+  invoke: InvokePlan,
+  readEnabled: () => boolean = () => true,
+) {
   const loading = ref(false)
   const toggling = ref(false)
   const markdown = ref('')
@@ -31,7 +35,7 @@ export function usePlanViewer(scope: () => readonly [boolean, string | null], in
   let observed: ReturnType<typeof captureResourceObservation> | undefined
 
   async function refresh(force = true) {
-    if (!scope()[0] || loading.value || toggling.value) return
+    if (!scope()[0] || !readEnabled() || loading.value || toggling.value) return
     const owner = generation
     const sessionId = scope()[1]
     const controller = new AbortController()

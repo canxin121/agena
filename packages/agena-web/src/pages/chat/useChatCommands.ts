@@ -2,7 +2,7 @@ import { computed, nextTick, ref, watch, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiCommandLine, RiFlashlightLine } from '@remixicon/vue'
 
-import { apiJson } from '@/lib/api'
+import { readPluginCommandCatalog } from '../../lib/pluginCommandRead'
 import { getComposerInput, type ComposerExpose } from './composerInput'
 import {
   clientCommandsFromCatalog,
@@ -44,12 +44,6 @@ export type PluginCommand = {
 }
 
 export type Command = BuiltInCommand | PluginCommand
-
-type PluginSurfaceCatalog = {
-  catalog?: {
-    commands?: PluginCommandCatalogItem[]
-  }
-}
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -130,7 +124,7 @@ export function useChatCommands(opts: {
     commandQuery.value = nextQuery
     commandFocusSearch.value = options.focusSearch !== false
     commandOpen.value = true
-    if (commands.value.length === 0) void loadCommands()
+    void loadCommands()
   }
 
   /**
@@ -190,7 +184,7 @@ export function useChatCommands(opts: {
     try {
       let catalogCommands: PluginCommandCatalogItem[] = []
       try {
-        const pluginCatalog = await apiJson<PluginSurfaceCatalog>('/api/v1/plugins/surface')
+        const pluginCatalog = await readPluginCommandCatalog()
         catalogCommands = pluginCatalog?.catalog?.commands || []
       } catch {
         // An unreachable plugin catalog means there is nothing to offer yet;

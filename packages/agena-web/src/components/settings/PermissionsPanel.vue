@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { RiDeleteBinLine, RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -10,6 +10,7 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
 import { useToastsStore } from '@/stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
+import { usePaneRead } from '@/composables/usePaneRead'
 
 type PermissionMode = 'allow' | 'auto' | 'ask' | 'deny'
 type PermissionScope = 'workspace' | 'global'
@@ -44,8 +45,6 @@ type PermissionRulePage = {
 
 const toasts = useToastsStore()
 
-const loading = ref(false)
-const error = ref('')
 const rules = ref<PermissionRule[]>([])
 const hasMore = ref(false)
 
@@ -56,17 +55,17 @@ const newQualifier = ref('')
 const newMode = ref<PermissionMode>('ask')
 const newScope = ref<PermissionScope>('workspace')
 
-const modeOptions = [
+const modeOptions = computed(() => [
   { value: 'allow', label: st('Allow'), description: st('Approve matching tool calls.') },
   { value: 'auto', label: st('Auto'), description: st('Let Agena evaluate matching calls automatically.') },
   { value: 'ask', label: st('Ask'), description: st('Request confirmation before running.') },
   { value: 'deny', label: st('Deny'), description: st('Block matching tool calls.') },
-]
+])
 
-const scopeOptions = [
+const scopeOptions = computed(() => [
   { value: 'workspace', label: st('Workspace'), description: st('Apply only to this workspace.') },
   { value: 'global', label: st('Global'), description: st('Apply across all workspaces.') },
-]
+])
 
 const canCreate = computed(() => !createBusy.value && newToolName.value.trim().length > 0)
 
@@ -90,21 +89,13 @@ function ruleTitle(rule: PermissionRule): string {
   return rule.action_key
 }
 
-async function refresh() {
-  loading.value = true
-  error.value = ''
-  try {
-    const data = await apiJson<PermissionRulePage>('/api/v1/permission-rules?limit=200')
+const { loading, error, refresh } = usePaneRead(
+  (signal) => apiJson<PermissionRulePage>('/api/v1/permission-rules?limit=200', { signal }),
+  (data) => {
     rules.value = Array.isArray(data?.items) ? data.items : []
     hasMore.value = data?.page?.has_more === true
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
-    rules.value = []
-    hasMore.value = false
-  } finally {
-    loading.value = false
-  }
-}
+  },
+)
 
 async function createRule() {
   if (!canCreate.value) return
@@ -145,10 +136,6 @@ async function removeRule(id: number) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   }
 }
-
-onMounted(() => {
-  void refresh()
-})
 </script>
 
 <template>
@@ -225,18 +212,20 @@ onMounted(() => {
     </div>
 
     <div class="grid gap-3">
-      <div v-if="loading" class="text-sm text-muted-foreground">{{ $st('Loading permission rules...') }}</div>
+      <div v-if="loading && rules.length === 0" class="text-sm text-muted-foreground">
+        {{ $st('Loading permission rules...') }}
+      </div>
       <div
-        v-else-if="error"
+        v-if="error"
         class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
         {{ error }}
       </div>
-      <div v-else-if="sortedRules.length === 0" class="text-sm text-muted-foreground">
+      <div v-if="!loading && sortedRules.length === 0" class="text-sm text-muted-foreground">
         {{ $st('No permission rules configured.') }}
       </div>
 
-      <div v-else class="space-y-2">
+      <div v-if="sortedRules.length > 0" class="space-y-2">
         <div
           v-for="rule in sortedRules"
           :key="rule.id"

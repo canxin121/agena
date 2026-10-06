@@ -351,6 +351,7 @@ export function fencedCodeBlock(text: string, language: string): string {
 export function operationPresentation(
   part: TranscriptDisplayPart,
   sectionValues: OperationSectionValues = {},
+  details = true,
 ): OperationPresentation {
   const sourceContent = jsonRecord(part.source.agenaContent)
   const content: JsonRecord = { ...sourceContent }
@@ -419,12 +420,12 @@ export function operationPresentation(
   })
 
   const diffPaths = new Set(
-    blocks
+    (details ? blocks : [])
       .filter((block) => block.type === 'diff')
       .flatMap((block) => transcriptDiffFiles(stringValue(block.diff)).flatMap((file) => [file.path, file.oldPath]))
       .filter(Boolean),
   )
-  const presentationBlocks = blocks.flatMap((block) => {
+  const presentationBlocks = (details ? blocks : []).flatMap((block) => {
     if (block.type === 'file_changes') {
       const changes = jsonArray(block.changes).filter((change) => !diffPaths.has(stringValue(jsonRecord(change).path)))
       return changes.length ? [{ ...block, changes }] : []
@@ -442,8 +443,8 @@ export function operationPresentation(
     summary: firstString(operation, ['summary']) || part.summary,
     toolName,
     input,
-    inputMarkdown: input === null ? '' : structuredValueMarkdown(input),
-    commandMarkdown: hasCommandBlock(presentationBlocks) ? '' : commandMarkdownFromInput(input),
+    inputMarkdown: !details || input === null ? '' : structuredValueMarkdown(input),
+    commandMarkdown: !details || hasCommandBlock(presentationBlocks) ? '' : commandMarkdownFromInput(input),
     error: operationFailureMessage(operation.error ?? null),
     rawOutput,
     blocks,

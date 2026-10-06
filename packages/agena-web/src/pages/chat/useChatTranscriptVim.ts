@@ -1,4 +1,17 @@
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComputedRef, type Ref } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  shallowRef,
+  useId,
+  watch,
+  type ComputedRef,
+  type Ref,
+} from 'vue'
+import { syncKeySet } from '@/lib/reactiveKeySet'
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -12,9 +25,9 @@ import { resolveTranscriptVimAction, type TranscriptVimAction, type TranscriptVi
 import {
   collectTranscriptSearchMatches,
   nextTranscriptSearchMatchIndex,
-  transcriptSearchRanges,
   type TranscriptSearchMatch,
 } from './transcriptSearch'
+import { MAX_TRANSCRIPT_SEARCH_HIGHLIGHT_RANGES, transcriptSearchHighlightRanges } from './transcriptSearchHighlights'
 import {
   clampTranscriptOffset,
   findTranscriptCharacter,
@@ -58,8 +71,6 @@ type TextModel = { entries: TextEntry[]; text: string }
 
 const NODE_SELECTOR = '[data-transcript-node][data-transcript-key]'
 const MESSAGE_SELECTOR = '[data-transcript-node="message"][data-transcript-key]'
-const VISUAL_BLOCK_HIGHLIGHT = 'agena-vim-block'
-const VISUAL_BLOCK_HIGHLIGHT_STYLE_ID = 'agena-vim-highlight-style'
 
 type CssHighlightRegistry = {
   set: (name: string, highlight: unknown) => void
@@ -78,15 +89,23 @@ function cssEscape(value: string): string {
   return value.replace(/["\\]/g, '\\$&')
 }
 
-function ensureVisualBlockHighlightStyle() {
-  if (typeof document === 'undefined' || document.getElementById(VISUAL_BLOCK_HIGHLIGHT_STYLE_ID)) return
+function ensureTranscriptHighlightStyle(id: string, visual: string, search: string, active: string) {
+  if (typeof document === 'undefined' || document.getElementById(id)) return
   const head = document.head
   if (!head) return
   const style = document.createElement('style')
-  style.id = VISUAL_BLOCK_HIGHLIGHT_STYLE_ID
+  style.id = id
   style.textContent = `
-::highlight(${VISUAL_BLOCK_HIGHLIGHT}) {
+::highlight(${visual}) {
   background: oklch(var(--primary) / 0.24);
+  color: inherit;
+}
+::highlight(${search}) {
+  background: rgb(251 191 36 / 0.32);
+  color: inherit;
+}
+::highlight(${active}) {
+  background: rgb(245 158 11 / 0.65);
   color: inherit;
 }`
   head.append(style)
@@ -110,6 +129,11 @@ export function useChatTranscriptVim(opts: {
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
   toasts: ToastsLike
 }) {
+  const highlightId = useId().replace(/[^a-zA-Z0-9_-]/g, '-')
+  const VISUAL_BLOCK_HIGHLIGHT = `agena-vim-block-${highlightId}`
+  const SEARCH_HIGHLIGHT = `agena-search-${highlightId}`
+  const ACTIVE_SEARCH_HIGHLIGHT = `agena-search-active-${highlightId}`
+  const highlightStyleId = `agena-transcript-highlights-${highlightId}`
   const mode = ref<TranscriptVimMode>('NAVIGATE')
   const activeNodeKey = ref('')
   const visualAnchorKey = ref('')
@@ -124,7 +148,17 @@ export function useChatTranscriptVim(opts: {
   const searchOpen = ref(false)
   const searchQuery = ref('')
   const searchForward = ref(true)
-  const searchMatches = ref<TranscriptSearchMatch[]>([])
+  const searchMatches = shallowRef<TranscriptSearchMatch[]>([])
+  const searchKeys = reactive(new Set<string>())
+  watch(
+    searchMatches,
+    (matches) =>
+      syncKeySet(
+        searchKeys,
+        matches.map((match) => match.key),
+      ),
+    { flush: 'sync' },
+  )
   const searchMatchIndex = ref(-1)
   const jumpHistory = ref<CursorPoint[]>([])
   const jumpHistoryIndex = ref(0)
@@ -143,6 +177,16 @@ export function useChatTranscriptVim(opts: {
   let mountedScroll: HTMLElement | null = null
   let transcriptResizeObserver: ResizeObserver | null = null
   let cachedTextModel: TextModel | null = null
+  let textProjections = new WeakMap<HTMLElement, TranscriptTextProjection>()
+
+  function textProjection(element: HTMLElement): TranscriptTextProjection {
+    let projection = textProjections.get(element)
+    if (!projection) {
+      projection = transcriptTextProjection(element)
+      textProjections.set(element, projection)
+    }
+    return projection
+  }
 
   // Vim mode is a switch, not a constant. Every visual side effect below is
   // gated on the same source of truth the key handler uses, so the transcript
@@ -221,7 +265,7 @@ export function useChatTranscriptVim(opts: {
     let combined = ''
     for (const element of cursorElements()) {
       const key = keyForElement(element)
-      const projection = transcriptTextProjection(element)
+      const projection = textProjection(element)
       const value = projection.text
       if (!key || !value) continue
       if (combined) combined += '\n'
@@ -859,7 +903,7 @@ export function useChatTranscriptVim(opts: {
     const registry = (CSS as typeof CSS & { highlights?: CssHighlightRegistry }).highlights
     const Constructor = (globalThis as typeof globalThis & { Highlight?: HighlightConstructor }).Highlight
     if (!registry || !Constructor) return null
-    ensureVisualBlockHighlightStyle()
+    ensureTranscriptHighlightStyle(highlightStyleId, VISUAL_BLOCK_HIGHLIGHT, SEARCH_HIGHLIGHT, ACTIVE_SEARCH_HIGHLIGHT)
     return { registry, Constructor }
   }
 
@@ -1308,8 +1352,10 @@ export function useChatTranscriptVim(opts: {
     )
   }
 
+  const selectedKeys = reactive(new Set<string>())
+  watch(selectedNodeKeys, (keys) => syncKeySet(selectedKeys, keys), { flush: 'sync' })
   function isNodeSelected(key: string): boolean {
-    return selectedNodeKeys.value.has(key)
+    return selectedKeys.has(key)
   }
 
   function startVisual(nextMode: 'character' | 'line' | 'block') {
@@ -1442,9 +1488,14 @@ export function useChatTranscriptVim(opts: {
   let searchHighlightObserver: MutationObserver | null = null
 
   function removeSearchHighlights(root: HTMLElement) {
+    const support = visualBlockHighlightSupport()
+    support?.registry.delete(SEARCH_HIGHLIGHT)
+    support?.registry.delete(ACTIVE_SEARCH_HIGHLIGHT)
     for (const mark of Array.from(root.querySelectorAll<HTMLElement>('mark[data-agena-search-match]'))) {
       const parent = mark.parentNode
       if (!parent) continue
+      const element = mark.closest<HTMLElement>(NODE_SELECTOR)
+      if (element) textProjections.delete(element)
       parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
       parent.normalize()
     }
@@ -1473,27 +1524,54 @@ export function useChatTranscriptVim(opts: {
       if (!query || !searchMatches.value.length) return
       const activeMatch = searchMatchIndex.value >= 0 ? searchMatches.value[searchMatchIndex.value] : null
       const activeKey = activeMatch?.key || ''
-      for (const element of cursorElements()) {
+      const support = visualBlockHighlightSupport()
+      const ordinaryRanges: Range[] = []
+      const activeRanges: Range[] = []
+      let budget = MAX_TRANSCRIPT_SEARCH_HIGHLIGHT_RANGES
+      const byKey = new Map<string, TranscriptSearchMatch[]>()
+      for (const match of searchMatches.value) {
+        const entries = byKey.get(match.key)
+        if (entries) entries.push(match)
+        else byKey.set(match.key, [match])
+      }
+      const elements = Array.from(
+        root.querySelectorAll<HTMLElement>('[data-transcript-node="part"][data-transcript-key]'),
+      )
+      // The selected occurrence takes priority over decorative previews.
+      elements.sort(
+        (left, right) => Number(keyForElement(right) === activeKey) - Number(keyForElement(left) === activeKey),
+      )
+      for (const element of elements) {
         const key = keyForElement(element)
-        const projection = transcriptTextProjection(element)
+        const keyMatches = byKey.get(key)
+        if (!keyMatches) continue
+        if (key !== activeKey && (budget <= 0 || element.closest('[data-near-viewport="false"]'))) continue
+        const projection = textProjection(element)
         if (!projection.segments.length) continue
-        const ranges = transcriptSearchRanges(projection.text, query)
+        const ranges = transcriptSearchHighlightRanges(
+          projection.segments,
+          keyMatches,
+          activeKey === key ? activeMatch : null,
+          budget,
+        )
         if (!ranges.length) continue
-        const keyMatches = searchMatches.value.filter((match) => match.key === key)
-        const activeOrdinal = activeKey === key ? keyMatches.indexOf(activeMatch as TranscriptSearchMatch) : -1
+        budget = Math.max(0, budget - ranges.filter((range) => !range.active).length)
         for (let rangeIndex = ranges.length - 1; rangeIndex >= 0; rangeIndex -= 1) {
-          const range = ranges[rangeIndex]
-          const segments = projection.segments.filter(
-            (segment) => segment.end > range.start && segment.start < range.end,
-          )
-          for (let segmentIndex = segments.length - 1; segmentIndex >= 0; segmentIndex -= 1) {
-            const segment = segments[segmentIndex]
-            if (!segment) continue
-            const start = segment.nodeStart + Math.max(range.start, segment.start) - segment.start
-            const end = segment.nodeStart + Math.min(range.end, segment.end) - segment.start
-            wrapSearchRange(segment.node, start, segment.node, end, rangeIndex === activeOrdinal)
+          const descriptor = ranges[rangeIndex]!
+          if (support) {
+            const range = document.createRange()
+            range.setStart(descriptor.node, descriptor.start)
+            range.setEnd(descriptor.node, descriptor.end)
+            ;(descriptor.active ? activeRanges : ordinaryRanges).push(range)
+          } else {
+            wrapSearchRange(descriptor.node, descriptor.start, descriptor.node, descriptor.end, descriptor.active)
+            textProjections.delete(element)
           }
         }
+      }
+      if (support) {
+        support.registry.set(SEARCH_HIGHLIGHT, new support.Constructor(...ordinaryRanges))
+        support.registry.set(ACTIVE_SEARCH_HIGHLIGHT, new support.Constructor(...activeRanges))
       }
     } finally {
       invalidateTextModel()
@@ -1513,7 +1591,14 @@ export function useChatTranscriptVim(opts: {
     })
   }
 
-  function refreshSearchMatches() {
+  let searchRefreshTimer: ReturnType<typeof setTimeout> | undefined
+  function scheduleSearchRefresh() {
+    if (!searchOpen.value && !searchQuery.value.trim()) return
+    if (searchRefreshTimer === undefined) searchRefreshTimer = setTimeout(() => refreshSearchMatches(true), 120)
+  }
+  function refreshSearchMatches(preserveActive = false) {
+    if (searchRefreshTimer !== undefined) clearTimeout(searchRefreshTimer)
+    searchRefreshTimer = undefined
     const query = searchQuery.value.trim()
     if (!query) {
       searchMatches.value = []
@@ -1521,13 +1606,19 @@ export function useChatTranscriptVim(opts: {
       scheduleSearchHighlight()
       return
     }
+    const active = preserveActive ? searchMatches.value[searchMatchIndex.value] : undefined
     searchMatches.value = collectTranscriptSearchMatches(textEntries().entries, query)
-    searchMatchIndex.value = -1
+    searchMatchIndex.value = active
+      ? searchMatches.value.findIndex(
+          (match) =>
+            match.key === active.key && match.textStart === active.textStart && match.textEnd === active.textEnd,
+        )
+      : -1
     scheduleSearchHighlight()
   }
 
   function isNodeSearchMatch(key: string): boolean {
-    return searchMatches.value.some((match) => match.key === key)
+    return searchKeys.has(key)
   }
 
   function openSearch(forward: boolean) {
@@ -1546,10 +1637,12 @@ export function useChatTranscriptVim(opts: {
 
   function setSearchQuery(query: string) {
     searchQuery.value = query
-    refreshSearchMatches()
+    if (searchRefreshTimer !== undefined) clearTimeout(searchRefreshTimer)
+    searchRefreshTimer = setTimeout(refreshSearchMatches, 120)
   }
 
   function closeSearch(clear = false) {
+    if (searchRefreshTimer !== undefined) refreshSearchMatches()
     searchOpen.value = false
     mode.value = 'NAVIGATE'
     if (clear) {
@@ -1571,6 +1664,7 @@ export function useChatTranscriptVim(opts: {
   }
 
   function jumpSearch(reverse: boolean) {
+    if (searchRefreshTimer !== undefined) refreshSearchMatches()
     if (!searchMatches.value.length) refreshSearchMatches()
     if (!searchMatches.value.length) return
     const forward = searchForward.value !== reverse
@@ -2071,13 +2165,32 @@ export function useChatTranscriptVim(opts: {
   })
 
   function onTranscriptResize() {
+    textProjections = new WeakMap()
     invalidateTextModel()
+    scheduleSearchRefresh()
+    scheduleCursorPlacement()
+  }
+
+  function invalidateElementTextProjection(parent: HTMLElement) {
+    const node = parent.closest<HTMLElement>(NODE_SELECTOR)
+    if (node) textProjections.delete(node)
+    // Visibility/clipping can change at an ancestor without replacing text
+    // nodes. Clear only its descendant projections, keeping other rows warm.
+    for (const child of parent.querySelectorAll<HTMLElement>(NODE_SELECTOR)) textProjections.delete(child)
+    invalidateTextModel()
+  }
+
+  function onTranscriptMediaLoad(event: Event) {
+    if (!(event.target instanceof HTMLElement)) return
+    invalidateElementTextProjection(event.target)
+    scheduleSearchRefresh()
     scheduleCursorPlacement()
   }
 
   watch(
     () => opts.selectedSessionId.value,
     () => {
+      textProjections = new WeakMap()
       invalidateTextModel()
       activeNodeKey.value = ''
       visualAnchorKey.value = ''
@@ -2143,19 +2256,42 @@ export function useChatTranscriptVim(opts: {
     mountedRoot = root
     mountedScroll = opts.scrollEl.value
     if (root && typeof MutationObserver !== 'undefined') {
-      searchHighlightObserver = new MutationObserver(() => {
-        invalidateTextModel()
-        if (applyingSearchHighlight) return
-        if (!searchOpen.value && !searchQuery.value.trim()) return
-        scheduleSearchHighlight()
+      searchHighlightObserver = new MutationObserver((records) => {
+        if (records.every((record) => record.type === 'attributes' && record.attributeName === 'data-near-viewport')) {
+          if (searchQuery.value.trim()) scheduleSearchHighlight()
+          return
+        }
+        let changed = false
+        for (const record of records) {
+          if (record.type === 'attributes' && record.attributeName === 'data-near-viewport') continue
+          const parent = record.target instanceof HTMLElement ? record.target : record.target.parentElement
+          if (!parent) continue
+          if (record.type === 'attributes') {
+            // Selection/search colors on row wrappers and excluded chrome
+            // do not affect the laid-out text or its cursor coordinates.
+            if (record.attributeName === 'class' && parent.matches(NODE_SELECTOR)) continue
+            if (parent.closest('[data-transcript-chrome="true"]')) continue
+          }
+          invalidateElementTextProjection(parent)
+          changed = true
+        }
+        if (!changed || applyingSearchHighlight) return
+        scheduleSearchRefresh()
       })
-      searchHighlightObserver.observe(root, { childList: true, subtree: true, characterData: true })
+      searchHighlightObserver.observe(root, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['data-near-viewport', 'class', 'style', 'hidden', 'aria-hidden', 'open'],
+      })
     }
     if (mountedScroll && typeof ResizeObserver !== 'undefined') {
       transcriptResizeObserver = new ResizeObserver(onTranscriptResize)
       transcriptResizeObserver.observe(mountedScroll)
     }
     root?.addEventListener('pointerdown', onTranscriptPointerDown, true)
+    root?.addEventListener('load', onTranscriptMediaLoad, true)
     window.addEventListener('keydown', onKeydown)
     window.addEventListener('resize', onTranscriptResize)
     document.addEventListener('copy', onTranscriptCopy)
@@ -2164,11 +2300,13 @@ export function useChatTranscriptVim(opts: {
     mountedScroll?.addEventListener('wheel', onTranscriptWheel, { passive: false })
   })
   onBeforeUnmount(() => {
+    if (searchRefreshTimer !== undefined) clearTimeout(searchRefreshTimer)
     searchHighlightObserver?.disconnect()
     searchHighlightObserver = null
     transcriptResizeObserver?.disconnect()
     transcriptResizeObserver = null
     mountedRoot?.removeEventListener('pointerdown', onTranscriptPointerDown, true)
+    mountedRoot?.removeEventListener('load', onTranscriptMediaLoad, true)
     window.removeEventListener('keydown', onKeydown)
     window.removeEventListener('resize', onTranscriptResize)
     document.removeEventListener('copy', onTranscriptCopy)
@@ -2180,6 +2318,8 @@ export function useChatTranscriptVim(opts: {
     if (scrollSuppressionFrame) window.cancelAnimationFrame(scrollSuppressionFrame)
     clearMouseSelection()
     clearVisualBlockHighlight()
+    if (mountedRoot) removeSearchHighlights(mountedRoot)
+    document.getElementById(highlightStyleId)?.remove()
     removeCursorOverlay()
     if (ownsNativeSelection) window.getSelection()?.removeAllRanges()
   })

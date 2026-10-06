@@ -21,6 +21,11 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;')
 }
 
+/** Preserve the entire source while a rich renderer is deferred or unavailable. */
+export function renderMarkdownPlainText(content: string): string {
+  return `<div class="whitespace-pre-wrap break-words">${escapeHtml(content)}</div>`
+}
+
 function normalizeNewlines(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 }

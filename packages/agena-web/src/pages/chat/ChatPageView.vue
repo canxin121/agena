@@ -349,6 +349,7 @@ void modelTriggerRef
 void thinkingTriggerRef
 void speedTriggerRef
 void sessionActionsMenuRef
+const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 </script>
 
 <template>
@@ -512,7 +513,7 @@ void sessionActionsMenuRef
                   :optimistic-user="optimisticUser"
                   :show-optimistic-user="showOptimisticUser"
                   :pending-attention="chat.selectedAttention"
-                  :open-mobile-sidebar="() => ui.setSessionSwitcherOpen(true)"
+                  :open-mobile-sidebar="openMobileSidebar"
                   @fork="handleForkFromMessage"
                   @revert="handleRevertFromMessage"
                   @copy="handleCopyMessage"

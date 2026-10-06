@@ -152,7 +152,7 @@ const sourceOptions = computed(() => [
     summary: permissionSummary(effectiveConfig.value),
   },
 ])
-const sectionOptions = [
+const sectionOptions = computed(() => [
   {
     value: 'path',
     label: st('Filesystem'),
@@ -164,13 +164,13 @@ const sectionOptions = [
     label: st('Tool Access'),
     description: st('Tool defaults, tool names, and command patterns.'),
   },
-]
-const modeOptions = [
+])
+const modeOptions = computed(() => [
   { value: 'allow', label: st('Allow'), description: st('Always permit matching access.') },
   { value: 'auto', label: st('Auto'), description: st('Let the approval model decide.') },
   { value: 'ask', label: st('Ask'), description: st('Ask before matching access.') },
   { value: 'deny', label: st('Deny'), description: st('Always block matching access.') },
-]
+])
 const shellToolOptions = SHELL_CAPABLE_TOOLS.map((value) => ({ value, label: value }))
 
 const pathRules = computed(() => Object.entries(config.value.path?.rules || {}))

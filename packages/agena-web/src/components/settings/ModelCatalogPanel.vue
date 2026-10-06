@@ -8,7 +8,7 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import { apiJson } from '@/lib/api'
 import { createRevalidator } from '@/lib/revalidation'
-import { isDocumentVisible } from '@/lib/backgroundReads'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
@@ -173,6 +173,8 @@ function modelSubtitle(model: CatalogModel): string {
 }
 
 const visibleItems = computed(() => items.value)
+const visible = usePaneVisibility()
+let pendingList = false
 let listController: AbortController | null = null
 let monitorController: AbortController | null = null
 let monitoringRefresh = false
@@ -180,10 +182,15 @@ let disposed = false
 
 async function load(options: { reset?: boolean } = {}) {
   if (disposed) return
+  if (options.reset) offset.value = 0
+  if (!visible.value) {
+    pendingList = true
+    return
+  }
+  pendingList = false
   listController?.abort()
   const request = new AbortController()
   listController = request
-  if (options.reset) offset.value = 0
   loading.value = true
   error.value = ''
   try {
@@ -238,23 +245,28 @@ const refreshMonitor = createRevalidator(
       if (monitorController === request) monitorController = null
     }
   },
-  { intervalMs: 250, retryMs: 5000, enabled: () => !disposed && monitoringRefresh && isDocumentVisible() },
+  { intervalMs: 250, retryMs: 5000, enabled: () => !disposed && monitoringRefresh && visible.value },
 )
 
 const visibility = () => {
-  if (isDocumentVisible()) refreshMonitor.resume()
-  else {
+  if (visible.value) {
+    if (pendingList) void load()
+    refreshMonitor.resume()
+  } else {
     refreshMonitor.pause()
     monitorController?.abort()
+    if (listController) {
+      pendingList = true
+      listController.abort()
+    }
   }
 }
-document.addEventListener('visibilitychange', visibility)
+watch(visible, visibility, { flush: 'sync' })
 onScopeDispose(() => {
   disposed = true
   listController?.abort()
   monitorController?.abort()
   refreshMonitor.dispose()
-  document.removeEventListener('visibilitychange', visibility)
 })
 
 function search() {

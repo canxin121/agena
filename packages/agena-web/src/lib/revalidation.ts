@@ -51,7 +51,15 @@ export function createRevalidator(
     scheduledAt = Infinity
     flight = Promise.resolve()
       .then(() => {
-        if (!disposed) return read()
+        if (disposed) return
+        // A pane can hide after refresh() queues this microtask. Retain the
+        // invalidation for resume instead of dispatching an invisible read.
+        if (options.enabled?.() === false) {
+          pending = true
+          pendingAt = Math.min(pendingAt, Date.now())
+          return
+        }
+        return read()
       })
       .then(
         () => {

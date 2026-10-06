@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import AttachmentPicker from '@/components/chat/AttachmentPicker.vue'
 import type { AttachedFile, PendingAttachment } from '@/pages/chat/useChatAttachments'
 import type { ComposerInput, ComposerSegment } from '@/pages/chat/composerInput'
+import { composerDomSelection } from '@/pages/chat/composerDomSelection'
 
 const props = defineProps<{
   draft: string
@@ -30,6 +31,8 @@ const { t } = useI18n()
 const ATTACHMENT_CHARACTER = '\ufffc'
 let savedStart = 0
 let savedEnd = 0
+let reportedText: string | undefined
+let selectionCache: { startNode: Node; endNode: Node; start: number; end: number } | undefined
 
 function readSegments(): ComposerSegment[] {
   const segments: ComposerSegment[] = []
@@ -102,22 +105,21 @@ function selectionOffsets(): [number, number] {
     return [savedStart, savedEnd]
   }
   const range = selection.getRangeAt(0)
-  const offset = (node: Node, position: number) => {
-    const prefix = document.createRange()
-    prefix.setStart(root, 0)
-    prefix.setEnd(node, position)
-    const fragment = prefix.cloneContents()
-    let length = 0
-    const count = (item: Node) => {
-      if (item.nodeType === Node.TEXT_NODE) length += item.textContent?.length ?? 0
-      else if (item instanceof HTMLElement && (item.dataset.attachmentId || item.tagName === 'BR')) length += 1
-      else for (const child of item.childNodes) count(child)
-    }
-    for (const child of fragment.childNodes) count(child)
-    return length
+  if (
+    selectionCache?.startNode === range.startContainer &&
+    selectionCache.endNode === range.endContainer &&
+    selectionCache.start === range.startOffset &&
+    selectionCache.end === range.endOffset
+  ) {
+    return [savedStart, savedEnd]
   }
-  savedStart = offset(range.startContainer, range.startOffset)
-  savedEnd = offset(range.endContainer, range.endOffset)
+  ;[savedStart, savedEnd] = composerDomSelection(root, range)
+  selectionCache = {
+    startNode: range.startContainer,
+    endNode: range.endContainer,
+    start: range.startOffset,
+    end: range.endOffset,
+  }
   return [savedStart, savedEnd]
 }
 function boundaryAt(position: number): { node: Node; offset: number } {
@@ -144,6 +146,7 @@ function boundaryAt(position: number): { node: Node; offset: number } {
   return visit(root) ?? { node: root, offset: root.childNodes.length }
 }
 function setSelectionRange(start: number, end: number) {
+  selectionCache = undefined
   const root = editorEl.value
   const length = editorValue().length
   savedStart = Math.max(0, Math.min(start, length))
@@ -159,13 +162,23 @@ function setSelectionRange(start: number, end: number) {
   selection?.addRange(range)
 }
 function notifyInput(notifyRemoved = true) {
+  selectionCache = undefined
+  const segments = readSegments()
   const known = new Set([...props.attachedFiles, ...props.pendingAttachments].map((file) => file.id))
   const present = new Set(
-    readSegments()
+    segments
       .filter((part): part is { type: 'attachment'; id: string } => part.type === 'attachment')
       .map((part) => part.id),
   )
-  emit('update:draft', plainText())
+  reportedText = segments
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('')
+  emit('update:draft', reportedText)
+  const reported = reportedText
+  void nextTick(() => {
+    if (reportedText === reported) reportedText = undefined
+  })
   if (notifyRemoved) for (const id of known) if (!present.has(id)) emit('removeAttachment', id)
   emit('draftInput')
 }
@@ -274,6 +287,7 @@ function insertChip(id: string) {
   emit('update:draft', plainText())
 }
 function syncAttachments() {
+  selectionCache = undefined
   const root = editorEl.value
   if (!root) return
   const known = new Set([...props.attachedFiles, ...props.pendingAttachments].map((file) => file.id))
@@ -349,6 +363,7 @@ function handleBeforeInput(event: InputEvent) {
   }
 }
 function handleInput() {
+  selectionCache = undefined
   normalizeBlocks()
   if (editorEl.value?.childNodes.length === 1 && editorEl.value.firstChild instanceof HTMLBRElement)
     editorEl.value.replaceChildren()
@@ -361,7 +376,9 @@ function rememberSelection() {
 watch(
   () => props.draft,
   (text) => {
-    if (!editorEl.value || plainText() === text) return
+    if (!editorEl.value || reportedText === text || plainText() === text) return
+    selectionCache = undefined
+    reportedText = undefined
     editorEl.value.replaceChildren(...(text ? [document.createTextNode(text)] : []))
     savedStart = savedEnd = text.length
     syncAttachments()

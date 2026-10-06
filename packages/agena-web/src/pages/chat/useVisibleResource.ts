@@ -1,5 +1,6 @@
 import { onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue'
 import { isDocumentVisible } from '../../lib/backgroundReads'
+import { useWorkspacePaneContext } from '../../app/workspace/workspacePaneContext'
 import {
   canReuseResource,
   captureResourceObservation,
@@ -21,6 +22,8 @@ export function useVisibleResource<T>(options: {
     observe: (observation: ReturnType<typeof captureResourceObservation>) => void,
   ) => Promise<T>
 }) {
+  const pane = useWorkspacePaneContext()
+  const visible = () => isDocumentVisible() && (!pane || pane.isVisible.value)
   const data = shallowRef<T | null>(null)
   const error = ref('')
   const loading = ref(false)
@@ -48,14 +51,14 @@ export function useVisibleResource<T>(options: {
 
   function schedule(delay: number) {
     clearTimeout(timer)
-    if (!disposed && options.key.value && isDocumentVisible())
+    if (!disposed && options.key.value && visible())
       timer = setTimeout(() => {
         void refresh()
       }, delay)
   }
 
   async function refresh(force = false) {
-    if (disposed || !options.key.value || !isDocumentVisible()) return
+    if (disposed || !options.key.value || !visible()) return
     pendingForce ||= force
     if (controller) {
       pendingRefresh = true
@@ -155,10 +158,11 @@ export function useVisibleResource<T>(options: {
     { immediate: true, flush: 'sync' },
   )
   const visibility = () => {
-    if (!isDocumentVisible()) cancel()
+    if (!visible()) cancel()
     else void refresh()
   }
   document.addEventListener('visibilitychange', visibility)
+  if (pane) watch(pane.isVisible, visibility, { flush: 'sync' })
   onBeforeUnmount(() => {
     disposed = true
     cancel()

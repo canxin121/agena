@@ -36,7 +36,9 @@ import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 import { apiUrl } from '@/lib/api'
-import { isDocumentVisible, limitBackgroundReads } from '@/lib/backgroundReads'
+import { limitBackgroundReads } from '@/lib/backgroundReads'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
+import { useVisibleSubscription } from '@/composables/useVisibleSubscription'
 import { useChatStore } from '@/stores/chat'
 import { useDirectoryStore } from '@/stores/directory'
 import { useToastsStore } from '@/stores/toasts'
@@ -49,6 +51,8 @@ const toasts = useToastsStore()
 const chat = useChatStore()
 const preview = useWorkspacePreviewStore()
 const directoryStore = useDirectoryStore()
+const visible = usePaneVisibility()
+useVisibleSubscription(() => preview.retainLiveSessions(), visible)
 
 const currentDirectory = computed(() => String(directoryStore.currentDirectory || '').trim())
 const currentChatSessionId = computed(() => String(chat.selectedSessionId || '').trim())
@@ -107,7 +111,6 @@ const HEALTH_TIMEOUT_MS = 3_500
 const healthBySessionId = ref<Record<string, SessionHealthEntry>>({})
 const healthInFlight = new Set<string>()
 const healthControllers = new Map<string, AbortController>()
-let releaseLiveSessions: (() => void) | undefined
 
 const createPreviewIdNorm = computed(() => String(createPreviewId.value || '').trim())
 const createPreviewIdValid = computed(() => /^[A-Za-z0-9_-]+$/.test(createPreviewIdNorm.value))
@@ -227,7 +230,7 @@ function sessionDotLabel(session: WorkspacePreviewSession): string {
 }
 
 async function probeSessionHealth(session: WorkspacePreviewSession) {
-  if (!isDocumentVisible()) return
+  if (!visible.value) return
   const sessionId = String(session.id || '').trim()
   if (!sessionId) return
   const state = normalizeSessionState(session.state)
@@ -291,7 +294,7 @@ async function probeSessionHealth(session: WorkspacePreviewSession) {
         }),
       controller.signal,
     )
-    if (controller.signal.aborted || !isDocumentVisible()) return
+    if (controller.signal.aborted || !visible.value) return
     const ok = resp.ok || resp.status === 304
     setSessionHealth(sessionId, {
       state: ok ? 'ok' : 'error',
@@ -300,7 +303,7 @@ async function probeSessionHealth(session: WorkspacePreviewSession) {
       failures: ok ? 0 : (prev?.failures ?? 0) + 1,
     })
   } catch {
-    if (isDocumentVisible() && healthControllers.get(sessionId) === controller)
+    if (visible.value && healthControllers.get(sessionId) === controller)
       setSessionHealth(sessionId, {
         state: 'error',
         checkedAt: Date.now(),
@@ -952,13 +955,11 @@ watch(currentDirectoryNorm, (next, prev) => {
 })
 
 onMounted(() => {
-  releaseLiveSessions = preview.retainLiveSessions()
   probeVisibleSessions()
-  document.addEventListener('visibilitychange', onHealthVisibility)
 })
 
 function onHealthVisibility() {
-  if (isDocumentVisible()) probeVisibleSessions()
+  if (visible.value) probeVisibleSessions()
   else {
     for (const controller of healthControllers.values()) controller.abort()
     for (const [id, entry] of Object.entries(healthBySessionId.value))
@@ -967,10 +968,9 @@ function onHealthVisibility() {
 }
 
 onBeforeUnmount(() => {
-  releaseLiveSessions?.()
-  document.removeEventListener('visibilitychange', onHealthVisibility)
   clearSessionHealth()
 })
+watch(visible, onHealthVisibility, { flush: 'sync' })
 
 function selectSession(sessionId: string) {
   preview.selectSession(sessionId)

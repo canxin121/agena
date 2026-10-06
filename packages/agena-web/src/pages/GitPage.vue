@@ -56,6 +56,7 @@ import { useToastsStore } from '@/stores/toasts'
 import { gitRepoScopedStorageKey, localStorageKeys } from '@/lib/persistence/storageKeys'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 const props = withDefaults(
   defineProps<{
@@ -76,6 +77,9 @@ const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
 const workspaceNavigation = useWorkspaceNavigation()
+const workspacePane = useWorkspacePaneContext()
+const isVisibleWorkspacePane = computed(() => !workspacePane || workspacePane.isVisible.value)
+const isGitVisible = () => isVisibleWorkspacePane.value && isDocumentVisible()
 const isEmbeddedWorkspacePane = computed(() => props.embedded || isEmbeddedWorkspacePaneContext(route.query))
 
 const projectRoot = computed(() => directoryStore.currentDirectory)
@@ -492,6 +496,7 @@ const commitOps = useGitCommitOps({
 })
 
 useGitAutoFetch({
+  isVisible: isVisibleWorkspacePane,
   repoRoot,
   gitReady,
   repoBusy: auth.repoBusy,
@@ -800,7 +805,7 @@ const watchRefreshQueue = createRevalidator(
       await refreshOpenDiffFromWatch(directory, owner, controller.signal)
       for (const [scope, expanded, count] of visibleWatchScopes()) {
         controller.signal.throwIfAborted()
-        if (owner !== watchGeneration || root.value !== directory || !isDocumentVisible()) return
+        if (owner !== watchGeneration || root.value !== directory || !isGitVisible()) return
         if (!dirtyWatchScopes.has(scope) || !expanded) continue
         dirtyWatchScopes.delete(scope)
         try {
@@ -815,7 +820,7 @@ const watchRefreshQueue = createRevalidator(
       if (watchReadController === controller) watchReadController = null
     }
   },
-  { intervalMs: 250, retryMs: 5000, enabled: () => isDocumentVisible() && gitReady.value },
+  { intervalMs: 250, retryMs: 5000, enabled: () => isGitVisible() && gitReady.value },
 )
 
 async function refreshOpenDiffFromWatch(directory: string, owner: number, signal: AbortSignal) {
@@ -837,7 +842,7 @@ async function refreshOpenDiffFromWatch(directory: string, owner: number, signal
       owner === watchGeneration &&
       root.value === directory &&
       selectedFile.value === path &&
-      isDocumentVisible()
+      isGitVisible()
     ) {
       await refreshDiff()
       diff = false
@@ -1126,6 +1131,7 @@ async function trustUnsafeRepo() {
 }
 
 async function load() {
+  if (!isGitVisible()) return
   const seq = ++loadSeq
   const dir = root.value
   error.value = null
@@ -1355,8 +1361,11 @@ watch(
  */
 function syncWatch() {
   const nextDir = (root.value || '').trim()
-  const visible = isDocumentVisible()
-  if (visible && repoReadController.signal.aborted) repoReadController = new AbortController()
+  const visible = isGitVisible()
+  if (visible && repoReadController.signal.aborted) {
+    repoReadController = new AbortController()
+    void load()
+  }
   if (!gitReady.value || !nextDir || !visible) {
     stopWatch()
     watchRefreshQueue.pause()
@@ -1368,6 +1377,8 @@ function syncWatch() {
   startWatch(nextDir)
   watchRefreshQueue.resume()
 }
+
+watch(isVisibleWorkspacePane, syncWatch)
 
 watch(
   () => [root.value, gitReady.value, selectedFile.value] as const,

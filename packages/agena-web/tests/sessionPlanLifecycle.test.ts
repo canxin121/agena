@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { createRenderer, defineComponent, nextTick, ref } from 'vue'
+import { computed, createRenderer, defineComponent, nextTick, ref } from 'vue'
+import { workspacePaneContextKey, type WorkspacePaneContext } from '../src/app/workspace/workspacePaneContext'
 import { useSessionPlan } from '../src/pages/chat/useSessionPlan'
 import { noteResourceVersion } from '../src/lib/resourceSync'
 import type { JsonValue } from '../src/types/json'
@@ -65,6 +66,7 @@ test('inline plans coalesce refreshes, pause hidden polling, and retain only the
   const session = ref<string | null>('7')
   const busy = ref(false)
   const change = ref(0)
+  const paneVisible = ref(false)
   const calls: Array<{
     session: string | null
     signal: AbortSignal
@@ -84,6 +86,7 @@ test('inline plans coalesce refreshes, pause hidden polling, and retain only the
       },
     }),
   )
+  app.provide(workspacePaneContextKey, { isVisible: computed(() => paneVisible.value) } as WorkspacePaneContext)
   const response = (title: string) => ({
     output_text: `Revision: v1\n# ${title}`,
     payload: { plan: { title, autorun: false } },
@@ -91,6 +94,10 @@ test('inline plans coalesce refreshes, pause hidden polling, and retain only the
   try {
     app.mount({})
     await settle()
+    expect(calls.length).toBe(0)
+    paneVisible.value = true
+    await settle()
+    await advance(180)
     expect(calls.length).toBe(1)
     state.expanded.value = true
     calls[0]!.resolve(response('First'))

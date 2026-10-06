@@ -18,14 +18,15 @@ import {
 } from '@/lib/runtimeSettings'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 
 type SettingKind = 'text' | 'number' | 'boolean' | 'select'
 type SettingOption = { value: string; label: string; description?: string }
 
-const booleanOptions: SettingOption[] = [
+const booleanOptions = computed<SettingOption[]>(() => [
   { value: 'true', label: st('Enabled') },
   { value: 'false', label: st('Disabled') },
-]
+])
 
 const props = withDefaults(
   defineProps<{
@@ -54,7 +55,7 @@ const props = withDefaults(
     monospace: false,
     allowCustom: false,
     includeEmpty: false,
-    emptyLabel: st('No value'),
+    emptyLabel: '',
     targetLayer: 'global',
     reload: true,
     disabled: false,
@@ -74,7 +75,12 @@ const error = ref('')
 const sources = ref<RuntimeSettingsReadBundle | null>(null)
 const localValue = ref<string | number | boolean>(props.defaultValue)
 const savedValue = ref<string | number | boolean>(props.defaultValue)
+const visible = usePaneVisibility()
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
+let readSequence = 0
+let fieldIdentity = 0
+let pendingRead = true
+let readController: AbortController | undefined
 
 const selectOptions = computed<SettingOption[]>(() => {
   if (props.kind !== 'select') return props.options
@@ -116,18 +122,32 @@ function syncLocal() {
 
 async function refresh() {
   if (!props.path.trim()) return
+  if (!visible.value) {
+    pendingRead = true
+    return
+  }
+  pendingRead = false
+  const sequence = ++readSequence
+  readController?.abort()
+  const controller = new AbortController()
+  readController = controller
   loading.value = true
   error.value = ''
   try {
-    const next = await readRuntimeSettingSources(props.path)
+    const next = await readRuntimeSettingSources(props.path, controller.signal)
+    if (controller.signal.aborted || sequence !== readSequence) return
     sources.value = next
     syncLocal()
     emit('loaded', next)
   } catch (reason) {
+    if (controller.signal.aborted || sequence !== readSequence) return
     error.value = reason instanceof Error ? reason.message : String(reason)
     emit('error', error.value)
   } finally {
-    loading.value = false
+    if (sequence === readSequence) {
+      readController = undefined
+      loading.value = false
+    }
   }
 }
 
@@ -143,6 +163,10 @@ function serializedValue(): JsonValue {
 async function save() {
   if (busy.value || !dirty.value) return
   clearAutoSaveTimer()
+  const identity = fieldIdentity
+  const path = props.path
+  const layer = props.targetLayer
+  const reload = props.reload
   saving.value = true
   error.value = ''
   try {
@@ -153,36 +177,49 @@ async function save() {
       (props.kind === 'select' && props.includeEmpty && !String(localValue.value || '').trim()) ||
       (props.kind === 'boolean' && props.includeEmpty && localValue.value === '')
     if (clearSelectedValue) {
-      await deleteRuntimeSetting(props.path, { reload: props.reload }, props.targetLayer)
+      await deleteRuntimeSetting(path, { reload }, layer)
+      if (identity !== fieldIdentity) return
       await refresh()
+      if (identity !== fieldIdentity) return
       emit('saved', settingValue(effectiveResponse.value, props.defaultValue) as JsonValue)
       return
     }
     const value = serializedValue()
-    await setRuntimeSetting(props.path, value, { reload: props.reload }, props.targetLayer)
+    await setRuntimeSetting(path, value, { reload }, layer)
+    if (identity !== fieldIdentity) return
     await refresh()
+    if (identity !== fieldIdentity) return
     emit('saved', value)
   } catch (reason) {
+    if (identity !== fieldIdentity) return
     error.value = reason instanceof Error ? reason.message : String(reason)
     emit('error', error.value)
   } finally {
-    saving.value = false
+    if (identity === fieldIdentity) saving.value = false
   }
 }
 
 async function clearOverride() {
   if (busy.value || !hasOverride.value) return
+  clearAutoSaveTimer()
+  const identity = fieldIdentity
+  const path = props.path
+  const layer = props.targetLayer
+  const reload = props.reload
   saving.value = true
   error.value = ''
   try {
-    await deleteRuntimeSetting(props.path, { reload: props.reload }, props.targetLayer)
+    await deleteRuntimeSetting(path, { reload }, layer)
+    if (identity !== fieldIdentity) return
     await refresh()
+    if (identity !== fieldIdentity) return
     emit('saved', settingValue(effectiveResponse.value, props.defaultValue) as JsonValue)
   } catch (reason) {
+    if (identity !== fieldIdentity) return
     error.value = reason instanceof Error ? reason.message : String(reason)
     emit('error', error.value)
   } finally {
-    saving.value = false
+    if (identity === fieldIdentity) saving.value = false
   }
 }
 
@@ -237,8 +274,35 @@ function effectiveLabel(response: RuntimeSettingReadResponse | null): string {
 }
 
 watch(
-  () => props.path,
-  () => void refresh(),
+  () => [props.path, props.targetLayer],
+  () => {
+    clearAutoSaveTimer()
+    fieldIdentity++
+    readSequence++
+    readController?.abort()
+    readController = undefined
+    loading.value = saving.value = false
+    sources.value = null
+    localValue.value = savedValue.value = props.defaultValue
+    error.value = ''
+    void refresh()
+  },
+  { flush: 'sync' },
+)
+watch(
+  visible,
+  (shown) => {
+    if (shown) {
+      if (pendingRead) void refresh()
+    } else if (readController) {
+      pendingRead = true
+      readSequence++
+      readController.abort()
+      readController = undefined
+      loading.value = false
+    }
+  },
+  { flush: 'sync' },
 )
 watch(
   () => props.defaultValue,
@@ -248,7 +312,12 @@ watch(
 )
 
 onMounted(() => void refresh())
-onBeforeUnmount(clearAutoSaveTimer)
+onBeforeUnmount(() => {
+  clearAutoSaveTimer()
+  fieldIdentity++
+  readSequence++
+  readController?.abort()
+})
 </script>
 
 <template>
@@ -290,7 +359,7 @@ onBeforeUnmount(clearAutoSaveTimer)
         :placeholder="placeholder || $st('Select value')"
         :search-placeholder="placeholder || label"
         :include-empty="true"
-        :empty-label="emptyLabel"
+        :empty-label="emptyLabel || $st('No value')"
         :disabled="busy"
         @update:model-value="onBooleanSelect"
       />
@@ -302,7 +371,7 @@ onBeforeUnmount(clearAutoSaveTimer)
         :placeholder="placeholder || $st('Select value')"
         :search-placeholder="placeholder || label"
         :include-empty="includeEmpty"
-        :empty-label="emptyLabel"
+        :empty-label="emptyLabel || $st('No value')"
         :allow-custom="allowCustom"
         :disabled="busy"
         :monospace="monospace"

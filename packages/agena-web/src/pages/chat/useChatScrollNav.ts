@@ -1,6 +1,7 @@
 import { computed, nextTick, ref, watch, type Ref } from 'vue'
 
 import { usePinnedScroll } from '@/composables/chat/usePinnedScroll'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 import { timelineCurrentOrdinal, timelineTotal, type NavigableMessage } from './timelineOrdinal'
 
@@ -27,6 +28,7 @@ export function useChatScrollNav(opts: {
   composerDividerHitPx: number
 }) {
   const { chat, ui, composerFullscreenActive, composerShellHeight, composerDividerHitPx } = opts
+  const pane = useWorkspacePaneContext()
 
   const loadingOlder = computed(() => chat.selectedHistory.loading)
 
@@ -114,7 +116,7 @@ export function useChatScrollNav(opts: {
   }
 
   function messageElId(messageId: string) {
-    return `msg-${messageId}`
+    return `${pane?.windowId.value || 'page'}-msg-${messageId}`
   }
 
   function scrollToMessageId(messageId: string, behavior: ScrollBehavior = 'smooth') {
@@ -172,29 +174,30 @@ export function useChatScrollNav(opts: {
 
       // Choose the message closest to the viewport center.
       // This stays stable with scrollIntoView({block:'center'}) and avoids index "flipping".
-      const targetY = el.scrollTop + el.clientHeight / 2
-      let bestIdx = 0
-      let bestDist = Number.POSITIVE_INFINITY
-
-      for (let i = 0; i < ids.length; i += 1) {
-        const id = ids[i]
-        if (!id) continue
-        const node = document.getElementById(messageElId(id)) as HTMLElement | null
-        if (!node) continue
-        const center = node.offsetTop + node.offsetHeight / 2
-        const dist = Math.abs(center - targetY)
-        if (dist < bestDist) {
-          bestDist = dist
-          bestIdx = i
-        }
+      const targetY = el.getBoundingClientRect().top + el.clientHeight / 2
+      const center = (i: number) => {
+        const node = document.getElementById(messageElId(ids[i]!))
+        if (!node) return Infinity
+        const bounds = node.getBoundingClientRect()
+        return bounds.top + bounds.height / 2
       }
-
-      navIndex.value = bestIdx
+      // User anchors follow transcript order. Read O(log N) rectangles rather
+      // than forcing every retained message to lay out on each scroll frame.
+      let low = 0
+      let high = ids.length - 1
+      while (low < high) {
+        const middle = (low + high) >>> 1
+        if (center(middle) < targetY) low = middle + 1
+        else high = middle
+      }
+      navIndex.value = low > 0 && Math.abs(center(low - 1) - targetY) < Math.abs(center(low) - targetY) ? low - 1 : low
     })
   }
 
   const pinned = usePinnedScroll({
     bottomThresholdPx: 140,
+    isVisible: () => !pane || pane.isVisible.value,
+    sessionId: () => chat.selectedSessionId,
     onScroll: () => {
       // scrollEl ref is provided by the composable, but we only need its current element.
       updateNavIndexFromScroll(scrollEl.value)

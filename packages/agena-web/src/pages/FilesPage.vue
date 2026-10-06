@@ -142,6 +142,7 @@ const toasts = useToastsStore()
 const directoryStore = useDirectoryStore()
 const ui = useUiStore()
 const workspacePane = useWorkspacePaneContext()
+const isVisibleWorkspacePane = computed(() => !workspacePane || workspacePane.isVisible.value)
 const workspaceNavigation = useWorkspaceNavigation()
 const route = useRoute()
 const router = useRouter()
@@ -4063,7 +4064,11 @@ const filesystemRefresh = createRevalidator(
       throw error
     }
   },
-  { intervalMs: 250, retryMs: 5000, enabled: () => pageMounted && document.visibilityState !== 'hidden' },
+  {
+    intervalMs: 250,
+    retryMs: 5000,
+    enabled: () => pageMounted && isVisibleWorkspacePane.value && document.visibilityState !== 'hidden',
+  },
 )
 
 function invalidateFilesystem() {
@@ -4072,7 +4077,7 @@ function invalidateFilesystem() {
 }
 
 function watchFilesystem() {
-  if (!pageMounted || !root.value || document.visibilityState === 'hidden') {
+  if (!pageMounted || !root.value || !isVisibleWorkspacePane.value || document.visibilityState === 'hidden') {
     filesystemStream?.close()
     filesystemStream = null
     filesystemWatchIdentity = ''
@@ -4113,6 +4118,7 @@ function watchFilesystem() {
 }
 
 watch(() => [root.value, selectedFile.value?.path, [...expandedDirs.value].sort().join('\n')], watchFilesystem)
+watch(isVisibleWorkspacePane, watchFilesystem)
 watch(
   () => directoryStore.fsEventSeq,
   () => {

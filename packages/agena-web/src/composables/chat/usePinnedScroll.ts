@@ -32,6 +32,8 @@ export function usePinnedScroll(opts: {
   canLoadOlder?: () => boolean
   // Should prepend older messages; returns true if any were loaded.
   loadOlder?: () => Promise<boolean>
+  isVisible?: () => boolean
+  sessionId?: () => string | null
 }) {
   const scrollEl = ref<HTMLDivElement | null>(null)
   const contentEl = ref<HTMLDivElement | null>(null)
@@ -71,6 +73,10 @@ export function usePinnedScroll(opts: {
   let followResizeObserver: ResizeObserver | null = null
   let followResizeUnlockRaf: number | null = null
   let followResizeLocked = false
+  const isVisible = () => opts.isVisible?.() ?? true
+  let visibilityGeneration = 0
+  let pausedPosition: { sessionId: string | null; top: number; key: string; offset: number; pinned: boolean } | null =
+    null
 
   function requestInitialScroll(sessionId: string | null | undefined) {
     historyLoadGeneration += 1
@@ -87,6 +93,7 @@ export function usePinnedScroll(opts: {
   }
 
   function scrollToBottom(behavior: ScrollBehavior = 'auto') {
+    if (!isVisible()) return
     const scroller = scrollEl.value
     if (!scroller) return
     // Prefer an explicit anchor to avoid scrollHeight races.
@@ -99,16 +106,17 @@ export function usePinnedScroll(opts: {
   }
 
   function scheduleScrollToBottom() {
-    if (scrollRaf) return
+    if (!isVisible() || scrollRaf) return
     scrollRaf = window.requestAnimationFrame(async () => {
       scrollRaf = null
-      if (!isAtBottom.value) return
+      if (!isVisible() || !isAtBottom.value) return
       await nextTick()
       scrollToBottom('auto')
     })
   }
 
   function pinToBottomNow() {
+    if (!isVisible()) return
     if (!isAtBottom.value) return
     if (followResizeLocked) return
     followResizeLocked = true
@@ -119,26 +127,83 @@ export function usePinnedScroll(opts: {
     })
   }
 
+  function syncFollowResizeObserver() {
+    followResizeObserver?.disconnect()
+    followResizeObserver = null
+
+    const scroller = scrollEl.value
+    const content = contentEl.value
+    if (!isVisible() || !scroller || !content) return
+
+    followResizeObserver = new ResizeObserver(() => {
+      pinToBottomNow()
+    })
+    followResizeObserver.observe(scroller)
+    followResizeObserver.observe(content)
+  }
+
+  watch(() => [scrollEl.value, contentEl.value] as const, syncFollowResizeObserver, { flush: 'post', immediate: true })
+
   watch(
-    () => [scrollEl.value, contentEl.value] as const,
-    () => {
-      followResizeObserver?.disconnect()
-      followResizeObserver = null
-
+    isVisible,
+    async (visible, previous) => {
+      const generation = ++visibilityGeneration
       const scroller = scrollEl.value
-      const content = contentEl.value
-      if (!scroller || !content) return
-
-      followResizeObserver = new ResizeObserver(() => {
-        pinToBottomNow()
-      })
-      followResizeObserver.observe(scroller)
-      followResizeObserver.observe(content)
+      if (!visible) {
+        // Capture before Vue removes the hidden pane's message subtree. Keep
+        // only its key/coordinates so a paused tab retains no detached DOM.
+        if (previous && scroller) {
+          const anchor = captureTranscriptScrollAnchor(scroller)
+          pausedPosition = {
+            sessionId: opts.sessionId?.() ?? null,
+            top: scroller.scrollTop,
+            key: anchor.element?.dataset.transcriptKey ?? '',
+            offset: anchor.offset,
+            pinned: isAtBottom.value,
+          }
+        }
+        initialScrollNonce++
+        historyLoadGeneration++
+        historyLoadInFlight = false
+        if (scrollRaf) window.cancelAnimationFrame(scrollRaf)
+        scrollRaf = null
+        if (followResizeUnlockRaf) window.cancelAnimationFrame(followResizeUnlockRaf)
+        followResizeUnlockRaf = null
+        followResizeLocked = false
+        syncFollowResizeObserver()
+        return
+      }
+      await nextTick()
+      if (generation !== visibilityGeneration || !isVisible() || scrollEl.value !== scroller) return
+      const saved = pausedPosition
+      pausedPosition = null
+      if (
+        scroller &&
+        saved &&
+        saved.sessionId === (opts.sessionId?.() ?? null) &&
+        !pendingInitialScrollSessionId.value
+      ) {
+        isAtBottom.value = saved.pinned
+        suppressAutoLoadOlderUntil.value = Date.now() + 1400
+        if (saved.pinned) scrollToBottom('auto')
+        else {
+          scroller.scrollTop = saved.top
+          const anchor = Array.from(scroller.querySelectorAll<HTMLElement>('[data-transcript-key]')).find(
+            (element) => element.dataset.transcriptKey === saved.key,
+          )
+          if (anchor)
+            scroller.scrollTop +=
+              anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top - saved.offset
+        }
+      }
+      syncFollowResizeObserver()
+      if (pendingInitialScrollSessionId.value) void scrollToBottomOnceAfterLoad(pendingInitialScrollSessionId.value)
     },
-    { flush: 'post', immediate: true },
+    { flush: 'sync' },
   )
 
   async function loadOlderAndPreserveViewport(): Promise<boolean> {
+    if (!isVisible()) return false
     const el = scrollEl.value
     if (!el) return false
     if (!opts.loadOlder) return false
@@ -154,9 +219,9 @@ export function usePinnedScroll(opts: {
     isAtBottom.value = false
     try {
       const ok = await opts.loadOlder()
-      if (!ok || generation !== historyLoadGeneration || scrollEl.value !== el) return false
+      if (!ok || !isVisible() || generation !== historyLoadGeneration || scrollEl.value !== el) return false
       await nextTick()
-      if (generation !== historyLoadGeneration || scrollEl.value !== el) return false
+      if (!isVisible() || generation !== historyLoadGeneration || scrollEl.value !== el) return false
       restoreTranscriptScrollAnchor(el, anchor)
       return true
     } finally {
@@ -184,6 +249,7 @@ export function usePinnedScroll(opts: {
   // shorter than the viewport and the browser cannot emit a meaningful
   // scrollTop change at the boundary.
   function handleWheel(event: WheelEvent) {
+    if (!isVisible()) return
     if (event.deltaY >= 0) return
     autoLoadOlderUnlocked.value = true
     const el = scrollEl.value
@@ -193,7 +259,7 @@ export function usePinnedScroll(opts: {
   }
 
   function handleScroll() {
-    if (!scrollEl.value) return
+    if (!isVisible() || !scrollEl.value) return
     isAtBottom.value = isNearBottomNow()
     if (!autoLoadOlderUnlocked.value && !isAtBottom.value) {
       autoLoadOlderUnlocked.value = true
@@ -203,6 +269,7 @@ export function usePinnedScroll(opts: {
   }
 
   async function scrollToBottomOnceAfterLoad(sessionId: string) {
+    if (!isVisible()) return
     const sid = (sessionId || '').trim()
     if (!sid) return
     if (pendingInitialScrollSessionId.value !== sid) return
@@ -212,12 +279,12 @@ export function usePinnedScroll(opts: {
     // We hide the list while `pendingInitialScrollSessionId` is set; do a stable
     // bottom landing before revealing to avoid entry jitter.
     await nextTick()
-    if (nonce !== initialScrollNonce) return
+    if (!isVisible() || nonce !== initialScrollNonce) return
     scrollToBottom('auto')
 
     // One extra frame absorbs immediate reflows (font swap, markdown highlight).
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
-    if (nonce !== initialScrollNonce) return
+    if (!isVisible() || nonce !== initialScrollNonce) return
     scrollToBottom('auto')
 
     if (pendingInitialScrollSessionId.value !== sid) return
@@ -227,6 +294,9 @@ export function usePinnedScroll(opts: {
   }
 
   onBeforeUnmount(() => {
+    visibilityGeneration++
+    initialScrollNonce++
+    pausedPosition = null
     if (scrollRaf) {
       window.cancelAnimationFrame(scrollRaf)
       scrollRaf = null

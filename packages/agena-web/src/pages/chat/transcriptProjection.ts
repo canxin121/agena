@@ -1,3 +1,4 @@
+import { computed, shallowRef, type ComputedRef, type ShallowRef } from 'vue'
 import type {
   MessageLike,
   MessagePartLike,
@@ -350,10 +351,9 @@ function displayFields(
   const presentedSummary = firstText(presented, ['summary'])
   if (kind === 'text' || kind === 'answer' || kind === 'text_segment' || kind === 'reasoning') {
     const body = transcriptPartText(part)
-    const firstLine = body
-      .split('\n')
-      .map((line) => line.trim())
-      .find(Boolean)
+    // Start at the first non-whitespace character. A leading greedy line
+    // matcher backtracks quadratically for a long whitespace-only response.
+    const firstLine = body.match(/\S[^\r\n]*/)?.[0].trim()
     return {
       title:
         presentedTitle ||
@@ -363,7 +363,7 @@ function displayFields(
     }
   }
   if (kind === 'operation') {
-    return { title: operationTitle(part), summary: operationSummary(part), copyText: operationCopyText(part) }
+    return { title: operationTitle(part), summary: operationSummary(part), copyText: '' }
   }
   if (kind === 'resource') {
     const labels = attachmentLabels(part)
@@ -433,7 +433,7 @@ function projectPart(
   const kind = classifyPart(part, answerPartId, role === 'assistant')
   const fields = displayFields(part, kind, labels)
   const toggleable = !['text', 'lifecycle'].includes(kind)
-  return {
+  const result: TranscriptDisplayPart = {
     key: `part:${id || compactJson(part).slice(0, 48)}`,
     id,
     kind,
@@ -444,6 +444,11 @@ function projectPart(
     toggleable,
     defaultExpanded: kind === 'answer' || kind === 'text',
   }
+  if (kind === 'operation') {
+    const copy = computed(() => operationCopyText(part))
+    Object.defineProperty(result, 'copyText', { enumerable: true, get: () => copy.value })
+  }
+  return result
 }
 
 function lifecyclePart(message: MessageLike, runIds: string[]): TranscriptDisplayPart | null {
@@ -497,7 +502,6 @@ export function foldAssistantMessages(messages: MessageLike[]): Array<{ message:
       if (message.folds?.length) {
         previous.message.folds = [...(previous.message.folds || []), ...message.folds]
       }
-      previous.message.parts.sort((a, b) => compareTranscriptIds(String(a.id || ''), String(b.id || '')))
       previous.runIds.push(id)
 
       // Adjacent assistant runs form one visual reply, but their lifecycle is
@@ -522,6 +526,9 @@ export function foldAssistantMessages(messages: MessageLike[]): Array<{ message:
     }
     folded.push({ message, runIds: id ? [id] : [] })
   }
+  for (const entry of folded) {
+    entry.message.parts.sort((a, b) => compareTranscriptIds(String(a.id || ''), String(b.id || '')))
+  }
   return folded
 }
 
@@ -529,9 +536,10 @@ function finalAnswerPartId(role: string, parts: MessagePartLike[]): string | nul
   if (role !== 'assistant') return null
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     const candidate = parts[index]
+    // Once an operation is encountered, no preceding text can be the answer.
+    if (candidate && durablePartKind(candidate) === 'tool_call') return null
     if (!candidate || durablePartKind(candidate) !== 'text' || !transcriptPartText(candidate).trim()) continue
-    const operationFollows = parts.slice(index + 1).some((later) => durablePartKind(later) === 'tool_call')
-    if (!operationFollows) return String(candidate.id || '') || null
+    return String(candidate.id || '') || null
   }
   return null
 }
@@ -539,15 +547,14 @@ function finalAnswerPartId(role: string, parts: MessagePartLike[]): string | nul
 export function projectTranscriptBlocks(
   messages: MessageLike[],
   options: TranscriptProjectionOptions = { showReasoning: true },
+  project: typeof projectPart = projectPart,
 ): RenderBlock[] {
   return foldAssistantMessages(messages || []).map(({ message, runIds }, messageIndex): MessageRenderBlock => {
     const role = text(message.info.role) || 'assistant'
-    const ordered = [...(message.parts || [])].sort((a, b) =>
-      compareTranscriptIds(String(a.id || ''), String(b.id || '')),
-    )
+    const ordered = message.parts
     const answerId = finalAnswerPartId(role, ordered)
     const displayParts = ordered
-      .map((part) => projectPart(part, role, answerId, options.labels))
+      .map((part) => project(part, role, answerId, options.labels))
       .filter((part) => {
         if (part.kind === 'reasoning') return options.showReasoning
         return true
@@ -566,4 +573,60 @@ export function projectTranscriptBlocks(
       hasActivity: displayParts.some((part) => part.kind !== 'text'),
     }
   })
+}
+
+/** Own reactive work per reply and part so a stream leaves older identities
+ * stable. Weak part keys and pruning reply keys bound the cache to this view.
+ * Nested computeds observe in-place edits as well as replaced parts.
+ */
+export function createTranscriptProjector(options: () => TranscriptProjectionOptions) {
+  const parts = new WeakMap<MessagePartLike, Map<string, ComputedRef<TranscriptDisplayPart>>>()
+  const replies = new Map<
+    MessageLike,
+    {
+      sources: ShallowRef<MessageLike[]>
+      block: ComputedRef<RenderBlock>
+    }
+  >()
+  const project: typeof projectPart = (part, role, answerId) => {
+    const kind = classifyPart(part, answerId, role === 'assistant')
+    const key = `${role}:${kind}`
+    let variants = parts.get(part)
+    if (!variants) parts.set(part, (variants = new Map()))
+    let result = variants.get(key)
+    if (!result) {
+      result = computed(() =>
+        projectPart(part, role, kind === 'answer' ? String(part.id || '') : null, options().labels),
+      )
+      variants.set(key, result)
+    }
+    return result.value
+  }
+  return (messages: MessageLike[]): RenderBlock[] => {
+    const groups: MessageLike[][] = []
+    for (const message of messages) {
+      const previous = groups.at(-1)
+      if (message.info.role === 'assistant' && previous?.[0]?.info.role === 'assistant') previous.push(message)
+      else groups.push([message])
+    }
+    const retained = new Set<MessageLike>()
+    const blocks = groups.map((group) => {
+      const first = group[0]!
+      retained.add(first)
+      let reply = replies.get(first)
+      if (!reply) {
+        const sources = shallowRef(group)
+        reply = { sources, block: computed(() => projectTranscriptBlocks(sources.value, options(), project)[0]!) }
+        replies.set(first, reply)
+      } else if (
+        reply.sources.value.length !== group.length ||
+        group.some((source, i) => source !== reply!.sources.value[i])
+      ) {
+        reply.sources.value = group
+      }
+      return reply.block.value
+    })
+    for (const first of replies.keys()) if (!retained.has(first)) replies.delete(first)
+    return blocks
+  }
 }

@@ -18,7 +18,7 @@ import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 
-const COMMON_PATHS = [
+const COMMON_PATHS = computed(() => [
   {
     value: 'providers',
     label: 'providers',
@@ -59,16 +59,16 @@ const COMMON_PATHS = [
     label: 'harnesses',
     description: st('Browser, shell, and editor harness catalogs.'),
   },
-]
+])
 
-const layerOptions = [
+const layerOptions = computed(() => [
   { value: 'global', label: st('Global layer'), description: st('Writes the server-wide Agena configuration file.') },
   {
     value: 'workspace',
     label: st('Workspace layer'),
     description: st('Writes the current workspace configuration file.'),
   },
-]
+])
 
 const toasts = useToastsStore()
 const targetLayer = ref<RuntimeSettingsLayer>('global')
@@ -214,7 +214,7 @@ watch(targetLayer, () => {
 })
 
 onMounted(() => {
-  settingPath.value = COMMON_PATHS[0]?.value || 'providers'
+  settingPath.value = COMMON_PATHS.value[0]?.value || 'providers'
   void load()
 })
 </script>

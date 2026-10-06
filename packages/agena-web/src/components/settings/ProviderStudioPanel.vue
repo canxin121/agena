@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RiAddLine, RiCloudLine, RiDeleteBinLine, RiEditLine, RiPlugLine, RiRefreshLine } from '@remixicon/vue'
 
 import SettingsDisclosureRow from '@/components/settings/SettingsDisclosureRow.vue'
@@ -16,6 +16,7 @@ import { confirmAction } from '@/lib/appConfirm'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import {
   normalizeProviderAdapterModels,
   type ProviderAdapterModelsRecord,
@@ -85,6 +86,7 @@ type ModelField = {
 }
 
 const toasts = useToastsStore()
+const visible = usePaneVisibility()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -138,7 +140,7 @@ let modelEditorGeneration = 0
 let catalogMatchGeneration = 0
 let catalogApplyGeneration = 0
 
-const authModeOptions = [
+const authModeOptions = computed(() => [
   {
     value: 'unset',
     label: st('Unset'),
@@ -147,36 +149,36 @@ const authModeOptions = [
   { value: 'none', label: st('None'), description: st('Provider does not require credentials.') },
   { value: 'api', label: 'API', description: st('API key or compatible API authentication.') },
   { value: 'credential', label: st('Credential'), description: st('Interactive or persisted OAuth credentials.') },
-]
+])
 
-const apiSubtypeOptions = [
+const apiSubtypeOptions = computed(() => [
   { value: 'custom', label: st('Custom API'), description: st('OpenAI-compatible, Anthropic, or Gemini endpoints.') },
   { value: 'cline_api', label: st('Cline API'), description: st('Cline-managed model service.') },
   { value: 'gitlab_api', label: st('GitLab API'), description: st('GitLab model API using an API key.') },
   { value: 'bedrock_sigv4', label: st('Bedrock SigV4'), description: st('AWS Bedrock signed requests.') },
-]
+])
 
-const credentialSubtypeOptions = [
+const credentialSubtypeOptions = computed(() => [
   { value: 'openai_chatgpt', label: st('OpenAI ChatGPT'), description: st('ChatGPT/Codex OAuth credentials.') },
   { value: 'github_copilot', label: st('GitHub Copilot'), description: st('GitHub Copilot device authentication.') },
   { value: 'gitlab', label: st('GitLab'), description: st('GitLab OAuth credentials.') },
   { value: 'google_adc', label: st('Google ADC'), description: st('Google Application Default Credentials.') },
   { value: 'sap_ai_core', label: st('SAP AI Core'), description: st('SAP AI Core service key.') },
-]
+])
 
-const loginKindOptions = [
+const loginKindOptions = computed(() => [
   { value: 'Browser', label: st('Browser'), description: st('Open a browser-based authorization flow.') },
   { value: 'Device', label: st('Device'), description: st('Use a device-code flow in the terminal or browser.') },
-]
+])
 
-const secretSourceOptions = [
+const secretSourceOptions = computed(() => [
   { value: 'Inline', label: st('Inline'), description: st('Store the secret value in this provider draft.') },
   {
     value: 'Env',
     label: st('Environment'),
     description: st('Read the secret from the configured environment source.'),
   },
-]
+])
 
 const apiKeyEnvironmentOptions = [
   'OPENAI_API_KEY',
@@ -220,28 +222,28 @@ const awsRegionOptions = [
 
 const gitlabInstanceOptions = [{ value: 'https://gitlab.com', label: 'https://gitlab.com', description: 'GitLab.com' }]
 
-const redirectUriOptions = [
+const redirectUriOptions = computed(() => [
   {
     value: 'http://localhost:1455/auth/callback',
     label: 'http://localhost:1455/auth/callback',
     description: st('Local OAuth callback used by the TUI and web runtime.'),
   },
-]
+])
 
 const defaultRedirectUri = 'http://localhost:1455/auth/callback'
 
 const awsProfiles = ref<string[]>(['default'])
 
-const modelToolModeOptions = [
+const modelToolModeOptions = computed(() => [
   {
     value: 'provider_protocol',
     label: st('Provider protocol'),
     description: st('Expose Agena tools through the provider protocol.'),
   },
   { value: 'disabled', label: st('Disabled'), description: st('Do not advertise Agena tools for this model.') },
-]
+])
 
-const modelLifecycleOptions = [
+const modelLifecycleOptions = computed(() => [
   { value: '', label: st('Default / unset') },
   { value: 'active', label: st('Active') },
   { value: 'preview', label: st('Preview') },
@@ -249,9 +251,9 @@ const modelLifecycleOptions = [
   { value: 'alpha', label: st('Alpha') },
   { value: 'experimental', label: st('Experimental') },
   { value: 'deprecated', label: st('Deprecated') },
-]
+])
 
-const modelFields: ModelField[] = [
+const modelFields = computed<ModelField[]>(() => [
   {
     key: 'model_id',
     label: st('Model ID'),
@@ -260,14 +262,14 @@ const modelFields: ModelField[] = [
   },
   { key: 'enabled', label: st('Enabled'), kind: 'boolean' },
   { key: 'native_compaction', label: st('Native compaction'), kind: 'boolean' },
-  { key: 'agena_tools.mode', label: st('Agena tool mode'), kind: 'select', options: modelToolModeOptions },
+  { key: 'agena_tools.mode', label: st('Agena tool mode'), kind: 'select', options: modelToolModeOptions.value },
   {
     key: 'display_name',
     label: st('Display name'),
     kind: 'text',
     placeholder: st('Friendly name shown in model pickers'),
   },
-  { key: 'lifecycle', label: st('Lifecycle'), kind: 'select', options: modelLifecycleOptions },
+  { key: 'lifecycle', label: st('Lifecycle'), kind: 'select', options: modelLifecycleOptions.value },
   {
     key: 'context_window_tokens',
     label: st('Context window tokens'),
@@ -302,7 +304,7 @@ const modelFields: ModelField[] = [
     help: st('Advertised by the provider/catalog and preserved when saving.'),
   },
   { key: 'description', label: st('Description'), kind: 'textarea', placeholder: st('Optional model description') },
-]
+])
 
 const modelFeatureTokens = new Set(['tool_calling', 'streaming', 'reasoning', 'structured_output', 'temperature'])
 const modelInputTokens = new Set(['text', 'image', 'document', 'audio', 'video', 'file'])
@@ -373,7 +375,7 @@ function authKindSubtype(value: JsonValue): string {
 const authMode = computed(() => authKindMode(draft.value?.auth_kind))
 const authSubtype = computed(() => authKindSubtype(draft.value?.auth_kind))
 const authSubtypeOptions = computed(() =>
-  authMode.value === 'credential' ? credentialSubtypeOptions : apiSubtypeOptions,
+  authMode.value === 'credential' ? credentialSubtypeOptions.value : apiSubtypeOptions.value,
 )
 
 const adapterRuleMap: Record<string, string[]> = {
@@ -832,7 +834,7 @@ function authDetailFields(): DraftField[] {
           path: 'auth.secret_source_kind',
           label: st('API key source'),
           type: 'select',
-          options: secretSourceOptions,
+          options: secretSourceOptions.value,
           includeEmpty: true,
           emptyLabel: st('No API key source'),
         },
@@ -844,7 +846,7 @@ function authDetailFields(): DraftField[] {
           path: 'auth.secret_source_kind',
           label: st('API key source'),
           type: 'select',
-          options: secretSourceOptions,
+          options: secretSourceOptions.value,
           includeEmpty: true,
           emptyLabel: st('No API key source'),
         },
@@ -865,7 +867,7 @@ function authDetailFields(): DraftField[] {
           path: 'auth.secret_source_kind',
           label: st('API key source'),
           type: 'select',
-          options: secretSourceOptions,
+          options: secretSourceOptions.value,
           includeEmpty: true,
           emptyLabel: st('No API key source'),
         },
@@ -906,7 +908,7 @@ function authDetailFields(): DraftField[] {
         : 'credential_drafts.gitlab'
   if (subtype === 'openai_chatgpt') {
     const fields: DraftField[] = [
-      { path: `${base}.login_kind`, label: st('Auth login method'), type: 'select', options: loginKindOptions },
+      { path: `${base}.login_kind`, label: st('Auth login method'), type: 'select', options: loginKindOptions.value },
     ]
     const loginKind = fieldValue(`${base}.login_kind`).trim().toLowerCase()
     if (loginKind === 'browser') {
@@ -915,7 +917,7 @@ function authDetailFields(): DraftField[] {
           path: `${base}.redirect_uri`,
           label: st('Redirect URI'),
           type: 'select',
-          options: redirectUriOptions,
+          options: redirectUriOptions.value,
           includeEmpty: true,
           emptyLabel: st('No redirect URI'),
           allowCustom: true,
@@ -955,7 +957,7 @@ function authDetailFields(): DraftField[] {
         path: `${base}.redirect_uri`,
         label: st('Redirect URI'),
         type: 'select',
-        options: redirectUriOptions,
+        options: redirectUriOptions.value,
         includeEmpty: true,
         emptyLabel: st('No redirect URI'),
         allowCustom: true,
@@ -1405,7 +1407,7 @@ function clearAuthPollTimer() {
 
 function scheduleDeviceAuthPoll() {
   clearAuthPollTimer()
-  if (!pendingDeviceAuth.value || authPolling.value || document.visibilityState === 'hidden') return
+  if (!pendingDeviceAuth.value || authPolling.value || !visible.value) return
   const intervalSeconds = Math.max(1, Number(pendingDeviceAuth.value.interval_seconds) || 2)
   authPollTimer = setTimeout(
     () => {
@@ -1417,7 +1419,7 @@ function scheduleDeviceAuthPoll() {
 }
 
 async function startAuth(action: 'start' | 'continue', silent = false) {
-  if (silent && document.visibilityState === 'hidden') return
+  if (silent && !visible.value) return
   if (!draft.value || authRequestInFlight.value) return
   const requestGeneration = ++authRequestGeneration
   const draftSnapshot = clone(draft.value)
@@ -1698,7 +1700,7 @@ function cloneModelPath(value: LooseRecord, key: string): LooseRecord {
 
 function setModelFieldValue(key: string, value: string | number | boolean) {
   if (!modelValue.value || key === 'model_id' || key === 'thinking_modes' || key === 'speed_modes') return
-  const field = modelFields.find((item) => item.key === key)
+  const field = modelFields.value.find((item) => item.key === key)
   if (!field) return
   let base: LooseRecord
   try {
@@ -1950,7 +1952,6 @@ async function createProvider() {
 }
 
 onMounted(async () => {
-  document.addEventListener('visibilitychange', onAuthVisibility)
   try {
     await Promise.all([loadProviders(), loadAwsProfiles()])
     const firstProviderId = providers.value[0]?.provider_id
@@ -1961,7 +1962,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('visibilitychange', onAuthVisibility)
   resetAuthUiState()
   clearModelJsonSyncTimer()
   ++draftRequestGeneration
@@ -1969,11 +1969,12 @@ onBeforeUnmount(() => {
   ++modelEditorGeneration
 })
 function onAuthVisibility() {
-  if (document.visibilityState === 'hidden') {
+  if (!visible.value) {
     clearAuthPollTimer()
     if (authPolling.value) authController?.abort()
   } else scheduleDeviceAuthPoll()
 }
+watch(visible, onAuthVisibility, { flush: 'sync' })
 </script>
 
 <template>

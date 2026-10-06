@@ -64,6 +64,8 @@ import { handleTerminalKeyboardShortcut } from '@/features/terminal/lib/terminal
 import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import { isEmbeddedWorkspacePaneContext, withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
+import { limitBackgroundReads } from '@/lib/backgroundReads'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 
@@ -172,6 +174,19 @@ function persistGitHandoffSessionName(next: string | null) {
 
 const ui = useUiStore()
 const workspacePane = useWorkspacePaneContext()
+const terminalVisible = usePaneVisibility()
+let terminalPageMounted = false
+let terminalInitialized = false
+let initializationFlight: Promise<void> | undefined
+let initializationController: AbortController | undefined
+let sessionProbeController: AbortController | undefined
+let sessionProbeFlight: Promise<void> | undefined
+let sessionProbeKey = ''
+let sessionProbesPending = false
+
+function isTerminalVisible() {
+  return terminalPageMounted && terminalVisible.value
+}
 const directoryStore = useDirectoryStore()
 
 const route = useRoute()
@@ -586,6 +601,12 @@ function applyTerminalUiStateSnapshot(snapshot: TerminalUiState) {
   }
   if (
     terminalStateHydrated.value &&
+    incomingVersion === terminalStateVersion.value &&
+    incomingUpdatedAt <= terminalStateUpdatedAt.value
+  )
+    return
+  if (
+    terminalStateHydrated.value &&
     incomingVersion <= terminalStateVersion.value &&
     (terminalStatePersistInFlight || terminalStatePersistQueued || terminalStatePersistTimer !== null)
   ) {
@@ -614,6 +635,7 @@ function applyTerminalUiStateSnapshot(snapshot: TerminalUiState) {
     requestedActive && allowedSessionIds.has(requestedActive) ? requestedActive : normalizedSessionIds[0] || ''
 
   const previousSessionIds = sessionList.value.slice()
+  const activeChanged = sessionId.value !== (nextActive || null)
 
   terminalStateApplyInProgress = true
   try {
@@ -647,27 +669,23 @@ function applyTerminalUiStateSnapshot(snapshot: TerminalUiState) {
     status.value = streamStatusForSession(sessionId.value)
   }
 
-  if (sessionId.value) {
+  if (activeChanged && sessionId.value) {
     renderSessionOutput(sessionId.value)
   }
-  void refreshTrackedSessions()
   ensureTrackedSessionStreams()
 }
 
-function applyTerminalUiStateEventMessage(raw: string, lastEventId: string) {
-  if (!raw) return
+function applyTerminalUiStateEvent(event: unknown, lastEventId: string) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return
 
   const seqFromLastEventId = Number.parseInt(String(lastEventId || '').trim(), 10)
-
-  let parsed: TerminalUiStateEvent
-  try {
-    parsed = JSON.parse(raw) as TerminalUiStateEvent
-  } catch {
-    return
-  }
+  // connectSse has already decoded JSON; serializing the whole terminal list
+  // just to parse it again adds avoidable work for every state event.
+  const parsed = event as TerminalUiStateEvent
 
   if (parsed.type === 'terminal-ui-state.snapshot') {
-    const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? Math.floor(parsed.seq) : seqFromLastEventId || 0
+    const seq =
+      typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? Math.floor(parsed.seq) : seqFromLastEventId || 0
     // Reconnect snapshots can reset a cursor after a backend restart.
     terminalStateEventSeq = Math.max(0, seq)
     if (parsed.state) {
@@ -678,7 +696,8 @@ function applyTerminalUiStateEventMessage(raw: string, lastEventId: string) {
 
   if (parsed.type !== 'terminal-ui-state.patch') return
 
-  const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? Math.floor(parsed.seq) : seqFromLastEventId || 0
+  const seq =
+    typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? Math.floor(parsed.seq) : seqFromLastEventId || 0
   if (seq > 0 && seq <= terminalStateEventSeq) return
   if (seq > 0) terminalStateEventSeq = seq
 
@@ -702,7 +721,7 @@ function closeTerminalUiStateEvents() {
 
 function openTerminalUiStateEvents() {
   closeTerminalUiStateEvents()
-  if (document.visibilityState === 'hidden') return
+  if (!isTerminalVisible()) return
   const client = connectSse({
     endpoint: terminalUiStateEventsUrl(terminalStateEventSeq > 0 ? terminalStateEventSeq : undefined),
     debugLabel: 'sse:terminal-ui-state',
@@ -711,7 +730,7 @@ function openTerminalUiStateEvents() {
         typeof (evt as unknown as { lastEventId?: unknown }).lastEventId === 'string'
           ? String((evt as unknown as { lastEventId?: string }).lastEventId || '')
           : ''
-      applyTerminalUiStateEventMessage(JSON.stringify(evt), lastEventId)
+      applyTerminalUiStateEvent(evt, lastEventId)
     },
     onError: () => {
       // connectSse handles reconnects.
@@ -725,22 +744,43 @@ function openTerminalUiStateEvents() {
  * resumes from the stored event cursor instead of replaying the whole state.
  */
 function handleTerminalUiStateVisibility() {
-  if (document.visibilityState === 'hidden') {
+  if (!isTerminalVisible()) {
+    initializationController?.abort()
+    sessionProbeController?.abort()
+    if (resizeTimer !== null) {
+      window.clearTimeout(resizeTimer)
+      resizeTimer = null
+    }
+    resizeObserver?.disconnect()
     closeTerminalUiStateEvents()
     // Output buffers live on the server; resume from each saved cursor.
     for (const sid of Array.from(streamSourceById.keys())) closeSessionStream(sid)
+    for (const sid of Array.from(streamReconnectTimerById.keys())) clearReconnectTimerForSession(sid)
   } else {
+    ensureTerminalMounted()
+    if (el.value) resizeObserver?.observe(el.value)
+    if (!terminalInitialized) {
+      void initializeTerminal()
+      return
+    }
     openTerminalUiStateEvents()
     ensureTrackedSessionStreams()
+    if (sessionProbesPending) void refreshTrackedSessions()
+    scheduleResize()
   }
 }
 
-async function bootstrapTerminalUiState() {
+async function bootstrapTerminalUiState(signal: AbortSignal) {
   try {
-    const remote = await getTerminalUiState()
+    const remote = await limitBackgroundReads(
+      () => getTerminalUiState(AbortSignal.any([signal, AbortSignal.timeout(30_000)])),
+      signal,
+    )
+    if (signal.aborted || !isTerminalVisible()) return
     applyTerminalUiStateSnapshot(remote)
     terminalStateHydrated.value = true
   } catch {
+    if (signal.aborted || !isTerminalVisible()) return
     applyTerminalUiStateSnapshot(defaultTerminalUiState())
     terminalStateHydrated.value = true
     scheduleTerminalStateRemotePersist()
@@ -1153,11 +1193,23 @@ function runMobileSessionAction(id: string, item: OptionMenuItem) {
   }
 }
 
-async function refreshTrackedSessions() {
-  if (sessionListRefreshing.value) return
+function refreshTrackedSessions(): Promise<void> {
+  if (!isTerminalVisible()) {
+    sessionProbesPending = true
+    return Promise.resolve()
+  }
+  const tracked = sessionList.value.slice()
+  const key = JSON.stringify(tracked)
+  if (sessionProbeFlight) {
+    if (key !== sessionProbeKey) sessionProbesPending = true
+    return sessionProbeFlight
+  }
+  sessionProbesPending = false
+  sessionProbeKey = key
+  const controller = new AbortController()
+  sessionProbeController = controller
   sessionListRefreshing.value = true
-  try {
-    const tracked = sessionList.value.slice()
+  sessionProbeFlight = (async () => {
     const missing = new Set<string>()
 
     await Promise.all(
@@ -1165,7 +1217,12 @@ async function refreshTrackedSessions() {
         const sid = normalizeSessionId(id)
         if (!sid) return
         try {
-          const exists = await getSessionInfo(sid)
+          const exists = await limitBackgroundReads(async () => {
+            if (!isTerminalVisible() || !sessionList.value.includes(sid)) return true
+            return Boolean(
+              await getTerminalSessionInfo(sid, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])),
+            )
+          }, controller.signal)
           if (!exists) {
             missing.add(sid)
           }
@@ -1175,7 +1232,7 @@ async function refreshTrackedSessions() {
       }),
     )
 
-    if (missing.size > 0) {
+    if (!controller.signal.aborted && isTerminalVisible() && missing.size > 0) {
       for (const sid of missing) {
         removeTrackedSession(sid)
       }
@@ -1183,9 +1240,16 @@ async function refreshTrackedSessions() {
         status.value = 'disconnected'
       }
     }
-  } finally {
-    sessionListRefreshing.value = false
-  }
+  })().finally(() => {
+    if (sessionProbeController === controller) {
+      sessionProbeController = undefined
+      sessionProbeFlight = undefined
+      sessionListRefreshing.value = false
+      if (controller.signal.aborted) sessionProbesPending = true
+      if (sessionProbesPending && isTerminalVisible()) void refreshTrackedSessions()
+    }
+  })
+  return sessionProbeFlight
 }
 
 const activeSessionStreamStatus = computed<SessionStreamStatus>(() => {
@@ -1401,7 +1465,7 @@ function clearSessionOutput(id: string) {
 
 function renderSessionOutput(id: string) {
   const sid = normalizeSessionId(id)
-  if (!sid || !term.value) return
+  if (!sid || !term.value || !isTerminalVisible()) return
   const buffer = streamOutputById.get(sid)
   term.value.reset()
   if (buffer && buffer.chunks.length > 0) {
@@ -1469,7 +1533,7 @@ function closeAllSessionStreams() {
 function scheduleSessionReconnect(id: string) {
   const sid = normalizeSessionId(id)
   if (!sid) return
-  if (document.visibilityState === 'hidden') return
+  if (!isTerminalVisible()) return
   if (streamManuallyDisconnected.has(sid)) return
   if (streamReconnectTimerById.has(sid)) return
 
@@ -1482,6 +1546,7 @@ function scheduleSessionReconnect(id: string) {
 
   const timer = window.setTimeout(async () => {
     streamReconnectTimerById.delete(sid)
+    if (!isTerminalVisible()) return
     if (streamManuallyDisconnected.has(sid)) return
 
     try {
@@ -1506,7 +1571,7 @@ function scheduleSessionReconnect(id: string) {
 function connectSessionStream(id: string) {
   const sid = normalizeSessionId(id)
   if (!sid) return
-  if (document.visibilityState === 'hidden') return
+  if (!isTerminalVisible()) return
   if (hasSessionStreamSource(sid)) return
 
   ensureTerminalMounted()
@@ -1644,7 +1709,7 @@ async function sendInput(data: string) {
 
 async function sendResize() {
   const id = sessionId.value
-  if (!id || !term.value) return
+  if (!id || !term.value || !isTerminalVisible()) return
 
   const cols = term.value.cols
   const rows = term.value.rows
@@ -1660,11 +1725,14 @@ async function sendResize() {
 }
 
 function scheduleResize() {
+  if (!isTerminalVisible()) return
   if (resizeTimer !== null) {
     window.clearTimeout(resizeTimer)
   }
   resizeTimer = window.setTimeout(async () => {
     resizeTimer = null
+    if (!isTerminalVisible() || !el.value?.clientWidth || !el.value.clientHeight) return
+    ensureTerminalMounted()
     if (!fit.value || !term.value) return
     fit.value.fit()
     // xterm occasionally renders a blank viewport when mounted while hidden or
@@ -1680,7 +1748,7 @@ function scheduleResize() {
 }
 
 function ensureTerminalMounted() {
-  if (!el.value) return
+  if (!isTerminalVisible() || !el.value?.clientWidth || !el.value.clientHeight) return
   if (term.value) return
 
   const t = new Terminal({
@@ -1727,9 +1795,11 @@ function ensureTerminalMounted() {
 
   term.value = t
   fit.value = f
+  if (sessionId.value) renderSessionOutput(sessionId.value)
 }
 
 async function connect() {
+  if (!isTerminalVisible()) return
   const sid = normalizeSessionId(sessionId.value || '')
   if (!sid) {
     status.value = 'disconnected'
@@ -1890,19 +1960,21 @@ async function closeTrackedSession(id: string) {
   removeTrackedSession(sid)
 }
 
-onMounted(() => {
-  ensureTerminalMounted()
-
-  hydratePendingSendFromQuery()
-
-  void (async () => {
-    await bootstrapTerminalUiState()
+function initializeTerminal() {
+  if (!isTerminalVisible() || terminalInitialized || initializationFlight) return initializationFlight
+  const controller = new AbortController()
+  initializationController = controller
+  initializationFlight = (async () => {
+    if (!terminalStateHydrated.value) await bootstrapTerminalUiState(controller.signal)
+    if (controller.signal.aborted || !isTerminalVisible()) return
     openTerminalUiStateEvents()
 
     await refreshTrackedSessions()
+    if (controller.signal.aborted || !isTerminalVisible()) return
 
     if (pendingSend.value && pendingSendTarget.value === 'git') {
       const gitSessionId = await ensureGitHandoffSessionExists()
+      if (controller.signal.aborted || !isTerminalVisible()) return
       setActiveSession(gitSessionId)
     }
 
@@ -1911,24 +1983,41 @@ onMounted(() => {
     } else {
       status.value = 'disconnected'
     }
+    if (controller.signal.aborted || !isTerminalVisible()) return
     ensureTrackedSessionStreams()
-  })().catch(() => {
-    status.value = 'disconnected'
-  })
+    terminalInitialized = true
+    scheduleResize()
+  })()
+    .catch(() => {
+      if (!controller.signal.aborted && isTerminalVisible()) status.value = 'disconnected'
+    })
+    .finally(() => {
+      initializationFlight = undefined
+      if (initializationController === controller) initializationController = undefined
+      // A fast hide/show can occur before a cancelled read settles. Resume once
+      // after that flight releases, instead of dropping initialization forever.
+      if (controller.signal.aborted && isTerminalVisible()) void initializeTerminal()
+    })
+  return initializationFlight
+}
+
+onMounted(() => {
+  terminalPageMounted = true
+  hydratePendingSendFromQuery()
 
   window.addEventListener('resize', scheduleResize)
-  document.addEventListener('visibilitychange', handleTerminalUiStateVisibility)
 
   // ResizeObserver catches layout changes that don't trigger window resize
   // (e.g. switching tabs/panels).
   if ('ResizeObserver' in window) {
     try {
       resizeObserver = new ResizeObserver(() => scheduleResize())
-      if (el.value) resizeObserver.observe(el.value)
+      if (isTerminalVisible() && el.value) resizeObserver.observe(el.value)
     } catch {
       resizeObserver = null
     }
   }
+  handleTerminalUiStateVisibility()
 })
 
 watch(
@@ -1940,12 +2029,18 @@ watch(
 )
 
 watch(
-  () => sessionList.value.join('|'),
-  () => {
+  () => sessionList.value.slice(),
+  (ids, previous) => {
+    const previousIds = new Set(previous)
+    // Renames, pins, recency and list order do not change which terminals
+    // exist. Probe membership changes instead of rereading every session.
+    if (ids.length === previousIds.size && ids.every((id) => previousIds.has(id))) return
     void refreshTrackedSessions()
     ensureTrackedSessionStreams()
   },
 )
+
+watch(terminalVisible, handleTerminalUiStateVisibility, { flush: 'sync' })
 
 watch(
   () => [activeSessionName.value, route.query],
@@ -1956,8 +2051,14 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  terminalPageMounted = false
+  initializationController?.abort()
+  sessionProbeController?.abort()
+  if (resizeTimer !== null) {
+    window.clearTimeout(resizeTimer)
+    resizeTimer = null
+  }
   window.removeEventListener('resize', scheduleResize)
-  document.removeEventListener('visibilitychange', handleTerminalUiStateVisibility)
   closeTerminalUiStateEvents()
 
   if (terminalStatePersistTimer !== null) {
@@ -1988,7 +2089,7 @@ watch(el, () => {
     if (resizeObserver) {
       try {
         resizeObserver.disconnect()
-        resizeObserver.observe(el.value)
+        if (isTerminalVisible()) resizeObserver.observe(el.value)
       } catch {
         // ignore
       }

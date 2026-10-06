@@ -837,10 +837,19 @@ export type WorkspaceFileUpload = {
 /** POST /api/v1/workspaces/{id}/files — upload a composer attachment. */
 export async function uploadWorkspaceFile(
   workspaceId: number,
-  input: { filename: string; dataBase64: string; mime?: string },
+  input: { filename: string; dataBase64?: string; blob?: Blob; mime?: string },
 ): Promise<WorkspaceFileUpload> {
   if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) throw new Error('A valid workspace id is required')
   const filename = String(input.filename || '').trim()
+  if (input.blob) {
+    if (!filename || !input.blob.size) throw new Error('Attachment filename and data are required')
+    const query = new URLSearchParams({ filename, ...(input.mime ? { mime: input.mime } : {}) })
+    return await apiJson<WorkspaceFileUpload>(`/api/v1/workspaces/${workspaceId}/files?${query}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: input.blob,
+    })
+  }
   const dataBase64 = String(input.dataBase64 || '').trim()
   if (!filename || !dataBase64) throw new Error('Attachment filename and data are required')
   return await apiJson<WorkspaceFileUpload>(`/api/v1/workspaces/${encodeURIComponent(String(workspaceId))}/files`, {

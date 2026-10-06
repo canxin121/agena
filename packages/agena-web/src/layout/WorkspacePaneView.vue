@@ -18,6 +18,7 @@ import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   windowId: string
+  visible?: boolean
 }>()
 
 const ui = useUiStore()
@@ -27,6 +28,7 @@ const paneNavigationInFlightByPath = new Map<string, Promise<unknown>>()
 const windowId = computed(() => String(props.windowId || '').trim())
 const windowTab = computed(() => ui.getWorkspaceWindowById(windowId.value))
 const isFocused = computed(() => windowId.value !== '' && windowId.value === ui.focusedWorkspaceWindowId)
+const isVisible = computed(() => props.visible !== false)
 
 function normalizeQuery(raw: LocationQuery | Record<string, unknown> | null | undefined): Record<string, string> {
   const out: Record<string, string> = {}
@@ -167,6 +169,7 @@ provide(routerKey, scopedRouter)
 provide(workspacePaneContextKey, {
   windowId,
   isFocused,
+  isVisible,
   route: scopedRouteRef,
   navigate,
 })

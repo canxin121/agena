@@ -102,15 +102,16 @@ const route = useRoute()
 const router = useRouter()
 const chat = useChatStore()
 const btw = useBtwStore()
+const workspacePane = useWorkspacePaneContext()
+const isVisibleWorkspacePane = computed(() => !workspacePane || workspacePane.isVisible.value)
 watch(
-  () => chat.selectedSessionId,
-  (sid, _previous, onCleanup) => {
-    if (sid) onCleanup(chat.retainSession(sid))
+  () => [chat.selectedSessionId, isVisibleWorkspacePane.value] as const,
+  ([sid, visible], _previous, onCleanup) => {
+    if (sid && visible) onCleanup(chat.retainSession(sid))
   },
   { immediate: true },
 )
 
-const workspacePane = useWorkspacePaneContext()
 const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
 const directoryStore = useDirectoryStore()
 const directorySessions = useDirectorySessionStore()
@@ -163,12 +164,22 @@ function discardFailedAttachmentDraft() {
 }
 
 const composerRef = ref<ComposerExpose | null>(null)
+const submittingAttachmentUrls = new Set<string>()
 const attachments = useChatAttachments({
   toasts,
   composerRef,
   restoreText: (text) => {
     draft.value += text
   },
+  retainedUrls: () => [
+    ...submittingAttachmentUrls,
+    ...[...attachmentDraftsBySession.values()].flatMap((files) =>
+      files.flatMap((file) => (file.url ? [file.url] : [])),
+    ),
+    ...(failedDraftSlot.peek()?.files.flatMap((file) => (file.url ? [file.url] : [])) ?? []),
+    ...(optimisticUser.value?.files.flatMap((file) => (file.url ? [file.url] : [])) ?? []),
+    ...(ui.isImageViewerOpen ? ui.imageViewerItems.map((item) => item.src) : []),
+  ],
 })
 const {
   attachedFiles,
@@ -202,8 +213,9 @@ watch(
     } else {
       attachmentDraftsBySession.delete(previousKey)
     }
-    clearAttachments()
+    clearAttachments({ preserve: true })
     attachedFiles.value = (attachmentDraftsBySession.get(String(sid || '')) || []).map((file) => ({ ...file }))
+    attachmentDraftsBySession.delete(String(sid || ''))
   },
   { flush: 'sync' },
 )
@@ -1059,6 +1071,9 @@ const {
 // vue-tsc's template narrowing can be finicky around `Ref<T | null>` even when
 // the runtime checks are correct. Keep this relaxed for now.
 const optimisticUser = stream.optimisticUser
+watch([optimisticUser, failedDraftVersion, () => ui.isImageViewerOpen], attachments.releaseUnusedAttachmentUrls, {
+  flush: 'post',
+})
 
 function restoredComposerText(document: JsonValue): string {
   if (!Array.isArray(document)) return ''
@@ -2078,6 +2093,7 @@ async function sendReady(sid: string | null) {
   // staged while this send was preparing belongs to the next message.
   if (draft.value === draftSnapshot) draft.value = ''
   const sentFileIds = new Set(filesSnapshot.map((file) => file.id))
+  for (const file of filesSnapshot) if (file.url) submittingAttachmentUrls.add(file.url)
   composerRef.value?.removeAttachmentNodes?.([...sentFileIds])
   attachedFiles.value = attachedFiles.value.filter((file) => !sentFileIds.has(file.id))
   commandOpen.value = false
@@ -2118,10 +2134,11 @@ async function sendReady(sid: string | null) {
       let size = Number.isFinite(f.size) && f.size > 0 ? Math.floor(f.size) : undefined
       const dataUrl = typeof f.url === 'string' ? f.url.trim() : ''
       if (dataUrl) {
-        const dataBase64 = attachmentBase64(dataUrl)
+        const dataBase64 = f.blob ? undefined : attachmentBase64(dataUrl)
         const uploaded = await chat.uploadWorkspaceAttachment(sid, {
           filename: f.filename,
           dataBase64,
+          ...(f.blob ? { blob: f.blob } : {}),
           mime: f.mime,
         })
         path = String(uploaded.path || '').trim()
@@ -2174,6 +2191,9 @@ async function sendReady(sid: string | null) {
       toasts.push('error', String(t('chat.attachments.failedDraftSaved')))
     }
     throw e
+  } finally {
+    submittingAttachmentUrls.clear()
+    attachments.releaseUnusedAttachmentUrls()
   }
 }
 
@@ -2206,12 +2226,14 @@ watch(
   // Session actions can be requested from the ChatSidebar while ChatPage
   // is unmounted (mobile session switcher). Make the watcher immediate so a
   // pending request is handled on mount.
-  () => ui.sessionActionSeq,
-  (seq) => {
+  () => [ui.sessionActionSeq, isFocusedWorkspacePane.value, chat.selectedSessionId] as const,
+  ([seq, focused, sid]) => {
     if (!seq) return
     if (seq === lastHandledSessionActionSeq.value) return
     const actionId = ui.sessionActionId
     if (!actionId) return
+    if (!focused || (ui.sessionActionSessionId && ui.sessionActionSessionId !== sid)) return
+    if (workspacePane && ui.sessionActionWindowId && ui.sessionActionWindowId !== workspacePane.windowId.value) return
     lastHandledSessionActionSeq.value = seq
     handleSessionActionRequest(actionId)
     ui.clearSessionActionRequest()

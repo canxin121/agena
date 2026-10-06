@@ -1296,6 +1296,8 @@ export const useUiStore = defineStore('ui', () => {
   // Cross-component session action requests (sidebar -> chat)
   const sessionActionSeq = ref(0)
   const sessionActionId = ref<string | null>(null)
+  const sessionActionSessionId = ref<string | null>(null)
+  const sessionActionWindowId = ref<string | null>(null)
 
   // Double-Esc abort prompt state (UI-only; actual abort lives in chat store)
   const abortPromptSessionId = ref<string | null>(null)
@@ -2236,15 +2238,19 @@ export const useUiStore = defineStore('ui', () => {
     imageViewerZoom.value = 1
   }
 
-  function requestSessionAction(actionId: string) {
+  function requestSessionAction(actionId: string, sessionId?: string) {
     const id = String(actionId || '').trim()
     if (!id) return
     sessionActionId.value = id
+    sessionActionSessionId.value = sessionId || null
+    sessionActionWindowId.value = focusedWorkspaceWindowId.value || null
     sessionActionSeq.value += 1
   }
 
   function clearSessionActionRequest() {
     sessionActionId.value = null
+    sessionActionSessionId.value = null
+    sessionActionWindowId.value = null
   }
 
   function armAbortPrompt(sessionId: string, durationMs: number): number {
@@ -2301,6 +2307,8 @@ export const useUiStore = defineStore('ui', () => {
     imageViewerZoom,
     sessionActionSeq,
     sessionActionId,
+    sessionActionSessionId,
+    sessionActionWindowId,
     sessionQueryEnabled,
     setIsCompactLayout,
     setIsMobileDevice,

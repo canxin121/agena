@@ -603,6 +603,7 @@ async function handleTabStripDrop(event: DragEvent) {
       <WorkspacePaneView
         v-for="windowTab in mountedTabs"
         v-show="isWindowActive(windowTab.id)"
+        :visible="isWindowActive(windowTab.id)"
         :key="windowTab.id"
         :window-id="windowTab.id"
         class="absolute inset-0"

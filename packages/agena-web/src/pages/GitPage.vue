@@ -10,6 +10,7 @@ import { useGitDiffSelection } from '@/composables/git/useGitDiffSelection'
 import { useGitStatusPaged } from '@/composables/git/useGitStatusPaged'
 import { useGitWatchSse } from '@/composables/git/useGitWatchSse'
 import { createRevalidator } from '@/lib/revalidation'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
 import { isDocumentVisible, limitBackgroundReads } from '@/lib/backgroundReads'
 import { useGitPageAuth } from './git/useGitPageAuth'
 import { useGitCommitState } from './git/useGitCommitState'
@@ -297,7 +298,12 @@ const {
   pageSize: FILE_LIST_PAGE_SIZE,
   loadStatusPage: async ({ directory, scope, offset, limit, signal }) => {
     if (root.value === directory) dirtyWatchScopes.delete(scope)
-    return await readRepoJson<GitStatusResponse>('status', directory, { scope, offset, limit, includeDiffStats: true }, signal)
+    return await readRepoJson<GitStatusResponse>(
+      'status',
+      directory,
+      { scope, offset, limit, includeDiffStats: true },
+      signal,
+    )
   },
 })
 
@@ -580,7 +586,12 @@ const stashOps = useGitStashOps({
   repoRoot,
   toasts,
   gitJson,
-  readJson: <T,>(endpoint: string, directory: string, query?: Record<string, string | number | boolean | null | undefined>, init?: RequestInit) => {
+  readJson: <T,>(
+    endpoint: string,
+    directory: string,
+    query?: Record<string, string | number | boolean | null | undefined>,
+    init?: RequestInit,
+  ) => {
     const signal = AbortSignal.any([repoReadController.signal, ...(init?.signal ? [init.signal] : [])])
     return limitBackgroundReads(() => readRepoJson<T>(endpoint, directory, query, signal), signal)
   },
@@ -627,6 +638,7 @@ const worktreesOps = useGitWorktrees({
   toasts,
   withRepoBusy: auth.withRepoBusy,
   handleGitBusy: auth.handleGitBusy,
+  refreshWorkingTree: refreshAfterWorkingTreeChange,
 })
 
 const mergeRebaseOps = useGitMergeRebaseOps({
@@ -701,6 +713,7 @@ const submoduleOps = useGitSubmoduleOps({
   toasts,
   withRepoBusy: auth.withRepoBusy,
   handleGitBusy: auth.handleGitBusy,
+  refreshWorkingTree: refreshAfterWorkingTreeChange,
 })
 
 const lfsOps = useGitLfsOps({
@@ -802,7 +815,7 @@ const watchRefreshQueue = createRevalidator(
       if (watchReadController === controller) watchReadController = null
     }
   },
-  { intervalMs: 1500, retryMs: 5000, enabled: () => isDocumentVisible() && gitReady.value },
+  { intervalMs: 250, retryMs: 5000, enabled: () => isDocumentVisible() && gitReady.value },
 )
 
 async function refreshOpenDiffFromWatch(directory: string, owner: number, signal: AbortSignal) {
@@ -819,7 +832,13 @@ async function refreshOpenDiffFromWatch(directory: string, owner: number, signal
       conflicts = false
     }
     signal.throwIfAborted()
-    if (diff && owner === watchGeneration && root.value === directory && selectedFile.value === path && isDocumentVisible()) {
+    if (
+      diff &&
+      owner === watchGeneration &&
+      root.value === directory &&
+      selectedFile.value === path &&
+      isDocumentVisible()
+    ) {
       await refreshDiff()
       diff = false
     }
@@ -835,14 +854,23 @@ async function refreshOpenDiffFromWatch(directory: string, owner: number, signal
 async function refreshAfterWorkingTreeChange() {
   const directory = root.value
   if (!directory || !gitReady.value) return
+  gitStatusGeneration++
+  conflictGeneration++
   await loadStatusSummary(directory)
   if (root.value !== directory) return
   await Promise.all([
     loadGitState(directory).catch((error) => {
-      if (root.value === directory && !(error instanceof DOMException && error.name === 'AbortError')) gitState.value = null
+      if (root.value === directory && !(error instanceof DOMException && error.name === 'AbortError'))
+        gitState.value = null
     }),
-    ((status.value?.mergeCount ?? 0) > 0 ? loadConflicts(directory) : Promise.resolve().then(() => { conflictPaths.value = [] })).catch((error) => {
-      if (root.value === directory && !(error instanceof DOMException && error.name === 'AbortError')) conflictPaths.value = []
+    ((status.value?.mergeCount ?? 0) > 0
+      ? loadConflicts(directory)
+      : Promise.resolve().then(() => {
+          conflictPaths.value = []
+        })
+    ).catch((error) => {
+      if (root.value === directory && !(error instanceof DOMException && error.name === 'AbortError'))
+        conflictPaths.value = []
     }),
     ...visibleWatchScopes().map(([scope, expanded, count]) => {
       if (count === 0) clearStatusScope(scope)
@@ -858,7 +886,8 @@ const { startWatch: startWatchInner, stopWatch } = useGitWatchSse<GitWatchStatus
   buildUrl: (directory) => gitWatchUrl(directory, 1500, selectedFile.value),
   onPayload: (payload, prev) => {
     const baseline = repoWatchBaseline ?? prev
-    if (baseline?.updatedAtMs != null && payload.updatedAtMs != null && payload.updatedAtMs < baseline.updatedAtMs) return
+    if (baseline?.updatedAtMs != null && payload.updatedAtMs != null && payload.updatedAtMs < baseline.updatedAtMs)
+      return
     repoWatchBaseline = payload
     if (
       prev &&
@@ -882,11 +911,19 @@ const { startWatch: startWatchInner, stopWatch } = useGitWatchSse<GitWatchStatus
       mergeCount: payload.mergeCount,
       totalFiles: payload.totalFiles ?? baseStatus.totalFiles,
     }
-    if (!status.value || nextStatus.current !== baseStatus.current || nextStatus.tracking !== baseStatus.tracking ||
-      nextStatus.ahead !== baseStatus.ahead || nextStatus.behind !== baseStatus.behind ||
-      nextStatus.stagedCount !== baseStatus.stagedCount || nextStatus.unstagedCount !== baseStatus.unstagedCount ||
-      nextStatus.untrackedCount !== baseStatus.untrackedCount || nextStatus.mergeCount !== baseStatus.mergeCount ||
-      nextStatus.totalFiles !== baseStatus.totalFiles) status.value = nextStatus
+    if (
+      !status.value ||
+      nextStatus.current !== baseStatus.current ||
+      nextStatus.tracking !== baseStatus.tracking ||
+      nextStatus.ahead !== baseStatus.ahead ||
+      nextStatus.behind !== baseStatus.behind ||
+      nextStatus.stagedCount !== baseStatus.stagedCount ||
+      nextStatus.unstagedCount !== baseStatus.unstagedCount ||
+      nextStatus.untrackedCount !== baseStatus.untrackedCount ||
+      nextStatus.mergeCount !== baseStatus.mergeCount ||
+      nextStatus.totalFiles !== baseStatus.totalFiles
+    )
+      status.value = nextStatus
 
     if (payload.isClean) {
       // If the repo is clean, clear selection + lists to match VS Code behavior.
@@ -913,22 +950,32 @@ const { startWatch: startWatchInner, stopWatch } = useGitWatchSse<GitWatchStatus
     if (changedCounts) {
       pendingWatchDiff ||=
         Boolean(selectedFile.value) &&
-        (!baseline || (prev != null && (payload.selectedPathSignature == null || payload.selectedPathSignature !== prev.selectedPathSignature)))
+        (!baseline ||
+          (prev != null &&
+            (payload.selectedPathSignature == null || payload.selectedPathSignature !== prev.selectedPathSignature)))
       const conflictsChanged = baseline
-        ? payload.mergeCount !== baseline.mergeCount || payload.scopeSignatures?.merge !== baseline.scopeSignatures?.merge
+        ? payload.mergeCount !== baseline.mergeCount ||
+          payload.scopeSignatures?.merge !== baseline.scopeSignatures?.merge
         : conflictPaths.value.length > 0 || (conflictReaders.get(repoReadController) ?? 0) > 0
       if (conflictsChanged) {
         conflictGeneration++
         pendingWatchConflicts = true
       }
-      const loadingByScope = { merge: mergeListLoading, staged: stagedListLoading, unstaged: changesListLoading, untracked: untrackedListLoading }
+      const loadingByScope = {
+        merge: mergeListLoading,
+        staged: stagedListLoading,
+        unstaged: changesListLoading,
+        untracked: untrackedListLoading,
+      }
       for (const [scope, , count, list] of visibleWatchScopes()) {
         if (count === 0) {
           clearStatusScope(scope)
           dirtyWatchScopes.delete(scope)
-        } else if (baseline
-          ? !payload.scopeSignatures || payload.scopeSignatures[scope] !== baseline.scopeSignatures?.[scope]
-          : list.value.length > 0 || loadingByScope[scope].value) {
+        } else if (
+          baseline
+            ? !payload.scopeSignatures || payload.scopeSignatures[scope] !== baseline.scopeSignatures?.[scope]
+            : list.value.length > 0 || loadingByScope[scope].value
+        ) {
           // The first stream snapshot may be newer than an earlier HTTP
           // representation. Validate only rows already read or in flight;
           // initial reads dispatched after this baseline cover it themselves.
@@ -948,23 +995,63 @@ function startWatch(directory: string) {
   startWatchInner(directory, `${directory}:${selectedFile.value ?? ''}`)
 }
 
+const beginStatusRead = createLatestRequestGuard(() => root.value, status)
+const beginRemoteRead = createLatestRequestGuard(() => root.value, remoteInfo)
+const beginSigningRead = createLatestRequestGuard(() => root.value, signingInfo)
+const beginStateRead = createLatestRequestGuard(() => root.value, gitState)
+
 async function loadStatusSummary(directory: string) {
   // summary=true keeps the payload small even for huge repos.
   const generation = gitStatusGeneration
-  const response = await limitBackgroundReads(() => readRepoJson<GitStatusResponse>('status', directory, { summary: true }), repoReadController.signal)
-  if (generation === gitStatusGeneration) status.value = response
+  const isCurrent = beginStatusRead()
+  try {
+    const response = await limitBackgroundReads(
+      () => readRepoJson<GitStatusResponse>('status', directory, { summary: true }),
+      repoReadController.signal,
+    )
+    if (isCurrent() && generation === gitStatusGeneration) status.value = response
+  } catch (error) {
+    if (isCurrent() && generation === gitStatusGeneration) throw error
+  }
 }
 
 async function loadRemoteInfo(directory: string) {
-  remoteInfo.value = await limitBackgroundReads(() => readRepoJson<GitRemoteInfoResponse>('remote-info', directory), repoReadController.signal)
+  const isCurrent = beginRemoteRead()
+  try {
+    const response = await limitBackgroundReads(
+      () => readRepoJson<GitRemoteInfoResponse>('remote-info', directory),
+      repoReadController.signal,
+    )
+    if (isCurrent()) remoteInfo.value = response
+  } catch (error) {
+    if (isCurrent()) throw error
+  }
 }
 
 async function loadSigningInfo(directory: string) {
-  signingInfo.value = await limitBackgroundReads(() => readRepoJson<GitSigningInfoResponse>('signing-info', directory), repoReadController.signal)
+  const isCurrent = beginSigningRead()
+  try {
+    const response = await limitBackgroundReads(
+      () => readRepoJson<GitSigningInfoResponse>('signing-info', directory),
+      repoReadController.signal,
+    )
+    if (isCurrent()) signingInfo.value = response
+  } catch (error) {
+    if (isCurrent()) throw error
+  }
 }
 
 async function loadGitState(directory: string) {
-  gitState.value = await limitBackgroundReads(() => readRepoJson<GitStateResponse>('state', directory), repoReadController.signal)
+  const isCurrent = beginStateRead()
+  try {
+    const response = await limitBackgroundReads(
+      () => readRepoJson<GitStateResponse>('state', directory),
+      repoReadController.signal,
+    )
+    if (isCurrent()) gitState.value = response
+  } catch (error) {
+    if (isCurrent()) throw error
+  }
 }
 
 async function loadConflicts(directory: string, signal?: AbortSignal) {
@@ -973,8 +1060,12 @@ async function loadConflicts(directory: string, signal?: AbortSignal) {
   const readSignal = signal ? AbortSignal.any([owner.signal, signal]) : owner.signal
   conflictReaders.set(owner, (conflictReaders.get(owner) ?? 0) + 1)
   try {
-    const resp = await limitBackgroundReads(() => readRepoJson<{ files: string[] }>('conflicts', directory, undefined, readSignal), readSignal)
-    if (root.value === directory && generation === conflictGeneration) conflictPaths.value = Array.isArray(resp?.files) ? resp.files : []
+    const resp = await limitBackgroundReads(
+      () => readRepoJson<{ files: string[] }>('conflicts', directory, undefined, readSignal),
+      readSignal,
+    )
+    if (root.value === directory && generation === conflictGeneration)
+      conflictPaths.value = Array.isArray(resp?.files) ? resp.files : []
   } catch (error) {
     if (owner === repoReadController && root.value === directory && generation !== conflictGeneration) return
     throw error
@@ -1068,14 +1159,35 @@ async function load() {
     await loadStatusSummary(dir)
     if (seq !== loadSeq || dir !== root.value) return
     const applyFallback = (error: unknown, fallback: () => void) => {
-      if (seq === loadSeq && dir === root.value && !(error instanceof DOMException && error.name === 'AbortError')) fallback()
+      if (seq === loadSeq && dir === root.value && !(error instanceof DOMException && error.name === 'AbortError'))
+        fallback()
     }
     await Promise.all([
-      loadRemoteInfo(dir).catch((error) => applyFallback(error, () => { remoteInfo.value = { remotes: [] } })),
-      loadSigningInfo(dir).catch((error) => applyFallback(error, () => { signingInfo.value = null })),
-      loadGitState(dir).catch((error) => applyFallback(error, () => { gitState.value = null })),
-      (status.value?.mergeCount ? loadConflicts(dir) : Promise.resolve()).catch((error) => applyFallback(error, () => { conflictPaths.value = [] })),
-      (stashOps.isStashExpanded.value ? loadStash(dir, true) : Promise.resolve()).catch((error) => applyFallback(error, () => { stashList.value = [] })),
+      loadRemoteInfo(dir).catch((error) =>
+        applyFallback(error, () => {
+          remoteInfo.value = { remotes: [] }
+        }),
+      ),
+      loadSigningInfo(dir).catch((error) =>
+        applyFallback(error, () => {
+          signingInfo.value = null
+        }),
+      ),
+      loadGitState(dir).catch((error) =>
+        applyFallback(error, () => {
+          gitState.value = null
+        }),
+      ),
+      (status.value?.mergeCount ? loadConflicts(dir) : Promise.resolve()).catch((error) =>
+        applyFallback(error, () => {
+          conflictPaths.value = []
+        }),
+      ),
+      (stashOps.isStashExpanded.value ? loadStash(dir, true) : Promise.resolve()).catch((error) =>
+        applyFallback(error, () => {
+          stashList.value = []
+        }),
+      ),
       ...visibleWatchScopes().map(([scope, expanded, count]) => {
         if (expanded && count > 0) return reloadScopeFirstPage(dir, scope)
         if (count === 0) clearStatusScope(scope)

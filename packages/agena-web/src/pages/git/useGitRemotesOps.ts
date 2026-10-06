@@ -1,5 +1,6 @@
 import { computed, ref, type Ref } from 'vue'
 import { i18n } from '@/i18n'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
 
 import type { GitRemoteInfoResponse } from '@/types/git'
 import type { JsonValue } from '@/types/json'
@@ -38,21 +39,26 @@ export function useGitRemotesOps(opts: {
 
   const remotesList = computed(() => remoteInfo.value?.remotes || [])
 
+  const beginLoadRemotes = createLatestRequestGuard(() => repoRoot.value, remoteInfo)
+
   async function loadRemotes() {
     const dir = repoRoot.value
     if (!dir) return
+    const isCurrent = beginLoadRemotes()
     remotesLoading.value = true
     remotesError.value = null
     try {
       const resp = await gitJson<GitRemoteInfoResponse>('remote-info', dir)
+      if (!isCurrent()) return
       remoteInfo.value = resp
       if (!selectedRemote.value) {
         selectedRemote.value = resp.remotes?.[0]?.name || ''
       }
     } catch (err) {
+      if (!isCurrent()) return
       remotesError.value = err instanceof Error ? err.message : String(err)
     } finally {
-      remotesLoading.value = false
+      if (isCurrent()) remotesLoading.value = false
     }
   }
 

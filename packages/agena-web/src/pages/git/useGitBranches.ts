@@ -1,5 +1,6 @@
 import { ref, type Ref } from 'vue'
 import { i18n } from '@/i18n'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
 
 import type { GitBranchesResponse } from '@/types/git'
 import type { JsonValue } from '@/types/json'
@@ -41,22 +42,32 @@ export function useGitBranches(opts: {
   const renameBranchFrom = ref('')
   const renameBranchTo = ref('')
 
+  const beginLoadBranches = createLatestRequestGuard(() => root.value, branches)
+
   async function loadBranches() {
     const dir = root.value
     if (!dir) return
+    const isCurrent = beginLoadBranches()
     branchesLoading.value = true
     try {
-      branches.value = await gitJson<GitBranchesResponse>('branches', dir)
+      const response = await gitJson<GitBranchesResponse>('branches', dir)
+      if (!isCurrent()) return
+      branches.value = response
+      if (isBranchDialogOpen.value) await loadBranchPicker()
     } catch {
+      if (!isCurrent()) return
       branches.value = null
     } finally {
-      branchesLoading.value = false
+      if (isCurrent()) branchesLoading.value = false
     }
   }
+
+  const beginLoadBranchPicker = createLatestRequestGuard(() => root.value, branchPicker)
 
   async function loadBranchPicker(opts?: { page?: number; pageSize?: number; search?: string }) {
     const dir = root.value
     if (!dir) return
+    const isCurrent = beginLoadBranchPicker()
     const pageRaw = Number(opts?.page ?? branchPickerPage.value)
     const pageSizeRaw = Number(opts?.pageSize ?? branchPickerPageSize.value)
     const page = Number.isFinite(pageRaw) ? Math.max(1, Math.floor(pageRaw)) : 1
@@ -71,6 +82,7 @@ export function useGitBranches(opts: {
         search: search || undefined,
         localOnly: true,
       })
+      if (!isCurrent()) return
       branchPicker.value = resp
       branchPickerPage.value = Number(resp.page || page) || page
       branchPickerPageSize.value = Number(resp.pageSize || pageSize) || pageSize
@@ -78,12 +90,13 @@ export function useGitBranches(opts: {
       branchPickerTotalPages.value = Math.max(1, Number(resp.totalPages || 1) || 1)
       branchPickerSearch.value = String(resp.search ?? search)
     } catch {
+      if (!isCurrent()) return
       branchPicker.value = null
       branchPickerPage.value = 1
       branchPickerTotal.value = 0
       branchPickerTotalPages.value = 1
     } finally {
-      branchPickerLoading.value = false
+      if (isCurrent()) branchPickerLoading.value = false
     }
   }
 

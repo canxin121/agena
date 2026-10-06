@@ -1,5 +1,6 @@
 import { ref, type Ref } from 'vue'
 import { i18n } from '@/i18n'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
 
 import type { GitTagInfo, GitTagsListResponse } from '@/types/git'
 import type { JsonValue } from '@/types/json'
@@ -34,18 +35,23 @@ export function useGitTags(opts: {
   const newTagMessage = ref('')
   const tagRemote = ref('origin')
 
+  const beginLoadTags = createLatestRequestGuard(() => repoRoot.value, tagsList)
+
   async function loadTags() {
     const dir = repoRoot.value
     if (!dir) return
+    const isCurrent = beginLoadTags()
     tagsLoading.value = true
     try {
       const resp = await gitJson<GitTagsListResponse>('tags', dir)
+      if (!isCurrent()) return
       tagsList.value = Array.isArray(resp?.tags) ? resp.tags : []
     } catch (err) {
+      if (!isCurrent()) return
       tagsList.value = []
       toasts.push('error', err instanceof Error ? err.message : String(err))
     } finally {
-      tagsLoading.value = false
+      if (isCurrent()) tagsLoading.value = false
     }
   }
 

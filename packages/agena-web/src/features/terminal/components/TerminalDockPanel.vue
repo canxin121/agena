@@ -356,6 +356,12 @@ function normalizeState(next: TerminalUiState): TerminalUiState {
 let terminalStateController: AbortController | null = null
 let terminalInfoRequest: { sessionId: string; controller: AbortController } | null = null
 
+function cancelSessionInfoRead() {
+  sessionInfoRequest++
+  terminalInfoRequest?.controller.abort()
+  terminalInfoRequest = null
+}
+
 async function refreshActiveSessionInfo() {
   if (!isDocumentVisible()) return
   const sid = String(activeSessionId.value || '').trim()
@@ -415,7 +421,7 @@ async function refreshState(opts?: { silent?: boolean }) {
   try {
     const next = await getTerminalUiState(controller.signal)
     if (controller.signal.aborted) return
-    uiState.value = normalizeState(next)
+    if (!uiState.value || next.version >= uiState.value.version) uiState.value = normalizeState(next)
     if (!activeSessionId.value) {
       closeStream()
       activeSessionInfo.value = null
@@ -441,7 +447,7 @@ async function updateState(next: TerminalUiState) {
   loading.value = false
   refreshing.value = false
   const saved = await putTerminalUiState(next)
-  uiState.value = normalizeState(saved)
+  if (!uiState.value || saved.version >= uiState.value.version) uiState.value = normalizeState(saved)
 }
 
 async function activateSession(id: string) {
@@ -519,6 +525,7 @@ async function startActiveSession() {
   try {
     const info = await startTerminalSession(sid)
     if (activeSessionId.value !== sid) return
+    cancelSessionInfoRead()
     activeSessionInfo.value = info
     setTerminalStdinEnabled(info.running === true)
     renderSessionOutput(sid)
@@ -542,6 +549,7 @@ async function stopActiveSession() {
   try {
     await stopTerminalSession(sid)
     if (activeSessionId.value !== sid) return
+    cancelSessionInfoRead()
     closeStream()
     status.value = 'disconnected'
     activeSessionInfo.value = {
@@ -618,9 +626,10 @@ function watchTerminalState() {
       let snapshot: unknown = event.state
       if (event.type === 'terminal-ui-state.patch') {
         const ops = event.properties?.ops
-        if (Array.isArray(ops)) for (const op of ops) {
-          if (op && typeof op === 'object' && !Array.isArray(op) && op.type === 'state.replace') snapshot = op.state
-        }
+        if (Array.isArray(ops))
+          for (const op of ops) {
+            if (op && typeof op === 'object' && !Array.isArray(op) && op.type === 'state.replace') snapshot = op.state
+          }
       }
       if (!snapshot || typeof snapshot !== 'object' || !('version' in snapshot)) return
       const next = snapshot as TerminalUiState

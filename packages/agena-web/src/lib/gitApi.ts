@@ -1,4 +1,11 @@
 import { apiJson } from '@/lib/api'
+import { captureResourceObservation } from './resourceSync'
+
+const mutationListeners = new Set<(directory: string, path: string) => void>()
+export function subscribeGitMutations(callback: (directory: string, path: string) => void) {
+  mutationListeners.add(callback)
+  return () => mutationListeners.delete(callback)
+}
 
 type QueryValue = string | number | boolean | null | undefined
 
@@ -26,7 +33,16 @@ export async function gitJson<T>(
   query?: Record<string, QueryValue>,
   init?: RequestInit,
 ): Promise<T> {
-  return await apiJson<T>(gitUrl(path, directory, query), init)
+  const scope = captureResourceObservation('sessions').scope
+  const result = await apiJson<T>(gitUrl(path, directory, query), init)
+  if (
+    init?.method &&
+    !['GET', 'HEAD'].includes(init.method.toUpperCase()) &&
+    scope === captureResourceObservation('sessions').scope
+  ) {
+    for (const listener of mutationListeners) listener(directory, path.replace(/^\/+/, ''))
+  }
+  return result
 }
 
 export function gitWatchUrl(directory: string, intervalMs = 1500, path?: string | null): string {

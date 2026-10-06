@@ -1,5 +1,6 @@
 import { ref, type Ref } from 'vue'
 import { i18n } from '@/i18n'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
 
 import type { GitRepoEntry, GitRepoListResponse } from '@/types/git'
 import type { JsonValue } from '@/types/json'
@@ -62,26 +63,33 @@ export function useGitRepoSelection(opts: {
   const cloneRepoRecursive = ref(false)
   const cloneRepoBusy = ref(false)
 
+  const beginLoadRepos = createLatestRequestGuard(() => projectRoot.value, repos)
+
   async function loadRepos() {
     const dir = projectRoot.value
     if (!dir) return
+    const isCurrent = beginLoadRepos()
+    const isPickerCurrent = beginLoadRepoPickerPage()
     reposLoading.value = true
     reposError.value = null
     try {
       const resp = await gitJson<GitRepoListResponse>('repos', dir)
+      if (!isCurrent()) return
       const allRepos = Array.isArray(resp.repos) ? resp.repos : []
       const closed = new Set(gitRepos.getClosedRelatives(dir).map((x) => (x || '').trim() || '.'))
       repos.value = allRepos.filter((r) => !closed.has((r.relative || '.').trim() || '.'))
-      repoPickerRepos.value = repos.value
       closedRepos.value = allRepos.filter((r) => closed.has((r.relative || '.').trim() || '.'))
-      parentRepos.value = Array.isArray(resp?.parentRepos)
-        ? resp.parentRepos.map((x) => (x || '').trim()).filter(Boolean)
-        : []
-      repoPickerPage.value = Number(resp.page || 1) || 1
-      repoPickerPageSize.value = Number(resp.pageSize || repos.value.length || 1) || 1
-      repoPickerTotal.value = Number(resp.total || repos.value.length) || repos.value.length
-      repoPickerTotalPages.value = Number(resp.totalPages || 1) || 1
-      repoPickerSearch.value = String(resp.search || '')
+      if (isPickerCurrent()) {
+        repoPickerRepos.value = repos.value
+        parentRepos.value = Array.isArray(resp?.parentRepos)
+          ? resp.parentRepos.map((x) => (x || '').trim()).filter(Boolean)
+          : []
+        repoPickerPage.value = Number(resp.page || 1) || 1
+        repoPickerPageSize.value = Number(resp.pageSize || repos.value.length || 1) || 1
+        repoPickerTotal.value = Number(resp.total || repos.value.length) || repos.value.length
+        repoPickerTotalPages.value = Number(resp.totalPages || 1) || 1
+        repoPickerSearch.value = String(resp.search || '')
+      }
 
       // Ensure selection is valid.
       const rel = selectedRepoRelative.value
@@ -91,22 +99,28 @@ export function useGitRepoSelection(opts: {
         gitRepos.setSelectedRelative(dir, fallback)
       }
     } catch (err) {
+      if (!isCurrent()) return
       reposError.value = err instanceof Error ? err.message : String(err)
       repos.value = []
-      repoPickerRepos.value = []
       closedRepos.value = []
-      parentRepos.value = []
-      repoPickerPage.value = 1
-      repoPickerTotal.value = 0
-      repoPickerTotalPages.value = 1
+      if (isPickerCurrent()) {
+        repoPickerRepos.value = []
+        parentRepos.value = []
+        repoPickerPage.value = 1
+        repoPickerTotal.value = 0
+        repoPickerTotalPages.value = 1
+      }
     } finally {
-      reposLoading.value = false
+      if (isCurrent()) reposLoading.value = false
     }
   }
+
+  const beginLoadRepoPickerPage = createLatestRequestGuard(() => projectRoot.value, repoPickerRepos)
 
   async function loadRepoPickerPage(opts?: { page?: number; pageSize?: number; search?: string }) {
     const dir = projectRoot.value
     if (!dir) return
+    const isCurrent = beginLoadRepoPickerPage()
     const pageRaw = Number(opts?.page ?? repoPickerPage.value)
     const pageSizeRaw = Number(opts?.pageSize ?? repoPickerPageSize.value)
     const page = Number.isFinite(pageRaw) ? Math.max(1, Math.floor(pageRaw)) : 1
@@ -121,6 +135,7 @@ export function useGitRepoSelection(opts: {
         pageSize,
         search: search || undefined,
       })
+      if (!isCurrent()) return
       const allRepos = Array.isArray(resp.repos) ? resp.repos : []
       repoPickerRepos.value = allRepos
       parentRepos.value = Array.isArray(resp?.parentRepos)
@@ -132,13 +147,14 @@ export function useGitRepoSelection(opts: {
       repoPickerTotalPages.value = Math.max(1, Number(resp.totalPages || 1) || 1)
       repoPickerSearch.value = String(resp.search ?? search)
     } catch (err) {
+      if (!isCurrent()) return
       reposError.value = err instanceof Error ? err.message : String(err)
       repoPickerRepos.value = []
       repoPickerPage.value = 1
       repoPickerTotal.value = 0
       repoPickerTotalPages.value = 1
     } finally {
-      repoPickerLoading.value = false
+      if (isCurrent()) repoPickerLoading.value = false
     }
   }
 

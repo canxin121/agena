@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import { ref } from 'vue'
 import { i18n } from '@/i18n'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
 
 import type { GitWorktreeInfo } from '@/types/git'
 import type { JsonValue } from '@/types/json'
@@ -23,6 +24,7 @@ export function useGitWorktrees(opts: {
   toasts: Toasts
   withRepoBusy: (op: string, fn: () => Promise<void>) => Promise<void>
   handleGitBusy: <T>(err: T, op: string, retry: () => Promise<void>) => boolean
+  refreshWorkingTree: () => Promise<void>
 }) {
   const { repoRoot, gitJson, toasts, withRepoBusy, handleGitBusy } = opts
 
@@ -36,19 +38,24 @@ export function useGitWorktrees(opts: {
   const newWorktreeStartPoint = ref('HEAD')
   const newWorktreeCreateBranch = ref(false)
 
+  const beginLoadWorktrees = createLatestRequestGuard(() => repoRoot.value, worktrees)
+
   async function loadWorktrees() {
     const dir = repoRoot.value
     if (!dir) return
+    const isCurrent = beginLoadWorktrees()
     worktreesLoading.value = true
     worktreesError.value = null
     try {
       const resp = await gitJson<GitWorktreeInfo[]>('worktrees', dir)
+      if (!isCurrent()) return
       worktrees.value = Array.isArray(resp) ? resp : []
     } catch (err) {
+      if (!isCurrent()) return
       worktrees.value = []
       worktreesError.value = err instanceof Error ? err.message : String(err)
     } finally {
-      worktreesLoading.value = false
+      if (isCurrent()) worktreesLoading.value = false
     }
   }
 
@@ -148,6 +155,7 @@ export function useGitWorktrees(opts: {
         })
         toasts.push('success', i18n.global.t('git.toasts.migratedWorktreeChanges'))
         await loadWorktrees()
+        await opts.refreshWorkingTree()
       } catch (err) {
         if (handleGitBusy(err, 'Migrate worktree changes', () => migrateWorktreeChanges(sourcePath))) return
         toasts.push('error', err instanceof Error ? err.message : String(err))

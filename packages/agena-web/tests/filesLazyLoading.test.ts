@@ -217,6 +217,10 @@ type FileEditingState = {
   directoryNextOffset: Ref<Record<string, number>>
   loadDirectory(path: string, options?: { force?: boolean; preserveLoaded?: boolean }): Promise<void>
   cancelDirectoryRequests(): void
+  expandedDirs: Ref<Set<string>>
+  createNode(kind: 'createFile' | 'createFolder', base: string, name: string): Promise<void>
+  renameNodePath(path: string, name: string): Promise<void>
+  deletePaths(paths: string[]): Promise<void>
 }
 
 async function withFileEditor(run: (state: FileEditingState) => Promise<void>) {
@@ -327,4 +331,21 @@ test('automatic directory refresh preserves exactly the loaded pagination prefix
     assert.equal(state.entriesByDir.value['/repo']?.length, 800)
     assert.equal(state.entriesByDir.value['/repo']?.[0]?.name, 'current-0')
     assert.equal(state.directoryNextOffset.value['/repo'], 800)
+  }))
+
+test('creating, renaming and deleting a file refresh only its containing folder', async () =>
+  withFileEditor(async (state) => {
+    state.expandedDirs.value = new Set(['/repo/changed', '/repo/other'])
+    state.entriesByDir.value = { '/repo': [], '/repo/changed': [], '/repo/other': [] }
+    const lists: string[] = []
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input), 'http://agena.test')
+      if (init?.method && init.method !== 'GET') return Response.json({ success: true })
+      lists.push(url.searchParams.get('path')!)
+      return Response.json({ entries: [], nextOffset: 0, hasMore: false })
+    }) as typeof fetch
+    await state.createNode('createFile', '/repo/changed', 'new.txt')
+    await state.renameNodePath('/repo/changed/new.txt', 'renamed.txt')
+    await state.deletePaths(['/repo/changed/renamed.txt'])
+    assert.deepEqual(lists, ['/repo/changed', '/repo/changed', '/repo/changed'])
   }))

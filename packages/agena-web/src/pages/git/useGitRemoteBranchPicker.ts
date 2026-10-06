@@ -1,4 +1,7 @@
-import { computed, ref, watch, type Ref } from 'vue'
+import { computed, getCurrentScope, onScopeDispose, ref, watch, type Ref } from 'vue'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
+import { captureResourceObservation } from '@/lib/resourceSync'
+import { subscribeGitMutations } from '@/lib/gitApi'
 import type { JsonValue } from '@/types/json'
 
 type QueryValue = string | number | boolean | null | undefined
@@ -33,6 +36,11 @@ export function useGitRemoteBranchPicker(opts: {
   const remoteBranchCache = ref<Record<string, RemoteBranchCacheEntry>>({})
   const remoteBranchInflight = ref<Record<string, Promise<string[]>>>({})
   let remoteBranchFetchTimer: number | null = null
+  const generations = new Map<string, number>()
+  const beginRead = createLatestRequestGuard(
+    () => `${captureResourceObservation('sessions').scope}:${repoRoot.value}:${targetRemote.value}`,
+    remoteBranchOptions,
+  )
 
   const filteredRemoteBranchOptions = computed(() => {
     const q = (targetBranch.value || '').trim().toLowerCase()
@@ -95,11 +103,16 @@ export function useGitRemoteBranchPicker(opts: {
     const dir = (directory || '').trim()
     if (!dir) return
 
-    const key = `${dir}::${r}`
+    const prefix = `${captureResourceObservation('sessions').scope}:${dir}::`
+    const key = `${prefix}${r}`
+    const generation = generations.get(prefix) ?? 0
+    const latest = beginRead()
+    const isCurrent = () => latest() && generation === (generations.get(prefix) ?? 0)
     const now = Date.now()
     const cached = remoteBranchCache.value[key]
     if (cached && now - cached.fetchedAt < REMOTE_BRANCH_CACHE_TTL_MS) {
       remoteBranchOptions.value = cached.branches
+      remoteBranchLoading.value = false
       return
     }
 
@@ -107,9 +120,12 @@ export function useGitRemoteBranchPicker(opts: {
     if (inflight) {
       remoteBranchLoading.value = true
       try {
-        remoteBranchOptions.value = await inflight
+        const branches = await inflight
+        if (isCurrent()) remoteBranchOptions.value = branches
+      } catch (error) {
+        if (isCurrent()) remoteBranchOptions.value = []
       } finally {
-        remoteBranchLoading.value = false
+        if (isCurrent()) remoteBranchLoading.value = false
       }
       return
     }
@@ -118,21 +134,25 @@ export function useGitRemoteBranchPicker(opts: {
     const p = (async () => {
       const resp = await gitJson<GitRemoteBranchListResponse>('remote-branches', dir, { remote: r })
       const branches = Array.isArray(resp?.branches) ? resp.branches : []
-      remoteBranchCache.value = {
-        ...remoteBranchCache.value,
-        [key]: { fetchedAt: Date.now(), branches },
+      if (generation === (generations.get(prefix) ?? 0)) {
+        const next = { ...remoteBranchCache.value, [key]: { fetchedAt: Date.now(), branches } }
+        if (Object.keys(next).length > 64) delete next[Object.keys(next)[0]!]
+        remoteBranchCache.value = next
       }
       return branches
     })()
 
     remoteBranchInflight.value = { ...remoteBranchInflight.value, [key]: p }
     try {
-      remoteBranchOptions.value = await p
+      const branches = await p
+      if (isCurrent()) remoteBranchOptions.value = branches
+    } catch (error) {
+      if (isCurrent()) remoteBranchOptions.value = []
     } finally {
       const next = { ...remoteBranchInflight.value }
-      delete next[key]
+      if (next[key] === p) delete next[key]
       remoteBranchInflight.value = next
-      remoteBranchLoading.value = false
+      if (isCurrent()) remoteBranchLoading.value = false
     }
   }
 
@@ -149,20 +169,57 @@ export function useGitRemoteBranchPicker(opts: {
       if (remoteBranchFetchTimer) window.clearTimeout(remoteBranchFetchTimer)
       remoteBranchFetchTimer = window.setTimeout(() => {
         remoteBranchFetchTimer = null
-        void loadRemoteBranches(d, r).catch(() => (remoteBranchOptions.value = []))
+        void loadRemoteBranches(d, r)
       }, 200)
     },
   )
 
   function clearRemoteBranchOptions() {
+    beginRead()
     remoteBranchOptions.value = []
+    remoteBranchLoading.value = false
   }
 
   function prefetchRemoteBranches(remote: string) {
     const dir = (repoRoot.value || '').trim()
     const r = (remote || '').trim()
     if (!dir || !r) return
-    void loadRemoteBranches(dir, r).catch(() => (remoteBranchOptions.value = []))
+    void loadRemoteBranches(dir, r)
+  }
+
+  if (getCurrentScope()) {
+    const release = subscribeGitMutations((directory, path) => {
+      if (
+        ![
+          'fetch',
+          'pull',
+          'push',
+          'remotes',
+          'remotes/rename',
+          'remotes/set-url',
+          'branches/delete-remote',
+          'create-github-repo-and-push',
+        ].includes(path)
+      )
+        return
+      const prefix = `${captureResourceObservation('sessions').scope}:${directory}::`
+      generations.set(prefix, (generations.get(prefix) ?? 0) + 1)
+      const keep = <T>(rows: Record<string, T>) =>
+        Object.fromEntries(Object.entries(rows).filter(([key]) => !key.startsWith(prefix)))
+      remoteBranchCache.value = keep(remoteBranchCache.value)
+      remoteBranchInflight.value = keep(remoteBranchInflight.value)
+      if (generations.size > 64) generations.delete(generations.keys().next().value!)
+      if (repoRoot.value === directory) {
+        beginRead()
+        remoteBranchLoading.value = false
+        if (pushToOpen.value || pullFromOpen.value || fetchFromOpen.value) prefetchRemoteBranches(targetRemote.value)
+      }
+    })
+    onScopeDispose(() => {
+      release()
+      beginRead()
+      if (remoteBranchFetchTimer !== null) window.clearTimeout(remoteBranchFetchTimer)
+    })
   }
 
   watch(

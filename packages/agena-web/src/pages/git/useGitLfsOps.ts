@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { i18n } from '@/i18n'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
 
 import type { GitLfsLockInfo, GitLfsLocksResponse, GitLfsStatusResponse } from '@/types/git'
 import type { JsonValue } from '@/types/json'
@@ -38,35 +39,45 @@ export function useGitLfsOps(opts: {
   const lfsTrackPattern = ref('')
   const lfsLockPath = ref('')
 
+  const beginLoadLfsStatus = createLatestRequestGuard(() => repoRoot.value, lfsTracked)
+
   async function loadLfsStatus() {
     const dir = repoRoot.value
     if (!dir) return
+    const isCurrent = beginLoadLfsStatus()
     lfsLoading.value = true
     lfsError.value = null
     try {
       const resp = await gitJson<GitLfsStatusResponse>('lfs', dir)
+      if (!isCurrent()) return
       lfsInstalled.value = Boolean(resp?.installed)
       lfsVersion.value = resp?.version ?? null
       lfsTracked.value = Array.isArray(resp?.tracked) ? resp.tracked : []
     } catch (err) {
+      if (!isCurrent()) return
       lfsError.value = err instanceof Error ? err.message : String(err)
     } finally {
-      lfsLoading.value = false
+      if (isCurrent()) lfsLoading.value = false
     }
   }
+
+  const beginLoadLfsLocks = createLatestRequestGuard(() => repoRoot.value, lfsLocks)
 
   async function loadLfsLocks() {
     const dir = repoRoot.value
     if (!dir) return
+    const isCurrent = beginLoadLfsLocks()
     lfsLocksLoading.value = true
     try {
       const resp = await gitJson<GitLfsLocksResponse>('lfs/locks', dir)
+      if (!isCurrent()) return
       lfsLocks.value = Array.isArray(resp?.locks) ? resp.locks : []
     } catch (err) {
+      if (!isCurrent()) return
       lfsLocks.value = []
       lfsError.value = err instanceof Error ? err.message : String(err)
     } finally {
-      lfsLocksLoading.value = false
+      if (isCurrent()) lfsLocksLoading.value = false
     }
   }
 

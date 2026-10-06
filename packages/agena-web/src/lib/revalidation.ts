@@ -6,6 +6,7 @@ export function createRevalidator(
   options: { intervalMs?: number; retryMs?: number; pollIntervalMs?: number; enabled?: () => boolean } = {},
 ) {
   let pending = false
+  let pendingAt = Infinity
   let disposed = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let scheduledAt = Infinity
@@ -16,7 +17,7 @@ export function createRevalidator(
 
   function schedule(delay = interval) {
     if (disposed || flight || !pending || options.enabled?.() === false) return
-    const wait = Math.max(0, delay, nextAllowedAt - Date.now())
+    const wait = Math.max(0, delay, nextAllowedAt - Date.now(), Number.isFinite(pendingAt) ? pendingAt - Date.now() : 0)
     const due = Date.now() + wait
     if (timer && scheduledAt <= due) return
     if (timer) clearTimeout(timer)
@@ -34,16 +35,19 @@ export function createRevalidator(
     if (flight) return flight
     if (options.enabled?.() === false) {
       pending = true
+      pendingAt = Math.min(pendingAt, Date.now())
       return Promise.resolve()
     }
     if (Date.now() < nextAllowedAt) {
       pending = true
+      pendingAt = Math.min(pendingAt, Date.now())
       schedule(0)
       return Promise.resolve()
     }
     if (timer) clearTimeout(timer)
     timer = undefined
     pending = false
+    pendingAt = Infinity
     scheduledAt = Infinity
     flight = Promise.resolve()
       .then(() => {
@@ -80,6 +84,10 @@ export function createRevalidator(
     refresh,
     invalidate(delay = interval) {
       pending = true
+      // Preserve a requested deadline when the invalidation arrives inside
+      // read(). A background task's 1.5s status check must not become a 250ms
+      // trailing loop; a newer urgent invalidation can still bring it forward.
+      pendingAt = Math.min(pendingAt, Date.now() + Math.max(0, delay))
       schedule(delay)
     },
     resume() {

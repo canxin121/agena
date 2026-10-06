@@ -3352,7 +3352,7 @@ async function moveNodeByDrag(sourcePath: string, targetDir: string): Promise<bo
 
   try {
     await renamePath({ directory: rootPath, oldPath: source, newPath: nextPath })
-    invalidateFileReadCache({ directory: rootPath })
+    invalidateFileReadCache({ directory: rootPath, paths: [source, nextPath] })
 
     const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
     const selectedFilePath = normalizePath(String(selectedFile.value?.path || '').trim())
@@ -3371,7 +3371,7 @@ async function moveNodeByDrag(sourcePath: string, targetDir: string): Promise<bo
     selectedDirectoryPath.value = destination
 
     await ensureDirectoryExpanded(destination)
-    await refreshRoot()
+    await refreshRoot({ paths: [source, nextPath] })
     toasts.push('success', t('files.toasts.movedCount', { count: 1 }))
     return true
   } catch (err) {
@@ -3397,6 +3397,7 @@ async function moveSelectedNodes(paths: string[], destinationInput: string) {
   let failedCount = 0
   let firstError = ''
   let affectedCurrentSelection = false
+  const movedPaths: string[] = []
 
   for (const target of targets) {
     if (destination === target || destination.startsWith(`${target}/`)) {
@@ -3417,6 +3418,7 @@ async function moveSelectedNodes(paths: string[], destinationInput: string) {
     try {
       await renamePath({ directory: rootPath, oldPath: target, newPath: nextPath })
       successCount += 1
+      movedPaths.push(target, nextPath)
 
       const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
       if (selectedDir && (selectedDir === target || selectedDir.startsWith(`${target}/`))) {
@@ -3436,7 +3438,7 @@ async function moveSelectedNodes(paths: string[], destinationInput: string) {
   }
 
   if (successCount > 0) {
-    invalidateFileReadCache({ directory: rootPath })
+    invalidateFileReadCache({ directory: rootPath, paths: movedPaths })
     if (affectedCurrentSelection) {
       resetViewerSelectionState()
       selectedDirectoryPath.value = ''
@@ -3444,7 +3446,7 @@ async function moveSelectedNodes(paths: string[], destinationInput: string) {
     clearSelectedPaths()
     selectedDirectoryPath.value = destination
     await ensureDirectoryExpanded(destination)
-    await refreshRoot()
+    await refreshRoot({ paths: movedPaths })
   }
 
   if (successCount > 0 && failedCount === 0) {
@@ -3576,7 +3578,7 @@ async function uploadFilesToDirectory(files: readonly File[] | FileList, targetD
 
     if (uploadedCount > 0) {
       invalidateFileReadCache({ directory: rootPath, paths: uploadedPaths })
-      await refreshRoot()
+      await refreshRoot({ paths: uploadedPaths })
     }
   } finally {
     uploading.value = false
@@ -3654,7 +3656,7 @@ async function createNode(kind: CreateKind, basePath: string, name: string) {
     toasts.push('success', t('files.toasts.folderCreated'))
   }
 
-  await refreshRoot()
+  await refreshRoot({ paths: [target] })
 }
 
 async function createNodeFromExplorer(kind: CreateKind, basePath: string, name: string): Promise<boolean> {
@@ -3683,7 +3685,7 @@ async function renameNodePath(oldPath: string, nextName: string) {
   if (newPath === sourcePath) return
 
   await renamePath({ directory: rootPath, oldPath: sourcePath, newPath })
-  invalidateFileReadCache({ directory: rootPath })
+  invalidateFileReadCache({ directory: rootPath, paths: [sourcePath, newPath] })
   applyExplorerRenameState(sourcePath, newPath)
 
   const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
@@ -3705,7 +3707,7 @@ async function renameNodePath(oldPath: string, nextName: string) {
     closeFileTimeline()
   }
 
-  await refreshRoot()
+  await refreshRoot({ paths: [sourcePath, newPath] })
 
   toasts.push('success', t('files.toasts.renamed'))
 }
@@ -3826,7 +3828,7 @@ async function deletePaths(targets: string[], opts?: { batch?: boolean }) {
       try {
         await deletePathApi({ directory: rootPath, path: target })
         successCount += 1
-        invalidateFileReadCache({ directory: rootPath })
+        invalidateFileReadCache({ directory: rootPath, paths: [target] })
         applyExplorerDeletionState(target)
         applyDeletionState(target)
       } catch (err) {
@@ -3842,7 +3844,7 @@ async function deletePaths(targets: string[], opts?: { batch?: boolean }) {
     }
 
     if (successCount > 0) {
-      await refreshRoot()
+      await refreshRoot({ paths: uniqueTargets })
     }
 
     if (opts?.batch) {
@@ -4033,7 +4035,7 @@ const filesystemRefresh = createRevalidator(
       fileLoading.value ||
       fileChunkLoadingMore.value
     ) {
-      throw new Error('File read is busy; retain pending filesystem reconciliation')
+      throw new DOMException('File read is busy; retain pending filesystem reconciliation', 'AbortError')
     }
     const paths = fullFilesystemRefresh ? undefined : [...changedFilesystemPaths]
     fullFilesystemRefresh = false
@@ -4043,7 +4045,7 @@ const filesystemRefresh = createRevalidator(
       await refreshRoot({ paths, throwOnError: true })
       if (root.value !== rootPath) return
       if (isSaving.value || isRefreshingFile.value || fileLoading.value || fileChunkLoadingMore.value) {
-        throw new Error('File became busy during tree reconciliation')
+        throw new DOMException('File became busy during tree reconciliation', 'AbortError')
       }
       const selected = selectedFile.value?.path
       if (selected && (!paths || paths.some((path) => selected === path || selected.startsWith(`${path}/`)))) {
@@ -4061,7 +4063,7 @@ const filesystemRefresh = createRevalidator(
       throw error
     }
   },
-  { intervalMs: 1000, retryMs: 5000, enabled: () => pageMounted && document.visibilityState !== 'hidden' },
+  { intervalMs: 250, retryMs: 5000, enabled: () => pageMounted && document.visibilityState !== 'hidden' },
 )
 
 function invalidateFilesystem() {

@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { i18n } from '@/i18n'
+import { createLatestRequestGuard } from '@/lib/latestRequest'
 
 import type { GitSubmoduleInfo, GitSubmoduleListResponse } from '@/types/git'
 import type { JsonValue } from '@/types/json'
@@ -22,6 +23,7 @@ export function useGitSubmoduleOps(opts: {
   toasts: Toasts
   withRepoBusy: (op: string, fn: () => Promise<void>) => Promise<void>
   handleGitBusy: <T>(err: T, op: string, retry: () => Promise<void>) => boolean
+  refreshWorkingTree: () => Promise<void>
 }) {
   const { repoRoot, gitJson, toasts, withRepoBusy, handleGitBusy } = opts
 
@@ -34,19 +36,24 @@ export function useGitSubmoduleOps(opts: {
   const newSubmodulePath = ref('')
   const newSubmoduleBranch = ref('')
 
+  const beginLoadSubmodules = createLatestRequestGuard(() => repoRoot.value, submodules)
+
   async function loadSubmodules() {
     const dir = repoRoot.value
     if (!dir) return
+    const isCurrent = beginLoadSubmodules()
     submodulesLoading.value = true
     submodulesError.value = null
     try {
       const resp = await gitJson<GitSubmoduleListResponse>('submodules', dir)
+      if (!isCurrent()) return
       submodules.value = Array.isArray(resp?.submodules) ? resp.submodules : []
     } catch (err) {
+      if (!isCurrent()) return
       submodules.value = []
       submodulesError.value = err instanceof Error ? err.message : String(err)
     } finally {
-      submodulesLoading.value = false
+      if (isCurrent()) submodulesLoading.value = false
     }
   }
 
@@ -75,6 +82,7 @@ export function useGitSubmoduleOps(opts: {
         newSubmodulePath.value = ''
         newSubmoduleBranch.value = ''
         await loadSubmodules()
+        await opts.refreshWorkingTree()
       } catch (err) {
         if (handleGitBusy(err, 'Add submodule', addSubmodule)) return
         toasts.push('error', err instanceof Error ? err.message : String(err))
@@ -95,6 +103,8 @@ export function useGitSubmoduleOps(opts: {
           body: JSON.stringify({ path: p }),
         })
         toasts.push('success', i18n.global.t('git.toasts.initializedItem', { name: p }))
+        await loadSubmodules()
+        await opts.refreshWorkingTree()
       } catch (err) {
         if (handleGitBusy(err, 'Init submodule', () => initSubmodule(p))) return
         toasts.push('error', err instanceof Error ? err.message : String(err))
@@ -117,6 +127,8 @@ export function useGitSubmoduleOps(opts: {
           'success',
           p ? i18n.global.t('git.toasts.updatedSubmodule', { path: p }) : i18n.global.t('git.toasts.updatedSubmodules'),
         )
+        await loadSubmodules()
+        await opts.refreshWorkingTree()
       } catch (err) {
         if (handleGitBusy(err, 'Update submodule', () => updateSubmodule(p, recursive, init))) return
         toasts.push('error', err instanceof Error ? err.message : String(err))

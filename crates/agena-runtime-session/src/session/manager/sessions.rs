@@ -158,8 +158,14 @@ impl SessionManager {
             return Ok(());
         }
         self.reconcile_interrupted_session(session_id).await?;
-        let session = self.store.load_session(session_id).await?;
-        let root_id = session.root_id;
+        let root_id = self
+            .store
+            .facade
+            .load_part_ids(session_id, &[])
+            .await
+            .map_err(crate::session::store::store_error)?
+            .meta
+            .root_id;
         for summary in self.store.list_session_tree(root_id).await? {
             if summary.parent_id == Some(session_id) {
                 self.reconcile_interrupted_session(summary.id).await?;
@@ -326,6 +332,23 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let mut session = self.store.load_session(session_id).await?;
         self.bind_session_workspace_root(&mut session).await?;
+        Ok(session)
+    }
+
+    pub(in crate::session::manager) async fn get_session_controls(
+        &self,
+        session_id: i64,
+    ) -> Result<Session, AppError> {
+        self.reconcile_session_on_open(session_id).await?;
+        let view = self
+            .store
+            .facade
+            .load_control_parts(session_id)
+            .await
+            .map_err(crate::session::store::store_error)?;
+        let mut session = crate::session::store::session_from_view(view)?;
+        self.bind_session_workspace_root(&mut session).await?;
+        self.refresh_execution_policy(&mut session, &self.execution_state());
         Ok(session)
     }
 

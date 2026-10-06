@@ -6,10 +6,17 @@ use uuid::Uuid;
 impl ApplicationService {
     /// Metadata-only catalog check; avoids session counts/tree projections.
     pub async fn workspace_revision_rows(&self) -> ApplicationResult<Vec<(i64, i64, String)>> {
-        Ok(self.workspace_repository.list(StorageWorkspaceListQuery {
-            limit: i64::MAX as u64, ..Default::default()
-        }).await.map_err(|error| ApplicationError::internal_error(&error))?
-            .into_iter().map(|row| (row.id, row.updated_at_ms, row.path)).collect())
+        Ok(self
+            .workspace_repository
+            .list(StorageWorkspaceListQuery {
+                limit: i64::MAX as u64,
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| ApplicationError::internal_error(&error))?
+            .into_iter()
+            .map(|row| (row.id, row.updated_at_ms, row.path))
+            .collect())
     }
 
     pub async fn list_workspaces(
@@ -329,6 +336,35 @@ impl ApplicationService {
         workspace_id: i64,
         request: WorkspaceFileUploadRequest,
     ) -> ApplicationResult<WorkspaceFileUploadResource> {
+        self.upload_workspace_file_data(workspace_id, request, None)
+            .await
+    }
+
+    pub async fn upload_workspace_file_bytes(
+        &self,
+        workspace_id: i64,
+        filename: String,
+        mime: Option<String>,
+        bytes: Vec<u8>,
+    ) -> ApplicationResult<WorkspaceFileUploadResource> {
+        self.upload_workspace_file_data(
+            workspace_id,
+            WorkspaceFileUploadRequest {
+                filename,
+                mime,
+                data_base64: String::new(),
+            },
+            Some(bytes),
+        )
+        .await
+    }
+
+    async fn upload_workspace_file_data(
+        &self,
+        workspace_id: i64,
+        request: WorkspaceFileUploadRequest,
+        bytes: Option<Vec<u8>>,
+    ) -> ApplicationResult<WorkspaceFileUploadResource> {
         const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
 
         let root_path = PathBuf::from(
@@ -343,6 +379,7 @@ impl ApplicationService {
                     )
                 })?,
         );
+        tokio::task::spawn_blocking(move || {
         let root = root_path
             .canonicalize()
             .map_err(|error| workspace_fs_error(root_path.as_path(), error))?;
@@ -360,11 +397,14 @@ impl ApplicationService {
             ));
         }
 
-        let decoded = BASE64_STANDARD
+        let decoded = match bytes {
+            Some(bytes) => bytes,
+            None => BASE64_STANDARD
             .decode(request.data_base64.trim().as_bytes())
             .map_err(|_| {
                 ApplicationError::bad_request("The uploaded file data is not valid base64.")
-            })?;
+            })?,
+        };
         if decoded.is_empty() {
             return Err(ApplicationError::bad_request("The uploaded file is empty."));
         }
@@ -432,6 +472,7 @@ impl ApplicationService {
             mime: non_empty(request.mime.as_deref()).map(ToOwned::to_owned),
             size_bytes: decoded.len() as u64,
         })
+        }).await.map_err(|error| ApplicationError::internal_error(&error))?
     }
 
     pub async fn create_workspace(
@@ -521,7 +562,12 @@ impl ApplicationService {
         let path = canonical_workspace_identity(request.path.as_str()).map_err(|error| {
             ApplicationError::bad_request_with_diagnostic("The workspace path is invalid.", error)
         })?;
-        if path == existing.path { return self.get_workspace(workspace_id).await?.ok_or_else(|| ApplicationError::not_found("The workspace was not found.")); }
+        if path == existing.path {
+            return self
+                .get_workspace(workspace_id)
+                .await?
+                .ok_or_else(|| ApplicationError::not_found("The workspace was not found."));
+        }
         if path != existing.path
             && let Some(existing_id) = self.workspace_id_by_path(path.as_str()).await?
             && existing_id != workspace_id

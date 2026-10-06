@@ -122,6 +122,93 @@ pub trait SessionStore: Send + Sync {
         part_id: i64,
     ) -> Result<Option<u64>, StoreError>;
 
+    /// Rank a noncontiguous recovery batch in one history pass where supported.
+    async fn user_message_ordinals(
+        &self,
+        session_id: i64,
+        ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, u64>, StoreError> {
+        let mut ordinals = std::collections::HashMap::new();
+        for &id in ids {
+            if let Some(ordinal) = self.user_message_ordinal(session_id, id).await? {
+                ordinals.insert(id, ordinal);
+            }
+        }
+        Ok(ordinals)
+    }
+
+    /// Read only tools that can contribute durable file-change evidence.
+    async fn load_owned_file_change_parts(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionView, StoreError> {
+        let mut view = self
+            .load_owned_parts_by_kind(session_id, "tool_call")
+            .await?;
+        view.parts.retain(|part| {
+            let name = part
+                .content
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            matches!(
+                name,
+                "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast"
+            ) || (name.starts_with("shell.")
+                && part
+                    .content
+                    .pointer("/input/writes")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|writes| !writes.is_empty()))
+        });
+        Ok(view)
+    }
+
+    /// Cursor-page run groups for task logs, excluding all pre-cursor history.
+    async fn load_runs_after(
+        &self,
+        session_id: i64,
+        after: i64,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError> {
+        let mut view = self.load(session_id).await?;
+        let mut ids = view
+            .parts
+            .iter()
+            .filter(|part| part.is_run_marker() && part.part_id > after)
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        let has_more = ids.len() > limit;
+        ids.truncate(limit);
+        let ids = ids.into_iter().collect::<std::collections::HashSet<_>>();
+        view.parts.retain(|part| {
+            ids.contains(&part.part_id) || part.run_id.is_some_and(|id| ids.contains(&id))
+        });
+        Ok(SessionPartPage {
+            meta: view.meta,
+            parts: view.parts,
+            has_more,
+        })
+    }
+
+    async fn load_run_markers(&self, session_id: i64) -> Result<SessionView, StoreError> {
+        let mut view = self.load(session_id).await?;
+        view.parts.retain(Part::is_run_marker);
+        Ok(view)
+    }
+
+    /// Session metadata and only its pending tool controls, without history.
+    async fn load_control_parts(&self, session_id: i64) -> Result<SessionView, StoreError> {
+        let mut view = self.load(session_id).await?;
+        view.parts.retain(|part| {
+            part.origin_session_id == session_id
+                && part.kind == "tool_call"
+                && part.state.is_in_flight()
+        });
+        Ok(view)
+    }
+
     /// Load one bounded newest-first keyset page without materializing the
     /// complete session transcript.
     async fn load_page(
@@ -300,6 +387,21 @@ pub trait SessionStore: Send + Sync {
         kind: Option<BackgroundOperationKind>,
         limit: usize,
     ) -> Result<Vec<BackgroundOperation>, StoreError>;
+
+    async fn active_background_operations_for_session(
+        &self,
+        session_id: i64,
+        kind: Option<BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError> {
+        Ok(self
+            .active_background_operations(kind, usize::MAX)
+            .await?
+            .into_iter()
+            .filter(|operation| operation.session_id == session_id)
+            .take(limit)
+            .collect())
+    }
 
     async fn session_has_active_background_operations(
         &self,
@@ -565,7 +667,7 @@ pub trait SessionStore: Send + Sync {
 /// A session's cached view plus the position it was read at.
 #[derive(Debug, Clone)]
 struct CacheEntry {
-    view: SessionView,
+    view: Arc<SessionView>,
     /// `sessions.version` at cache time; every session-visible mutation bumps
     /// it, which invalidates the entry on the next hit (8.6 / 15.3).
     version: i64,
@@ -636,7 +738,7 @@ impl MemoryLayer {
             let cache = self.cache.lock().expect("cache lock");
             let entry = cache.get(&session_id)?;
             // A missing persisted version (session deleted) is not a hit.
-            if version.is_some() && entry.version != version.unwrap() {
+            if version != Some(entry.version) {
                 return None;
             }
             if entry.newest_cursor != newest_cursor {
@@ -646,7 +748,7 @@ impl MemoryLayer {
         };
         let stamp = self.clock.fetch_add(1, Ordering::Relaxed);
         self.lru.lock().expect("lru lock").insert(session_id, stamp);
-        Some(view)
+        Some((*view).clone())
     }
 
     fn insert(
@@ -673,7 +775,7 @@ impl MemoryLayer {
         self.cache.lock().expect("cache lock").insert(
             session_id,
             CacheEntry {
-                view,
+                view: Arc::new(view),
                 version,
                 newest_cursor,
             },
@@ -711,27 +813,39 @@ impl MemoryLayer {
     /// which must leave the entry's version untouched. A missing cache entry
     /// is a no-op (there is nothing to seed).
     fn apply_committed(&self, session_id: i64, parts: &[Part], version: Option<i64>) {
-        // Touch recency under the LRU lock first, then update the cache under
-        // the cache lock — the same lock order as `insert` (which may take the
-        // cache lock while holding the LRU lock during eviction). Never nest
-        // the two in the opposite order.
+        // Clone incoming bodies before acquiring the global cache mutex.
+        let incoming = parts.to_vec();
         let stamp = self.clock.fetch_add(1, Ordering::Relaxed);
-        self.lru.lock().expect("lru lock").insert(session_id, stamp);
         let mut cache = self.cache.lock().expect("cache lock");
         let Some(entry) = cache.get_mut(&session_id) else {
             return;
         };
-        for part in parts {
-            match entry
-                .view
-                .parts
-                .iter_mut()
-                .find(|existing| existing.part_id == part.part_id)
-            {
-                Some(existing) => *existing = part.clone(),
-                None => entry.view.parts.push(part.clone()),
+        if let Some(view) = Arc::get_mut(&mut entry.view) {
+            merge_cached_parts(view, incoming);
+        } else {
+            // A reader can hold this Arc while cloning a long transcript.
+            // Copy-on-write must not clone that transcript under the mutex
+            // shared by unrelated sessions. Publish only if it is still the
+            // same snapshot after the copy, otherwise force a fresh read.
+            let expected = entry.view.clone();
+            drop(cache);
+            let mut view = (*expected).clone();
+            merge_cached_parts(&mut view, incoming);
+            cache = self.cache.lock().expect("cache lock");
+            let Some(entry) = cache.get_mut(&session_id) else {
+                return;
+            };
+            if !Arc::ptr_eq(&entry.view, &expected) {
+                cache.remove(&session_id);
+                drop(cache);
+                self.lru.lock().expect("lru lock").remove(&session_id);
+                return;
             }
+            entry.view = Arc::new(view);
         }
+        let entry = cache
+            .get_mut(&session_id)
+            .expect("cache snapshot remains present");
         if let Some(version) = version {
             entry.version = version;
         }
@@ -743,6 +857,12 @@ impl MemoryLayer {
             (Some(existing), Some(incoming)) => Some(existing.max(incoming)),
             (existing, incoming) => existing.or(incoming),
         };
+        drop(cache);
+        self.lru
+            .lock()
+            .expect("lru lock")
+            .entry(session_id)
+            .and_modify(|recency| *recency = stamp);
     }
 
     /// Overlay same-process, not-yet-flushed text deltas on a persisted/cache
@@ -772,6 +892,19 @@ impl MemoryLayer {
             .lock()
             .expect("streaming lock")
             .remove(&(session_id, part_id));
+    }
+}
+
+fn merge_cached_parts(view: &mut SessionView, parts: Vec<Part>) {
+    for part in parts {
+        let cursor = (part.created_at_ms, part.part_id);
+        match view
+            .parts
+            .binary_search_by_key(&cursor, |part| (part.created_at_ms, part.part_id))
+        {
+            Ok(index) => view.parts[index] = part,
+            Err(index) => view.parts.insert(index, part),
+        }
     }
 }
 
@@ -1060,12 +1193,11 @@ where
                 )));
             }
             let now = self.now();
-            let mut next_part = buffer.part.clone();
-            let state_changed = apply_buffered_delta(&mut next_part, delta, now)?;
-            if next_part.updated_at_ms == buffer.part.updated_at_ms {
+            let previous_update = buffer.part.updated_at_ms;
+            let state_changed = apply_buffered_delta(&mut buffer.part, delta, now)?;
+            if buffer.part.updated_at_ms == previous_update {
                 return Ok(None);
             }
-            buffer.part = next_part;
             buffer.pending_deltas += 1;
             // End-only streaming: commit once when the part transitions state
             // (terminalize, tool-call completion) or when a pathological
@@ -1262,6 +1394,44 @@ where
         Ok(view)
     }
 
+    async fn load_owned_file_change_parts(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionView, StoreError> {
+        let mut view = self.engine.load_owned_file_change_parts(session_id).await?;
+        self.memory.overlay_streaming(session_id, &mut view);
+        Ok(view)
+    }
+
+    async fn load_runs_after(
+        &self,
+        session_id: i64,
+        after: i64,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError> {
+        let mut page = self
+            .engine
+            .load_runs_after(session_id, after, limit)
+            .await?;
+        let mut view = SessionView {
+            meta: page.meta.clone(),
+            parts: page.parts,
+        };
+        self.memory.overlay_streaming(session_id, &mut view);
+        page.parts = view.parts;
+        Ok(page)
+    }
+
+    async fn load_control_parts(&self, session_id: i64) -> Result<SessionView, StoreError> {
+        let mut view = self.engine.load_control_parts(session_id).await?;
+        self.memory.overlay_streaming(session_id, &mut view);
+        Ok(view)
+    }
+
+    async fn load_run_markers(&self, session_id: i64) -> Result<SessionView, StoreError> {
+        self.engine.load_run_markers(session_id).await
+    }
+
     async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
         self.engine.user_message_count(session_id).await
     }
@@ -1272,6 +1442,14 @@ where
         part_id: i64,
     ) -> Result<Option<u64>, StoreError> {
         self.engine.user_message_ordinal(session_id, part_id).await
+    }
+
+    async fn user_message_ordinals(
+        &self,
+        session_id: i64,
+        ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, u64>, StoreError> {
+        self.engine.user_message_ordinals(session_id, ids).await
     }
 
     async fn load_page(
@@ -1461,6 +1639,17 @@ where
         limit: usize,
     ) -> Result<Vec<BackgroundOperation>, StoreError> {
         self.engine.active_background_operations(kind, limit).await
+    }
+
+    async fn active_background_operations_for_session(
+        &self,
+        session_id: i64,
+        kind: Option<BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError> {
+        self.engine
+            .active_background_operations_for_session(session_id, kind, limit)
+            .await
     }
 
     async fn session_has_active_background_operations(
@@ -2207,9 +2396,52 @@ fn apply_buffered_delta(
     delta: PartDelta,
     now_ms: i64,
 ) -> Result<bool, StoreError> {
+    // Ordinary text tokens append into the existing allocation. All checks
+    // precede mutation, preserving the transactional failure contract without
+    // cloning a growing response several times for every token.
+    if part.kind == "text"
+        && part.state == PartState::InProgress
+        && delta.content.is_none()
+        && delta.summary.is_none()
+        && delta.provider_state.is_none()
+        && delta.finished_at_ms.is_none()
+        && delta.state.is_none_or(|state| state == part.state)
+        && let Some(text) = delta.content_text_delta.as_deref()
+    {
+        let now = now_ms.max(part.updated_at_ms);
+        if part.revision == i64::MAX || now < part.created_at_ms {
+            return Err(StoreError::InvalidState(
+                "invalid buffered text update".to_owned(),
+            ));
+        }
+        let target = match &mut part.content {
+            serde_json::Value::String(value) => Some(value),
+            serde_json::Value::Object(map) => map.get_mut("text").and_then(|value| match value {
+                serde_json::Value::String(value) => Some(value),
+                _ => None,
+            }),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            StoreError::InvalidState("content_text_delta requires a text-shaped content".to_owned())
+        })?;
+        if !text.is_empty() {
+            target.push_str(text);
+            part.updated_at_ms = now.max(part.updated_at_ms.saturating_add(1));
+        }
+        return Ok(false);
+    }
     let revision = part.revision;
-    let mut next = prepare_part_update(part.clone(), delta, now_ms)?;
+    // Buffered checkpoints have a logical clock (several tokens can arrive in
+    // one wall-clock millisecond). Preserve it when the terminal delta lands.
+    let mut next = prepare_part_update(part.clone(), delta, now_ms.max(part.updated_at_ms))?;
     let state_changed = next.state != part.state;
+    if next.revision != revision {
+        // Buffered updates keep the committed revision. Their logical clock
+        // must advance even when wall time hasn't, so the live-update bus
+        // can distinguish successive checkpoints.
+        next.updated_at_ms = next.updated_at_ms.max(part.updated_at_ms.saturating_add(1));
+    }
     next.revision = revision;
     *part = next;
     Ok(state_changed)
@@ -4165,6 +4397,80 @@ mod tests {
                 .import_session_jsonl(workspace_id, bundle, now_ms)
                 .await
         }
+    }
+
+    #[tokio::test]
+    async fn cache_merges_preserve_reader_snapshots_and_sorted_membership() {
+        let clock = Clock::new(1_000_000);
+        let facade = SessionFacade::with_clock(
+            InMemoryEngine::default(),
+            MemoryLayer::new(16),
+            NotificationBus::new(),
+            move || clock.get(),
+        );
+        let session = ready_session(&facade, 1, "snapshot cache").await;
+        facade
+            .submit_user_run(
+                session,
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "hello"}),
+                )],
+                None,
+            )
+            .await
+            .unwrap();
+        let original = facade.load(session).await.unwrap();
+        let held = facade
+            .memory
+            .cache
+            .lock()
+            .unwrap()
+            .get(&session)
+            .unwrap()
+            .view
+            .clone();
+        let mut updated = original.parts[1].clone();
+        updated.summary = Some("new summary".into());
+        updated.revision += 1;
+        let mut earlier = updated.clone();
+        earlier.part_id = i64::MAX;
+        earlier.created_at_ms -= 1;
+        facade.memory.apply_committed(
+            session,
+            &[updated.clone(), earlier],
+            Some(original.meta.version),
+        );
+        let cursor = original
+            .parts
+            .iter()
+            .map(|part| (part.created_at_ms, part.part_id))
+            .max();
+        let cached = facade
+            .memory
+            .get(session, Some(original.meta.version), cursor)
+            .unwrap();
+        assert_eq!(held.parts, original.parts);
+        assert_eq!(cached.parts.len(), original.parts.len() + 1);
+        assert_eq!(
+            cached
+                .parts
+                .iter()
+                .find(|part| part.part_id == updated.part_id)
+                .unwrap()
+                .summary
+                .as_deref(),
+            Some("new summary")
+        );
+        assert!(
+            cached
+                .parts
+                .windows(2)
+                .all(|parts| (parts[0].created_at_ms, parts[0].part_id)
+                    < (parts[1].created_at_ms, parts[1].part_id))
+        );
+        assert!(facade.memory.get(session, None, cursor).is_none());
     }
 
     #[tokio::test]

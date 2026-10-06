@@ -94,6 +94,20 @@ impl Scheduler {
             .collect())
     }
 
+    pub async fn list_filtered(
+        &self,
+        session_id: Option<i64>,
+        active_only: bool,
+    ) -> SchedulerResult<Vec<ScheduledJob>> {
+        Ok(self
+            .store
+            .list_filtered(session_id, active_only)
+            .await?
+            .into_iter()
+            .map(|snapshot| snapshot.job)
+            .collect())
+    }
+
     /// Exact session-scoped snapshots, including claims not yet acknowledged by the sink.
     pub async fn pending_jobs_for_session(
         &self,

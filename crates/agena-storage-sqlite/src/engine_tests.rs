@@ -32,13 +32,27 @@ async fn revision_projection_observes_external_writes_without_loading_part_table
     let before = facade.session_revision_rows().await.unwrap();
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].0, id);
-    db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-        "UPDATE agena_sessions SET version = version + 1 WHERE id = ?", [id.into()]))
-        .await.unwrap();
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "UPDATE agena_sessions SET version = version + 1 WHERE id = ?",
+        [id.into()],
+    ))
+    .await
+    .unwrap();
     // A version check has no dependency on the transcript's membership,
     // content or state projection tables, even if they cannot be read.
-    db.execute(Statement::from_string(DatabaseBackend::Sqlite, "DROP TABLE agena_session_parts")).await.unwrap();
-    db.execute(Statement::from_string(DatabaseBackend::Sqlite, "DROP TABLE agena_parts")).await.unwrap();
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "DROP TABLE agena_session_parts",
+    ))
+    .await
+    .unwrap();
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "DROP TABLE agena_parts",
+    ))
+    .await
+    .unwrap();
     let after = facade.session_revision_rows().await.unwrap();
     assert_eq!(after[0].0, id);
     assert_eq!(after[0].1, before[0].1);
@@ -2729,6 +2743,14 @@ async fn active_background_query_is_exactly_session_scoped_without_global_limits
         engine.active_background_operations(None, 1).await.unwrap()[0].operation_id,
         unrelated.operation_id
     );
+    assert_eq!(
+        engine
+            .active_background_operations_for_session(session_id, None, 1)
+            .await
+            .unwrap()[0]
+            .operation_id,
+        operation.operation_id
+    );
     assert!(
         engine
             .session_has_active_background_operations(session_id)
@@ -2763,4 +2785,180 @@ async fn active_background_query_is_exactly_session_scoped_without_global_limits
             .await
             .unwrap()
     );
+}
+
+#[tokio::test]
+async fn performance_read_projections_preserve_membership_order_and_controls() {
+    let (engine, id) = setup(in_memory_db().await).await;
+    let mut question = pending_tool_call("question", "ask_user");
+    question.content["name"] = json!("interaction.ask");
+    let mut edit = pending_tool_call("edit", "ask_user");
+    edit.state = PartState::Completed;
+    edit.content["state"] = json!("completed");
+    edit.content["name"] = json!("fs.write");
+    edit.content["input"] = json!({"path":"file.txt","content":"hello"});
+    let mut unrelated = edit.clone();
+    unrelated.content["name"] = json!("network.request");
+    let first = engine
+        .submit_user_run(
+            id,
+            vec![completed_text_part("first"), question, edit, unrelated],
+            None,
+            1_000_000,
+        )
+        .await
+        .unwrap();
+    let second = engine
+        .submit_user_run(id, vec![completed_text_part("second")], None, 1_001_000)
+        .await
+        .unwrap();
+    let third = engine
+        .submit_user_run(id, vec![completed_text_part("third")], None, 1_002_000)
+        .await
+        .unwrap();
+    let ordinals = engine
+        .user_message_ordinals(id, &[third.run_id, first.run_id, third.run_id, i64::MAX])
+        .await
+        .unwrap();
+    assert_eq!(ordinals.len(), 2);
+    assert_eq!(ordinals[&first.run_id], 1);
+    assert_eq!(ordinals[&third.run_id], 3);
+    let controls = engine.load_control_parts(id).await.unwrap();
+    assert_eq!(engine.load_run_markers(id).await.unwrap().parts.len(), 3);
+    assert_eq!(controls.parts.len(), 1);
+    assert_eq!(controls.parts[0].content["name"], "interaction.ask");
+    let files = engine.load_owned_file_change_parts(id).await.unwrap();
+    assert_eq!(files.parts.len(), 1);
+    assert_eq!(files.parts[0].content["name"], "fs.write");
+    let page = engine.load_runs_after(id, first.run_id, 1).await.unwrap();
+    assert!(page.has_more);
+    assert_eq!(
+        page.parts
+            .iter()
+            .filter(|part| part.is_run_marker())
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        [second.run_id]
+    );
+    assert!(
+        page.parts
+            .iter()
+            .all(|part| part.part_id == second.run_id || part.run_id == Some(second.run_id))
+    );
+    let tail = engine.load_runs_after(id, second.run_id, 1).await.unwrap();
+    assert!(!tail.has_more);
+    assert!(
+        engine
+            .load_runs_after(id, third.run_id, 1)
+            .await
+            .unwrap()
+            .parts
+            .is_empty()
+    );
+    let child = engine
+        .fork_session(
+            id,
+            second.parts.last().unwrap().part_id,
+            "projection fork".into(),
+            false,
+            1_003_000,
+        )
+        .await
+        .unwrap();
+    let inherited = engine.load_run_markers(child.id).await.unwrap();
+    assert_eq!(
+        inherited
+            .parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        [first.run_id, second.run_id]
+    );
+    assert!(
+        inherited
+            .parts
+            .iter()
+            .all(|part| part.origin_session_id == id)
+    );
+    assert!(
+        engine
+            .load_control_parts(child.id)
+            .await
+            .unwrap()
+            .parts
+            .is_empty()
+    );
+    assert!(
+        engine
+            .load_owned_file_change_parts(child.id)
+            .await
+            .unwrap()
+            .parts
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn bounded_gc_advances_past_live_history_and_preserves_run_foreign_keys() {
+    let db = in_memory_db().await;
+    let (engine, live) = setup(db.clone()).await;
+    engine
+        .submit_user_run(
+            live,
+            (0..2050).map(|_| completed_text_part("live")).collect(),
+            None,
+            1_000_000,
+        )
+        .await
+        .unwrap();
+    let workspace_id = engine.session_meta(live).await.unwrap().workspace_id;
+    let orphan = engine
+        .create_session(NewSession {
+            workspace_id,
+            parent_id: None,
+            relation_kind: SessionRelationKind::Root,
+            cutoff_part_id: None,
+            title: "orphan".into(),
+            task_id: None,
+            config_json: None,
+            provider_anchors_json: None,
+        })
+        .await
+        .unwrap();
+    engine
+        .submit_user_run(
+            orphan.id,
+            (0..16).map(|_| completed_text_part("orphan")).collect(),
+            None,
+            1_001_000,
+        )
+        .await
+        .unwrap();
+    engine.delete_session(orphan.id).await.unwrap();
+    assert_eq!(
+        engine
+            .maintenance(1_002_000)
+            .await
+            .unwrap()
+            .gc_deleted_parts,
+        0
+    );
+    let mut deleted = 0;
+    for _ in 0..4 {
+        deleted += engine
+            .maintenance(1_002_000)
+            .await
+            .unwrap()
+            .gc_deleted_parts;
+    }
+    assert_eq!(deleted, 17);
+    assert_eq!(engine.load_session(live).await.unwrap().parts.len(), 2051);
+    let violations = db
+        .query_all(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "PRAGMA foreign_key_check",
+        ))
+        .await
+        .unwrap();
+    assert!(violations.is_empty());
 }

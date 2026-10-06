@@ -142,7 +142,8 @@ impl AgenaRuntime {
         // Publish directly to the bounded signal hub. Its synchronous clock
         // observers see every mutation; slow clients receive an explicit lag.
         let live_signals = Arc::new(agena_runtime::LiveSignalHub::new(256));
-        let activity_registry = crate::activity::ActivityRegistry::with_signals(live_signals.clone());
+        let activity_registry =
+            crate::activity::ActivityRegistry::with_signals(live_signals.clone());
         // Background-completion bridge: correlates launched-in-background
         // operations (monitored shells, delegated tasks) with their transcript
         // parts. The manager may not exist yet on a control-only bootstrap;
@@ -705,7 +706,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         let mut projected = self
             .activities
             .registry
-            .list(&agena_domain::BackgroundActivityFilter::default())
+            .list(filter)
             .into_iter()
             .map(|activity| (activity.id.clone(), activity))
             .collect::<BTreeMap<_, _>>();
@@ -726,14 +727,20 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     projected.insert(activity.id.clone(), activity);
                 }
             }
-            let operations = session_store
-                .active_background_operations(None, 4_096)
-                .await
-                .map_err(|error| {
-                    agena_runtime::ActivityControlError::internal(format!(
-                        "load durable background operations: {error}"
-                    ))
-                })?;
+            let operations = if let Some(session_id) = filter.session_id {
+                session_store
+                    .active_background_operations_for_session(session_id, None, 4_096)
+                    .await
+            } else {
+                session_store
+                    .active_background_operations(None, 4_096)
+                    .await
+            }
+            .map_err(|error| {
+                agena_runtime::ActivityControlError::internal(format!(
+                    "load durable background operations: {error}"
+                ))
+            })?;
             for operation in operations {
                 let activity = durable_operation_activity(&projected, operation);
                 projected.insert(activity.id.clone(), activity);
@@ -741,7 +748,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
 
             if let Some(scheduler) = manager.tool_executor().scheduler().cloned() {
                 for job in scheduler
-                    .list()
+                    .list_filtered(filter.session_id, filter.active_only)
                     .await
                     .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
                 {
@@ -779,11 +786,59 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         &self,
         activity_id: &str,
     ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        self.list_activities(&agena_domain::BackgroundActivityFilter::default())
-            .await?
-            .into_iter()
-            .find(|activity| activity.id == activity_id)
-            .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))
+        let live = self.activities.registry.get(activity_id);
+        let snapshot = self.current_snapshot();
+        if let Some(manager) = snapshot.session_manager() {
+            let store = manager.session_store();
+            if let Some(activity) = &live {
+                if let Some(operation) =
+                    durable_operation_for_live_activity(store.as_ref(), activity).await?
+                {
+                    return Ok(durable_operation_activity(
+                        &BTreeMap::from([(activity.id.clone(), activity.clone())]),
+                        operation,
+                    ));
+                }
+            } else {
+                use agena_storage::store::BackgroundOperationKind;
+                let (external_id, kinds): (&str, &[BackgroundOperationKind]) =
+                    if let Some(task) = activity_id.strip_prefix("task_") {
+                        (task, &[BackgroundOperationKind::Task])
+                    } else {
+                        (
+                            activity_id,
+                            &[
+                                BackgroundOperationKind::Shell,
+                                BackgroundOperationKind::Monitor,
+                                BackgroundOperationKind::ScheduledDelivery,
+                            ],
+                        )
+                    };
+                for kind in kinds {
+                    if let Some(operation) = store
+                        .background_operation_by_external_id(*kind, external_id)
+                        .await
+                        .map_err(|error| {
+                            agena_runtime::ActivityControlError::internal_error(&error)
+                        })?
+                    {
+                        return Ok(durable_operation_activity(&BTreeMap::new(), operation));
+                    }
+                }
+                if let Some(job_id) = activity_id
+                    .strip_prefix("cron_")
+                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                    && let Some(scheduler) = manager.tool_executor().scheduler()
+                    && let Some(job) = scheduler.get(job_id).await.map_err(|error| {
+                        agena_runtime::ActivityControlError::internal_error(&error)
+                    })?
+                {
+                    let source = cron_source_part_id(&job);
+                    return Ok(scheduled_job_activity(job, source));
+                }
+            }
+        }
+        live.ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))
     }
 
     async fn activity_logs(
@@ -2312,7 +2367,11 @@ impl AgenaRuntime {
                 live_signals: {
                     struct Adapter(Arc<agena_runtime::LiveSignalHub>);
                     impl agena_runtime::RuntimeLiveSignalService for Adapter {
-                        fn observe(&self, observer: agena_runtime::RuntimeLiveSignalObserver) -> Option<agena_runtime::RuntimeLiveSignalObservation> {
+                        fn observe(
+                            &self,
+                            observer: agena_runtime::RuntimeLiveSignalObserver,
+                        ) -> Option<agena_runtime::RuntimeLiveSignalObservation>
+                        {
                             Some(self.0.observe(observer))
                         }
                         fn subscribe(
@@ -2719,7 +2778,8 @@ impl AgenaRuntime {
                                     );
                                 }
                                 let delivery_manager = Arc::clone(&manager);
-                                tokio::spawn(async move {
+                                // Await the bounded round so maintenance never overlaps itself.
+                                {
                                     if let Err(error) = delivery_manager
                                         .renew_background_operation_leases(128)
                                         .await
@@ -2757,7 +2817,7 @@ impl AgenaRuntime {
                                             "periodic background delivery recovery failed"
                                         );
                                     }
-                                });
+                                }
                             }
                         }
                     },

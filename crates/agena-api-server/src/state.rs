@@ -14,6 +14,7 @@ pub struct AppState {
     server: agena_api::resource::ServerIdentityResource,
     next_operator_call_id: Arc<AtomicI64>,
     revisions: Arc<Mutex<Option<Arc<crate::revisions::ResourceRevisions>>>>,
+    file_changes: Arc<crate::rest::FileChangesProjectionCache>,
 }
 
 impl AppState {
@@ -28,11 +29,16 @@ impl AppState {
             },
             next_operator_call_id: Arc::new(AtomicI64::new(1)),
             revisions: Arc::new(Mutex::new(None)),
+            file_changes: Arc::new(crate::rest::FileChangesProjectionCache::default()),
         }
     }
 
     pub fn server(&self) -> &agena_api::resource::ServerIdentityResource {
         &self.server
+    }
+
+    pub(crate) fn file_changes_cache(&self) -> &crate::rest::FileChangesProjectionCache {
+        &self.file_changes
     }
 
     pub(crate) fn revisions(

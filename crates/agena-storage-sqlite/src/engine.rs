@@ -73,11 +73,15 @@ const BACKGROUND_DELIVERY_COLS: &str = "\
 #[derive(Clone)]
 pub struct SqliteEngine {
     db: Arc<DatabaseConnection>,
+    gc_cursor: Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl SqliteEngine {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
+        Self {
+            db,
+            gc_cursor: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        }
     }
 
     fn db(&self) -> &DatabaseConnection {
@@ -879,6 +883,35 @@ impl PersistenceEngine for SqliteEngine {
         })
     }
 
+    async fn user_message_ordinals(
+        &self,
+        session_id: i64,
+        ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, u64>, StoreError> {
+        let mut result = std::collections::HashMap::new();
+        for chunk in ids.chunks(512) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let values = std::iter::once(Value::from(session_id))
+                .chain(chunk.iter().copied().map(Value::from))
+                .collect::<Vec<_>>();
+            let rows = self.db().query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!("WITH ranked AS ( \
+                    SELECT p.part_id, ROW_NUMBER() OVER (ORDER BY p.created_at_ms, p.part_id) AS ordinal \
+                    FROM agena_session_parts sp JOIN agena_parts p ON p.part_id = sp.part_id \
+                    WHERE sp.session_id = ? AND p.kind = 'run' AND p.role = 'user' \
+                    ) SELECT part_id, ordinal FROM ranked WHERE part_id IN ({placeholders})"),
+                values,
+            )).await.map_err(map_db_err)?;
+            for row in rows {
+                let id: i64 = row.try_get("", "part_id").map_err(map_db_err)?;
+                let ordinal: i64 = row.try_get("", "ordinal").map_err(map_db_err)?;
+                result.insert(id, ordinal as u64);
+            }
+        }
+        Ok(result)
+    }
+
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {
         let meta = self.session_meta(session_id).await?;
         let parts = self
@@ -933,6 +966,88 @@ impl PersistenceEngine for SqliteEngine {
             [session_id.into(), session_id.into(), kind.to_owned().into()],
         )).await.map_err(map_db_err)?.into_iter().map(part_from_row)
             .collect::<Result<Vec<_>, _>>().map_err(map_db_err)?;
+        Ok(SessionView { meta, parts })
+    }
+
+    async fn load_owned_file_change_parts(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionView, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let parts = self.db().query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("SELECT {PART_COLS} FROM agena_parts p \
+                JOIN agena_session_parts sp ON sp.part_id = p.part_id \
+                WHERE sp.session_id = ? AND p.origin_session_id = ? AND p.kind = 'tool_call' \
+                  AND (json_extract(p.content, '$.name') IN ('fs.write','fs.replace','fs.apply_patch','code.rewrite_ast') \
+                    OR (json_extract(p.content, '$.name') LIKE 'shell.%' \
+                      AND json_array_length(json_extract(p.content, '$.input.writes')) > 0)) \
+                ORDER BY p.created_at_ms, p.part_id"),
+            [session_id.into(), session_id.into()],
+        )).await.map_err(map_db_err)?.into_iter().map(part_from_row)
+            .collect::<Result<Vec<_>, _>>().map_err(map_db_err)?;
+        Ok(SessionView { meta, parts })
+    }
+
+    async fn load_runs_after(
+        &self,
+        session_id: i64,
+        after: i64,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let limit = limit.clamp(1, 500);
+        let rows = self.db().query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT p.part_id FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id \
+                WHERE sp.session_id = ? AND p.kind = 'run' AND p.part_id > ? ORDER BY p.part_id LIMIT ?",
+            [session_id.into(), after.into(), ((limit + 1) as i64).into()],
+        )).await.map_err(map_db_err)?;
+        let has_more = rows.len() > limit;
+        let ids = rows
+            .into_iter()
+            .take(limit)
+            .map(|row| row.try_get::<i64>("", "part_id").map_err(map_db_err))
+            .collect::<Result<Vec<_>, _>>()?;
+        if ids.is_empty() {
+            return Ok(SessionPartPage {
+                meta,
+                parts: Vec::new(),
+                has_more,
+            });
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let values = std::iter::once(Value::from(session_id))
+            .chain(ids.iter().chain(ids.iter()).copied().map(Value::from))
+            .collect::<Vec<_>>();
+        let parts = self.db().query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id \
+                WHERE sp.session_id = ? AND (p.part_id IN ({placeholders}) OR p.run_id IN ({placeholders})) \
+                ORDER BY p.created_at_ms, p.part_id"), values,
+        )).await.map_err(map_db_err)?.into_iter().map(part_from_row).collect::<Result<Vec<_>, _>>().map_err(map_db_err)?;
+        Ok(SessionPartPage {
+            meta,
+            parts,
+            has_more,
+        })
+    }
+
+    async fn load_run_markers(&self, session_id: i64) -> Result<SessionView, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let parts = self.db().query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.kind = 'run' ORDER BY p.created_at_ms, p.part_id"), [session_id.into()],
+        )).await.map_err(map_db_err)?.into_iter().map(part_from_row).collect::<Result<Vec<_>, _>>().map_err(map_db_err)?;
+        Ok(SessionView { meta, parts })
+    }
+
+    async fn load_control_parts(&self, session_id: i64) -> Result<SessionView, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let parts = self.db().query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id \
+                WHERE sp.session_id = ? AND p.origin_session_id = ? AND p.kind = 'tool_call' \
+                  AND p.state IN ('pending','in_progress') ORDER BY p.created_at_ms, p.part_id"),
+            [session_id.into(), session_id.into()],
+        )).await.map_err(map_db_err)?.into_iter().map(part_from_row).collect::<Result<Vec<_>, _>>().map_err(map_db_err)?;
         Ok(SessionView { meta, parts })
     }
 
@@ -1746,6 +1861,36 @@ impl PersistenceEngine for SqliteEngine {
                 vec![limit.into()],
             ),
         };
+        self.db()
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                sql,
+                values,
+            ))
+            .await
+            .map_err(map_db_err)?
+            .into_iter()
+            .map(background_operation_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_err)
+    }
+
+    async fn active_background_operations_for_session(
+        &self,
+        session_id: i64,
+        kind: Option<BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError> {
+        let mut values: Vec<sea_orm::Value> = vec![session_id.into()];
+        let mut sql = format!(
+            "SELECT {BACKGROUND_OPERATION_COLS} FROM agena_background_operations WHERE session_id = ? AND phase IN ('launch_requested','launching','running')"
+        );
+        if let Some(kind) = kind {
+            sql.push_str(" AND kind = ?");
+            values.push(kind.as_str().into());
+        }
+        sql.push_str(" ORDER BY created_at_ms ASC, operation_id ASC LIMIT ?");
+        values.push(i64::try_from(limit).unwrap_or(i64::MAX).into());
         self.db()
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
@@ -3026,14 +3171,58 @@ impl PersistenceEngine for SqliteEngine {
     }
 
     async fn maintenance(&self, _now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
-        let db = self.db();
-        run_write(db, move |txn| {
-            Box::pin(async move {
-                let gc_deleted_parts = gc_orphan_parts_tx(txn).await?;
-                Ok(MaintenanceOutcome { gc_deleted_parts })
+        use std::sync::atomic::Ordering;
+        let after = self.gc_cursor.load(Ordering::Relaxed);
+        // Probe a bounded primary-key window outside the write transaction.
+        // Quiet databases acquire no write lock and never scan the whole table.
+        let mut rows = self
+            .db()
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT part_id FROM agena_parts WHERE part_id > ? ORDER BY part_id LIMIT 2048",
+                [after.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        if rows.is_empty() && after != 0 {
+            rows = self
+                .db()
+                .query_all(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    "SELECT part_id FROM agena_parts ORDER BY part_id LIMIT 2048",
+                ))
+                .await
+                .map_err(map_db_err)?;
+        }
+        let Some(first) = rows.first() else {
+            return Ok(MaintenanceOutcome {
+                gc_deleted_parts: 0,
+            });
+        };
+        let low: i64 = first.try_get("", "part_id").map_err(map_db_err)?;
+        let high: i64 = rows
+            .last()
+            .unwrap()
+            .try_get("", "part_id")
+            .map_err(map_db_err)?;
+        let candidates = self.db().query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("SELECT p.part_id FROM agena_parts p WHERE p.part_id BETWEEN ? AND ? AND {} LIMIT 1", orphan_part_predicate("p")),
+            [low.into(), high.into()],
+        )).await.map_err(map_db_err)?;
+        let deleted = if candidates.is_some() {
+            run_write(self.db(), move |txn| {
+                Box::pin(async move { gc_orphan_parts_tx(txn, low, high).await })
             })
+            .await?
+        } else {
+            0
+        };
+        self.gc_cursor
+            .store(if rows.len() < 2048 { 0 } else { high }, Ordering::Relaxed);
+        Ok(MaintenanceOutcome {
+            gc_deleted_parts: deleted,
         })
-        .await
     }
 
     async fn record_usage(&self, record: UsageRecord) -> Result<(), StoreError> {
@@ -3478,54 +3667,39 @@ async fn run_parts_tx(txn: &DatabaseTransaction, run_id: i64) -> Result<Vec<Part
 /// membership that are not themselves in-flight run markers and whose run
 /// reference is absent or terminal. Children are removed before their orphan
 /// parents in a second pass to satisfy the parent FK.
-async fn gc_orphan_parts_tx(txn: &DatabaseTransaction) -> Result<usize, StoreError> {
-    /// The refcount guard for a part aliased `{a}`.
-    fn orphan(a: &str) -> String {
-        format!(
-            "NOT EXISTS (SELECT 1 FROM agena_session_parts sp WHERE sp.part_id = {a}.part_id) \
-             AND NOT ({a}.kind = 'run' AND {a}.state IN ('pending', 'in_progress')) \
-             AND ({a}.run_id IS NULL OR NOT EXISTS ( \
-                 SELECT 1 FROM agena_parts run \
-                 WHERE run.part_id = {a}.run_id AND run.state IN ('pending', 'in_progress') \
-             ))"
-        )
+fn orphan_part_predicate(a: &str) -> String {
+    format!(
+        "NOT EXISTS (SELECT 1 FROM agena_session_parts sp WHERE sp.part_id = {a}.part_id) \
+        AND NOT ({a}.kind = 'run' AND {a}.state IN ('pending', 'in_progress')) \
+        AND ({a}.run_id IS NULL OR NOT EXISTS (SELECT 1 FROM agena_parts run \
+            WHERE run.part_id = {a}.run_id AND run.state IN ('pending', 'in_progress')))"
+    )
+}
+
+async fn gc_orphan_parts_tx(
+    txn: &DatabaseTransaction,
+    low: i64,
+    high: i64,
+) -> Result<usize, StoreError> {
+    let mut deleted = 0;
+    // Delete leaves first. A bounded window may exclude a parent's children,
+    // so explicitly retain every referenced parent and run marker. Repeated
+    // sweeps converge without violating FKs or sacrificing active runs.
+    for _ in 0..8 {
+        let outcome = txn.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("DELETE FROM agena_parts WHERE part_id IN (SELECT p.part_id FROM agena_parts p \
+                WHERE p.part_id BETWEEN ? AND ? AND {} \
+                  AND NOT EXISTS (SELECT 1 FROM agena_parts child WHERE child.parent_part_id = p.part_id) \
+                  AND NOT EXISTS (SELECT 1 FROM agena_parts child WHERE child.run_id = p.part_id))", orphan_part_predicate("p")),
+            [low.into(), high.into()],
+        )).await.map_err(map_db_err)?;
+        let count = outcome.rows_affected() as usize;
+        deleted += count;
+        if count == 0 {
+            break;
+        }
     }
-    let mut deleted = 0usize;
-    // Pass 1: orphans whose parent is not itself an orphan.
-    let pass_one = txn
-        .execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            format!(
-                "DELETE FROM agena_parts WHERE part_id IN ( \
-                    SELECT p.part_id FROM agena_parts p \
-                    WHERE {} \
-                      AND (p.parent_part_id IS NULL OR NOT EXISTS ( \
-                          SELECT 1 FROM agena_parts parent \
-                          WHERE parent.part_id = p.parent_part_id AND {} \
-                      )) \
-                 )",
-                orphan("p"),
-                orphan("parent"),
-            ),
-        ))
-        .await
-        .map_err(map_db_err)?;
-    deleted += pass_one.rows_affected() as usize;
-    // Pass 2: remaining orphans (children of orphaned parents) — their parents
-    // are gone, so the FK no longer holds them back.
-    let pass_two = txn
-        .execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            format!(
-                "DELETE FROM agena_parts WHERE part_id IN ( \
-                    SELECT p.part_id FROM agena_parts p WHERE {} \
-                 )",
-                orphan("p"),
-            ),
-        ))
-        .await
-        .map_err(map_db_err)?;
-    deleted += pass_two.rows_affected() as usize;
     Ok(deleted)
 }
 

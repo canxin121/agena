@@ -2,7 +2,6 @@ use super::{AppError, SessionProcessor, SessionRunRequest, Utc};
 use crate::session::store::{
     StoreAdapter, new_part_from_content, typed_content_from_value, typed_content_to_value,
 };
-use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{NewPart, Part, PartDelta, PartRole, PartState, PartVisibility};
 
 impl SessionProcessor {
@@ -80,89 +79,86 @@ impl SessionProcessor {
         Ok(part_id)
     }
 
-    /// Stream one text delta onto the durable row through the facade. The
-    /// facade coalesces deltas in its streaming buffer and flushes after
-    /// `STREAMING_FLUSH_DELTA_COUNT` deltas or on any non-text/terminal update
-    /// (D10), so revision advances once per coalesced flush, not per token.
-    /// The returned part (the authoritative in-memory overlay) is folded back
-    /// into the turn accumulator.
+    /// Append text to the store and the local turn accumulator. The store
+    /// returns only a revision/time checkpoint for an unflushed delta, avoiding
+    /// a full growing-text snapshot and repeated deep copies per token.
     pub(crate) async fn append_text_delta(
         &self,
         run: &SessionRunRequest,
-        parts: &mut Vec<Part>,
+        parts: &mut [Part],
         part_id: i64,
         delta: &str,
     ) -> Result<(), AppError> {
         let part = parts
-            .iter()
+            .iter_mut()
             .find(|part| part.part_id == part_id)
             .ok_or_else(|| {
                 AppError::Internal(format!(
                     "active text part missing from turn accumulator: {part_id}"
                 ))
             })?;
-        if part.kind != "text" {
+        if part.kind != "text" || part.state != PartState::InProgress {
             return Err(AppError::Internal(format!(
-                "failed to append text delta to part {part_id}: kind mismatch"
+                "failed to append text delta to part {part_id}: kind or state mismatch"
             )));
         }
-        let updated = run
+        let text = match &mut part.content {
+            serde_json::Value::String(text) => Some(text),
+            serde_json::Value::Object(map) => match map.get_mut("text") {
+                Some(serde_json::Value::String(text)) => Some(text),
+                _ => None,
+            },
+            _ => None,
+        }
+        .ok_or_else(|| AppError::Internal(format!("text part {part_id} has non-text content")))?;
+        let checkpoint = run
             .store
-            .update_part(
-                run.session_id,
-                part_id,
-                PartDelta {
-                    content_text_delta: Some(delta.to_owned()),
-                    ..Default::default()
-                },
-            )
+            .append_live_text(run.session_id, part_id, delta.to_owned())
             .await?;
-        upsert_part(parts, updated);
+        text.push_str(delta);
+        part.revision = checkpoint.revision;
+        part.updated_at_ms = checkpoint.updated_at_ms;
         Ok(())
     }
 
-    /// Stream one thinking delta. D10 asymmetry: the think content is an array
-    /// shape (summary/raw_content), so `content_text_delta` cannot be applied
-    /// to it; each update replaces the whole content document, which the
-    /// facade commits immediately (revision per update instead of per
-    /// coalesced flush).
+    /// Append one canonical thinking summary element without decoding,
+    /// copying and re-encoding the complete accumulated reasoning per token.
     pub(crate) async fn append_reasoning_delta(
         &self,
         run: &SessionRunRequest,
-        parts: &mut Vec<Part>,
+        parts: &mut [Part],
         part_id: i64,
         delta: &str,
     ) -> Result<(), AppError> {
         let part = parts
-            .iter()
+            .iter_mut()
             .find(|part| part.part_id == part_id)
             .ok_or_else(|| {
                 AppError::Internal(format!(
                     "active reasoning part missing from turn accumulator: {part_id}"
                 ))
             })?;
-        let mut content = typed_content_from_value(&part.kind, &part.content)?;
-        if let TypedContent::Think(think) = &mut content {
-            think.summary.push(delta.to_owned());
-        } else {
+        if part.kind != "think" || part.state != PartState::InProgress {
             return Err(AppError::Internal(format!(
-                "failed to append reasoning delta to part {part_id}: kind mismatch"
+                "failed to append reasoning delta to part {part_id}: kind or state mismatch"
             )));
         }
-        let content = typed_content_to_value(&content)?;
-        let updated = run
+        let summary = part
+            .content
+            .get_mut("summary")
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "reasoning part {part_id} has non-array summary content"
+                ))
+            })?;
+        let checkpoint = run
             .store
-            .update_part(
-                run.session_id,
-                part_id,
-                PartDelta {
-                    state: Some(PartState::InProgress),
-                    content: Some(content),
-                    ..Default::default()
-                },
-            )
+            .append_live_reasoning(run.session_id, part_id, delta.to_owned())
             .await?;
-        upsert_part(parts, updated);
+        summary.push(serde_json::Value::String(delta.to_owned()));
+        part.revision = checkpoint.revision;
+        part.updated_at_ms = checkpoint.updated_at_ms;
         Ok(())
     }
 

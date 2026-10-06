@@ -1188,6 +1188,7 @@ dependencies = [
 name = "agena-storage"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-domain",
  "agena-failure",
  "async-trait",

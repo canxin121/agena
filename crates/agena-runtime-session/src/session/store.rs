@@ -42,6 +42,8 @@ use crate::AppError;
 use crate::part::{CommandReferencePart, OperationPart};
 use crate::session::Session;
 
+static SESSION_PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 /// The facade-backed store adapter used by [`crate::SessionManager`].
 ///
 /// The facade is the only writer: this process owns the data directory, so a
@@ -78,7 +80,12 @@ impl StoreAdapter {
     /// aggregate the execution engine operates on.
     pub(crate) async fn load_session(&self, session_id: i64) -> Result<Session, AppError> {
         let view = self.facade.load(session_id).await.map_err(store_error)?;
-        session_from_view(view)
+        SESSION_PROJECTIONS
+            .run(move || session_from_view(view))
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("session projection worker failed: {error}"))
+            })?
     }
 
     /// Create a new session row and return the rebuilt aggregate.
@@ -457,6 +464,31 @@ impl StoreAdapter {
                     "append_parts returned no failure part for run {run_id}"
                 ))
             })
+    }
+
+    /// Append live text and return a lightweight acknowledgement.
+    pub(crate) async fn append_live_text(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        text: String,
+    ) -> Result<agena_storage::store::PartCheckpoint, AppError> {
+        self.facade
+            .append_live_text(session_id, part_id, text)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn append_live_reasoning(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        text: String,
+    ) -> Result<agena_storage::store::PartCheckpoint, AppError> {
+        self.facade
+            .append_live_reasoning(session_id, part_id, text)
+            .await
+            .map_err(store_error)
     }
 
     /// Apply a streaming delta to one part and return the updated part.

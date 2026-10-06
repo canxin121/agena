@@ -507,6 +507,14 @@ pub struct PartDelta {
     pub finished_at_ms: Option<i64>,
 }
 
+/// Lightweight acknowledgement for a live text append. The runtime already
+/// owns the preceding text and does not need a full snapshot for every token.
+#[derive(Debug, Clone, Copy)]
+pub struct PartCheckpoint {
+    pub revision: i64,
+    pub updated_at_ms: i64,
+}
+
 /// Outcome of [`crate::store::PersistenceEngine::complete_run`] — how a run marker ends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunOutcome {

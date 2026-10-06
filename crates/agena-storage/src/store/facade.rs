@@ -30,14 +30,15 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
+use agena_async::BlockingPool;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationKind,
     BackgroundOperationTransition, BackgroundSettleOutcome, MaintenanceOutcome,
-    NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta, PartState,
-    PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
+    NewBackgroundOperation, NewPart, NewSession, Part, PartCheckpoint, PartCursor, PartDelta,
+    PartState, PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionPresentation, SessionState, SessionSummary,
     SessionView, StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
     prepare_part_update, presentation,
@@ -51,6 +52,10 @@ use super::{
 /// bounds an unusually long single part so an unbounded buffer cannot grow
 /// without ever touching the durable store (crash-safety backstop).
 pub const STREAMING_FLUSH_DELTA_COUNT: usize = 512;
+
+// Full-history copies must not block stream updates or the async executor.
+static SESSION_SNAPSHOTS: BlockingPool = BlockingPool::new(2);
+static SESSION_UPDATES: BlockingPool = BlockingPool::new(4);
 
 /// A session subscription handle. Dropping it unsubscribes (15.5).
 pub struct Subscription {
@@ -409,6 +414,67 @@ pub trait SessionStore: Send + Sync {
         delta: PartDelta,
     ) -> Result<Part, StoreError>;
 
+    /// Append live text without copying the whole growing part back to the
+    /// runtime on every token. Other store implementations retain the same
+    /// semantics through this default; the facade supplies the fast path.
+    async fn append_live_text(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        text: String,
+    ) -> Result<PartCheckpoint, StoreError> {
+        let part = self
+            .update_part(
+                session_id,
+                part_id,
+                PartDelta {
+                    content_text_delta: Some(text),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(PartCheckpoint {
+            revision: part.revision,
+            updated_at_ms: part.updated_at_ms,
+        })
+    }
+
+    async fn append_live_reasoning(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        text: String,
+    ) -> Result<PartCheckpoint, StoreError> {
+        let mut part = self
+            .load_part_ids(session_id, &[part_id])
+            .await?
+            .parts
+            .into_iter()
+            .next()
+            .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
+        if part.kind != "think" || part.state != PartState::InProgress {
+            return Err(StoreError::InvalidState(
+                "reasoning append requires an in-progress think part".to_owned(),
+            ));
+        }
+        super::part_update::append_reasoning_summary(&mut part.content, text)?;
+        let updated = self
+            .update_part(
+                session_id,
+                part_id,
+                PartDelta {
+                    state: Some(PartState::InProgress),
+                    content: Some(part.content),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(PartCheckpoint {
+            revision: updated.revision,
+            updated_at_ms: updated.updated_at_ms,
+        })
+    }
+
     /// Finish a run marker with the given terminal outcome. Returns the
     /// terminal marker row.
     async fn complete_run(
@@ -566,6 +632,7 @@ pub trait SessionStore: Send + Sync {
 #[derive(Debug, Clone)]
 struct CacheEntry {
     view: SessionView,
+    part_indices: HashMap<i64, usize>,
     /// `sessions.version` at cache time; every session-visible mutation bumps
     /// it, which invalidates the entry on the next hit (8.6 / 15.3).
     version: i64,
@@ -583,6 +650,33 @@ struct StreamingBuffer {
     pending_deltas: usize,
     notification_pending: bool,
     notified_at_ms: i64,
+    flush_requested: bool,
+}
+
+#[derive(Debug)]
+struct CacheSlot {
+    entry: Arc<Mutex<CacheEntry>>,
+    recency: u64,
+}
+
+#[derive(Debug)]
+struct StreamingSlot {
+    // Serialize changes and their durable flush for this part only. The buffer
+    // mutex is acquired only by finite blocking workers, never by async tasks.
+    gate: Arc<tokio::sync::Mutex<()>>,
+    run_id: Option<i64>,
+    buffer: Mutex<StreamingBuffer>,
+}
+
+enum StreamUpdate {
+    Buffered(Part),
+    Checkpoint(PartCheckpoint),
+    Committed(Part),
+}
+
+enum BufferedDelta {
+    Part(PartDelta),
+    Reasoning(String),
 }
 
 /// The internal memory layer (15.3): a per-session LRU cache of
@@ -592,15 +686,14 @@ struct StreamingBuffer {
 #[derive(Debug)]
 pub struct MemoryLayer {
     /// session_id -> cached view (LRU, capped by `max_cached_sessions`).
-    cache: Mutex<HashMap<i64, CacheEntry>>,
-    /// session_id -> LRU recency counter, highest = most recently used.
-    lru: Mutex<HashMap<i64, u64>>,
+    cache: Mutex<HashMap<i64, CacheSlot>>,
     /// Monotonic recency stamp.
     clock: AtomicU64,
     /// Maximum number of sessions held in the cache.
     max_cached_sessions: usize,
     /// `(session_id, part_id)` text streams awaiting a bounded flush.
-    streaming: Mutex<HashMap<(i64, i64), StreamingBuffer>>,
+    streaming: Mutex<HashMap<(i64, i64), Arc<StreamingSlot>>>,
+    part_gates: Mutex<HashMap<(i64, i64), std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
 
 impl Default for MemoryLayer {
@@ -613,40 +706,34 @@ impl MemoryLayer {
     pub fn new(max_cached_sessions: usize) -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
-            lru: Mutex::new(HashMap::new()),
             clock: AtomicU64::new(1),
             max_cached_sessions,
             streaming: Mutex::new(HashMap::new()),
+            part_gates: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Cache hit when the cached view still matches the persisted position:
-    /// `sessions.version` (all session-visible writes) AND the newest member
-    /// cursor (membership position). Either moving invalidates.
+    /// The registry lock only protects handles and recency. Payload locks and
+    /// all deep copies are used on admitted blocking workers, per session.
+    fn cache_entry(&self, session_id: i64) -> Option<Arc<Mutex<CacheEntry>>> {
+        let mut cache = self.cache.lock().expect("cache lock");
+        let slot = cache.get_mut(&session_id)?;
+        slot.recency = self.clock.fetch_add(1, Ordering::Relaxed);
+        Some(Arc::clone(&slot.entry))
+    }
+
     fn get(
         &self,
         session_id: i64,
         version: Option<i64>,
         newest_cursor: Option<(i64, i64)>,
     ) -> Option<SessionView> {
-        // Read the entry and touch recency under separate locks — never nest
-        // the cache and LRU mutexes (see `insert`'s eviction path and
-        // [`Self::apply_committed`]).
-        let view = {
-            let cache = self.cache.lock().expect("cache lock");
-            let entry = cache.get(&session_id)?;
-            // A missing persisted version (session deleted) is not a hit.
-            if version.is_some() && entry.version != version.unwrap() {
-                return None;
-            }
-            if entry.newest_cursor != newest_cursor {
-                return None;
-            }
-            entry.view.clone()
-        };
-        let stamp = self.clock.fetch_add(1, Ordering::Relaxed);
-        self.lru.lock().expect("lru lock").insert(session_id, stamp);
-        Some(view)
+        let entry = self.cache_entry(session_id)?;
+        let entry = entry.lock().expect("session cache lock");
+        if version != Some(entry.version) || entry.newest_cursor != newest_cursor {
+            return None;
+        }
+        Some(entry.view.clone())
     }
 
     fn insert(
@@ -656,122 +743,218 @@ impl MemoryLayer {
         version: i64,
         newest_cursor: Option<(i64, i64)>,
     ) {
-        let stamp = self.clock.fetch_add(1, Ordering::Relaxed);
-        let mut lru = self.lru.lock().expect("lru lock");
-        lru.insert(session_id, stamp);
-        if lru.len() > self.max_cached_sessions {
-            let evict = lru
-                .iter()
-                .min_by_key(|(_, recency)| **recency)
-                .map(|(id, _)| *id);
-            if let Some(evict) = evict {
-                lru.remove(&evict);
-                self.cache.lock().expect("cache lock").remove(&evict);
-            }
-        }
-        drop(lru);
-        self.cache.lock().expect("cache lock").insert(
-            session_id,
-            CacheEntry {
+        let part_indices = view
+            .parts
+            .iter()
+            .enumerate()
+            .map(|(index, part)| (part.part_id, index))
+            .collect();
+        let slot = CacheSlot {
+            entry: Arc::new(Mutex::new(CacheEntry {
                 view,
+                part_indices,
                 version,
                 newest_cursor,
-            },
-        );
+            })),
+            recency: self.clock.fetch_add(1, Ordering::Relaxed),
+        };
+        let (replaced, evicted) = {
+            let mut cache = self.cache.lock().expect("cache lock");
+            let replaced = cache.insert(session_id, slot);
+            let evicted = if cache.len() > self.max_cached_sessions {
+                let id = cache
+                    .iter()
+                    .min_by_key(|(_, slot)| slot.recency)
+                    .map(|(id, _)| *id)
+                    .expect("nonempty cache");
+                cache.remove(&id)
+            } else {
+                None
+            };
+            (replaced, evicted)
+        };
+        // A view's final release may free a large tree of JSON. Do it outside
+        // the shared registry lock and on the caller's blocking worker.
+        drop((replaced, evicted));
     }
 
-    /// Discard a session's cache entry (a write committed, or a delete — the
-    /// entry no longer reflects the persisted position).
     fn invalidate(&self, session_id: i64) {
-        self.cache.lock().expect("cache lock").remove(&session_id);
-        self.lru.lock().expect("lru lock").remove(&session_id);
+        let removed = self.cache.lock().expect("cache lock").remove(&session_id);
+        drop(removed);
     }
 
     fn invalidate_changed_meta(&self, meta: &SessionMeta) {
         let unchanged = self
-            .cache
-            .lock()
-            .expect("cache lock")
-            .get(&meta.id)
-            .is_some_and(|entry| entry.version == meta.version);
+            .cache_entry(meta.id)
+            .is_some_and(|entry| entry.lock().expect("session cache lock").version >= meta.version);
         if !unchanged {
             self.invalidate(meta.id);
         }
     }
 
-    /// Merge parts that were just committed (or are in an in-progress
-    /// streaming buffer) into the cached view, keeping the entry's position
-    /// in sync so the very next `load` is a cache hit instead of a redundant
-    /// membership JOIN. In-place updates replace by `part_id`; new parts
-    /// append — the `(created_at_ms, part_id)` order position is immutable,
-    /// so appends keep the view ordered.
-    ///
-    /// `version` is `Some` when the write advanced `sessions.version` (a
-    /// durable mutation) and `None` for a not-yet-flushed streaming delta,
-    /// which must leave the entry's version untouched. A missing cache entry
-    /// is a no-op (there is nothing to seed).
-    fn apply_committed(&self, session_id: i64, parts: &[Part], version: Option<i64>) {
-        // Touch recency under the LRU lock first, then update the cache under
-        // the cache lock — the same lock order as `insert` (which may take the
-        // cache lock while holding the LRU lock during eviction). Never nest
-        // the two in the opposite order.
-        let stamp = self.clock.fetch_add(1, Ordering::Relaxed);
-        self.lru.lock().expect("lru lock").insert(session_id, stamp);
-        let mut cache = self.cache.lock().expect("cache lock");
-        let Some(entry) = cache.get_mut(&session_id) else {
+    /// Merge only the changed parts using an index, under this session's lock.
+    /// An observed version jump beyond this operation's known writes discards
+    /// this session's entry. Stale callbacks never lower its durable position.
+    fn apply_committed(
+        &self,
+        session_id: i64,
+        parts: &[Part],
+        version: Option<i64>,
+        known_writes: usize,
+    ) {
+        let Some(entry) = self.cache_entry(session_id) else {
             return;
         };
+        let mut entry = entry.lock().expect("session cache lock");
+        if version.is_some_and(|version| version < entry.version) {
+            return;
+        }
+        if version.is_some_and(|version| {
+            version
+                > entry
+                    .version
+                    .saturating_add(i64::try_from(known_writes).unwrap_or(i64::MAX))
+        }) {
+            drop(entry);
+            self.invalidate(session_id);
+            return;
+        }
+        let mut reorder = false;
+        let mut changed = false;
         for part in parts {
-            match entry
-                .view
-                .parts
-                .iter_mut()
-                .find(|existing| existing.part_id == part.part_id)
-            {
-                Some(existing) => *existing = part.clone(),
-                None => entry.view.parts.push(part.clone()),
+            if let Some(&index) = entry.part_indices.get(&part.part_id) {
+                let existing = &mut entry.view.parts[index];
+                if (part.revision, part.updated_at_ms) > (existing.revision, existing.updated_at_ms)
+                {
+                    changed = true;
+                    *existing = part.clone();
+                }
+            } else {
+                if version.is_some_and(|version| version <= entry.version) {
+                    continue;
+                }
+                changed = true;
+                reorder |= entry.view.parts.last().is_some_and(|last| {
+                    (last.created_at_ms, last.part_id) > (part.created_at_ms, part.part_id)
+                });
+                let index = entry.view.parts.len();
+                entry.part_indices.insert(part.part_id, index);
+                entry.view.parts.push(part.clone());
             }
         }
-        if let Some(version) = version {
-            entry.version = version;
+        if version.is_some_and(|version| version > entry.version) && !changed {
+            drop(entry);
+            self.invalidate(session_id);
+            return;
         }
-        let parts_cursor = parts
+        if let Some(version) = version {
+            entry.version = entry.version.max(version);
+        }
+        // Concurrent completed writes can arrive out of creation order.
+        if reorder {
+            entry
+                .view
+                .parts
+                .sort_by_key(|part| (part.created_at_ms, part.part_id));
+            entry.part_indices = entry
+                .view
+                .parts
+                .iter()
+                .enumerate()
+                .map(|(index, part)| (part.part_id, index))
+                .collect();
+        }
+        let incoming = parts
             .iter()
             .map(|part| (part.created_at_ms, part.part_id))
             .max();
-        entry.newest_cursor = match (entry.newest_cursor, parts_cursor) {
+        entry.newest_cursor = match (entry.newest_cursor, incoming) {
             (Some(existing), Some(incoming)) => Some(existing.max(incoming)),
             (existing, incoming) => existing.or(incoming),
         };
     }
 
-    /// Overlay same-process, not-yet-flushed text deltas on a persisted/cache
-    /// view. Other processes intentionally see only bounded checkpoints.
+    fn streaming_slot(&self, session_id: i64, part_id: i64) -> Option<Arc<StreamingSlot>> {
+        self.streaming
+            .lock()
+            .expect("streaming lock")
+            .get(&(session_id, part_id))
+            .cloned()
+    }
+
+    fn part_gate(&self, key: (i64, i64)) -> Arc<tokio::sync::Mutex<()>> {
+        let mut gates = self.part_gates.lock().expect("part gates lock");
+        if let Some(gate) = gates.get(&key).and_then(std::sync::Weak::upgrade) {
+            return gate;
+        }
+        if gates.len() >= 8192 {
+            gates.retain(|_, gate| gate.strong_count() > 0);
+        }
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        gates.insert(key, Arc::downgrade(&gate));
+        gate
+    }
+
+    fn is_current_stream(&self, key: (i64, i64), slot: &Arc<StreamingSlot>) -> bool {
+        self.streaming
+            .lock()
+            .expect("streaming lock")
+            .get(&key)
+            .is_some_and(|current| Arc::ptr_eq(current, slot))
+    }
+
+    fn remove_stream(&self, key: (i64, i64), slot: &Arc<StreamingSlot>) {
+        let removed = {
+            let mut streaming = self.streaming.lock().expect("streaming lock");
+            if streaming
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, slot))
+            {
+                streaming.remove(&key)
+            } else {
+                None
+            }
+        };
+        drop(removed);
+    }
+
+    /// Take only cheap handles under the shared map lock. Clone a live part
+    /// under its own lock, on a snapshot worker, without blocking other streams.
     fn overlay_streaming(&self, _session_id: i64, view: &mut SessionView) {
-        let streaming = self.streaming.lock().expect("streaming lock");
         for part in &mut view.parts {
-            if let Some(buffer) = streaming.get(&(part.origin_session_id, part.part_id)) {
-                *part = buffer.part.clone();
+            if let Some(slot) = self.streaming_slot(part.origin_session_id, part.part_id) {
+                let buffer = slot.buffer.lock().expect("part stream lock");
+                if (buffer.part.revision, buffer.part.updated_at_ms)
+                    >= (part.revision, part.updated_at_ms)
+                {
+                    *part = buffer.part.clone();
+                }
             }
         }
     }
 
     fn clear_streaming_session(&self, session_id: i64) {
-        self.streaming
-            .lock()
-            .expect("streaming lock")
-            .retain(|(buffer_session_id, _), _| *buffer_session_id != session_id);
+        let removed = {
+            let mut streaming = self.streaming.lock().expect("streaming lock");
+            let keys = streaming
+                .keys()
+                .filter(|(id, _)| *id == session_id)
+                .copied()
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| streaming.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        drop(removed);
     }
 
-    /// Drop one part's streaming buffer. Used by the background-settle path,
-    /// which must clear only the launching tool part's overlay — clearing the
-    /// whole session would discard unflushed streaming content a live
-    /// execution is still writing.
     fn clear_streaming_part(&self, session_id: i64, part_id: i64) {
-        self.streaming
+        let removed = self
+            .streaming
             .lock()
             .expect("streaming lock")
             .remove(&(session_id, part_id));
+        drop(removed);
     }
 }
 
@@ -967,23 +1150,145 @@ where
         &self.engine
     }
 
-    /// Load from cache first; on a miss, one membership JOIN through the
-    /// engine. The cache is validated against `sessions.version` AND the
-    /// newest member cursor so cross-process writes are caught on the next
-    /// read (14.4, 15.3).
+    async fn in_memory<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&MemoryLayer, &NotificationBus) -> T + Send + 'static,
+    ) -> Result<T, StoreError> {
+        let memory = Arc::clone(&self.memory);
+        let bus = Arc::clone(&self.bus);
+        SESSION_UPDATES
+            .run(move || operation(&memory, &bus))
+            .await
+            .map_err(|error| StoreError::Io(format!("session memory worker failed: {error}")))
+    }
+
+    /// A started blocking operation survives cancellation of its async caller.
+    /// Keep the acquired part gate alive on that worker until its mutation or
+    /// cleanup finishes, so the next caller cannot race with detached work.
+    async fn in_part_memory<T: Send + 'static>(
+        &self,
+        gate: &Arc<tokio::sync::OwnedMutexGuard<()>>,
+        operation: impl FnOnce(&MemoryLayer, &NotificationBus) -> T + Send + 'static,
+    ) -> Result<T, StoreError> {
+        let gate = Arc::clone(gate);
+        self.in_memory(move |memory, bus| {
+            let _gate = gate;
+            operation(memory, bus)
+        })
+        .await
+    }
+
+    async fn overlay(
+        &self,
+        session_id: i64,
+        mut view: SessionView,
+    ) -> Result<SessionView, StoreError> {
+        let memory = Arc::clone(&self.memory);
+        SESSION_SNAPSHOTS
+            .run(move || {
+                memory.overlay_streaming(session_id, &mut view);
+                view
+            })
+            .await
+            .map_err(|error| StoreError::Io(format!("session snapshot worker failed: {error}")))
+    }
+
+    async fn publish_meta(&self, meta: SessionMeta) -> Result<SessionMeta, StoreError> {
+        self.in_memory(move |_, bus| {
+            bus.emit(SessionChange::SessionMetaUpdated {
+                session_id: meta.id,
+                meta: meta.clone(),
+            });
+            meta
+        })
+        .await
+    }
+
+    /// Keep payload copies, cache merging and notification fanout on a worker.
+    /// Pass the owned outcome in so even the first copy happens there.
+    async fn publish_parts<T: Send + 'static>(
+        &self,
+        session_id: i64,
+        meta: SessionMeta,
+        value: T,
+        parts: fn(&T) -> &[Part],
+        added: bool,
+    ) -> Result<T, StoreError> {
+        self.publish_parts_with_writes(session_id, meta, value, parts, added, 1)
+            .await
+    }
+
+    async fn publish_parts_with_writes<T: Send + 'static>(
+        &self,
+        session_id: i64,
+        meta: SessionMeta,
+        value: T,
+        parts: fn(&T) -> &[Part],
+        added: bool,
+        known_writes: usize,
+    ) -> Result<T, StoreError> {
+        self.in_memory(move |memory, bus| {
+            memory.apply_committed(session_id, parts(&value), Some(meta.version), known_writes);
+            for part in parts(&value) {
+                let change = if added {
+                    SessionChange::PartAdded {
+                        session_id,
+                        part: part.clone(),
+                    }
+                } else {
+                    SessionChange::PartUpdated {
+                        session_id,
+                        part: part.clone(),
+                    }
+                };
+                bus.emit(change);
+            }
+            bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            value
+        })
+        .await
+    }
+
+    /// Validate the cached durable position using async SQL, then perform the
+    /// full snapshot copy and stream overlay on a bounded worker.
     async fn load_cached(&self, session_id: i64) -> Result<SessionView, StoreError> {
         let meta = self.engine.session_meta(session_id).await?;
         let version = meta.version;
         let cursor = self.engine.newest_member_cursor(session_id).await?;
-        if let Some(mut view) = self.memory.get(session_id, Some(version), cursor) {
-            self.memory.overlay_streaming(session_id, &mut view);
+        let memory = Arc::clone(&self.memory);
+        let cached = SESSION_SNAPSHOTS
+            .run(move || {
+                memory
+                    .get(session_id, Some(version), cursor)
+                    .map(|mut view| {
+                        view.meta = meta;
+                        memory.overlay_streaming(session_id, &mut view);
+                        view
+                    })
+            })
+            .await
+            .map_err(|error| StoreError::Io(format!("session snapshot worker failed: {error}")))?;
+        if let Some(view) = cached {
             return Ok(view);
         }
         let mut view = self.engine.load_session(session_id).await?;
-        self.memory
-            .insert(session_id, view.clone(), version, cursor);
-        self.memory.overlay_streaming(session_id, &mut view);
-        Ok(view)
+        // Use the position of the snapshot actually read, rather than an older
+        // metadata read that may have preceded a concurrent commit.
+        let memory = Arc::clone(&self.memory);
+        SESSION_SNAPSHOTS
+            .run(move || {
+                let version = view.meta.version;
+                let cursor = view
+                    .parts
+                    .iter()
+                    .map(|part| (part.created_at_ms, part.part_id))
+                    .max();
+                memory.insert(session_id, view.clone(), version, cursor);
+                memory.overlay_streaming(session_id, &mut view);
+                view
+            })
+            .await
+            .map_err(|error| StoreError::Io(format!("session snapshot worker failed: {error}")))
     }
 
     /// Derive the session presentation (17.6) from the persisted rows.
@@ -993,112 +1298,135 @@ where
     ) -> Result<SessionPresentation, StoreError> {
         let meta = self.engine.session_meta(session_id).await?;
         let view = self.engine.load_session(session_id).await?;
-        let inputs = StateInputs::from_view(&view);
-        presentation(
-            Some(&meta),
-            &inputs.in_flight_runs,
-            &inputs.pending_interactions,
-            inputs.last_error.as_ref(),
-            self.now(),
-        )
+        let now = self.now();
+        self.in_memory(move |_, _| {
+            let inputs = StateInputs::from_view(&view);
+            presentation(
+                Some(&meta),
+                &inputs.in_flight_runs,
+                &inputs.pending_interactions,
+                inputs.last_error.as_ref(),
+                now,
+            )
+        })
+        .await?
     }
 
-    /// Buffer a text-stream delta and return the committed part when the
-    /// threshold (or a non-streaming semantic change) forces a flush.
+    /// Keep the buffer registered until a durable flush succeeds. Cancellation
+    /// or a database error leaves the uncommitted tail available for a retry.
     async fn update_streaming_part(
         &self,
         session_id: i64,
         part_id: i64,
-        delta: PartDelta,
-    ) -> Result<Option<Part>, StoreError> {
+        delta: BufferedDelta,
+        snapshot: bool,
+        gate: &Arc<tokio::sync::OwnedMutexGuard<()>>,
+    ) -> Result<StreamUpdate, StoreError> {
         let key = (session_id, part_id);
-        let needs_base = !self
-            .memory
-            .streaming
-            .lock()
-            .expect("streaming lock")
-            .contains_key(&key);
-        // Seed the stream buffer from the facade's cached view rather than a
-        // direct engine reload: the cache is kept current by `apply_committed`
-        // on every commit, and a warm cache keeps streaming setup off the
-        // database read path entirely.
-        let persisted_base = if needs_base {
-            Some(
-                self.load_cached(session_id)
+        loop {
+            let slot = match self.memory.streaming_slot(session_id, part_id) {
+                Some(slot) => slot,
+                None => {
+                    // Stream setup only needs this part, never the full history.
+                    let base = self
+                        .engine
+                        .load_part_ids(session_id, &[part_id])
+                        .await?
+                        .parts
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
+                    if base.origin_session_id != session_id {
+                        return Err(StoreError::InvalidState(format!(
+                            "part {part_id} is shared; only its origin session may update it in place"
+                        )));
+                    }
+                    self.in_part_memory(gate, move |memory, _| {
+                        let candidate = Arc::new(StreamingSlot {
+                            gate: memory.part_gate(key),
+                            run_id: base.run_id,
+                            buffer: Mutex::new(StreamingBuffer {
+                                notified_at_ms: base.updated_at_ms,
+                                part: base,
+                                pending_deltas: 0,
+                                notification_pending: false,
+                                flush_requested: false,
+                            }),
+                        });
+                        let slot = memory
+                            .streaming
+                            .lock()
+                            .expect("streaming lock")
+                            .entry(key)
+                            .or_insert_with(|| Arc::clone(&candidate))
+                            .clone();
+                        // Release an unused candidate outside the registry lock.
+                        drop(candidate);
+                        slot
+                    })
                     .await?
-                    .parts
-                    .into_iter()
-                    .find(|part| part.part_id == part_id)
-                    .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?,
-            )
-        } else {
-            None
-        };
-        if persisted_base
-            .as_ref()
-            .is_some_and(|part| part.origin_session_id != session_id)
-        {
-            return Err(StoreError::InvalidState(format!(
-                "part {part_id} is shared; only its origin session may update it in place"
-            )));
-        }
-
-        let flush = {
-            let mut streaming = self.memory.streaming.lock().expect("streaming lock");
-            let buffer = streaming.entry(key).or_insert_with(|| {
-                let part = persisted_base.expect("missing stream buffer has a persisted base");
-                StreamingBuffer {
-                    notified_at_ms: part.updated_at_ms,
-                    part,
-                    pending_deltas: 0,
-                    notification_pending: false,
                 }
-            });
-            if buffer.part.origin_session_id != session_id {
-                return Err(StoreError::InvalidState(format!(
-                    "part {part_id} is shared; only its origin session may update it in place"
-                )));
+            };
+            if !self.memory.is_current_stream(key, &slot) {
+                self.in_part_memory(gate, move |_, _| drop(slot)).await?;
+                continue;
             }
+            let worker_slot = Arc::clone(&slot);
+            let memory = Arc::clone(&self.memory);
+            let bus = Arc::clone(&self.bus);
             let now = self.now();
-            let mut next_part = buffer.part.clone();
-            let state_changed = apply_buffered_delta(&mut next_part, delta, now)?;
-            if next_part.updated_at_ms == buffer.part.updated_at_ms {
-                return Ok(None);
+            let threshold = self.streaming_flush_delta_count;
+            let (part, flush) = self
+                .in_part_memory(gate, move |_, _| {
+                    let mut buffer = worker_slot.buffer.lock().expect("part stream lock");
+                    let previous_updated_at = buffer.part.updated_at_ms;
+                    let state_changed = match delta {
+                        BufferedDelta::Part(delta) => {
+                            apply_buffered_delta(&mut buffer.part, delta, now)?
+                        }
+                        BufferedDelta::Reasoning(text) => {
+                            super::part_update::append_buffered_reasoning(
+                                &mut buffer.part,
+                                text,
+                                now,
+                            )?;
+                            false
+                        }
+                    };
+                    if buffer.part.updated_at_ms != previous_updated_at {
+                        buffer.pending_deltas += 1;
+                    }
+                    buffer.flush_requested |= state_changed || buffer.pending_deltas >= threshold;
+                    let flush = buffer.flush_requested;
+                    let part = if snapshot || flush {
+                        StreamUpdate::Buffered(buffer.part.clone())
+                    } else {
+                        StreamUpdate::Checkpoint(PartCheckpoint {
+                            revision: buffer.part.revision,
+                            updated_at_ms: buffer.part.updated_at_ms,
+                        })
+                    };
+                    drop(buffer);
+                    if !flush {
+                        Self::schedule_streaming_notification(&memory, &bus, key, &worker_slot);
+                    }
+                    Ok::<_, StoreError>((part, flush))
+                })
+                .await??;
+            if !flush {
+                return Ok(part);
             }
-            buffer.part = next_part;
-            buffer.pending_deltas += 1;
-            // End-only streaming: commit once when the part transitions state
-            // (terminalize, tool-call completion) or when a pathological
-            // single part exceeds the safety ceiling. The former `!is_text_delta`
-            // clause flushed every non-text delta (think parts rewrite their
-            // whole content document per token), which wrote the database
-            // ~100+ times per second during reasoning; the durable row is only
-            // meaningful at part completion and reads of the in-memory buffer
-            // already overlay live content.
-            let should_flush =
-                state_changed || buffer.pending_deltas >= self.streaming_flush_delta_count;
-            should_flush.then(|| {
-                streaming
-                    .remove(&key)
-                    .expect("stream buffer exists while flushing")
-            })
-        };
-
-        match flush {
-            Some(buffer) => self
-                .flush_streaming_buffer(session_id, buffer)
-                .await
-                .map(Some),
-            None => Ok(None),
+            let StreamUpdate::Buffered(part) = part else {
+                unreachable!("flush requests a full checkpoint")
+            };
+            let updated = self.flush_streaming_part(session_id, part).await?;
+            self.in_part_memory(gate, move |memory, _| memory.remove_stream(key, &slot))
+                .await?;
+            return Ok(StreamUpdate::Committed(updated));
         }
     }
 
-    async fn flush_streaming_buffer(
-        &self,
-        session_id: i64,
-        buffer: StreamingBuffer,
-    ) -> Result<Part, StoreError> {
-        let part = buffer.part;
+    async fn flush_streaming_part(&self, session_id: i64, part: Part) -> Result<Part, StoreError> {
         self.engine
             .update_part(
                 session_id,
@@ -1116,88 +1444,121 @@ where
             .await
     }
 
-    /// Publish the current in-memory checkpoint at most once per 100 ms.
-    /// A trailing notification is essential: a provider may pause after any
-    /// token. Persistence remains end-only; live reads and patches observe
-    /// the same buffer without writing SQLite for every token.
-    fn schedule_streaming_notification(&self, session_id: i64, part_id: i64) {
+    /// Called on the admitted update worker. The delayed snapshot and callback
+    /// fanout also run on workers; only the timer itself occupies an async task.
+    fn schedule_streaming_notification(
+        memory: &Arc<MemoryLayer>,
+        bus: &Arc<NotificationBus>,
+        key: (i64, i64),
+        slot: &Arc<StreamingSlot>,
+    ) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
         {
-            let mut buffers = self.memory.streaming.lock().expect("streaming lock");
-            let Some(buffer) = buffers.get_mut(&(session_id, part_id)) else {
-                return;
-            };
+            let mut buffer = slot.buffer.lock().expect("part stream lock");
             if buffer.notification_pending || buffer.notified_at_ms == buffer.part.updated_at_ms {
                 return;
             }
             buffer.notification_pending = true;
         }
-        let memory = Arc::downgrade(&self.memory);
-        let bus = Arc::downgrade(&self.bus);
+        let memory = Arc::downgrade(memory);
+        let bus = Arc::downgrade(bus);
+        let slot = Arc::downgrade(slot);
         runtime.spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let (Some(memory), Some(bus)) = (memory.upgrade(), bus.upgrade()) else {
+            let (Some(memory), Some(bus), Some(slot)) =
+                (memory.upgrade(), bus.upgrade(), slot.upgrade())
+            else {
                 return;
             };
-            let part = {
-                let mut buffers = memory.streaming.lock().expect("streaming lock");
-                let Some(buffer) = buffers.get_mut(&(session_id, part_id)) else {
-                    // Completion/removal already published the committed state.
-                    return;
-                };
-                buffer.notification_pending = false;
-                buffer.notified_at_ms = buffer.part.updated_at_ms;
-                buffer.part.clone()
-            };
-            bus.emit(SessionChange::PartUpdated { session_id, part });
+            if let Err(error) = SESSION_UPDATES
+                .run(move || {
+                    if !memory.is_current_stream(key, &slot) {
+                        return;
+                    }
+                    let part = {
+                        let mut buffer = slot.buffer.lock().expect("part stream lock");
+                        buffer.notification_pending = false;
+                        // A semantic boundary awaiting commit must not publish
+                        // an uncommitted terminal state through the live bus.
+                        if buffer.flush_requested {
+                            return;
+                        }
+                        buffer.notified_at_ms = buffer.part.updated_at_ms;
+                        buffer.part.clone()
+                    };
+                    bus.emit(SessionChange::PartUpdated {
+                        session_id: key.0,
+                        part,
+                    });
+                })
+                .await
+            {
+                tracing::error!(%error, "stream notification worker failed");
+            }
         });
     }
 
-    /// Flush every buffered member of a run before its marker becomes
-    /// terminal. This is the mandatory tail flush in D10.
+    /// Serialize and flush each part independently; other sessions and other
+    /// parts can still advance. Failed or cancelled flushes retain their buffer.
     async fn flush_streaming_run(&self, session_id: i64, run_id: i64) -> Result<(), StoreError> {
-        let buffers = {
-            let mut streaming = self.memory.streaming.lock().expect("streaming lock");
-            let keys = streaming
+        let slots = {
+            let streaming = self.memory.streaming.lock().expect("streaming lock");
+            streaming
                 .iter()
-                .filter(|((buffer_session_id, part_id), buffer)| {
-                    *buffer_session_id == session_id
-                        && (*part_id == run_id || buffer.part.run_id == Some(run_id))
+                .filter(|((id, part_id), slot)| {
+                    *id == session_id && (*part_id == run_id || slot.run_id == Some(run_id))
                 })
-                .map(|(key, _)| *key)
-                .collect::<Vec<_>>();
-            let mut buffers = Vec::with_capacity(keys.len());
-            for key in keys {
-                let buffer = streaming
-                    .remove(&key)
-                    .expect("collected stream buffer exists");
-                buffers.push(buffer);
-            }
-            buffers
+                .map(|(key, slot)| (*key, Arc::clone(slot)))
+                .collect::<Vec<_>>()
         };
-        let mut flushed = Vec::with_capacity(buffers.len());
-        for buffer in buffers {
-            flushed.push(self.flush_streaming_buffer(session_id, buffer).await?);
-        }
-        if !flushed.is_empty() {
-            // Merge the committed rows into the cache instead of invalidating
-            // it: flushing on part completion is the normal tail of a run, and
-            // invalidating here would force the next read back to the engine
-            // every time a run ends. `apply_committed` keeps the warm cache
-            // authoritative (and lets `load_cached` stay a hit).
-            let meta = self.engine.session_meta(session_id).await?;
-            self.memory
-                .apply_committed(session_id, &flushed, Some(meta.version));
-            self.bus
-                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-            for part in flushed {
-                self.bus
-                    .emit(SessionChange::PartUpdated { session_id, part });
+        let mut flushed = Vec::with_capacity(slots.len());
+        let mut failure = None;
+        for (key, slot) in slots {
+            let gate = Arc::new(Arc::clone(&slot.gate).lock_owned().await);
+            if !self.memory.is_current_stream(key, &slot) {
+                self.in_part_memory(&gate, move |_, _| drop(slot)).await?;
+                continue;
+            }
+            let worker_slot = Arc::clone(&slot);
+            let part = self
+                .in_part_memory(&gate, move |_, _| {
+                    worker_slot
+                        .buffer
+                        .lock()
+                        .expect("part stream lock")
+                        .part
+                        .clone()
+                })
+                .await?;
+            match self.flush_streaming_part(session_id, part).await {
+                Ok(part) => {
+                    self.in_part_memory(&gate, move |memory, _| memory.remove_stream(key, &slot))
+                        .await?;
+                    flushed.push(part);
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
             }
         }
-        Ok(())
+        // Announce earlier successful flushes even when a later part failed.
+        if !flushed.is_empty() {
+            let meta = self.engine.session_meta(session_id).await?;
+            let known_writes = flushed.len();
+            self.publish_parts_with_writes(
+                session_id,
+                meta,
+                flushed,
+                Vec::as_slice,
+                false,
+                known_writes,
+            )
+            .await?;
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     /// Reconcile a session left with an ownerless in-flight run (17.4):
@@ -1215,20 +1576,22 @@ where
     async fn reconcile(&self, session_id: i64, run_ids: &[i64]) -> Result<(), StoreError> {
         // A process-restart reconciliation cannot safely commit a process-local
         // stream tail. Drop it before deriving/announcing the terminal rows.
-        self.memory.clear_streaming_session(session_id);
+        self.in_memory(move |memory, _| memory.clear_streaming_session(session_id))
+            .await?;
         let outcome = self
             .engine
             .reconcile(session_id, run_ids, self.now())
             .await?;
         if !outcome.updated_parts.is_empty() {
-            self.memory.invalidate(session_id);
-            for part in outcome.updated_parts {
-                self.bus
-                    .emit(SessionChange::PartUpdated { session_id, part });
-            }
             let meta = self.engine.session_meta(session_id).await?;
-            self.bus
-                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            self.in_memory(move |memory, bus| {
+                memory.invalidate(session_id);
+                for part in outcome.updated_parts {
+                    bus.emit(SessionChange::PartUpdated { session_id, part });
+                }
+                bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            })
+            .await?;
         }
         Ok(())
     }
@@ -1244,9 +1607,8 @@ where
     }
 
     async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError> {
-        let mut view = self.engine.load_part_ids(session_id, ids).await?;
-        self.memory.overlay_streaming(session_id, &mut view);
-        Ok(view)
+        let view = self.engine.load_part_ids(session_id, ids).await?;
+        self.overlay(session_id, view).await
     }
 
     async fn load_owned_parts_by_kind(
@@ -1254,12 +1616,11 @@ where
         session_id: i64,
         kind: &str,
     ) -> Result<SessionView, StoreError> {
-        let mut view = self
+        let view = self
             .engine
             .load_owned_parts_by_kind(session_id, kind)
             .await?;
-        self.memory.overlay_streaming(session_id, &mut view);
-        Ok(view)
+        self.overlay(session_id, view).await
     }
 
     async fn user_message_count(&self, session_id: i64) -> Result<u64, StoreError> {
@@ -1284,11 +1645,11 @@ where
             .engine
             .load_session_page(session_id, before, limit)
             .await?;
-        let mut view = SessionView {
+        let view = SessionView {
             meta: page.meta.clone(),
             parts: std::mem::take(&mut page.parts),
         };
-        self.memory.overlay_streaming(session_id, &mut view);
+        let view = self.overlay(session_id, view).await?;
         page.parts = view.parts;
         Ok(page)
     }
@@ -1304,11 +1665,11 @@ where
             .engine
             .load_run_page(session_id, run_id, before, limit)
             .await?;
-        let mut view = SessionView {
+        let view = SessionView {
             meta: page.meta.clone(),
             parts: std::mem::take(&mut page.parts),
         };
-        self.memory.overlay_streaming(session_id, &mut view);
+        let view = self.overlay(session_id, view).await?;
         page.parts = view
             .parts
             .into_iter()
@@ -1322,11 +1683,7 @@ where
         // A fresh session has no subscribers yet, but emit for consistency
         // with the write path (a child create may be observed by a parent
         // subscriber).
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id: meta.id,
-            meta: meta.clone(),
-        });
-        Ok(meta)
+        self.publish_meta(meta).await
     }
 
     async fn find_subagent_by_task_id(
@@ -1349,11 +1706,7 @@ where
             .engine
             .create_subagent_session(parent_session_id, task_id, title, self.now())
             .await?;
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id: meta.id,
-            meta: meta.clone(),
-        });
-        Ok(meta.id)
+        Ok(self.publish_meta(meta).await?.id)
     }
 
     async fn update_subtask_state(
@@ -1368,12 +1721,9 @@ where
             .engine
             .update_subtask_state(session_id, status, started_at_ms, finished_at_ms, failure)
             .await?;
-        self.memory.invalidate(session_id);
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id,
-            meta: meta.clone(),
-        });
-        Ok(meta)
+        self.in_memory(move |memory, _| memory.invalidate(session_id))
+            .await?;
+        self.publish_meta(meta).await
     }
 
     async fn list_session_summaries(
@@ -1491,23 +1841,32 @@ where
             .await?;
         if outcome.created {
             let session_id = outcome.operation.session_id;
-            self.memory.invalidate(session_id);
-            let view = self.engine.load_session(session_id).await?;
-            if let Some(run_id) = outcome.notification_part.run_id
-                && let Some(marker) = view.parts.iter().find(|part| part.part_id == run_id)
-            {
-                self.bus.emit(SessionChange::PartAdded {
-                    session_id,
-                    part: marker.clone(),
-                });
-            }
-            self.bus.emit(SessionChange::PartAdded {
-                session_id,
-                part: outcome.notification_part.clone(),
-            });
-            let meta = self.engine.session_meta(session_id).await?;
-            self.bus
-                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            let ids = outcome
+                .notification_part
+                .run_id
+                .into_iter()
+                .collect::<Vec<_>>();
+            let view = self.engine.load_part_ids(session_id, &ids).await?;
+            return self
+                .in_memory(move |memory, bus| {
+                    memory.invalidate(session_id);
+                    for marker in view.parts {
+                        bus.emit(SessionChange::PartAdded {
+                            session_id,
+                            part: marker,
+                        });
+                    }
+                    bus.emit(SessionChange::PartAdded {
+                        session_id,
+                        part: outcome.notification_part.clone(),
+                    });
+                    bus.emit(SessionChange::SessionMetaUpdated {
+                        session_id,
+                        meta: view.meta,
+                    });
+                    outcome
+                })
+                .await;
         }
         Ok(outcome)
     }
@@ -1587,16 +1946,9 @@ where
             .await?;
         if outcome.created {
             let meta = self.engine.session_meta(session_id).await?;
-            self.memory
-                .apply_committed(session_id, &outcome.parts, Some(meta.version));
-            for part in &outcome.parts {
-                self.bus.emit(SessionChange::PartAdded {
-                    session_id,
-                    part: part.clone(),
-                });
-            }
-            self.bus
-                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            return self
+                .publish_parts(session_id, meta, outcome, |value| &value.parts, true)
+                .await;
         }
         Ok(outcome)
     }
@@ -1620,16 +1972,9 @@ where
             .await?;
         if outcome.created {
             let meta = self.engine.session_meta(session_id).await?;
-            self.memory
-                .apply_committed(session_id, &outcome.parts, Some(meta.version));
-            for part in &outcome.parts {
-                self.bus.emit(SessionChange::PartAdded {
-                    session_id,
-                    part: part.clone(),
-                });
-            }
-            self.bus
-                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            return self
+                .publish_parts(session_id, meta, outcome, |value| &value.parts, true)
+                .await;
         }
         Ok(outcome)
     }
@@ -1650,7 +1995,8 @@ where
         // may still be streaming unrelated parts.
         let tool_part_id = tool_part.as_ref().map(|(part_id, _, _)| *part_id);
         if let Some(tool_part_id) = tool_part_id {
-            self.memory.clear_streaming_part(session_id, tool_part_id);
+            self.in_memory(move |memory, _| memory.clear_streaming_part(session_id, tool_part_id))
+                .await?;
         }
         let created = self
             .engine
@@ -1660,31 +2006,27 @@ where
         // the run marker, neither of which it returns. Invalidate the cache
         // and re-derive the changed rows so live observers see the committed
         // launch/settle state.
-        self.memory.invalidate(session_id);
-        for part in &created {
-            self.bus.emit(SessionChange::PartAdded {
-                session_id,
-                part: part.clone(),
-            });
-        }
-        // A settlement can end the run without a tool transition. Always
-        // announce that marker so navigation observes the state boundary as
-        // well as its ending timestamp. Read only these rows, not the whole
-        // transcript, and reuse the metadata returned by that bounded read.
+        self.in_memory(move |memory, _| memory.invalidate(session_id))
+            .await?;
         let changed_ids = tool_part_id.into_iter().chain([run_id]).collect::<Vec<_>>();
         let view = self.engine.load_part_ids(session_id, &changed_ids).await?;
-        for id in changed_ids {
-            if let Some(part) = view.parts.iter().find(|part| part.part_id == id) {
-                self.bus.emit(SessionChange::PartUpdated {
+        self.in_memory(move |_, bus| {
+            for part in &created {
+                bus.emit(SessionChange::PartAdded {
                     session_id,
                     part: part.clone(),
                 });
             }
-        }
-        let meta = view.meta;
-        self.bus
-            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-        Ok(created)
+            for part in view.parts {
+                bus.emit(SessionChange::PartUpdated { session_id, part });
+            }
+            bus.emit(SessionChange::SessionMetaUpdated {
+                session_id,
+                meta: view.meta,
+            });
+            created
+        })
+        .await
     }
 
     async fn append_parts(
@@ -1698,17 +2040,8 @@ where
             .append_parts(session_id, run_id, parts, self.now())
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
-        self.memory
-            .apply_committed(session_id, &created, Some(meta.version));
-        self.bus
-            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-        for part in &created {
-            self.bus.emit(SessionChange::PartAdded {
-                session_id,
-                part: part.clone(),
-            });
-        }
-        Ok(created)
+        self.publish_parts(session_id, meta, created, Vec::as_slice, true)
+            .await
     }
 
     async fn update_part(
@@ -1717,81 +2050,123 @@ where
         part_id: i64,
         delta: PartDelta,
     ) -> Result<Part, StoreError> {
-        // A part with a live stream buffer must stay on the buffered path for
-        // every subsequent update: the buffer holds the in-memory truth and
-        // the committed row may still lag it (a state the engine would read as
-        // a backwards transition).
-        let has_buffer = self
-            .memory
-            .streaming
-            .lock()
-            .expect("streaming lock")
-            .contains_key(&(session_id, part_id));
+        // Take the same gate before reading the base, buffering, or doing a
+        // direct durable edit. Concurrent first deltas cannot seed stale rows
+        // after another delta's flush removed the preceding buffer.
+        let gate = Arc::new(
+            self.memory
+                .part_gate((session_id, part_id))
+                .lock_owned()
+                .await,
+        );
+        let has_buffer = self.memory.streaming_slot(session_id, part_id).is_some();
         let is_text_delta = delta.content.is_none() && delta.content_text_delta.is_some();
-        // Route an in-progress content update (think/tool-call whole-document
-        // deltas are `content`-shaped, not `content_text_delta`-shaped)
-        // through the streaming buffer too. Without this, reasoning deltas
-        // bypass the buffer entirely and write the database once per token
-        // (~100+ writes per second while thinking). The buffer keeps them in
-        // memory and commits once when the part terminalizes or its run ends.
-        // A content update with a terminal state (a checkpoint editing a
-        // completed part) is a durable edit and stays on the direct commit
-        // path so its revision advances.
         let streaming_content_update =
             delta.content.is_some() && delta.state == Some(PartState::InProgress);
-        if has_buffer || is_text_delta || streaming_content_update {
-            if let Some(updated) = self
-                .update_streaming_part(session_id, part_id, delta)
+        let updated = if has_buffer || is_text_delta || streaming_content_update {
+            match self
+                .update_streaming_part(session_id, part_id, BufferedDelta::Part(delta), true, &gate)
                 .await?
             {
-                // The delta was flushed: merge the committed row into the
-                // cache (the buffer no longer overlays it) and notify (D10 —
-                // notifications follow committed flushes).
-                let meta = self.engine.session_meta(session_id).await?;
-                self.memory.apply_committed(
-                    session_id,
-                    std::slice::from_ref(&updated),
-                    Some(meta.version),
-                );
-                self.bus
-                    .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-                self.bus.emit(SessionChange::PartUpdated {
-                    session_id,
-                    part: updated.clone(),
-                });
-                return Ok(updated);
+                StreamUpdate::Buffered(part) => return Ok(part),
+                StreamUpdate::Committed(part) => part,
+                StreamUpdate::Checkpoint(_) => unreachable!("snapshot was requested"),
             }
-            // The buffer is authoritative for live reads and throttled
-            // patches, while its durable revision advances only on commit.
-            self.schedule_streaming_notification(session_id, part_id);
-            let buffered = self
-                .memory
-                .streaming
-                .lock()
-                .expect("streaming lock")
-                .get(&(session_id, part_id))
-                .expect("buffered part exists")
-                .part
-                .clone();
-            return Ok(buffered);
-        }
-        let updated = self
-            .engine
-            .update_part(session_id, part_id, delta, self.now())
-            .await?;
+        } else {
+            self.engine
+                .update_part(session_id, part_id, delta, self.now())
+                .await?
+        };
+        // Observer callbacks may reenter this part. Publish only after the
+        // durable edit and buffer cleanup have released their serialization.
+        drop(gate);
         let meta = self.engine.session_meta(session_id).await?;
-        self.memory.apply_committed(
-            session_id,
-            std::slice::from_ref(&updated),
-            Some(meta.version),
+        self.publish_parts(session_id, meta, updated, std::slice::from_ref, false)
+            .await
+    }
+
+    async fn append_live_text(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        text: String,
+    ) -> Result<PartCheckpoint, StoreError> {
+        let gate = Arc::new(
+            self.memory
+                .part_gate((session_id, part_id))
+                .lock_owned()
+                .await,
         );
-        self.bus
-            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-        self.bus.emit(SessionChange::PartUpdated {
-            session_id,
-            part: updated.clone(),
-        });
-        Ok(updated)
+        let delta = PartDelta {
+            content_text_delta: Some(text),
+            ..Default::default()
+        };
+        let updated = self
+            .update_streaming_part(
+                session_id,
+                part_id,
+                BufferedDelta::Part(delta),
+                false,
+                &gate,
+            )
+            .await?;
+        drop(gate);
+        match updated {
+            StreamUpdate::Checkpoint(position) => Ok(position),
+            StreamUpdate::Committed(part) => {
+                let position = PartCheckpoint {
+                    revision: part.revision,
+                    updated_at_ms: part.updated_at_ms,
+                };
+                let meta = self.engine.session_meta(session_id).await?;
+                self.publish_parts(session_id, meta, part, std::slice::from_ref, false)
+                    .await?;
+                Ok(position)
+            }
+            StreamUpdate::Buffered(_) => {
+                unreachable!("only a lightweight checkpoint was requested")
+            }
+        }
+    }
+
+    async fn append_live_reasoning(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        text: String,
+    ) -> Result<PartCheckpoint, StoreError> {
+        let gate = Arc::new(
+            self.memory
+                .part_gate((session_id, part_id))
+                .lock_owned()
+                .await,
+        );
+        let updated = self
+            .update_streaming_part(
+                session_id,
+                part_id,
+                BufferedDelta::Reasoning(text),
+                false,
+                &gate,
+            )
+            .await?;
+        drop(gate);
+        match updated {
+            StreamUpdate::Checkpoint(position) => Ok(position),
+            StreamUpdate::Committed(part) => {
+                let position = PartCheckpoint {
+                    revision: part.revision,
+                    updated_at_ms: part.updated_at_ms,
+                };
+                let meta = self.engine.session_meta(session_id).await?;
+                self.publish_parts(session_id, meta, part, std::slice::from_ref, false)
+                    .await?;
+                Ok(position)
+            }
+            StreamUpdate::Buffered(_) => {
+                unreachable!("only a lightweight checkpoint was requested")
+            }
+        }
     }
 
     async fn complete_run(
@@ -1806,18 +2181,8 @@ where
             .complete_run(session_id, run_id, outcome, self.now())
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
-        self.memory.apply_committed(
-            session_id,
-            std::slice::from_ref(&marker),
-            Some(meta.version),
-        );
-        self.bus.emit(SessionChange::PartUpdated {
-            session_id,
-            part: marker.clone(),
-        });
-        self.bus
-            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-        Ok(marker)
+        self.publish_parts(session_id, meta, marker, std::slice::from_ref, false)
+            .await
     }
 
     async fn start_run(
@@ -1833,16 +2198,9 @@ where
             .await?;
         if outcome.created {
             let meta = self.engine.session_meta(session_id).await?;
-            self.memory
-                .apply_committed(session_id, &outcome.parts, Some(meta.version));
-            for part in &outcome.parts {
-                self.bus.emit(SessionChange::PartAdded {
-                    session_id,
-                    part: part.clone(),
-                });
-            }
-            self.bus
-                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            return self
+                .publish_parts(session_id, meta, outcome, |value| &value.parts, true)
+                .await;
         }
         Ok(outcome)
     }
@@ -1856,12 +2214,15 @@ where
             .engine
             .set_provider_anchors(session_id, anchors)
             .await?;
-        self.memory.invalidate_changed_meta(&meta);
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id,
-            meta: meta.clone(),
-        });
-        Ok(meta)
+        self.in_memory(move |memory, bus| {
+            memory.invalidate_changed_meta(&meta);
+            bus.emit(SessionChange::SessionMetaUpdated {
+                session_id,
+                meta: meta.clone(),
+            });
+            meta
+        })
+        .await
     }
 
     async fn set_config_json(
@@ -1870,12 +2231,15 @@ where
         config: Option<Value>,
     ) -> Result<SessionMeta, StoreError> {
         let meta = self.engine.set_config_json(session_id, config).await?;
-        self.memory.invalidate_changed_meta(&meta);
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id,
-            meta: meta.clone(),
-        });
-        Ok(meta)
+        self.in_memory(move |memory, bus| {
+            memory.invalidate_changed_meta(&meta);
+            bus.emit(SessionChange::SessionMetaUpdated {
+                session_id,
+                meta: meta.clone(),
+            });
+            meta
+        })
+        .await
     }
 
     async fn record_usage(&self, record: UsageRecord) -> Result<(), StoreError> {
@@ -1892,11 +2256,7 @@ where
             .engine
             .fork_session(session_id, at_part_id, title.clone(), false, self.now())
             .await?;
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id: meta.id,
-            meta: meta.clone(),
-        });
-        Ok(meta.id)
+        Ok(self.publish_meta(meta).await?.id)
     }
 
     async fn fork_with_config(
@@ -1917,11 +2277,7 @@ where
                 self.now(),
             )
             .await?;
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id: meta.id,
-            meta: meta.clone(),
-        });
-        Ok(meta.id)
+        Ok(self.publish_meta(meta).await?.id)
     }
 
     async fn rewind(
@@ -1934,11 +2290,7 @@ where
             .engine
             .fork_session(session_id, at_part_id, title.clone(), true, self.now())
             .await?;
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id: meta.id,
-            meta: meta.clone(),
-        });
-        Ok(meta.id)
+        Ok(self.publish_meta(meta).await?.id)
     }
 
     async fn rename(&self, session_id: i64, title: String) -> Result<SessionMeta, StoreError> {
@@ -1966,12 +2318,15 @@ where
             .engine
             .update_session_metadata(session_id, patch)
             .await?;
-        self.memory.invalidate_changed_meta(&meta);
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id,
-            meta: meta.clone(),
-        });
-        Ok(meta)
+        self.in_memory(move |memory, bus| {
+            memory.invalidate_changed_meta(&meta);
+            bus.emit(SessionChange::SessionMetaUpdated {
+                session_id,
+                meta: meta.clone(),
+            });
+            meta
+        })
+        .await
     }
 
     async fn cancel_run(&self, session_id: i64, run_id: i64) -> Result<Vec<Part>, StoreError> {
@@ -1982,16 +2337,9 @@ where
             .await?;
         if !updated_parts.is_empty() {
             let meta = self.engine.session_meta(session_id).await?;
-            self.memory
-                .apply_committed(session_id, &updated_parts, Some(meta.version));
-            for part in &updated_parts {
-                self.bus.emit(SessionChange::PartUpdated {
-                    session_id,
-                    part: part.clone(),
-                });
-            }
-            self.bus
-                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            return self
+                .publish_parts(session_id, meta, updated_parts, Vec::as_slice, false)
+                .await;
         }
         Ok(updated_parts)
     }
@@ -2010,17 +2358,19 @@ where
             return Ok(Vec::new());
         }
         let meta = self.engine.session_meta(session_id).await?;
-        self.memory.clear_streaming_session(session_id);
-        self.memory.invalidate(session_id);
-        for part in &removed_parts {
-            self.bus.emit(SessionChange::PartRemoved {
-                session_id,
-                part_id: part.part_id,
-            });
-        }
-        self.bus
-            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-        Ok(removed_parts)
+        self.in_memory(move |memory, bus| {
+            memory.clear_streaming_session(session_id);
+            memory.invalidate(session_id);
+            for part in &removed_parts {
+                bus.emit(SessionChange::PartRemoved {
+                    session_id,
+                    part_id: part.part_id,
+                });
+            }
+            bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            removed_parts
+        })
+        .await
     }
 
     async fn in_flight_session_ids(&self) -> Result<Vec<i64>, StoreError> {
@@ -2076,17 +2426,8 @@ where
             .await?;
         self.engine.set_provider_anchors(session_id, None).await?;
         let meta = self.engine.session_meta(session_id).await?;
-        self.memory.apply_committed(
-            session_id,
-            std::slice::from_ref(&marker),
-            Some(meta.version),
-        );
-        self.bus.emit(SessionChange::PartAdded {
-            session_id,
-            part: marker,
-        });
-        self.bus
-            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        self.publish_parts(session_id, meta, marker, std::slice::from_ref, true)
+            .await?;
         Ok(outcome.run_id)
     }
 
@@ -2122,23 +2463,25 @@ where
             ));
         }
         self.engine.delete_session(session_id).await?;
-        removed_memberships.sort_by_key(|(deleted_id, _, _, _)| *deleted_id);
-        for (deleted_id, workspace_id, temporary, part_ids) in removed_memberships {
-            self.memory.clear_streaming_session(deleted_id);
-            self.memory.invalidate(deleted_id);
-            for part_id in part_ids {
-                self.bus.emit(SessionChange::PartRemoved {
+        self.in_memory(move |memory, bus| {
+            removed_memberships.sort_by_key(|(id, _, _, _)| *id);
+            for (deleted_id, workspace_id, temporary, part_ids) in removed_memberships {
+                memory.clear_streaming_session(deleted_id);
+                memory.invalidate(deleted_id);
+                for part_id in part_ids {
+                    bus.emit(SessionChange::PartRemoved {
+                        session_id: deleted_id,
+                        part_id,
+                    });
+                }
+                bus.emit(SessionChange::SessionDeleted {
                     session_id: deleted_id,
-                    part_id,
+                    workspace_id,
+                    temporary,
                 });
             }
-            self.bus.emit(SessionChange::SessionDeleted {
-                session_id: deleted_id,
-                workspace_id,
-                temporary,
-            });
-        }
-        Ok(())
+        })
+        .await
     }
 
     async fn export_session_jsonl(&self, session_id: i64) -> Result<String, StoreError> {
@@ -2155,13 +2498,16 @@ where
             .import_session_jsonl(workspace_id, bundle, self.now())
             .await?;
         let view = self.engine.load_session(session_id).await?;
-        self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id,
-            meta: view.meta,
-        });
-        for part in view.parts {
-            self.bus.emit(SessionChange::PartAdded { session_id, part });
-        }
+        self.in_memory(move |_, bus| {
+            bus.emit(SessionChange::SessionMetaUpdated {
+                session_id,
+                meta: view.meta,
+            });
+            for part in view.parts {
+                bus.emit(SessionChange::PartAdded { session_id, part });
+            }
+        })
+        .await?;
         Ok(session_id)
     }
 
@@ -2207,6 +2553,19 @@ fn apply_buffered_delta(
     delta: PartDelta,
     now_ms: i64,
 ) -> Result<bool, StoreError> {
+    if !part.is_run_marker()
+        && part.state == PartState::InProgress
+        && part.finished_at_ms.is_none()
+        && delta.state.is_none()
+        && delta.content.is_none()
+        && delta.summary.is_none()
+        && delta.provider_state.is_none()
+        && delta.finished_at_ms.is_none()
+        && let Some(text) = delta.content_text_delta.as_deref()
+    {
+        super::part_update::append_buffered_text(part, text, now_ms)?;
+        return Ok(false);
+    }
     let revision = part.revision;
     let mut next = prepare_part_update(part.clone(), delta, now_ms)?;
     let state_changed = next.state != part.state;

@@ -106,11 +106,7 @@ pub fn prepare_run_completion(
     finish_update(&previous, part, now_ms)
 }
 
-fn finish_update(
-    previous: &Part,
-    mut part: Part,
-    now_ms: i64,
-) -> Result<Part, StoreError> {
+fn finish_update(previous: &Part, mut part: Part, now_ms: i64) -> Result<Part, StoreError> {
     if part.started_at_ms < 0
         || part.created_at_ms < 0
         || now_ms < part.created_at_ms
@@ -144,6 +140,75 @@ fn finish_update(
         .ok_or_else(|| StoreError::InvalidState("part revision is exhausted".to_owned()))?;
     part.updated_at_ms = now_ms.max(previous.updated_at_ms.saturating_add(1));
     Ok(part)
+}
+
+/// Fast path for a pure text append to a live, non-run streaming checkpoint.
+/// Validate before mutation, preserving the general updater's error atomicity.
+/// The durable revision is intentionally unchanged until the coalesced flush.
+pub(super) fn append_buffered_text(
+    part: &mut Part,
+    text: &str,
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    let now_ms = now_ms.max(part.updated_at_ms);
+    if part.started_at_ms < 0 || part.created_at_ms < 0 || now_ms < part.created_at_ms {
+        return Err(StoreError::InvalidState(
+            "invalid part lifecycle timestamps".to_owned(),
+        ));
+    }
+    if !text.is_empty() && part.revision.checked_add(1).is_none() {
+        return Err(StoreError::InvalidState(
+            "part revision is exhausted".to_owned(),
+        ));
+    }
+    append_text_delta(&mut part.content, text)?;
+    if !text.is_empty() {
+        part.updated_at_ms = now_ms.max(part.updated_at_ms.saturating_add(1));
+    }
+    Ok(())
+}
+
+pub(super) fn append_reasoning_summary(
+    content: &mut Value,
+    text: String,
+) -> Result<(), StoreError> {
+    let summary = content
+        .get_mut("summary")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            StoreError::InvalidState(
+                "reasoning summary requires an array-shaped content".to_owned(),
+            )
+        })?;
+    summary.push(Value::String(text));
+    Ok(())
+}
+
+pub(super) fn append_buffered_reasoning(
+    part: &mut Part,
+    text: String,
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    let now_ms = now_ms.max(part.updated_at_ms);
+    if part.kind != "think" || part.state != PartState::InProgress || part.finished_at_ms.is_some()
+    {
+        return Err(StoreError::InvalidState(
+            "reasoning append requires an in-progress think part".to_owned(),
+        ));
+    }
+    if part.started_at_ms < 0 || part.created_at_ms < 0 || now_ms < part.created_at_ms {
+        return Err(StoreError::InvalidState(
+            "invalid part lifecycle timestamps".to_owned(),
+        ));
+    }
+    if part.revision.checked_add(1).is_none() {
+        return Err(StoreError::InvalidState(
+            "part revision is exhausted".to_owned(),
+        ));
+    }
+    append_reasoning_summary(&mut part.content, text)?;
+    part.updated_at_ms = now_ms.max(part.updated_at_ms.saturating_add(1));
+    Ok(())
 }
 
 fn append_text_delta(content: &mut Value, delta: &str) -> Result<(), StoreError> {

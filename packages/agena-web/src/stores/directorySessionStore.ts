@@ -122,7 +122,8 @@ function toSidebarRowFromAgenaSession(
 const SIDEBAR_DIRECTORIES_PAGE_SIZE = 15
 const SIDEBAR_FOOTER_PAGE_SIZE = 10
 const SIDEBAR_DIRECTORY_SESSIONS_PAGE_SIZE = 10
-const SIDEBAR_RECOVERY_THROTTLE_MS = 10_000
+const SIDEBAR_REFRESH_INTERVAL_MS = 200
+const SIDEBAR_RETRY_INTERVAL_MS = 10_000
 const SIDEBAR_STATE_REQUEST_STALE_MS = 12000
 const SIDEBAR_SESSION_HYDRATION_RETRY_MS = 10000
 const SIDEBAR_RECOVERY_EVENT_TYPES = new Set(['session_changed', 'runtime_signal', 'lagged'])
@@ -835,6 +836,32 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       sidebarSync.invalidate(180)
     }),
   ]
+  const releaseSessionActions = chat.$onAction(({ name, after }) => {
+    if (name !== 'createSession') return
+    after((session) => {
+      if (disposed || !session) return
+      const directoryId = String(session.workspace_id)
+      const patch: Partial<ChatSidebarUiPrefs> = {
+        collapsedDirectoryIds: uiPrefs.value.collapsedDirectoryIds.filter((id) => id !== directoryId),
+      }
+      if (!session.parent_id) {
+        // New roots sort onto the first page. Make the result visible even
+        // when creation started from a collapsed directory or an older page.
+        patch.sessionRootPageByDirectoryId = {
+          ...uiPrefs.value.sessionRootPageByDirectoryId,
+          [directoryId]: 0,
+        }
+      } else {
+        patch.expandedParentSessionIds = [
+          ...new Set([...uiPrefs.value.expandedParentSessionIds, String(session.parent_id)]),
+        ]
+      }
+      applyAuthoritativeUiPrefs(patchChatSidebarUiPrefs(uiPrefs.value, patch))
+      syncWorkspaceSubscriptions(directoryPageRows.value)
+      // The successful write already invalidated the relevant revisions.
+      // Updating preferences here lets that same targeted refresh reveal it.
+    })
+  })
   watch(
     () => footerKinds.map((kind) => uiPrefs.value[`${kind}SessionsOpen`]),
     () => {
@@ -998,18 +1025,22 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
           const hydrated = entries.get(row.id)
           if (!hydrated) return row
           const nextRow = mergeSidebarRowSnapshot(row, hydrated)
-          if (!sessionRowEquivalent(row, nextRow)) changed = true
+          if (sessionRowEquivalent(row, nextRow)) return row
+          changed = true
           return nextRow
         }),
         recentRows: section.recentRows.map((row) => {
           const hydrated = entries.get(row.id)
           if (!hydrated) return row
           const nextRow = mergeSidebarRowSnapshot(row, hydrated)
-          if (!sessionRowEquivalent(row, nextRow)) changed = true
+          if (sessionRowEquivalent(row, nextRow)) return row
+          changed = true
           return nextRow
         }),
       }
-      nextDirectorySidebarById[directoryId] = nextSection
+      nextDirectorySidebarById[directoryId] = directorySidebarViewEquivalent(section, nextSection)
+        ? section
+        : nextSection
     }
 
     const mergeFooterRows = (rows: SidebarSessionRow[]): SidebarSessionRow[] =>
@@ -1017,7 +1048,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         const hydrated = entries.get(row.id)
         if (!hydrated) return row
         const nextRow = mergeSidebarRowSnapshot(row, hydrated)
-        if (!sessionRowEquivalent(row, nextRow)) changed = true
+        if (sessionRowEquivalent(row, nextRow)) return row
+        changed = true
         return nextRow
       })
 
@@ -1031,10 +1063,14 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
     if (changed) {
       directorySidebarById.value = nextDirectorySidebarById
-      pinnedFooterView.value = nextPinnedFooterView
-      favoriteFooterView.value = nextFavoriteFooterView
-      recentFooterView.value = nextRecentFooterView
-      runningFooterView.value = nextRunningFooterView
+      if (!footerViewEquivalent(pinnedFooterView.value, nextPinnedFooterView))
+        pinnedFooterView.value = nextPinnedFooterView
+      if (!footerViewEquivalent(favoriteFooterView.value, nextFavoriteFooterView))
+        favoriteFooterView.value = nextFavoriteFooterView
+      if (!footerViewEquivalent(recentFooterView.value, nextRecentFooterView))
+        recentFooterView.value = nextRecentFooterView
+      if (!footerViewEquivalent(runningFooterView.value, nextRunningFooterView))
+        runningFooterView.value = nextRunningFooterView
     }
 
     return changed
@@ -1191,7 +1227,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       for (const sid of unresolved) {
         sidebarSessionHydrationAttemptAt.set(
           sid,
-          Date.now() - SIDEBAR_SESSION_HYDRATION_RETRY_MS + SIDEBAR_RECOVERY_THROTTLE_MS,
+          Date.now() - SIDEBAR_SESSION_HYDRATION_RETRY_MS + SIDEBAR_RETRY_INTERVAL_MS,
         )
       }
       scheduleSidebarRecoverySync('sidebar-session-hydration-missed', 220)
@@ -1204,7 +1240,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       for (const sid of unresolved) {
         sidebarSessionHydrationAttemptAt.set(
           sid,
-          Date.now() - SIDEBAR_SESSION_HYDRATION_RETRY_MS + SIDEBAR_RECOVERY_THROTTLE_MS,
+          Date.now() - SIDEBAR_SESSION_HYDRATION_RETRY_MS + SIDEBAR_RETRY_INTERVAL_MS,
         )
       }
       scheduleSidebarRecoverySync('sidebar-session-hydration-partial', 220)
@@ -1841,6 +1877,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     targetedController?.abort()
     for (const controller of pageRequests.values()) controller.abort()
     sidebarSync.dispose()
+    releaseSessionActions()
     for (const release of releaseSidebarResources) release()
     for (const subscription of footerSubscriptions.values()) subscription.release()
     for (const release of workspaceSubscriptions.values()) release()
@@ -1902,8 +1939,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         if (!disposed && sidebarInitialized && isDocumentVisible()) await refreshDirtySidebar()
       },
       {
-        intervalMs: SIDEBAR_RECOVERY_THROTTLE_MS,
-        retryMs: SIDEBAR_RECOVERY_THROTTLE_MS,
+        intervalMs: SIDEBAR_REFRESH_INTERVAL_MS,
+        retryMs: SIDEBAR_RETRY_INTERVAL_MS,
         enabled: () => !disposed && isDocumentVisible(),
       },
     )

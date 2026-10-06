@@ -1924,9 +1924,6 @@ async function createSessionInDirectory(directoryId: string, directoryPath: stri
       workspacePath: directoryPath,
     })
     if (created?.id) {
-      // Ensure the sidebar list reflects the new session without a manual refresh.
-      directorySessions.scheduleSidebarRecoverySync('session-created', 0, { force: true })
-
       if (props.navigateToChat) {
         await openSessionInWorkspaceWindow(created.id)
       }

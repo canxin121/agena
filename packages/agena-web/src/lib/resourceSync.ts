@@ -278,6 +278,11 @@ export function invalidateResources(keys: Iterable<string> = listeners.keys()) {
   if (changed) queue.invalidate(500)
 }
 
+export function invalidateResourcePrefix(prefix: string) {
+  ensureScope()
+  invalidateResources(new Set([...listeners.keys(), ...versions.keys()].filter((key) => key.startsWith(prefix))))
+}
+
 export function applyResourceEvent(event: SseEvent) {
   const props = event.properties ?? {}
   const announced = props.resource_revisions

@@ -1,10 +1,5 @@
 import type { SessionState } from '../types/chat'
-import {
-  normalizeSessionState,
-  sessionStateIsBusy,
-  sessionStateKind,
-  sessionStateNeedsAttention,
-} from '../types/chat'
+import { normalizeSessionState, sessionStateIsBusy, sessionStateKind, sessionStateNeedsAttention } from '../types/chat'
 
 /**
  * The directory store only keeps the canonical server state and the server
@@ -79,6 +74,11 @@ export function mergeSessionStateSnapshot(
   return current
 }
 
-export function stateSnapshotEquivalent(left: SessionStateSnapshot, right: SessionStateSnapshot): boolean {
+export function stateSnapshotEquivalent(
+  left: SessionStateSnapshot | null | undefined,
+  right: SessionStateSnapshot | null | undefined,
+): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
   return left.updatedAt === right.updatedAt && JSON.stringify(left.state) === JSON.stringify(right.state)
 }

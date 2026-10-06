@@ -19,5 +19,5 @@ test('directory session store only accepts targeted list hydration results and s
   const source = readFileSync(storeFile, 'utf8')
 
   assert.match(source, /if \(!sid \|\| !candidateIds\.has\(sid\)\) continue/)
-  assert.match(source, /Date\.now\(\) - SIDEBAR_SESSION_HYDRATION_RETRY_MS \+ SIDEBAR_RECOVERY_THROTTLE_MS/)
+  assert.match(source, /Date\.now\(\) - SIDEBAR_SESSION_HYDRATION_RETRY_MS \+ SIDEBAR_RETRY_INTERVAL_MS/)
 })

@@ -18,6 +18,10 @@ const { useActivityLogs } = (await vite.ssrLoadModule(
   '/src/composables/useActivityLogs.ts',
 )) as typeof import('../src/composables/useActivityLogs')
 const { useChatStore } = (await vite.ssrLoadModule('/src/stores/chat.ts')) as typeof import('../src/stores/chat')
+const { useDirectorySessionStore } = (await vite.ssrLoadModule(
+  '/src/stores/directorySessionStore.ts',
+)) as typeof import('../src/stores/directorySessionStore')
+const chatApi = (await vite.ssrLoadModule('/src/stores/chat/api.ts')) as typeof import('../src/stores/chat/api')
 const { useSessionActivityStore } = (await vite.ssrLoadModule(
   '/src/stores/sessionActivity.ts',
 )) as typeof import('../src/stores/sessionActivity')
@@ -29,6 +33,8 @@ const { conditionalJson, conditionalJsonObserved } = (await vite.ssrLoadModule(
   '/src/lib/conditionalJson.ts',
 )) as typeof import('../src/lib/conditionalJson')
 
+let runtimeClock = 100_000
+
 async function withRuntime(
   run: (context: {
     mount: (setup: () => void) => void
@@ -38,7 +44,7 @@ async function withRuntime(
     calls: URL[]
     reply: (key: string, body: unknown) => Response
     evict: () => Promise<void>
-    setFetch: (handler: (url: URL) => Response) => void
+    setFetch: (handler: (url: URL, init?: RequestInit) => Response) => void
   }) => Promise<void>,
 ) {
   ensureBrowserTestRuntime()
@@ -50,8 +56,9 @@ async function withRuntime(
     clearTimeout: globalThis.clearTimeout,
     windowSetTimeout: window.setTimeout,
     windowClearTimeout: window.clearTimeout,
+    location: window.location,
   }
-  let now = 100_000,
+  let now = runtimeClock,
     sequence = 0
   const timers = new Map<number, { at: number; callback: () => void }>()
   const timeout = ((callback: () => void, ms = 0) => {
@@ -64,6 +71,7 @@ async function withRuntime(
   Object.assign(globalThis, { document: doc, setTimeout: timeout, clearTimeout: clear })
   window.setTimeout = timeout as typeof window.setTimeout
   window.clearTimeout = clear as typeof window.clearTimeout
+  Object.assign(window, { location: new URL('http://agena.test/chat') })
   Date.now = () => now
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -120,8 +128,8 @@ async function withRuntime(
     Response.json(body, {
       headers: { etag: `W/"${tokens.get(key) ?? 'granularity-http:1'}"` },
     })
-  const setFetch = (handler: (url: URL) => Response) => {
-    globalThis.fetch = (async (input) => {
+  const setFetch = (handler: (url: URL, init?: RequestInit) => Response) => {
+    globalThis.fetch = (async (input, init) => {
       const url = new URL(String(input), 'http://agena.test')
       calls.push(url)
       if (url.pathname === '/api/v1/changes/revisions')
@@ -134,7 +142,7 @@ async function withRuntime(
           ),
         )
       if (url.pathname.startsWith('/evict-granularity/')) return reply('sessions', {})
-      return handler(url)
+      return handler(url, init)
     }) as typeof fetch
   }
   let eviction = 0
@@ -147,6 +155,7 @@ async function withRuntime(
   } finally {
     for (const app of apps) app.unmount()
     disposePinia(pinia)
+    runtimeClock = now + 1000
     Date.now = original.now
     Object.assign(globalThis, {
       document: original.document,
@@ -156,8 +165,323 @@ async function withRuntime(
     })
     window.setTimeout = original.windowSetTimeout
     window.clearTimeout = original.windowClearTimeout
+    Object.assign(window, { location: original.location })
   }
 }
+
+test('creating a session refreshes its sidebar within one second after a previous refresh, without SSE', () =>
+  withRuntime(async ({ mount, advance, tokens, calls, reply, setFetch }) => {
+    const workspaceIds = ['99601', '99602']
+    const resourceKeys = [
+      'sessions',
+      'workspaces:catalog',
+      ...['pinned', 'favorite', 'recent', 'running'].map((kind) => `sessions:bucket:${kind}:count`),
+      ...workspaceIds.flatMap((id) => [`workspace:${id}:sessions:roots`, `workspace:${id}:stats`]),
+    ]
+    for (const key of resourceKeys) tokens.set(key, 'granularity-http:100')
+    const rows = new Map(
+      workspaceIds.map((id) => [
+        id,
+        [
+          {
+            id: Number(id) + 100,
+            workspace_id: Number(id),
+            title: `Original ${id}`,
+            root_id: Number(id) + 100,
+            parent_id: null,
+            child_session_count: 0,
+            version: 1,
+            state: { kind: 'ready', data: {} },
+          },
+        ],
+      ]),
+    )
+    setFetch((url, init) => {
+      if (url.pathname === '/api/v1/workspaces')
+        return reply('workspaces:catalog', {
+          items: workspaceIds.map((id) => ({ id: Number(id), path: `/repo-${id}` })),
+          page: { has_more: false },
+        })
+      if (url.pathname === '/api/v1/workspaces/session-stats')
+        return Response.json({
+          items: url.searchParams
+            .get('ids')!
+            .split(',')
+            .map((id) => ({
+              workspace_id: Number(id),
+              revision: tokens.get(`workspace:${id}:stats`),
+              stats: { total: rows.get(id)!.length, roots: rows.get(id)!.length, pinned: 0, running: 0, attention: 0 },
+            })),
+        })
+      expect(url.pathname).toBe('/api/v1/sessions')
+      if (init?.method === 'POST') {
+        const input = JSON.parse(String(init.body))
+        expect(input.workspace_id).toBe(99601)
+        const created = { ...rows.get('99601')![0]!, id: 99901, root_id: 99901, title: input.title }
+        rows.get('99601')!.unshift(created)
+        for (const key of ['workspace:99601:sessions:roots', 'workspace:99601:stats', 'sessions:bucket:recent:count'])
+          tokens.set(key, 'granularity-http:102')
+        return Response.json(created)
+      }
+      const id = url.searchParams.get('workspace_id')
+      const bucket = url.searchParams.get('bucket')
+      const key = id ? `workspace:${id}:sessions:roots` : bucket ? `sessions:bucket:${bucket}:count` : 'sessions'
+      return reply(key, {
+        items: id ? rows.get(id) : [],
+        total: id ? rows.get(id)!.length : bucket === 'recent' ? [...rows.values()].flat().length : 0,
+        page: { has_more: false },
+      })
+    })
+    let sidebar!: ReturnType<typeof useDirectorySessionStore>
+    mount(() => {
+      sidebar = useDirectorySessionStore()
+      for (const kind of ['pinned', 'favorite', 'recent', 'running'] as const)
+        sidebar.uiPrefs[`${kind}SessionsOpen`] = false
+    })
+    const release = sync.startResourceSync()
+    try {
+      const boot = sidebar.revalidateFromApi()
+      await advance(1000)
+      expect(await boot).toBe(true)
+      const otherDirectory = sidebar.directorySidebarById['99602']
+      // Complete an ordinary refresh immediately before creating. The old
+      // recovery interval then prevents all further updates for ten seconds.
+      rows.get('99601')![0]!.title = 'Updated before creation'
+      tokens.set('workspace:99601:sessions:roots', 'granularity-http:101')
+      sync.applyResourceEvent({
+        type: 'session_changed',
+        properties: { resource_revisions: { 'workspace:99601:sessions:roots': 'granularity-http:101' } },
+      })
+      await advance(1000)
+      expect(sidebar.directorySidebarById['99601']!.recentRows[0]!.session!.title).toBe('Updated before creation')
+      calls.length = 0
+      // No stream event announces this mutation. Its successful HTTP response
+      // must still cause the precise lists and counts to be reconciled.
+      const created = await chatApi.createSession({ workspaceId: 99601, title: 'Just created' })
+      await advance(1000)
+      expect(sidebar.error).toBeNull()
+      expect(sidebar.directorySidebarById['99601']!.recentRows.map((row) => row.id)).toContain(created.id)
+      expect(sidebar.directorySidebarById['99601']!.sessionCount).toBe(2)
+      expect(sidebar.recentFooterView.total).toBe(3)
+      expect(sidebar.directorySidebarById['99602']).toBe(otherDirectory)
+      expect(calls.filter((url) => url.pathname === '/api/v1/workspaces')).toHaveLength(0)
+      expect(calls.filter((url) => url.searchParams.get('workspace_id') === '99602')).toHaveLength(0)
+      expect(
+        calls
+          .filter((url) => url.pathname === '/api/v1/workspaces/session-stats')
+          .every((url) => url.searchParams.get('ids') === '99601'),
+      ).toBe(true)
+      expect(
+        calls
+          .filter((url) => url.pathname === '/api/v1/sessions' && url.searchParams.has('bucket'))
+          .every((url) => url.searchParams.get('bucket') === 'recent'),
+      ).toBe(true)
+    } finally {
+      release()
+    }
+  }))
+
+test('a first-seen session can enter the open recent footer while its directory remains collapsed', () =>
+  withRuntime(async ({ mount, advance, tokens, calls, reply, setFetch }) => {
+    const workspaceId = 99603
+    const otherWorkspaceId = 99605
+    const recentKey = 'sessions:bucket:recent'
+    for (const key of [
+      'workspaces:catalog',
+      recentKey,
+      `workspace:${workspaceId}:stats`,
+      `workspace:${otherWorkspaceId}:stats`,
+      ...['pinned', 'favorite', 'recent', 'running'].map((kind) => `sessions:bucket:${kind}:count`),
+    ])
+      tokens.set(key, 'granularity-http:110')
+    const rows: Array<Record<string, unknown>> = []
+    setFetch((url, init) => {
+      if (url.pathname === '/api/v1/workspaces')
+        return reply('workspaces:catalog', {
+          items: [
+            { id: workspaceId, path: '/repo-footer' },
+            { id: otherWorkspaceId, path: '/repo-footer-other' },
+          ],
+          page: { has_more: false },
+        })
+      if (url.pathname === '/api/v1/workspaces/session-stats')
+        return Response.json({
+          items: url.searchParams
+            .get('ids')!
+            .split(',')
+            .map((id) => ({
+              workspace_id: Number(id),
+              revision: tokens.get(`workspace:${id}:stats`),
+              stats: {
+                total: Number(id) === workspaceId ? rows.length : 0,
+                roots: Number(id) === workspaceId ? rows.length : 0,
+                pinned: 0,
+                running: 0,
+                attention: 0,
+              },
+            })),
+        })
+      if (url.pathname === '/api/v1/sessions/99903') return Response.json(rows[0])
+      expect(url.pathname).toBe('/api/v1/sessions')
+      if (init?.method === 'POST') {
+        const created = {
+          id: 99903,
+          root_id: 99903,
+          parent_id: null,
+          workspace_id: workspaceId,
+          title: 'Footer first insertion',
+          version: 1,
+          child_session_count: 0,
+          state: { kind: 'ready', data: {} },
+        }
+        rows.push(created)
+        tokens.set(recentKey, 'granularity-http:111')
+        tokens.set(`workspace:${workspaceId}:stats`, 'granularity-http:111')
+        return Response.json(created)
+      }
+      expect(url.searchParams.has('workspace_id')).toBe(false)
+      const bucket = url.searchParams.get('bucket')!
+      return reply(`sessions:bucket:${bucket}${url.searchParams.get('count_only') === 'true' ? ':count' : ''}`, {
+        items: bucket === 'recent' ? rows : [],
+        total: bucket === 'recent' ? rows.length : 0,
+        page: { has_more: false },
+      })
+    })
+    let sidebar!: ReturnType<typeof useDirectorySessionStore>
+    mount(() => {
+      sidebar = useDirectorySessionStore()
+      sidebar.uiPrefs.collapsedDirectoryIds = [String(workspaceId), String(otherWorkspaceId)]
+      sidebar.uiPrefs.recentSessionsOpen = true
+    })
+    sync.invalidateResources()
+    const release = sync.startResourceSync()
+    try {
+      const boot = sidebar.revalidateFromApi()
+      await advance(1000)
+      expect(await boot).toBe(true)
+      expect(sidebar.stateBySessionId['99903']).toBeUndefined()
+      const otherDirectory = sidebar.directorySidebarById[String(otherWorkspaceId)]
+      const favoriteFooter = sidebar.favoriteFooterView
+      calls.length = 0
+      const created = await chatApi.createSession({ workspaceId, title: 'Footer first insertion' })
+      await advance(1000)
+      expect(sidebar.error).toBeNull()
+      expect(sidebar.recentFooterView.rows.map((row) => row.id)).toEqual([created.id])
+      expect(sidebar.recentFooterView.total).toBe(1)
+      expect(sidebar.stateBySessionId[created.id]!.state.kind).toBe('ready')
+      expect(sidebar.recentFooterView.rows[0]!.directory?.id).toBe(String(workspaceId))
+      expect(sidebar.directorySidebarById[String(workspaceId)]!.sessionCount).toBe(1)
+      expect(sidebar.directorySidebarById[String(workspaceId)]!.recentRows).toHaveLength(0)
+      expect(sidebar.directorySidebarById[String(otherWorkspaceId)]).toBe(otherDirectory)
+      expect(sidebar.favoriteFooterView).toBe(favoriteFooter)
+      expect(calls.filter((url) => url.pathname === '/api/v1/sessions/99903')).toHaveLength(1)
+      expect(calls.some((url) => url.searchParams.has('workspace_id'))).toBe(false)
+      expect(
+        calls
+          .filter((url) => url.pathname === '/api/v1/sessions' && url.searchParams.has('bucket'))
+          .map((url) => url.searchParams.get('bucket')),
+      ).toEqual(['recent'])
+    } finally {
+      release()
+    }
+  }))
+
+test('the shared create action reveals a new root from a collapsed directory on an older page', () =>
+  withRuntime(async ({ mount, advance, tokens, calls, reply, setFetch }) => {
+    const workspaceId = 99604
+    const rootKey = `workspace:${workspaceId}:sessions:roots`
+    const statsKey = `workspace:${workspaceId}:stats`
+    for (const key of [
+      'workspaces:catalog',
+      rootKey,
+      statsKey,
+      ...['pinned', 'favorite', 'recent', 'running'].map((kind) => `sessions:bucket:${kind}:count`),
+    ])
+      tokens.set(key, 'granularity-http:120')
+    const rows = Array.from({ length: 12 }, (_, index) => ({
+      id: 99800 + index,
+      root_id: 99800 + index,
+      parent_id: null,
+      workspace_id: workspaceId,
+      title: `Older ${index}`,
+      version: 1,
+      child_session_count: 0,
+      state: { kind: 'ready', data: {} },
+    }))
+    setFetch((url, init) => {
+      if (url.pathname === '/api/v1/workspaces')
+        return reply('workspaces:catalog', {
+          items: [{ id: workspaceId, path: '/repo-reveal' }],
+          page: { has_more: false },
+        })
+      if (url.pathname === `/api/v1/workspaces/${workspaceId}`)
+        return Response.json({ id: workspaceId, path: '/repo-reveal' })
+      if (url.pathname === '/api/v1/workspaces/session-stats')
+        return Response.json({
+          items: [
+            {
+              workspace_id: workspaceId,
+              revision: tokens.get(statsKey),
+              stats: { total: rows.length, roots: rows.length, pinned: 0, running: 0, attention: 0 },
+            },
+          ],
+        })
+      if (url.pathname === '/api/v1/sessions/99904/transcript')
+        return reply('session:99904:transcript', {
+          session_id: 99904,
+          version: 1,
+          parts: [],
+          user_message_count: 0,
+          page: { has_more: false },
+        })
+      expect(url.pathname).toBe('/api/v1/sessions')
+      if (init?.method === 'POST') {
+        const created = { ...rows[0]!, id: 99904, root_id: 99904, title: 'Visible after creation' }
+        rows.unshift(created)
+        for (const key of [rootKey, statsKey, 'sessions:bucket:recent:count']) tokens.set(key, 'granularity-http:121')
+        return Response.json(created)
+      }
+      const directory = url.searchParams.has('workspace_id')
+      const bucket = url.searchParams.get('bucket')!
+      const offset = Number(url.searchParams.get('offset'))
+      const limit = Number(url.searchParams.get('limit'))
+      return reply(directory ? rootKey : `sessions:bucket:${bucket}:count`, {
+        items: directory ? rows.slice(offset, offset + limit) : [],
+        total: directory || bucket === 'recent' ? rows.length : 0,
+        page: { has_more: directory && offset + limit < rows.length },
+      })
+    })
+    let sidebar!: ReturnType<typeof useDirectorySessionStore>
+    mount(() => {
+      sidebar = useDirectorySessionStore()
+      sidebar.uiPrefs.collapsedDirectoryIds = [String(workspaceId)]
+      sidebar.uiPrefs.sessionRootPageByDirectoryId = { [workspaceId]: 1 }
+    })
+    sync.invalidateResources()
+    const release = sync.startResourceSync()
+    try {
+      const boot = sidebar.revalidateFromApi()
+      await advance(1000)
+      expect(await boot).toBe(true)
+      expect(sidebar.directorySidebarById[String(workspaceId)]!.rootPage).toBe(1)
+      calls.length = 0
+      const creation = useChatStore().createSession({ workspaceId })
+      await advance(1000)
+      const created = await creation
+      expect(created).not.toBeNull()
+      expect(sidebar.error).toBeNull()
+      expect(sidebar.uiPrefs.collapsedDirectoryIds).not.toContain(String(workspaceId))
+      expect(sidebar.uiPrefs.sessionRootPageByDirectoryId[String(workspaceId)]).toBe(0)
+      expect(sidebar.directorySidebarById[String(workspaceId)]!.recentRows[0]!.id).toBe(created!.id)
+      expect(sidebar.directorySidebarById[String(workspaceId)]!.sessionCount).toBe(13)
+      expect(
+        calls.filter((url) => url.searchParams.has('workspace_id')).map((url) => url.searchParams.get('offset') ?? '0'),
+      ).toEqual(['0'])
+      expect(calls.filter((url) => url.pathname === '/api/v1/workspaces')).toHaveLength(0)
+    } finally {
+      release()
+    }
+  }))
 
 test('a selected file keeps its diff through other-file changes, eviction, hide/show and reopening', () =>
   withRuntime(async ({ mount, advance, doc, tokens, calls, reply, evict, setFetch }) => {

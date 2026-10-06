@@ -10,6 +10,7 @@ import type { SessionActivity } from '@/types/activity'
 
 import { apiJson } from '../../lib/api'
 import { conditionalJsonObserved } from '../../lib/conditionalJson'
+import { invalidateResourcePrefix, invalidateResources } from '../../lib/resourceSync'
 import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
@@ -766,6 +767,25 @@ export async function createSession(input: CreateSessionInput): Promise<Session>
   })
   const session = toSession(created)
   if (!session) throw new Error('Server did not return a session')
+  // A successful local write must reconcile its lists even if the stream is
+  // disconnected. Probe only this workspace and affected bucket versions;
+  // unchanged queries continue to reuse their displayed bodies.
+  const workspaceId = Number(session.workspace_id)
+  invalidateResources([
+    sessionListResourceKey({ workspaceId }),
+    sessionListResourceKey({ workspaceId, roots: true }),
+    `workspace:${workspaceId}:stats`,
+    sessionListResourceKey({ bucket: 'recent' }),
+    sessionListResourceKey({ bucket: 'recent', countOnly: true }),
+  ])
+  if (session.parent_id) {
+    // The immediate parent's child count changes too. Its containing query
+    // may be a nested branch, so check the mounted lists in this workspace.
+    invalidateResourcePrefix(`workspace:${workspaceId}:sessions:`)
+    invalidateResources(
+      ['pinned', 'favorite', 'running', 'attention'].map((bucket) => sessionListResourceKey({ bucket })),
+    )
+  }
   return session
 }
 
@@ -784,6 +804,7 @@ export async function resolveWorkspace(path: string): Promise<{ id: number; path
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || !resolvedPath) {
     throw new Error('Server did not return a workspace')
   }
+  invalidateResources(['workspaces:catalog'])
   return { id, path: resolvedPath }
 }
 

@@ -797,18 +797,18 @@ dependencies = [
 name = "agena-provider-bedrock-streaming"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "async-stream",
  "aws-smithy-eventstream",
- "aws-smithy-http",
  "aws-smithy-types",
  "base64 0.22.1",
+ "bytes",
  "futures-core",
  "futures-util",
- "http-body 1.1.0",
- "http-body-util",
  "reqwest 0.13.4",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
@@ -2218,7 +2218,6 @@ version = "0.64.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37843d9add67c3aff5856f409c6dc315d3cdff60f9c0cb5b670dab1e9920306d"
 dependencies = [
- "aws-smithy-eventstream",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes",

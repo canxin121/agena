@@ -7,18 +7,18 @@ rust-version.workspace = true
 description = "AWS Smithy event-stream decoder leaf for Amazon Bedrock"
 
 [dependencies]
+agena-async = { workspace = true }
 async-stream = { workspace = true }
 aws-smithy-eventstream = { workspace = true }
-aws-smithy-http = { workspace = true, features = ["event-stream"] }
-aws-smithy-types = { workspace = true, features = ["http-body-1-x"] }
+aws-smithy-types = { workspace = true }
 base64 = { workspace = true }
+bytes = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
-http-body = { workspace = true }
-http-body-util = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
 
 [lints]
 workspace = true

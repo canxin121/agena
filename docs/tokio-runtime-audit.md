@@ -1,6 +1,6 @@
 # Tokio runtime responsiveness audit
 
-Audit date: 2026-10-06. This audit follows production call paths from HTTP,
+Audit dates: 2026-10-06–2026-10-07. This audit follows production call paths from HTTP,
 session execution, plugin callbacks and runtime maintenance into synchronous
 dependencies. A synchronous helper is a problem when its async caller runs it
 on a Tokio worker, or when another operation holds a shared lock for a long
@@ -260,6 +260,78 @@ Some typed response-to-domain projections and small per-event projections
 remain synchronous. Short handle-registry locks remain synchronous where their
 critical sections perform no I/O or deep payload copies. Those boundaries
 should be reviewed again when payload shapes or extension callers change.
+
+## Further pass: notifications, MCP, and terminal state publication
+
+This pass follows the remaining notification and MCP call paths, including
+implicit payload clones performed by broadcast receivers and work hidden inside
+protocol converters. It also checks the terminal UI state writer through
+cancellation, initialization, file publication, cache replacement and SSE.
+
+| Boundary | Finding | Change |
+| --- | --- | --- |
+| Unified notification list | Sorting/filtering and full notification clones occurred under the store-wide mutex on async callers | Store immutable Arc payloads, snapshot handles under the lock, and sort/filter/deep-copy outside the lock on a separate read worker pool |
+| Notification emit/dismiss/action lookup | Ingest and dismiss copied payloads under the lock; action resolution could project nested data there | Worker entrypoints for async callers; perform required deep copies/projection outside the lock; dismiss validates its captured Arc before replacement with at most five attempts |
+| Notification broadcast and SSE | Each broadcast receive cloned a whole boxed notification, and SSE resource construction copied it before reaching the JSON worker | Share Arc notifications across subscribers and build/encode owned SSE resources on the existing API worker; domain subscriptions obtain their required owned snapshot on a worker |
+| Notification capacity eviction | Removing a Vec element shifted surviving indexes without repairing the by-id map | Use swap-remove and repair the moved handle's index atomically; retired payloads are released after the store lock; pruning rebuilds indexes and releases retired handles outside the lock |
+| Background notification aggregation | The async live-signal consumer synchronously converted/copied/ingested activity data | Move owned activity projection and ingest into update admission; synchronous session callbacks already run on facade update workers and now avoid unused deep return copies |
+| MCP server projections | Tool schemas, extension values, prompt arguments/content and resource/result conversions ran directly in async handlers | Two-slot projection workers for owned prompt argument preparation and results of all six MCP methods; backend futures and rmcp transport I/O stay async |
+| MCP client tool cache | Cache reads deep-cloned every tool schema while holding the tool-list lock; refresh preparation and old catalog release ran on async callers | Share Arc catalogs; snapshot handles under locks, clone returned catalogs on snapshot workers, prepare/filter schemas on catalog workers and release replaced catalogs outside locks on workers; publish refresh generations with the cache replacement before awaiting release |
+| MCP client results | Tool/resource/template/prompt converters performed nested serde projection on async callers | Independent two-slot payload workers for owned protocol results; retain existing request timeouts, tool policy and risk lookup semantics |
+| MCP HTTP request middleware | Trace, authentication and tools/list rewriting repeatedly parsed the same up-to-8-MiB request JSON | Parse once into compact metadata shared through a private Arc request extension; large parsing/ID copies use bounded workers; mixed auth reads the authoritative catalog only for captured tool calls; cap the logged method to 128 characters |
+| MCP HTTP response rewriting | Tools/list JSON/SSE security metadata rewriting performed UTF-8/JSON transformations and re-encoding on Tokio | Move owned response bytes and the authoritative security map into a separate rewrite worker; preserve original bytes when unchanged and return 503 on worker failure rather than bypassing required processing |
+| Terminal UI state reads | Concurrent cold reads launched duplicate disk reads; cache reads deep-cloned the whole state under a lock | Share cached Arc state; use the same per-store async gate for initialization and writes; the started initialization worker retains the gate through cache publication |
+| Terminal UI state writes | JSON sanitation/encoding ran on Tokio; direct file overwrite could leave a truncated file after cancellation; cache/event publication could be skipped after a started write | One admitted worker owns the acquired write gate through fresh disk read, validation, staging, sync, atomic rename, cache update and event publication; preserve existing target aliases and file permissions |
+| Terminal UI state HTTP/SSE | Async handlers serialized complete state snapshots, while a 1024-event broadcast retained whole strings per event | Encode owned/shared snapshots on workers, broadcast Arc strings with a 64-event backlog, move large SSE event copies to workers, and consume cooperative budget; existing lag recovery reconnects to a fresh snapshot |
+| Bedrock binary event stream | Smithy Receiver polled frame CRC, outer JSON, base64 and inner JSON synchronously during async network receive | Keep reqwest network reads on the async task; run large accumulation, Smithy frame validation and payload decoding on two admitted workers; process at most 64 events per batch and retain fragmented frames |
+
+The new pools admit two operations each: notification reads/updates, MCP server
+projections, MCP client catalog preparation/snapshots/payload projection, MCP
+HTTP metadata/response rewriting, terminal state reads/writes, and Bedrock frame
+decoding. They retain the shared BlockingPool cancellation contract. No blocking
+worker drives an async database or network future with `block_on`.
+
+Notification mutation and broadcast publication remain ordered by the short
+store lock, with immutable payload handles passed to the broadcast. The
+Rust-only `SubscriptionEvent::Notification` payload is now `Arc<Notification>`;
+the domain service still returns owned `Notification` values and wire JSON is
+unchanged. Public synchronous ingest/prune helpers remain available for their
+existing synchronous callers.
+
+MCP authentication keeps the original rules: unknown tool names require auth;
+protected batches receive a transport challenge; a protected notification with
+no ID also receives a transport challenge; malformed mixed-auth JSON proceeds
+to the protocol parser. Worker failures return an unavailable response. The
+shared metadata contains method/ID/auth names rather than tool argument trees.
+The tools/list response still uses the current authoritative exposure policy.
+Initial MCP catalog projection failures follow the same connection cancellation
+and failure-recording path as list failures. Non-object tool argument error
+formatting also runs on the payload worker when it serializes nested JSON.
+
+Terminal UI state files and encoded writes are bounded at 8 MiB. Reads reject
+non-regular opened files, use nonblocking opens on Unix to avoid waiting on
+named pipes, and retain a limit-plus-one check for growth after inspection.
+A worker that has already started can complete its atomic
+write after its HTTP caller disappears; it also finishes cache/event publication
+and retains the write gate until then. Queued work remains abortable. These are
+in-process gates, not a new cross-process file-lock protocol. An existing file
+must remain a writable regular file; invalid persisted schema is still rejected.
+
+Bedrock frames and individual network chunks are limited to 64 MiB; combined
+buffered data is limited to 128 MiB. Small buffered work below 64 KiB remains
+inline. Smithy's existing frame parser still validates header layout and prelude
+and message checksums. Fragmented frames, multiple frames in a chunk, final
+truncation, earlier valid events before a later failure, and service error retry
+classification are handled explicitly by the new stream owner.
+
+The database and task-lifecycle review in this pass rechecked the session
+write-transaction helper, scheduler edits/delivery ownership, server-state KV,
+background task registry, MCP connection/reload gates, process termination and
+runtime watch metadata entrypoints. The previously installed per-file write
+admission, CAS predicates, async driver ownership and finite worker boundaries
+remain the relevant safeguards. No persistent schema change is introduced.
+rmcp's own network/JSON transport implementation remains third-party code;
+these repairs isolate the repository's surrounding projections and middleware.
 
 ## Verification and practical limits
 

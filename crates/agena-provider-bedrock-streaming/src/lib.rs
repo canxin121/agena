@@ -9,18 +9,19 @@ use std::{error::Error as StdError, fmt, pin::Pin};
 use async_stream::stream;
 use aws_smithy_eventstream::{
     error::Error as EventStreamError,
-    frame::{UnmarshallMessage, UnmarshalledMessage},
+    frame::{UnmarshallMessage, UnmarshalledMessage, read_message_from},
 };
-use aws_smithy_http::event_stream::Receiver;
-use aws_smithy_types::{
-    body::SdkBody,
-    event_stream::{HeaderValue, Message as EventStreamMessage},
-};
+use aws_smithy_types::event_stream::{HeaderValue, Message as EventStreamMessage};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use bytes::{Bytes, BytesMut};
 use futures_core::Stream;
-use futures_util::TryStreamExt;
-use http_body::Frame;
+use futures_util::StreamExt;
 use serde_json::Value;
+
+static FRAME_DECODERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+const INLINE_BYTES: usize = 64 * 1024;
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+const MAX_BATCH_EVENTS: usize = 64;
 
 /// Bedrock service failure carried by an AWS event-stream frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,37 +145,117 @@ impl UnmarshallMessage for BedrockAnthropicStreamUnmarshaller {
     }
 }
 
-/// Decode a successful Bedrock response without leaking Smithy frame types to
-/// the Runtime adapter.
+#[derive(Default)]
+struct FrameBuffer {
+    pending: BytesMut,
+    ended: bool,
+}
+
+impl FrameBuffer {
+    /// Pure framing/CRC/JSON/base64 work. Limit each batch, retain fragmented
+    /// frames, and let the async owner fetch network chunks between batches.
+    fn feed(
+        &mut self,
+        chunk: Option<Bytes>,
+    ) -> Vec<Result<Value, BedrockAnthropicStreamDecodeError>> {
+        let mut events = Vec::new();
+        if let Some(chunk) = chunk {
+            if chunk.len() > MAX_FRAME_BYTES
+                || self.pending.len().saturating_add(chunk.len()) > 2 * MAX_FRAME_BYTES
+            {
+                self.ended = true;
+                events.push(Err(BedrockAnthropicStreamDecodeError::Decode(
+                    "Bedrock event-stream buffer exceeds its size limit".to_owned(),
+                )));
+                return events;
+            }
+            self.pending.extend_from_slice(&chunk);
+        }
+        while events.len() < MAX_BATCH_EVENTS && self.pending.len() >= 12 {
+            let frame_len =
+                u32::from_be_bytes(self.pending[..4].try_into().expect("four bytes")) as usize;
+            let headers_len =
+                u32::from_be_bytes(self.pending[4..8].try_into().expect("four bytes")) as usize;
+            if !(16..=MAX_FRAME_BYTES).contains(&frame_len) || headers_len > frame_len - 16 {
+                self.ended = true;
+                events.push(Err(BedrockAnthropicStreamDecodeError::Decode(
+                    "Bedrock event-stream frame has an invalid or oversized length".to_owned(),
+                )));
+                break;
+            }
+            if self.pending.len() < frame_len {
+                break;
+            }
+            let frame = self.pending.split_to(frame_len).freeze();
+            // Smithy still validates the prelude and message checksums and
+            // header layout; only its synchronous execution boundary changes.
+            let event = read_message_from(frame)
+                .and_then(|message| BedrockAnthropicStreamUnmarshaller.unmarshall(&message));
+            let event = match event {
+                Ok(UnmarshalledMessage::Event(event)) => Ok(event),
+                Ok(UnmarshalledMessage::Error(service)) => {
+                    Err(BedrockAnthropicStreamDecodeError::Service(service))
+                }
+                Err(error) => Err(BedrockAnthropicStreamDecodeError::Decode(error.to_string())),
+            };
+            self.ended = event.is_err();
+            events.push(event);
+            if self.ended {
+                break;
+            }
+        }
+        events
+    }
+}
+
+/// Decode a successful Bedrock response. Network I/O stays async; large frame
+/// accumulation, CRC validation and payload decoding use bounded workers.
 pub fn decode_response(
     response: reqwest::Response,
 ) -> Pin<Box<dyn Stream<Item = Result<Value, BedrockAnthropicStreamDecodeError>> + Send>> {
-    let response_stream = response.bytes_stream().map_ok(Frame::data);
-    let body = SdkBody::from_body_1_x(http_body_util::StreamBody::new(response_stream));
-    let receiver = Receiver::<Value, BedrockAnthropicStreamServiceError>::new(
-        BedrockAnthropicStreamUnmarshaller,
-        body,
-    );
-
     Box::pin(stream! {
-        let mut receiver = receiver;
-        loop {
-            match receiver.recv().await {
-                Ok(Some(event)) => yield Ok(event),
-                Ok(None) => break,
+        let mut chunks = response.bytes_stream();
+        let mut state = FrameBuffer::default();
+        while let Some(chunk) = chunks.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
                 Err(error) => {
-                    if let Some(service) = error.as_service_error() {
-                        yield Err(BedrockAnthropicStreamDecodeError::Service(service.clone()));
-                    } else {
-                        let source = error
-                            .into_source()
-                            .map(|source| source.to_string())
-                            .unwrap_or_else(|error| error.to_string());
-                        yield Err(BedrockAnthropicStreamDecodeError::Decode(source));
+                    yield Err(BedrockAnthropicStreamDecodeError::Decode(error.to_string()));
+                    return;
+                }
+            };
+            let mut input = Some(chunk);
+            loop {
+                tokio::task::consume_budget().await;
+                let offload = state.pending.len().saturating_add(input.as_ref().map_or(0, Bytes::len)) >= INLINE_BYTES;
+                let decode = move || {
+                    let events = state.feed(input);
+                    (state, events)
+                };
+                let (next, events) = if offload {
+                    match FRAME_DECODERS.run(decode).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            yield Err(BedrockAnthropicStreamDecodeError::Decode(format!("Bedrock frame worker failed: {error}")));
+                            return;
+                        }
                     }
+                } else {
+                    decode()
+                };
+                state = next;
+                let full_batch = events.len() == MAX_BATCH_EVENTS;
+                for event in events { yield event; }
+                if state.ended { return; }
+                if full_batch {
+                    input = None;
+                } else {
                     break;
                 }
             }
+        }
+        if !state.pending.is_empty() {
+            yield Err(BedrockAnthropicStreamDecodeError::Decode("unexpected end of Bedrock event stream".to_owned()));
         }
     })
 }

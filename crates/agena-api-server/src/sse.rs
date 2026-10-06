@@ -114,6 +114,22 @@ async fn notification_event(
     }
 }
 
+async fn notification_resource_event(
+    notification: impl std::borrow::Borrow<agena_notification::model::Notification> + Send + 'static,
+) -> Option<Event> {
+    match crate::json_codec::encode_with(move || {
+        agena_api::resource::NotificationResource::from(notification.borrow())
+    })
+    .await
+    {
+        Ok(payload) => Some(Event::default().event("notification").data(payload)),
+        Err(error) => {
+            tracing::error!(%error, "notification resource worker failed");
+            None
+        }
+    }
+}
+
 impl StreamQuery {
     fn into_scope(self) -> Result<agena_api::Scope, ServerError> {
         let scope = match self.scope_kind.as_deref() {
@@ -199,7 +215,7 @@ pub async fn notifications_stream(
     Query(query): Query<NotificationStreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ServerError> {
     use crate::rest::notifications::notification_error;
-    use agena_api::resource::{NotificationResource, NotificationStreamEvent};
+    use agena_api::resource::NotificationStreamEvent;
     use agena_notification::NotificationService;
     use agena_runtime_notifications::store::SubscriptionEvent;
 
@@ -224,11 +240,8 @@ pub async fn notifications_stream(
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
     let producer = tokio::spawn(async move {
-        for notification in replayed.iter().filter(|n| n.created_at_ms > since_ms) {
-            let message = NotificationStreamEvent::Notification(Box::new(
-                NotificationResource::from(notification),
-            ));
-            let Some(event) = notification_event(message).await else {
+        for notification in replayed.into_iter().filter(|n| n.created_at_ms > since_ms) {
+            let Some(event) = notification_resource_event(notification).await else {
                 continue;
             };
             if tx.send(Ok(event)).await.is_err() {
@@ -258,7 +271,7 @@ pub async fn notifications_stream(
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
-            let message = match item {
+            let event = match item {
                 SubscriptionEvent::Notification(notification) => {
                     // An inactive update still has to remove a previously
                     // active row in this scope. Only the initial list uses
@@ -273,16 +286,19 @@ pub async fn notifications_stream(
                     ) {
                         continue;
                     }
-                    NotificationStreamEvent::Notification(Box::new(NotificationResource::from(
-                        &*notification,
-                    )))
+                    notification_resource_event(notification).await
                 }
-                SubscriptionEvent::Lagged(skipped) => NotificationStreamEvent::Lagged { skipped },
-                SubscriptionEvent::Closed => NotificationStreamEvent::SubscriptionClosed {
-                    reason: "notification store closed".into(),
-                },
+                SubscriptionEvent::Lagged(skipped) => {
+                    notification_event(NotificationStreamEvent::Lagged { skipped }).await
+                }
+                SubscriptionEvent::Closed => {
+                    notification_event(NotificationStreamEvent::SubscriptionClosed {
+                        reason: "notification store closed".into(),
+                    })
+                    .await
+                }
             };
-            let Some(event) = notification_event(message).await else {
+            let Some(event) = event else {
                 continue;
             };
             if tx.send(Ok(event)).await.is_err() {

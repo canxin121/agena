@@ -15,6 +15,13 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+static NOTIFICATION_READS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static NOTIFICATION_UPDATES: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+fn worker_error(error: tokio::task::JoinError) -> NotificationError {
+    NotificationError::Unavailable(format!("notification worker failed: {error}"))
+}
+
 /// 当前时间（毫秒）。
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -26,7 +33,7 @@ pub fn now_ms() -> i64 {
 /// 订阅事件：通知、滞后信号、流关闭。
 #[derive(Debug, Clone)]
 pub enum SubscriptionEvent {
-    Notification(Box<Notification>),
+    Notification(Arc<Notification>),
     Lagged(u64),
     Closed,
 }
@@ -66,7 +73,7 @@ pub fn filter_matches(filter: &NotificationFilter, n: &Notification) -> bool {
 
 #[derive(Default)]
 struct StoreInner {
-    notifications: Vec<Notification>,
+    notifications: Vec<Arc<Notification>>,
     by_id: HashMap<NotificationId, usize>,
 }
 
@@ -99,34 +106,82 @@ impl InMemoryNotificationStore {
 
     /// 直接入库一条已构造的通知（聚合器入口）。返回入库后的通知。
     pub fn ingest(&self, notification: Notification) -> Notification {
-        let mut inner = self.inner.lock().expect("store lock poisoned");
-        let pos = Self::upsert_locked(&mut inner, notification, self.capacity);
-        let stored = inner.notifications[pos].clone();
-        let _ = self
-            .tx
-            .send(SubscriptionEvent::Notification(Box::new(stored.clone())));
+        self.ingest_shared(notification).as_ref().clone()
+    }
+
+    /// Synchronous worker entrypoint for producers that need no deep snapshot.
+    pub fn ingest_shared(&self, notification: Notification) -> Arc<Notification> {
+        let stored = Arc::new(notification);
+        let retired = {
+            let mut inner = self.inner.lock().expect("store lock poisoned");
+            let retired = Self::upsert_locked(&mut inner, Arc::clone(&stored), self.capacity);
+            // Share only handles with subscribers. Serialize publication with
+            // the mutation so a dismiss cannot precede its original ingest.
+            let _ = self
+                .tx
+                .send(SubscriptionEvent::Notification(Arc::clone(&stored)));
+            retired
+        };
+        drop(retired);
         stored
+    }
+
+    /// Async entrypoint for callers outside an existing synchronous worker.
+    pub async fn ingest_async(
+        &self,
+        notification: Notification,
+    ) -> Result<Notification, NotificationError> {
+        let store = self.clone();
+        NOTIFICATION_UPDATES
+            .run(move || store.ingest(notification))
+            .await
+            .map_err(worker_error)
+    }
+
+    /// Project the owned event and publish it within the admitted worker.
+    pub async fn ingest_with(
+        &self,
+        project: impl FnOnce() -> Notification + Send + 'static,
+    ) -> Result<Arc<Notification>, NotificationError> {
+        let store = self.clone();
+        NOTIFICATION_UPDATES
+            .run(move || store.ingest_shared(project()))
+            .await
+            .map_err(worker_error)
     }
 
     /// 清除已过期通知，返回清除数量。
     pub fn prune_expired(&self, now: i64) -> usize {
-        let mut inner = self.inner.lock().expect("store lock poisoned");
-        let before = inner.notifications.len();
-        inner.notifications.retain(|n| !n.is_expired(now));
-        inner.by_id = inner
-            .notifications
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.id.clone(), i))
-            .collect();
-        before - inner.notifications.len()
+        let retired = {
+            let mut inner = self.inner.lock().expect("store lock poisoned");
+            let (retained, retired) = std::mem::take(&mut inner.notifications)
+                .into_iter()
+                .partition::<Vec<_>, _>(|n| !n.is_expired(now));
+            inner.notifications = retained;
+            inner.by_id = inner
+                .notifications
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.id.clone(), i))
+                .collect();
+            retired
+        };
+        let removed = retired.len();
+        drop(retired);
+        removed
     }
 
-    fn upsert_locked(inner: &mut StoreInner, notification: Notification, capacity: usize) -> usize {
+    fn upsert_locked(
+        inner: &mut StoreInner,
+        notification: Arc<Notification>,
+        capacity: usize,
+    ) -> Option<Arc<Notification>> {
         // id 冲突则替换
         if let Some(&pos) = inner.by_id.get(&notification.id) {
-            inner.notifications[pos] = notification;
-            return pos;
+            return Some(std::mem::replace(
+                &mut inner.notifications[pos],
+                notification,
+            ));
         }
         // dedup_key 冲突则替换旧条目（保持新条目的 id）
         if let Some(dk) = &notification.dedup_key
@@ -138,12 +193,12 @@ impl InMemoryNotificationStore {
             let old_id = inner.notifications[pos].id.clone();
             let new_id = notification.id.clone();
             inner.by_id.remove(&old_id);
-            inner.notifications[pos] = notification;
+            let retired = std::mem::replace(&mut inner.notifications[pos], notification);
             inner.by_id.insert(new_id, pos);
-            return pos;
+            return Some(retired);
         }
         // 容量淘汰最旧
-        if inner.notifications.len() >= capacity
+        let retired = if inner.notifications.len() >= capacity
             && let Some(oldest_pos) = inner
                 .notifications
                 .iter()
@@ -151,14 +206,60 @@ impl InMemoryNotificationStore {
                 .min_by_key(|(_, n)| n.created_at_ms)
                 .map(|(i, _)| i)
         {
-            let removed_id = inner.notifications.remove(oldest_pos).id;
-            inner.by_id.remove(&removed_id);
-        }
+            let retired = inner.notifications.swap_remove(oldest_pos);
+            inner.by_id.remove(&retired.id);
+            // swap_remove changes exactly one surviving index.
+            if let Some(moved) = inner.notifications.get(oldest_pos) {
+                inner.by_id.insert(moved.id.clone(), oldest_pos);
+            }
+            Some(retired)
+        } else {
+            None
+        };
         inner
             .by_id
             .insert(notification.id.clone(), inner.notifications.len());
         inner.notifications.push(notification);
-        inner.notifications.len() - 1
+        retired
+    }
+
+    fn dismiss_sync(&self, id: NotificationId) -> Result<(), NotificationError> {
+        // Copy the payload outside the registry lock, then validate that the
+        // notification has not been replaced before publishing the edit.
+        for _ in 0..5 {
+            let original = {
+                let inner = self.inner.lock().expect("store lock poisoned");
+                inner
+                    .by_id
+                    .get(&id)
+                    .and_then(|&pos| inner.notifications.get(pos))
+                    .cloned()
+                    .ok_or_else(|| NotificationError::NotFound(id.clone()))?
+            };
+            let mut updated = original.as_ref().clone();
+            updated.dismissed = true;
+            let updated = Arc::new(updated);
+            let retired = {
+                let mut inner = self.inner.lock().expect("store lock poisoned");
+                let pos = inner
+                    .by_id
+                    .get(&id)
+                    .copied()
+                    .ok_or_else(|| NotificationError::NotFound(id.clone()))?;
+                if !Arc::ptr_eq(&inner.notifications[pos], &original) {
+                    continue;
+                }
+                let retired =
+                    std::mem::replace(&mut inner.notifications[pos], Arc::clone(&updated));
+                let _ = self.tx.send(SubscriptionEvent::Notification(updated));
+                retired
+            };
+            drop(retired);
+            return Ok(());
+        }
+        Err(NotificationError::Conflict(format!(
+            "notification {id} changed during dismissal"
+        )))
     }
 }
 
@@ -190,23 +291,37 @@ impl NotificationService for InMemoryNotificationStore {
             expires_at_ms: request.ttl_ms.map(|ttl| now + ttl),
             dismissed: false,
         };
-        Ok(self.ingest(notification))
+        self.ingest_async(notification).await
     }
 
     async fn list(
         &self,
         filter: NotificationFilter,
     ) -> Result<Vec<Notification>, NotificationError> {
-        let inner = self.inner.lock().expect("store lock poisoned");
-        let mut matched: Vec<&Notification> = inner
-            .notifications
-            .iter()
-            .filter(|n| filter_matches(&filter, n))
-            .filter(|n| filter.cursor.is_none_or(|c| n.created_at_ms < c))
-            .collect();
-        matched.sort_by_key(|b| std::cmp::Reverse(b.created_at_ms));
-        let limit = filter.limit.unwrap_or(usize::MAX).min(matched.len());
-        Ok(matched.into_iter().take(limit).cloned().collect())
+        let store = self.clone();
+        NOTIFICATION_READS
+            .run(move || {
+                let snapshot = store
+                    .inner
+                    .lock()
+                    .expect("store lock poisoned")
+                    .notifications
+                    .clone();
+                let mut matched = snapshot
+                    .into_iter()
+                    .filter(|n| filter_matches(&filter, n))
+                    .filter(|n| filter.cursor.is_none_or(|c| n.created_at_ms < c))
+                    .collect::<Vec<_>>();
+                matched.sort_by_key(|n| std::cmp::Reverse(n.created_at_ms));
+                let limit = filter.limit.unwrap_or(usize::MAX).min(matched.len());
+                matched
+                    .into_iter()
+                    .take(limit)
+                    .map(|n| n.as_ref().clone())
+                    .collect()
+            })
+            .await
+            .map_err(worker_error)
     }
 
     async fn dismiss(
@@ -214,19 +329,11 @@ impl NotificationService for InMemoryNotificationStore {
         id: NotificationId,
         _reason: Option<String>,
     ) -> Result<(), NotificationError> {
-        let mut inner = self.inner.lock().expect("store lock poisoned");
-        let pos = inner
-            .by_id
-            .get(&id)
-            .copied()
-            .ok_or_else(|| NotificationError::NotFound(id.clone()))?;
-        inner.notifications[pos].dismissed = true;
-        let updated = inner.notifications[pos].clone();
-        drop(inner);
-        let _ = self
-            .tx
-            .send(SubscriptionEvent::Notification(Box::new(updated)));
-        Ok(())
+        let store = self.clone();
+        NOTIFICATION_UPDATES
+            .run(move || store.dismiss_sync(id))
+            .await
+            .map_err(worker_error)?
     }
 
     async fn resolve_target(
@@ -234,13 +341,22 @@ impl NotificationService for InMemoryNotificationStore {
         id: NotificationId,
         action_id: String,
     ) -> Result<ActionTarget, NotificationError> {
-        let inner = self.inner.lock().expect("store lock poisoned");
-        let notification = inner
-            .by_id
-            .get(&id)
-            .and_then(|&pos| inner.notifications.get(pos))
-            .ok_or_else(|| NotificationError::NotFound(id.clone()))?;
-        resolve_action_target(notification, &action_id)
+        let store = self.clone();
+        NOTIFICATION_READS
+            .run(move || {
+                let notification = {
+                    let inner = store.inner.lock().expect("store lock poisoned");
+                    inner
+                        .by_id
+                        .get(&id)
+                        .and_then(|&pos| inner.notifications.get(pos))
+                        .cloned()
+                        .ok_or_else(|| NotificationError::NotFound(id))?
+                };
+                resolve_action_target(&notification, &action_id)
+            })
+            .await
+            .map_err(worker_error)?
     }
 
     fn subscribe(&self, filter: NotificationFilter) -> Box<dyn NotificationSubscription> {
@@ -268,9 +384,16 @@ impl NotificationSubscription for BroadcastSubscription {
 
     async fn next_notification(&mut self) -> Option<Notification> {
         loop {
+            tokio::task::consume_budget().await;
             match self.rx.recv().await {
                 Ok(SubscriptionEvent::Notification(n)) if filter_matches(&self.filter, &n) => {
-                    return Some(*n);
+                    return match NOTIFICATION_READS.run(move || n.as_ref().clone()).await {
+                        Ok(notification) => Some(notification),
+                        Err(error) => {
+                            tracing::error!(%error, "notification subscription worker failed");
+                            None
+                        }
+                    };
                 }
                 Ok(SubscriptionEvent::Notification(_)) => continue,
                 Ok(SubscriptionEvent::Lagged(_)) | Ok(SubscriptionEvent::Closed) => return None,

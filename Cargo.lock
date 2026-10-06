@@ -935,11 +935,13 @@ dependencies = [
 name = "agena-runtime-notifications"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-domain",
  "agena-notification",
  "agena-runtime-contracts",
  "async-trait",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

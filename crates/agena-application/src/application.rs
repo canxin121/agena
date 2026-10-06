@@ -591,7 +591,7 @@ impl Application {
             let store = Arc::clone(&store);
             let subscription = facade.subscribe_all(Arc::new(move |change| {
                 if let Some(notification) = notification_from_session_change(&change) {
-                    store.ingest(notification);
+                    store.ingest_shared(notification);
                 }
             }));
             *self
@@ -606,14 +606,22 @@ impl Application {
         let task = handle.spawn(async move {
             let mut subscription = live_signals.subscribe();
             while let Some(item) = subscription.recv().await {
+                tokio::task::consume_budget().await;
                 let signal = match item {
                     agena_runtime::RuntimeLiveSignalItem::Signal(signal) => signal,
                     agena_runtime::RuntimeLiveSignalItem::Lagged(_) => continue,
                 };
                 if let agena_runtime::RuntimeLiveSignal::Activity(activity) = signal {
-                    store.ingest(agena_runtime_notifications::from_background_activity(
-                        &activity.activity,
-                    ));
+                    if let Err(error) = store
+                        .ingest_with(move || {
+                            agena_runtime_notifications::from_background_activity(
+                                &activity.activity,
+                            )
+                        })
+                        .await
+                    {
+                        tracing::error!(%error, "background activity notification failed");
+                    }
                 }
             }
         });

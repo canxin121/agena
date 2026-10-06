@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use axum::{
@@ -12,6 +13,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
+use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 
 use crate::git2_utils;
@@ -676,6 +678,7 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
 /// Query for git watch.
 pub struct GitWatchQuery {
     pub directory: Option<String>,
+    pub path: Option<String>,
     #[serde(rename = "intervalMs")]
     pub interval_ms: Option<u64>,
 }
@@ -691,8 +694,186 @@ struct GitWatchStatusPayload {
     unstaged_count: usize,
     untracked_count: usize,
     merge_count: usize,
+    total_files: usize,
     is_clean: bool,
     worktree_signature: String,
+    updated_at_ms: i64,
+    #[serde(skip)]
+    path_signatures: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_path_signature: Option<String>,
+    scope_signatures: HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct GitFileFingerprint {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    changed: (i64, i64),
+    #[cfg(unix)]
+    mode: u32,
+    symlink: bool,
+}
+
+struct GitFileDigest {
+    fingerprint: GitFileFingerprint,
+    oid: git2::Oid,
+}
+
+// Stat is only a cheap gate. The revision includes the blob's content hash,
+// so touching a file without changing its contents emits no refresh.
+fn git_watch_file_oid(
+    path: &Path,
+    cache: &mut HashMap<PathBuf, GitFileDigest>,
+    hash_budget: &mut u64,
+) -> Result<Option<git2::Oid>, git2_utils::Git2OpenError> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            cache.remove(path);
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(git2_utils::Git2OpenError::Other(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to inspect a watched Git file",
+                    &error,
+                ),
+            ));
+        }
+    };
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    let fingerprint = GitFileFingerprint {
+        length: metadata.len(),
+        modified: metadata.modified().ok(),
+        symlink: metadata.file_type().is_symlink(),
+        #[cfg(unix)]
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+        #[cfg(unix)]
+        mode: metadata.mode(),
+    };
+    // A watch must not hash gigabytes of untracked/binary content merely to
+    // decide whether a reader should refresh. Bound both file and scan I/O.
+    const MAX_FILE_HASH_BYTES: u64 = 512 * 1024;
+    let content_hash = fingerprint.symlink
+        || (metadata.is_file()
+            && metadata.len() <= MAX_FILE_HASH_BYTES
+            && *hash_budget > metadata.len());
+    if let Some(previous) = cache.get(path)
+        && previous.fingerprint == fingerprint
+    {
+        return Ok(Some(previous.oid));
+    }
+    let oid = if fingerprint.symlink {
+        let target = std::fs::read_link(path).map_err(|error| {
+            git2_utils::Git2OpenError::Other(
+                agena_failure::diagnostic::format_error_chain_with_context(
+                    "failed to read a watched Git symlink",
+                    &error,
+                ),
+            )
+        })?;
+        git2::Oid::hash_object(
+            git2::ObjectType::Blob,
+            target.as_os_str().as_encoded_bytes(),
+        )
+        .map_err(|error| git2_other("failed to hash a watched Git symlink", &error))?
+    } else if metadata.is_file() {
+        if content_hash {
+            use std::io::Read;
+            let limit = MAX_FILE_HASH_BYTES.min(*hash_budget).saturating_add(1);
+            let mut bytes = Vec::new();
+            std::fs::File::open(path)
+                .and_then(|file| file.take(limit).read_to_end(&mut bytes))
+                .map_err(|error| {
+                    git2_utils::Git2OpenError::Other(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to read a watched Git file",
+                            &error,
+                        ),
+                    )
+                })?;
+            *hash_budget = hash_budget.saturating_sub(bytes.len() as u64);
+            if bytes.len() as u64 >= limit {
+                git2::Oid::hash_object(
+                    git2::ObjectType::Blob,
+                    format!("{fingerprint:?}").as_bytes(),
+                )
+                .map_err(|error| git2_other("failed to hash a watched file revision", &error))?
+            } else {
+                git2::Oid::hash_object(git2::ObjectType::Blob, &bytes)
+                    .map_err(|error| git2_other("failed to hash a watched Git file", &error))?
+            }
+        } else {
+            // Large files use a conservative metadata revision. A pure touch
+            // may wake a consumer, while unchanged files require no body I/O.
+            git2::Oid::hash_object(
+                git2::ObjectType::Blob,
+                format!("{fingerprint:?}").as_bytes(),
+            )
+            .map_err(|error| git2_other("failed to hash a watched file revision", &error))?
+        }
+    } else {
+        // A submodule directory is represented by its checked-out commit.
+        return Ok(git2::Repository::open(path)
+            .ok()
+            .and_then(|repo| repo.head().ok().and_then(|head| head.target())));
+    };
+    cache.insert(path.to_path_buf(), GitFileDigest { fingerprint, oid });
+    Ok(Some(oid))
+}
+
+struct GitWatchCache {
+    revision: u64,
+    checked_at: tokio::time::Instant,
+    payload: GitWatchStatusPayload,
+}
+
+/// One OS watcher and one serialized status cache per repository, shared by
+/// every browser/pane. The last stream drops the watcher and cached snapshot.
+struct GitWatchHub {
+    _watcher: Option<notify::RecommendedWatcher>,
+    changes: tokio::sync::watch::Sender<u64>,
+    snapshot: tokio::sync::Mutex<Option<GitWatchCache>>,
+    file_digests: Arc<Mutex<HashMap<PathBuf, GitFileDigest>>>,
+}
+
+fn git_watch_hub(root: PathBuf, git_dir: PathBuf, common_dir: PathBuf) -> Arc<GitWatchHub> {
+    static HUBS: OnceLock<Mutex<HashMap<PathBuf, Weak<GitWatchHub>>>> = OnceLock::new();
+    let mut hubs = HUBS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    hubs.retain(|_, hub| hub.strong_count() > 0);
+    if let Some(hub) = hubs.get(&root).and_then(Weak::upgrade) {
+        return hub;
+    }
+    let (changes, _) = tokio::sync::watch::channel(0_u64);
+    let wake = changes.clone();
+    let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.as_ref().is_ok_and(|event| matches!(event.kind, notify::EventKind::Access(_))) { return; }
+        wake.send_modify(|revision| *revision = revision.wrapping_add(1));
+    }).and_then(|mut watcher| {
+        watcher.watch(&root, RecursiveMode::Recursive)?;
+        // Linked worktrees keep their index/refs outside the worktree root.
+        if !git_dir.starts_with(&root) { watcher.watch(&git_dir, RecursiveMode::Recursive)?; }
+        if !common_dir.starts_with(&root) && common_dir != git_dir {
+            watcher.watch(&common_dir, RecursiveMode::Recursive)?;
+        }
+        Ok(watcher)
+    }).map_err(|error| {
+        tracing::warn!(%error, "Git filesystem watch unavailable; using shared 60 second reconciliation");
+    }).ok();
+    let hub = Arc::new(GitWatchHub {
+        _watcher: watcher,
+        changes,
+        snapshot: tokio::sync::Mutex::new(None),
+        file_digests: Arc::new(Mutex::new(HashMap::new())),
+    });
+    hubs.insert(root, Arc::downgrade(&hub));
+    hub
 }
 
 pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
@@ -700,29 +881,57 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
         Ok(d) => d,
         Err(resp) => return *resp,
     };
+    // This is an identity lookup into the shared status cache, never an
+    // additional filesystem read for each subscriber.
+    let selected_path = q
+        .path
+        .filter(|path| !path.is_empty())
+        .map(|path| path.replace('\\', "/"));
 
     // Validate repository early so the client gets a normal JSON response.
     let probe = spawn_libgit2({
         let dir = dir.clone();
-        move || git2_utils::open_repo_discover(&dir).map(|_| ())
+        move || {
+            let repo = git2_utils::open_repo_discover(&dir)?;
+            let root = repo.workdir().unwrap_or(repo.path()).to_path_buf();
+            let root = std::fs::canonicalize(&root).unwrap_or(root);
+            Ok::<_, git2_utils::Git2OpenError>(git_watch_hub(
+                root,
+                repo.path().to_path_buf(),
+                repo.commondir().to_path_buf(),
+            ))
+        }
     })
     .await;
-    match probe {
-        Ok(Ok(_)) => {}
+    let hub = match probe {
+        Ok(Ok(hub)) => hub,
         Ok(Err(e)) => return git2_open_error_response(e),
         Err(error) => return git_task_error_response("validate the Git watch repository", &error),
-    }
+    };
 
-    let interval_ms = q.interval_ms.unwrap_or(1500).clamp(500, 10_000);
+    let interval_ms = q.interval_ms.unwrap_or(1500).clamp(1000, 10_000);
     let stream = async_stream::stream! {
         let mut last: Option<GitWatchStatusPayload> = None;
-        let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
+        let mut changes = hub.changes.subscribe();
 
         loop {
-            ticker.tick().await;
-
-            let snapshot = spawn_libgit2({
+            let mut cache = hub.snapshot.lock().await;
+            let mut revision = *changes.borrow_and_update();
+            // Check the shared cache before doing any libgit2 work. Idle
+            // streams only wake for a 60s safety reconciliation, not 1.5s scans.
+            let cached = cache.as_ref().filter(|entry| entry.revision == revision && entry.checked_at.elapsed() < Duration::from_secs(60));
+            let cache_hit = cached.is_some();
+            let snapshot = if let Some(entry) = cached {
+                Ok(Ok(entry.payload.clone()))
+            } else {
+            if let Some(entry) = cache.as_ref() {
+                let cooldown = Duration::from_millis(interval_ms).saturating_sub(entry.checked_at.elapsed());
+                tokio::time::sleep(cooldown).await;
+            }
+            revision = *changes.borrow_and_update();
+            spawn_libgit2({
                 let dir = dir.clone();
+                let file_digests = hub.file_digests.clone();
                 move || -> Result<GitWatchStatusPayload, git2_utils::Git2OpenError> {
                     use git2::{Status, StatusOptions};
 
@@ -798,11 +1007,28 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                     let mut merge_count: usize = 0;
                     let mut total_files: usize = 0;
                     let mut worktree_signature: u64 = 1469598103934665603;
+                    if let Ok(head) = repo.head() && let Some(oid) = head.target() {
+                        fnv1a64_update(&mut worktree_signature, oid.as_bytes());
+                    }
+                    if let Ok(branch) = repo.find_branch(&current, git2::BranchType::Local)
+                        && let Ok(upstream) = branch.upstream() && let Some(oid) = upstream.get().target() {
+                        fnv1a64_update(&mut worktree_signature, oid.as_bytes());
+                    }
+                    let mut digests = file_digests.lock().unwrap_or_else(|error| error.into_inner());
+                    let mut hash_budget = 2 * 1024 * 1024;
+                    let mut retained = HashSet::new();
+                    let mut path_signatures = HashMap::new();
+                    let mut scope_signatures = HashMap::<String, u64>::new();
 
                     for entry in statuses.iter() {
-                        let path = entry.path().map_err(|error| {
+                        let reported_path = entry.path().map_err(|error| {
                             git2_other("Git watch status path is not valid UTF-8", &error)
                         })?;
+                        let head_delta = entry.head_to_index();
+                        let work_delta = entry.index_to_workdir();
+                        let path = work_delta.as_ref().and_then(|delta| delta.new_file().path())
+                            .or_else(|| head_delta.as_ref().and_then(|delta| delta.new_file().path()))
+                            .and_then(|path| path.to_str()).unwrap_or(reported_path);
                         let st = entry.status();
                         let mut x = idx_code(st);
                         let mut y = wt_code(st);
@@ -817,11 +1043,39 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                             y = "?";
                         }
 
-                        fnv1a64_update(&mut worktree_signature, x.as_bytes());
-                        fnv1a64_update(&mut worktree_signature, b"|");
-                        fnv1a64_update(&mut worktree_signature, y.as_bytes());
-                        fnv1a64_update(&mut worktree_signature, b"|");
+                        let mut file_signature = 1469598103934665603;
+                        fnv1a64_update(&mut file_signature, x.as_bytes());
+                        fnv1a64_update(&mut file_signature, b"|");
+                        fnv1a64_update(&mut file_signature, y.as_bytes());
+                        fnv1a64_update(&mut file_signature, b"|");
+                        fnv1a64_update(&mut file_signature, path.as_bytes());
+                        if let Some(delta) = entry.head_to_index() {
+                            fnv1a64_update(&mut file_signature, delta.old_file().id().as_bytes());
+                            fnv1a64_update(&mut file_signature, delta.new_file().id().as_bytes());
+                            fnv1a64_update(&mut file_signature, format!("{:?}", delta.new_file().mode()).as_bytes());
+                        }
+                        if let Some(delta) = entry.index_to_workdir() {
+                            // Working diffs depend on the index baseline too.
+                            // A checkout/stage can change it while the worktree
+                            // tail and porcelain status codes stay identical.
+                            fnv1a64_update(&mut file_signature, delta.old_file().id().as_bytes());
+                            fnv1a64_update(&mut file_signature, delta.new_file().id().as_bytes());
+                            fnv1a64_update(&mut file_signature, format!("{:?}", delta.new_file().mode()).as_bytes());
+                        }
+                        if let Some(root) = repo.workdir() {
+                            let file = root.join(path);
+                            retained.insert(file.clone());
+                            if let Some(oid) = git_watch_file_oid(&file, &mut digests, &mut hash_budget)? { fnv1a64_update(&mut file_signature, oid.as_bytes()); }
+                        }
+                        let signature = format!("{file_signature:016x}");
+                        path_signatures.insert(path.to_owned(), signature.clone());
+                        for delta in [entry.head_to_index(), entry.index_to_workdir()].into_iter().flatten() {
+                            if let Some(old) = delta.old_file().path().and_then(|path| path.to_str()) {
+                                path_signatures.entry(old.to_owned()).or_insert_with(|| signature.clone());
+                            }
+                        }
                         fnv1a64_update(&mut worktree_signature, path.as_bytes());
+                        fnv1a64_update(&mut worktree_signature, &file_signature.to_le_bytes());
                         fnv1a64_update(&mut worktree_signature, b"\n");
 
                         total_files += 1;
@@ -830,6 +1084,11 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                         let is_untracked = x == "?" && y == "?";
                         let is_staged = !is_merge && !x.is_empty() && x != "?";
                         let is_unstaged = !is_merge && !is_untracked && !y.is_empty();
+                        for (scope, included) in [("merge", is_merge), ("staged", is_staged), ("unstaged", is_unstaged), ("untracked", is_untracked)] {
+                            if included {
+                                fnv1a64_update(scope_signatures.entry(scope.to_owned()).or_insert(1469598103934665603), &file_signature.to_le_bytes());
+                            }
+                        }
 
                         if is_merge {
                             merge_count += 1;
@@ -844,6 +1103,7 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                             untracked_count += 1;
                         }
                     }
+                    digests.retain(|path, _| retained.contains(path));
 
                     Ok(GitWatchStatusPayload {
                         current,
@@ -854,14 +1114,20 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                         unstaged_count,
                         untracked_count,
                         merge_count,
+                        total_files,
                         is_clean: total_files == 0,
                         worktree_signature: format!("{worktree_signature:016x}"),
+                        updated_at_ms: 0,
+                        path_signatures,
+                        selected_path_signature: None,
+                        scope_signatures: scope_signatures.into_iter().map(|(scope, hash)| (scope, format!("{hash:016x}"))).collect(),
                     })
                 }
             })
-            .await;
+            .await
+            };
 
-            let payload = match snapshot {
+            let mut payload = match snapshot {
                 Ok(Ok(v)) => v,
                 Ok(Err(e)) => {
                     let diagnostic = e.message();
@@ -909,16 +1175,31 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                 }
             };
 
-            if last.as_ref().is_some_and(|prev| prev == &payload) {
-                continue;
+            if !cache_hit {
+                let previous_time = cache.as_ref().map_or(0, |entry| entry.payload.updated_at_ms);
+                payload.updated_at_ms = previous_time;
+                if cache.as_ref().is_none_or(|entry| entry.payload != payload) {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |duration| duration.as_millis() as i64);
+                    payload.updated_at_ms = now.max(previous_time.saturating_add(1));
+                }
+                *cache = Some(GitWatchCache { revision, checked_at: tokio::time::Instant::now(), payload: payload.clone() });
             }
-            last = Some(payload.clone());
-
+            drop(cache);
+            payload.selected_path_signature = selected_path.as_ref().map(|path|
+                payload.path_signatures.get(path).cloned().unwrap_or_else(|| "clean".to_owned()));
+            if last.as_ref() != Some(&payload) {
+              last = Some(payload.clone());
             let json = serialize_git_watch_event(serde_json::json!({
                 "type": "git.watch.status",
                 "properties": payload,
             }), "status");
             yield Ok::<Event, Infallible>(Event::default().event("status").data(json));
+            }
+            tokio::select! {
+                result = changes.changed() => { if result.is_err() { break; } }
+                _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+            }
         }
     };
 
@@ -926,4 +1207,115 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
         .interval(Duration::from_secs(15))
         .text("ping");
     Sse::new(stream).keep_alive(keep).into_response()
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+    use futures_util::StreamExt;
+
+    #[tokio::test]
+    async fn watch_streams_share_idle_snapshots_and_detect_content_changes_in_already_dirty_files()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        std::fs::write(directory.path().join("file.txt"), "before").unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let hub = git_watch_hub(
+            root.clone(),
+            repo.path().to_path_buf(),
+            repo.commondir().to_path_buf(),
+        );
+        let same = git_watch_hub(
+            root,
+            repo.path().to_path_buf(),
+            repo.commondir().to_path_buf(),
+        );
+        assert!(
+            Arc::ptr_eq(&hub, &same),
+            "one repository must own one watcher/cache"
+        );
+        drop(same);
+        let query = || {
+            Query(GitWatchQuery {
+                directory: Some(directory.path().to_string_lossy().into_owned()),
+                path: None,
+                interval_ms: Some(1000),
+            })
+        };
+        let mut first = git_watch(query()).await.into_body().into_data_stream();
+        let mut second = git_watch(query()).await.into_body().into_data_stream();
+        let a = tokio::time::timeout(Duration::from_secs(5), first.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let checked = hub.snapshot.lock().await.as_ref().unwrap().checked_at;
+        let b = tokio::time::timeout(Duration::from_secs(5), second.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(a, b);
+        assert_eq!(
+            checked,
+            hub.snapshot.lock().await.as_ref().unwrap().checked_at,
+            "the second consumer must reuse the computed snapshot"
+        );
+        let idle = tokio::time::timeout(Duration::from_millis(2200), first.next()).await;
+        assert!(idle.is_err(), "an idle stream sends no status payloads");
+        assert_eq!(
+            checked,
+            hub.snapshot.lock().await.as_ref().unwrap().checked_at,
+            "idle watching must not run periodic 1.5s status scans"
+        );
+        std::fs::write(
+            directory.path().join("file.txt"),
+            "after-with-different-content-and-size",
+        )
+        .unwrap();
+        // Restricted macOS runners can construct FSEvents watches without
+        // receiving callbacks. The shared 60s reconciliation must still find
+        // the change, while native delivery normally completes immediately.
+        let updated = tokio::time::timeout(Duration::from_secs(65), async {
+            loop {
+                let bytes = first
+                    .next()
+                    .await
+                    .expect("the watch stream stays open")
+                    .unwrap();
+                // Axum sends SSE keep-alive comments independently of status.
+                if std::str::from_utf8(&bytes)
+                    .unwrap()
+                    .lines()
+                    .any(|line| line.starts_with("data:"))
+                {
+                    break bytes;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "Git change was not observed: {error}; native watcher: {}; revision: {}",
+                hub._watcher.is_some(),
+                *hub.changes.borrow()
+            )
+        });
+        let parse = |bytes: &[u8]| {
+            let text = std::str::from_utf8(bytes).unwrap();
+            let data = text
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .unwrap();
+            serde_json::from_str::<serde_json::Value>(data).unwrap()
+        };
+        let old = parse(&a);
+        let new = parse(&updated);
+        assert_eq!(new["properties"]["totalFiles"], 1);
+        assert_ne!(
+            old["properties"]["worktreeSignature"],
+            new["properties"]["worktreeSignature"]
+        );
+    }
 }

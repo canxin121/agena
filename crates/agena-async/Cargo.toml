@@ -1,0 +1,13 @@
+[package]
+name = "agena-async"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Bounded blocking work at Agena's asynchronous service boundaries"
+
+[dependencies]
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[lints]
+workspace = true

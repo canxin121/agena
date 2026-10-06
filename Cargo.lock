@@ -97,6 +97,7 @@ dependencies = [
  "agena-api",
  "agena-api-server",
  "agena-application",
+ "agena-async",
  "agena-cli",
  "agena-client",
  "agena-domain",
@@ -216,6 +217,7 @@ name = "agena-application"
 version = "0.1.0"
 dependencies = [
  "agena-api",
+ "agena-async",
  "agena-domain",
  "agena-failure",
  "agena-notification",
@@ -246,10 +248,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-async"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "agena-bundled-plugins"
 version = "0.1.0"
 dependencies = [
  "agena-api",
+ "agena-async",
  "agena-domain",
  "agena-failure",
  "agena-macros",
@@ -456,6 +466,7 @@ dependencies = [
 name = "agena-lsp"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-failure",
  "agena-process",
  "agena-stdio-codec",
@@ -511,6 +522,7 @@ dependencies = [
 name = "agena-mcp-client"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-failure",
  "agena-keyring-store",
  "agena-process",
@@ -619,6 +631,7 @@ name = "agena-plugin-host"
 version = "0.1.0"
 dependencies = [
  "abi_stable",
+ "agena-async",
  "agena-failure",
  "agena-plugin-sdk",
  "agena-process",
@@ -823,6 +836,7 @@ dependencies = [
 name = "agena-runtime"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-bundled-plugins",
  "agena-domain",
  "agena-failure",
@@ -955,6 +969,7 @@ dependencies = [
 name = "agena-runtime-provider"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-domain",
  "agena-failure",
  "agena-plugin-host",
@@ -1023,6 +1038,7 @@ dependencies = [
 name = "agena-runtime-session"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-domain",
  "agena-failure",
  "agena-permission",
@@ -1084,6 +1100,7 @@ dependencies = [
 name = "agena-runtime-tools"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-domain",
  "agena-failure",
  "agena-lsp",
@@ -1189,6 +1206,7 @@ dependencies = [
 name = "agena-storage-sqlite"
 version = "0.1.0"
 dependencies = [
+ "agena-async",
  "agena-domain",
  "agena-failure",
  "agena-provider",

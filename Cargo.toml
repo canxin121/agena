@@ -50,6 +50,7 @@ members = [
     "crates/agena-notification",
     "crates/agena-permission",
     "crates/agena-process",
+    "crates/agena-async",
     "crates/agena-stdio-codec",
     "crates/agena-plugin-contracts",
     "crates/agena-plugin-host",
@@ -118,6 +119,7 @@ agena-memory-index = { path = "crates/agena-memory-index" }
 agena-notification = { path = "crates/agena-notification" }
 agena-permission = { path = "crates/agena-permission" }
 agena-process = { path = "crates/agena-process" }
+agena-async = { path = "crates/agena-async" }
 agena-stdio-codec = { path = "crates/agena-stdio-codec" }
 agena-plugin-contracts = { path = "crates/agena-plugin-contracts" }
 agena-plugin-host = { path = "crates/agena-plugin-host" }

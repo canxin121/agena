@@ -1,7 +1,8 @@
 //! Current schema for the dedicated scheduler SQLite database.
 //!
 //! The scheduler has no database migration layer. Empty databases are created
-//! from the current declarations; non-empty databases must match exactly.
+//! from the current declarations; existing durable objects must match exactly.
+//! Derived performance indexes can be installed after that validation.
 
 use std::path::{Path, PathBuf};
 
@@ -108,14 +109,16 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
     Ok(Some(PathBuf::from(lock_path)))
 }
 
-/// Create the current scheduler schema or validate an existing one exactly.
+/// Create or validate the durable scheduler schema and add missing derived indexes.
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let _lock = SchemaLock::acquire(db).await?;
     let objects = schema_objects(db).await?;
     let fresh = objects.is_empty();
-    if !fresh {
-        validate_existing_schema(&objects)?;
-    }
+    let missing_indexes = if fresh {
+        Vec::new()
+    } else {
+        validate_existing_schema(&objects)?
+    };
     for pragma in [
         "PRAGMA journal_mode = WAL",
         "PRAGMA busy_timeout = 1000",
@@ -128,10 +131,21 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
         .await?;
     }
     if !fresh {
-        return Ok(());
+        if missing_indexes.is_empty() {
+            return Ok(());
+        }
+        let txn = db.begin().await?;
+        for statement in missing_indexes {
+            txn.execute(Statement::from_string(
+                txn.get_database_backend(),
+                statement,
+            ))
+            .await?;
+        }
+        return txn.commit().await;
     }
     let txn = db.begin().await?;
-    for statement in TABLES.iter().chain(INDEXES) {
+    for statement in TABLES.iter().chain(INDEXES).chain(PERFORMANCE_INDEXES) {
         txn.execute(Statement::from_string(
             txn.get_database_backend(),
             (*statement).to_owned(),
@@ -183,14 +197,28 @@ async fn schema_objects<C: ConnectionTrait>(
 
 fn validate_existing_schema(
     actual: &std::collections::BTreeMap<(String, String), String>,
-) -> Result<(), DbErr> {
+) -> Result<Vec<&'static str>, DbErr> {
+    let mut durable = actual.clone();
+    let mut missing_indexes = Vec::new();
+    for sql in PERFORMANCE_INDEXES {
+        let (kind, name, stored) = declaration(sql)?;
+        match durable.remove(&(kind, name)) {
+            None => missing_indexes.push(*sql),
+            Some(found) if found != stored => {
+                return Err(DbErr::Custom(
+                    "scheduler performance index has a different definition".into(),
+                ));
+            }
+            Some(_) => {}
+        }
+    }
     let mut expected = std::collections::BTreeMap::new();
     for sql in TABLES.iter().chain(INDEXES) {
         let (kind, name, stored) = declaration(sql)?;
         expected.insert((kind, name), stored);
     }
-    if actual == &expected {
-        Ok(())
+    if durable == expected {
+        Ok(missing_indexes)
     } else {
         Err(DbErr::Custom("scheduler database schema does not match this Agena build; delete it and start with a fresh database".into()))
     }
@@ -216,6 +244,11 @@ const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_jobs_delivery ON agena_scheduler_jobs(delivery_key) WHERE delivery_key IS NOT NULL",
 ];
 
+const PERFORMANCE_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_session ON agena_scheduler_jobs(json_extract(job_json, '$.owner_session_id'), completed, next_fire_at_ms, id) WHERE json_valid(job_json)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_invalid_json ON agena_scheduler_jobs(id) WHERE NOT json_valid(job_json)",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,12 +265,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn existing_scheduler_schema_acquires_indexes_and_preserves_malformed_records() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        initialize_schema(&db).await.unwrap();
+        db.execute(Statement::from_string(DatabaseBackend::Sqlite,
+            "INSERT INTO agena_scheduler_jobs (id, job_json, updated_at_ms) VALUES ('legacy', 'not JSON', 7)")).await.unwrap();
+        let expected = schema_objects(&db).await.unwrap();
+        for sql in PERFORMANCE_INDEXES {
+            let (_, name, _) = declaration(sql).unwrap();
+            db.execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!("DROP INDEX {name}"),
+            ))
+            .await
+            .unwrap();
+        }
+        initialize_schema(&db).await.unwrap();
+        assert_eq!(schema_objects(&db).await.unwrap(), expected);
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT job_json, updated_at_ms FROM agena_scheduler_jobs WHERE id = 'legacy'",
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.try_get::<String>("", "job_json").unwrap(), "not JSON");
+        assert_eq!(row.try_get::<i64>("", "updated_at_ms").unwrap(), 7);
+        initialize_schema(&db).await.unwrap();
+        assert_eq!(schema_objects(&db).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn a_changed_scheduler_performance_index_is_rejected_without_repair() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        initialize_schema(&db).await.unwrap();
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "DROP INDEX idx_agena_scheduler_session",
+        ))
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE INDEX idx_agena_scheduler_session ON agena_scheduler_jobs(id)",
+        ))
+        .await
+        .unwrap();
+        let before = schema_objects(&db).await.unwrap();
+        initialize_schema(&db)
+            .await
+            .expect_err("changed derived index must be rejected");
+        assert_eq!(schema_objects(&db).await.unwrap(), before);
+    }
+
+    #[tokio::test]
     async fn modified_scheduler_database_is_rejected_without_repair() {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         initialize_schema(&db).await.unwrap();
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             "ALTER TABLE agena_scheduler_jobs ADD COLUMN obsolete TEXT",
+        ))
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "DROP INDEX idx_agena_scheduler_session",
         ))
         .await
         .unwrap();

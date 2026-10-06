@@ -41,7 +41,9 @@ test('monaco diff reveal waits for visible layout before consuming first-change 
 
   assert.ok(diffEditor.includes('onDidLayoutChange(() => {'))
   assert.ok(diffEditor.includes('layout.width <= 0 || layout.height <= 0'))
-  assert.ok(diffEditor.includes('requestAnimationFrame(() => {'))
+  // Zero-size deferral and the eventual reveal are exercised through actual
+  // layout events in performanceFollowupRendering.test.ts. Requiring a frame
+  // retry here would require the hidden-pane busy loop we deliberately removed.
   assert.ok(diffEditor.includes('getRequestedInitialTopLine()'))
   assert.ok(diffEditor.includes('resolveModelLineFromDisplayLine('))
   assert.ok(diffEditor.includes('updateLineNumberOptions()'))

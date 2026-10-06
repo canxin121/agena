@@ -19,16 +19,18 @@ use agena_runtime_contracts::part_content::{
 use agena_storage::store::{Part, PartRole, PartState};
 use sha2::{Digest, Sha256};
 
+static SUBTASK_LOG_PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 /// The lossy visible text of one run group, derived from its decoded content
 /// parts: text and command-reference parts render their content, tool-call parts
 /// their best-effort output, and the remaining part kinds fall back to their
 /// summary.
-pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
-    run.iter()
-        .skip(1)
+fn visible_run_text<'a>(parts: impl Iterator<Item = &'a Part>) -> String {
+    parts
+        .filter(|part| !part.is_run_marker())
         .filter_map(
             |part| match typed_content_from_value(&part.kind, &part.content) {
-                Ok(TypedContent::Text(text)) => Some(text.text.clone()),
+                Ok(TypedContent::Text(text)) => Some(text.text),
                 Ok(TypedContent::CommandRef(command)) => {
                     Some(command_reference_from_command_ref(&command).summary())
                 }
@@ -37,7 +39,11 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
                     // running. Project its independent display tail so the
                     // task log's existing run cursor can update in place.
                     (part.state == PartState::InProgress)
-                        .then(|| tool.live_output().filter(|text| !text.trim().is_empty()).map(str::to_owned))
+                        .then(|| {
+                            tool.live_output()
+                                .filter(|text| !text.trim().is_empty())
+                                .map(str::to_owned)
+                        })
                         .flatten()
                         .or_else(|| tool_visible_text_lossy(&operation_from_tool_call(&tool)))
                 }
@@ -50,6 +56,110 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
         .join("\n")
 }
 
+#[cfg(test)]
+pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
+    visible_run_text(run.iter())
+}
+
+fn bounded_run_text(parts: &[&Part], max_bytes: usize) -> String {
+    let mut slices = Vec::new();
+    let mut remaining = max_bytes;
+    for part in parts.iter().rev() {
+        if part.is_run_marker() || part.kind == "think" || remaining == 0 {
+            continue;
+        }
+        let body = match part.kind.as_str() {
+            "text" | "paste_ref" => part
+                .content
+                .as_str()
+                .or_else(|| part.content.get("text").and_then(serde_json::Value::as_str)),
+            "tool_call" => {
+                let live = (part.state == PartState::InProgress)
+                    .then(|| {
+                        part.content
+                            .pointer("/metadata/live_output")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .flatten();
+                live.filter(|text| !text.trim().is_empty())
+                    .or_else(|| {
+                        part.content
+                            .pointer("/output/payload/text")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .or_else(|| {
+                        part.content
+                            .pointer("/output/payload")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .filter(|text| !text.trim().is_empty())
+                    .or_else(|| {
+                        part.content
+                            .pointer("/error/failure/user/fallback")
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|text| !text.trim().is_empty())
+                    })
+                    .or_else(|| {
+                        part.content
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|text| !text.trim().is_empty())
+                    })
+                    .or(part.summary.as_deref())
+            }
+            _ => part.summary.as_deref(),
+        };
+        let command;
+        let body = if part.kind == "skill_ref" {
+            command = part
+                .content
+                .get("skills")
+                .and_then(serde_json::Value::as_array)
+                .map(|commands| {
+                    let names: Vec<_> = commands
+                        .iter()
+                        .filter_map(|item| item.get("name").and_then(serde_json::Value::as_str))
+                        .collect();
+                    match names.as_slice() {
+                        [] => "0 command references".to_owned(),
+                        [name] => format!("Command: {name}"),
+                        names => format!(
+                            "{} commands: {}",
+                            names.len(),
+                            names.iter().take(3).copied().collect::<Vec<_>>().join(", ")
+                        ),
+                    }
+                })
+                .unwrap_or_else(|| "0 command references".to_owned());
+            Some(command.as_str())
+        } else {
+            body
+        };
+        let Some(body) = body.filter(|body| !body.trim().is_empty()) else {
+            continue;
+        };
+        let separator = usize::from(!slices.is_empty());
+        if remaining <= separator {
+            continue;
+        }
+        let mut start = body.len().saturating_sub(remaining - separator);
+        while !body.is_char_boundary(start) {
+            start += 1;
+        }
+        let tail = &body[start..];
+        if tail.is_empty() {
+            continue;
+        }
+        remaining -= tail.len() + separator;
+        slices.push(tail.to_owned());
+        if remaining == 0 {
+            break;
+        }
+    }
+    slices.reverse();
+    slices.join("\n")
+}
+
 /// Best-effort textual rendering of a tool-call projection: first non-empty of
 /// output text, error message, title, or summary.
 fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) -> Option<String> {
@@ -59,6 +169,84 @@ fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) 
         .flatten()
         .find(|text| !text.trim().is_empty())
         .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod bounded_log_tests {
+    use super::*;
+    use agena_storage::store::PartVisibility;
+    use serde_json::{Value, json};
+
+    fn part(kind: &str, content: Value) -> Part {
+        Part {
+            part_id: 2,
+            kind: kind.into(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content,
+            summary: None,
+            visibility: PartVisibility::Both,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 1,
+            finished_at_ms: Some(1),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            provider_state: None,
+        }
+    }
+
+    #[test]
+    fn utf8_tails_respect_budgets_without_empty_slices_or_dangling_separators() {
+        let older = part("text", json!({"text": "你"}));
+        let latest = part("text", json!({"text": "🙂你"}));
+        for (budget, expected) in [
+            (0, ""),
+            (2, ""),
+            (3, "你"),
+            (4, "你"),
+            (7, "🙂你"),
+            (8, "🙂你"),
+            (11, "你\n🙂你"),
+        ] {
+            let text = bounded_run_text(&[&older, &latest], budget);
+            assert_eq!(text, expected, "budget={budget}");
+            assert!(text.len() <= budget);
+        }
+    }
+
+    #[test]
+    fn tool_logs_keep_live_output_and_terminal_error_and_title_fallbacks() {
+        let mut tool = part(
+            "tool_call",
+            json!({"name": "shell", "output": {"payload": {"text": "completed"}}, "metadata": {"live_output": "still running"}, "error": {"failure": {"user": {"fallback": "failed"}}}}),
+        );
+        tool.state = PartState::InProgress;
+        assert_eq!(bounded_run_text(&[&tool], 100), "still running");
+        tool.state = PartState::Completed;
+        assert_eq!(bounded_run_text(&[&tool], 100), "completed");
+        tool.content["output"] = json!({"payload": "plain output"});
+        assert_eq!(bounded_run_text(&[&tool], 100), "plain output");
+        tool.content["output"] = Value::Null;
+        assert_eq!(bounded_run_text(&[&tool], 100), "failed");
+        tool.content["error"] = Value::Null;
+        assert_eq!(bounded_run_text(&[&tool], 100), "shell");
+    }
+
+    #[test]
+    fn logs_skip_reasoning_and_markers_and_preserve_command_reference_summaries() {
+        let marker = part("run", json!({"run_kind": "continue"}));
+        let mut reasoning = part("think", json!({"text": "private reasoning"}));
+        reasoning.summary = Some("reasoning summary".into());
+        let command = part("skill_ref", json!({"skills": [{"name": "review"}]}));
+        let text = part("text", json!({"text": "done"}));
+        assert_eq!(
+            bounded_run_text(&[&marker, &reasoning, &command, &text], 100),
+            "Command: review\ndone"
+        );
+    }
 }
 
 /// Resolve requested command names into lazy references for a delegated
@@ -213,41 +401,103 @@ impl SessionManager {
         after_cursor: i64,
         limit: u32,
     ) -> Result<crate::SessionSubtaskOutput, AppError> {
-        let child = self
-            .require_subtask_session(parent_session_id, task_id)
-            .await?;
-        let limit = limit.clamp(1, 500) as usize;
-        let mut messages = crate::session::store::parts_into_runs(child.parts())
-            .into_iter()
-            .filter_map(|run| {
-                let marker_id = run.first().map(|marker| marker.part_id);
-                marker_id
-                    .filter(|marker_id| *marker_id > after_cursor)
-                    .map(|_| run)
+        self.read_subtask_output_page(parent_session_id, task_id, after_cursor, limit, None)
+            .await
+    }
+
+    pub async fn read_subtask_output_bounded(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+        after_cursor: i64,
+        limit: u32,
+    ) -> Result<crate::SessionSubtaskOutput, AppError> {
+        self.read_subtask_output_page(
+            parent_session_id,
+            task_id,
+            after_cursor,
+            limit,
+            Some(128 * 1024),
+        )
+        .await
+    }
+
+    async fn read_subtask_output_page(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+        after_cursor: i64,
+        limit: u32,
+        byte_limit: Option<usize>,
+    ) -> Result<crate::SessionSubtaskOutput, AppError> {
+        let child_id = self
+            .store
+            .find_subagent_by_task_id(parent_session_id, task_id.trim())
+            .await?
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "subtask '{task_id}' does not exist under session {parent_session_id}"
+                ))
+            })?;
+        let page = self
+            .store
+            .facade
+            .load_runs_after(child_id, after_cursor, limit.clamp(1, 500) as usize)
+            .await
+            .map_err(crate::session::store::store_error)?;
+        SUBTASK_LOG_PROJECTIONS
+            .run(move || {
+                let mut groups = std::collections::BTreeMap::<i64, Vec<&Part>>::new();
+                for part in &page.parts {
+                    let id = if part.is_run_marker() {
+                        Some(part.part_id)
+                    } else {
+                        part.run_id
+                    };
+                    if let Some(id) = id {
+                        groups.entry(id).or_default().push(part);
+                    }
+                }
+                let mut chunks = Vec::new();
+                let mut next_cursor = after_cursor;
+                let mut bytes = 0;
+                let mut has_more = page.has_more;
+                for (_, run) in groups {
+                    if byte_limit.is_some_and(|limit| bytes >= limit) {
+                        has_more = true;
+                        break;
+                    }
+                    let Some(marker) = run.iter().find(|part| part.is_run_marker()).copied() else {
+                        continue;
+                    };
+                    let text = if let Some(limit) = byte_limit {
+                        bounded_run_text(&run, (limit - bytes).min(64 * 1024))
+                    } else {
+                        // Only this cursor page is materialized; previous runs and
+                        // their tool output are never cloned by the log reader.
+                        visible_run_text(run.iter().copied())
+                    };
+                    next_cursor = marker.part_id;
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    bytes += text.len();
+                    chunks.push(crate::SessionSubtaskOutputChunk {
+                        cursor: marker.part_id,
+                        role: crate::session::store::role_from_part_role(marker.role),
+                        text,
+                        created_at_ms: marker.created_at_ms,
+                    });
+                }
+                crate::SessionSubtaskOutput {
+                    session_id: child_id,
+                    chunks,
+                    next_cursor,
+                    has_more,
+                }
             })
-            .filter_map(|run| {
-                let marker = run.first().expect("run group has a marker");
-                let text = run_visible_text_lossy(&run);
-                (!text.trim().is_empty()).then_some(crate::SessionSubtaskOutputChunk {
-                    cursor: marker.part_id,
-                    role: crate::session::store::role_from_part_role(marker.role),
-                    text,
-                    created_at_ms: marker.created_at_ms,
-                })
-            })
-            .collect::<Vec<_>>();
-        messages.sort_by_key(|message| message.cursor);
-        let has_more = messages.len() > limit;
-        messages.truncate(limit);
-        let next_cursor = messages
-            .last()
-            .map_or(after_cursor, |message| message.cursor);
-        Ok(crate::SessionSubtaskOutput {
-            session_id: child.id,
-            chunks: messages,
-            next_cursor,
-            has_more,
-        })
+            .await
+            .map_err(|error| AppError::Internal(format!("subtask log worker failed: {error}")))
     }
 
     pub(in crate::session::manager) async fn submit_user_run_inner(

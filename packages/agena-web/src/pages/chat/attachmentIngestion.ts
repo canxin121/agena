@@ -13,6 +13,7 @@ export type ComposerAttachment = {
   size: number
   mime: string
   url?: string
+  blob?: Blob
   serverPath?: string
   delivery?: AttachmentDelivery
   state: AttachmentState
@@ -34,8 +35,10 @@ type Options = {
   get: () => StagedAttachment[]
   set: (files: StagedAttachment[]) => void
   read: (file: File, signal: AbortSignal) => Promise<string>
-  onError: (error: { kind: 'size' | 'total' | 'count' | 'read'; file: File }) => void
+  onError: (error: { kind: 'size' | 'total' | 'count' | 'read' | 'memory'; file: File }) => void
   onBusy: (count: number) => void
+  release?: (url: string) => void
+  remainingBytes?: () => number
 }
 type StageOptions = {
   idForFile?: (file: File) => string
@@ -65,6 +68,10 @@ export function createAttachmentIngestor(options: Options) {
         options.onError({ kind: 'total', file })
         continue
       }
+      if (options.remainingBytes && file.size > options.remainingBytes()) {
+        options.onError({ kind: 'memory', file })
+        continue
+      }
       const abort = new AbortController()
       active.add(abort)
       const stagedId = stageOptions.idForFile?.(file)
@@ -79,24 +86,58 @@ export function createAttachmentIngestor(options: Options) {
         active.delete(abort)
         if (stagedId) activeById.delete(stagedId)
       }
-      if (epoch !== generation || abort.signal.aborted) break
-      if (stageOptions.shouldSkip?.(file)) continue
-      if (!url.startsWith('data:') || !url.includes(';base64,')) {
+      if (epoch !== generation || abort.signal.aborted) {
+        options.release?.(url)
+        break
+      }
+      if (stageOptions.shouldSkip?.(file)) {
+        options.release?.(url)
+        continue
+      }
+      if (!url.startsWith('blob:') && (!url.startsWith('data:') || !url.includes(';base64,'))) {
+        options.release?.(url)
         options.onError({ kind: 'read', file })
         continue
       }
       // Actual contents decide duplicates. Same-name/same-size screenshots
       // may differ and must never disappear on a filename-only comparison.
-      if (options.get().some((f) => f.url === url && f.filename === (file.name || 'file'))) {
+      let duplicate = false
+      for (const item of options.get()) {
+        if (item.filename !== (file.name || 'file')) continue
+        if (
+          item.url === url ||
+          item.blob === file ||
+          (item.blob && item.size === file.size && (await equalBlobs(item.blob, file)))
+        ) {
+          // Hashing can yield while the user removes the original chip. Only
+          // suppress the new file if that duplicate still belongs to the draft.
+          duplicate = options
+            .get()
+            .some((latest) => latest.id === item.id && latest.url === item.url && latest.blob === item.blob)
+          if (duplicate) break
+        }
+      }
+      if (epoch !== generation || abort.signal.aborted) {
+        options.release?.(url)
+        break
+      }
+      if (stageOptions.shouldSkip?.(file)) {
+        options.release?.(url)
+        continue
+      }
+      if (duplicate) {
+        options.release?.(url)
         accepted.push(file)
         continue
       }
       const latest = options.get()
       if (latest.length >= MAX_ATTACHMENTS) {
+        options.release?.(url)
         options.onError({ kind: 'count', file })
         break
       }
       if (latest.reduce((n, f) => n + Math.max(0, f.size || 0), 0) + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
+        options.release?.(url)
         options.onError({ kind: 'total', file })
         continue
       }
@@ -108,6 +149,7 @@ export function createAttachmentIngestor(options: Options) {
           size: file.size,
           mime: file.type || 'application/octet-stream',
           url,
+          ...(url.startsWith('blob:') ? { blob: file } : {}),
           delivery: 'model_input',
           state: 'ready',
         },
@@ -148,6 +190,29 @@ export function createAttachmentIngestor(options: Options) {
     activeById.get(id)?.abort()
   }
   return { stage, clear, cancel, generation: () => generation }
+}
+
+const blobHashes = new WeakMap<Blob, Promise<string>>()
+function blobHash(blob: Blob) {
+  let hash = blobHashes.get(blob)
+  if (!hash) {
+    hash = blob
+      .arrayBuffer()
+      .then((bytes) => crypto.subtle.digest('SHA-256', bytes))
+      .then((digest) => Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join(''))
+    blobHashes.set(blob, hash)
+  }
+  return hash
+}
+async function equalBlobs(left: Blob, right: Blob) {
+  // Hash only same-name/same-size candidates. New files normally require no
+  // body read at all, and WebCrypto performs the hash outside JavaScript.
+  try {
+    const hashes = await Promise.all([blobHash(left), blobHash(right)])
+    return hashes[0] === hashes[1]
+  } catch {
+    return false
+  }
 }
 
 export function filesFromClipboard(data: Pick<DataTransfer, 'items' | 'files'> | null): File[] {

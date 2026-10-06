@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 
 import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '@/lib/api'
 import { settingsText as st } from '@/i18n/settingsText'
+import { usePaneRead } from '@/composables/usePaneRead'
 
 type UsageTotals = {
   requests: number
@@ -54,8 +55,6 @@ type UsageSection = {
   rows: UsageBreakdown[]
 }
 
-const loading = ref(false)
-const error = ref('')
 const stats = ref<UsageStats | null>(null)
 
 const sections = computed<UsageSection[]>(() => {
@@ -82,17 +81,20 @@ function finiteNumber(value: unknown): number {
   return Number.isFinite(number) ? number : 0
 }
 
+const integerFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
+const usdFormatter = new Intl.NumberFormat(undefined, {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 6,
+})
+
 function formatInteger(value: unknown): string {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(finiteNumber(value))
+  return integerFormatter.format(finiteNumber(value))
 }
 
 function formatUsd(value: unknown): string {
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 6,
-  }).format(finiteNumber(value))
+  return usdFormatter.format(finiteNumber(value))
 }
 
 function rowLabel(section: UsageSection['key'], row: UsageBreakdown): string {
@@ -102,26 +104,17 @@ function rowLabel(section: UsageSection['key'], row: UsageBreakdown): string {
   return String(row.title || `Session ${row.session_id ?? ''}`).trim()
 }
 
-async function refresh() {
-  loading.value = true
-  error.value = ''
-  try {
+const { loading, error, refresh } = usePaneRead(
+  (signal) => {
     const timezoneOffsetMinutes = -new Date().getTimezoneOffset()
-    const data = await apiJson<UsageStats>(
-      `/api/v1/usage?period=last_30_days&timezone_offset_minutes=${timezoneOffsetMinutes}`,
-    )
+    return apiJson<UsageStats>(`/api/v1/usage?period=last_30_days&timezone_offset_minutes=${timezoneOffsetMinutes}`, {
+      signal,
+    })
+  },
+  (data) => {
     stats.value = data && typeof data === 'object' ? data : null
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
-    stats.value = null
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(() => {
-  void refresh()
-})
+  },
+)
 </script>
 
 <template>
@@ -146,16 +139,16 @@ onMounted(() => {
       </IconButton>
     </div>
 
-    <div v-if="loading" class="text-sm text-muted-foreground">{{ $st('Loading usage...') }}</div>
+    <div v-if="loading && !stats" class="text-sm text-muted-foreground">{{ $st('Loading usage...') }}</div>
     <div
-      v-else-if="error"
+      v-if="error"
       class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
     >
       {{ error }}
     </div>
-    <div v-else-if="!stats" class="text-sm text-muted-foreground">{{ $st('No usage data available.') }}</div>
+    <div v-if="!loading && !stats" class="text-sm text-muted-foreground">{{ $st('No usage data available.') }}</div>
 
-    <template v-else>
+    <template v-if="stats">
       <dl class="grid grid-cols-2 gap-x-6 gap-y-4 border-y border-border/60 py-4 sm:grid-cols-4">
         <div>
           <dt class="text-xs text-muted-foreground">{{ $st('Requests') }}</dt>

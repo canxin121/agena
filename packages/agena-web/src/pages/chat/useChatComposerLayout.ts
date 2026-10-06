@@ -1,6 +1,9 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { getComposerInput, type ComposerExpose } from './composerInput'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+
+const fullscreenOwners = new Set<symbol>()
 
 type UiLike = { isCompactLayout: boolean; isCompactTouch: boolean; isTouchPointer: boolean }
 
@@ -42,10 +45,16 @@ export function useChatComposerLayout(opts: {
     scrollToBottom,
   } = opts
 
+  const pane = useWorkspacePaneContext()
+  const visible = () => !pane || pane.isVisible.value
+  const fullscreenOwner = Symbol('composer-fullscreen')
+  let layoutFrame: number | undefined
   const root = typeof document !== 'undefined' ? document.documentElement : null
   function syncComposerFullscreenRootFlag() {
     if (!root) return
-    if (composerFullscreenActive.value) root.setAttribute('data-oc-composer-fullscreen', 'true')
+    if (composerFullscreenActive.value && visible()) fullscreenOwners.add(fullscreenOwner)
+    else fullscreenOwners.delete(fullscreenOwner)
+    if (fullscreenOwners.size) root.setAttribute('data-oc-composer-fullscreen', 'true')
     else root.removeAttribute('data-oc-composer-fullscreen')
   }
 
@@ -151,7 +160,7 @@ export function useChatComposerLayout(opts: {
   }
 
   function syncRegularComposerHeight() {
-    if (ui.isCompactLayout || editorFullscreen.value) return
+    if (!visible() || ui.isCompactLayout || editorFullscreen.value) return
     const maxHeight = regularComposerMaxHeight()
     composerMaxHeight.value = maxHeight
     composerTargetHeight.value = regularComposerTargetHeight()
@@ -296,13 +305,11 @@ export function useChatComposerLayout(opts: {
     syncComposerFullscreenRootFlag()
 
     // Keep app shell stable while the fullscreen composer is active.
-    watch(() => composerFullscreenActive.value, syncComposerFullscreenRootFlag, { immediate: true })
+    watch(() => [composerFullscreenActive.value, visible()], syncComposerFullscreenRootFlag, { immediate: true })
+    if (pane) watch(pane.isVisible, () => handleWindowResize())
 
     if (typeof ResizeObserver !== 'undefined') {
-      composerShellObserver = new ResizeObserver(() => {
-        const el = composerBarRef.value
-        composerShellHeight.value = el ? Math.round(el.getBoundingClientRect().height) : 0
-      })
+      composerShellObserver = new ResizeObserver(handleWindowResize)
 
       const el = composerBarRef.value
       if (el) {
@@ -324,6 +331,16 @@ export function useChatComposerLayout(opts: {
   })
 
   function handleWindowResize() {
+    if (!visible() || layoutFrame !== undefined) return
+    layoutFrame = window.requestAnimationFrame(() => {
+      layoutFrame = undefined
+      if (!visible()) return
+      const el = composerBarRef.value
+      composerShellHeight.value = el ? Math.round(el.getBoundingClientRect().height) : 0
+      measureLayout()
+    })
+  }
+  function measureLayout() {
     if (editorFullscreen.value && !editorClosing.value) {
       syncFullscreenHeight()
       return
@@ -339,7 +356,9 @@ export function useChatComposerLayout(opts: {
   onBeforeUnmount(() => {
     // Ensure we don't leave the app shell in fullscreen state.
     try {
-      root?.removeAttribute('data-oc-composer-fullscreen')
+      fullscreenOwners.delete(fullscreenOwner)
+      if (!fullscreenOwners.size) root?.removeAttribute('data-oc-composer-fullscreen')
+      if (layoutFrame !== undefined) window.cancelAnimationFrame(layoutFrame)
     } catch {}
 
     if (composerShellObserver) {

@@ -1310,6 +1310,30 @@ impl PersistenceEngine for InMemoryEngine {
         Ok(operations)
     }
 
+    async fn active_background_operations_for_session(
+        &self,
+        session_id: i64,
+        kind: Option<super::BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError> {
+        let mut operations = self
+            .background_operations
+            .read()
+            .expect("background operations lock")
+            .values()
+            .filter(|operation| {
+                operation.session_id == session_id
+                    && !operation.phase.is_terminal()
+                    && kind.is_none_or(|kind| operation.kind == kind)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        operations
+            .sort_by_key(|operation| (operation.created_at_ms, operation.operation_id.clone()));
+        operations.truncate(limit);
+        Ok(operations)
+    }
+
     async fn session_has_active_background_operations(
         &self,
         session_id: i64,
@@ -3862,6 +3886,14 @@ mod tests {
         assert_eq!(
             engine.active_background_operations(None, 1).await.unwrap()[0].operation_id,
             unrelated.operation_id
+        );
+        assert_eq!(
+            engine
+                .active_background_operations_for_session(session_id, None, 1)
+                .await
+                .unwrap()[0]
+                .operation_id,
+            operation.operation_id
         );
         assert!(
             engine

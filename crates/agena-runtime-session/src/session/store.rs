@@ -80,12 +80,7 @@ impl StoreAdapter {
     /// aggregate the execution engine operates on.
     pub(crate) async fn load_session(&self, session_id: i64) -> Result<Session, AppError> {
         let view = self.facade.load(session_id).await.map_err(store_error)?;
-        SESSION_PROJECTIONS
-            .run(move || session_from_view(view))
-            .await
-            .map_err(|error| {
-                AppError::Internal(format!("session projection worker failed: {error}"))
-            })?
+        session_from_view_async(view).await
     }
 
     /// Create a new session row and return the rebuilt aggregate.
@@ -795,6 +790,14 @@ pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> 
     restore_prompt_window_from_parts(&mut session.runtime, &parts, session.id)?;
     session.install_projected_parts(parts);
     Ok(session)
+}
+
+/// Rebuild both full and narrow projections on the same admitted worker pool.
+pub(crate) async fn session_from_view_async(view: SessionView) -> Result<Session, AppError> {
+    SESSION_PROJECTIONS
+        .run(move || session_from_view(view))
+        .await
+        .map_err(|error| AppError::Internal(format!("session projection worker failed: {error}")))?
 }
 
 /// The compaction marker is the durable prompt boundary. Restore the exact

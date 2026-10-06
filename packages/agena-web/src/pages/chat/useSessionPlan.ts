@@ -2,6 +2,7 @@ import { computed, onMounted, onScopeDispose, reactive, watch } from 'vue'
 import { usePlanViewer } from './usePlanViewer'
 import { subscribeResource } from '../../lib/resourceSync'
 import { isDocumentVisible } from '../../lib/backgroundReads'
+import { useWorkspacePaneContext } from '../../app/workspace/workspacePaneContext'
 
 export function useSessionPlan(
   sessionId: () => string | null,
@@ -9,6 +10,8 @@ export function useSessionPlan(
   _changeSignal: () => unknown,
   invoke: Parameters<typeof usePlanViewer>[1],
 ) {
+  const pane = useWorkspacePaneContext()
+  const isVisible = () => isDocumentVisible() && (!pane || pane.isVisible.value)
   const expandedSessions = reactive(new Set<string>())
   let lastStarted = 0
   let failures = 0
@@ -34,6 +37,7 @@ export function useSessionPlan(
         throw error
       }
     },
+    isVisible,
   )
   const expanded = computed({
     get: () => expandedSessions.has(sessionId() || ''),
@@ -52,7 +56,6 @@ export function useSessionPlan(
   let unsubscribe: (() => void) | undefined
   let disposed = false
   let dirty = false
-  const isVisible = isDocumentVisible
 
   function scheduleRefresh() {
     dirty = true
@@ -101,6 +104,7 @@ export function useSessionPlan(
       viewer.pauseRead()
     }
   }
+  if (pane) watch(pane.isVisible, onVisibility, { flush: 'sync' })
   onScopeDispose(() => {
     disposed = true
     clearTimeout(timer)

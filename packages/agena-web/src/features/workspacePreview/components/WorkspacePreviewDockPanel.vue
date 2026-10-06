@@ -23,7 +23,7 @@ import Input from '@/components/ui/Input.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
-import { apiUrl } from '@/lib/api'
+import { probePreviewProxyResponse } from '@/features/workspacePreview/api/previewProxyProbe'
 import type { WorkspacePreviewSession } from '@/features/workspacePreview/api/workspacePreviewApi'
 import { buildPreviewFrameSrc } from '@/features/workspacePreview/model/previewUrl'
 import { useChatStore } from '@/stores/chat'
@@ -31,6 +31,8 @@ import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspacePreviewStore } from '@/stores/workspacePreview'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
+import { useVisibleSubscription } from '@/composables/useVisibleSubscription'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -38,6 +40,8 @@ const chat = useChatStore()
 const directoryStore = useDirectoryStore()
 const ui = useUiStore()
 const preview = useWorkspacePreviewStore()
+const visible = usePaneVisibility()
+useVisibleSubscription(() => preview.retainLiveSessions(), visible)
 
 type PreviewViewerMode = 'fill' | 'responsive'
 
@@ -712,7 +716,8 @@ const sessionMenuQuery = ref('')
 const FRAME_UPDATE_THROTTLE_MS = 220
 
 let frameTimer: number | null = null
-let releaseLiveSessions: (() => void) | undefined
+let frameProbeController: AbortController | undefined
+let frameProbeSrc = ''
 let lastFrameUpdateAt = 0
 let frameRequestId = 0
 
@@ -882,19 +887,11 @@ function formatProxyHttpError(status: number, detail: string): string {
   return String(t('workspaceDock.preview.states.proxyHttpError', { status, detail: cleanDetail }))
 }
 
-async function probePreviewProxy(src: string): Promise<string> {
+async function probePreviewProxy(src: string, signal: AbortSignal): Promise<string> {
   try {
-    const response = await fetch(apiUrl(src), {
-      method: 'GET',
-      credentials: 'include',
-      headers: {
-        accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
-      },
-    })
+    const response = await probePreviewProxyResponse(src, signal)
     if (response.ok) return ''
-
-    const body = await response.text().catch(() => '')
-    const detail = extractProxyErrorDetail(body, response.headers.get('content-type') || '')
+    const detail = extractProxyErrorDetail(response.body, response.contentType)
     return formatProxyHttpError(response.status, detail)
   } catch {
     return String(t('workspaceDock.preview.states.proxyRequestFailed'))
@@ -909,19 +906,43 @@ function clearFrameTimer() {
 
 async function setFrameUrlNow() {
   clearFrameTimer()
+  if (!visible.value) return
   const src = previewSrc.value
   iframeError.value = ''
   if (!src || effectiveError.value) {
+    frameRequestId++
+    frameProbeController?.abort()
     frameSrc.value = ''
     iframeLoading.value = false
     lastFrameUpdateAt = Date.now()
     return
   }
+  if (src === frameSrc.value || (src === frameProbeSrc && frameProbeController && !frameProbeController.signal.aborted))
+    return
 
   const requestId = ++frameRequestId
+  frameProbeController?.abort()
+  const controller = new AbortController()
+  frameProbeController = controller
+  frameProbeSrc = src
   iframeLoading.value = true
-  const proxyError = await probePreviewProxy(src)
-  if (requestId !== frameRequestId) return
+  let proxyError: string
+  try {
+    proxyError = await probePreviewProxy(src, controller.signal)
+  } finally {
+    if (frameProbeController === controller) {
+      frameProbeController = undefined
+      frameProbeSrc = ''
+    }
+  }
+  if (
+    controller.signal.aborted ||
+    !visible.value ||
+    requestId !== frameRequestId ||
+    previewSrc.value !== src ||
+    effectiveError.value
+  )
+    return
 
   if (proxyError) {
     frameSrc.value = ''
@@ -937,6 +958,7 @@ async function setFrameUrlNow() {
 
 function scheduleFrameUpdate() {
   clearFrameTimer()
+  if (!visible.value) return
   const elapsed = Date.now() - lastFrameUpdateAt
   const waitMs = Math.max(0, FRAME_UPDATE_THROTTLE_MS - elapsed)
   frameTimer = window.setTimeout(() => {
@@ -946,6 +968,7 @@ function scheduleFrameUpdate() {
 }
 
 async function refreshPreview(opts?: { forceFrameReload?: boolean }) {
+  if (!visible.value) return
   await preview.refreshSessions({ force: opts?.forceFrameReload })
   if (opts?.forceFrameReload) {
     preview.bumpRefreshToken()
@@ -1145,12 +1168,26 @@ watch(
 
 onMounted(() => {
   void refreshPreview()
-  releaseLiveSessions = preview.retainLiveSessions()
 })
+
+watch(
+  visible,
+  (shown) => {
+    if (shown) scheduleFrameUpdate()
+    else {
+      clearFrameTimer()
+      frameRequestId++
+      frameProbeController?.abort()
+      iframeLoading.value = false
+    }
+  },
+  { flush: 'sync' },
+)
 
 onBeforeUnmount(() => {
   clearFrameTimer()
-  releaseLiveSessions?.()
+  frameRequestId++
+  frameProbeController?.abort()
 })
 </script>
 

@@ -13,6 +13,7 @@ export function useGitAutoFetch(opts: {
   autoSyncIntervalMinutes: { value: number }
   fetchRemote: RemoteFn
   sync: RemoteFn
+  isVisible?: { value: boolean }
 }) {
   const {
     repoRoot,
@@ -52,6 +53,7 @@ export function useGitAutoFetch(opts: {
       gitReady.value &&
       hasRemotes.value &&
       !repoBusy.value &&
+      (opts.isVisible?.value ?? true) &&
       document.visibilityState !== 'hidden'
     )
   }

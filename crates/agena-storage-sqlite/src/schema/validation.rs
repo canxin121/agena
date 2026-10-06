@@ -1,11 +1,11 @@
-//! Validate a non-empty Agena database against the one current schema.
-//! No migrations or repairs are performed.
+//! Validate the durable schema and present performance indexes exactly.
+//! Return missing derived indexes; never repair tables or rewrite records.
 
 use std::collections::BTreeMap;
 
 use sea_orm::{ConnectionTrait, DbErr, Statement};
 
-use super::{INDEXES, TABLES};
+use super::{INDEXES, PERFORMANCE_INDEXES, TABLES};
 use crate::schema_invariants::INVARIANT_TRIGGERS;
 
 pub(crate) struct Declaration<'a> {
@@ -69,11 +69,25 @@ fn incompatible(detail: impl std::fmt::Display) -> DbErr {
     ))
 }
 
-pub(crate) async fn validate_existing_schema<C>(db: &C) -> Result<(), DbErr>
+pub(crate) async fn validate_existing_schema<C>(db: &C) -> Result<Vec<&'static str>, DbErr>
 where
     C: ConnectionTrait,
 {
-    let actual = schema_objects(db).await?;
+    let mut actual = schema_objects(db).await?;
+    let mut missing_indexes = Vec::new();
+    for sql in PERFORMANCE_INDEXES {
+        let index = declaration(sql)?;
+        match actual.remove(&(index.kind.to_owned(), index.name.to_owned())) {
+            None => missing_indexes.push(*sql),
+            Some(found) if found != index.stored_sql => {
+                return Err(incompatible(format!(
+                    "index {} has a different definition",
+                    index.name
+                )));
+            }
+            Some(_) => {}
+        }
+    }
     let mut expected = BTreeMap::new();
     for sql in TABLES.iter().chain(INDEXES).chain(INVARIANT_TRIGGERS) {
         let declaration = declaration(sql)?;
@@ -83,7 +97,7 @@ where
         );
     }
     if actual == expected {
-        return Ok(());
+        return Ok(missing_indexes);
     }
     for (identity, sql) in &expected {
         match actual.get(identity) {

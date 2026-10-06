@@ -277,12 +277,13 @@ export function useChatModelSelection(opts: {
     const sessionId = includeSessionLayers ? activeSessionId() : ''
     const candidates = includeSessionLayers
       ? [
-          readSessionManualModelPair(sessionManualModelBySession.value, sessionId),
-          sessionRunSelection(),
-          deriveSessionSelectionFromMessages(chat.messages),
+          () => readSessionManualModelPair(sessionManualModelBySession.value, sessionId),
+          () => sessionRunSelection(),
+          () => deriveSessionSelectionFromMessages(chat.messages),
         ]
       : []
-    for (const candidate of candidates) {
+    for (const resolve of candidates) {
+      const candidate = resolve()
       if (candidate.provider && candidate.model) {
         setModelSelection(candidate, 'session')
         return

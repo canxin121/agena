@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import EditorFindBar from '@/components/editor/EditorFindBar.vue'
 import { useMonacoFindSession } from '@/components/editor/useMonacoFindSession'
 import { ensureMonacoReady } from '@/lib/monacoSetup'
 import { VueMonacoEditor } from '@/lib/monaco-editor'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import type * as Monaco from 'monaco-editor'
 
 const props = defineProps<{
@@ -37,6 +38,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const visible = usePaneVisibility()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: string): void
@@ -75,6 +77,7 @@ let lineMarkerDecorationCollection: Monaco.editor.IEditorDecorationsCollection |
 let diffDecorationCollection: Monaco.editor.IEditorDecorationsCollection | null = null
 let diffZoneIds: string[] = []
 let codeLensKey: string | null = null
+const codeLensOwnerId = useId()
 let lastRevealRequestKey = ''
 
 const findSession = useMonacoFindSession(() => editorRef.value, {
@@ -94,6 +97,7 @@ type CodeLensRegistryState = {
   provider: Monaco.languages.CodeLensProvider | null
   emitter: Monaco.Emitter<Monaco.languages.CodeLensProvider> | null
   byModel: Map<string, CodeLensEntry[]>
+  ownersByModel: Map<string, Map<string, CodeLensEntry[]>>
   actionsByKey: Map<string, () => void>
   actionKeysByModel: Map<string, Set<string>>
   commandRegistered: boolean
@@ -115,6 +119,7 @@ function getCodeLensRegistry(): CodeLensRegistryState {
       provider: null,
       emitter: null,
       byModel: new Map<string, CodeLensEntry[]>(),
+      ownersByModel: new Map(),
       actionsByKey: new Map<string, () => void>(),
       actionKeysByModel: new Map<string, Set<string>>(),
       commandRegistered: false,
@@ -175,17 +180,25 @@ function clearModelCodeLenses(modelKey: string) {
   const key = String(modelKey || '').trim()
   if (!key) return
   const registry = getCodeLensRegistry()
-  registry.byModel.delete(key)
+  const owners = registry.ownersByModel.get(key)
+  const owned = owners?.get(codeLensOwnerId)
+  if (!owned) return
+  owners!.delete(codeLensOwnerId)
   const keys = registry.actionKeysByModel.get(key)
-  if (keys) {
-    for (const actionKey of keys) {
-      registry.actionsByKey.delete(actionKey)
-    }
+  for (const entry of owned) {
+    registry.actionsByKey.delete(entry.actionKey)
+    keys?.delete(entry.actionKey)
   }
-  registry.actionKeysByModel.delete(key)
+  if (!keys?.size) registry.actionKeysByModel.delete(key)
+  if (owners!.size) registry.byModel.set(key, [...owners!.values()].at(-1)!)
+  else {
+    registry.byModel.delete(key)
+    registry.ownersByModel.delete(key)
+  }
 }
 
 function updateCodeLens() {
+  if (disposed || !visible.value) return
   const editor = editorRef.value
   const monaco = monacoRef.value
   if (!editor || !monaco) return
@@ -212,7 +225,7 @@ function updateCodeLens() {
 
   clearModelCodeLenses(key)
 
-  const actionKeys = new Set<string>()
+  const actionKeys = registry.actionKeysByModel.get(key) ?? new Set<string>()
   const entries: CodeLensEntry[] = actions.map((action) => {
     const actionKey = `${key}::${++registry.counter}`
     actionKeys.add(actionKey)
@@ -221,6 +234,9 @@ function updateCodeLens() {
   })
 
   registry.byModel.set(key, entries)
+  const owners = registry.ownersByModel.get(key) ?? new Map<string, CodeLensEntry[]>()
+  owners.set(codeLensOwnerId, entries)
+  registry.ownersByModel.set(key, owners)
   registry.actionKeysByModel.set(key, actionKeys)
   if (registry.provider) registry.emitter?.fire(registry.provider)
 }
@@ -241,6 +257,7 @@ function normalizeInlineClassName(value?: string): string {
 }
 
 function updateInlineDecorations() {
+  if (disposed || !visible.value) return
   const editor = editorRef.value
   const monaco = monacoRef.value
   if (!editor || !monaco) return
@@ -299,6 +316,7 @@ function positiveInt(raw: unknown): number | null {
 }
 
 function revealRequestedPosition() {
+  if (disposed || !visible.value) return
   const editor = editorRef.value
   const monaco = monacoRef.value
   if (!editor || !monaco) return
@@ -333,6 +351,7 @@ function revealRequestedPosition() {
 }
 
 function updateGitLineDecorations() {
+  if (disposed || !visible.value) return
   const editor = editorRef.value
   const monaco = monacoRef.value
   if (!editor || !monaco) return
@@ -371,6 +390,7 @@ function updateGitLineDecorations() {
 }
 
 function updateLineMarkers() {
+  if (disposed || !visible.value) return
   const editor = editorRef.value
   const monaco = monacoRef.value
   if (!editor || !monaco) return
@@ -422,6 +442,7 @@ function updateLineMarkers() {
 }
 
 function updateDiffZones() {
+  if (disposed || !visible.value) return
   const editor = editorRef.value
   const monaco = monacoRef.value
   if (!editor || !monaco) return
@@ -455,6 +476,7 @@ function updateDiffZones() {
 }
 
 function updateDiffDecorations() {
+  if (disposed || !visible.value) return
   const editor = editorRef.value
   const monaco = monacoRef.value
   if (!editor || !monaco) return
@@ -515,9 +537,10 @@ const value = computed({
 
 const language = computed(() => languageByPath(props.path))
 
+const unnamedModelPath = `inmemory://model/${useId()}`
 const modelPath = computed(() => {
   const raw = (props.path || '').trim()
-  return raw ? raw : 'inmemory://model/1'
+  return raw ? raw : unnamedModelPath
 })
 
 const resolvedFontFamily = computed(() => (props.useFilesTheme ? 'var(--font-mono)' : 'var(--mono-font)'))
@@ -565,13 +588,14 @@ function handleMount(
   contentListener = editorInstance.onDidChangeModelContent((event: Monaco.editor.IModelContentChangedEvent) => {
     if (event.isFlush) return
     emit('user-edit')
-    if (isFindVisible.value) {
+    if (visible.value && isFindVisible.value) {
       findSession.refresh()
     }
   })
 
   scrollListener?.dispose()
   const emitScroll = () => {
+    if (!visible.value) return
     const visibleRanges = editorInstance.getVisibleRanges()
     let visibleStartLine = 1
     let visibleEndLine = 1
@@ -727,16 +751,52 @@ defineExpose({
   insertText,
 })
 
-onMounted(async () => {
-  await ensureMonacoReady()
-  if (disposed) return
-  updateThemeFromDom()
-  if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
-    themeObserver = new MutationObserver(() => updateThemeFromDom())
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
-  }
-  ready.value = true
-})
+let initialization: Promise<void> | undefined
+function initializeCodeEditor() {
+  if (disposed || !visible.value || ready.value) return
+  if (!initialization)
+    initialization = (async () => {
+      await ensureMonacoReady()
+      if (disposed || !visible.value) return
+      updateThemeFromDom()
+      if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
+        themeObserver = new MutationObserver(() => updateThemeFromDom())
+        themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+      }
+      ready.value = true
+    })().finally(() => {
+      initialization = undefined
+    })
+  return initialization
+}
+onMounted(initializeCodeEditor)
+watch(
+  visible,
+  (shown) => {
+    if (!shown) {
+      if (codeLensKey) {
+        clearModelCodeLenses(codeLensKey)
+        const registry = getCodeLensRegistry()
+        if (registry.provider) registry.emitter?.fire(registry.provider)
+      }
+      return
+    }
+    if (!ready.value) {
+      void initializeCodeEditor()
+      return
+    }
+    updateThemeFromDom()
+    updateInlineDecorations()
+    updateGitLineDecorations()
+    updateLineMarkers()
+    updateDiffZones()
+    updateDiffDecorations()
+    updateCodeLens()
+    revealRequestedPosition()
+    if (isFindVisible.value) findSession.refresh()
+  },
+  { flush: 'post' },
+)
 
 onBeforeUnmount(() => {
   disposed = true
@@ -754,12 +814,13 @@ onBeforeUnmount(() => {
   findSession.dispose()
 })
 
-watch(isFindVisible, (visible) => {
-  if (!visible) {
+watch(isFindVisible, (shown) => {
+  if (!shown) {
     findSession.clear()
     return
   }
 
+  if (!visible.value) return
   findSession.refresh({ revealCurrent: true })
   if (isReplaceVisible.value && canReplace.value) {
     findBarRef.value?.focusReplace(true)
@@ -769,26 +830,9 @@ watch(isFindVisible, (visible) => {
 })
 
 watch([findQuery, findCaseSensitive, findRegex, findWholeWord], () => {
-  if (!isFindVisible.value) return
+  if (!visible.value || !isFindVisible.value) return
   findSession.refresh({ revealCurrent: true })
 })
-
-watch(
-  monacoTheme,
-  (theme) => {
-    if (!monacoRef.value) return
-    monacoRef.value.editor.setTheme(theme)
-  },
-  { immediate: true },
-)
-
-watch(
-  () => props.wrap,
-  (wrap) => {
-    if (!editorRef.value) return
-    editorRef.value.updateOptions({ wordWrap: wrap ? 'on' : 'off' })
-  },
-)
 
 watch(
   () => props.readOnly,
@@ -796,8 +840,6 @@ watch(
     if (readOnly) {
       isReplaceVisible.value = false
     }
-    if (!editorRef.value) return
-    editorRef.value.updateOptions({ readOnly: Boolean(readOnly) })
   },
 )
 
@@ -870,7 +912,7 @@ watch(modelPath, () => {
   updateDiffDecorations()
   updateCodeLens()
   revealRequestedPosition()
-  if (isFindVisible.value) {
+  if (visible.value && isFindVisible.value) {
     findSession.refresh({ revealCurrent: true })
   }
 })

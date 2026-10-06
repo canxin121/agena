@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onClickOutside } from '@vueuse/core'
 import { RiListUnordered } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import { renderMermaid } from '@/lib/mermaidRenderer'
-import { renderMarkdown, type MarkdownUiLabels } from '@/lib/markdown'
+import { renderMarkdown, renderMarkdownPlainText, type MarkdownUiLabels } from '@/lib/markdown'
+import { useNearViewport } from '@/composables/useNearViewport'
+import { renderMarkdownAsync } from '@/lib/markdownAsync'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { resolveWorkspaceFileLink, resolveWorkspaceMediaUrl } from '@/lib/workspaceLinks'
@@ -34,7 +37,12 @@ const props = withDefaults(
 )
 
 const html = ref('')
+const pane = useWorkspacePaneContext()
+let parseController: AbortController | undefined
+let renderVersion = 0
 const rootEl = ref<HTMLElement | null>(null)
+const nearViewport = useNearViewport(rootEl)
+const deferredHtml = computed(() => renderMarkdownPlainText(props.content))
 let timer: number | null = null
 let copiedTimer: number | null = null
 let mermaidTimer: number | null = null
@@ -281,17 +289,36 @@ function clearTimer() {
   }
 }
 
-function updateNow() {
+async function updateNow() {
+  if (!nearViewport.value || (pane && !pane.isVisible.value)) return
+  parseController?.abort()
+  const request = new AbortController()
+  parseController = request
+  const version = ++renderVersion
+  const labels = buildMarkdownLabels()
+  let rendered: string
+  try {
+    rendered =
+      props.stream || props.content.length > 8192
+        ? await renderMarkdownAsync(props.content, labels, request.signal)
+        : renderMarkdown(props.content, labels)
+  } catch (error) {
+    if (request.signal.aborted) return
+    console.error('Markdown rendering failed', error)
+    rendered = renderMarkdownPlainText(props.content)
+  }
+  if (version !== renderVersion || request.signal.aborted) return
   resetMermaid()
   if (imageObserver) {
     imageObserver.disconnect()
     imageObserver = null
   }
-  html.value = renderMarkdown(props.content, buildMarkdownLabels())
+  html.value = rendered
   // Scan TOC and rewrite local media links after rendering.
   nextTick(() => {
     scanToc()
     hydrateWorkspaceMedia()
+    scheduleHydrateMermaid()
   })
 }
 
@@ -730,8 +757,24 @@ onMounted(() => {
 })
 
 watch(
-  () => [props.mode, props.content, props.sourcePath, props.stream, props.streamDebounceMs] as const,
+  () =>
+    [
+      props.mode,
+      props.content,
+      props.sourcePath,
+      props.stream,
+      props.streamDebounceMs,
+      nearViewport.value,
+      !pane || pane.isVisible.value,
+    ] as const,
   () => {
+    if (!nearViewport.value || (pane && !pane.isVisible.value)) {
+      clearTimer()
+      parseController?.abort()
+      resetMermaid()
+      imageObserver?.disconnect()
+      return
+    }
     if (props.mode !== 'markdown') {
       resetMermaid()
       clearTimer()
@@ -751,7 +794,11 @@ watch(
     // A continuous stream must repaint at a bounded rate instead of
     // postponing every render until the stream becomes quiet.
     if (timer !== null) return
-    const delay = Math.max(0, Math.floor(props.streamDebounceMs || 0))
+    const delay = Math.max(
+      0,
+      Math.floor(props.streamDebounceMs || 0),
+      Math.min(400, Math.floor(props.content.length / 200)),
+    )
     timer = window.setTimeout(() => {
       timer = null
       updateNow()
@@ -776,6 +823,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  parseController?.abort()
   resetMermaid()
   clearTimer()
   if (copiedTimer) {
@@ -838,6 +886,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div ref="rootEl" class="prose prose-sm max-w-none break-words" v-html="html" />
+    <div ref="rootEl" class="prose prose-sm max-w-none break-words" v-html="html || deferredHtml" />
   </div>
 </template>

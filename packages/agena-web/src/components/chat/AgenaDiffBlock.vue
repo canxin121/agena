@@ -47,7 +47,7 @@ const visibleFiles = computed(() => {
   return files.value.map((file) => {
     const rows = file.rows.slice(0, Math.max(0, remaining))
     remaining -= rows.length
-    return { ...file, rows }
+    return { ...file, rows: rows.map((row) => ({ ...row, html: highlighted(row.text, file.path) || ' ' })) }
   })
 })
 </script>
@@ -102,7 +102,7 @@ const visibleFiles = computed(() => {
             <code
               v-if="row.kind !== 'hunk' && row.kind !== 'note'"
               class="block whitespace-pre pr-3"
-              v-html="highlighted(row.text, file.path) || ' '"
+              v-html="row.html"
             />
             <span v-else class="whitespace-pre pr-3">{{ row.text }}</span>
           </div>

@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue'
 
 import EditorFindBar from '@/components/editor/EditorFindBar.vue'
 import { useMonacoFindSession } from '@/components/editor/useMonacoFindSession'
+import { createDisplayLineResolver } from '@/components/editor/displayLineResolver'
 import { ensureMonacoReady } from '@/lib/monacoSetup'
+import { acquireModel } from '@/lib/monaco-editor/utils'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import type * as Monaco from 'monaco-editor'
 
 type HunkActionKind = 'stage' | 'unstage' | 'discard'
@@ -58,6 +61,8 @@ const emit = defineEmits<{
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
+const visible = usePaneVisibility()
+const unnamedModelId = useId()
 const ready = ref(false)
 const isDark = ref(false)
 const isFindVisible = ref(false)
@@ -74,6 +79,8 @@ const monacoRef = shallowRef<typeof import('monaco-editor') | null>(null)
 const diffEditorRef = shallowRef<Monaco.editor.IStandaloneDiffEditor | null>(null)
 const originalModelRef = shallowRef<Monaco.editor.ITextModel | null>(null)
 const modifiedModelRef = shallowRef<Monaco.editor.ITextModel | null>(null)
+let originalLease: ReturnType<typeof acquireModel> | undefined
+let modifiedLease: ReturnType<typeof acquireModel> | undefined
 
 let themeObserver: MutationObserver | null = null
 let diffUpdateListener: Monaco.IDisposable | null = null
@@ -87,11 +94,22 @@ let modifiedModelChangeListener: Monaco.IDisposable | null = null
 let hunkZoneIds: string[] = []
 let pendingHunkZoneRefresh = false
 let pendingFirstChangeReveal = true
-let revealRetryFrame: number | null = null
 let lastRevealModelKey = ''
 let lastRevealContentKey = ''
 let lastLineNumberOptionsKey = ''
+let lastDiffOptionsKey = ''
+let lastHunkZones: { model: Monaco.editor.ITextModel; version: number; key: string } | undefined
+let hunkButtons: Array<{
+  button: HTMLButtonElement
+  id: string
+  kind: HunkActionKind
+  label: string
+  disabled: boolean
+}> = []
 let disposed = false
+const hunkZoneOptionsKey = computed(() =>
+  JSON.stringify([props.hunkActionsEnabled, props.hunkActions, props.modifiedStartLine, props.modifiedLineNumbers]),
+)
 
 const originalFindSession = useMonacoFindSession(() => diffEditorRef.value?.getOriginalEditor() ?? null, {
   query: findQuery,
@@ -142,7 +160,7 @@ const language = computed(() => languageByPath(props.languagePath || props.path)
 
 const modelPath = computed(() => {
   const raw = String(props.modelId || props.path || '').trim()
-  return raw || 'timeline/current'
+  return raw || `timeline/current/${unnamedModelId}`
 })
 
 const originalModelPath = computed(() => {
@@ -161,9 +179,12 @@ function updateThemeFromDom() {
 }
 
 function updateDiffEditorOptions() {
-  if (disposed) return
+  if (disposed || !visible.value) return
   const editor = diffEditorRef.value
   if (!editor) return
+  const key = `${Boolean(props.wrap)}:${Boolean(props.readOnly)}`
+  if (key === lastDiffOptionsKey) return
+  lastDiffOptionsKey = key
   const wrapMode = props.wrap ? 'on' : 'off'
   editor.updateOptions({
     readOnly: Boolean(props.readOnly),
@@ -193,13 +214,13 @@ function hunkRangeLabel(hunk: HunkAction): string {
   return `-${oldStart},${oldCount} +${newStart},${newCount}`
 }
 
-function resolveHunkAnchorLine(hunk: HunkAction, lineCount: number): number {
+function resolveHunkAnchorLine(hunk: HunkAction, resolveLine: (line: number) => number): number {
   const directAnchor = Number(hunk.anchorLine)
   if (Number.isFinite(directAnchor) && directAnchor > 0) {
-    return resolveModifiedModelLineFromDisplayLine(Math.floor(directAnchor), lineCount)
+    return resolveLine(Math.floor(directAnchor))
   }
   const preferred = hunk.newCount > 0 ? hunk.newStart : hunk.newStart || hunk.oldStart || 1
-  return resolveModifiedModelLineFromDisplayLine(Math.floor(preferred || 1), lineCount)
+  return resolveLine(Math.floor(preferred || 1))
 }
 
 function isHunkActionActive(id: string, kind: HunkActionKind): boolean {
@@ -266,6 +287,7 @@ function buildHunkActionRow(hunk: HunkAction): HTMLDivElement {
     button.textContent = active ? `${label}...` : label
 
     button.disabled = Boolean(props.hunkActionsBusy) || Boolean(hunk.disabled)
+    hunkButtons.push({ button, id, kind, label, disabled: Boolean(hunk.disabled) })
 
     button.addEventListener('mousedown', (event) => {
       event.stopPropagation()
@@ -288,6 +310,7 @@ function buildHunkActionRow(hunk: HunkAction): HTMLDivElement {
 }
 
 function clearHunkActionZones() {
+  hunkButtons = []
   const diffEditor = diffEditorRef.value
   if (!diffEditor || !hunkZoneIds.length) {
     hunkZoneIds = []
@@ -303,9 +326,17 @@ function clearHunkActionZones() {
     }
   })
 }
+function updateHunkActionButtonStates() {
+  for (const { button, id, kind, label, disabled } of hunkButtons) {
+    const active = isHunkActionActive(id, kind)
+    button.classList.toggle('is-active', active)
+    button.textContent = active ? `${label}...` : label
+    button.disabled = Boolean(props.hunkActionsBusy) || disabled
+  }
+}
 
 function refreshHunkActionZones() {
-  if (disposed) return
+  if (disposed || !visible.value) return
   const diffEditor = diffEditorRef.value
   if (!diffEditor) return
 
@@ -315,27 +346,37 @@ function refreshHunkActionZones() {
   const enabled = props.hunkActionsEnabled !== false
 
   if (!model || !enabled || !actions.length) {
+    lastHunkZones = undefined
     clearHunkActionZones()
     return
   }
+  const key = hunkZoneOptionsKey.value
+  const version = model.getVersionId()
+  if (lastHunkZones?.model === model && lastHunkZones.version === version && lastHunkZones.key === key) {
+    updateHunkActionButtonStates()
+    return
+  }
+  lastHunkZones = { model, version, key }
 
   clearHunkActionZones()
 
   const lineCount = Math.max(1, model.getLineCount())
+  const resolveLine = createDisplayLineResolver(lineCount, getModifiedLineNumberMap(lineCount), getModifiedStartLine())
   const sorted = [...actions]
     .map((item) => ({
       ...item,
       id: String(item?.id || '').trim(),
+      anchor: resolveHunkAnchorLine(item, resolveLine),
     }))
     .filter((item) => Boolean(item.id))
-    .sort((a, b) => resolveHunkAnchorLine(a, lineCount) - resolveHunkAnchorLine(b, lineCount))
+    .sort((a, b) => a.anchor - b.anchor)
 
   if (!sorted.length) return
 
   const nextZoneIds: string[] = []
   modifiedEditor.changeViewZones((accessor) => {
     for (const hunk of sorted) {
-      const anchorLine = resolveHunkAnchorLine(hunk, lineCount)
+      const anchorLine = hunk.anchor
       const domNode = buildHunkActionRow(hunk)
       const zoneId = accessor.addZone({
         afterLineNumber: clamp(anchorLine - 1, 0, lineCount),
@@ -542,7 +583,7 @@ function applyEditorLineNumberOptions(
 }
 
 function updateLineNumberOptions() {
-  if (disposed) return
+  if (disposed || !visible.value) return
   const diffEditor = diffEditorRef.value
   if (!diffEditor) return
 
@@ -562,7 +603,7 @@ function updateLineNumberOptions() {
   const modifiedDigits = computeLineNumberDigits(modifiedLineCount, modifiedLineMap, modifiedStartLine)
   const inlineGapChars = inlineMode ? computeInlineGapChars(originalDigits, modifiedDigits) : 0
 
-  const lineNumberKey = `${inlineMode ? 'inline' : 'side'}:${inlineGapChars}:${originalDigits}:${modifiedDigits}:${lineMapSignature(originalLineMap)}:${lineMapSignature(modifiedLineMap)}:${originalStartLine ?? 'n'}:${modifiedStartLine ?? 'n'}`
+  const lineNumberKey = `${originalLineCount}:${modifiedLineCount}:${inlineMode ? 'inline' : 'side'}:${inlineGapChars}:${originalDigits}:${modifiedDigits}:${lineMapSignature(originalLineMap)}:${lineMapSignature(modifiedLineMap)}:${originalStartLine ?? 'n'}:${modifiedStartLine ?? 'n'}`
   if (lineNumberKey === lastLineNumberOptionsKey) return
   lastLineNumberOptionsKey = lineNumberKey
 
@@ -582,7 +623,7 @@ function revealModifiedLineAtTop(modifiedEditor: Monaco.editor.ICodeEditor, targ
 }
 
 function maybeRevealFirstDiffChange() {
-  if (disposed) return
+  if (disposed || !visible.value) return
   if (!pendingFirstChangeReveal) return
 
   const diffEditor = diffEditorRef.value
@@ -597,31 +638,19 @@ function maybeRevealFirstDiffChange() {
 
   const layout = modifiedEditor.getLayoutInfo()
   if (layout.width <= 0 || layout.height <= 0) {
-    if (revealRetryFrame === null && typeof requestAnimationFrame === 'function') {
-      revealRetryFrame = requestAnimationFrame(() => {
-        revealRetryFrame = null
-        maybeRevealFirstDiffChange()
-      })
-    }
+    // onDidLayoutChange retries when the container actually gains a size.
+    // A hidden pane must not spin a requestAnimationFrame loop forever.
     return
   }
 
   if (explicitTopLine !== null) {
     pendingFirstChangeReveal = false
-    if (revealRetryFrame !== null && typeof cancelAnimationFrame === 'function') {
-      cancelAnimationFrame(revealRetryFrame)
-    }
-    revealRetryFrame = null
     revealModifiedLineAtTop(modifiedEditor, explicitTopLine)
     return
   }
 
   if (props.autoRevealFirstChange === false) {
     pendingFirstChangeReveal = false
-    if (revealRetryFrame !== null && typeof cancelAnimationFrame === 'function') {
-      cancelAnimationFrame(revealRetryFrame)
-    }
-    revealRetryFrame = null
     return
   }
 
@@ -632,20 +661,12 @@ function maybeRevealFirstDiffChange() {
 
   if (!lineChanges.length) {
     pendingFirstChangeReveal = false
-    if (revealRetryFrame !== null && typeof cancelAnimationFrame === 'function') {
-      cancelAnimationFrame(revealRetryFrame)
-    }
-    revealRetryFrame = null
     return
   }
 
   const first = lineChanges[0]
 
   pendingFirstChangeReveal = false
-  if (revealRetryFrame !== null && typeof cancelAnimationFrame === 'function') {
-    cancelAnimationFrame(revealRetryFrame)
-  }
-  revealRetryFrame = null
 
   const candidates = [
     first.modifiedStartLineNumber,
@@ -693,7 +714,7 @@ function requestFirstChangeReveal() {
 }
 
 function syncFindSessions() {
-  if (!isFindVisible.value) return
+  if (!visible.value || !isFindVisible.value) return
   originalFindSession.refresh()
   modifiedFindSession.refresh()
 }
@@ -812,7 +833,7 @@ function bindEditorFindEvents(
 }
 
 function syncModels() {
-  if (disposed) return
+  if (disposed || !visible.value) return
   const monaco = monacoRef.value
   const editor = diffEditorRef.value
   if (!monaco || !editor) return
@@ -828,10 +849,11 @@ function syncModels() {
   const previousModified = modifiedModelRef.value
 
   let originalModel = previousOriginal
+  let oldOriginalLease: typeof originalLease
   if (!originalModel || originalModel.uri.toString() !== originalUri.toString()) {
-    originalModel =
-      (monaco.editor.getModel(originalUri) as Monaco.editor.ITextModel | null) ??
-      monaco.editor.createModel(nextOriginalValue, nextLanguage, originalUri)
+    oldOriginalLease = originalLease
+    originalLease = acquireModel(monaco, nextOriginalValue, nextLanguage, originalUriPath.value)
+    originalModel = originalLease.model
   }
   if (originalModel.getLanguageId() !== nextLanguage) {
     monaco.editor.setModelLanguage(originalModel, nextLanguage)
@@ -841,10 +863,11 @@ function syncModels() {
   }
 
   let modifiedModel = previousModified
+  let oldModifiedLease: typeof modifiedLease
   if (!modifiedModel || modifiedModel.uri.toString() !== modifiedUri.toString()) {
-    modifiedModel =
-      (monaco.editor.getModel(modifiedUri) as Monaco.editor.ITextModel | null) ??
-      monaco.editor.createModel(nextModifiedValue, nextLanguage, modifiedUri)
+    oldModifiedLease = modifiedLease
+    modifiedLease = acquireModel(monaco, nextModifiedValue, nextLanguage, modifiedUriPath.value)
+    modifiedModel = modifiedLease.model
   }
   if (modifiedModel.getLanguageId() !== nextLanguage) {
     monaco.editor.setModelLanguage(modifiedModel, nextLanguage)
@@ -864,23 +887,18 @@ function syncModels() {
   originalModelRef.value = originalModel
   modifiedModelRef.value = modifiedModel
 
-  if (previousOriginal && previousOriginal !== originalModel) {
-    previousOriginal.dispose()
-  }
-  if (previousModified && previousModified !== modifiedModel) {
-    previousModified.dispose()
-  }
+  oldOriginalLease?.release()
+  oldModifiedLease?.release()
 
   updateLineNumberOptions()
   scheduleHunkActionZoneRefresh()
 }
 
-onMounted(async () => {
-  disposed = false
+async function mountDiffEditor() {
   await ensureMonacoReady()
-  if (disposed) return
+  if (disposed || !visible.value) return
   const monaco = await import('monaco-editor')
-  if (disposed) return
+  if (disposed || !visible.value) return
   monacoRef.value = monaco
 
   updateThemeFromDom()
@@ -940,7 +958,18 @@ onMounted(async () => {
   scheduleHunkActionZoneRefresh()
   maybeRevealFirstDiffChange()
   ready.value = true
-})
+}
+
+let initialization: Promise<void> | undefined
+function initializeDiffEditor() {
+  if (disposed || !visible.value || diffEditorRef.value) return
+  if (!initialization)
+    initialization = mountDiffEditor().finally(() => {
+      initialization = undefined
+    })
+  return initialization
+}
+onMounted(initializeDiffEditor)
 
 onBeforeUnmount(() => {
   disposed = true
@@ -968,35 +997,45 @@ onBeforeUnmount(() => {
   modifiedModelChangeListener?.dispose()
   modifiedModelChangeListener = null
 
-  if (revealRetryFrame !== null && typeof cancelAnimationFrame === 'function') {
-    cancelAnimationFrame(revealRetryFrame)
-  }
-  revealRetryFrame = null
-
   clearHunkActionZones()
 
   diffEditorRef.value?.setModel(null)
   diffEditorRef.value?.dispose()
   diffEditorRef.value = null
 
-  const originalModel = originalModelRef.value
-  const modifiedModel = modifiedModelRef.value
   originalModelRef.value = null
   modifiedModelRef.value = null
-
-  queueMicrotask(() => {
-    originalModel?.dispose()
-    modifiedModel?.dispose()
-  })
+  originalLease?.release()
+  modifiedLease?.release()
+  originalLease = modifiedLease = undefined
 
   originalFindSession.dispose()
   modifiedFindSession.dispose()
 })
 
 watch(
+  visible,
+  (shown) => {
+    if (!shown) return
+    if (!diffEditorRef.value) {
+      void initializeDiffEditor()
+      return
+    }
+    syncModels()
+    updateDiffEditorOptions()
+    monacoRef.value?.editor.setTheme(monacoTheme.value)
+    diffEditorRef.value?.layout()
+    scheduleHunkActionZoneRefresh()
+    maybeRevealFirstDiffChange()
+    syncFindSessions()
+  },
+  { flush: 'post' },
+)
+
+watch(
   monacoTheme,
   (theme) => {
-    if (!monacoRef.value) return
+    if (!visible.value || !monacoRef.value) return
     monacoRef.value.editor.setTheme(theme)
   },
   { immediate: true },
@@ -1076,12 +1115,13 @@ watch(
   },
 )
 
-watch(isFindVisible, (visible) => {
-  if (!visible) {
+watch(isFindVisible, (shown) => {
+  if (!shown) {
     originalFindSession.clear()
     modifiedFindSession.clear()
     return
   }
+  if (!visible.value || !diffEditorRef.value) return
 
   originalFindSession.refresh({ revealCurrent: activeFindPane.value === 'original' })
   modifiedFindSession.refresh({ revealCurrent: activeFindPane.value === 'modified' })
@@ -1093,13 +1133,13 @@ watch(isFindVisible, (visible) => {
 })
 
 watch([findQuery, findCaseSensitive, findRegex, findWholeWord], () => {
-  if (!isFindVisible.value) return
+  if (!visible.value || !isFindVisible.value) return
   originalFindSession.refresh({ revealCurrent: activeFindPane.value === 'original' })
   modifiedFindSession.refresh({ revealCurrent: activeFindPane.value === 'modified' })
 })
 
 watch(activeFindPane, (next) => {
-  if (!isFindVisible.value) return
+  if (!visible.value || !isFindVisible.value) return
   if (next === 'original') {
     originalFindSession.refresh({ revealCurrent: true })
     return

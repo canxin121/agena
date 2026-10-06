@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import ModelCatalogPanel from '@/components/settings/ModelCatalogPanel.vue'
-import ProviderStudioPanel from '@/components/settings/ProviderStudioPanel.vue'
-import ProvidersPanel from '@/components/settings/ProvidersPanel.vue'
+import { computed, defineAsyncComponent } from 'vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
-const pages = buildSettingsSubpages('models-providers')
+const ModelCatalogPanel = defineAsyncComponent(() => import('@/components/settings/ModelCatalogPanel.vue'))
+const ProviderStudioPanel = defineAsyncComponent(() => import('@/components/settings/ProviderStudioPanel.vue'))
+const ProvidersPanel = defineAsyncComponent(() => import('@/components/settings/ProvidersPanel.vue'))
+
+const pages = computed(() => buildSettingsSubpages('models-providers'))
 </script>
 
 <template>
@@ -13,9 +15,7 @@ const pages = buildSettingsSubpages('models-providers')
     section="models-providers"
     :title="$st('Models & Providers')"
     :description="
-      $st(
-        'Manage provider credentials, adapters, and model routes, then inspect the complete model catalog.',
-      )
+      $st('Manage provider credentials, adapters, and model routes, then inspect the complete model catalog.')
     "
     :pages="pages"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['models-providers']"

@@ -684,8 +684,11 @@ its audit record in the same transaction. Do not append that record separately.
 
 The scheduler database has no schema-version or migration layer. An empty
 database is created from the current declarations; a non-empty database must
-match the current tables and indexes exactly or startup fails and the database
-must be recreated. The `delivery_key` column identifies one worker attempt; the
+match the current tables and required indexes exactly or startup fails. The
+non-unique indexes in `PERFORMANCE_INDEXES` are derived: a validated existing
+database acquires any missing ones in one transaction. Present derived indexes
+must still match their declarations. No job rows or columns are rewritten.
+The `delivery_key` column identifies one worker attempt; the
 stable business idempotency key remains in `pending_delivery`. `claimed_at_ms` holds the last lease renewal, while the
 attempt's original start time remains in the JSON. Workers renew every **30
 seconds** and abandoned claims become eligible after **90 seconds**, followed
@@ -719,9 +722,12 @@ cargo test --locked -p agena-storage-sqlite
 The main store has no schema-version or migration layer. `initialize_schema`
 creates an empty database from the current table, index, seed, and invariant-
 trigger declarations. Reopening a non-empty database compares every Agena
-table, index, and trigger with those declarations. Missing, extra, or changed
-objects are rejected without repair; startup tells the operator to recreate
-the database. Initialization never upgrades columns, rewrites rows, refreshes
+table, required index, and trigger with those declarations. Missing, extra, or
+changed durable objects are rejected without repair; startup tells the operator
+to recreate the database. The non-unique `PERFORMANCE_INDEXES` may be absent;
+only after durable validation passes are missing derived indexes added in one
+transaction. Present derived indexes must match exactly, and incompatible
+databases acquire no indexes. Initialization never upgrades columns, rewrites rows, refreshes
 triggers, or interprets a database as an older generation.
 
 Creation failures require string `id`, `code`, and `user.fallback` fields.

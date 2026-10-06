@@ -84,6 +84,7 @@ pub(super) fn start_prepared(
     command: String,
     workdir: PathBuf,
     env: HashMap<String, String>,
+    launch: Option<&agena_tool::shell::ShellLaunchSpec>,
     process_id: Option<String>,
     owner: TerminalOwner,
     cancel: CancellationToken,
@@ -101,7 +102,10 @@ pub(super) fn start_prepared(
     env.remove("LINES");
     let argv = crate::shell_sandbox::protect(
         executor,
-        agena_tool::shell::shell_command_for_platform(&command),
+        match launch {
+            Some(spec) => spec.argv(command.as_str()),
+            None => agena_tool::shell::shell_command_for_platform(&command),
+        },
         input,
         &mut env,
     )?;
@@ -123,7 +127,13 @@ pub(super) fn start_prepared(
             cancel,
         )
         .map_err(error)?;
-    Ok(render("run", read))
+    let mut execution = render("run", read);
+    if let Some(spec) = launch {
+        for (key, value) in spec.metadata() {
+            execution.view.metadata.insert(key, value);
+        }
+    }
+    Ok(execution)
 }
 
 pub(super) fn execute(

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, ref, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiArrowDownSLine,
@@ -16,9 +16,6 @@ import {
   RiUserLine,
 } from '@remixicon/vue'
 
-import MonacoCodeEditor from '@/components/MonacoCodeEditor.vue'
-import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
-import MonacoDiffEditor from '@/components/MonacoDiffEditor.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
@@ -35,6 +32,10 @@ import { isImagePath } from '../fileKinds'
 import { isMermaidPath } from '../previewKinds'
 import type { FileNode, MarkdownViewMode, SelectionRange, ViewerMode } from '../types'
 import type { GitBlameLine, GitDiffMeta, GitLogCommit } from '@/types/git'
+
+const MonacoCodeEditor = defineAsyncComponent(() => import('@/components/MonacoCodeEditor.vue'))
+const MarkdownRenderer = defineAsyncComponent(() => import('@/components/markdown/MarkdownRenderer.vue'))
+const MonacoDiffEditor = defineAsyncComponent(() => import('@/components/MonacoDiffEditor.vue'))
 
 type GitDiffMode = 'working' | 'staged'
 type GitPatchMode = 'stage' | 'unstage' | 'discard'
@@ -358,14 +359,17 @@ const timelineCommitByHash = computed(() => {
   return map
 })
 
+// Historical versions belong to this viewer. Sharing only by file path lets
+// two split panes overwrite each other's independently selected revisions.
+const timelineModelOwner = useId()
 const timelineLeftModelPath = computed(() => {
   const filePath = (props.timelinePath || props.selectedPath || '').trim() || 'timeline-file'
-  return `timeline-left:${filePath}`
+  return `timeline-left:${timelineModelOwner}:${filePath}`
 })
 
 const timelineRightModelPath = computed(() => {
   const filePath = (props.timelinePath || props.selectedPath || '').trim() || 'timeline-file'
-  return `timeline-right:${filePath}`
+  return `timeline-right:${timelineModelOwner}:${filePath}`
 })
 
 const timelineInitialTopLine = computed(() =>

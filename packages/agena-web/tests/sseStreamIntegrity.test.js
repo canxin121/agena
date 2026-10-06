@@ -5,7 +5,7 @@ import { connectSse } from '../src/lib/sse.ts'
 
 // Use actual Response/ReadableStream objects so decoding sees the same byte
 // boundaries as a network response. EOF flushes the queue before onError runs.
-async function consumeChunks(chunks) {
+async function consumeChunks(chunks, onEvent) {
   const originalFetch = globalThis.fetch
   const originalWindow = globalThis.window
   if (!globalThis.window) globalThis.window = globalThis
@@ -28,7 +28,10 @@ async function consumeChunks(chunks) {
   const client = connectSse({
     endpoint: '/fake',
     autoReconnect: false,
-    onEvent: (event) => events.push(event),
+    onEvent: (event) => {
+      events.push(event)
+      onEvent?.(event)
+    },
     onError: () => finish(),
   })
   try {
@@ -45,10 +48,78 @@ function notification(change) {
   return { kind: 'session_changed', data: { subscription: {}, change: { session_id: 1, ...change } } }
 }
 
-function consumeNotifications(notifications) {
+function consumeNotifications(notifications, onEvent) {
   const stream = notifications.map((value, index) => `id: ${index + 1}\ndata: ${JSON.stringify(value)}\n\n`).join('')
-  return consumeChunks([new TextEncoder().encode(stream)])
+  return consumeChunks([new TextEncoder().encode(stream)], onEvent)
 }
+
+test('SSE drains recovery bursts in order at EOF while allowing other timers to run', async () => {
+  let heartbeats = 0
+  const timer = setInterval(() => {
+    heartbeats++
+  }, 1)
+  try {
+    const payloads = Array.from({ length: 80 }, (_, seq) => ({ type: 'data', seq, data: String(seq) }))
+    const events = await consumeNotifications(payloads, () => {
+      const deadline = performance.now() + 0.4
+      while (performance.now() < deadline) {
+        /* model a costly event consumer */
+      }
+    })
+    assert.deepEqual(
+      events.map((event) => event.seq),
+      payloads.map((event) => event.seq),
+    )
+    assert.ok(heartbeats > 0, 'large bursts yield before all consumers finish')
+  } finally {
+    clearInterval(timer)
+  }
+})
+
+test('closing from an event consumer during the EOF drain suppresses remaining callbacks', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  if (!globalThis.window) globalThis.window = globalThis
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode('data: {"type":"data","seq":1}\n\ndata: {"type":"data","seq":2}\n\n'),
+          )
+          controller.close()
+        },
+      }),
+    )
+  const events = []
+  const errors = []
+  let delivered
+  const consumed = new Promise((resolve) => {
+    delivered = resolve
+  })
+  const client = connectSse({
+    endpoint: '/fake',
+    autoReconnect: false,
+    onEvent(event) {
+      events.push(event.seq)
+      client.close()
+      delivered()
+    },
+    onError(error) {
+      errors.push(error)
+    },
+  })
+  try {
+    await consumed
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(events, [1])
+    assert.deepEqual(errors, [])
+  } finally {
+    client.close()
+    globalThis.fetch = originalFetch
+    if (originalWindow === undefined) delete globalThis.window
+  }
+})
 
 test('SSE preserves multiline JSON, UTF-8, and cursors across split CRLF bytes', async () => {
   const stream =

@@ -920,14 +920,13 @@ pub(crate) async fn read_task_logs(
         // A provider keeps appending to one run. Re-read the cursor run as
         // well, so its log line can be replaced while it streams; an exclusive
         // cursor only ever exposed the first fragment of that reply.
-        .read_subtask_output(parent_session_id, task_id, after_cursor.saturating_sub(1), 200)
+        .read_subtask_output_bounded(parent_session_id, task_id, after_cursor.saturating_sub(1), 200)
         .await
     {
         Ok(output) => {
             let mut lines = Vec::new();
-            let mut last_seq = after_cursor;
+            let last_seq = output.next_cursor.max(after_cursor);
             for chunk in output.chunks {
-                last_seq = chunk.cursor;
                 let text = format!(
                     "{}: {}",
                     format!("{:?}", chunk.role).to_lowercase(),

@@ -1,7 +1,9 @@
 //! Cheap invalidation tokens, maintained at mutation time rather than by
 //! loading/serializing snapshots. Tokens are scoped to this server lifetime.
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,9 +16,72 @@ use agena_storage::store::PartState;
 use agena_storage::store::{GlobalSubscription, SessionChange};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use lru::LruCache;
 use serde::Serialize;
 
 use crate::{error::ServerError, state::AppState};
+
+const MAX_RESOURCE_REVISIONS: usize = 8192;
+
+/// These are comparison memos, not authoritative facts. Forget one old
+/// observation at capacity; never erase all hot observations together.
+struct RevisionMemo<K: Hash + Eq, V, const CAPACITY: usize>(LruCache<K, V>);
+
+impl<K: Hash + Eq, V, const CAPACITY: usize> Default for RevisionMemo<K, V, CAPACITY> {
+    fn default() -> Self {
+        Self(LruCache::new(NonZeroUsize::new(CAPACITY).unwrap()))
+    }
+}
+
+impl<K: Hash + Eq + Clone, V, const CAPACITY: usize> RevisionMemo<K, V, CAPACITY> {
+    fn get<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+    {
+        self.0.peek(key)
+    }
+    fn get_mut<Q: Hash + Eq + ?Sized>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+    {
+        self.0.get_mut(key)
+    }
+    fn contains_key<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+    {
+        self.0.contains(key)
+    }
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.0.put(key, value)
+    }
+    fn remove<Q: Hash + Eq + ?Sized>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+    {
+        self.0.pop(key)
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.0.iter()
+    }
+    fn keys(&self) -> impl Iterator<Item = &K> {
+        self.0.iter().map(|(key, _)| key)
+    }
+    fn retain(&mut self, mut keep: impl FnMut(&K, &V) -> bool) {
+        let removed: Vec<_> = self
+            .0
+            .iter()
+            .filter(|(key, value)| !keep(key, value))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in removed {
+            self.0.pop(&key);
+        }
+    }
+}
 
 fn tool_section_hashes(part: &agena_storage::store::Part) -> [u64; 3] {
     fn hash<T: Hash>(value: T) -> u64 {
@@ -36,20 +101,79 @@ fn tool_section_hashes(part: &agena_storage::store::Part) -> [u64; 3] {
     ]
 }
 
+struct PreparedPartChange {
+    source: u64,
+    fact: Option<u64>,
+    sections: Option<[u64; 3]>,
+}
+
+fn observe_clock_change(clock: &Arc<Mutex<Clock>>, change: &SessionChange) {
+    let prepared = if let SessionChange::PartAdded { part, .. }
+    | SessionChange::PartUpdated { part, .. } = change
+    {
+        let id = change.session_id();
+        let previous = {
+            let clock = clock.lock().unwrap_or_else(|error| error.into_inner());
+            if clock
+                .parts
+                .get(&(id, part.part_id))
+                .is_some_and(|(revision, updated, _, _)| {
+                    (*revision, *updated) >= (part.revision, part.updated_at_ms)
+                })
+            {
+                return;
+            }
+            clock
+                .file_facts
+                .get(&(id, part.part_id))
+                .map(|previous| (previous.source, previous.fact))
+        };
+        let source = if part.origin_session_id == id {
+            crate::rest::recorded_file_source(part)
+        } else {
+            0
+        };
+        let fact = if source == 0 {
+            None
+        } else if let Some((previous_source, previous_fact)) =
+            previous.filter(|(previous_source, _)| *previous_source == source)
+        {
+            let _ = previous_source;
+            previous_fact
+        } else {
+            crate::rest::recorded_file_revision(part)
+        };
+        Some(PreparedPartChange {
+            source,
+            fact,
+            sections: (part.kind == "tool_call" && part.visibility.visible_to_user())
+                .then(|| tool_section_hashes(part)),
+        })
+    } else {
+        None
+    };
+    clock
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .changed_prepared(change, prepared.as_ref());
+}
+
 #[derive(Default)]
 struct Clock {
     updated_at_ms: i64,
     baseline: i64,
-    resources: HashMap<String, i64>,
-    workspaces: HashMap<i64, i64>,
-    part_sessions: HashMap<i64, i64>,
-    sessions: HashMap<i64, SessionRevision>,
-    parts: HashMap<(i64, i64), (i64, i64, PartState, serde_json::Value)>,
-    tool_sections: HashMap<i64, [u64; 3]>,
-    file_facts: HashMap<(i64, i64), FileRevision>,
-    activities: HashMap<String, (i64, BackgroundActivity, bool)>,
-    plans: HashMap<i64, serde_json::Value>,
-    deleted_sessions: std::collections::HashSet<i64>,
+    resources: BTreeMap<String, i64>,
+    resource_order: RevisionMemo<String, (), MAX_RESOURCE_REVISIONS>,
+    resource_floor: i64,
+    workspaces: RevisionMemo<i64, i64, 8192>,
+    part_sessions: RevisionMemo<i64, i64, 8192>,
+    sessions: RevisionMemo<i64, SessionRevision, 4096>,
+    parts: RevisionMemo<(i64, i64), (i64, i64, PartState, serde_json::Value), 8192>,
+    tool_sections: RevisionMemo<i64, [u64; 3], 8192>,
+    file_facts: RevisionMemo<(i64, i64), FileRevision, 8192>,
+    activities: RevisionMemo<String, (i64, BackgroundActivity, bool), 4096>,
+    plans: RevisionMemo<i64, serde_json::Value, 4096>,
+    deleted_sessions: RevisionMemo<i64, (), 4096>,
 }
 
 // Invalidation retains only navigation fields, never session configs or
@@ -97,16 +221,52 @@ impl Clock {
 
     fn bump(&mut self, key: impl Into<String>) {
         let key = key.into();
-        if self.resources.len() >= 8192 && !self.resources.contains_key(&key) {
-            self.reset();
-        }
         let updated_at = self.tick();
-        self.resources.insert(key, updated_at);
+        self.remember_resource(key, updated_at);
+    }
+
+    fn remember_resource(&mut self, key: String, revision: i64) -> i64 {
+        let retained = self.resources.contains_key(&key);
+        if let Some((evicted, ())) = self.resource_order.0.push(key.clone(), ())
+            && evicted != key
+        {
+            // A baseline can affect several retained list clocks. Materialize
+            // those effective clocks before forgetting that baseline.
+            if evicted.ends_with("-baseline") {
+                let revisions: Vec<_> = self
+                    .resources
+                    .keys()
+                    .map(|key| (key.clone(), self.revision(key)))
+                    .collect();
+                for (key, revision) in revisions {
+                    self.resources.insert(key, revision);
+                }
+            }
+            self.resources.remove(&evicted);
+            // A forgotten key must never reuse its original token and make
+            // an old HTTP representation appear current again. Retained keys
+            // keep their own revision and do not share this eviction floor.
+            self.resource_floor = self.tick();
+        }
+        let revision = if retained {
+            revision
+        } else {
+            revision.max(self.resource_floor)
+        };
+        self.resources.insert(key, revision);
+        revision
+    }
+
+    fn observe_resource(&mut self, key: &str) -> i64 {
+        let revision = self.revision(key);
+        self.remember_resource(key.to_owned(), revision)
     }
 
     fn reset(&mut self) {
         self.baseline = self.tick();
+        self.resource_floor = self.baseline;
         self.resources.clear();
+        self.resource_order = RevisionMemo::default();
     }
 
     fn lists_changed(&mut self, id: i64) {
@@ -222,19 +382,29 @@ impl Clock {
         }
     }
 
-    fn record_file_fact(&mut self, id: i64, part: &agena_storage::store::Part, added: bool) {
+    fn record_file_fact(
+        &mut self,
+        id: i64,
+        part: &agena_storage::store::Part,
+        added: bool,
+        prepared: Option<&PreparedPartChange>,
+    ) {
         let key = (id, part.part_id);
         let stamp = (part.revision, part.updated_at_ms);
         let previous = self.file_facts.get(&key);
         if previous.is_some_and(|previous| previous.stamp >= stamp) {
             return;
         }
-        let source = if part.origin_session_id == id {
+        let source = if let Some(prepared) = prepared {
+            prepared.source
+        } else if part.origin_session_id == id {
             crate::rest::recorded_file_source(part)
         } else {
             0
         };
-        let fact = if source == 0 {
+        let fact = if let Some(prepared) = prepared {
+            prepared.fact
+        } else if source == 0 {
             None
         } else if let Some(previous) = previous.filter(|previous| previous.source == source) {
             previous.fact
@@ -250,9 +420,6 @@ impl Clock {
                     && self.resources.contains_key(&format!("session:{id}:files"))),
             |previous| previous.fact != fact,
         );
-        if self.file_facts.len() >= 8192 && !self.file_facts.contains_key(&key) {
-            self.file_facts.clear();
-        }
         self.file_facts.insert(
             key,
             FileRevision {
@@ -266,7 +433,7 @@ impl Clock {
         }
     }
 
-    fn changed(&mut self, change: &SessionChange) {
+    fn changed_prepared(&mut self, change: &SessionChange, prepared: Option<&PreparedPartChange>) {
         let id = change.session_id();
         match change {
             SessionChange::SessionMetaUpdated { meta, .. } => {
@@ -320,12 +487,6 @@ impl Clock {
                     .sessions
                     .get(&id)
                     .map(|old| (old.workspace_id, old.parent_id));
-                if self.sessions.len() >= 4096 && !self.sessions.contains_key(&id) {
-                    self.sessions.clear();
-                    self.workspaces.clear();
-                    self.part_sessions.clear();
-                    self.reset();
-                }
                 self.sessions.insert(
                     id,
                     SessionRevision {
@@ -411,10 +572,7 @@ impl Clock {
                 if let Some(parent) = parent {
                     self.parent_row_changed(parent);
                 }
-                if self.deleted_sessions.len() >= 4096 {
-                    self.deleted_sessions.clear();
-                }
-                self.deleted_sessions.insert(id);
+                self.deleted_sessions.insert(id, ());
                 let parts: std::collections::HashSet<_> = self
                     .part_sessions
                     .iter()
@@ -445,7 +603,12 @@ impl Clock {
                 self.bump(format!("session:{id}:transcript"));
             }
             SessionChange::PartAdded { part, .. } | SessionChange::PartUpdated { part, .. } => {
-                self.record_file_fact(id, part, matches!(change, SessionChange::PartAdded { .. }));
+                self.record_file_fact(
+                    id,
+                    part,
+                    matches!(change, SessionChange::PartAdded { .. }),
+                    prepared,
+                );
                 let key = (id, part.part_id);
                 let interaction = part.content.get("user_input").cloned().unwrap_or_default();
                 let previous = self.parts.get(&key);
@@ -488,9 +651,6 @@ impl Clock {
                 } else {
                     false
                 };
-                if self.parts.len() >= 8192 && !self.parts.contains_key(&key) {
-                    self.parts.clear();
-                }
                 self.parts.insert(
                     key,
                     (part.revision, part.updated_at_ms, part.state, interaction),
@@ -503,11 +663,10 @@ impl Clock {
                 }
                 self.bump(format!("part:{}", part.part_id));
                 if part.kind == "tool_call" {
-                    let next = tool_section_hashes(part);
+                    let next = prepared
+                        .and_then(|prepared| prepared.sections)
+                        .unwrap_or_else(|| tool_section_hashes(part));
                     let previous = self.tool_sections.get(&part.part_id).copied();
-                    if self.tool_sections.len() >= 8192 && previous.is_none() {
-                        self.tool_sections.clear();
-                    }
                     self.tool_sections.insert(part.part_id, next);
                     for (index, section) in ["input", "metadata", "output"].into_iter().enumerate()
                     {
@@ -515,12 +674,6 @@ impl Clock {
                             self.bump(format!("part:{}:{section}", part.part_id));
                         }
                     }
-                }
-                if self.part_sessions.len() >= 8192
-                    && !self.part_sessions.contains_key(&part.part_id)
-                {
-                    self.part_sessions.clear();
-                    self.reset();
                 }
                 self.part_sessions
                     .insert(part.part_id, part.origin_session_id);
@@ -617,9 +770,6 @@ impl Clock {
                 // The JSON representations contain log cursors too, so their
                 // ETags must advance. Web consumers apply these complete SSE
                 // descriptors directly and do not reload list/state bodies.
-                if self.activities.len() >= 4096 && !self.activities.contains_key(id) {
-                    self.activities.clear();
-                }
                 self.activities
                     .insert(id.clone(), (event.ts_ms, event.activity.clone(), dismissed));
                 if representation_changed {
@@ -642,9 +792,6 @@ impl Clock {
                 if self.plans.get(id) == Some(payload) {
                     return;
                 }
-                if self.plans.len() >= 4096 && !self.plans.contains_key(id) {
-                    self.plans.clear();
-                }
                 self.plans.insert(*id, payload.clone());
                 self.bump(format!("session:{id}:plan"));
             }
@@ -653,7 +800,11 @@ impl Clock {
     }
 
     fn revision(&self, key: &str) -> i64 {
-        let revision = self.resources.get(key).copied().unwrap_or(self.baseline);
+        let revision = self
+            .resources
+            .get(key)
+            .copied()
+            .unwrap_or(self.baseline.max(self.resource_floor));
         if key.starts_with("workspace:") {
             let workspace_baseline = key
                 .split(':')
@@ -724,10 +875,7 @@ impl ResourceRevisions {
         let subscription = state
             .session_store()?
             .subscribe_all(Arc::new(move |change| {
-                observer
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .changed(&change);
+                observe_clock_change(&observer, &change);
             }));
         let observer = clock.clone();
         let signal_observation = state.live_signals()?.observe(Arc::new(move |signal| {
@@ -770,20 +918,13 @@ impl ResourceRevisions {
 
     pub(crate) fn register_part(&self, part: &agena_storage::store::Part) {
         let part_id = part.part_id;
+        let sections = (part.kind == "tool_call").then(|| tool_section_hashes(part));
         let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
-        if clock.part_sessions.len() >= 8192 && !clock.part_sessions.contains_key(&part_id) {
-            clock.part_sessions.clear();
-            clock.reset();
-        }
         clock.part_sessions.insert(part_id, part.origin_session_id);
         if part.kind == "tool_call" {
-            if clock.tool_sections.len() >= 8192 && !clock.tool_sections.contains_key(&part_id) {
-                clock.tool_sections.clear();
+            if !clock.tool_sections.contains_key(&part_id) {
+                clock.tool_sections.insert(part_id, sections.unwrap());
             }
-            clock
-                .tool_sections
-                .entry(part_id)
-                .or_insert_with(|| tool_section_hashes(part));
         }
     }
 
@@ -826,14 +967,16 @@ impl ResourceRevisions {
             .collect::<Vec<_>>();
         let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
         // A mutation or deletion during decoding owns the newer baseline.
-        if clock.revision(&resource) != revision || clock.deleted_sessions.contains(&id) {
+        if clock.revision(&resource) != revision || clock.deleted_sessions.contains_key(&id) {
             return;
         }
         for (key, seed) in seeds {
             if clock.file_facts.len() >= 8192 {
                 break;
             }
-            clock.file_facts.entry(key).or_insert(seed);
+            if !clock.file_facts.contains_key(&key) {
+                clock.file_facts.insert(key, seed);
+            }
         }
     }
 
@@ -914,7 +1057,7 @@ impl ResourceRevisions {
                             .sessions
                             .keys()
                             .filter(|id| {
-                                !next.contains_key(id) && !clock.deleted_sessions.contains(id)
+                                !next.contains_key(id) && !clock.deleted_sessions.contains_key(id)
                             })
                             .copied(),
                     )
@@ -974,11 +1117,7 @@ impl ResourceRevisions {
 
     pub(crate) fn token(&self, key: &str) -> String {
         let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
-        if clock.resources.len() >= 8192 && !clock.resources.contains_key(key) {
-            clock.reset();
-        }
-        let revision = clock.revision(key);
-        clock.resources.entry(key.to_owned()).or_insert(revision);
+        let revision = clock.observe_resource(key);
         format!("{}:{revision}", self.epoch)
     }
 
@@ -998,7 +1137,6 @@ impl ResourceRevisions {
                 .sessions
                 .get(&row.id)
                 .is_some_and(|old| old.version > row.version)
-                || (clock.sessions.len() >= 4096 && !clock.sessions.contains_key(&row.id))
             {
                 continue;
             }
@@ -1027,10 +1165,7 @@ impl ResourceRevisions {
     }
 
     pub(crate) fn observe_change(&self, change: &SessionChange) {
-        self.clock
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .changed(change);
+        observe_clock_change(&self.clock, change);
     }
 
     pub(crate) fn observe_signal(&self, signal: &RuntimeLiveSignal) {
@@ -1101,9 +1236,9 @@ impl ResourceRevisions {
                 keys.extend(
                     clock
                         .resources
-                        .keys()
-                        .filter(|key| key.starts_with("workspace:"))
-                        .cloned(),
+                        .range("workspace:".to_owned()..)
+                        .take_while(|(key, _)| key.starts_with("workspace:"))
+                        .map(|(key, _)| key.clone()),
                 );
             }
         }
@@ -1116,13 +1251,15 @@ impl ResourceRevisions {
                 .filter_map(|key| key.split(':').nth(1))
                 .map(|id| format!("workspace:{id}:sessions:"))
                 .collect::<std::collections::HashSet<_>>();
-            keys.extend(
-                clock
-                    .resources
-                    .keys()
-                    .filter(|key| prefixes.iter().any(|prefix| key.starts_with(prefix)))
-                    .cloned(),
-            );
+            for prefix in prefixes {
+                keys.extend(
+                    clock
+                        .resources
+                        .range(prefix.clone()..)
+                        .take_while(|(key, _)| key.starts_with(&prefix))
+                        .map(|(key, _)| key.clone()),
+                );
+            }
         }
         if let Some(signal) = signal {
             if signal.kind == "activity" {
@@ -1174,6 +1311,10 @@ pub(crate) struct ConditionalRead {
 }
 
 impl ConditionalRead {
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
+
     pub(crate) async fn new(state: &AppState, key: &str) -> Result<Self, ServerError> {
         // Seed the durable checkpoint before the first body can be cached.
         // All later reads share one metadata recovery check per 30 seconds.
@@ -1225,6 +1366,61 @@ impl ConditionalRead {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capacity_evicts_one_revision_without_invalidating_retained_resources() {
+        let mut clock = Clock::default();
+        let forgotten = clock.observe_resource("part:old");
+        clock.bump("workspace:7:sessions:roots");
+        let retained = clock.observe_resource("workspace:7:sessions:roots");
+        for id in 0..MAX_RESOURCE_REVISIONS + 32 {
+            clock.bump(format!("part:{id}"));
+            assert_eq!(
+                clock.observe_resource("workspace:7:sessions:roots"),
+                retained
+            );
+        }
+        assert_eq!(clock.resources.len(), MAX_RESOURCE_REVISIONS);
+        assert_eq!(clock.resource_order.len(), MAX_RESOURCE_REVISIONS);
+        assert!(clock.observe_resource("part:old") > forgotten);
+        assert_eq!(clock.revision("workspace:7:sessions:roots"), retained);
+        assert_eq!(clock.baseline, 0);
+    }
+
+    #[test]
+    fn evicted_baselines_keep_their_effect_on_retained_list_revisions() {
+        let mut clock = Clock::default();
+        clock.observe_resource("workspace:7:sessions:roots");
+        clock.bump("workspace:7:sessions-baseline");
+        let baseline = clock.revision("workspace:7:sessions:roots");
+        for id in 0..MAX_RESOURCE_REVISIONS + 32 {
+            clock.bump(format!("part:{id}"));
+            assert_eq!(
+                clock.observe_resource("workspace:7:sessions:roots"),
+                baseline
+            );
+        }
+        assert!(
+            !clock
+                .resources
+                .contains_key("workspace:7:sessions-baseline")
+        );
+        assert_eq!(clock.revision("workspace:7:sessions:roots"), baseline);
+        assert_eq!(clock.baseline, 0);
+    }
+
+    #[test]
+    fn revision_memos_evict_individual_old_observations_and_keep_updated_entries() {
+        let mut memo = RevisionMemo::<i64, i64, 2>::default();
+        memo.insert(1, 1);
+        memo.insert(2, 2);
+        memo.insert(1, 3);
+        memo.insert(4, 4);
+        assert_eq!(memo.get(&1), Some(&3));
+        assert_eq!(memo.get(&2), None);
+        assert_eq!(memo.get(&4), Some(&4));
+        assert_eq!(memo.len(), 2);
+    }
 
     #[test]
     fn resource_time_keeps_advancing_when_wall_time_is_behind() {

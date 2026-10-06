@@ -31,6 +31,9 @@ hljs.registerLanguage('typescript', typescript)
 hljs.registerLanguage('xml', xml)
 
 export { hljs }
+const highlightedCache = new Map<string, string>()
+let cacheCharacters = 0
+const CACHE_CHARACTERS = 512 * 1024
 
 function escapeHtml(input: string): string {
   return input
@@ -49,12 +52,41 @@ export function highlightCodeToHtml(code: string, lang?: string): string {
   if (requested === 'text' || requested === 'plain' || requested === 'plaintext') {
     return escapeHtml(value)
   }
-  try {
-    if (requested && hljs.getLanguage(requested)) {
-      return hljs.highlight(value, { language: requested, ignoreIllegals: true }).value
-    }
-    return hljs.highlightAuto(value).value
-  } catch {
-    return escapeHtml(value)
+  // Auto detection runs every registered grammar; large payloads and very
+  // long lines must never monopolize the UI thread. The text remains intact.
+  const explicitLanguage = requested && hljs.getLanguage(requested)
+  if (value.length > (explicitLanguage ? 16_384 : 2048)) return escapeHtml(value)
+  let lineStart = 0
+  for (let index = 0; index < value.length; index++) {
+    if (value[index] === '\n') lineStart = index + 1
+    else if (index - lineStart >= 4096) return escapeHtml(value)
   }
+  const key = `${requested}\0${value}`
+  const cached = highlightedCache.get(key)
+  if (cached !== undefined) {
+    highlightedCache.delete(key)
+    highlightedCache.set(key, cached)
+    return cached
+  }
+  let result: string
+  try {
+    if (explicitLanguage) {
+      result = hljs.highlight(value, { language: requested, ignoreIllegals: true }).value
+    } else {
+      result = hljs.highlightAuto(value).value
+    }
+  } catch {
+    result = escapeHtml(value)
+  }
+  const size = key.length + result.length
+  if (size <= CACHE_CHARACTERS) {
+    while (cacheCharacters + size > CACHE_CHARACTERS || highlightedCache.size >= 256) {
+      const oldest = highlightedCache.keys().next().value!
+      cacheCharacters -= oldest.length + highlightedCache.get(oldest)!.length
+      highlightedCache.delete(oldest)
+    }
+    highlightedCache.set(key, result)
+    cacheCharacters += size
+  }
+  return result
 }

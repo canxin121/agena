@@ -1075,7 +1075,7 @@ async function runSessionDialogAction(item: SessionDialogActionItem) {
   if (t.session?.id && t.session.id !== chat.selectedSessionId) {
     await selectSession(t.session.id)
   }
-  ui.requestSessionAction(item.id)
+  ui.requestSessionAction(item.id, t.session.id)
 }
 
 async function setPagedDirectoriesCollapsed(collapsed: boolean) {
@@ -2071,9 +2071,7 @@ function ensureAncestorsExpanded(parentById: Record<string, string | null>, sess
     }
     cur = parent
   }
-  for (const parentId of toExpand) {
-    void directorySessions.commandSetSessionExpanded(parentId, true, { silent: true })
-  }
+  if (toExpand.length) void directorySessions.commandExpandSessionAncestors(toExpand)
 }
 
 function buildBackendFlattenedTree(section: DirectorySidebarView | null | undefined): FlattenedDirectoryTree | null {

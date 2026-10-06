@@ -241,16 +241,16 @@ type PluginLog = {
 type PluginLogsResponse = { plugin_id: string; logs?: PluginLog[] }
 type PanelTab = 'overview' | 'settings' | 'commands' | 'tools' | 'logs' | 'diagnostics'
 
-const PANEL_TABS: Array<{ id: PanelTab; label: string }> = [
+const PANEL_TABS = computed<Array<{ id: PanelTab; label: string }>>(() => [
   { id: 'overview', label: st('Overview') },
   { id: 'settings', label: st('Settings') },
   { id: 'commands', label: st('Commands') },
   { id: 'tools', label: st('Tools') },
   { id: 'logs', label: st('Logs') },
   { id: 'diagnostics', label: st('Diagnostics') },
-]
+])
 
-const PANEL_TAB_IDS = new Set<PanelTab>(PANEL_TABS.map((tab) => tab.id))
+const PANEL_TAB_IDS = new Set<PanelTab>(PANEL_TABS.value.map((tab) => tab.id))
 
 const route = useRoute()
 const router = useRouter()
@@ -448,8 +448,7 @@ function showCommandFeedback(result: PluginCommandResult) {
   if (result.status === 'succeeded') toasts.push('success', message || st('Plugin command completed'))
   else if (result.status === 'failed')
     toasts.push('error', result.detail?.trim() || message || st('Plugin command failed'))
-  else
-    toasts.push('info', result.detail?.trim() || message || st('Plugin command {status}', { status: result.status }))
+  else toasts.push('info', result.detail?.trim() || message || st('Plugin command {status}', { status: result.status }))
 }
 
 async function applyCommandEffect(effect: PluginHostEffect) {

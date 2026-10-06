@@ -34,6 +34,16 @@ pub fn prepare_part_update(
     delta: PartDelta,
     now_ms: i64,
 ) -> Result<Part, StoreError> {
+    if now_ms < part.updated_at_ms {
+        return Err(StoreError::InvalidState(
+            "invalid part lifecycle timestamps".to_owned(),
+        ));
+    }
+    if part.revision == i64::MAX {
+        return Err(StoreError::InvalidState(
+            "part revision is exhausted".to_owned(),
+        ));
+    }
     let previous = part.clone();
     let now_ms = now_ms.max(part.updated_at_ms);
     if let Some(to) = delta.state {
@@ -138,7 +148,10 @@ fn finish_update(previous: &Part, mut part: Part, now_ms: i64) -> Result<Part, S
         .revision
         .checked_add(1)
         .ok_or_else(|| StoreError::InvalidState("part revision is exhausted".to_owned()))?;
-    part.updated_at_ms = now_ms.max(previous.updated_at_ms.saturating_add(1));
+    // Committed updates already have a strictly increasing revision. Keep
+    // their clock physical and nondecreasing so two writes in the same
+    // millisecond don't make the next valid write look like time travel.
+    part.updated_at_ms = now_ms;
     Ok(part)
 }
 

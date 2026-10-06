@@ -38,13 +38,20 @@ export function activityEquals(left: object, right: object): boolean {
   const before = left as Record<string, unknown>
   const after = right as Record<string, unknown>
   const keys = Object.keys(before)
-  return keys.length === Object.keys(after).length && keys.every(key =>
-    before[key] === after[key] || (before[key] !== null && typeof before[key] === 'object'
-      && JSON.stringify(before[key]) === JSON.stringify(after[key])))
+  return (
+    keys.length === Object.keys(after).length &&
+    keys.every(
+      (key) =>
+        before[key] === after[key] ||
+        (before[key] !== null &&
+          typeof before[key] === 'object' &&
+          JSON.stringify(before[key]) === JSON.stringify(after[key])),
+    )
+  )
 }
 
 export function activityLogText(log: ActivityLog | null): string {
-  return log?.lines.map(line => line.text + (line.chunk || line.text.endsWith('\n') ? '' : '\n')).join('') ?? ''
+  return log?.lines.map((line) => line.text + (line.chunk || line.text.endsWith('\n') ? '' : '\n')).join('') ?? ''
 }
 
 /** Bound retained output even for a monitor that runs for days. */
@@ -52,25 +59,65 @@ export function mergeActivityLog(previous: ActivityLog | null, next: ActivityLog
   const old = previous?.activity_id === next.activity_id ? previous.lines : []
   // Shell lines are immutable, while a delegated task's cursor line is a
   // snapshot of its still-streaming run. Replace a repeated sequence number.
-  const bySequence = new Map(old.map(line => [line.seq, line]))
+  const bySequence = new Map(old.map((line) => [line.seq, line]))
   for (const line of next.lines) bySequence.set(line.seq, line)
   const lines = [...bySequence.values()].sort((a, b) => a.seq - b.seq).slice(-200)
   let budget = 128 * 1024
-  const encoder = new TextEncoder()
-  const decoder = new TextDecoder()
   const retained: ActivityLog['lines'] = []
   for (const line of lines.reverse()) {
     if (budget <= 0) break
-    const bytes = encoder.encode(line.text)
     if (budget < 4) break
-    let text = line.text
-    if (bytes.length > budget) {
-      let start = bytes.length - budget + 3
-      while ((bytes[start]! & 0xc0) === 0x80) start++
-      text = '…' + decoder.decode(bytes.subarray(start))
+    let bytes = logLineBytes.get(line)
+    if (bytes !== undefined && bytes <= budget) {
+      retained.push(line)
+      budget -= bytes
+      continue
     }
-    retained.push({ ...line, text })
-    budget -= encoder.encode(text).length
+    const tail = utf8Tail(line.text, budget)
+    const value = tail.text === line.text ? line : { ...line, text: tail.text }
+    bytes = tail.bytes
+    logLineBytes.set(value, bytes)
+    retained.push(value)
+    budget -= bytes
   }
-  return { ...next, last_seq: Math.max(previous?.activity_id === next.activity_id ? previous.last_seq : 0, next.last_seq), lines: retained.reverse() }
+  return {
+    ...next,
+    last_seq: Math.max(previous?.activity_id === next.activity_id ? previous.last_seq : 0, next.last_seq),
+    lines: retained.reverse(),
+  }
+}
+
+const logLineBytes = new WeakMap<ActivityLog['lines'][number], number>()
+
+/** Walk only the retained tail; never encode a huge discarded prefix. */
+function utf8Tail(text: string, budget: number): { text: string; bytes: number } {
+  let start = text.length
+  let bytes = 0
+  while (start > 0) {
+    const low = text.charCodeAt(start - 1)
+    const pair =
+      low >= 0xdc00 &&
+      low <= 0xdfff &&
+      start > 1 &&
+      text.charCodeAt(start - 2) >= 0xd800 &&
+      text.charCodeAt(start - 2) <= 0xdbff
+    const size = pair ? 4 : low < 0x80 ? 1 : low < 0x800 ? 2 : 3
+    const nextStart = start - (pair ? 2 : 1)
+    if (bytes + size > budget) break
+    start = nextStart
+    bytes += size
+  }
+  if (!start) return { text, bytes }
+  while (bytes > budget - 3 && start < text.length) {
+    const high = text.charCodeAt(start)
+    const pair =
+      high >= 0xd800 &&
+      high <= 0xdbff &&
+      start + 1 < text.length &&
+      text.charCodeAt(start + 1) >= 0xdc00 &&
+      text.charCodeAt(start + 1) <= 0xdfff
+    bytes -= pair ? 4 : high < 0x80 ? 1 : high < 0x800 ? 2 : 3
+    start += pair ? 2 : 1
+  }
+  return { text: `…${text.slice(start)}`, bytes: bytes + 3 }
 }

@@ -219,14 +219,17 @@ pub async fn list_session_parts(
             .await
             .map_err(crate::rest::server_error_from_store)?;
         let mut parts = crate::live::project_parts_for_user(&state, &view.parts).await;
-        // Requested ids need not be contiguous, so rank markers individually.
+        let user_ids = parts
+            .iter()
+            .filter(|part| part.kind == "run" && part.role == "user")
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
+        let ordinals = store
+            .user_message_ordinals(session_id, &user_ids)
+            .await
+            .map_err(crate::rest::server_error_from_store)?;
         for part in &mut parts {
-            if part.kind == "run" && part.role == "user" {
-                part.user_message_ordinal = store
-                    .user_message_ordinal(session_id, part.part_id)
-                    .await
-                    .map_err(crate::rest::server_error_from_store)?;
-            }
+            part.user_message_ordinal = ordinals.get(&part.part_id).copied();
         }
         return Ok(Json(agena_api::live::SessionPartsResource {
             session_id,

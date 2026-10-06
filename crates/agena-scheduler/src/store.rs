@@ -86,6 +86,21 @@ pub trait JobStore: Send + Sync {
             .collect())
     }
     async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>>;
+    async fn list_filtered(
+        &self,
+        session_id: Option<i64>,
+        active_only: bool,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|entry| {
+                session_id.is_none_or(|id| entry.job.owner_session_id == Some(id))
+                    && (!active_only || !entry.job.completed)
+            })
+            .collect())
+    }
     async fn pending_jobs_for_session(
         &self,
         session_id: i64,
@@ -251,6 +266,32 @@ impl JobStore for InMemoryJobStore {
 
     async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>> {
         Ok(self.inner.read().jobs.get(&id).cloned())
+    }
+
+    async fn list_filtered(
+        &self,
+        session_id: Option<i64>,
+        active_only: bool,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        let mut jobs: Vec<_> = self
+            .inner
+            .read()
+            .jobs
+            .values()
+            .filter(|entry| {
+                session_id.is_none_or(|id| entry.job.owner_session_id == Some(id))
+                    && (!active_only || !entry.job.completed)
+            })
+            .cloned()
+            .collect();
+        jobs.sort_by_key(|entry| {
+            (
+                entry.job.next_fire_at.is_none(),
+                entry.job.next_fire_at,
+                entry.job.id,
+            )
+        });
+        Ok(jobs)
     }
 
     async fn list_due(&self, now_ms: i64) -> SchedulerResult<Vec<JobSnapshot>> {
@@ -603,6 +644,40 @@ impl JobStore for SqliteJobStore {
         let rows = self.db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
             "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id",
         )).await?;
+        Self::decode_rows(rows).await
+    }
+
+    async fn list_filtered(
+        &self,
+        session_id: Option<i64>,
+        active_only: bool,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        // Keep corruption visible. The invalid-JSON partial index makes this
+        // check constant-sized on healthy stores.
+        if let Some(row) = self.db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE NOT json_valid(job_json) LIMIT 1")).await? {
+            Self::decode_rows(vec![row]).await?;
+        }
+        let mut sql = String::from(
+            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE json_valid(job_json)",
+        );
+        let mut values: Vec<sea_orm::Value> = Vec::new();
+        if let Some(id) = session_id {
+            sql.push_str(" AND json_extract(job_json, '$.owner_session_id') = ?");
+            values.push(id.into());
+        }
+        if active_only {
+            sql.push_str(" AND completed = 0");
+        }
+        sql.push_str(" ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id");
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                sql,
+                values,
+            ))
+            .await?;
         Self::decode_rows(rows).await
     }
 

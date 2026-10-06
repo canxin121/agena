@@ -3,10 +3,11 @@ import { computed, ref, type ComputedRef } from 'vue'
 import type { MessageLike, MessagePartLike, RenderBlock } from '@/components/chat/messageList.types'
 import {
   durablePartKind,
-  projectTranscriptBlocks,
+  createTranscriptProjector,
   transcriptPartText,
   type TranscriptProjectionLabels,
 } from './transcriptProjection'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 type ChatLike = { messages: MessageLike[] }
 type SettingsLike = { data?: unknown }
@@ -24,12 +25,18 @@ export function useChatRenderBlocks(opts: {
   void opts.settings
   void opts.formatTime
 
-  const renderBlocks = computed<RenderBlock[]>(() =>
-    projectTranscriptBlocks(chat.messages || [], {
-      showReasoning: showThinking.value,
-      ...(opts.labels ? { labels: opts.labels() } : {}),
-    }),
-  )
+  const pane = useWorkspacePaneContext()
+  const project = createTranscriptProjector(() => ({
+    showReasoning: showThinking.value,
+    ...(opts.labels ? { labels: opts.labels() } : {}),
+  }))
+  const renderBlocks = computed<RenderBlock[]>(() => {
+    if (pane && !pane.isVisible.value) {
+      project([])
+      return []
+    }
+    return project(chat.messages || [])
+  })
 
   function getTextParts(parts: MessagePartLike[]): MessagePartLike[] {
     return (parts || []).filter((part) => {
@@ -61,7 +68,7 @@ export function useChatRenderBlocks(opts: {
   }
 
   function setActivityExpanded(partKey: string, expanded: boolean) {
-    activityExpandedByBlockKey.value = { ...activityExpandedByBlockKey.value, [partKey]: expanded }
+    activityExpandedByBlockKey.value[partKey] = expanded
   }
 
   return {

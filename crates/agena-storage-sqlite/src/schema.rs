@@ -121,18 +121,20 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
     Ok(Some(PathBuf::from(lock_path)))
 }
 
-/// Create the complete SQLite schema or validate the current schema exactly.
+/// Create the complete SQLite schema or validate the durable schema exactly.
 ///
 /// Agena has no database migration layer. An empty database is initialized
-/// from the current declarations. A non-empty database must match the current
-/// tables, indexes, and triggers exactly; otherwise startup fails and the
-/// database must be recreated.
+/// from the current declarations. Existing tables, required indexes and
+/// triggers must match exactly. Additional, non-unique performance indexes
+/// may be absent and are installed only after the durable schema validates.
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let _lock = SchemaLock::acquire(db).await?;
     let fresh = schema_objects(db).await?.is_empty();
-    if !fresh {
-        validate_existing_schema(db).await?;
-    }
+    let missing_indexes = if fresh {
+        Vec::new()
+    } else {
+        validate_existing_schema(db).await?
+    };
     for pragma in [
         "PRAGMA journal_mode = WAL",
         "PRAGMA busy_timeout = 1000",
@@ -145,10 +147,26 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
         .await?;
     }
     if !fresh {
-        return Ok(());
+        if missing_indexes.is_empty() {
+            return Ok(());
+        }
+        let txn = db.begin().await?;
+        for statement in missing_indexes {
+            txn.execute(Statement::from_string(
+                txn.get_database_backend(),
+                statement,
+            ))
+            .await?;
+        }
+        return txn.commit().await;
     }
     let txn = db.begin().await?;
-    for statement in TABLES.iter().chain(INDEXES).chain(SEEDS) {
+    for statement in TABLES
+        .iter()
+        .chain(INDEXES)
+        .chain(PERFORMANCE_INDEXES)
+        .chain(SEEDS)
+    {
         txn.execute(Statement::from_string(
             txn.get_database_backend(),
             (*statement).to_owned(),
@@ -213,6 +231,19 @@ const INDEXES: &[&str] = &[
     BACKGROUND_INDEXES[0],
     BACKGROUND_INDEXES[1],
     BACKGROUND_INDEXES[2],
+];
+
+// These derived indexes change no data or integrity rules. An existing valid
+// database can acquire them without a table migration or transcript rewrite.
+const PERFORMANCE_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS idx_agena_parts_control ON agena_parts(origin_session_id, created_at_ms, part_id) WHERE kind = 'tool_call' AND state IN ('pending','in_progress')",
+    "CREATE INDEX IF NOT EXISTS idx_agena_session_updated ON agena_sessions(updated_at_ms, id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_parts_created ON agena_parts(created_at_ms, part_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_parts_run_order ON agena_parts(run_id, created_at_ms, part_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_parts_user_order ON agena_parts(created_at_ms, part_id) WHERE kind = 'run' AND role = 'user'",
+    "CREATE INDEX IF NOT EXISTS idx_agena_background_active_order ON agena_background_operations(created_at_ms, operation_id) WHERE phase IN ('launch_requested','launching','running')",
+    "CREATE INDEX IF NOT EXISTS idx_agena_background_active_session_order ON agena_background_operations(session_id, created_at_ms, operation_id) WHERE phase IN ('launch_requested','launching','running')",
+    "CREATE INDEX IF NOT EXISTS idx_agena_background_active_kind_order ON agena_background_operations(kind, created_at_ms, operation_id) WHERE phase IN ('launch_requested','launching','running')",
 ];
 
 const BACKGROUND_INDEXES: &[&str] = &[
@@ -352,6 +383,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn existing_durable_schema_acquires_performance_indexes_without_changing_rows() {
+        let db = initialized_database().await;
+        seed_parts(&db).await;
+        let expected = validation::schema_objects(&db).await.unwrap();
+        for sql in PERFORMANCE_INDEXES {
+            let name = validation::declaration(sql).unwrap().name;
+            execute(&db, &format!("DROP INDEX {name}")).await.unwrap();
+        }
+        assert_eq!(
+            validate_existing_schema(&db).await.unwrap().len(),
+            PERFORMANCE_INDEXES.len()
+        );
+        initialize_schema(&db).await.unwrap();
+        assert_eq!(validation::schema_objects(&db).await.unwrap(), expected);
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT content, revision, updated_at_ms FROM agena_parts WHERE part_id = 2",
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.try_get::<String>("", "content").unwrap(),
+            "{\"text\":\"hello\"}"
+        );
+        assert_eq!(row.try_get::<i64>("", "revision").unwrap(), 1);
+        assert_eq!(row.try_get::<i64>("", "updated_at_ms").unwrap(), 2);
+        initialize_schema(&db).await.unwrap();
+        assert_eq!(validation::schema_objects(&db).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn a_changed_performance_index_is_rejected_without_repair() {
+        let db = initialized_database().await;
+        execute(&db, "DROP INDEX idx_agena_session_updated")
+            .await
+            .unwrap();
+        execute(
+            &db,
+            "CREATE INDEX idx_agena_session_updated ON agena_sessions(id)",
+        )
+        .await
+        .unwrap();
+        let before = validation::schema_objects(&db).await.unwrap();
+        initialize_schema(&db)
+            .await
+            .expect_err("changed derived index must be rejected");
+        assert_eq!(validation::schema_objects(&db).await.unwrap(), before);
+    }
+
+    #[tokio::test]
     async fn modified_current_schema_is_rejected_without_repair() {
         for mutation in [
             "ALTER TABLE agena_parts ADD COLUMN obsolete TEXT",
@@ -361,6 +444,11 @@ mod tests {
         ] {
             let db = initialized_database().await;
             execute(&db, mutation).await.unwrap();
+            // Validation must precede every additive index write, including
+            // when reopening an older database with an invalid durable schema.
+            execute(&db, "DROP INDEX idx_agena_session_updated")
+                .await
+                .unwrap();
             let before = validation::schema_objects(&db).await.unwrap();
             let error = initialize_schema(&db)
                 .await

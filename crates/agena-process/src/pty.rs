@@ -8,6 +8,7 @@ use std::{collections::HashMap, io, path::Path};
 
 mod platform;
 use platform::PtyIo;
+pub mod windows_input;
 
 pub struct PtyProcess {
     master: Option<Box<dyn MasterPty + Send>>,

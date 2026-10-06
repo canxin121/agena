@@ -17,6 +17,7 @@ import {
 } from '@/pages/chat/transcriptPartPresentation'
 import { getToolPartDetail, type ToolDetailSection } from '@/stores/chat/api'
 import { isDocumentVisible } from '@/lib/backgroundReads'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import {
   canReuseResource,
   captureResourceObservation,
@@ -38,6 +39,8 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const pane = useWorkspacePaneContext()
+const isVisible = () => isDocumentVisible() && (!pane || pane.isVisible.value)
 const detailsExpanded = ref(false)
 const metadataExpanded = ref(false)
 const inputExpanded = ref(false)
@@ -70,7 +73,7 @@ const sectionErrors = ref<Partial<Record<ToolDetailSection, string>>>({})
 const loadedPartKey = ref('')
 const toolDetailSections: ToolDetailSection[] = ['input', 'output', 'metadata', 'presentation']
 
-const operation = computed(() => operationPresentation(props.part, sectionValues.value))
+const operation = computed(() => operationPresentation(props.part, sectionValues.value, props.expanded))
 const status = computed(() => partStatusPresentation(props.part.status))
 const chat = useChatStore()
 const linkedActivity = computed(() =>
@@ -114,7 +117,7 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
   // are deliberately fetched only after their disclosure row is opened, and a
   // forced refresh keeps the rendered snapshot on screen until the new one
   // arrives.
-  if (section === 'presentation') return
+  if (section === 'presentation' || !isVisible()) return
   if (sectionLoading(section)) {
     if (options.force) queuedSections.add(section)
     return
@@ -213,7 +216,7 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
         props.expanded &&
         detailsExpanded.value &&
         sectionExpanded(section) &&
-        !document.hidden
+        isVisible()
       )
         scheduleLiveSectionRefresh([])
     }
@@ -233,7 +236,7 @@ function toggleDetails() {
 }
 
 function loadVisibleSections() {
-  if (props.expanded && detailsExpanded.value) {
+  if (isVisible() && props.expanded && detailsExpanded.value) {
     for (const section of toolDetailSections) {
       // Reopening a child refreshes it, but the rendered snapshot stays on
       // screen until the new one arrives instead of blanking the section.
@@ -309,7 +312,7 @@ watch(
   { flush: 'sync' },
 )
 function syncSectionSubscriptions() {
-  const open = props.expanded && detailsExpanded.value && isDocumentVisible()
+  const open = props.expanded && detailsExpanded.value && isVisible()
   const keys = new Map<string, ToolDetailSection>(
     open
       ? toolDetailSections
@@ -343,7 +346,7 @@ watch(
 )
 
 function scheduleLiveSectionRefresh(sections = toolDetailSections) {
-  if (!isDocumentVisible() || !props.expanded || !detailsExpanded.value) return
+  if (!isVisible() || !props.expanded || !detailsExpanded.value) return
   for (const section of sections)
     if (section !== 'presentation' && sectionExpanded(section)) queuedSections.add(section)
   const ready = [...queuedSections].filter((section) => sectionExpanded(section) && !sectionLoading(section))
@@ -358,7 +361,7 @@ function scheduleLiveSectionRefresh(sections = toolDetailSections) {
   liveRefreshTimer = setTimeout(() => {
     liveRefreshTimer = undefined
     liveRefreshScheduledAt = Infinity
-    if (!isDocumentVisible() || !props.expanded || !detailsExpanded.value) return
+    if (!isVisible() || !props.expanded || !detailsExpanded.value) return
     // A response/error arriving after scheduling can extend the cooldown.
     if (Date.now() < liveRefreshAllowedAt) {
       scheduleLiveSectionRefresh([])
@@ -386,7 +389,7 @@ function scheduleLiveSectionRefresh(sections = toolDetailSections) {
  * work, so a hidden tab defers it until the reader is looking again.
  */
 function refreshSettledSections(sections: ToolDetailSection[] = ['output']) {
-  if (document.hidden || !props.expanded || !detailsExpanded.value) return
+  if (!isVisible() || !props.expanded || !detailsExpanded.value) return
   scheduleLiveSectionRefresh(sections)
 }
 
@@ -411,7 +414,7 @@ watch(
 )
 function handleVisibilityChange() {
   syncSectionSubscriptions()
-  if (document.hidden) {
+  if (!isVisible()) {
     partGeneration += 1
     cancelSectionRequests()
     loadingSections.value = new Set()
@@ -419,6 +422,7 @@ function handleVisibilityChange() {
   syncSectionSubscriptions()
 }
 document.addEventListener('visibilitychange', handleVisibilityChange)
+if (pane) watch(pane.isVisible, handleVisibilityChange, { flush: 'sync' })
 onBeforeUnmount(() => {
   partGeneration += 1
   cancelSectionRequests()

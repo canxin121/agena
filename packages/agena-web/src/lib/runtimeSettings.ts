@@ -1,6 +1,7 @@
 import { apiJson } from '@/lib/api'
 import { notifyModelConfigurationChanged } from './modelConfigurationApi'
 import { captureResourceObservation } from './resourceSync'
+import { readBatchedRuntimeSettingSources, retireRuntimeSettingReads } from './runtimeSettingReads'
 import type { JsonObject, JsonValue } from '@/types/json'
 
 export type RuntimeSettingsSource = 'effective' | 'file'
@@ -105,14 +106,17 @@ export async function getRuntimeSettingLayer(
   return await apiJson<RuntimeSettingReadResponse>(`/api/v1/settings/layers/${layer}${query ? `?${query}` : ''}`)
 }
 
-export async function readRuntimeSettingSources(path: string): Promise<RuntimeSettingsReadBundle> {
-  const [effective, file, global, workspace] = await Promise.all([
-    getRuntimeSetting(path, 'effective'),
-    getRuntimeSetting(path, 'file'),
-    getRuntimeSettingLayer('global', path),
-    getRuntimeSettingLayer('workspace', path),
-  ])
-  return { effective, file, global, workspace }
+export function readRuntimeSettingSources(path: string, signal?: AbortSignal): Promise<RuntimeSettingsReadBundle> {
+  return readBatchedRuntimeSettingSources(path, signal)
+}
+
+async function editRuntimeSettings(url: string, init: RequestInit): Promise<RuntimeSettingEditResponse> {
+  retireRuntimeSettingReads()
+  try {
+    return await apiJson<RuntimeSettingEditResponse>(url, init)
+  } finally {
+    retireRuntimeSettingReads()
+  }
 }
 
 export async function setRuntimeSetting(
@@ -123,14 +127,11 @@ export async function setRuntimeSetting(
 ): Promise<RuntimeSettingEditResponse> {
   const scope = captureResourceObservation('sessions').scope
   const body = JSON.stringify({ path, value, ...optionsBody(options) })
-  const result = await apiJson<RuntimeSettingEditResponse>(
-    layer ? `/api/v1/settings/layers/${layer}` : '/api/v1/settings',
-    {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body,
-    },
-  )
+  const result = await editRuntimeSettings(layer ? `/api/v1/settings/layers/${layer}` : '/api/v1/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body,
+  })
   reconcileModelSettings(scope, path, result, options)
   return result
 }
@@ -141,7 +142,7 @@ export async function patchRuntimeSettings(
   options?: RuntimeSettingsEditOptions,
 ): Promise<RuntimeSettingEditResponse> {
   const scope = captureResourceObservation('sessions').scope
-  const result = await apiJson<RuntimeSettingEditResponse>('/api/v1/settings', {
+  const result = await editRuntimeSettings('/api/v1/settings', {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -167,7 +168,7 @@ export async function deleteRuntimeSetting(
     validate: String(editOptions.validate),
     reload: String(editOptions.reload),
   })
-  const result = await apiJson<RuntimeSettingEditResponse>(
+  const result = await editRuntimeSettings(
     `${layer ? `/api/v1/settings/layers/${layer}` : '/api/v1/settings'}?${params.toString()}`,
     { method: 'DELETE' },
   )

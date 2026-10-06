@@ -1,6 +1,6 @@
 use super::shell_tools::{
-    ExitInterpretation, analyze_command, inherited_environment, resolve_workdir,
-    validate_declared_filesystem_effects,
+    ExitInterpretation, analyze_command, inherited_environment, prepare_posix_launch,
+    resolve_workdir, shell_settings, validate_declared_filesystem_effects,
 };
 use agena_tool::{
     ShellOutput, ShellRequest,
@@ -25,6 +25,9 @@ pub(super) async fn prepare_command_async(
 ) -> Result<Option<PreparedShellCommand>, ToolError> {
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
     let mut env = inherited_environment();
+    // Resolved before plugin overrides so the precedence is
+    // inherited < snapshot < plugin `shell.env`/`command.before` values.
+    let launch = prepare_posix_launch(shell_settings(), &mut env).await?;
     env.extend(
         executor
             .shell_env_overrides_async(&cwd, Some(session_id), Some(call_id))
@@ -56,6 +59,7 @@ pub(super) async fn prepare_command_async(
                 command,
                 cwd: updated.cwd,
                 env: updated.env.into_iter().collect(),
+                launch: Some(launch),
             }))
         }
         Ok(CommandBeforeOutcome::Abort(reason)) => {
@@ -96,6 +100,7 @@ pub(super) async fn prepare_command_async(
                 command: input.command.clone(),
                 cwd,
                 env: fallback_env,
+                launch: Some(launch),
             }))
         }
     }
@@ -124,8 +129,13 @@ pub(super) async fn execute_async(
             _ => None,
         },
     };
-    let (final_command, final_cwd, env) = match prepared {
-        Some(prepared) => (prepared.command, prepared.cwd, prepared.env),
+    let (final_command, final_cwd, env, launch) = match prepared {
+        Some(prepared) => (
+            prepared.command,
+            prepared.cwd,
+            prepared.env,
+            prepared.launch,
+        ),
         None => {
             let mut env = inherited_environment();
             env.extend(
@@ -133,13 +143,18 @@ pub(super) async fn execute_async(
                     .shell_env_overrides_async(&cwd, context.session_id, context.call_id)
                     .await?,
             );
-            (input.command.clone(), cwd, env)
+            (input.command.clone(), cwd, env, None)
         }
     };
     let final_analysis = analyze_command(final_command.as_str());
     let command_rewritten = final_command != input.command;
     let mut request = ShellRequest {
-        command: shell_command_for_platform(&final_command),
+        // The resolved launch owns the program and the login flag; callers that
+        // never resolved a user shell keep the historical platform default.
+        command: match launch.as_ref() {
+            Some(spec) => spec.argv(final_command.as_str()),
+            None => shell_command_for_platform(&final_command),
+        },
         cwd: final_cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
@@ -187,9 +202,11 @@ pub(super) async fn execute_async(
         &request,
         execution,
         aggregated_for_display,
+        launch.as_ref(),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_execution(
     input: &ShellCommandInput,
     analysis: CommandAnalysis,
@@ -199,6 +216,7 @@ fn render_execution(
     request: &ShellRequest,
     execution: ShellOutput,
     aggregated_for_display: String,
+    launch: Option<&agena_tool::shell::ShellLaunchSpec>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let (trimmed_output, truncated) = truncate_shell_output(&aggregated_for_display);
     let exit_interpretation =
@@ -273,6 +291,11 @@ fn render_execution(
         )
     };
     let mut view = ToolExecutionView::simple(title, run_summary, display_output);
+    if let Some(spec) = launch {
+        for (key, value) in spec.metadata() {
+            view.metadata.insert(key, value);
+        }
+    }
     view.metadata
         .insert("exit_code".to_string(), execution.exit_code.to_string());
     view.metadata.insert(

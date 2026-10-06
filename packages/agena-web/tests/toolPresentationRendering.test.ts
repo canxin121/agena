@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test, { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
-import { createRenderer, createSSRApp, h, nextTick, reactive, ssrContextKey, type Ref } from 'vue'
+import { computed, createRenderer, createSSRApp, h, nextTick, reactive, ref, ssrContextKey, type Ref } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { createPinia, disposePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -245,6 +245,15 @@ test('technical details load only visible children, reject stale responses and s
     sessionId: '7',
   })
   const app = renderer.createApp({ setup: () => () => h(subject, props) })
+  const { workspacePaneContextKey } = await vite.ssrLoadModule('/src/app/workspace/workspacePaneContext.ts')
+  const paneVisible = ref(true)
+  app.provide(workspacePaneContextKey, {
+    windowId: computed(() => 'tool-detail-pane'),
+    isFocused: computed(() => true),
+    isVisible: computed(() => paneVisible.value),
+    route: computed(() => ({ path: '/chat', query: {} })),
+    navigate: async () => {},
+  })
   app.provide(ssrContextKey, {})
   const pinia = createPinia()
   app.use(pinia)
@@ -320,6 +329,20 @@ test('technical details load only visible children, reject stale responses and s
     props.collapseSignal++
     await nextTick()
     assert.equal(state!.detailsExpanded.value, false)
+
+    paneVisible.value = false
+    state!.toggleDetails()
+    const hiddenOutput = state!.toggleSection('output')
+    await flush()
+    await clock.advance(2100)
+    assert.equal(requests.length, 5, 'a hidden pane must not start a direct or scheduled detail read')
+    await hiddenOutput
+    paneVisible.value = true
+    await clock.advance(1000)
+    assert.equal(requests.length, 6, 'revealing the pane resumes its open disclosures')
+    reply(5, 'visible again')
+    await flush()
+    assert.equal(state!.sectionValues.value.output, 'visible again')
   } finally {
     app.unmount()
     disposePinia(pinia)

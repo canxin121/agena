@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -10,6 +10,7 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '../../lib/api'
 import { useToastsStore } from '../../stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
+import { usePaneRead } from '@/composables/usePaneRead'
 
 type MemoryItem = {
   name?: string
@@ -28,8 +29,6 @@ type MemoriesOverview = {
 
 const toasts = useToastsStore()
 
-const loading = ref(false)
-const error = ref('')
 const items = ref<MemoryItem[]>([])
 const workspaceRoot = ref('')
 const directory = ref('')
@@ -42,13 +41,13 @@ const editBody = ref('')
 const editBusy = ref(false)
 const editError = ref('')
 
-const memoryTypeOptions = [
+const memoryTypeOptions = computed(() => [
   { value: 'user', label: st('User'), description: st('Stable user preferences and personal context.') },
   { value: 'feedback', label: st('Feedback'), description: st('Corrections and feedback from prior work.') },
   { value: 'project', label: st('Project'), description: st('Project-specific facts and conventions.') },
   { value: 'reference', label: st('Reference'), description: st('Reusable reference information.') },
   { value: 'other', label: st('Other'), description: st('Memory that does not fit another category.') },
-]
+])
 
 const sortedItems = computed(() =>
   [...items.value].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
@@ -63,28 +62,22 @@ function selectMemory(item: MemoryItem) {
   editError.value = ''
 }
 
-async function refresh() {
-  loading.value = true
-  error.value = ''
-  try {
-    const overview = await apiJson<MemoriesOverview>('/api/v1/memories/overview')
+const { loading, error, refresh } = usePaneRead(
+  async (signal) => {
+    const overview = await apiJson<MemoriesOverview>('/api/v1/memories/overview', { signal })
+    let items = Array.isArray(overview?.items) ? overview.items : []
+    if (!items.length) {
+      const flat = await apiJson<MemoryItem[]>('/api/v1/memories', { signal }).catch(() => null)
+      if (Array.isArray(flat)) items = flat
+    }
+    return { overview, items }
+  },
+  ({ overview, items: next }) => {
     workspaceRoot.value = overview?.workspace_root ?? ''
     directory.value = overview?.directory ?? ''
-    items.value = Array.isArray(overview?.items) ? overview.items : []
-    if (items.value.length === 0) {
-      // Fall back to the flat endpoint when the overview reports no items.
-      const flat = await apiJson<MemoryItem[]>('/api/v1/memories').catch(() => null)
-      if (Array.isArray(flat)) {
-        items.value = flat
-      }
-    }
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
-    items.value = []
-  } finally {
-    loading.value = false
-  }
-}
+    items.value = next
+  },
+)
 
 async function saveSelected() {
   const name = selectedName.value
@@ -131,10 +124,6 @@ async function deleteSelected() {
     editBusy.value = false
   }
 }
-
-onMounted(() => {
-  void refresh()
-})
 </script>
 
 <template>
@@ -150,18 +139,20 @@ onMounted(() => {
     </div>
 
     <div class="grid gap-3">
-      <div v-if="loading" class="text-sm text-muted-foreground">{{ $st('Loading memories...') }}</div>
+      <div v-if="loading && items.length === 0" class="text-sm text-muted-foreground">
+        {{ $st('Loading memories...') }}
+      </div>
       <div
-        v-else-if="error"
+        v-if="error"
         class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
         {{ error }}
       </div>
-      <div v-else-if="sortedItems.length === 0" class="text-sm text-muted-foreground">
+      <div v-if="!loading && sortedItems.length === 0" class="text-sm text-muted-foreground">
         {{ $st('No memories stored.') }}
       </div>
 
-      <div v-else class="space-y-2">
+      <div v-if="sortedItems.length > 0" class="space-y-2">
         <button
           v-for="item in sortedItems"
           :key="item.name ?? item.file_name ?? item.path"

@@ -4,6 +4,7 @@ import type { RouteLocationNormalizedLoaded, RouteLocationRaw } from 'vue-router
 export type WorkspacePaneContext = {
   windowId: ComputedRef<string>
   isFocused: ComputedRef<boolean>
+  isVisible: ComputedRef<boolean>
   route: ComputedRef<RouteLocationNormalizedLoaded>
   navigate: (to: RouteLocationRaw, replace?: boolean) => Promise<unknown>
 }

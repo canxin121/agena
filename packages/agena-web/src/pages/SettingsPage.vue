@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RiRefreshLine, RiResetLeftLine } from '@remixicon/vue'
@@ -11,13 +11,11 @@ import type { AppLocale } from '@/i18n/locale'
 
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
-import ModelsProvidersPanel from '@/components/settings/ModelsProvidersPanel.vue'
-import PermissionsWorkbenchPanel from '@/components/settings/PermissionsWorkbenchPanel.vue'
-import PluginsToolsPanel from '@/components/settings/PluginsToolsPanel.vue'
-import RuntimeSessionPanel from '@/components/settings/RuntimeSessionPanel.vue'
-import InterfaceSettingsPanel from '@/components/settings/InterfaceSettingsPanel.vue'
-import DiagnosticsWorkbenchPanel from '@/components/settings/DiagnosticsWorkbenchPanel.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
+import {
+  resolveSettingsSubpage,
+  settingsSubpageStorageKey,
+} from '@/components/settings/workbench/settingsSectionNavigation'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 import {
   buildSettingsSidebarTabs,
@@ -32,6 +30,7 @@ import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { apiJson } from '@/lib/api'
 import { buildLocalePickerOptions } from '@/pages/loginLocaleOptions'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import {
   BUILTIN_CHAT_ACTIVITY_KINDS,
@@ -49,9 +48,21 @@ import {
 import { settingsText as st } from '@/i18n/settingsText'
 import { resolveTranscriptVimEnabled } from '@/pages/chat/transcriptVimPreference'
 
+const ModelsProvidersPanel = defineAsyncComponent(() => import('@/components/settings/ModelsProvidersPanel.vue'))
+const PermissionsWorkbenchPanel = defineAsyncComponent(
+  () => import('@/components/settings/PermissionsWorkbenchPanel.vue'),
+)
+const PluginsToolsPanel = defineAsyncComponent(() => import('@/components/settings/PluginsToolsPanel.vue'))
+const RuntimeSessionPanel = defineAsyncComponent(() => import('@/components/settings/RuntimeSessionPanel.vue'))
+const InterfaceSettingsPanel = defineAsyncComponent(() => import('@/components/settings/InterfaceSettingsPanel.vue'))
+const DiagnosticsWorkbenchPanel = defineAsyncComponent(
+  () => import('@/components/settings/DiagnosticsWorkbenchPanel.vue'),
+)
+
 const settings = useSettingsStore()
 const ui = useUiStore()
 const workspacePane = useWorkspacePaneContext()
+const visible = usePaneVisibility()
 const route = useRoute()
 const router = useRouter()
 const { startDesktopSidebarResize } = useDesktopSidebarResize()
@@ -77,16 +88,6 @@ function readInitialSection(): SettingsTab {
 
 const activeSection = ref<SettingsTab>(readInitialSection())
 const settingsRefreshNonce = ref(0)
-
-watch(
-  () => i18n.global.locale.value,
-  () => {
-    // Most dense Settings panels build option catalogs during setup. Remount
-    // the active workbench so every script-side label changes immediately
-    // when the browser locale changes.
-    settingsRefreshNonce.value += 1
-  },
-)
 
 function goToSettingsDestination(destination: SettingsSidebarDestination) {
   const path = settingsPathForTab(destination.section)
@@ -148,7 +149,6 @@ onMounted(() => {
   if (!settings.data && !settings.loading) {
     void settings.refresh()
   }
-  void loadChatToolCatalog()
 })
 
 watch(
@@ -353,22 +353,59 @@ const activityKindCatalogItems = ref<ChatActivityKindCatalogItem[]>(BUILTIN_CHAT
 const toolCatalogLoading = ref(false)
 const toolCatalogError = ref('')
 const toolCatalogQuery = ref('')
+let toolCatalogLoaded = false
+let toolCatalogController: AbortController | undefined
+const needsChatToolCatalog = computed(() => {
+  if (activeSection.value !== 'interface') return false
+  let remembered = ''
+  try {
+    remembered = localStorage.getItem(settingsSubpageStorageKey('interface')) || ''
+  } catch {}
+  return (
+    resolveSettingsSubpage(route.query.view, remembered, interfacePages.value, SETTINGS_DEFAULT_SUBPAGE.interface) ===
+    'conversation'
+  )
+})
 
 async function loadChatToolCatalog() {
-  if (toolCatalogLoading.value) return
+  if (!visible.value || !needsChatToolCatalog.value || toolCatalogLoading.value) return
+  const controller = new AbortController()
+  toolCatalogController = controller
   toolCatalogLoading.value = true
   toolCatalogError.value = ''
   try {
-    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/surface')
+    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/surface', {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+    })
+    if (controller.signal.aborted || toolCatalogController !== controller) return
     toolCatalogItems.value = Array.isArray(response?.permission_tools) ? response.permission_tools : []
     const activityKinds = normalizeChatActivityKindCatalog(response?.activity_kinds)
     activityKindCatalogItems.value = activityKinds.length ? activityKinds : BUILTIN_CHAT_ACTIVITY_KINDS.slice()
+    toolCatalogLoaded = true
   } catch (error) {
+    if (controller.signal.aborted || toolCatalogController !== controller) return
     toolCatalogError.value = error instanceof Error ? error.message : String(error)
   } finally {
-    toolCatalogLoading.value = false
+    if (toolCatalogController === controller) {
+      toolCatalogController = undefined
+      toolCatalogLoading.value = false
+    }
   }
 }
+watch(
+  [visible, needsChatToolCatalog],
+  ([shown, needed]) => {
+    if (shown && needed) {
+      if (!toolCatalogLoaded) void loadChatToolCatalog()
+    } else {
+      toolCatalogController?.abort()
+      toolCatalogController = undefined
+      toolCatalogLoading.value = false
+    }
+  },
+  { immediate: true, flush: 'sync' },
+)
+onBeforeUnmount(() => toolCatalogController?.abort())
 
 const activityKindOptions = computed(() => activityKindCatalogItems.value)
 

@@ -4,6 +4,7 @@ import { useBtwStore } from './btw'
 import { computed, onScopeDispose, ref } from 'vue'
 
 import * as chatApi from './chat/api'
+import { TranscriptCacheIndex } from './chat/transcriptCache'
 import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
 import { binarySearchById, compareChatIds, isOlderPart, upsertMessageEntryIn, upsertPart } from './chat/messageIndex'
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
@@ -99,6 +100,33 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // ─── selected session ─────────────────────────────────────────────────────
   const selectedSessionId = ref<string | null>(loadStoredSelectedSession())
   const messagesBySession = ref<Record<string, MessageEntry[]>>({})
+  const transcriptCache = new TranscriptCacheIndex()
+  const evictedTranscriptSessions = new Set<string>()
+  let cacheEvictionTimer: ReturnType<typeof setTimeout> | undefined
+  function scheduleTranscriptEviction() {
+    if (cacheEvictionTimer !== undefined) return
+    cacheEvictionTimer = setTimeout(() => {
+      cacheEvictionTimer = undefined
+      const protectedIds = new Set([...visibleSessions.keys(), ...refreshMessagesInFlightBySession.keys()])
+      if (selectedSessionId.value) protectedIds.add(selectedSessionId.value)
+      for (const sid of transcriptCache.evictions(protectedIds)) {
+        transcriptCache.remove(sid)
+        evictedTranscriptSessions.add(sid)
+        delete messagesBySession.value[sid]
+        clearMessagesHydrated(sid)
+        delete historyCursorBySession.value[sid]
+        delete historyExhaustedBySession.value[sid]
+        delete historyLimitBySession.value[sid]
+        delete historyOlderLoadedBySession.value[sid]
+        transcriptObservations.delete(sid)
+        transcriptRecovery.delete(sid)
+        membershipRevalidation.delete(sid)
+        messageRevalidators.get(sid)?.dispose()
+        messageRevalidators.delete(sid)
+        clearMessageRefreshRetry(sid)
+      }
+    }, 1000)
+  }
   const messagesHydratedBySession = ref<Record<string, boolean>>({})
   const messages = computed<MessageEntry[]>(() => {
     const sid = selectedSessionId.value
@@ -230,6 +258,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function retainSession(sid: string) {
+    transcriptCache.touch(sid)
     visibleSessions.set(sid, (visibleSessions.get(sid) || 0) + 1)
     if (!sessionResourceSubscriptions.has(sid)) {
       const releaseState = subscribeResource(`session:${sid}:state`, (event) => {
@@ -249,6 +278,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
     statusRevalidators.get(sid)?.resume()
     messageRevalidators.get(sid)?.resume()
+    if (evictedTranscriptSessions.delete(sid)) void refreshMessages(sid, { silent: true }).catch(() => {})
     return () => {
       const count = (visibleSessions.get(sid) || 1) - 1
       if (count) visibleSessions.set(sid, count)
@@ -258,6 +288,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         sessionResourceSubscriptions.delete(sid)
         statusRevalidators.get(sid)?.pause()
         messageRevalidators.get(sid)?.pause()
+        scheduleTranscriptEviction()
       }
     }
   }
@@ -322,7 +353,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // ─── session list ─────────────────────────────────────────────────────────
 
   function indexSessions(list: Session[]) {
-    const nextById = { ...sessionsById.value }
+    const nextById = sessionsById.value
     for (const s of list) {
       const sid = typeof s?.id === 'string' ? s.id.trim() : ''
       if (sid && !deletedSessions.has(sid) && !(Number(nextById[sid]?.version || 0) > Number(s.version || 0)))
@@ -337,7 +368,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid || deletedSessions.has(sid)) return
     if (updated.version !== undefined && Number(sessionsById.value[sid]?.version || 0) > updated.version) return
     const merged = { ...(sessionsById.value[sid] || {}), ...updated, id: sid } as Session
-    sessionsById.value = { ...sessionsById.value, [sid]: merged }
+    sessionsById.value[sid] = merged
     const hasInCurrent = sessions.value.some((s) => s.id === sid)
     if (hasInCurrent) {
       sessions.value = sessions.value.map((s) => (s.id === sid ? { ...s, ...merged } : s))
@@ -507,6 +538,16 @@ const useChatStoreDefinition = defineStore('chat', () => {
           parts: entry.parts.filter((part) => !removed.has(part.id)),
         }))
     const existing = messagesBySession.value[sid]
+    transcriptCache.set(
+      sid,
+      list.flatMap(
+        (entry): Array<[string, unknown]> => [
+          [entry.info.id, entry.info],
+          ...entry.parts.map((part): [string, unknown] => [part.id, part]),
+        ],
+      ),
+    )
+    scheduleTranscriptEviction()
     if (Array.isArray(existing)) {
       existing.splice(0, existing.length, ...list)
       return
@@ -653,6 +694,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
   if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', resumeMessageRefresh)
   onScopeDispose(() => {
+    clearTimeout(cacheEvictionTimer)
+    transcriptCache.clear()
     if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', resumeMessageRefresh)
     for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
     refreshMessagesRetryTimerBySession.clear()
@@ -1021,6 +1064,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
         sessionResourceSubscriptions.delete(sid)
       }
     presentedInteractiveRequestBySession.clear()
+    transcriptCache.clear()
+    evictedTranscriptSessions.clear()
     messagesBySession.value = {}
     messagesHydratedBySession.value = {}
     historyLimitBySession.value = {}
@@ -1438,6 +1483,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function forgetSession(sid: string) {
+    transcriptCache.remove(sid)
+    evictedTranscriptSessions.delete(sid)
     transcriptObservations.delete(sid)
     transcriptRecovery.delete(sid)
     executionRecovery.delete(sid)
@@ -1448,6 +1495,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     deletedSessions.add(sid)
     messageRevalidators.get(sid)?.dispose()
     statusRevalidators.get(sid)?.dispose()
+    messageRevalidators.delete(sid)
+    statusRevalidators.delete(sid)
     clearMessageRefreshRetry(sid)
     refreshMessagesRequestSeqBySession.delete(sid)
 
@@ -1660,7 +1709,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   async function uploadWorkspaceAttachment(
     sessionId: string,
-    input: { filename: string; dataBase64: string; mime?: string },
+    input: { filename: string; dataBase64?: string; blob?: Blob; mime?: string },
   ) {
     const sid = String(sessionId || '').trim()
     if (!sid) throw new Error('A session is required for attachments')
@@ -1917,11 +1966,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
       // loaded in another conversation; removals remain session-specific.
       if (propagateShared && changeKind === 'part_updated' && isRecord(props.part)) {
         const id = String(props.part.part_id)
-        for (const [target, entries] of Object.entries(messagesBySession.value)) {
-          if (
-            target !== sid &&
-            entries.some((entry) => entry.info.id === id || entry.parts.some((part) => part.id === id))
-          ) {
+        for (const target of [...transcriptCache.members(id)]) {
+          if (target !== sid) {
             applyEvent({ ...evt, properties: { ...props, session_id: Number(target) } }, false)
           }
         }
@@ -1946,6 +1992,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
             const runId = readNumber(part.run_id)
             const key = runId != null ? String(runId) : String(partId)
             const list = ensureSessionMessages(sid)
+            transcriptCache.update(sid, String(partId), part)
+            scheduleTranscriptEviction()
             const kind = readString(part.kind as JsonValue)
 
             if (kind === 'run') {
@@ -2026,6 +2074,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       } else if (sid && changeKind === 'part_removed') {
         const removedPartId = readNumber(props.part_id)
         if (removedPartId != null) {
+          transcriptCache.removePart(sid, String(removedPartId))
           let removed = removedParts.get(sid)
           if (!removed) removedParts.set(sid, (removed = new Set()))
           removed.add(String(removedPartId))
@@ -2038,6 +2087,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
             const idx = list.findIndex((m) => Number(m.info.runId) === removedPartId)
             if (idx >= 0) {
               const removedMessage = list[idx]
+              for (const part of removedMessage.parts) transcriptCache.removePart(sid, part.id)
               list.splice(idx, 1)
               decrementUserMessageCount(sid, removedMessage)
               return
@@ -2236,6 +2286,7 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
     )
   }
 
+  const paneMessages = computed(() => store.getMessagesForSession(selectedSessionId()))
   return new Proxy(store, {
     get(target, property, receiver) {
       const sid = selectedSessionId()
@@ -2243,7 +2294,7 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
       if (property === 'selectedSession') return target.getSessionById(sid)
       if (property === 'selectedSessionState') return target.getSessionById(sid)?.state || { kind: 'ready', data: {} }
       if (property === 'selectedSessionDirectory') return target.getSessionDirectory(sid)
-      if (property === 'messages') return target.getMessagesForSession(sid)
+      if (property === 'messages') return paneMessages.value
       if (property === 'messagesLoading') return sid === target.selectedSessionId ? target.messagesLoading : false
       if (property === 'messagesError') return sid === target.selectedSessionId ? target.messagesError : null
       if (property === 'selectedHistory') return target.getSessionHistory(sid)

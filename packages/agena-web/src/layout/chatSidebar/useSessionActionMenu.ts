@@ -76,7 +76,7 @@ export function buildSessionActionItemsForSessionI18n(
 
 export function useSessionActionMenu(opts: {
   chat: { selectedSessionId: string | null }
-  ui: { requestSessionAction: (id: string) => void }
+  ui: { requestSessionAction: (id: string, sessionId?: string) => void }
   selectSession: (sessionId: string) => Promise<void>
 }) {
   const { t } = useI18n()
@@ -171,7 +171,7 @@ export function useSessionActionMenu(opts: {
     if (targetSessionId && targetSessionId !== opts.chat.selectedSessionId) {
       await opts.selectSession(targetSessionId)
     }
-    opts.ui.requestSessionAction(item.id)
+    opts.ui.requestSessionAction(item.id, targetSessionId)
   }
 
   watch(sessionActionMenuOpen, (open) => {

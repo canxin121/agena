@@ -190,6 +190,35 @@ impl ApplicationService {
         workspace_id: i64,
         request: WorkspaceFileUploadRequest,
     ) -> ApplicationResult<WorkspaceFileUploadResource> {
+        self.upload_workspace_file_inner(workspace_id, request, None)
+            .await
+    }
+
+    pub async fn upload_workspace_file_bytes(
+        &self,
+        workspace_id: i64,
+        filename: String,
+        mime: Option<String>,
+        bytes: Vec<u8>,
+    ) -> ApplicationResult<WorkspaceFileUploadResource> {
+        self.upload_workspace_file_inner(
+            workspace_id,
+            WorkspaceFileUploadRequest {
+                filename,
+                mime,
+                data_base64: String::new(),
+            },
+            Some(bytes),
+        )
+        .await
+    }
+
+    async fn upload_workspace_file_inner(
+        &self,
+        workspace_id: i64,
+        request: WorkspaceFileUploadRequest,
+        bytes: Option<Vec<u8>>,
+    ) -> ApplicationResult<WorkspaceFileUploadResource> {
         let root_path = PathBuf::from(
             self.workspace_repository
                 .path_by_id(workspace_id)
@@ -203,7 +232,7 @@ impl ApplicationService {
                 })?,
         );
         WORKSPACE_TRANSFERS
-            .run(move || upload_workspace_file_sync(workspace_id, root_path, request))
+            .run(move || upload_workspace_file_sync(workspace_id, root_path, request, bytes))
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?
     }
@@ -520,6 +549,7 @@ fn upload_workspace_file_sync(
     workspace_id: i64,
     root_path: PathBuf,
     request: WorkspaceFileUploadRequest,
+    bytes: Option<Vec<u8>>,
 ) -> ApplicationResult<WorkspaceFileUploadResource> {
     const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
 
@@ -540,18 +570,23 @@ fn upload_workspace_file_sync(
         ));
     }
 
-    // Check the encoded budget before allocating the decoded attachment.
-    let max_encoded = 4 * MAX_UPLOAD_BYTES.div_ceil(3);
-    if request.data_base64.trim().len() as u64 > max_encoded {
-        return Err(ApplicationError::bad_request(
-            "The uploaded file exceeds the 50 MiB upload limit.",
-        ));
-    }
-    let decoded = BASE64_STANDARD
-        .decode(request.data_base64.trim().as_bytes())
-        .map_err(|_| {
-            ApplicationError::bad_request("The uploaded file data is not valid base64.")
-        })?;
+    let decoded = match bytes {
+        Some(bytes) => bytes,
+        None => {
+            // Check the encoded budget before allocating the decoded attachment.
+            let max_encoded = 4 * MAX_UPLOAD_BYTES.div_ceil(3);
+            if request.data_base64.trim().len() as u64 > max_encoded {
+                return Err(ApplicationError::bad_request(
+                    "The uploaded file exceeds the 50 MiB upload limit.",
+                ));
+            }
+            BASE64_STANDARD
+                .decode(request.data_base64.trim().as_bytes())
+                .map_err(|_| {
+                    ApplicationError::bad_request("The uploaded file data is not valid base64.")
+                })?
+        }
+    };
     if decoded.is_empty() {
         return Err(ApplicationError::bad_request("The uploaded file is empty."));
     }

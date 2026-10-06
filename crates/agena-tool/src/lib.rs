@@ -4268,6 +4268,9 @@ pub struct PreparedShellCommand {
     /// hooks. Carrying it with the prepared command prevents execution from
     /// re-entering synchronous plugin hooks on a blocking worker.
     pub env: std::collections::HashMap<String, String>,
+    /// Resolved shell launch for `command`. `None` keeps the historical
+    /// platform-default wrap for callers that never resolved a user shell.
+    pub launch: Option<crate::shell::ShellLaunchSpec>,
 }
 
 /// Maximum-character policy applied by concrete tool-output truncators.
@@ -4337,6 +4340,7 @@ mod tests {
             command: "echo ok".to_string(),
             cwd: std::path::PathBuf::from("/tmp"),
             env: std::collections::HashMap::new(),
+            launch: None,
         };
         assert_eq!(command.command, "echo ok");
         assert_eq!(command.cwd, std::path::Path::new("/tmp"));

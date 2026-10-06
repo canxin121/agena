@@ -48,7 +48,7 @@ const jsonError = ref('')
 const rawHarnessJson = ref('{}')
 const rawHarnessJsonDirty = ref(false)
 
-const kindOptions = [
+const kindOptions = computed(() => [
   {
     value: 'browser',
     label: st('Browser Harness'),
@@ -64,11 +64,11 @@ const kindOptions = [
     label: st('Editor Harness'),
     description: st('Workspace boundary, file size, and extension allowlist.'),
   },
-]
-const layerOptions = [
+])
+const layerOptions = computed(() => [
   { value: 'global', label: st('Global layer'), description: st('Available to all workspaces.') },
   { value: 'workspace', label: st('Workspace layer'), description: st('Overrides only the current workspace.') },
-]
+])
 
 const names = computed(() => Object.keys(maps.value[selectedKind.value] || {}).sort((a, b) => a.localeCompare(b)))
 const selectedConfig = computed(() =>

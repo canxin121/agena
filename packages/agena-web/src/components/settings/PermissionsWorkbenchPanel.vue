@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import PermissionStudioPanel from '@/components/settings/PermissionStudioPanel.vue'
-import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
+import { computed, defineAsyncComponent } from 'vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
-const pages = buildSettingsSubpages('permissions')
+const PermissionStudioPanel = defineAsyncComponent(() => import('@/components/settings/PermissionStudioPanel.vue'))
+const PermissionsPanel = defineAsyncComponent(() => import('@/components/settings/PermissionsPanel.vue'))
+
+const pages = computed(() => buildSettingsSubpages('permissions'))
 </script>
 
 <template>

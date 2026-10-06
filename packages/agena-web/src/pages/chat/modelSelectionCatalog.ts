@@ -1,4 +1,5 @@
-import { getCurrentScope, onScopeDispose, ref } from 'vue'
+import { getCurrentScope, onScopeDispose, ref, watch } from 'vue'
+import { useWorkspacePaneContext } from '../../app/workspace/workspacePaneContext'
 
 import { apiJson } from '../../lib/api'
 import {
@@ -95,23 +96,25 @@ type ProviderAdapterModels = {
   failure?: JsonValue
 }
 
-// Coalesce the same catalog reads across mounted pickers. Keep a completed
-// result for only one scheduling window; explicit later reloads read again.
-const sharedReads = new Map<string, { promise: Promise<unknown>; until: number }>()
-async function catalogJson<T>(path: string, scope: number, generation: number): Promise<T> {
+// Share initial reads across panes for 30 seconds. Configuration generations
+// invalidate them immediately; an explicit reload of an existing picker only
+// reuses the same scheduling window.
+const sharedReads = new Map<string, { promise: Promise<unknown>; completedAt: number }>()
+async function catalogJson<T>(path: string, scope: number, generation: number, reuse: boolean): Promise<T> {
   const key = `${scope}:${generation}:${path}`
   const existing = sharedReads.get(key)
-  if (existing && existing.until > Date.now()) return existing.promise as Promise<T>
-  const entry = { promise: apiJson<T>(path, { signal: AbortSignal.timeout(15_000) }), until: Infinity }
+  if (existing && (existing.completedAt === Infinity || Date.now() - existing.completedAt < (reuse ? 30_000 : 250)))
+    return existing.promise as Promise<T>
+  const entry = { promise: apiJson<T>(path, { signal: AbortSignal.timeout(15_000) }), completedAt: Infinity }
   sharedReads.set(key, entry)
   if (sharedReads.size > 128)
     for (const [oldKey, value] of sharedReads) {
-      if (value.until !== Infinity) sharedReads.delete(oldKey)
+      if (value.completedAt !== Infinity) sharedReads.delete(oldKey)
       if (sharedReads.size <= 128) break
     }
   try {
     const result = await entry.promise
-    entry.until = Date.now() + 250
+    entry.completedAt = Date.now()
     return result
   } catch (error) {
     if (sharedReads.get(key) === entry) sharedReads.delete(key)
@@ -274,6 +277,7 @@ export function useModelSelectionCatalog() {
     const generation = modelConfigurationGeneration()
     const scope = captureResourceObservation('sessions').scope
     const inventoryGeneration = modelInventoryGeneration()
+    const reuse = changedOnly || loadedGeneration < 0
     const isCurrent = () =>
       !disposed &&
       generation === modelConfigurationGeneration() &&
@@ -282,7 +286,7 @@ export function useModelSelectionCatalog() {
       catalogLoading.value = true
       catalogError.value = ''
       try {
-        const runtime = await catalogJson<RuntimeStatus>('/api/v1/runtime', scope, generation)
+        const runtime = await catalogJson<RuntimeStatus>('/api/v1/runtime', scope, generation, reuse)
         if (!isCurrent()) return
 
         const selection = runtime?.default_selection || null
@@ -309,7 +313,7 @@ export function useModelSelectionCatalog() {
           loadedGeneration = generation
           return
         }
-        const summaries = await catalogJson<ProviderSummary[]>('/api/v1/providers', scope, generation)
+        const summaries = await catalogJson<ProviderSummary[]>('/api/v1/providers', scope, generation, reuse)
 
         const summaryList = Array.isArray(summaries) ? summaries : []
         const results = await Promise.allSettled(
@@ -320,6 +324,7 @@ export function useModelSelectionCatalog() {
               `/api/v1/providers/${encodeURIComponent(providerId)}/configured-models`,
               scope,
               generation,
+              reuse,
             )
             const models: ProviderModel[] = []
             for (const adapter of adapters) {
@@ -410,17 +415,20 @@ export function useModelSelectionCatalog() {
   }
 
   if (getCurrentScope()) {
+    const pane = useWorkspacePaneContext()
+    const visible = () => isDocumentVisible() && (!pane || pane.isVisible.value)
     const queue = createRevalidator(
       async () => {
         await loadProvidersAndModels(true)
         if (catalogError.value) throw new Error(catalogError.value)
       },
-      { intervalMs: 250, retryMs: 5000, enabled: () => !disposed && isDocumentVisible() },
+      { intervalMs: 250, retryMs: 5000, enabled: () => !disposed && visible() },
     )
     const release = subscribeModelConfiguration(() => {
       if (loadPromise || loadedGeneration >= 0) queue.invalidate(0)
     })
-    const visibility = () => (isDocumentVisible() ? queue.resume() : queue.pause())
+    const visibility = () => (visible() ? queue.resume() : queue.pause())
+    if (pane) watch(pane.isVisible, visibility, { flush: 'sync' })
     document.addEventListener('visibilitychange', visibility)
     onScopeDispose(() => {
       disposed = true

@@ -1,0 +1,161 @@
+{
+  "captured_at": "2026-10-06T14:50:54.426Z",
+  "baseline_commit": "eae4b96f255e216113ba9b6c0ffea86f3df20d4b",
+  "runtime": {
+    "bun": "1.4.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M5"
+  },
+  "methodology": {
+    "statistic": "median",
+    "samples": 9,
+    "warmups": 3,
+    "isolated_cpu_only": true,
+    "JSON_parsing_and_browser_layout_excluded": true
+  },
+  "results": [
+    {
+      "name": "fold_consecutive_assistants",
+      "input": {
+        "messages": 500
+      },
+      "before_ms": 6.487791999999985,
+      "after_ms": 0.19591599999998266,
+      "speedup": 33.11517180832887
+    },
+    {
+      "name": "fold_consecutive_assistants",
+      "input": {
+        "messages": 1000
+      },
+      "before_ms": 24.784708000000023,
+      "after_ms": 0.2977500000000646,
+      "speedup": 83.23999328293752
+    },
+    {
+      "name": "fold_consecutive_assistants",
+      "input": {
+        "messages": 2000
+      },
+      "before_ms": 99.23433399999999,
+      "after_ms": 0.44354199999997945,
+      "speedup": 223.7315383887086
+    },
+    {
+      "name": "classify_answers_before_tool",
+      "input": {
+        "parts": 1000
+      },
+      "before_ms": 4.228749999999991,
+      "after_ms": 0.14591700000005403,
+      "speedup": 28.980516320911374
+    },
+    {
+      "name": "classify_answers_before_tool",
+      "input": {
+        "parts": 2000
+      },
+      "before_ms": 15.335166000000072,
+      "after_ms": 0.2900419999998576,
+      "speedup": 52.87222540186456
+    },
+    {
+      "name": "classify_answers_before_tool",
+      "input": {
+        "parts": 4000
+      },
+      "before_ms": 59.792417000000114,
+      "after_ms": 0.5422079999998459,
+      "speedup": 110.2757926847577
+    },
+    {
+      "name": "stream_one_tail_preserving_history",
+      "input": {
+        "messages": 500
+      },
+      "before_ms": 0.9403749999996762,
+      "after_ms": 0.2664589999999407,
+      "speedup": 3.5291545791280665
+    },
+    {
+      "name": "stream_one_tail_preserving_history",
+      "input": {
+        "messages": 2000
+      },
+      "before_ms": 3.3988329999997404,
+      "after_ms": 0.9991249999998217,
+      "speedup": 3.4018095833858095
+    },
+    {
+      "name": "stream_one_tail_preserving_history",
+      "input": {
+        "messages": 6000
+      },
+      "before_ms": 10.412667000000056,
+      "after_ms": 3.540875000000142,
+      "speedup": 2.9407044868852017
+    },
+    {
+      "name": "search_row_membership",
+      "input": {
+        "rows": 500,
+        "matches": 1000
+      },
+      "before_ms": 12.494375000000218,
+      "after_ms": 0.03670899999997346,
+      "speedup": 340.36271758994394
+    },
+    {
+      "name": "search_row_membership",
+      "input": {
+        "rows": 1000,
+        "matches": 2000
+      },
+      "before_ms": 50.61716699999988,
+      "after_ms": 0.03241700000035053,
+      "speedup": 1561.4389671916758
+    },
+    {
+      "name": "search_row_membership",
+      "input": {
+        "rows": 2000,
+        "matches": 4000
+      },
+      "before_ms": 203.53312499999993,
+      "after_ms": 0.05766700000003766,
+      "speedup": 3529.455754588708
+    },
+    {
+      "name": "SSE_frame_delimiters",
+      "input": {
+        "bytes": 2097160,
+        "chunk_bytes": 4096
+      },
+      "before_ms": 31.26416700000027,
+      "after_ms": 1.7545419999996739,
+      "speedup": 17.818990369000048
+    },
+    {
+      "name": "large_code_explicit_language",
+      "input": {
+        "characters": 92000,
+        "language": "javascript",
+        "policy": "plain escaped source above 16 KiB"
+      },
+      "before_ms": 16.852457999999388,
+      "after_ms": 0.052250000000640284,
+      "speedup": 322.53508133574877
+    },
+    {
+      "name": "activity_log_large_tail",
+      "input": {
+        "source_characters": 1200000,
+        "budget_bytes": 131072
+      },
+      "before_ms": 0.9366669999999431,
+      "after_ms": 0.10737499999959255,
+      "speedup": 8.72332479630731
+    }
+  ]
+}

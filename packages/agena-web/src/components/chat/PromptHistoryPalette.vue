@@ -47,7 +47,7 @@ function setIndex(index: number) {
 }
 
 function preview(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
+  return text.slice(0, 600).replace(/\s+/g, ' ').trim()
 }
 </script>
 

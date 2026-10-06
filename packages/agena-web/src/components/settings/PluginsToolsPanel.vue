@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import HarnessSettingsPanel from '@/components/settings/HarnessSettingsPanel.vue'
-import McpServerControlPanel from '@/components/settings/McpServerControlPanel.vue'
-import PluginMarketplacePanel from '@/components/settings/PluginMarketplacePanel.vue'
-import PluginsPanel from '@/components/settings/PluginsPanel.vue'
+import { computed, defineAsyncComponent } from 'vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
-const pages = buildSettingsSubpages('plugins-tools')
+const HarnessSettingsPanel = defineAsyncComponent(() => import('@/components/settings/HarnessSettingsPanel.vue'))
+const McpServerControlPanel = defineAsyncComponent(() => import('@/components/settings/McpServerControlPanel.vue'))
+const PluginMarketplacePanel = defineAsyncComponent(() => import('@/components/settings/PluginMarketplacePanel.vue'))
+const PluginsPanel = defineAsyncComponent(() => import('@/components/settings/PluginsPanel.vue'))
+
+const pages = computed(() => buildSettingsSubpages('plugins-tools'))
 </script>
 
 <template>

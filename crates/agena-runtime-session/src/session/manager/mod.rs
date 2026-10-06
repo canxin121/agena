@@ -2603,20 +2603,21 @@ impl SessionManager {
             .monitor_registry()
             .map(|registry| registry.list())
             .unwrap_or_default();
+        let running_process_ids = process_summaries
+            .iter()
+            .filter(|summary| summary.status == ProcessStatus::Running)
+            .map(|summary| summary.process_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
         let mut renewed = 0usize;
         for operation in operations {
             if operation.phase != BackgroundOperationPhase::Running {
                 continue;
             }
             let live = match operation.kind {
-                BackgroundOperationKind::Shell | BackgroundOperationKind::Monitor => {
-                    operation.external_id.as_deref().is_some_and(|external_id| {
-                        process_summaries.iter().any(|summary| {
-                            summary.process_id == external_id
-                                && summary.status == ProcessStatus::Running
-                        })
-                    })
-                }
+                BackgroundOperationKind::Shell | BackgroundOperationKind::Monitor => operation
+                    .external_id
+                    .as_deref()
+                    .is_some_and(|external_id| running_process_ids.contains(external_id)),
                 BackgroundOperationKind::Task => {
                     let Some(task_id) = operation.external_id.as_deref() else {
                         continue;
@@ -2841,7 +2842,14 @@ impl SessionManager {
             else {
                 continue;
             };
-            let child = self.store.load_session(child_id).await?;
+            let mut child = crate::session::store::session_from_view_async(
+                self.store
+                    .facade
+                    .load_part_ids(child_id, &[])
+                    .await
+                    .map_err(crate::session::store::store_error)?,
+            )
+            .await?;
             if child.runtime.subtask.status == agena_domain::SubtaskStatus::Running {
                 let launch_is_live = operation
                     .lease_until_ms
@@ -2854,12 +2862,20 @@ impl SessionManager {
                     continue;
                 }
                 self.reconcile_interrupted_session(child_id).await?;
+                child = crate::session::store::session_from_view_async(
+                    self.store
+                        .facade
+                        .load_part_ids(child_id, &[])
+                        .await
+                        .map_err(crate::session::store::store_error)?,
+                )
+                .await?;
             }
-            let child = self.store.load_session(child_id).await?;
             let status = child.runtime.subtask.status;
             if !status.is_terminal() {
                 continue;
             }
+            let child = self.store.load_session(child_id).await?;
             let (terminal, notification_status) = match status {
                 agena_domain::SubtaskStatus::Completed => (PartState::Completed, "completed"),
                 agena_domain::SubtaskStatus::Failed => (PartState::Failed, "failed"),

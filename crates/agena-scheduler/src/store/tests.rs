@@ -18,6 +18,37 @@ async fn stores() -> Vec<Box<dyn JobStore>> {
     ]
 }
 
+#[tokio::test]
+async fn activity_lists_filter_session_and_terminal_jobs_before_projection() {
+    for store in stores().await {
+        let now = Utc::now();
+        let mut owned = ScheduledJob::new_once(now, "owned");
+        owned.owner_session_id = Some(7);
+        let mut unrelated = ScheduledJob::new_once(now, "unrelated");
+        unrelated.owner_session_id = Some(8);
+        let mut terminal = ScheduledJob::new_once(now, "terminal");
+        terminal.owner_session_id = Some(7);
+        terminal.completed = true;
+        let owned_id = owned.id;
+        store.put(owned).await.unwrap();
+        store.put(unrelated).await.unwrap();
+        store.put(terminal).await.unwrap();
+        assert_eq!(
+            store
+                .list_filtered(Some(7), true)
+                .await
+                .unwrap()
+                .iter()
+                .map(|entry| entry.job.id)
+                .collect::<Vec<_>>(),
+            [owned_id]
+        );
+        assert_eq!(store.list_filtered(Some(7), false).await.unwrap().len(), 2);
+        assert_eq!(store.list_filtered(None, true).await.unwrap().len(), 2);
+        assert!(store.list_filtered(Some(9), true).await.unwrap().is_empty());
+    }
+}
+
 async fn snapshot(store: &dyn JobStore, id: Uuid) -> JobSnapshot {
     store.get(id).await.unwrap().unwrap()
 }
@@ -578,6 +609,7 @@ async fn persistence_and_decode_errors_are_not_empty_or_missing_jobs() {
     .unwrap();
     assert!(store.get(id).await.is_err());
     assert!(store.list().await.is_err());
+    assert!(store.list_filtered(Some(7), true).await.is_err());
     assert!(store.list_due(now.timestamp_millis()).await.is_err());
     db.execute(Statement::from_string(
         DatabaseBackend::Sqlite,

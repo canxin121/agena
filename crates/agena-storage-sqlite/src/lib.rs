@@ -9,8 +9,8 @@
 //!
 //! - [`SeaModelCatalogRepository`], [`SeaWorkspaceRepository`],
 //!   [`SeaPermissionRuleRepository`] — SQLite-backed infrastructure repositories.
-//! - [`initialize_schema`] — create the schema only for an empty database and
-//!   otherwise require an exact match with this build.
+//! - [`initialize_schema`] — create an empty database, validate existing durable
+//!   objects exactly, and install missing derived performance indexes.
 //!
 //! The `schema_invariants` module installs database triggers that keep
 //! invariants enforced at the storage layer.

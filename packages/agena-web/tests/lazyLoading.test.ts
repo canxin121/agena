@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { after } from 'node:test'
 import { createServer } from 'vite'
+import { effectScope, nextTick, ref } from 'vue'
 import { fileURLToPath } from 'node:url'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMermaidRenderer } from '../src/lib/mermaidRenderer'
@@ -26,6 +27,117 @@ const { useDirectorySessionStore } = (await vite.ssrLoadModule(
   '/src/stores/directorySessionStore.ts',
 )) as typeof import('../src/stores/directorySessionStore')
 const resourceSync = (await vite.ssrLoadModule('/src/lib/resourceSync.ts')) as typeof import('../src/lib/resourceSync')
+const { renderMarkdownAsync } = (await vite.ssrLoadModule(
+  '/src/lib/markdownAsync.ts',
+)) as typeof import('../src/lib/markdownAsync')
+const { useChatAttachments } = (await vite.ssrLoadModule(
+  '/src/pages/chat/useChatAttachments.ts',
+)) as typeof import('../src/pages/chat/useChatAttachments')
+
+test('Markdown worker serializes parses, drops cancelled queued bodies, and recovers after a worker failure', async () => {
+  const original = globalThis.Worker
+  const workers: Array<{
+    onmessage?: (event: unknown) => void
+    onerror?: () => void
+    sent: Array<{ id: number; content: string }>
+  }> = []
+  globalThis.Worker = class {
+    onmessage?: (event: unknown) => void
+    onerror?: () => void
+    sent: Array<{ id: number; content: string }> = []
+    constructor() {
+      workers.push(this)
+    }
+    postMessage(value: { id: number; content: string }) {
+      this.sent.push(value)
+    }
+    terminate() {}
+  } as unknown as typeof Worker
+  try {
+    const signal = new AbortController()
+    const cancelled = new AbortController()
+    const first = renderMarkdownAsync('first', {}, signal.signal)
+    const ignored = renderMarkdownAsync('cancelled', {}, cancelled.signal)
+    const rejection = assert.rejects(ignored, { name: 'AbortError' })
+    const last = renderMarkdownAsync('last', {}, signal.signal)
+    cancelled.abort()
+    await rejection
+    const worker = workers[0]!
+    assert.deepEqual(
+      worker.sent.map((work) => work.content),
+      ['first'],
+    )
+    worker.onmessage?.({ data: { id: worker.sent[0]!.id, html: '<p>first</p>' } })
+    assert.equal(await first, '<p>first</p>')
+    assert.deepEqual(
+      worker.sent.map((work) => work.content),
+      ['first', 'last'],
+    )
+    worker.onmessage?.({ data: { id: worker.sent[1]!.id, html: '<p>last</p>' } })
+    assert.equal(await last, '<p>last</p>')
+    const failure = renderMarkdownAsync('failure', {}, signal.signal)
+    const failed = assert.rejects(failure, /worker failed/)
+    worker.onerror?.()
+    await failed
+    const retry = renderMarkdownAsync('retry', {}, signal.signal)
+    const replacement = workers[1]!
+    replacement.onmessage?.({ data: { id: replacement.sent[0]!.id, html: '<p>retry</p>' } })
+    assert.equal(await retry, '<p>retry</p>')
+    // Leave no fake worker in the shared renderer after this test.
+    replacement.onerror?.()
+  } finally {
+    globalThis.Worker = original
+  }
+})
+
+test('attachment URLs survive switching drafts and failed-send recovery, then release on discard and unmount', async () => {
+  const create = URL.createObjectURL
+  const revoke = URL.revokeObjectURL
+  const released: string[] = []
+  let sequence = 0
+  let retained: string[] = []
+  URL.createObjectURL = () => `blob:lifecycle-${++sequence}`
+  URL.revokeObjectURL = (url: string) => {
+    released.push(url)
+  }
+  const scope = effectScope()
+  try {
+    const attachments = scope.run(() =>
+      useChatAttachments({ toasts: { push() {} }, composerRef: ref(null), retainedUrls: () => retained }),
+    )!
+    await attachments.handleDrop({
+      preventDefault() {},
+      dataTransfer: { files: [new File(['image'], 'draft.png')] },
+    } as unknown as DragEvent)
+    const saved = attachments.attachedFiles.value.slice()
+    retained = saved.map((file) => file.url!)
+    attachments.clearAttachments({ preserve: true })
+    await nextTick()
+    assert.deepEqual(released, [])
+    attachments.attachedFiles.value = saved
+    retained = []
+    await nextTick()
+    assert.deepEqual(released, [])
+    // A submitted/failed snapshot owns the URLs even with an empty composer.
+    retained = saved.map((file) => file.url!)
+    attachments.attachedFiles.value = []
+    await nextTick()
+    assert.deepEqual(released, [])
+    retained = []
+    attachments.releaseUnusedAttachmentUrls()
+    assert.deepEqual(released, ['blob:lifecycle-1'])
+    await attachments.handleDrop({
+      preventDefault() {},
+      dataTransfer: { files: [new File(['new'], 'second.png')] },
+    } as unknown as DragEvent)
+    scope.stop()
+    assert.deepEqual(released, ['blob:lifecycle-1', 'blob:lifecycle-2'])
+  } finally {
+    scope.stop()
+    URL.createObjectURL = create
+    URL.revokeObjectURL = revoke
+  }
+})
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void

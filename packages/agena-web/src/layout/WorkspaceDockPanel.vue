@@ -16,8 +16,10 @@ import { MAIN_TABS, type MainTabId } from '@/app/navigation/mainTabs'
 import ChatDockPanel from '@/components/chat/ChatDockPanel.vue'
 import { useUiStore } from '@/stores/ui'
 import IconButton from '@/components/ui/IconButton.vue'
-import TerminalDockPanel from '@/features/terminal/components/TerminalDockPanel.vue'
-import WorkspacePreviewDockPanel from '@/features/workspacePreview/components/WorkspacePreviewDockPanel.vue'
+const TerminalDockPanel = defineAsyncComponent(() => import('@/features/terminal/components/TerminalDockPanel.vue'))
+const WorkspacePreviewDockPanel = defineAsyncComponent(
+  () => import('@/features/workspacePreview/components/WorkspacePreviewDockPanel.vue'),
+)
 
 const FilesDockPanel = defineAsyncComponent(() => import('@/pages/FilesPage.vue'))
 const GitDockPanel = defineAsyncComponent(() => import('@/pages/GitPage.vue'))

@@ -761,10 +761,13 @@ impl agena_runtime::SessionQueryService for SessionManager {
         &self,
         session_id: i64,
     ) -> Result<agena_domain::SessionCostSummary, agena_runtime::SessionQueryError> {
-        let session = SessionManager::get_session(self, session_id)
+        let view = self
+            .store
+            .facade
+            .load_run_markers(session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal_error(&error))?;
-        Ok(crate::session::cost::summarize(session.parts()))
+        Ok(crate::session::cost::summarize(&view.parts))
     }
 
     async fn usage_stats(
@@ -781,25 +784,25 @@ impl agena_runtime::SessionQueryService for SessionManager {
         session_id: i64,
     ) -> Result<Vec<agena_domain::PendingInteractiveRequestContext>, agena_runtime::SessionQueryError>
     {
-        let session = SessionManager::get_session(self, session_id)
+        let session = SessionManager::get_session_controls(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal_error(&error))?;
         let tree = SessionManager::list_session_tree(self, session.root_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal_error(&error))?;
-        let mut descendants = std::collections::HashSet::from([session.id]);
-        loop {
-            let previous_len = descendants.len();
-            for summary in &tree {
-                if summary
-                    .parent_id
-                    .is_some_and(|parent_id| descendants.contains(&parent_id))
-                {
-                    descendants.insert(summary.id);
-                }
+        let mut children = std::collections::HashMap::<i64, Vec<i64>>::new();
+        for summary in &tree {
+            if let Some(parent) = summary.parent_id {
+                children.entry(parent).or_default().push(summary.id);
             }
-            if descendants.len() == previous_len {
-                break;
+        }
+        let mut descendants = std::collections::HashSet::from([session.id]);
+        let mut stack = vec![session.id];
+        while let Some(parent) = stack.pop() {
+            for &child in children.get(&parent).into_iter().flatten() {
+                if descendants.insert(child) {
+                    stack.push(child);
+                }
             }
         }
 
@@ -814,7 +817,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
                 continue;
             }
             sessions.push(
-                SessionManager::get_session(self, summary.id)
+                SessionManager::get_session_controls(self, summary.id)
                     .await
                     .map_err(|error| agena_runtime::SessionQueryError::internal_error(&error))?,
             );
@@ -844,7 +847,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
         &self,
         session_id: i64,
     ) -> Result<agena_runtime::SessionExecutionContext, agena_runtime::SessionQueryError> {
-        let mut session = SessionManager::get_session(self, session_id)
+        let mut session = SessionManager::get_session_controls(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal_error(&error))?;
         let state = self.execution_state();

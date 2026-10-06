@@ -1,3 +1,5 @@
+static UPLOAD_BUFFERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
 pub async fn list_workspaces(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<WorkspaceListQuery>,
@@ -128,12 +130,55 @@ pub async fn list_workspace_files(
     json_http(state.service().list_workspace_files(workspace_id, query)).await
 }
 
+#[derive(Default, serde::Deserialize)]
+pub struct BinaryUploadQuery {
+    filename: Option<String>,
+    mime: Option<String>,
+}
+
 pub async fn upload_workspace_file(
     State(state): State<AppState>,
     Path(workspace_id): Path<i64>,
-    Json(request): Json<WorkspaceFileUploadRequest>,
+    AxumQuery(query): AxumQuery<BinaryUploadQuery>,
+    request: axum::extract::Request,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(state.service().upload_workspace_file(workspace_id, request)).await
+    if request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case("application/octet-stream")
+        })
+    {
+        let filename = query
+            .filename
+            .ok_or_else(|| ServerError::bad_request("The uploaded file needs a filename."))?;
+        let bytes = axum::body::to_bytes(request.into_body(), 50 * 1024 * 1024)
+            .await
+            .map_err(|error| ServerError::bad_request_error(&error))?;
+        let bytes = UPLOAD_BUFFERS
+            .run(move || bytes.to_vec())
+            .await
+            .map_err(|error| ServerError::internal_error(&error))?;
+        json_http(state.service().upload_workspace_file_bytes(
+            workspace_id,
+            filename,
+            query.mime,
+            bytes,
+        ))
+        .await
+    } else {
+        use axum::extract::FromRequest;
+        let Json(request) = Json::<WorkspaceFileUploadRequest>::from_request(request, &state)
+            .await
+            .map_err(|error| ServerError::bad_request_error(&error))?;
+        json_http(state.service().upload_workspace_file(workspace_id, request)).await
+    }
 }
 
 pub async fn download_workspace_file(

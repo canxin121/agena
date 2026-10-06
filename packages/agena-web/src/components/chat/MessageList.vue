@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { RiCheckLine, RiLoader4Line, RiSparkling2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -71,6 +71,12 @@ const emit = defineEmits<{
 const { t } = useI18n()
 // Keep deliberate expansion when a session's keyed message subtree remounts.
 const activityVisibility = reactive<Record<string, ActivityVisibility>>({})
+watch(
+  () => props.selectedSessionId,
+  () => {
+    for (const key of Object.keys(activityVisibility)) delete activityVisibility[key]
+  },
+)
 function replyVisibility(id: string): ActivityVisibility {
   const key = `${props.selectedSessionId}:${id}`
   return (activityVisibility[key] ??= { ids: [] })

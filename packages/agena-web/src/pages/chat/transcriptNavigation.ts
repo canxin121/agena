@@ -16,14 +16,17 @@ function visibleHeadlineText(value: unknown): string {
 
 /** Copy/navigation text must mirror the currently visible transcript. */
 export function transcriptPartNavigationText(part: TranscriptDisplayPart, expanded: boolean): string {
-  const full = String(part.copyText || '').trim()
-  if (!part.toggleable || expanded) return full
+  if (!part.toggleable || expanded) return String(part.copyText || '').trim()
 
   const title = visibleHeadlineText(part.title)
   const summary = visibleHeadlineText(part.summary)
   const preview = [title, summary && summary !== title ? summary : ''].filter(Boolean).join(' · ')
   if (preview) return preview
-  return full.split(/\r?\n/u, 1)[0]?.trim() || ''
+  return (
+    String(part.copyText || '')
+      .split(/\r?\n/u, 1)[0]
+      ?.trim() || ''
+  )
 }
 
 /**

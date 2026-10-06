@@ -2,6 +2,7 @@ import type { JsonValue as JsonLike } from '@/types/json'
 
 import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from './authEvents.ts'
 import { apiUrl } from './api'
+import { SseFrames } from './sseFrames'
 import { buildActiveUiAuthHeaders, readUiAuthTokenVersion } from './uiAuthToken'
 
 export type SseEvent = {
@@ -228,6 +229,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
   const coalesced = new Map<string, number>()
   let timer: number | null = null
   let lastFlushAt = 0
+  let queueHead = 0
 
   function getNumeric(value: JsonLike, key: string): number | null {
     if (!isRecord(value)) return null
@@ -262,22 +264,45 @@ export function connectSse(opts: SseClientOptions): SseClient {
     }
     if (queue.length === 0) return
 
-    const events = queue.splice(0, queue.length)
-    coalesced.clear()
-
     lastFlushAt = Date.now()
-    for (const evt of events) {
-      if (closed) break
+    const deadline = performance.now() + 8
+    while (queueHead < queue.length) {
+      const index = queueHead++
+      const evt = queue[index]
+      queue[index] = undefined
       if (!evt) continue
+      const key = eventKey(evt)
+      if (key && coalesced.get(key) === index) coalesced.delete(key)
       stats.lastEventAt = Date.now()
       opts.onEvent(evt)
+      if (closed || performance.now() >= deadline) break
+    }
+    if (queueHead === queue.length) {
+      queue.length = 0
+      queueHead = 0
+      coalesced.clear()
+    } else {
+      if (queueHead >= 1024) {
+        queue.splice(0, queueHead)
+        for (const [key, index] of coalesced) coalesced.set(key, index - queueHead)
+        queueHead = 0
+      }
+      // Yield between batches so input and paint get a turn during recovery.
+      timer = window.setTimeout(flush, 0)
     }
   }
 
   function scheduleFlush() {
-    if (timer !== null) return
+    if (closed || timer !== null) return
     const elapsed = Date.now() - lastFlushAt
     timer = window.setTimeout(flush, Math.max(0, 16 - elapsed))
+  }
+
+  async function drainQueuedEvents() {
+    while (!closed && queueHead < queue.length) {
+      flush()
+      if (queueHead < queue.length) await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    }
   }
 
   function pushEvent(evt: SseEvent) {
@@ -310,7 +335,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
       coalesced.clear()
     }
     queue.push(evt)
-    if (queue.length >= 1024) flush()
+    if (queue.length - queueHead >= 1024 && timer === null) flush()
     scheduleFlush()
   }
 
@@ -463,7 +488,8 @@ export function connectSse(opts: SseClientOptions): SseClient {
 
         stats.connectCount += 1
         if (closed || controller.signal.aborted) return
-        flush()
+        await drainQueuedEvents()
+        if (closed || controller.signal.aborted) return
         opts.onOpen?.()
         debugLog('connected', { attempt, lastEventId: lastEventId || '' }, { force: true })
 
@@ -473,8 +499,8 @@ export function connectSse(opts: SseClientOptions): SseClient {
 
         const reader = resp.body.getReader()
         const decoder = new TextDecoder()
-        let buf = ''
-        let skipLeadingLf = false
+        const frames = new SseFrames()
+        let parseDeadline = performance.now() + 8
         let allowCursorResetOnFirstId = true
         let lastByteAt = Date.now()
 
@@ -517,18 +543,18 @@ export function connectSse(opts: SseClientOptions): SseClient {
             stats.lastChunkAt = lastByteAt
 
             const decoded = decoder.decode(value, { stream: true })
-            if (decoded) {
-              // A CRLF pair can straddle reads. Remember the previous CR so
-              // its following LF cannot become an extra event separator.
-              const text = skipLeadingLf && decoded.startsWith('\n') ? decoded.slice(1) : decoded
-              skipLeadingLf = decoded.endsWith('\r')
-              buf += text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-            }
-
-            const chunks = buf.split('\n\n')
-            buf = chunks.pop() ?? ''
+            const chunks = frames.push(decoded)
 
             for (const chunk of chunks) {
+              // Already-buffered reads can resolve in an uninterrupted chain
+              // of microtasks. Yield during JSON parsing as well as event
+              // application, and apply backpressure to large recovery bursts.
+              if (performance.now() >= parseDeadline || queue.length - queueHead >= 1024) {
+                flush()
+                await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+                parseDeadline = performance.now() + 8
+                if (closed || controller.signal.aborted) break
+              }
               const lines = chunk.split('\n')
               const dataLines: string[] = []
               let seenId: string | undefined
@@ -624,7 +650,8 @@ export function connectSse(opts: SseClientOptions): SseClient {
         }
       } catch (err) {
         if (closed || controller.signal.aborted) break
-        flush()
+        await drainQueuedEvents()
+        if (closed || controller.signal.aborted) break
         const nextError: Error | string = err instanceof Error ? err : String(err)
         stats.errorCount += 1
         stats.lastErrorAt = Date.now()

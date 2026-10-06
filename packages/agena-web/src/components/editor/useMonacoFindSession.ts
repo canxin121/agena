@@ -68,15 +68,28 @@ export function useMonacoFindSession(
     all: null,
     current: null,
   }
+  let decorationEditor: Monaco.editor.IStandaloneCodeEditor | undefined
+  let decoratedCurrentRange: Monaco.IRange | undefined
 
   let ranges: Monaco.editor.FindMatch[] = []
+  let lastSearch:
+    | {
+        model: Monaco.editor.ITextModel
+        version: number
+        input: string
+        regex: boolean
+        caseSensitive: boolean
+      }
+    | undefined
 
   function clearDecorations() {
     decorations.all?.set([])
     decorations.current?.set([])
+    decoratedCurrentRange = undefined
   }
 
   function resetState() {
+    lastSearch = undefined
     ranges = []
     matchCount.value = 0
     currentMatch.value = 0
@@ -85,6 +98,12 @@ export function useMonacoFindSession(
   }
 
   function ensureDecorations(editor: Monaco.editor.IStandaloneCodeEditor) {
+    if (decorationEditor !== editor) {
+      clearDecorations()
+      decorations.all = decorations.current = null
+      lastSearch = undefined
+      decorationEditor = editor
+    }
     if (!decorations.all) {
       decorations.all = editor.createDecorationsCollection()
     }
@@ -93,7 +112,7 @@ export function useMonacoFindSession(
     }
   }
 
-  function updateDecorations() {
+  function updateDecorations(updateAll = true) {
     const editor = getEditor()
     if (!editor) {
       resetState()
@@ -101,29 +120,32 @@ export function useMonacoFindSession(
     }
     ensureDecorations(editor)
 
-    decorations.all?.set(
-      ranges.map((item) => ({
-        range: item.range,
-        options: {
-          className: 'oc-monaco-find-match',
-        },
-      })),
-    )
+    if (updateAll)
+      decorations.all?.set(
+        ranges.map((item) => ({
+          range: item.range,
+          options: {
+            className: 'oc-monaco-find-match',
+          },
+        })),
+      )
 
     const activeIndex = Math.max(0, currentMatch.value - 1)
     const activeRange = ranges[activeIndex]?.range
-    decorations.current?.set(
-      activeRange
-        ? [
-            {
-              range: activeRange,
-              options: {
-                className: 'oc-monaco-find-match-current',
+    if (updateAll || decoratedCurrentRange !== activeRange)
+      decorations.current?.set(
+        activeRange
+          ? [
+              {
+                range: activeRange,
+                options: {
+                  className: 'oc-monaco-find-match-current',
+                },
               },
-            },
-          ]
-        : [],
-    )
+            ]
+          : [],
+      )
+    decoratedCurrentRange = activeRange
   }
 
   function pickCurrentIndex(editor: Monaco.editor.IStandaloneCodeEditor): number {
@@ -196,32 +218,48 @@ export function useMonacoFindSession(
 
     ensureDecorations(editor)
 
-    try {
-      ranges = model.findMatches(
-        input.searchString,
-        true,
-        input.isRegex,
-        options.caseSensitive.value,
-        null,
-        false,
-        5000,
-      )
-      invalidRegex.value = false
-    } catch {
-      ranges = []
-      invalidRegex.value = true
+    const version = model.getVersionId()
+    const changed =
+      !lastSearch ||
+      lastSearch.model !== model ||
+      lastSearch.version !== version ||
+      lastSearch.input !== input.searchString ||
+      lastSearch.regex !== input.isRegex ||
+      lastSearch.caseSensitive !== options.caseSensitive.value
+    if (changed)
+      try {
+        ranges = model.findMatches(
+          input.searchString,
+          true,
+          input.isRegex,
+          options.caseSensitive.value,
+          null,
+          false,
+          5000,
+        )
+        invalidRegex.value = false
+      } catch {
+        ranges = []
+        invalidRegex.value = true
+      }
+    lastSearch = {
+      model,
+      version,
+      input: input.searchString,
+      regex: input.isRegex,
+      caseSensitive: options.caseSensitive.value,
     }
 
     matchCount.value = ranges.length
     if (!ranges.length) {
       currentMatch.value = 0
-      updateDecorations()
+      updateDecorations(changed)
       return
     }
 
     const currentIndex = pickCurrentIndex(editor)
     currentMatch.value = currentIndex + 1
-    updateDecorations()
+    updateDecorations(changed)
 
     if (refreshOptions.revealCurrent) {
       applyCurrentSelection(currentIndex, Boolean(refreshOptions.focusEditor))
@@ -229,16 +267,14 @@ export function useMonacoFindSession(
   }
 
   function move(direction: SearchDirection) {
-    if (!ranges.length) {
-      refresh()
-      if (!ranges.length) return
-    }
+    refresh()
+    if (!ranges.length) return
 
     const total = ranges.length
     const startIndex = Math.max(0, currentMatch.value - 1)
     const nextIndex = (startIndex + direction + total) % total
     currentMatch.value = nextIndex + 1
-    updateDecorations()
+    updateDecorations(false)
     applyCurrentSelection(nextIndex, true)
   }
 
@@ -250,9 +286,7 @@ export function useMonacoFindSession(
     const searchInput = buildSearchInput()
     if (!searchInput) return false
 
-    if (!ranges.length) {
-      refresh({ revealCurrent: true })
-    }
+    refresh()
     if (!ranges.length || invalidRegex.value) return false
 
     const replacementRegex = buildReplacementRegex(searchInput)
@@ -293,9 +327,7 @@ export function useMonacoFindSession(
     const searchInput = buildSearchInput()
     if (!searchInput) return 0
 
-    if (!ranges.length) {
-      refresh()
-    }
+    refresh()
     if (!ranges.length || invalidRegex.value) return 0
 
     const replacementRegex = buildReplacementRegex(searchInput)
@@ -348,6 +380,7 @@ export function useMonacoFindSession(
   }
 
   function dispose() {
+    lastSearch = undefined
     clearDecorations()
     decorations.all = null
     decorations.current = null

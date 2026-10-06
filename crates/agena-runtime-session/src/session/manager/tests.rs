@@ -126,6 +126,99 @@ async fn create_with_model(
 }
 
 #[tokio::test]
+async fn bounded_subtask_logs_keep_utf8_tails_and_advance_past_empty_runs() {
+    let manager = test_manager().await;
+    let parent = create(&manager, "bounded task logs").await;
+    let child = manager
+        .store
+        .create_subagent_session(parent.id, "bounded-logs".into(), "child logs".into())
+        .await
+        .unwrap();
+    let facade = &manager.store.facade;
+    let empty = facade
+        .start_run(child, "continue".into(), serde_json::json!({}), None)
+        .await
+        .unwrap();
+    let first = facade
+        .submit_user_run(
+            child,
+            vec![NewPart::pending(
+                "text",
+                PartRole::User,
+                serde_json::json!({"text": "a".repeat(100_000)}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    let second = facade
+        .submit_user_run(
+            child,
+            vec![NewPart::pending(
+                "text",
+                PartRole::User,
+                serde_json::json!({"text": "b".repeat(100_000)}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    let unicode = facade
+        .submit_user_run(
+            child,
+            vec![NewPart::pending(
+                "text",
+                PartRole::User,
+                serde_json::json!({"text": "你🙂".repeat(30_000)}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    let page = manager
+        .read_subtask_output_bounded(parent.id, "bounded-logs", 0, 100)
+        .await
+        .unwrap();
+    assert!(page.has_more);
+    assert_eq!(page.next_cursor, second.run_id);
+    assert_eq!(
+        page.chunks
+            .iter()
+            .map(|chunk| chunk.cursor)
+            .collect::<Vec<_>>(),
+        [first.run_id, second.run_id]
+    );
+    assert_eq!(
+        page.chunks
+            .iter()
+            .map(|chunk| chunk.text.len())
+            .sum::<usize>(),
+        128 * 1024
+    );
+    let tail = manager
+        .read_subtask_output_bounded(parent.id, "bounded-logs", page.next_cursor, 100)
+        .await
+        .unwrap();
+    assert!(!tail.has_more);
+    assert_eq!(tail.next_cursor, unicode.run_id);
+    assert_eq!(tail.chunks.len(), 1);
+    assert!(tail.chunks[0].text.len() <= 64 * 1024);
+    assert!(tail.chunks[0].text.ends_with("你🙂"));
+    let empty_page = manager
+        .read_subtask_output_bounded(parent.id, "bounded-logs", 0, 1)
+        .await
+        .unwrap();
+    assert!(empty_page.chunks.is_empty());
+    assert_eq!(empty_page.next_cursor, empty.run_id);
+    assert!(empty_page.has_more);
+    let full = manager
+        .read_subtask_output(parent.id, "bounded-logs", second.run_id, 1)
+        .await
+        .unwrap();
+    assert_eq!(full.chunks[0].text, "你🙂".repeat(30_000));
+}
+
+#[tokio::test]
 async fn compaction_checkpoint_and_user_request_survive_a_store_reload() {
     let manager = test_manager().await;
     let session = create(&manager, "durable compaction prompt").await;

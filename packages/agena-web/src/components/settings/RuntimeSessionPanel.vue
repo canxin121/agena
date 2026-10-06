@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiRefreshLine } from '@remixicon/vue'
 
@@ -14,7 +14,7 @@ const refreshBusy = ref(false)
 const refreshError = ref('')
 const clientVersionNonce = ref(0)
 
-const pages = buildSettingsSubpages('runtime-session')
+const pages = computed(() => buildSettingsSubpages('runtime-session'))
 
 async function refreshClientVersions() {
   if (refreshBusy.value) return

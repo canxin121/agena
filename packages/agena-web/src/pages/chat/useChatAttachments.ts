@@ -1,10 +1,10 @@
-import { computed, ref, onScopeDispose, type Ref } from 'vue'
+import { computed, ref, onScopeDispose, watch, type Ref } from 'vue'
+import { createBlobUrlRegistry, MAX_LOCAL_ATTACHMENT_MEMORY_BYTES } from '../../lib/blobUrlRegistry'
 import { i18n } from '@/i18n'
 import {
   createAttachmentIngestor,
   filesFromClipboard,
   pasteTextWithinBudget,
-  readLocalDataUrl,
   MAX_ATTACHMENT_TOTAL_BYTES,
   MAX_ATTACHMENTS,
   type ComposerAttachment,
@@ -27,6 +27,7 @@ export function useChatAttachments(opts: {
   toasts: Toasts
   composerRef: Ref<ComposerExpose | null>
   restoreText?: (text: string) => void
+  retainedUrls?: () => Iterable<string>
 }) {
   const { toasts, composerRef } = opts
 
@@ -56,12 +57,36 @@ export function useChatAttachments(opts: {
 
   const MAX_RESOURCE_ATTACHMENTS = MAX_ATTACHMENTS
   const LONG_PASTE_TEXT_CHARS = 1_000
+  const objectUrls = createBlobUrlRegistry()
+  const preparingUrls = new Set<string>()
+  const releaseUrl = (url: string) => {
+    preparingUrls.delete(url)
+    objectUrls.release(url)
+  }
+  function releaseUnusedAttachmentUrls() {
+    objectUrls.releaseUnreferenced(
+      new Set([
+        ...preparingUrls,
+        ...(opts.retainedUrls?.() ?? []),
+        ...attachments.value.flatMap((file) => (file.url ? [file.url] : [])),
+      ]),
+    )
+  }
+  watch(attachments, releaseUnusedAttachmentUrls, { flush: 'post' })
   const ingestion = createAttachmentIngestor({
     get: () => attachedFiles.value,
     set: (files) => {
       attachedFiles.value = files.map((file) => ({ ...file, state: 'ready' as const }))
+      for (const file of files) if (file.url) preparingUrls.delete(file.url)
     },
-    read: readLocalDataUrl,
+    read: async (file, signal) => {
+      signal.throwIfAborted()
+      const url = objectUrls.create(file)
+      preparingUrls.add(url)
+      return url
+    },
+    release: releaseUrl,
+    remainingBytes: objectUrls.available,
     onBusy: (count) => {
       attachBusyCount.value = count
     },
@@ -70,15 +95,28 @@ export function useChatAttachments(opts: {
       const message =
         kind === 'count'
           ? i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_ATTACHMENTS })
-          : kind === 'total'
-            ? i18n.global.t('chat.attachments.errors.totalTooLarge', { size: formatBytes(MAX_ATTACHMENT_TOTAL_BYTES) })
-            : kind === 'size'
-              ? i18n.global.t('chat.attachments.errors.fileTooLarge', { name: file.name, size: formatBytes(file.size) })
-              : i18n.global.t('chat.attachments.errors.failedToReadFile', { name: file.name })
+          : kind === 'memory'
+            ? i18n.global.t('chat.attachments.errors.totalTooLarge', {
+                size: formatBytes(MAX_LOCAL_ATTACHMENT_MEMORY_BYTES),
+              })
+            : kind === 'total'
+              ? i18n.global.t('chat.attachments.errors.totalTooLarge', {
+                  size: formatBytes(MAX_ATTACHMENT_TOTAL_BYTES),
+                })
+              : kind === 'size'
+                ? i18n.global.t('chat.attachments.errors.fileTooLarge', {
+                    name: file.name,
+                    size: formatBytes(file.size),
+                  })
+                : i18n.global.t('chat.attachments.errors.failedToReadFile', { name: file.name })
       toasts.push('error', message)
     },
   })
-  onScopeDispose(() => ingestion.clear())
+  onScopeDispose(() => {
+    ingestion.clear()
+    preparingUrls.clear()
+    objectUrls.dispose()
+  })
 
   const attachProjectDialogOpen = ref(false)
   const attachProjectPath = ref('')
@@ -172,9 +210,9 @@ export function useChatAttachments(opts: {
   }
 
   function pastedTextPreview(text: string): string {
-    const compact = text.replace(/\s+/g, ' ').trim()
+    const compact = text.slice(0, 2048).replace(/\s+/g, ' ').trim()
     if (!compact) return String(i18n.global.t('chat.attachments.whitespaceOnly'))
-    const characters = Array.from(compact)
+    const characters = Array.from(compact.slice(0, 1000))
     return characters.length > 240 ? `${characters.slice(0, 240).join('')}…` : compact
   }
 
@@ -187,7 +225,10 @@ export function useChatAttachments(opts: {
       toasts.push('error', String(i18n.global.t('chat.attachments.errors.textPasteTooLarge')))
       return
     }
-    if (Array.from(text).length >= LONG_PASTE_TEXT_CHARS) {
+    if (
+      text.length >= LONG_PASTE_TEXT_CHARS * 2 ||
+      Array.from(text.slice(0, LONG_PASTE_TEXT_CHARS * 2)).length >= LONG_PASTE_TEXT_CHARS
+    ) {
       e.preventDefault()
       const textFile = longPasteTextFile(text)
       await attachLocalFiles([textFile, ...files], { file: textFile, preview: pastedTextPreview(text), text })
@@ -219,7 +260,9 @@ export function useChatAttachments(opts: {
     attachedFiles.value = attachedFiles.value.filter((f) => f.id !== id)
   }
 
-  function clearAttachments() {
+  function clearAttachments(options: { preserve?: boolean } = {}) {
+    // Preserved drafts are supplied through retainedUrls by the owning page.
+    void options
     ingestion.clear()
     pendingAttachments.value = []
     cancelled.clear()
@@ -314,6 +357,7 @@ export function useChatAttachments(opts: {
     handleFileInputChange,
     removeAttachment,
     clearAttachments,
+    releaseUnusedAttachmentUrls,
     openFilePicker,
     openProjectAttachDialog,
     addProjectAttachment,

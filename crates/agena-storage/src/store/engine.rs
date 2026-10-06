@@ -89,9 +89,32 @@ pub trait PersistenceEngine: Send + Sync {
         part_id: i64,
     ) -> Result<Option<u64>, StoreError>;
 
+    /// Rank a noncontiguous recovery batch in one history pass where supported.
+    async fn user_message_ordinals(
+        &self,
+        session_id: i64,
+        ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, u64>, StoreError> {
+        let mut ordinals = std::collections::HashMap::new();
+        for &id in ids {
+            if let Some(ordinal) = self.user_message_ordinal(session_id, id).await? {
+                ordinals.insert(id, ordinal);
+            }
+        }
+        Ok(ordinals)
+    }
+
     /// Load a session's metadata plus all parts ordered by
     /// `(created_at_ms, part_id)` — one membership JOIN.
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError>;
+
+    /// Billing lives on run markers. Include inherited memberships without
+    /// reading unrelated tool output or message bodies.
+    async fn load_run_markers(&self, session_id: i64) -> Result<SessionView, StoreError> {
+        let mut view = self.load_session(session_id).await?;
+        view.parts.retain(Part::is_run_marker);
+        Ok(view)
+    }
 
     /// Read only client-loaded memberships for reconnect reconciliation.
     async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError> {
@@ -110,6 +133,72 @@ pub trait PersistenceEngine: Send + Sync {
         let mut view = self.load_session(session_id).await?;
         view.parts
             .retain(|part| part.origin_session_id == session_id && part.kind == kind);
+        Ok(view)
+    }
+
+    /// Read only tools that can contribute durable file-change evidence.
+    async fn load_owned_file_change_parts(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionView, StoreError> {
+        let mut view = self
+            .load_owned_parts_by_kind(session_id, "tool_call")
+            .await?;
+        view.parts.retain(|part| {
+            let name = part
+                .content
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            matches!(
+                name,
+                "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast"
+            ) || (name.starts_with("shell.")
+                && part
+                    .content
+                    .pointer("/input/writes")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|writes| !writes.is_empty()))
+        });
+        Ok(view)
+    }
+
+    /// Cursor-page run groups for task logs, excluding all pre-cursor history.
+    async fn load_runs_after(
+        &self,
+        session_id: i64,
+        after: i64,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError> {
+        let mut view = self.load_session(session_id).await?;
+        let mut ids = view
+            .parts
+            .iter()
+            .filter(|part| part.is_run_marker() && part.part_id > after)
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        let has_more = ids.len() > limit;
+        ids.truncate(limit);
+        let ids = ids.into_iter().collect::<std::collections::HashSet<_>>();
+        view.parts.retain(|part| {
+            ids.contains(&part.part_id) || part.run_id.is_some_and(|id| ids.contains(&id))
+        });
+        Ok(SessionPartPage {
+            meta: view.meta,
+            parts: view.parts,
+            has_more,
+        })
+    }
+
+    /// Session metadata and only its pending tool controls, without history.
+    async fn load_control_parts(&self, session_id: i64) -> Result<SessionView, StoreError> {
+        let mut view = self.load_session(session_id).await?;
+        view.parts.retain(|part| {
+            part.origin_session_id == session_id
+                && part.kind == "tool_call"
+                && part.state.is_in_flight()
+        });
         Ok(view)
     }
 
@@ -344,6 +433,22 @@ pub trait PersistenceEngine: Send + Sync {
         kind: Option<super::BackgroundOperationKind>,
         limit: usize,
     ) -> Result<Vec<BackgroundOperation>, StoreError>;
+
+    /// Filter the owner before the limit: unrelated sessions cannot hide rows.
+    async fn active_background_operations_for_session(
+        &self,
+        session_id: i64,
+        kind: Option<super::BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError> {
+        Ok(self
+            .active_background_operations(kind, usize::MAX)
+            .await?
+            .into_iter()
+            .filter(|operation| operation.session_id == session_id)
+            .take(limit)
+            .collect())
+    }
 
     /// Exact session-scoped existence query; never apply a global limit first.
     async fn session_has_active_background_operations(

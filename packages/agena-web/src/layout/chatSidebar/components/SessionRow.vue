@@ -24,6 +24,7 @@ import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMen
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import SidebarSessionActionMenu from '@/layout/chatSidebar/components/SidebarSessionActionMenu.vue'
+import { useNearViewport } from '@/composables/useNearViewport'
 
 type SessionLike = {
   id?: string | number | null
@@ -125,6 +126,15 @@ const emit = defineEmits<{
 const hasSessionContext = computed(() => Boolean(props.session && props.directory))
 const hasSession = computed(() => Boolean(props.session))
 const rowRootEl = ref<HTMLElement | null>(null)
+const nearViewport = useNearViewport(rowRootEl)
+const hasRowFocus = ref(false)
+const actionControlsVisible = computed(
+  () => nearViewport.value || hasRowFocus.value || isInlineRename.value || props.sessionActionMenuOpen,
+)
+
+function handleRowFocusOut(event: FocusEvent) {
+  hasRowFocus.value = event.relatedTarget instanceof Node && Boolean(rowRootEl.value?.contains(event.relatedTarget))
+}
 
 const statusLabelText = computed(() => {
   const next = String(props.statusLabel || '').trim()
@@ -265,7 +275,13 @@ function handleRowDragStart(event: DragEvent) {
 </script>
 
 <template>
-  <div ref="rowRootEl" class="group relative">
+  <div
+    ref="rowRootEl"
+    class="group relative"
+    style="content-visibility: auto; contain-intrinsic-size: auto 36px"
+    @focusin="hasRowFocus = true"
+    @focusout="handleRowFocusOut"
+  >
     <SidebarListItem
       :active="selected"
       :indent="indentPx"
@@ -366,7 +382,7 @@ function handleRowDragStart(event: DragEvent) {
         </template>
       </div>
 
-      <template #actions>
+      <template v-if="actionControlsVisible" #actions>
         <template v-if="isInlineRename">
           <IconButton
             size="xs"

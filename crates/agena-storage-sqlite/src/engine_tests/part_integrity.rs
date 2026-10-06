@@ -268,6 +268,39 @@ async fn both_backends_reject_invalid_finish_times_and_backwards_updates_without
 }
 
 #[tokio::test]
+async fn same_millisecond_updates_advance_revision_without_advancing_wall_time() {
+    for memory in [false, true] {
+        let (engine, session) = engine(memory).await;
+        let submitted = engine
+            .submit_user_run(session, vec![super::text_part("hello")], None, 1_000_000)
+            .await
+            .unwrap();
+        let initial = submitted
+            .parts
+            .iter()
+            .find(|part| !part.is_run_marker())
+            .unwrap();
+        for (offset, text) in ["first", "second", "third"].into_iter().enumerate() {
+            let updated = engine
+                .update_part(
+                    session,
+                    initial.part_id,
+                    PartDelta {
+                        content: Some(json!({"text": text})),
+                        ..Default::default()
+                    },
+                    1_000_000,
+                )
+                .await
+                .unwrap();
+            assert_eq!(updated.revision, initial.revision + offset as i64 + 1);
+            assert_eq!(updated.updated_at_ms, 1_000_000);
+            assert_eq!(updated.content, json!({"text": text}));
+        }
+    }
+}
+
+#[tokio::test]
 async fn exhausted_part_revision_returns_an_error_without_panicking_or_wrapping() {
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 

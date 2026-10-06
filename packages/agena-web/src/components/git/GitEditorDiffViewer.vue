@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
 import { RiFileTextLine, RiLoader4Line, RiSearchLine, RiTextWrap } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
-import MonacoDiffEditor from '@/components/MonacoDiffEditor.vue'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { apiJson } from '@/lib/api'
 import { createRevalidator } from '@/lib/revalidation'
-import { isDocumentVisible } from '@/lib/backgroundReads'
 import { confirmAction } from '@/lib/appConfirm'
 import IconButton from '@/components/ui/IconButton.vue'
 import { buildUnifiedDiffModel } from '@/features/git/diff/unifiedDiff'
@@ -15,6 +14,8 @@ import type { GitCommitDiffResponse, GitCommitFileContentResponse, GitDiffMeta, 
 
 const { t } = useI18n()
 const ui = useUiStore()
+const MonacoDiffEditor = defineAsyncComponent(() => import('@/components/MonacoDiffEditor.vue'))
+const visible = usePaneVisibility()
 
 type DiffHunkView = {
   id: string
@@ -69,6 +70,8 @@ const diffText = ref('')
 const diffMeta = ref<GitDiffMeta | null>(null)
 const original = ref('')
 const modified = ref('')
+const loadedModelScope = ref('')
+const loadedLanguagePath = ref('')
 
 // Keep current content visible while switching files.
 const staleDiffText = ref('')
@@ -86,6 +89,7 @@ function isDataImageUrl(value: string): boolean {
 }
 
 const normalizedPath = computed(() => (props.path || '').trim())
+const normalizedDirectory = computed(() => (props.directory || '').trim())
 const diffScope = computed(() => (props.staged ? 'staged' : 'working'))
 const commitScope = computed(() => {
   const commit = (props.commit || '').trim()
@@ -95,14 +99,15 @@ const commitScope = computed(() => {
 })
 
 const originalModelPath = computed(() => {
-  const path = normalizedPath.value || 'git-diff-file'
-  return `git-diff:${diffScope.value}:${commitScope.value}:original:${path}`
+  return `git-diff:original:${loadedModelScope.value}`
 })
 
 const modifiedModelPath = computed(() => {
-  const path = normalizedPath.value || 'git-diff-file'
-  return `git-diff:${diffScope.value}:${commitScope.value}:modified:${path}`
+  return `git-diff:modified:${loadedModelScope.value}`
 })
+const requestedModelScope = computed(() =>
+  JSON.stringify([normalizedDirectory.value, diffScope.value, commitScope.value, normalizedPath.value]),
+)
 
 const displayOriginal = computed(() => (loading.value ? original.value || staleOriginal.value : original.value))
 const displayModified = computed(() => (loading.value ? modified.value || staleModified.value : modified.value))
@@ -114,14 +119,16 @@ const rightLabel = computed(() =>
 )
 const canOpenFile = computed(() => Boolean(props.onOpenFile) && Boolean(normalizedPath.value))
 const canRevealFile = computed(() => Boolean(props.onRevealFile) && Boolean(normalizedPath.value))
-const canStageHunk = computed(() => !props.staged && Boolean(props.onStageHunk))
-const canUnstageHunk = computed(() => Boolean(props.staged) && Boolean(props.onUnstageHunk))
-const canDiscardHunk = computed(() => !props.staged && Boolean(props.onDiscardHunk))
+const actionsScoped = computed(() => loadedModelScope.value === requestedModelScope.value)
+const actionsReady = computed(() => !loading.value && actionsScoped.value)
+const canStageHunk = computed(() => actionsScoped.value && !props.staged && Boolean(props.onStageHunk))
+const canUnstageHunk = computed(() => actionsScoped.value && Boolean(props.staged) && Boolean(props.onUnstageHunk))
+const canDiscardHunk = computed(() => actionsScoped.value && !props.staged && Boolean(props.onDiscardHunk))
 const hasAnyHunkAction = computed(() => canStageHunk.value || canUnstageHunk.value || canDiscardHunk.value)
 const isAnyActionBusy = computed(() => Boolean(activeHunkAction.value))
 
-const activeDiff = computed(() => diffText.value || staleDiffText.value)
-const activeDiffMeta = computed(() => diffMeta.value || staleDiffMeta.value)
+const activeDiff = computed(() => (loading.value ? diffText.value || staleDiffText.value : diffText.value))
+const activeDiffMeta = computed(() => (loading.value ? diffMeta.value || staleDiffMeta.value : diffMeta.value))
 const parsedDiff = computed(() => buildUnifiedDiffModel(activeDiff.value, activeDiffMeta.value))
 
 const hunks = computed<DiffHunkView[]>(() => {
@@ -204,6 +211,8 @@ function resetState() {
   diffMeta.value = null
   original.value = ''
   modified.value = ''
+  loadedModelScope.value = ''
+  loadedLanguagePath.value = ''
   staleDiffText.value = ''
   staleDiffMeta.value = null
   staleOriginal.value = ''
@@ -212,6 +221,7 @@ function resetState() {
 }
 
 async function runHunkAction(hunk: DiffHunkView, mode: HunkActionMode) {
+  if (!actionsReady.value) return
   if (!hunk.patchReady || !hunk.patch) return
   if (isAnyActionBusy.value) return
 
@@ -251,6 +261,7 @@ async function load(opts: {
   parentCommit?: string
   signal: AbortSignal
   seq: number
+  modelScope: string
 }) {
   staleDiffText.value = diffText.value
   staleDiffMeta.value = diffMeta.value
@@ -301,6 +312,8 @@ async function load(opts: {
       diffMeta.value = null
       original.value = originalResponse?.exists ? originalResponse.content || '' : ''
       modified.value = modifiedResponse?.exists ? modifiedResponse.content || '' : ''
+      loadedModelScope.value = opts.modelScope
+      loadedLanguagePath.value = opts.path
       return
     }
 
@@ -321,14 +334,12 @@ async function load(opts: {
     diffMeta.value = diffResponse?.meta && typeof diffResponse.meta === 'object' ? diffResponse.meta : null
     original.value = fileResponse?.original || ''
     modified.value = fileResponse?.modified || ''
+    loadedModelScope.value = opts.modelScope
+    loadedLanguagePath.value = opts.path
   } catch (e) {
     if (opts.signal.aborted || opts.seq !== loadSeq) return
 
     error.value = e instanceof Error ? e.message : String(e)
-    diffText.value = ''
-    diffMeta.value = null
-    original.value = ''
-    modified.value = ''
     throw e
   } finally {
     if (opts.signal.aborted || opts.seq !== loadSeq) return
@@ -349,6 +360,7 @@ function revealFile() {
 }
 
 async function readDiff() {
+  if (!visible.value) return
   const directory = (props.directory || '').trim()
   const path = normalizedPath.value
   if (!directory || !path) return
@@ -358,20 +370,23 @@ async function readDiff() {
   const seq = ++loadSeq
 
   const timeout = setTimeout(() => ac.abort(), 30_000)
-  try { await load({
-    directory,
-    path,
-    staged: Boolean(props.staged),
-    commit: (props.commit || '').trim(),
-    parentCommit: (props.parentCommit || '').trim(),
-    signal: ac.signal,
-    seq,
-  }) } finally {
+  try {
+    await load({
+      directory,
+      path,
+      staged: Boolean(props.staged),
+      commit: (props.commit || '').trim(),
+      parentCommit: (props.parentCommit || '').trim(),
+      signal: ac.signal,
+      seq,
+      modelScope: requestedModelScope.value,
+    })
+  } finally {
     clearTimeout(timeout)
     if (activeAbort === ac) {
       activeAbort = null
       loading.value = false
-      if (ac.signal.aborted && seq === loadSeq && isDocumentVisible()) {
+      if (ac.signal.aborted && seq === loadSeq && visible.value) {
         error.value = 'Diff request timed out'
         throw new Error(error.value)
       }
@@ -379,11 +394,12 @@ async function readDiff() {
   }
 }
 
-const makeRefreshQueue = () => createRevalidator(readDiff, {
-  intervalMs: 750,
-  retryMs: 5000,
-  enabled: () => isDocumentVisible() && Boolean(props.directory && normalizedPath.value),
-})
+const makeRefreshQueue = () =>
+  createRevalidator(readDiff, {
+    intervalMs: 750,
+    retryMs: 5000,
+    enabled: () => visible.value && Boolean(normalizedDirectory.value && normalizedPath.value),
+  })
 let refreshQueue = makeRefreshQueue()
 function refresh() {
   refreshQueue.invalidate(0)
@@ -393,16 +409,10 @@ function refresh() {
 defineExpose({ refresh })
 
 watch(
-  () => ({
-    directory: props.directory,
-    path: props.path,
-    staged: props.staged,
-    commit: props.commit,
-    parentCommit: props.parentCommit,
-  }),
-  (next) => {
-    const directory = (next.directory || '').trim()
-    const path = (next.path || '').trim()
+  requestedModelScope,
+  () => {
+    const directory = normalizedDirectory.value
+    const path = normalizedPath.value
 
     refreshQueue.dispose()
     activeAbort?.abort()
@@ -420,21 +430,23 @@ watch(
   { immediate: true },
 )
 const visibility = () => {
-  if (isDocumentVisible()) {
+  if (visible.value) {
     refreshQueue.resume()
   } else {
     refreshQueue.pause()
+    const interrupted = Boolean(activeAbort)
     activeAbort?.abort()
+    activeAbort = null
+    loadSeq++
     loading.value = false
-    refreshQueue.invalidate(0)
+    if (interrupted) refreshQueue.invalidate(0)
   }
 }
-document.addEventListener('visibilitychange', visibility)
+watch(visible, visibility, { flush: 'sync' })
 onBeforeUnmount(() => {
   refreshQueue.dispose()
   activeAbort?.abort()
   loadSeq++
-  document.removeEventListener('visibilitychange', visibility)
 })
 </script>
 
@@ -442,7 +454,7 @@ onBeforeUnmount(() => {
   <div class="git-editor-diff" :aria-busy="loading ? 'true' : 'false'">
     <div v-if="error" class="error">{{ error }}</div>
 
-    <div v-else-if="isImageDiff" class="images">
+    <div v-if="isImageDiff" class="images">
       <div class="image-panel">
         <div class="image-title">{{ leftLabel }}</div>
         <button
@@ -518,17 +530,19 @@ onBeforeUnmount(() => {
 
       <div class="editor-container">
         <MonacoDiffEditor
+          v-if="loadedModelScope"
           :original-value="displayOriginal"
           :modified-value="displayModified"
           :path="modifiedModelPath"
           :original-path="originalModelPath"
+          :language-path="loadedLanguagePath"
           :initial-top-line="firstChangedLine"
           :use-files-theme="true"
           :wrap="wrapLines"
           :read-only="true"
           :hunk-actions="editorHunkActions"
           :hunk-actions-enabled="hasAnyHunkAction && editorHunkActions.length > 0"
-          :hunk-actions-busy="isAnyActionBusy"
+          :hunk-actions-busy="loading || isAnyActionBusy"
           :active-hunk-action-id="activeHunkAction?.hunkId || null"
           :active-hunk-action-kind="activeHunkAction?.mode || null"
           @hunk-action="handleEditorHunkAction"

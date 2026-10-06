@@ -87,7 +87,7 @@ const mcpSurfaceSummary = computed(() => {
   }
   return st('The /mcp endpoint is available. MCP calls are anonymous.')
 })
-const authModeOptions = [
+const authModeOptions = computed(() => [
   {
     value: 'none',
     label: st('No authentication'),
@@ -105,8 +105,8 @@ const authModeOptions = [
       'Keep initialize and tool discovery public; tool calls remain OAuth-protected unless explicitly opted into anonymous access.',
     ),
   },
-]
-const anonymousAccessOptions = [
+])
+const anonymousAccessOptions = computed(() => [
   {
     value: 'none',
     label: st('No anonymous tool calls (recommended)'),
@@ -119,8 +119,7 @@ const anonymousAccessOptions = [
       'High risk: permission-contract read-only tools can run without OAuth and may expose private workspace, filesystem, configuration, or diagnostic data.',
     ),
   },
-]
-
+])
 
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value)
@@ -198,9 +197,7 @@ function toggleEnabled() {
 }
 
 async function saveControlDraft() {
-  const highRisk =
-    enabled.value &&
-    (authMode.value === 'none' || anonymousAccess.value === 'read_only')
+  const highRisk = enabled.value && (authMode.value === 'none' || anonymousAccess.value === 'read_only')
   if (highRisk && !(await confirmAction(st('Apply this high-risk MCP configuration?')))) return
   await updateControl({
     enabled: enabled.value,
@@ -424,7 +421,6 @@ onMounted(() => {
           {{ $st('Safe default: initialize and tool discovery are public, but every tool call requires OAuth.') }}
         </div>
       </div>
-
 
       <SettingsSaveBar
         :dirty="controlDirty"

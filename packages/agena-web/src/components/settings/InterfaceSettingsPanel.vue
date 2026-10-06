@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiRefreshLine } from '@remixicon/vue'
 
@@ -11,6 +11,7 @@ import { jsonPathForKey } from '@/lib/runtimeSettings'
 import { normalizeChatActivityKindCatalog, type ChatActivityKindCatalogItem } from '@/lib/chatActivity'
 import { TUI_LOCALE_OPTIONS } from '@/i18n/tuiLocale'
 import { settingsText as st } from '@/i18n/settingsText'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
 
 type ToolCatalogResponse = {
   catalog?: {
@@ -42,9 +43,19 @@ const loadingCatalog = ref(false)
 const catalogError = ref('')
 const activityKinds = ref<ChatActivityKindCatalogItem[]>([])
 const toolNames = ref<string[]>([])
-const themeOptions = ref<Array<{ value: string; label: string; description?: string }>>([])
+const themes = ref<Array<{ value: string; label: string; pluginId: string }>>([])
+const themeOptions = computed(() =>
+  themes.value.map(({ value, label, pluginId }) => ({
+    value,
+    label,
+    description: pluginId ? st('Plugin: {pluginId}', { pluginId }) : undefined,
+  })),
+)
 const activityQuery = ref('')
 const toolQuery = ref('')
+const visible = usePaneVisibility()
+let catalogController: AbortController | undefined
+let pendingCatalog = true
 
 const localeOptions = computed(() =>
   TUI_LOCALE_OPTIONS.map((option) => ({
@@ -54,17 +65,17 @@ const localeOptions = computed(() =>
   })),
 )
 
-const colorSchemeOptions = [
+const colorSchemeOptions = computed(() => [
   { value: 'auto', label: st('Auto'), description: st('Follow the terminal environment.') },
   { value: 'dark', label: st('Dark'), description: st('Use the dark TUI palette.') },
   { value: 'light', label: st('Light'), description: st('Use the light TUI palette.') },
-]
+])
 
-const graphicsOptions = [
+const graphicsOptions = computed(() => [
   { value: 'auto', label: st('Auto'), description: st('Use native terminal graphics when available.') },
   { value: 'native', label: st('Native'), description: st('Prefer native terminal graphics.') },
   { value: 'unicode', label: st('Unicode'), description: st('Use portable Unicode rendering.') },
-]
+])
 
 const filteredActivityKinds = computed(() => {
   const query = activityQuery.value.trim().toLowerCase()
@@ -85,28 +96,38 @@ const filteredToolNames = computed(() => {
 })
 
 async function loadCatalog() {
+  if (!visible.value) {
+    pendingCatalog = true
+    return
+  }
   if (loadingCatalog.value) return
+  pendingCatalog = false
+  const controller = new AbortController()
+  catalogController = controller
   loadingCatalog.value = true
   catalogError.value = ''
   try {
-    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/surface')
+    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/surface', {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+    })
+    if (controller.signal.aborted || catalogController !== controller) return
     const kinds = normalizeChatActivityKindCatalog(response?.activity_kinds)
     activityKinds.value = kinds
-    themeOptions.value = (
-      Array.isArray(response?.catalog?.terminal?.themes) ? response.catalog.terminal.themes : []
-    ).flatMap((theme) => {
-      const id = String(theme?.id || '').trim()
-      const label = String(theme?.display_name || id).trim()
-      const pluginId = String(theme?.plugin_id || '').trim()
-      if (!id) return []
-      return [
-        {
-          value: id,
-          label: label || id,
-          description: pluginId ? st('Plugin: {pluginId}', { pluginId: pluginId }) : undefined,
-        },
-      ]
-    })
+    themes.value = (Array.isArray(response?.catalog?.terminal?.themes) ? response.catalog.terminal.themes : []).flatMap(
+      (theme) => {
+        const id = String(theme?.id || '').trim()
+        const label = String(theme?.display_name || id).trim()
+        const pluginId = String(theme?.plugin_id || '').trim()
+        if (!id) return []
+        return [
+          {
+            value: id,
+            label: label || id,
+            pluginId,
+          },
+        ]
+      },
+    )
     toolNames.value = [
       ...new Set([
         ...BUILTIN_ACTIVITY_TOOLS,
@@ -116,9 +137,13 @@ async function loadCatalog() {
       ]),
     ].sort((a, b) => a.localeCompare(b))
   } catch (reason) {
+    if (controller.signal.aborted || catalogController !== controller) return
     catalogError.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
-    loadingCatalog.value = false
+    if (catalogController === controller) {
+      catalogController = undefined
+      loadingCatalog.value = false
+    }
   }
 }
 
@@ -136,6 +161,21 @@ function toolPath(name: string): string {
 }
 
 onMounted(() => void loadCatalog())
+watch(
+  visible,
+  (shown) => {
+    if (shown) {
+      if (pendingCatalog) void loadCatalog()
+    } else if (catalogController) {
+      pendingCatalog = true
+      catalogController.abort()
+      catalogController = undefined
+      loadingCatalog.value = false
+    }
+  },
+  { flush: 'sync' },
+)
+onBeforeUnmount(() => catalogController?.abort())
 </script>
 
 <template>

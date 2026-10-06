@@ -40,7 +40,8 @@ watch(
 )
 
 const highlighted = computed(() => {
-  return highlightCodeToHtml(props.code, props.lang)
+  const code = expanded.value ? props.code : props.code.split('\n', 24).join('\n').slice(0, 4096)
+  return highlightCodeToHtml(code, props.lang)
 })
 
 async function copyCode() {

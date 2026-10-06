@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import ActivitiesPanel from '@/components/settings/ActivitiesPanel.vue'
-import AdvancedSettingsPanel from '@/components/settings/AdvancedSettingsPanel.vue'
-import DiagnosticsPanel from '@/components/settings/DiagnosticsPanel.vue'
-import MemoriesPanel from '@/components/settings/MemoriesPanel.vue'
+import { computed, defineAsyncComponent } from 'vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
-import UsagePanel from '@/components/settings/UsagePanel.vue'
 
-const pages = buildSettingsSubpages('diagnostics')
+const ActivitiesPanel = defineAsyncComponent(() => import('@/components/settings/ActivitiesPanel.vue'))
+const AdvancedSettingsPanel = defineAsyncComponent(() => import('@/components/settings/AdvancedSettingsPanel.vue'))
+const DiagnosticsPanel = defineAsyncComponent(() => import('@/components/settings/DiagnosticsPanel.vue'))
+const MemoriesPanel = defineAsyncComponent(() => import('@/components/settings/MemoriesPanel.vue'))
+const UsagePanel = defineAsyncComponent(() => import('@/components/settings/UsagePanel.vue'))
+
+const pages = computed(() => buildSettingsSubpages('diagnostics'))
 </script>
 
 <template>

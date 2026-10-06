@@ -4,6 +4,8 @@ import { localStorageKeys } from '../../lib/persistence/storageKeys'
 
 /** Keep the Web prompt history bounded to the same size as the TUI history. */
 export const MAX_PROMPT_HISTORY_ENTRIES = 200
+export const MAX_PROMPT_HISTORY_CHARACTERS = 256 * 1024
+const sharedHistory = new WeakMap<Storage, { entries: Ref<string[]>; raw: string | null }>()
 
 export type PromptHistoryFocus = 'input' | 'results'
 
@@ -30,9 +32,12 @@ export function normalizePromptHistoryItems(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
   const items: string[] = []
+  let characters = 0
   for (const candidate of value) {
     const text = normalizePromptHistoryText(candidate)
-    if (!text || seen.has(text)) continue
+    if (!text || seen.has(text) || text.length > MAX_PROMPT_HISTORY_CHARACTERS) continue
+    if (characters + text.length > MAX_PROMPT_HISTORY_CHARACTERS) continue
+    characters += text.length
     seen.add(text)
     items.push(text)
     if (items.length >= MAX_PROMPT_HISTORY_ENTRIES) break
@@ -95,7 +100,16 @@ export type ComposerPromptHistoryState = {
 
 export function useComposerPromptHistory(options: { storage?: Storage | null } = {}): ComposerPromptHistoryState {
   const storage = options.storage === undefined ? browserStorage() : options.storage
-  const entries = ref(loadPromptHistory(storage))
+  let shared = storage ? sharedHistory.get(storage) : undefined
+  if (!shared) {
+    let raw: string | null = null
+    try {
+      raw = storage?.getItem(localStorageKeys.chat.promptHistory) ?? null
+    } catch {}
+    shared = { entries: ref(loadPromptHistory(storage)), raw }
+    if (storage) sharedHistory.set(storage, shared)
+  }
+  const entries = shared.entries
   const open = ref(false)
   const query = ref('')
   const activeIndex = ref(0)
@@ -110,7 +124,14 @@ export function useComposerPromptHistory(options: { storage?: Storage | null } =
   }
 
   function reload() {
-    entries.value = loadPromptHistory(storage)
+    let raw: string | null = null
+    try {
+      raw = storage?.getItem(localStorageKeys.chat.promptHistory) ?? null
+    } catch {}
+    if (raw !== shared!.raw) {
+      shared!.raw = raw
+      entries.value = loadPromptHistory(storage)
+    }
     clampActiveIndex()
   }
 
@@ -182,7 +203,12 @@ export function useComposerPromptHistory(options: { storage?: Storage | null } =
     const next = addPromptHistoryEntry(entries.value, value)
     const changed = next.length !== entries.value.length || next.some((item, index) => item !== entries.value[index])
     entries.value = next
-    if (changed) persistPromptHistory(next, storage)
+    if (changed) {
+      persistPromptHistory(next, storage)
+      try {
+        shared!.raw = storage?.getItem(localStorageKeys.chat.promptHistory) ?? null
+      } catch {}
+    }
     closeHistory()
     return changed
   }

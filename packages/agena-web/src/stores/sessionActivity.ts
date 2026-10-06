@@ -78,11 +78,12 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
       const id = item.parent_session_id ?? item.session_id
       if (typeof id !== 'number' || !isActiveActivityStatus(String(item.status ?? ''))) continue
       const sid = String(id)
-      const kinds = next[sid]?.kinds ?? []
+      const entry = next[sid] ?? (next[sid] = { type: 'busy', kinds: [] })
       const kind = String(item.kind ?? '')
         .trim()
         .toLowerCase()
-      next[sid] = { type: 'busy', kinds: kind ? [...kinds, kind] : kinds }
+      entry.type = 'busy'
+      if (kind) entry.kinds.push(kind)
     }
     for (const entry of Object.values(next)) entry.kinds = [...new Set(entry.kinds)].sort()
     const previous = snapshot.value
@@ -123,7 +124,7 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
       }
       const { value: list, observation } = await conditionalJsonObserved<ActivityItem[]>(
         'activities',
-        '/api/v1/activities',
+        '/api/v1/activities?active_only=true',
         {
           signal: request.signal,
         },

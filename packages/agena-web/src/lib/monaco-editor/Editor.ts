@@ -12,13 +12,15 @@ import {
   type PropType,
   type SetupContext,
   type ShallowRef,
+  type Ref,
 } from 'vue'
 import type * as monacoEditor from 'monaco-editor'
 
 import { type MonacoEditor, type Nullable } from './types'
 import { useContainer } from './useContainer'
 import { useMonaco } from './useMonaco'
-import { getOrCreateModel, isUndefined, slotHelper } from './utils'
+import { acquireModel, isUndefined, slotHelper } from './utils'
+import { usePaneVisibility } from '../../composables/usePaneVisibility'
 
 export interface EditorProps {
   defaultValue?: string
@@ -95,47 +97,53 @@ export default defineComponent({
   setup(props, ctx: SetupContext<VueMonacoEditorEmitsOptions>) {
     const viewStates = new Map<string | undefined, Nullable<monacoEditor.editor.ICodeEditorViewState>>()
     const containerRef = shallowRef<Nullable<HTMLElement>>(null)
-    const { monacoRef, unload, isLoadFailed } = useMonaco()
-    const { editorRef } = useEditor(ctx, props, monacoRef, containerRef)
+    const visible = usePaneVisibility()
+    const { monacoRef, unload, isLoadFailed } = useMonaco(() => visible.value)
+    const { editorRef, appliedPath, replaceModel, releaseModel } = useEditor(
+      ctx,
+      props,
+      monacoRef,
+      containerRef,
+      visible,
+    )
     const { disposeValidator } = useValidator(ctx, monacoRef, editorRef)
     const isEditorReady = computed(() => !!monacoRef.value && !!editorRef.value)
+    let appliedLine = props.line
     const { wrapperStyle, containerStyle } = useContainer(props, isEditorReady)
 
     onUnmounted(() => {
       disposeValidator.value?.()
       if (editorRef.value) {
-        editorRef.value.getModel()?.dispose()
         editorRef.value.dispose()
+        releaseModel()
       } else {
         unload()
       }
     })
 
     watch(
-      [() => props.path, () => props.value, () => props.language, () => props.line],
-      ([newPath, newValue, newLanguage, newLine], [oldPath, , oldLanguage, oldLine]) => {
-        if (!isEditorReady.value || !editorRef.value || !monacoRef.value) {
+      [() => props.path, () => props.value, () => props.language, () => props.line, visible],
+      ([newPath, newValue, newLanguage, newLine]) => {
+        if (!visible.value || !isEditorReady.value || !editorRef.value || !monacoRef.value) {
           return
         }
 
-        if (newPath !== oldPath) {
-          const newModel = getOrCreateModel(
-            monacoRef.value,
-            newValue || props.defaultValue || '',
-            newLanguage || props.defaultLanguage || '',
-            newPath || props.defaultPath || '',
-          )
+        const nextPath = newPath || props.defaultPath || ''
+        if (nextPath !== appliedPath.value) {
           if (props.saveViewState) {
-            viewStates.set(oldPath, editorRef.value.saveViewState())
+            viewStates.delete(appliedPath.value)
+            viewStates.set(appliedPath.value, editorRef.value.saveViewState())
+            if (viewStates.size > 64) viewStates.delete(viewStates.keys().next().value)
           }
-          editorRef.value.setModel(newModel)
+          replaceModel(newValue ?? props.defaultValue ?? '', newLanguage || props.defaultLanguage || '', nextPath)
           if (props.saveViewState) {
-            editorRef.value.restoreViewState(viewStates.get(newPath) ?? null)
+            editorRef.value.restoreViewState(viewStates.get(nextPath) ?? null)
           }
 
           if (!isUndefined(newLine)) {
             editorRef.value.revealLine(newLine)
           }
+          appliedLine = newLine
           return
         }
 
@@ -143,35 +151,31 @@ export default defineComponent({
           editorRef.value.setValue(newValue || '')
         }
 
-        if (newLanguage !== oldLanguage) {
-          monacoRef.value.editor.setModelLanguage(
-            editorRef.value.getModel()!,
-            newLanguage || props.defaultLanguage || 'plaintext',
-          )
+        const language = newLanguage || props.defaultLanguage || 'plaintext'
+        if (editorRef.value.getModel()?.getLanguageId() !== language) {
+          monacoRef.value.editor.setModelLanguage(editorRef.value.getModel()!, language)
         }
 
-        if (!isUndefined(newLine) && newLine !== oldLine) {
+        if (!isUndefined(newLine) && newLine !== appliedLine) {
           editorRef.value.revealLine(newLine)
         }
+        appliedLine = newLine
       },
     )
 
     watch(
-      () => props.options,
-      (options) => {
-        editorRef.value?.updateOptions(options)
+      [() => props.options, visible],
+      ([options]) => {
+        if (visible.value) editorRef.value?.updateOptions(options)
       },
       { deep: true },
     )
 
-    watch(
-      () => props.theme,
-      (theme) => {
-        if (monacoRef.value) {
-          monacoRef.value.editor.setTheme(theme)
-        }
-      },
-    )
+    watch([() => props.theme, visible], ([theme]) => {
+      if (visible.value && monacoRef.value) {
+        monacoRef.value.editor.setTheme(theme)
+      }
+    })
 
     return {
       containerRef,
@@ -220,14 +224,30 @@ function useEditor(
   props: EditorProps,
   monacoRef: ShallowRef<Nullable<MonacoEditor>>,
   containerRef: ShallowRef<Nullable<HTMLElement>>,
+  visible: Readonly<Ref<boolean>>,
 ) {
   const editorRef = shallowRef<Nullable<monacoEditor.editor.IStandaloneCodeEditor>>(null)
+  let modelLease: ReturnType<typeof acquireModel> | undefined
+  const appliedPath = ref('')
+  const releaseModel = () => {
+    modelLease?.release()
+    modelLease = undefined
+  }
+  function replaceModel(value: string, language: string, path: string) {
+    if (!monacoRef.value || !editorRef.value) return
+    const next = acquireModel(monacoRef.value, value, language, path)
+    editorRef.value.setModel(next.model)
+    releaseModel()
+    modelLease = next
+    appliedPath.value = path
+    if (next.model.getValue() !== value) next.model.setValue(value)
+  }
 
   onMounted(() => {
     const stop = watch(
-      monacoRef,
+      [monacoRef, visible],
       () => {
-        if (containerRef.value && monacoRef.value) {
+        if (visible.value && containerRef.value && monacoRef.value) {
           nextTick(() => stop())
           createEditor()
         }
@@ -244,7 +264,8 @@ function useEditor(
     emit('beforeMount', monacoRef.value)
 
     const autoCreatedModelPath = props.path || props.defaultPath
-    const defaultModel = getOrCreateModel(
+    appliedPath.value = autoCreatedModelPath || ''
+    modelLease = acquireModel(
       monacoRef.value,
       props.value || props.defaultValue || '',
       props.language || props.defaultLanguage || '',
@@ -254,7 +275,7 @@ function useEditor(
     editorRef.value = monacoRef.value.editor.create(
       containerRef.value,
       {
-        model: defaultModel,
+        model: modelLease.model,
         theme: props.theme,
         automaticLayout: true,
         autoIndent: 'brackets',
@@ -280,7 +301,7 @@ function useEditor(
     emit('mount', editorRef.value, monacoRef.value)
   }
 
-  return { editorRef }
+  return { editorRef, appliedPath, replaceModel, releaseModel }
 }
 
 function useValidator(

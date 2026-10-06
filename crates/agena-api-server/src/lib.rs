@@ -110,6 +110,7 @@ pub fn router(state: AppState) -> Router {
                     .delete(rest::delete_layer_settings),
             )
             .route("/api/v1/settings/entries", get(rest::list_settings))
+            .route("/api/v1/settings/sources", get(rest::get_settings_sources))
             .route("/api/v1/settings/validate", post(rest::validate_settings))
             .route("/api/v1/config/resolved", get(rest::get_resolved_config))
             .route("/api/v1/model-catalog", get(rest::get_model_catalog))
@@ -569,6 +570,8 @@ mod router_contract_tests {
     mod file_changes;
     mod realtime_consistency;
     mod revisions;
+    mod settings_sources;
+    mod workspace_uploads;
     use std::collections::{BTreeMap, VecDeque};
 
     use agena_api::{

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { RiArrowGoBackLine, RiCheckLine, RiClipboardLine, RiGitBranchLine, RiLoader4Line } from '@remixicon/vue'
 
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
@@ -20,6 +20,8 @@ import { partStatusPresentation } from '@/pages/chat/transcriptPartPresentation'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, normalizeTranscriptPartPageSize } from '@/pages/chat/transcriptPartPaging'
 import { useI18n } from 'vue-i18n'
 import { transcriptFoldKey } from '@/stores/chat/transcriptFolds'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { useNearViewport } from '@/composables/useNearViewport'
 
 const props = defineProps<{
   message: MessageLike
@@ -53,6 +55,9 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const pane = useWorkspacePaneContext()
+const articleRef = ref<HTMLElement | null>(null)
+const nearViewport = useNearViewport(articleRef)
 const role = computed(() => String(props.message.info.role || 'assistant'))
 const messageId = computed(() => String(props.message.info.id || ''))
 const messageNodeKey = computed(() => `message:${messageId.value}`)
@@ -207,8 +212,10 @@ function partNavigationText(part: TranscriptDisplayPart): string {
 
 <template>
   <article
-    :id="`msg-${messageId}`"
+    ref="articleRef"
+    :id="`${pane?.windowId.value || 'page'}-msg-${messageId}`"
     class="group/message relative min-w-0 scroll-mt-16 rounded-lg px-1 py-2"
+    style="content-visibility: auto; contain-intrinsic-size: auto 120px"
     :class="[
       selected(messageNodeKey) ? 'bg-primary/10' : '',
       searchMatch(messageNodeKey) ? 'ring-1 ring-inset ring-amber-400/55' : '',
@@ -218,6 +225,7 @@ function partNavigationText(part: TranscriptDisplayPart): string {
     :data-message-id="messageId"
     :data-chat-message-anchor="role === 'user' ? 'true' : undefined"
     :data-role="role"
+    :data-near-viewport="nearViewport ? 'true' : 'false'"
     tabindex="-1"
     @pointerdown="selectMessageNode"
     @focus="$emit('nodeSelect', messageNodeKey)"

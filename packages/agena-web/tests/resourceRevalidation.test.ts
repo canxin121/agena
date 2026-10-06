@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { createSharedRead, createRequestLimiter } from '../src/lib/backgroundReads'
-import { conditionalJson } from '../src/lib/conditionalJson'
+import { conditionalJson, conditionalJsonObserved } from '../src/lib/conditionalJson'
 import {
   applyResourceEvent,
   canReuseResource,
   captureResourceObservation,
   checkResourceVersions,
+  invalidateResources,
   noteResourceVersion,
   subscribeResource,
 } from '../src/lib/resourceSync'
@@ -151,6 +152,9 @@ test('SSE revision tokens wake only the changed resource and do not perform a se
   const key = 'session:2004:files'
   cleanups.push(subscribeResource(key, () => notified++))
   noteResourceVersion(key, 'event-server:1', captureResourceObservation(key))
+  // Earlier fixtures use other server epochs. A real authoritative read in
+  // the current epoch closes that restart before this test's steady stream.
+  noteResourceVersion(key, 'event-server:1', captureResourceObservation(key))
   globalThis.fetch = (async () => {
     throw new Error('SSE notification must not make a version request')
   }) as typeof fetch
@@ -166,6 +170,60 @@ test('SSE revision tokens wake only the changed resource and do not perform a se
   expect(canReuseResource(key, 'event-server:2')).toBe(true)
   await checkResourceVersions([key])
   expect(notified).toBe(1)
+})
+
+test('retained values use their actual response token when a newer announcement overtakes HTTP', async () => {
+  const key = 'session:2010:files',
+    url = '/resource-test/observed'
+  const pending = deferred<Response>()
+  let requests = 0
+  noteResourceVersion(key, 'observation-server:1')
+  globalThis.fetch = (async (_input, init) => {
+    requests++
+    if (requests === 1) return pending.promise
+    if (requests === 2) return Response.json({ value: 'current' }, { headers: { etag: 'W/"observation-server:2"' } })
+    expect(new Headers(init?.headers).get('if-none-match')).toBe('W/"observation-server:2"')
+    return new Response(null, { status: 304 })
+  }) as typeof fetch
+  const older = conditionalJsonObserved<{ value: string }>(key, url)
+  await settle()
+  noteResourceVersion(key, 'observation-server:2')
+  pending.resolve(Response.json({ value: 'earlier' }, { headers: { etag: 'W/"observation-server:1"' } }))
+  const snapshot = await older
+  expect(snapshot.value.value).toBe('earlier')
+  expect(snapshot.observation.token).toBe('observation-server:1')
+  expect(canReuseResource(key, snapshot.observation.token!)).toBe(false)
+  const current = await conditionalJsonObserved<{ value: string }>(key, url)
+  expect(current.observation.token).toBe('observation-server:2')
+  expect(current.value.value).toBe('current')
+  const cached = await conditionalJsonObserved<{ value: string }>(key, url)
+  expect(requests).toBe(2)
+  expect(cached.observation.token).toBe(current.observation.token)
+  const validated = await conditionalJsonObserved<{ value: string }>(key, url, undefined, true)
+  expect(requests).toBe(3)
+  expect(validated.value).toEqual(current.value)
+  expect(validated.observation.token).toBe(current.observation.token)
+})
+
+test('an incremental SSE after a connection gap cannot mark an unreconciled resource reusable', async () => {
+  const key = 'session:2011:files'
+  // Previous fixtures advanced the shared revision queue by a minute.
+  let now = originalNow() + 120_000
+  Date.now = () => now
+  noteResourceVersion(key, 'gap-server:1')
+  invalidateResources([key])
+  applyResourceEvent({ type: 'session_changed', properties: { resource_revisions: { [key]: 'gap-server:2' } } })
+  expect(captureResourceObservation(key).token).toBe('gap-server:2')
+  expect(canReuseResource(key, 'gap-server:2')).toBe(false)
+  let requests = 0
+  globalThis.fetch = (async () => {
+    requests++
+    return Response.json({ [key]: 'gap-server:2' })
+  }) as typeof fetch
+  now += 1000
+  await checkResourceVersions([key])
+  expect(requests).toBe(1)
+  expect(canReuseResource(key, 'gap-server:2')).toBe(true)
 })
 
 test('cancelling the last shared consumer aborts transport and queued work never starts', async () => {

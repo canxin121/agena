@@ -9,7 +9,7 @@ import type { SessionActivity } from '@/types/activity'
 // server rejects unknown fields, including the old Agent/profile selection.
 
 import { apiJson } from '../../lib/api'
-import { conditionalJson } from '../../lib/conditionalJson'
+import { conditionalJsonObserved } from '../../lib/conditionalJson'
 import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
@@ -76,6 +76,7 @@ export type ToolDetailResource = {
   part_state?: string
   section: ToolDetailSection
   value: JsonValue
+  observation?: ReturnType<typeof import('../../lib/resourceSync').captureResourceObservation>
 }
 
 /** SessionPartsResource — GET /api/v1/sessions/{id}/parts. */
@@ -157,6 +158,7 @@ export type SessionListResponse = {
   total?: number
   hasMore?: boolean
   nextCursor?: string | null
+  observation?: Awaited<ReturnType<typeof conditionalJsonObserved>>['observation']
 }
 
 export type MessageListResponse = {
@@ -168,6 +170,7 @@ export type MessageListResponse = {
 
 export type TranscriptMessageListResponse = MessageListResponse & {
   userMessageCount: number
+  observation?: Awaited<ReturnType<typeof conditionalJsonObserved>>['observation']
 }
 
 function messageFoldsFromWire(folds: AgenaSessionParts['folds']): MessageFold[] {
@@ -190,6 +193,7 @@ function messageFoldsFromWire(folds: AgenaSessionParts['folds']): MessageFold[] 
 }
 
 export type SessionExecutionStatus = {
+  observation?: Awaited<ReturnType<typeof conditionalJsonObserved>>['observation']
   session: Session
   state: SessionState
   execution?: AgenaExecutionState['execution']
@@ -655,6 +659,24 @@ export function normalizeAgenaPart(
 
 // --- sessions --------------------------------------------------------------
 
+export function sessionListResourceKey(opts?: {
+  workspaceId?: number | string
+  parentId?: number | string
+  roots?: boolean
+  bucket?: string
+  countOnly?: boolean
+}): string {
+  const workspace = Number(opts?.workspaceId)
+  if (Number.isSafeInteger(workspace) && workspace > 0) {
+    const base = `workspace:${workspace}:sessions`
+    if (opts?.bucket) return `${base}:bucket:${opts.bucket}`
+    const parent = Number(opts?.parentId)
+    if (Number.isSafeInteger(parent) && parent > 0) return `${base}:parent:${parent}`
+    return opts?.roots ? `${base}:roots` : base
+  }
+  return opts?.bucket ? `sessions:bucket:${opts.bucket}${opts.countOnly ? ':count' : ''}` : 'sessions'
+}
+
 /** GET /api/v1/sessions — flat recent list. */
 export async function listSessions(opts?: {
   limit?: number
@@ -667,6 +689,7 @@ export async function listSessions(opts?: {
   offset?: number
   bucket?: 'pinned' | 'favorite' | 'running' | 'attention' | 'recent'
   includeTotal?: boolean
+  countOnly?: boolean
   signal?: AbortSignal
 }): Promise<SessionListResponse> {
   const params: string[] = []
@@ -691,14 +714,11 @@ export async function listSessions(opts?: {
   if (opts?.offset) params.push(`offset=${Math.max(0, Math.floor(opts.offset))}`)
   if (opts?.bucket) params.push(`bucket=${encodeURIComponent(opts.bucket)}`)
   if (opts?.includeTotal) params.push('include_total=true')
+  if (opts?.countOnly) params.push('count_only=true')
   const suffix = params.length ? `?${params.join('&')}` : ''
 
-  const payload = await conditionalJson<JsonValue>(
-    Number.isSafeInteger(workspaceId) && workspaceId > 0
-      ? `workspace:${workspaceId}:sessions`
-      : opts?.bucket
-        ? `sessions:bucket:${opts.bucket}`
-        : 'sessions',
+  const { value: payload, observation } = await conditionalJsonObserved<JsonValue>(
+    sessionListResourceKey(opts),
     `/api/v1/sessions${suffix}`,
     opts?.signal ? { signal: opts.signal } : undefined,
   )
@@ -713,6 +733,7 @@ export async function listSessions(opts?: {
     total: typeof body.total === 'number' ? Number(body.total) : undefined,
     hasMore: page.has_more === true,
     nextCursor,
+    observation,
   }
 }
 
@@ -905,12 +926,13 @@ export async function getToolPartDetail(
   const sid = String(sessionId || '').trim()
   const pid = String(partId || '').trim()
   if (!sid || !pid) throw new Error('A session id and part id are required')
-  return await conditionalJson<ToolDetailResource>(
+  const { value, observation } = await conditionalJsonObserved<ToolDetailResource>(
     section === 'presentation' ? `part:${pid}` : `part:${pid}:${section}`,
     `/api/v1/sessions/${encodeURIComponent(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
     signal ? { signal } : undefined,
     force,
   )
+  return { ...value, observation }
 }
 
 /**
@@ -923,6 +945,7 @@ export async function listMessages(
   limit: number,
   cursor?: string | null,
   activityLimit?: number,
+  force = false,
 ): Promise<TranscriptMessageListResponse> {
   const sid = String(sessionId || '').trim()
   if (!sid) return { entries: [], hasMore: false, nextCursor: null, userMessageCount: 0 }
@@ -932,9 +955,11 @@ export async function listMessages(
     params.set('activity_limit', String(Math.max(1, Math.min(50, Math.floor(activityLimit)))))
   }
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
-  const parts = await apiJson<AgenaSessionParts>(
+  const { value: parts, observation } = await conditionalJsonObserved<AgenaSessionParts>(
+    `session:${sid}:transcript`,
     `/api/v1/sessions/${encodeURIComponent(sid)}/transcript?${params.toString()}`,
     { signal: AbortSignal.timeout(30_000) },
+    force,
   )
   const folds = messageFoldsFromWire(parts.folds)
   if (typeof parts.user_message_count !== 'number' || !Number.isFinite(parts.user_message_count)) {
@@ -942,6 +967,7 @@ export async function listMessages(
   }
   return {
     entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], folds),
+    observation,
     version: parts.version,
     hasMore: Boolean(parts.page?.has_more),
     nextCursor: parts.page?.next_cursor ?? null,
@@ -1288,7 +1314,7 @@ export async function presentInteractiveRequest(sessionId: string, requestId: st
 export async function getSessionExecutionStatus(sessionId: string): Promise<SessionExecutionStatus | null> {
   const sid = String(sessionId || '').trim()
   if (!sid) return null
-  const raw = await conditionalJson<AgenaExecutionState>(
+  const { value: raw, observation } = await conditionalJsonObserved<AgenaExecutionState>(
     `session:${sid}:state`,
     `/api/v1/sessions/${encodeURIComponent(sid)}/state?include_parts=false`,
     { signal: AbortSignal.timeout(30_000) },
@@ -1311,6 +1337,7 @@ export async function getSessionExecutionStatus(sessionId: string): Promise<Sess
     usage: state.usage,
     backgroundActivityKinds,
     backgroundActivities: raw.background_activities || [],
+    observation,
   }
 }
 

@@ -13,6 +13,7 @@ export interface SessionFileEdit {
 }
 export interface SessionFileChange {
   path: string
+  revision?: string
   operation_count: number
   operation_history: boolean
   operations: SessionFileEdit[]

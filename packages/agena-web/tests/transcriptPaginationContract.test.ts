@@ -42,7 +42,9 @@ test('chat opens with one recent page and delegates older loading to user scroll
   assert.doesNotMatch(chatPage, /function collapseAllTranscriptParts/)
   assert.doesNotMatch(chatPage, /function expandNextTranscriptParts/)
   assert.doesNotMatch(chatPage, /function collectAllTranscriptParts/)
-  assert.match(store, /listMessages\(sid, limit, undefined, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE\)/)
+  // The recent page validates after a send even if its SSE notification was
+  // lost; older pages remain lazy and use their explicit cursor.
+  assert.match(store, /listMessages\(sid, limit, undefined, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, true\)/)
   assert.match(store, /listMessages\(sid, OLDER_MESSAGE_PAGE_SIZE, cursor, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE\)/)
 })
 

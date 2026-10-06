@@ -4,6 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { connectSse, type SseClient } from '@/lib/sse'
 import { createRevalidator } from '@/lib/revalidation'
+import { apiUrl } from '@/lib/api'
+import { readUiAuthTokenVersion } from '@/lib/uiAuthToken'
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
@@ -3601,7 +3603,6 @@ watch(
 
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalKeydown)
-
 })
 
 onBeforeUnmount(() => {
@@ -4017,6 +4018,7 @@ watch(
 // One non-recursive stream watches only visible directories. It owns no
 // recursive workspace scan and is closed with the pane or hidden document.
 let filesystemStream: SseClient | null = null
+let filesystemWatchIdentity = ''
 let filesystemOverflowTimer: number | null = null
 let fullFilesystemRefresh = true
 const changedFilesystemPaths = new Set<string>()
@@ -4048,7 +4050,14 @@ const filesystemRefresh = createRevalidator(
         await refreshCurrentFile({ source: 'manual', silent: true, throwOnError: true })
       }
     } catch (error) {
-      fullFilesystemRefresh = true
+      if (root.value === rootPath) {
+        if (!paths) fullFilesystemRefresh = true
+        else
+          for (const path of paths) {
+            if (changedFilesystemPaths.size < 256) changedFilesystemPaths.add(path)
+            else fullFilesystemRefresh = true
+          }
+      }
       throw error
     }
   },
@@ -4061,24 +4070,38 @@ function invalidateFilesystem() {
 }
 
 function watchFilesystem() {
+  if (!pageMounted || !root.value || document.visibilityState === 'hidden') {
+    filesystemStream?.close()
+    filesystemStream = null
+    filesystemWatchIdentity = ''
+    if (filesystemOverflowTimer !== null) window.clearInterval(filesystemOverflowTimer)
+    filesystemOverflowTimer = null
+    filesystemRefresh.pause()
+    return
+  }
+  const rootPath = root.value
+  const selectedPath = selectedFile.value?.path || ''
+  const parent = selectedPath.slice(0, selectedPath.lastIndexOf('/'))
+  const visiblePaths = [...new Set([rootPath, parent, ...[...expandedDirs.value].sort()])].filter(
+    (path) => path && withinWorkspace(path, rootPath),
+  )
+  const paths = visiblePaths.slice(0, 128)
+  const query = new URLSearchParams({ directory: rootPath, paths: JSON.stringify([...paths].sort()) })
+  const endpoint = `/api/v1/workbench/fs/stream?${query}`
+  const identity = `${readUiAuthTokenVersion()}:${apiUrl(endpoint)}:${visiblePaths.length > 128}`
+  // Selecting another file in an already watched folder changes no watch.
+  // Keeping this stream also avoids a full reconciliation on every selection.
+  if (filesystemStream && filesystemWatchIdentity === identity) return
+  filesystemWatchIdentity = identity
   if (filesystemOverflowTimer !== null) window.clearInterval(filesystemOverflowTimer)
   filesystemOverflowTimer = null
   filesystemStream?.close()
   filesystemStream = null
-  if (!pageMounted || !root.value || document.visibilityState === 'hidden') return
-  const rootPath = root.value
-  const selectedPath = selectedFile.value?.path || ''
-  const parent = selectedPath.slice(0, selectedPath.lastIndexOf('/'))
-  const visiblePaths = [...new Set([rootPath, parent, ...expandedDirs.value])].filter(
-    (path) => path && withinWorkspace(path, rootPath),
-  )
-  const paths = visiblePaths.slice(0, 128)
   // Beyond the OS-watch budget, keep the remaining loaded folders coherent
   // with a bounded, low-frequency fallback while this pane is visible.
   if (visiblePaths.length > 128) filesystemOverflowTimer = window.setInterval(invalidateFilesystem, 60_000)
-  const query = new URLSearchParams({ directory: rootPath, paths: JSON.stringify(paths) })
   filesystemStream = connectSse({
-    endpoint: `/api/v1/workbench/fs/stream?${query}`,
+    endpoint,
     onOpen: invalidateFilesystem,
     onEvent: (event) => {
       directoryStore.applyGlobalEvent(event)

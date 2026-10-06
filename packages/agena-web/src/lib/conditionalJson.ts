@@ -4,7 +4,13 @@ import { canReuseResource, captureResourceObservation, noteResourceVersion } fro
 import { createSharedRead, limitBackgroundReads } from './backgroundReads'
 
 type Cached = { token: string; etag: string; value: unknown; bytes: number; generation: number }
-type Flight = { read: ReturnType<typeof createSharedRead<unknown>>; generation: number; requestedGeneration: number }
+type Observation = ReturnType<typeof captureResourceObservation>
+type Observed<T> = { value: T; observation: Observation }
+type Flight = {
+  read: ReturnType<typeof createSharedRead<Observed<unknown>>>
+  generation: number
+  requestedGeneration: number
+}
 const cache = new Map<string, Cached>()
 const flights = new Map<string, Flight>()
 let cacheBytes = 0
@@ -30,7 +36,25 @@ function remember(key: string, entry: Cached) {
 
 /** Bounded representations, shared reads, and independent cancellation.
  * A mutation's forced read cannot join a request sent before that mutation. */
-export async function conditionalJson<T>(resource: string, url: string, init?: RequestInit, force = false, requiredGeneration?: number): Promise<T> {
+export async function conditionalJson<T>(
+  resource: string,
+  url: string,
+  init?: RequestInit,
+  force = false,
+  requiredGeneration?: number,
+): Promise<T> {
+  return (await conditionalJsonObserved<T>(resource, url, init, force, requiredGeneration)).value
+}
+
+/** Associate a locally retained value with the token of its actual response,
+ * including an older response that raced a newer SSE announcement. */
+export async function conditionalJsonObserved<T>(
+  resource: string,
+  url: string,
+  init?: RequestInit,
+  force = false,
+  requiredGeneration?: number,
+): Promise<Observed<T>> {
   init?.signal?.throwIfAborted()
   const authVersion = readUiAuthTokenVersion()
   const resolvedUrl = apiUrl(url)
@@ -45,10 +69,17 @@ export async function conditionalJson<T>(resource: string, url: string, init?: R
   const key = `${resource}:${resolvedUrl}`
   if (force && requiredGeneration === undefined) requiredGeneration = ++forcedSequence
   const previous = cache.get(key)
-  if (previous && (!force || previous.generation >= requiredGeneration!) && canReuseResource(resource, previous.token)) {
+  if (
+    previous &&
+    (!force || previous.generation >= requiredGeneration!) &&
+    canReuseResource(resource, previous.token)
+  ) {
     cache.delete(key)
     cache.set(key, previous)
-    return previous.value as T
+    return {
+      value: previous.value as T,
+      observation: { ...captureResourceObservation(resource), token: previous.token },
+    }
   }
   let flight = flights.get(key)
   if (flight?.read.signal.aborted) {
@@ -58,8 +89,9 @@ export async function conditionalJson<T>(resource: string, url: string, init?: R
   if (flight) {
     if (force) flight.requestedGeneration = Math.max(flight.requestedGeneration, requiredGeneration!)
     const value = await flight.read.join(init?.signal)
-    if (force && flight.generation < requiredGeneration!) return conditionalJson<T>(resource, url, init, true, requiredGeneration)
-    return value as T
+    if (force && flight.generation < requiredGeneration!)
+      return conditionalJsonObserved<T>(resource, url, init, true, requiredGeneration)
+    return value as Observed<T>
   }
   const current: Flight = { read: undefined!, generation: forcedSequence, requestedGeneration: forcedSequence }
   current.read = createSharedRead(async (signal) =>
@@ -82,8 +114,9 @@ export async function conditionalJson<T>(resource: string, url: string, init?: R
         throw new Error('Backend or authentication changed during read')
       if (response.status === 304) {
         if (!cached) throw new Error('A 304 response has no cached representation')
-        if (noteResourceVersion(resource, cached.token, observation)) remember(key, { ...cached, generation: current.generation })
-        return cached.value
+        if (noteResourceVersion(resource, cached.token, observation))
+          remember(key, { ...cached, generation: current.generation })
+        return { value: cached.value, observation: { ...observation, token: cached.token } }
       }
       const text = await response.text()
       signal.throwIfAborted()
@@ -94,11 +127,12 @@ export async function conditionalJson<T>(resource: string, url: string, init?: R
       const token = /^(?:W\/)?"(.+)"$/.exec(etag)?.[1] ?? ''
       const accepted = token ? noteResourceVersion(resource, token, observation) : false
       const bytes = text.length * 2
-      if (accepted && bytes <= 2 * 1024 * 1024) remember(key, { token, etag, value, bytes, generation: current.generation })
+      if (accepted && bytes <= 2 * 1024 * 1024)
+        remember(key, { token, etag, value, bytes, generation: current.generation })
       else if (accepted || !token) forget(key)
       // A concurrent event leaves one throttled trailing read with the
       // subscriber. Keep this useful snapshot without caching an old token.
-      return value
+      return { value, observation: { ...observation, token: token || undefined } }
     }, signal),
   )
   flights.set(key, current)
@@ -107,5 +141,5 @@ export async function conditionalJson<T>(resource: string, url: string, init?: R
       if (flights.get(key) === current) flights.delete(key)
     })
     .catch(() => {})
-  return (await current.read.join(init?.signal)) as T
+  return (await current.read.join(init?.signal)) as Observed<T>
 }

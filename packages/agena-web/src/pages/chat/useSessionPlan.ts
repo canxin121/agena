@@ -65,7 +65,7 @@ export function useSessionPlan(
           return
         }
         dirty = false
-        void viewer.refresh()
+        void viewer.refresh(false)
       },
       Math.max(180, 1000 - (Date.now() - lastStarted), nextAllowedAt - Date.now()),
     )

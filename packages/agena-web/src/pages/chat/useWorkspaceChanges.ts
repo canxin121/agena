@@ -1,6 +1,7 @@
 import { computed, ref, shallowRef, watch, type Ref } from 'vue'
 import { apiJson } from '@/lib/api'
-import { conditionalJson } from '@/lib/conditionalJson'
+import { conditionalJsonObserved } from '@/lib/conditionalJson'
+import { captureResourceObservation } from '@/lib/resourceSync'
 import type { SessionFileChange, SessionFileChanges } from '@/types/sessionFileChanges'
 import { useVisibleResource } from './useVisibleResource'
 
@@ -10,10 +11,18 @@ const DIFF_PAGE_BYTES = 256 * 1024
 // The name remains for the dock's callers; its source is durable session facts,
 // independent of workspace/Git and of how much transcript the client loaded.
 export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref<boolean>; request?: typeof apiJson }) {
-  const request = (resource: string, url: string, signal: AbortSignal, force: boolean) =>
-    options.request
-      ? options.request<SessionFileChanges>(url, { signal })
-      : conditionalJson<SessionFileChanges>(resource, url, { signal }, force)
+  const request = async (
+    resource: string,
+    url: string,
+    signal: AbortSignal,
+    force: boolean,
+    observe: (observation: ReturnType<typeof captureResourceObservation>) => void,
+  ) => {
+    if (options.request) return options.request<SessionFileChanges>(url, { signal })
+    const { value, observation } = await conditionalJsonObserved<SessionFileChanges>(resource, url, { signal }, force)
+    observe(observation)
+    return value
+  }
   const expanded = ref(false)
   const page = ref(0)
   const selected = shallowRef<SessionFileChange | null>(null)
@@ -50,13 +59,14 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
     ),
     resource: (key) => `session:${(JSON.parse(key) as string[])[0]}:files`,
     interval: () => null,
-    load(key, signal, _previous, force) {
+    load(key, signal, _previous, force, observe) {
       const [id, open, index] = JSON.parse(key) as [string, boolean, number]
       return request(
         `session:${id}:files`,
         `/api/v1/sessions/${encodeURIComponent(id)}/file-changes?summary=${!open}&offset=${index * PAGE_SIZE}&limit=${PAGE_SIZE}`,
         signal,
         force,
+        observe,
       )
     },
   })
@@ -95,7 +105,9 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
       : '',
   )
   const diffKey = computed(() =>
-    diffIdentity.value ? JSON.stringify([...JSON.parse(diffIdentity.value), diffLimit.value]) : '',
+    diffIdentity.value
+      ? JSON.stringify([...JSON.parse(diffIdentity.value), diffLimit.value, selected.value?.revision ?? ''])
+      : '',
   )
   const visibleDiff = shallowRef<SessionFileChanges | null>(null)
   watch(
@@ -105,19 +117,33 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
     },
     { flush: 'sync' },
   )
+  let retainedDiff: { key: string; scope: number; value: SessionFileChanges } | null = null
   const diff = useVisibleResource<SessionFileChanges>({
     key: diffKey,
-    resource: (key) => `session:${(JSON.parse(key) as string[])[0]}:files`,
+    // The list carries a per-file fingerprint. Only a changed selected row
+    // should reload its diff; legacy responses still use the broad clock.
+    resource: (key) => {
+      const [id, , , revision] = JSON.parse(key) as [string, string, number, string]
+      return revision ? undefined : `session:${id}:files`
+    },
     interval: () => null,
-    load(key, signal, _previous, force) {
-      const [id, path, maxBytes] = JSON.parse(key) as [string, string, number]
+    async load(key, signal, _previous, force, observe) {
+      const [id, path, maxBytes, revision] = JSON.parse(key) as [string, string, number, string]
+      const scope = captureResourceObservation(`session:${id}:files`).scope
+      if (revision && retainedDiff?.key === key && retainedDiff.scope === scope && !force) return retainedDiff.value
       const query = new URLSearchParams({ path, max_bytes: String(maxBytes) })
-      return request(
+      const value = await request(
         `session:${id}:files`,
         `/api/v1/sessions/${encodeURIComponent(id)}/file-changes?${query}`,
         signal,
         force,
+        observe,
       )
+      signal.throwIfAborted()
+      // One selected diff is retained, bounded by the existing 2 MiB limit.
+      if (revision && scope === captureResourceObservation(`session:${id}:files`).scope)
+        retainedDiff = { key, scope, value }
+      return value
     },
   })
   watch(

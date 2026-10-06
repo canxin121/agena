@@ -53,7 +53,8 @@ const sectionAllowedAt = new Map<ToolDetailSection, number>()
 const sectionControllers = new Map<ToolDetailSection, AbortController>()
 const queuedSections = new Set<ToolDetailSection>()
 const sectionSubscriptions = new Map<string, () => void>()
-const sectionVersions = new Map<ToolDetailSection, string>()
+const sectionObservations = new Map<ToolDetailSection, ReturnType<typeof captureResourceObservation>>()
+let loadedOutputState: string | undefined
 function cancelSectionRequests() {
   clearTimeout(liveRefreshTimer)
   liveRefreshTimer = undefined
@@ -137,11 +138,24 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
   sectionErrors.value = { ...sectionErrors.value, [section]: '' }
   try {
     const key = `part:${partId}:${section}`
-    if (sectionLoaded(section) && sectionVersions.has(section) && !hadSectionError) {
+    const sourceState = props.part.source.partState ?? props.part.status
+    // A terminal transcript can arrive before its section's revision hint.
+    // Validate output directly until its actual body reflects that terminal
+    // state, without refreshing the independent input/metadata sections.
+    const needsTerminalOutput =
+      section === 'output' && status.value.terminal && sectionLoaded(section) && loadedOutputState !== sourceState
+    const observed = sectionObservations.get(section)
+    if (
+      !needsTerminalOutput &&
+      sectionLoaded(section) &&
+      observed?.token &&
+      observed.scope === captureResourceObservation(key).scope &&
+      !hadSectionError
+    ) {
       await checkResourceVersions([key], controller.signal)
-      if (canReuseResource(key, sectionVersions.get(section)!)) return
+      if (canReuseResource(key, observed.token)) return
     }
-    const resource = await getToolPartDetail(sessionId, partId, section, controller.signal)
+    const resource = await getToolPartDetail(sessionId, partId, section, controller.signal, needsTerminalOutput)
     if (
       partGeneration !== requestGeneration ||
       controller.signal.aborted ||
@@ -170,8 +184,9 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
     }
     if (!sectionLoaded(section) || sectionValues.value[section] !== resource.value)
       sectionValues.value = { ...sectionValues.value, [section]: resource.value }
-    const token = captureResourceObservation(key).token
-    if (token && !queuedSections.has(section)) sectionVersions.set(section, token)
+    if (resource.observation) sectionObservations.set(section, resource.observation)
+    else sectionObservations.delete(section)
+    if (section === 'output') loadedOutputState = resource.part_state ?? sourceState
     sectionFailures.delete(section)
     sectionAllowedAt.set(section, Date.now() + 750)
     liveRefreshAllowedAt = Math.max(liveRefreshAllowedAt, Date.now() + 750)
@@ -244,7 +259,8 @@ watch(
       sectionValues.value = {}
       loadingSections.value = new Set()
       sectionErrors.value = {}
-      sectionVersions.clear()
+      sectionObservations.clear()
+      loadedOutputState = undefined
     }
     loadedPartKey.value = key
     lastLiveRefreshAt = liveRefreshAllowedAt = -Infinity

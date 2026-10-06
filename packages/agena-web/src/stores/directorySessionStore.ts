@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, onScopeDispose, ref } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 import { i18n } from '@/i18n'
 
 import * as chatApi from '@/stores/chat/api'
@@ -10,6 +10,7 @@ import { conditionalJson } from '@/lib/conditionalJson'
 import { apiJson } from '@/lib/api'
 import {
   captureResourceObservation,
+  canReuseResource,
   checkResourceVersions,
   invalidateResources,
   noteResourceVersion,
@@ -819,10 +820,13 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   const dirtyFooters = new Set<SidebarFooterKind>()
   let sidebarSync = createSidebarSync()
   const workspaceSubscriptions = new Map<string, () => void>()
+  const footerSubscriptions = new Map<SidebarFooterKind, { key: string; release: () => void }>()
   const footerKinds = ['pinned', 'favorite', 'recent', 'running'] as const
   const sidebarResourceKeys = () => [
     'workspaces:catalog',
-    ...footerKinds.map((kind) => `sessions:bucket:${kind}`),
+    ...footerKinds.map((kind) =>
+      chatApi.sessionListResourceKey({ bucket: kind, countOnly: !uiPrefs.value[`${kind}SessionsOpen`] }),
+    ),
     ...workspaceSubscriptions.keys(),
   ]
   const releaseSidebarResources = [
@@ -830,13 +834,25 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       catalogDirty = true
       sidebarSync.invalidate(180)
     }),
-    ...footerKinds.map((kind) =>
-      subscribeResource(`sessions:bucket:${kind}`, () => {
-        dirtyFooters.add(kind)
-        sidebarSync.invalidate(180)
-      }),
-    ),
   ]
+  watch(
+    () => footerKinds.map((kind) => uiPrefs.value[`${kind}SessionsOpen`]),
+    () => {
+      for (const kind of footerKinds) {
+        const key = chatApi.sessionListResourceKey({ bucket: kind, countOnly: !uiPrefs.value[`${kind}SessionsOpen`] })
+        if (footerSubscriptions.get(kind)?.key === key) continue
+        footerSubscriptions.get(kind)?.release()
+        footerSubscriptions.set(kind, {
+          key,
+          release: subscribeResource(key, () => {
+            dirtyFooters.add(kind)
+            sidebarSync.invalidate(180)
+          }),
+        })
+      }
+    },
+    { immediate: true, flush: 'sync' },
+  )
   let sidebarStateRequestInFlight: SidebarInFlightVoidRequest | null = null
   let targetedController: AbortController | null = null
   const sidebarSessionHydrationInFlight = new Map<
@@ -950,8 +966,14 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   ): DirectorySidebarView {
     return {
       ...section,
-      pinnedRows: section.pinnedRows.map((row) => enrichSidebarRowWithKnownData(row, knownRows)),
-      recentRows: section.recentRows.map((row) => enrichSidebarRowWithKnownData(row, knownRows)),
+      pinnedRows: section.pinnedRows.map((row) => {
+        const enriched = enrichSidebarRowWithKnownData(row, knownRows)
+        return sessionRowEquivalent(knownRows[row.id], enriched) ? knownRows[row.id]! : enriched
+      }),
+      recentRows: section.recentRows.map((row) => {
+        const enriched = enrichSidebarRowWithKnownData(row, knownRows)
+        return sessionRowEquivalent(knownRows[row.id], enriched) ? knownRows[row.id]! : enriched
+      }),
     }
   }
 
@@ -1266,9 +1288,9 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
       const next = normalizeUiPrefs(patchChatSidebarUiPrefs(uiPrefs.value, patch))
       applyAuthoritativeUiPrefs(next)
+      syncWorkspaceSubscriptions(directoryPageRows.value)
       sidebarStateRequestInFlight?.controller?.abort()
       sidebarStateRequestInFlight = null
-      for (const controller of pageRequests.values()) controller.abort()
       if (command.type === 'setFooterOpen' || command.type === 'setFooterPage') {
         if (!(await revalidateFooterFromApi(command.kind, { silent: true }))) return false
       } else if (command.type === 'setSessionExpanded') {
@@ -1527,6 +1549,46 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   const childPageById = new Map<string, number>()
   const pinnedPageByDirectory = new Map<string, number>()
   const pageRequests = new Map<string, AbortController>()
+  type DirectoryPage = Awaited<ReturnType<typeof loadSidebarSessionPage>>
+  const directoryPages = new Map<string, { resource: string; scope: number; token?: string; value: DirectoryPage }>()
+
+  function subscribeDirectoryList(key: string, id: string) {
+    if (workspaceSubscriptions.has(key)) return
+    workspaceSubscriptions.set(
+      key,
+      subscribeResource(key, () => {
+        dirtyDirectories.add(id)
+        sidebarSync.invalidate(180)
+      }),
+    )
+  }
+
+  async function loadDirectoryPage(options: Parameters<typeof chatApi.listSessions>[0], page: number, size: number) {
+    const resource = chatApi.sessionListResourceKey(options)
+    subscribeDirectoryList(resource, String(options?.workspaceId))
+    const key = `${resource}:${page}:${size}`
+    const cached = directoryPages.get(key)
+    if (cached) {
+      await checkResourceVersions([resource], options?.signal)
+      if (
+        cached.scope === captureResourceObservation(resource).scope &&
+        cached.token &&
+        canReuseResource(resource, cached.token)
+      )
+        return cached.value
+    }
+    const value = await loadSidebarSessionPage(options ?? {}, page, size)
+    options?.signal?.throwIfAborted()
+    const observed = value.observation
+    if (observed && observed.scope === captureResourceObservation(resource).scope) {
+      directoryPages.set(key, { resource, scope: observed.scope, token: observed.token, value })
+      // Retain just the displayed page for each list, plus a finite ceiling.
+      for (const [oldKey, old] of directoryPages)
+        if (oldKey !== key && old.resource === resource) directoryPages.delete(oldKey)
+      while (directoryPages.size > 256) directoryPages.delete(directoryPages.keys().next().value!)
+    }
+    return value
+  }
 
   function syncWorkspaceSubscriptions(entries: DirectoryEntry[]) {
     const liveIds = new Set(entries.map((entry) => entry.id))
@@ -1536,26 +1598,42 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         workspaceStatsVersions.delete(id)
       }
     const liveKeys = new Set(
-      entries.flatMap((entry) => [`workspace:${entry.id}:sessions`, `workspace:${entry.id}:stats`]),
+      entries.flatMap((entry) => {
+        const stats = `workspace:${entry.id}:stats`
+        if (uiPrefs.value.collapsedDirectoryIds.includes(entry.id)) return [stats]
+        const children = (directorySidebarById.value[entry.id]?.recentRows ?? [])
+          .filter((row) => row.isExpanded && row.isParent)
+          .map((row) => chatApi.sessionListResourceKey({ workspaceId: entry.id, parentId: row.id }))
+        return [
+          stats,
+          chatApi.sessionListResourceKey({ workspaceId: entry.id, roots: true }),
+          ...(workspaceStats.get(entry.id)?.pinned === 0
+            ? []
+            : [chatApi.sessionListResourceKey({ workspaceId: entry.id, bucket: 'pinned' })]),
+          ...children,
+        ]
+      }),
     )
     for (const [key, release] of workspaceSubscriptions)
       if (!liveKeys.has(key)) {
         release()
         workspaceSubscriptions.delete(key)
       }
-    for (const entry of entries)
-      for (const section of ['sessions', 'stats'] as const) {
-        const key = `workspace:${entry.id}:${section}`
-        if (!workspaceSubscriptions.has(key))
-          workspaceSubscriptions.set(
-            key,
-            subscribeResource(key, () => {
-              if (section === 'stats') dirtyStats.add(entry.id)
-              dirtyDirectories.add(entry.id)
-              sidebarSync.invalidate(180)
-            }),
-          )
-      }
+    for (const [key, cached] of directoryPages) if (!liveKeys.has(cached.resource)) directoryPages.delete(key)
+    for (const entry of entries) {
+      const key = `workspace:${entry.id}:stats`
+      if (!workspaceSubscriptions.has(key))
+        workspaceSubscriptions.set(
+          key,
+          subscribeResource(key, () => {
+            dirtyStats.add(entry.id)
+            dirtyDirectories.add(entry.id)
+            sidebarSync.invalidate(180)
+          }),
+        )
+      for (const list of liveKeys)
+        if (list.startsWith(`workspace:${entry.id}:sessions:`)) subscribeDirectoryList(list, entry.id)
+    }
   }
 
   async function loadWorkspaceStats(ids: string[], signal?: AbortSignal) {
@@ -1606,10 +1684,10 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     const [roots, pins] = collapsed
       ? [empty, empty]
       : await Promise.all([
-          loadSidebarSessionPage({ workspaceId: directory.id, roots: true, signal }, page, pageSize),
+          loadDirectoryPage({ workspaceId: directory.id, roots: true, signal }, page, pageSize),
           stats?.pinned === 0
             ? empty
-            : loadSidebarSessionPage(
+            : loadDirectoryPage(
                 { workspaceId: directory.id, bucket: 'pinned', signal },
                 pinnedPageByDirectory.get(directory.id) || 0,
                 pageSize,
@@ -1626,7 +1704,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       row.rootId = rootId
       parentById[row.id] = row.parentId
       if (!row.isExpanded || !row.isParent) return [row]
-      const children = await loadSidebarSessionPage(
+      const children = await loadDirectoryPage(
         { workspaceId: directory.id, parentId: row.id, signal },
         childPageById.get(row.id) || 0,
         pageSize,
@@ -1668,7 +1746,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     pageSize: number,
     signal?: AbortSignal,
   ): Promise<SidebarFooterView> {
-    const result = await loadSidebarSessionPage({ bucket: kind, signal }, page, pageSize)
+    const countOnly = !uiPrefs.value[`${kind}SessionsOpen`]
+    const result = await loadSidebarSessionPage({ bucket: kind, countOnly, signal }, page, pageSize)
     const expanded = new Set(uiPrefs.value.expandedParentSessionIds)
     return {
       total: result.total,
@@ -1763,6 +1842,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     for (const controller of pageRequests.values()) controller.abort()
     sidebarSync.dispose()
     for (const release of releaseSidebarResources) release()
+    for (const subscription of footerSubscriptions.values()) subscription.release()
     for (const release of workspaceSubscriptions.values()) release()
     if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', resumeSidebarSync)
   })
@@ -1790,6 +1870,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         const state = await buildAgenaSidebarPayload(controller ? controller.signal : undefined)
         if (!controller?.signal.aborted) {
           applySidebarStatePayload(state)
+          syncWorkspaceSubscriptions(directoryPageRows.value)
           sidebarInitialized = true
         }
       } catch (err) {
@@ -2112,6 +2193,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
           [did]: section,
         }
       }
+      syncWorkspaceSubscriptions(directoryPageRows.value)
 
       const previousRootPage = Math.max(0, Math.floor(Number(uiPrefs.value.sessionRootPageByDirectoryId[did] || 0)))
       if (previousRootPage !== section.rootPage) {
@@ -2400,6 +2482,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     sectionLoads.clear()
     workspaceStats.clear()
     workspaceStatsVersions.clear()
+    directoryPages.clear()
     sidebarInitialized = false
     catalogDirty = false
     recoveryCheck = false

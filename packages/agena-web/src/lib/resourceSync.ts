@@ -12,8 +12,20 @@ const versions = new Map<string, string>()
 const dirty = new Set<string>()
 const checkedAt = new Map<string, number>()
 const invalidation = new Map<string, number>()
-const retiredEpochs = new Set<string>()
-let serverEpoch: string | undefined
+// The core API and workbench preview registry have independent lifetimes.
+// One producer's UUID must never retire another producer's resource tokens.
+type Authority = 'api' | 'preview'
+const authorityFor = (key: string): Authority => (key === 'preview' ? 'preview' : 'api')
+const epochs = new Map<Authority, { current?: string; retired: Set<string> }>()
+function epochState(key: string) {
+  const authority = authorityFor(key)
+  let state = epochs.get(authority)
+  if (!state) {
+    state = { retired: new Set() }
+    epochs.set(authority, state)
+  }
+  return state
+}
 let runtimeUsers = 0
 let scope = ''
 let scopeGeneration = 0
@@ -33,8 +45,7 @@ function ensureScope() {
   dirty.clear()
   checkedAt.clear()
   invalidation.clear()
-  retiredEpochs.clear()
-  serverEpoch = undefined
+  epochs.clear()
   probeAllowedAt = 0
   probeFailures = 0
   probeError = undefined
@@ -56,7 +67,12 @@ function prune() {
 }
 
 export function captureResourceObservation(key: string) {
-  return { scope: ensureScope(), epoch: serverEpoch, token: versions.get(key), generation: invalidation.get(key) ?? 0 }
+  return {
+    scope: ensureScope(),
+    epoch: epochState(key).current,
+    token: versions.get(key),
+    generation: invalidation.get(key) ?? 0,
+  }
 }
 
 export function resourceUpdatedAtMs(key: string): number | null {
@@ -80,11 +96,16 @@ export function noteResourceVersion(
   const separator = token.lastIndexOf(':')
   const epoch = token.slice(0, separator)
   const timestamp = Number(token.slice(separator + 1))
-  if (separator < 1 || !Number.isSafeInteger(timestamp) || retiredEpochs.has(epoch)) return false
+  const identity = epochState(key)
+  const serverEpoch = identity.current
+  if (separator < 1 || !Number.isSafeInteger(timestamp) || identity.retired.has(epoch)) return false
   const previous = versions.get(key)
   const accept = () => {
     checkedAt.set(key, Date.now())
-    if (!observation || observation.generation === (invalidation.get(key) ?? 0)) dirty.delete(key)
+    // A new incremental event cannot prove that an earlier connection gap
+    // or local mutation was reconciled. Retain that invalidation until an
+    // authoritative read acknowledges the same generation.
+    if (!event && (!observation || observation.generation === (invalidation.get(key) ?? 0))) dirty.delete(key)
   }
   if (previous === token) {
     // A repeated announcement is not evidence that a pending local mutation
@@ -106,18 +127,20 @@ export function noteResourceVersion(
     // A restart applies to every resource, including keys not involved in
     // its first response. Retire the epoch globally before accepting bodies.
     if (observation && observation.epoch !== serverEpoch) return false
-    retiredEpochs.add(serverEpoch)
-    if (retiredEpochs.size > 16) retiredEpochs.delete(retiredEpochs.values().next().value!)
-    const affected = new Set([...versions.keys(), ...listeners.keys()])
-    versions.clear()
-    checkedAt.clear()
+    identity.retired.add(serverEpoch)
+    if (identity.retired.size > 16) identity.retired.delete(identity.retired.values().next().value!)
+    const affected = new Set(
+      [...versions.keys(), ...listeners.keys()].filter((candidate) => authorityFor(candidate) === authorityFor(key)),
+    )
     for (const affectedKey of affected) {
+      versions.delete(affectedKey)
+      checkedAt.delete(affectedKey)
       dirty.add(affectedKey)
       invalidation.set(affectedKey, (invalidation.get(affectedKey) ?? 0) + 1)
       if (affectedKey !== key) notify(affectedKey)
     }
   }
-  serverEpoch = epoch
+  identity.current = epoch
   versions.set(key, token)
   if (event) invalidation.set(key, (invalidation.get(key) ?? 0) + 1)
   accept()
@@ -265,7 +288,8 @@ export function applyResourceEvent(event: SseEvent) {
       // Text is rendered directly from the stream. Navigation ordering and
       // optimistic versions catch up at the shared 30s check; a token stream
       // must not repeatedly reload list/state representations.
-      if ((part?.kind === 'text' || part?.kind === 'think') && !key.startsWith('part:')) continue
+      if ((part?.kind === 'text' || part?.kind === 'think') && !key.startsWith('part:') && !key.endsWith(':transcript'))
+        continue
       if (noteResourceVersion(key, token, undefined, event)) {
         checkedAt.set(key, Date.now())
       }
@@ -275,6 +299,7 @@ export function applyResourceEvent(event: SseEvent) {
   const sid = String(props.session_id ?? '')
   const keys: string[] = []
   if (event.type === 'session_changed') {
+    if (sid) keys.push(`session:${sid}:transcript`)
     const part = props.part && typeof props.part === 'object' && !Array.isArray(props.part) ? props.part : null
     if (part) {
       keys.push(`part:${String(part.part_id)}`)
@@ -305,7 +330,8 @@ export function applyResourceEvent(event: SseEvent) {
           ? payload.activity
           : payload
       if (typeof activity.id === 'string') keys.push(`activity:${activity.id}`)
-      if (payload.reason !== 'updated') {
+      if (typeof activity.id === 'string') keys.push(`activity:${activity.id}:logs`)
+      if (payload.reason !== 'updated' && payload.reason !== 'logs_changed') {
         keys.push('activities')
         if (sid) keys.push(`session:${sid}:state`)
       }

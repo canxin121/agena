@@ -501,12 +501,17 @@ test('real sidebar refreshes only dirty directories and buckets, including after
   const ids = ['8101', '8102', '8103']
   const keys = [
     'workspaces:catalog',
-    ...['pinned', 'favorite', 'recent', 'running'].map((kind) => `sessions:bucket:${kind}`),
-    ...ids.flatMap((id) => [`workspace:${id}:sessions`, `workspace:${id}:stats`]),
+    ...['pinned', 'favorite', 'recent', 'running'].map((kind) => `sessions:bucket:${kind}:count`),
+    ...ids.flatMap((id) => [`workspace:${id}:sessions:roots`, `workspace:${id}:stats`]),
   ]
   const tokens = new Map(keys.map((key) => [key, 'sidebar-granularity:1']))
   const titles = new Map(ids.map((id) => [id, `before-${id}`]))
   const totals = new Map(ids.map((id) => [id, 1]))
+  let treeEnabled = false
+  const childTitles = new Map([
+    ['8201', 'child A'],
+    ['8401', 'child B'],
+  ])
   const calls: URL[] = []
   const etag = (key: string) => ({ etag: `W/"${tokens.get(key) || 'sidebar-granularity:1'}"` })
   globalThis.fetch = (async (input) => {
@@ -537,14 +542,24 @@ test('real sidebar refreshes only dirty directories and buckets, including after
           .map((id) => ({
             workspace_id: Number(id),
             revision: tokens.get(`workspace:${id}:stats`),
-            stats: { total: totals.get(id), roots: totals.get(id), pinned: 0, running: 0, attention: 0 },
+            stats: {
+              total: totals.get(id),
+              roots: totals.get(id),
+              pinned: treeEnabled && id === '8101' ? 1 : 0,
+              running: 0,
+              attention: 0,
+            },
           })),
       })
     if (url.pathname === '/api/v1/sessions') {
       const id = url.searchParams.get('workspace_id')
       const bucket = url.searchParams.get('bucket')
-      const key = id ? `workspace:${id}:sessions` : bucket ? `sessions:bucket:${bucket}` : 'sessions'
-      const items = id
+      const key = id
+        ? `workspace:${id}:sessions:${url.searchParams.has('parent_id') ? `parent:${url.searchParams.get('parent_id')}` : bucket ? `bucket:${bucket}` : 'roots'}`
+        : bucket
+          ? `sessions:bucket:${bucket}${url.searchParams.get('count_only') === 'true' ? ':count' : ''}`
+          : 'sessions'
+      let items = id
         ? [
             {
               id: Number(id) + 100,
@@ -558,7 +573,44 @@ test('real sidebar refreshes only dirty directories and buckets, including after
             },
           ]
         : []
-      return Response.json({ items, total: items.length, page: { has_more: false } }, { headers: etag(key) })
+      if (treeEnabled && id === '8101') {
+        const roots = [8201, 8401].map((sid) => ({
+          id: sid,
+          workspace_id: 8101,
+          root_id: sid,
+          parent_id: null,
+          title: sid === 8201 ? titles.get('8101') : 'other root',
+          pinned: sid === 8201,
+          state: { kind: 'ready' },
+          child_session_count: 1,
+          version: 2,
+        }))
+        const parent = url.searchParams.get('parent_id')
+        items = parent
+          ? [
+              {
+                id: Number(parent) + 300,
+                workspace_id: 8101,
+                root_id: Number(parent),
+                parent_id: Number(parent),
+                title: childTitles.get(parent),
+                state: { kind: 'ready' },
+                child_session_count: 0,
+                version: 3,
+              },
+            ]
+          : bucket
+            ? [roots[0]!]
+            : roots
+      }
+      return Response.json(
+        {
+          items: url.searchParams.get('count_only') === 'true' ? [] : items,
+          total: items.length,
+          page: { has_more: false },
+        },
+        { headers: etag(key) },
+      )
     }
     // Unique inert bodies fill the real 80-entry response cache.
     if (url.pathname.startsWith('/evict-sidebar/')) return Response.json({}, { headers: etag('sessions') })
@@ -581,7 +633,7 @@ test('real sidebar refreshes only dirty directories and buckets, including after
     const catalogRows = store.directoryPageRows
     calls.length = 0
     titles.set('8101', 'after-A')
-    tokens.set('workspace:8101:sessions', 'sidebar-granularity:2')
+    tokens.set('workspace:8101:sessions:roots', 'sidebar-granularity:2')
     const event = {
       type: 'session_changed',
       properties: {
@@ -589,7 +641,10 @@ test('real sidebar refreshes only dirty directories and buckets, including after
         session_id: 8201,
         title: 'after-A',
         version: 2,
-        resource_revisions: { sessions: 'sidebar-granularity:2', 'workspace:8101:sessions': 'sidebar-granularity:2' },
+        resource_revisions: {
+          sessions: 'sidebar-granularity:2',
+          'workspace:8101:sessions:roots': 'sidebar-granularity:2',
+        },
       },
     }
     resourceSync.applyResourceEvent(event)
@@ -612,17 +667,17 @@ test('real sidebar refreshes only dirty directories and buckets, including after
     )) as typeof import('../src/lib/conditionalJson')
     await Promise.all(Array.from({ length: 90 }, (_, i) => conditionalJson('sessions', `/evict-sidebar/${i}`)))
     calls.length = 0
-    tokens.set('workspace:8101:sessions', 'sidebar-granularity:3')
+    tokens.set('workspace:8101:sessions:roots', 'sidebar-granularity:3')
     tokens.set('workspace:8101:stats', 'sidebar-granularity:3')
-    tokens.set('sessions:bucket:pinned', 'sidebar-granularity:3')
+    tokens.set('sessions:bucket:pinned:count', 'sidebar-granularity:3')
     resourceSync.applyResourceEvent({
       type: 'session_changed',
       properties: {
         kind: 'session_meta_updated',
         resource_revisions: {
-          'workspace:8101:sessions': 'sidebar-granularity:3',
+          'workspace:8101:sessions:roots': 'sidebar-granularity:3',
           'workspace:8101:stats': 'sidebar-granularity:3',
-          'sessions:bucket:pinned': 'sidebar-granularity:3',
+          'sessions:bucket:pinned:count': 'sidebar-granularity:3',
         },
       },
     })
@@ -646,7 +701,7 @@ test('real sidebar refreshes only dirty directories and buckets, including after
     calls.length = 0
     const moved = Object.fromEntries(
       ['8101', '8102'].flatMap((id) =>
-        ['sessions', 'stats'].map((section) => {
+        ['sessions:roots', 'stats'].map((section) => {
           const key = `workspace:${id}:${section}`
           tokens.set(key, 'sidebar-granularity:4')
           return [key, 'sidebar-granularity:4']
@@ -696,6 +751,70 @@ test('real sidebar refreshes only dirty directories and buckets, including after
       ['/api/v1/changes/revisions'],
       'reconnect checks tokens without reloading evicted but unchanged bodies',
     )
+
+    treeEnabled = true
+    totals.set('8101', 4)
+    store.uiPrefs.expandedParentSessionIds = ['8201', '8401']
+    tokens.set('workspace:8101:sessions:roots', 'sidebar-granularity:6')
+    tokens.set('workspace:8101:sessions:bucket:pinned', 'sidebar-granularity:6')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:6')
+    tokens.set('workspace:8101:sessions:parent:8401', 'sidebar-granularity:6')
+    tokens.set('workspace:8101:stats', 'sidebar-granularity:6')
+    resourceSync.invalidateResources(keys)
+    const treeBoot = store.revalidateFromApi()
+    await advance(11_000)
+    assert.equal(await treeBoot, true)
+    const otherRoot = store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8401')
+    const otherChild = store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8701')
+    assert.ok(otherChild, 'second expanded branch is loaded')
+    await Promise.all(Array.from({ length: 90 }, (_, i) => conditionalJson('sessions', `/evict-sidebar/tree-${i}`)))
+    calls.length = 0
+    childTitles.set('8201', 'changed child A')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:7')
+    resourceSync.applyResourceEvent({
+      type: 'session_changed',
+      properties: {
+        resource_revisions: { 'workspace:8101:sessions:parent:8201': 'sidebar-granularity:7' },
+      },
+    })
+    await advance(11_000)
+    assert.deepEqual(
+      calls.map((url) => [url.pathname, url.searchParams.get('parent_id')]),
+      [['/api/v1/sessions', '8201']],
+      'only the changed child branch reads, even after body cache eviction',
+    )
+    assert.equal(
+      store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8501')!.session!.title,
+      'changed child A',
+    )
+    assert.equal(
+      store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8401'),
+      otherRoot,
+    )
+    assert.equal(
+      store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8701'),
+      otherChild,
+    )
+
+    calls.length = 0
+    resourceSync.applyResourceEvent({
+      type: 'session_changed',
+      properties: {
+        resource_revisions: { 'sessions:bucket:pinned': 'sidebar-granularity:8' },
+      },
+    })
+    await advance(11_000)
+    assert.equal(calls.length, 0, 'a closed footer ignores row changes while its count is unchanged')
+    tokens.set('sessions:bucket:pinned:count', 'sidebar-granularity:9')
+    resourceSync.applyResourceEvent({
+      type: 'session_changed',
+      properties: {
+        resource_revisions: { 'sessions:bucket:pinned:count': 'sidebar-granularity:9' },
+      },
+    })
+    await advance(11_000)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]!.searchParams.get('count_only'), 'true', 'closed footer requests only a count')
   } finally {
     for (const instance of (pinia as unknown as { _s: Map<string, { $dispose(): void }> })._s.values())
       instance.$dispose()

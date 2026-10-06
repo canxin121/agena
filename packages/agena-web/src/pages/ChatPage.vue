@@ -47,8 +47,8 @@ import {
 } from './chat/composerWordNavigation'
 import { useComposerPromptHistory } from './chat/composerPromptHistory'
 import { useSessionPlan } from './chat/useSessionPlan'
-import { conditionalJson } from '@/lib/conditionalJson'
-import { checkResourceVersions, invalidateResources } from '@/lib/resourceSync'
+import { conditionalJsonObserved } from '@/lib/conditionalJson'
+import { invalidateResources } from '@/lib/resourceSync'
 import { buildPlanToolInvocationRequest } from './chat/planViewerRequest'
 import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
@@ -1370,13 +1370,19 @@ const {
   () => chat.selectedSessionId,
   () => currentPhase.value !== 'idle',
   () => [chat.messages.length, currentPhase.value],
-  async (sessionId, tool, input, signal) => {
+  async (sessionId, tool, input, signal, read) => {
     const body = buildPlanToolInvocationRequest(sessionId, tool, input)
     if (!body) throw new Error(String(t('chat.planViewer.requiresSession')))
     const resource = `session:${body.session_id}:plan`
     if (tool === 'get') {
-      await checkResourceVersions([resource], signal)
-      return conditionalJson(resource, `/api/v1/sessions/${body.session_id}/plan`, { signal })
+      const { value, observation } = await conditionalJsonObserved<Record<string, JsonValue>>(
+        resource,
+        `/api/v1/sessions/${body.session_id}/plan`,
+        { signal },
+        read?.force,
+      )
+      read?.observe(observation)
+      return value
     }
     const result = await apiJson<Record<string, JsonValue>>('/api/v1/plugins/tools/invoke', {
       method: 'POST',

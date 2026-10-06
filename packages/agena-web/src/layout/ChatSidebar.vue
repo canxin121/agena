@@ -1982,12 +1982,12 @@ async function addDirectoryEntry() {
   await chatApi.createWorkspace(p)
   newDirectoryPath.value = ''
   isAddDirectoryOpen.value = false
-  await revalidateSidebarState(undefined, { silent: true })
+  directorySessions.scheduleSidebarRecoverySync('directory-created', 0, { force: true })
 }
 
 async function removeDirectoryEntry(directoryId: string) {
   await chatApi.deleteWorkspace(directoryId)
-  await revalidateSidebarState(undefined, { silent: true })
+  directorySessions.scheduleSidebarRecoverySync('directory-deleted', 0, { force: true })
 }
 
 const isDirectoryFocused = (directory: DirectoryEntry) => {

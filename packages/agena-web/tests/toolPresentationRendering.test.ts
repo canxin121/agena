@@ -442,6 +442,22 @@ test('a real expanded tool subscribes by section and output changes read no inpu
     })
     await clock.advance(2100)
     assert.deepEqual(calls, ['output'], 'a closed input disclosure sends no request even when its own token changes')
+
+    calls.length = 0
+    // The transcript has caught up through HTTP while the detail clock is
+    // still fresh in the browser: the completion SSE was lost. A cached
+    // running output must not defer the final result until the heartbeat.
+    versions.set('part:8401:output', 'tool-grain:4')
+    props.part.status = 'completed'
+    props.part.source.partState = 'completed'
+    props.part.source.updatedAt = 4
+    await clock.advance(2100)
+    assert.deepEqual(calls, ['output'], 'a missing terminal hint refreshes output without reading metadata or input')
+    assert.equal((state.sectionValues.value.output as { version: string }).version, 'tool-grain:4')
+    assert.equal(state.sectionValues.value.metadata, savedMetadata)
+    calls.length = 0
+    await clock.advance(2100)
+    assert.equal(calls.length, 0, 'an output that has reached the terminal state needs no further body read')
   } finally {
     app.unmount()
     disposePinia(pinia)

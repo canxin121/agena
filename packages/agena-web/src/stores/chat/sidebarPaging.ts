@@ -24,5 +24,5 @@ export async function loadSidebarSessionPage(
     page = pageCount - 1
     result = await fetchPage()
   }
-  return { sessions: result.sessions, total, page, pageCount }
+  return { sessions: result.sessions, total, page, pageCount, observation: result.observation }
 }

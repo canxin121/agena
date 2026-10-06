@@ -11,9 +11,15 @@ import {
 export function useVisibleResource<T>(options: {
   key: Ref<string>
   interval: () => number | null
-  resource?: (key: string) => string
+  resource?: (key: string) => string | undefined
   minInterval?: number
-  load: (key: string, signal: AbortSignal, previous: T | null, force: boolean) => Promise<T>
+  load: (
+    key: string,
+    signal: AbortSignal,
+    previous: T | null,
+    force: boolean,
+    observe: (observation: ReturnType<typeof captureResourceObservation>) => void,
+  ) => Promise<T>
 }) {
   const data = shallowRef<T | null>(null)
   const error = ref('')
@@ -28,7 +34,7 @@ export function useVisibleResource<T>(options: {
   let unsubscribe: (() => void) | undefined
   let failures = 0
   let allowedAt = 0
-  let observedToken: string | undefined
+  let observed: ReturnType<typeof captureResourceObservation> | undefined
 
   function cancel() {
     generation++
@@ -77,26 +83,32 @@ export function useVisibleResource<T>(options: {
       // A first read needs a body regardless of its revision; its ETag seeds
       // the index without a redundant metadata request. Explicit refreshes
       // likewise validate the representation directly.
-      if (resource && observedToken && data.value !== null && !force)
+      const sameScope = resource && observed?.scope === captureResourceObservation(resource).scope
+      if (resource && sameScope && observed?.token && data.value !== null && !force)
         await checkResourceVersions([resource], request.signal)
-      const observation = resource ? captureResourceObservation(resource) : undefined
       if (
         !force &&
         resource &&
-        observedToken &&
+        sameScope &&
+        observed?.token &&
         data.value !== null &&
         options.interval() === null &&
         !error.value &&
-        canReuseResource(resource, observedToken)
+        canReuseResource(resource, observed.token)
       )
         return
-      const result = await options.load(key, request.signal, data.value, force)
+      let responseObservation: ReturnType<typeof captureResourceObservation> | undefined
+      const result = await options.load(key, request.signal, data.value, force, (value) => {
+        responseObservation = value
+      })
       if (version === generation && key === options.key.value && !disposed) {
         data.value = result
         error.value = ''
         failures = 0
         allowedAt = Date.now() + (options.minInterval ?? 750)
-        if (resource) observedToken = pendingRefresh ? observation?.token : captureResourceObservation(resource).token
+        // Only the HTTP response knows which version this body represents.
+        // A concurrent revision check must not label an older body current.
+        observed = responseObservation
       }
     } catch (cause) {
       if (version === generation && !disposed) {
@@ -124,16 +136,16 @@ export function useVisibleResource<T>(options: {
     () => {
       cancel()
       unsubscribe?.()
-      unsubscribe =
-        options.resource && options.key.value
-          ? subscribeResource(options.resource(options.key.value), () => {
-              void refresh()
-            })
-          : undefined
+      const resource = options.key.value ? options.resource?.(options.key.value) : undefined
+      unsubscribe = resource
+        ? subscribeResource(resource, () => {
+            void refresh()
+          })
+        : undefined
       failures = 0
       allowedAt = 0
       data.value = null
-      observedToken = undefined
+      observed = undefined
       lastStart = 0
       error.value = ''
       void refresh()

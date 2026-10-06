@@ -13,7 +13,7 @@ const favoriteFooterSource = readFileSync(
 
 test('sidebar projects durable favorites into a first-class paged section', () => {
   assert.ok(storeSource.includes("type SidebarFooterKind = 'pinned' | 'favorite' | 'recent' | 'running'"))
-  assert.ok(storeSource.includes('loadSidebarSessionPage({ bucket: kind, signal }'))
+  assert.ok(storeSource.includes('loadSidebarSessionPage({ bucket: kind, countOnly, signal }'))
   assert.ok(storeSource.includes('favoriteFooterView'))
   assert.ok(storeSource.includes("['pinned', 'favorite', 'recent', 'running']"))
   assert.ok(storeSource.includes("command.kind === 'favorite'"))

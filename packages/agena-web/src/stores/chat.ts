@@ -11,7 +11,13 @@ import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
 import { createRevalidator } from '../lib/revalidation'
 import { isDocumentVisible } from '../lib/backgroundReads'
-import { subscribeResource } from '../lib/resourceSync'
+import {
+  canReuseResource,
+  captureResourceObservation,
+  checkResourceVersions,
+  invalidateResources,
+  subscribeResource,
+} from '../lib/resourceSync'
 import { isRunTerminal } from '../lib/chatRunState'
 import { setLocalJson, getLocalJson } from '../lib/persist'
 import { localStorageKeys } from '../lib/persistence/storageKeys'
@@ -171,6 +177,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const deletedSessions = new Set<string>()
   const removedParts = new Map<string, Set<string>>()
   const membershipRevalidation = new Set<string>()
+  const transcriptRecovery = new Set<string>()
+  const transcriptObservations = new Map<string, ReturnType<typeof captureResourceObservation>>()
+  const executionRecovery = new Set<string>()
+  const executionObservations = new Map<string, ReturnType<typeof captureResourceObservation>>()
+  const sessionRecoveryResources = () =>
+    [...visibleSessions.keys()].flatMap((sid) => [`session:${sid}:state`, `session:${sid}:transcript`])
   const visibleSessions = new Map<string, number>()
   const sessionResourceSubscriptions = new Map<string, () => void>()
   const messageRevalidators = new Map<string, ReturnType<typeof createRevalidator>>()
@@ -195,6 +207,19 @@ const useChatStoreDefinition = defineStore('chat', () => {
       queue = createRevalidator(
         async () => {
           await refreshMessagesInFlightBySession.get(sid)
+          if (transcriptRecovery.has(sid)) {
+            const key = `session:${sid}:transcript`
+            const observed = transcriptObservations.get(sid)
+            if (observed?.token) await checkResourceVersions(sessionRecoveryResources())
+            if (
+              observed?.scope === captureResourceObservation(key).scope &&
+              observed.token &&
+              canReuseResource(key, observed.token)
+            ) {
+              membershipRevalidation.delete(sid)
+              return
+            }
+          }
           await refreshMessages(sid, { silent: true })
         },
         { intervalMs: 1000, enabled: () => isDocumentVisible() && isSessionVisible(sid) },
@@ -206,14 +231,22 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   function retainSession(sid: string) {
     visibleSessions.set(sid, (visibleSessions.get(sid) || 0) + 1)
-    if (!sessionResourceSubscriptions.has(sid))
-      sessionResourceSubscriptions.set(
-        sid,
-        subscribeResource(`session:${sid}:state`, (event) => {
-          if (event?.type === 'runtime_signal' && event.properties?.kind === 'activity') return
-          scheduleSessionStatusRefresh(sid)
-        }),
-      )
+    if (!sessionResourceSubscriptions.has(sid)) {
+      const releaseState = subscribeResource(`session:${sid}:state`, (event) => {
+        if (event?.type === 'runtime_signal' && event.properties?.kind === 'activity') return
+        scheduleSessionStatusRefresh(sid)
+      })
+      const releaseTranscript = subscribeResource(`session:${sid}:transcript`, (event) => {
+        if (event?.type === 'session_changed') return
+        transcriptRecovery.add(sid)
+        membershipRevalidation.add(sid)
+        messageRevalidator(sid).invalidate(0)
+      })
+      sessionResourceSubscriptions.set(sid, () => {
+        releaseState()
+        releaseTranscript()
+      })
+    }
     statusRevalidators.get(sid)?.resume()
     messageRevalidators.get(sid)?.resume()
     return () => {
@@ -239,8 +272,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (refreshSessionsInFlight) sessionsRevalidator.invalidate(0)
     // Cached inactive conversations are revalidated when opened again.
     for (const sid of Object.keys(messagesBySession.value)) membershipRevalidation.add(sid)
-    messagesHydratedBySession.value = {}
     for (const sid of new Set([...visibleSessions.keys(), selectedSessionId.value].filter(Boolean) as string[])) {
+      transcriptRecovery.add(sid)
+      executionRecovery.add(sid)
+      invalidateResources([`session:${sid}:transcript`, `session:${sid}:state`])
       messageRevalidator(sid).invalidate(0)
       scheduleSessionStatusRefresh(sid, 0)
     }
@@ -694,7 +729,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         }
       }
       const limit = sessionMessageLimit(sid)
-      const page = await chatApi.listMessages(sid, limit, undefined, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE)
+      const page = await chatApi.listMessages(sid, limit, undefined, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, true)
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       clearMessageRefreshRetry(sid)
       const ordered = normalizeMessageList(page.entries)
@@ -715,6 +750,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
             )
       setSessionMessages(sid, nextMessages)
       markMessagesHydrated(sid)
+      if (page.observation && page.observation.scope === captureResourceObservation(`session:${sid}:transcript`).scope)
+        transcriptObservations.set(sid, page.observation)
       historyUserMessageCountBySession.value = {
         ...historyUserMessageCountBySession.value,
         [sid]: page.userMessageCount,
@@ -964,6 +1001,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
   /** Drop transcript pages when the chat page is actually unmounted. */
   function clearTranscriptCache() {
     transcriptCacheGeneration += 1
+    transcriptObservations.clear()
+    transcriptRecovery.clear()
     for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
     refreshMessagesRetryTimerBySession.clear()
     refreshMessagesFailuresBySession.clear()
@@ -1007,6 +1046,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
       queue = createRevalidator(
         async () => {
           await refreshExecutionInFlightBySession.get(sid)?.catch(() => {})
+          if (executionRecovery.has(sid)) {
+            const key = `session:${sid}:state`
+            const observed = executionObservations.get(sid)
+            if (observed?.token) await checkResourceVersions(sessionRecoveryResources())
+            if (
+              observed?.scope === captureResourceObservation(key).scope &&
+              observed.token &&
+              canReuseResource(key, observed.token)
+            )
+              return
+          }
           await refreshExecutionStatus(sid)
         },
         { intervalMs: 2000, retryMs: 5000, enabled: () => isDocumentVisible() && isSessionVisible(sid) },
@@ -1019,6 +1069,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function refreshExecutionStatusInternal(sessionId: string): Promise<void> {
     const sid = (sessionId || '').trim()
     if (!sid) return
+    const key = `session:${sid}:state`
+    const observed = executionObservations.get(sid)
+    if (observed?.scope === captureResourceObservation(key).scope && observed.token) {
+      await checkResourceVersions([key])
+      if (canReuseResource(key, observed.token)) return
+    }
     const generation = transcriptCacheGeneration
     const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const st = await chatApi.getSessionExecutionStatus(sid).catch((error) => {
@@ -1030,6 +1086,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     })
     if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return
     if (!st) throw new Error('Session status could not be refreshed')
+    if (st.observation) executionObservations.set(sid, st.observation)
     if (Number(getSessionById(sid)?.version || 0) > Number(st.session.version || 0)) return
     upsertSessionCache(st.session)
     applyAttention(sid, st.state)
@@ -1381,6 +1438,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function forgetSession(sid: string) {
+    transcriptObservations.delete(sid)
+    transcriptRecovery.delete(sid)
+    executionRecovery.delete(sid)
+    executionObservations.delete(sid)
     backgroundActivityGeneration.delete(sid)
     for (const key of backgroundActivityTimes.keys()) if (key.startsWith(`${sid}:`)) backgroundActivityTimes.delete(key)
     useBtwStore().clear(sid)
@@ -1561,6 +1622,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (document.length === 0) return null
     clearSessionError(sid)
     const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
+    transcriptRecovery.delete(sid)
+    executionRecovery.delete(sid)
+    invalidateResources([`session:${sid}:transcript`, `session:${sid}:state`])
     // The acknowledgement is durable even if the SSE patch was lost.
     messageRevalidator(sid).invalidate(0)
     scheduleSessionStatusRefresh(sid, 200)
@@ -1575,6 +1639,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     await chatApi.continueSession(sid, buildRunOptions({}))
+    transcriptRecovery.delete(sid)
+    executionRecovery.delete(sid)
+    invalidateResources([`session:${sid}:transcript`, `session:${sid}:state`])
     messageRevalidator(sid).invalidate(0)
     scheduleSessionStatusRefresh(sid, 200)
   }

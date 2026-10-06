@@ -1,11 +1,16 @@
 import { defineStore } from 'pinia'
 import { computed, onScopeDispose, ref } from 'vue'
 
-import { conditionalJson } from '../lib/conditionalJson'
+import { conditionalJsonObserved } from '../lib/conditionalJson'
 import { apiUrl } from '../lib/api'
 import { readUiAuthTokenVersion } from '../lib/uiAuthToken'
 import { isDocumentVisible } from '../lib/backgroundReads'
-import { subscribeResource } from '../lib/resourceSync'
+import {
+  canReuseResource,
+  captureResourceObservation,
+  checkResourceVersions,
+  subscribeResource,
+} from '../lib/resourceSync'
 import { createRevalidator } from '../lib/revalidation'
 import { extractSessionActivityUpdate } from '../lib/sessionActivityEvent.js'
 import type { SseEvent } from '../lib/sse'
@@ -42,6 +47,10 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
   const runs = new Map<string, Phase>()
   let controller: AbortController | null = null
   let resourceScope = ''
+  let observedList: ReturnType<typeof captureResourceObservation> | undefined
+  let recoveryGeneration = 0
+  let observedRecoveryGeneration = -1
+  let forceNextRead = false
   function ensureActivityScope() {
     const next = `${readUiAuthTokenVersion()}:${apiUrl('/')}`
     if (next !== resourceScope) {
@@ -52,6 +61,9 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
       liveAt.clear()
       runs.clear()
       snapshot.value = {}
+      observedList = undefined
+      recoveryGeneration++
+      observedRecoveryGeneration = -1
       eventGeneration++
     }
     return resourceScope
@@ -74,10 +86,18 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
     }
     for (const entry of Object.values(next)) entry.kinds = [...new Set(entry.kinds)].sort()
     const previous = snapshot.value
-    if (Object.keys(previous).length === Object.keys(next).length && Object.entries(next).every(([sid, entry]) => {
+    let changed = Object.keys(previous).length !== Object.keys(next).length
+    for (const [sid, entry] of Object.entries(next)) {
       const old = previous[sid]
-      return old?.type === entry.type && old.kinds.length === entry.kinds.length && old.kinds.every((kind, index) => kind === entry.kinds[index])
-    })) return
+      if (
+        old?.type === entry.type &&
+        old.kinds.length === entry.kinds.length &&
+        old.kinds.every((kind, index) => kind === entry.kinds[index])
+      )
+        next[sid] = old
+      else changed = true
+    }
+    if (!changed) return
     snapshot.value = next
   }
 
@@ -85,15 +105,30 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
   async function refreshInternal() {
     const scope = ensureActivityScope()
     const generation = eventGeneration
+    const requestRecoveryGeneration = recoveryGeneration
     const request = new AbortController()
     controller = request
     const timeout = window.setTimeout(() => request.abort(new Error('Activity request timed out')), 30_000)
     loading.value = true
     error.value = null
     try {
-      const list = await conditionalJson<ActivityItem[]>('activities', '/api/v1/activities', {
-        signal: request.signal,
-      })
+      const force = forceNextRead
+      forceNextRead = false
+      if (observedList?.scope === captureResourceObservation('activities').scope && observedList.token && !force) {
+        await checkResourceVersions(['activities'], request.signal)
+        if (canReuseResource('activities', observedList.token)) {
+          observedRecoveryGeneration = recoveryGeneration
+          return
+        }
+      }
+      const { value: list, observation } = await conditionalJsonObserved<ActivityItem[]>(
+        'activities',
+        '/api/v1/activities',
+        {
+          signal: request.signal,
+        },
+        force,
+      )
       const arr = Array.isArray(list) ? list : []
       const next = new Map<string, ActivityItem>()
       for (const item of arr) {
@@ -110,6 +145,8 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
           }
         activities.clear()
         for (const [id, item] of next) activities.set(id, item)
+        observedList = observation
+        observedRecoveryGeneration = requestRecoveryGeneration
         rebuild()
       }
     } catch (err) {
@@ -132,10 +169,20 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
     enabled: () => !disposed && isDocumentVisible(),
   })
   const releaseResource = subscribeResource('activities', (event) => {
-    if (event?.type !== 'runtime_signal' || event.properties?.kind !== 'activity') queue.invalidate(150)
+    if (event?.type !== 'runtime_signal' || event.properties?.kind !== 'activity') {
+      recoveryGeneration++
+      queue.invalidate(150)
+    }
   })
-  const refresh = () => queue.refresh().catch(() => {})
-  const scheduleRefresh = () => queue.invalidate(150)
+  const refresh = () => {
+    forceNextRead = true
+    recoveryGeneration++
+    return queue.refresh().catch(() => {})
+  }
+  const scheduleRefresh = () => {
+    recoveryGeneration++
+    queue.invalidate(150)
+  }
   const visibility = () => {
     if (isDocumentVisible()) queue.resume()
     else {
@@ -169,6 +216,16 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
       const dismissed = payload.reason === 'dismissed'
       if (dismissed) activities.delete(item.id)
       else activities.set(item.id, item as ActivityItem)
+      if (observedList?.token && observedRecoveryGeneration === recoveryGeneration) {
+        const current = captureResourceObservation('activities')
+        if (
+          current.scope === observedList.scope &&
+          current.token &&
+          canReuseResource('activities', current.token) &&
+          !controller
+        )
+          observedList = current
+      }
       if (
         dismissed ||
         !previous ||

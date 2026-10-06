@@ -62,7 +62,9 @@ export function useVisibleResource<T>(options: {
       return
     }
     // Coalesce clicks, visibility changes and event bursts.
-    const remaining = Math.max((options.minInterval ?? 750) - (Date.now() - lastStart), allowedAt - Date.now())
+    // User refreshes retain a short coalescing gap and the failure backoff.
+    // Force validates the body; it must not turn repeated clicks into a loop.
+    const remaining = Math.max((options.minInterval ?? 250) - (Date.now() - lastStart), allowedAt - Date.now())
     if (remaining > 0) {
       schedule(remaining)
       return
@@ -105,7 +107,7 @@ export function useVisibleResource<T>(options: {
         data.value = result
         error.value = ''
         failures = 0
-        allowedAt = Date.now() + (options.minInterval ?? 750)
+        allowedAt = Date.now() + (options.minInterval ?? 250)
         // Only the HTTP response knows which version this body represents.
         // A concurrent revision check must not label an older body current.
         observed = responseObservation

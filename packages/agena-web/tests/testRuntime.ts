@@ -41,16 +41,22 @@ export function ensureBrowserTestRuntime(): Storage {
   windowRecord.localStorage = storage
   windowRecord.setTimeout = globalThis.setTimeout.bind(globalThis)
   windowRecord.clearTimeout = globalThis.clearTimeout.bind(globalThis)
+  windowRecord.performance ??= globalThis.performance
+  globalRecord.history ??= { state: null, replaceState() {}, pushState() {} }
+  windowRecord.history ??= globalRecord.history
 
   const currentDocument = globalRecord.document as Record<string, unknown> | undefined
   if (!currentDocument || typeof currentDocument.createElement !== 'function') {
     const doc = Object.assign(new EventTarget(), {
       createElement: () => ({ style: {} }),
       createElementNS: () => ({}),
+      querySelector: () => null,
     })
     globalRecord.document = doc
-    windowRecord.document = doc
   }
+  const documentRecord = globalRecord.document as Record<string, unknown>
+  documentRecord.querySelector ??= () => null
+  windowRecord.document = documentRecord
 
   return storage
 }

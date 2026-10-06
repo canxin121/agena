@@ -465,6 +465,7 @@ export function useChatModelSelection(opts: {
     () => chat.messages.length,
     () => applySessionSelection(),
   )
+  watch([runtimeDefaultSelection, providers], () => applySessionSelection())
 
   return {
     providers,

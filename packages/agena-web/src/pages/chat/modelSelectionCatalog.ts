@@ -1,6 +1,14 @@
-import { ref } from 'vue'
+import { getCurrentScope, onScopeDispose, ref } from 'vue'
 
 import { apiJson } from '../../lib/api'
+import {
+  modelConfigurationGeneration,
+  modelInventoryGeneration,
+  subscribeModelConfiguration,
+} from '../../lib/modelConfigurationApi'
+import { captureResourceObservation } from '../../lib/resourceSync'
+import { createRevalidator } from '../../lib/revalidation'
+import { isDocumentVisible } from '../../lib/backgroundReads'
 import type { JsonValue } from '../../types/json'
 
 export type ThinkingRequest = {
@@ -85,6 +93,30 @@ type ProviderAdapterModels = {
   enabled: boolean
   models: ProviderModel[]
   failure?: JsonValue
+}
+
+// Coalesce the same catalog reads across mounted pickers. Keep a completed
+// result for only one scheduling window; explicit later reloads read again.
+const sharedReads = new Map<string, { promise: Promise<unknown>; until: number }>()
+async function catalogJson<T>(path: string, scope: number, generation: number): Promise<T> {
+  const key = `${scope}:${generation}:${path}`
+  const existing = sharedReads.get(key)
+  if (existing && existing.until > Date.now()) return existing.promise as Promise<T>
+  const entry = { promise: apiJson<T>(path, { signal: AbortSignal.timeout(15_000) }), until: Infinity }
+  sharedReads.set(key, entry)
+  if (sharedReads.size > 128)
+    for (const [oldKey, value] of sharedReads) {
+      if (value.until !== Infinity) sharedReads.delete(oldKey)
+      if (sharedReads.size <= 128) break
+    }
+  try {
+    const result = await entry.promise
+    entry.until = Date.now() + 250
+    return result
+  } catch (error) {
+    if (sharedReads.get(key) === entry) sharedReads.delete(key)
+    throw error
+  }
 }
 
 function readString(value: unknown): string {
@@ -213,6 +245,10 @@ export function useModelSelectionCatalog() {
   const catalogLoading = ref(false)
   const catalogError = ref('')
   let loadPromise: Promise<void> | null = null
+  let loadedGeneration = -1
+  let loadedInventoryGeneration = -1
+  let loadedScope = -1
+  let disposed = false
 
   function modelMetaFor(providerId: string, modelId: string, adapterId?: string): ProviderModel | null {
     const provider = providers.value.find((item) => item.id === readString(providerId))
@@ -228,19 +264,29 @@ export function useModelSelectionCatalog() {
     return provider.models.find((model) => model.id === targetModel) || null
   }
 
-  async function loadProvidersAndModels() {
-    if (loadPromise) return await loadPromise
+  async function loadProvidersAndModels(changedOnly = false) {
+    if (disposed) return
+    if (loadPromise) {
+      await loadPromise
+      if (!disposed && loadedGeneration !== modelConfigurationGeneration()) await loadProvidersAndModels(changedOnly)
+      return
+    }
+    const generation = modelConfigurationGeneration()
+    const scope = captureResourceObservation('sessions').scope
+    const inventoryGeneration = modelInventoryGeneration()
+    const isCurrent = () =>
+      !disposed &&
+      generation === modelConfigurationGeneration() &&
+      scope === captureResourceObservation('sessions').scope
     loadPromise = (async () => {
       catalogLoading.value = true
       catalogError.value = ''
       try {
-        const [runtime, summaries] = await Promise.all([
-          apiJson<RuntimeStatus>('/api/v1/runtime'),
-          apiJson<ProviderSummary[]>('/api/v1/providers'),
-        ])
+        const runtime = await catalogJson<RuntimeStatus>('/api/v1/runtime', scope, generation)
+        if (!isCurrent()) return
 
         const selection = runtime?.default_selection || null
-        runtimeDefaultSelection.value = {
+        const nextDefaultSelection: RuntimeDefaultSelection = {
           provider: readString(selection?.provider),
           adapter: readString(selection?.adapter),
           model: readString(selection?.model),
@@ -252,18 +298,35 @@ export function useModelSelectionCatalog() {
             : {}),
         }
 
+        if (
+          changedOnly &&
+          loadedScope === scope &&
+          loadedInventoryGeneration === inventoryGeneration &&
+          (!nextDefaultSelection.model ||
+            modelMetaFor(nextDefaultSelection.provider, nextDefaultSelection.model, nextDefaultSelection.adapter))
+        ) {
+          runtimeDefaultSelection.value = nextDefaultSelection
+          loadedGeneration = generation
+          return
+        }
+        const summaries = await catalogJson<ProviderSummary[]>('/api/v1/providers', scope, generation)
+
         const summaryList = Array.isArray(summaries) ? summaries : []
         const results = await Promise.allSettled(
           summaryList.map(async (summary) => {
             const providerId = readString(summary.provider_id)
             if (!providerId) return null
-            const adapters = await apiJson<ProviderAdapterModels[]>(
+            const adapters = await catalogJson<ProviderAdapterModels[]>(
               `/api/v1/providers/${encodeURIComponent(providerId)}/configured-models`,
+              scope,
+              generation,
             )
             const models: ProviderModel[] = []
             for (const adapter of adapters) {
               if (!Array.isArray(adapter.models)) {
-                throw new TypeError(`Provider adapter ${readString(adapter.adapter_id) || '<unknown>'} is missing its models array`)
+                throw new TypeError(
+                  `Provider adapter ${readString(adapter.adapter_id) || '<unknown>'} is missing its models array`,
+                )
               }
               if (!adapter.enabled) continue
               const adapterId = readString(adapter.adapter_id)
@@ -298,7 +361,7 @@ export function useModelSelectionCatalog() {
           }
         }
 
-        const configuredDefault = runtimeDefaultSelection.value
+        const configuredDefault = nextDefaultSelection
         if (configuredDefault.provider && configuredDefault.model) {
           let provider = next.find((item) => item.id === configuredDefault.provider)
           if (!provider) {
@@ -325,10 +388,15 @@ export function useModelSelectionCatalog() {
           }
         }
 
+        if (!isCurrent()) return
+        runtimeDefaultSelection.value = nextDefaultSelection
         providers.value = next.sort((a, b) => a.id.localeCompare(b.id))
+        loadedGeneration = generation
+        loadedInventoryGeneration = inventoryGeneration
+        loadedScope = scope
       } catch (error) {
+        if (!isCurrent()) return
         catalogError.value = error instanceof Error ? error.message : String(error)
-        providers.value = []
       } finally {
         catalogLoading.value = false
       }
@@ -339,6 +407,27 @@ export function useModelSelectionCatalog() {
     } finally {
       loadPromise = null
     }
+  }
+
+  if (getCurrentScope()) {
+    const queue = createRevalidator(
+      async () => {
+        await loadProvidersAndModels(true)
+        if (catalogError.value) throw new Error(catalogError.value)
+      },
+      { intervalMs: 250, retryMs: 5000, enabled: () => !disposed && isDocumentVisible() },
+    )
+    const release = subscribeModelConfiguration(() => {
+      if (loadPromise || loadedGeneration >= 0) queue.invalidate(0)
+    })
+    const visibility = () => (isDocumentVisible() ? queue.resume() : queue.pause())
+    document.addEventListener('visibilitychange', visibility)
+    onScopeDispose(() => {
+      disposed = true
+      release()
+      queue.dispose()
+      document.removeEventListener('visibilitychange', visibility)
+    })
   }
 
   return {

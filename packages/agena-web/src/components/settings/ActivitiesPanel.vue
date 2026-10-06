@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onScopeDispose, ref } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import { apiJson } from '../../lib/api'
+import { conditionalJson } from '../../lib/conditionalJson'
+import { clearFinishedActivities, controlActivity } from '../../lib/activityApi'
+import { createLatestRequestGuard } from '../../lib/latestRequest'
+import { createRevalidator } from '../../lib/revalidation'
+import { captureResourceObservation, subscribeResource } from '../../lib/resourceSync'
+import { isDocumentVisible } from '../../lib/backgroundReads'
 import { useToastsStore } from '../../stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
 
@@ -18,6 +23,7 @@ type Activity = {
   title: string
   description: string
   session_id?: number | null
+  parent_session_id?: number | null
   created_at_ms: number
   message?: string | null
   controls?: ActivityControl[]
@@ -67,17 +73,21 @@ function controlLabel(control: ActivityControl): string {
   return control.charAt(0).toUpperCase() + control.slice(1)
 }
 
-async function refresh() {
+const beginRead = createLatestRequestGuard(() => captureResourceObservation('activities').scope, activities)
+async function readActivities() {
+  const isCurrent = beginRead()
   loading.value = true
   error.value = ''
   try {
-    const data = await apiJson<Activity[]>('/api/v1/activities')
+    const data = await conditionalJson<Activity[]>('activities', '/api/v1/activities')
+    if (!isCurrent()) return
     activities.value = Array.isArray(data) ? data : []
   } catch (err) {
+    if (!isCurrent()) return
     error.value = err instanceof Error ? err.message : String(err)
-    activities.value = []
+    throw err
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 
@@ -85,9 +95,14 @@ async function runAction(id: string, action: ActivityControl) {
   if (!id || busyId.value) return
   busyId.value = id
   try {
-    await apiJson(`/api/v1/activities/${encodeURIComponent(id)}/${action}`, { method: 'POST' })
+    const result = await controlActivity(id, action)
+    beginRead() // Retire a pre-mutation read before applying the response.
+    activities.value =
+      action === 'dismiss' || action === 'delete'
+        ? activities.value.filter((row) => row.id !== id)
+        : activities.value.map((row) => (row.id === id ? (result as Activity) : row))
     toasts.push('success', st('{action} requested', { action: controlLabel(action) }))
-    await refresh()
+    queue.invalidate(0)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     toasts.push('error', msg)
@@ -100,7 +115,7 @@ async function clearFinished() {
   if (busyId.value) return
   busyId.value = '__clear_finished__'
   try {
-    await apiJson('/api/v1/activities/clear-finished', { method: 'POST' })
+    await clearFinishedActivities(activities.value)
     toasts.push('success', st('Finished activities cleared'))
     await refresh()
   } catch (err) {
@@ -112,7 +127,18 @@ async function clearFinished() {
 }
 
 onMounted(() => {
-  void refresh()
+  void queue.refresh().catch(() => {})
+})
+const queue = createRevalidator(readActivities, { intervalMs: 250, retryMs: 5000, enabled: isDocumentVisible })
+const refresh = () => queue.refresh().catch(() => {})
+const release = subscribeResource('activities', () => queue.invalidate(150))
+const visibility = () => (isDocumentVisible() ? queue.resume() : queue.pause())
+document.addEventListener('visibilitychange', visibility)
+onScopeDispose(() => {
+  release()
+  queue.dispose()
+  beginRead()
+  document.removeEventListener('visibilitychange', visibility)
 })
 </script>
 

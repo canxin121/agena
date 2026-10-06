@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from 'bun:test'
 import { createServer } from 'vite'
 import { fileURLToPath } from 'node:url'
-import { createRenderer, defineComponent, nextTick, ref } from 'vue'
+import { createRenderer, defineComponent, nextTick, ref, ssrContextKey } from 'vue'
 import { createPinia, disposePinia, setActivePinia } from 'pinia'
 import { ensureBrowserTestRuntime } from './testRuntime'
 import type { SessionActivity } from '../src/types/activity'
@@ -97,6 +97,7 @@ async function withRuntime(
         },
       }),
     )
+    app.provide(ssrContextKey, { modules: new Set() })
     apps.push(app)
     app.mount({})
   }
@@ -374,7 +375,7 @@ test('a first-seen session can enter the open recent footer while its directory 
       expect(sidebar.directorySidebarById[String(workspaceId)]!.recentRows).toHaveLength(0)
       expect(sidebar.directorySidebarById[String(otherWorkspaceId)]).toBe(otherDirectory)
       expect(sidebar.favoriteFooterView).toBe(favoriteFooter)
-      expect(calls.filter((url) => url.pathname === '/api/v1/sessions/99903')).toHaveLength(1)
+      expect(calls.filter((url) => url.pathname === '/api/v1/sessions/99903')).toHaveLength(0)
       expect(calls.some((url) => url.searchParams.has('workspace_id'))).toBe(false)
       expect(
         calls
@@ -503,6 +504,318 @@ test.each([0, 1500])(
       }
     }),
 )
+
+test('metadata, deletion and execution writes reconcile mounted lists without SSE, leaving another workspace untouched', () =>
+  withRuntime(async ({ mount, advance, tokens, calls, reply, setFetch }) => {
+    const workspaces = [99501, 99502]
+    type Row = {
+      id: number
+      workspace_id: number
+      root_id: number
+      parent_id: number | null
+      title: string
+      version: number
+      favorite: boolean
+      pinned: boolean
+      child_session_count: number
+      state: { kind: string; data: object }
+    }
+    const rows: Row[] = workspaces.map((id) => ({
+      id: id + 100,
+      workspace_id: id,
+      root_id: id + 100,
+      parent_id: null,
+      title: `Original ${id}`,
+      version: 1,
+      favorite: false,
+      pinned: false,
+      child_session_count: 0,
+      state: { kind: 'ready', data: {} },
+    }))
+    const own = rows[0]!,
+      sid = String(own.id)
+    let revision = 1000
+    const bump = (key: string) => tokens.set(key, `granularity-http:${++revision}`)
+    const belongs = (row: Row, bucket: string) =>
+      bucket === 'pinned'
+        ? row.pinned
+        : bucket === 'favorite'
+          ? row.favorite
+          : bucket === 'running'
+            ? row.state.kind === 'running'
+            : bucket === 'attention'
+              ? row.state.kind === 'awaiting_interaction'
+              : row.state.kind === 'ready'
+    const changed = (previous: Row, current?: Row) => {
+      for (const key of [
+        `workspace:${previous.workspace_id}:sessions`,
+        previous.parent_id
+          ? `workspace:${previous.workspace_id}:sessions:parent:${previous.parent_id}`
+          : `workspace:${previous.workspace_id}:sessions:roots`,
+        `workspace:${previous.workspace_id}:stats`,
+        `session:${previous.id}:state`,
+        `session:${previous.id}:transcript`,
+      ])
+        bump(key)
+      for (const bucket of ['pinned', 'favorite', 'running', 'attention', 'recent']) {
+        if (belongs(previous, bucket) || (current && belongs(current, bucket))) {
+          bump(`sessions:bucket:${bucket}`)
+          bump(`workspace:${previous.workspace_id}:sessions:bucket:${bucket}`)
+        }
+        if (belongs(previous, bucket) !== Boolean(current && belongs(current, bucket)))
+          bump(`sessions:bucket:${bucket}:count`)
+      }
+    }
+    for (const key of [
+      'sessions',
+      'workspaces:catalog',
+      'activities',
+      ...['pinned', 'favorite', 'running', 'attention', 'recent'].flatMap((kind) => [
+        `sessions:bucket:${kind}`,
+        `sessions:bucket:${kind}:count`,
+      ]),
+      ...workspaces.flatMap((id) => [`workspace:${id}:sessions:roots`, `workspace:${id}:stats`]),
+      ...rows.flatMap((row) => [`session:${row.id}:state`, `session:${row.id}:transcript`]),
+    ])
+      bump(key)
+    setFetch((url, init) => {
+      if (url.pathname === '/api/v1/workspaces')
+        return reply('workspaces:catalog', {
+          items: workspaces.map((id) => ({ id, path: `/mutations-${id}` })),
+          page: { has_more: false },
+        })
+      if (url.pathname === '/api/v1/workspaces/session-stats')
+        return Response.json({
+          items: url.searchParams
+            .get('ids')!
+            .split(',')
+            .map((id) => {
+              const list = rows.filter((row) => row.workspace_id === Number(id))
+              return {
+                workspace_id: Number(id),
+                revision: tokens.get(`workspace:${id}:stats`),
+                stats: {
+                  total: list.length,
+                  roots: list.filter((row) => !row.parent_id).length,
+                  pinned: list.filter((row) => row.pinned).length,
+                  running: list.filter((row) => belongs(row, 'running')).length,
+                  attention: list.filter((row) => belongs(row, 'attention')).length,
+                },
+              }
+            }),
+        })
+      if (url.pathname === '/api/v1/sessions') {
+        const opts = {
+          workspaceId: url.searchParams.get('workspace_id') ?? undefined,
+          parentId: url.searchParams.get('parent_id') ?? undefined,
+          roots: url.searchParams.get('roots') === 'true',
+          bucket: url.searchParams.get('bucket') ?? undefined,
+          countOnly: url.searchParams.get('count_only') === 'true',
+        }
+        const list = rows.filter(
+          (row) =>
+            (!opts.workspaceId || row.workspace_id === Number(opts.workspaceId)) &&
+            (!opts.parentId || row.parent_id === Number(opts.parentId)) &&
+            (!opts.roots || !row.parent_id) &&
+            (!opts.bucket || belongs(row, opts.bucket)),
+        )
+        return reply(chatApi.sessionListResourceKey(opts), {
+          items: opts.countOnly ? [] : list,
+          total: list.length,
+          page: { has_more: false },
+        })
+      }
+      if (url.pathname === `/api/v1/sessions/${sid}`) {
+        const previous = structuredClone(own)
+        if (init?.method === 'PUT') {
+          Object.assign(own, JSON.parse(String(init.body)))
+          own.version++
+          changed(previous, own)
+        }
+        if (init?.method === 'DELETE') {
+          for (let i = rows.length - 1; i >= 0; i--)
+            if (rows[i]!.id === own.id || rows[i]!.parent_id === own.id) rows.splice(i, 1)
+          changed(previous)
+          return Response.json({})
+        }
+        return Response.json(own)
+      }
+      if (url.pathname === `/api/v1/sessions/${sid}/state`)
+        return reply(`session:${sid}:state`, { session: own, parts: [], background_activities: [] })
+      if (url.pathname === `/api/v1/sessions/${sid}/transcript`)
+        return reply(`session:${sid}:transcript`, {
+          session_id: own.id,
+          version: own.version,
+          parts: [],
+          user_message_count: 0,
+          page: { has_more: false },
+        })
+      if (init?.method === 'POST' && (url.pathname.endsWith('/fork') || url.pathname.endsWith('/rewind'))) {
+        const previous = structuredClone(own)
+        const child: Row = {
+          ...own,
+          id: own.id + 1000 + own.child_session_count,
+          parent_id: own.id,
+          title: url.pathname.endsWith('/fork') ? 'Forked' : 'Rewound',
+          child_session_count: 0,
+          version: 1,
+        }
+        rows.push(child)
+        own.child_session_count++
+        own.version++
+        changed(previous, own)
+        bump(`workspace:${own.workspace_id}:sessions:parent:${own.id}`)
+        bump('sessions:bucket:recent:count')
+        return Response.json({ session: child, parts: [] })
+      }
+      if (init?.method === 'POST' && url.pathname.startsWith(`/api/v1/sessions/${sid}/`)) {
+        const previous = structuredClone(own)
+        own.version++
+        own.state = { kind: url.pathname.endsWith('/cancel') ? 'ready' : 'running', data: {} }
+        changed(previous, own)
+        return Response.json(
+          url.pathname.endsWith('/messages')
+            ? { session: own, parts: [] }
+            : url.pathname.endsWith('/cancel')
+              ? { result: 'already_terminal' }
+              : {},
+        )
+      }
+      throw new Error(`Unexpected mutation request ${url}`)
+    })
+    let sidebar!: ReturnType<typeof useDirectorySessionStore>
+    mount(() => {
+      sidebar = useDirectorySessionStore()
+      for (const kind of ['pinned', 'favorite', 'recent', 'running'] as const)
+        sidebar.uiPrefs[`${kind}SessionsOpen`] = true
+    })
+    sync.invalidateResources()
+    const release = sync.startResourceSync(),
+      chat = useChatStore()
+    const releaseSession = chat.retainSession(sid)
+    try {
+      const boot = sidebar.revalidateFromApi()
+      await advance(1000)
+      expect(await boot).toBe(true)
+      await chat.refreshMessages(sid)
+      await advance(1000)
+      const other = sidebar.directorySidebarById[String(workspaces[1])]
+      const assertScoped = () => {
+        expect(sidebar.error).toBeNull()
+        expect(sidebar.directorySidebarById[String(workspaces[1])]).toBe(other)
+        expect(
+          calls.some(
+            (url) =>
+              url.pathname === '/api/v1/workspaces' || url.searchParams.get('workspace_id') === String(workspaces[1]),
+          ),
+        ).toBe(false)
+        expect(
+          calls
+            .filter((url) => url.pathname === '/api/v1/workspaces/session-stats')
+            .every((url) => url.searchParams.get('ids') === String(workspaces[0])),
+        ).toBe(true)
+        expect(
+          calls.some(
+            (url) =>
+              url.pathname === '/api/v1/sessions' &&
+              !url.searchParams.has('workspace_id') &&
+              !url.searchParams.has('bucket'),
+          ),
+        ).toBe(false)
+      }
+      calls.length = 0
+      await chat.renameSession(sid, 'Renamed immediately')
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.recentRows[0]!.session!.title).toBe(
+        'Renamed immediately',
+      )
+      expect(sidebar.recentFooterView.rows[0]!.session!.title).toBe('Renamed immediately')
+      await advance(1000)
+      assertScoped()
+      for (const field of ['favorite', 'pinned'] as const) {
+        for (const enabled of [true, false]) {
+          calls.length = 0
+          await chat.updateSessionMetadata(sid, { [field]: enabled })
+          const footer = field === 'favorite' ? sidebar.favoriteFooterView : sidebar.pinnedFooterView
+          // Use the returned metadata immediately, before any revision probe.
+          expect(footer.rows.some((row) => row.id === sid)).toBe(enabled)
+          expect(footer.total).toBe(enabled ? 1 : 0)
+          await advance(1000)
+          expect(footer.rows.some((row) => row.id === sid)).toBe(enabled)
+          expect(footer.total).toBe(enabled ? 1 : 0)
+          assertScoped()
+        }
+      }
+      for (const operation of [
+        () => chat.sendMessage(sid, { text: 'hello' }),
+        () => chat.continueSession(sid),
+        () => chat.compactSession(sid),
+        () => chat.replyPermission(sid, 'permission-1', 'once'),
+        () => chat.replyQuestion(sid, 'question-1', [['yes']]),
+        () => chat.rejectQuestion(sid, 'question-2'),
+        () => chat.abortSession(sid),
+      ]) {
+        calls.length = 0
+        await operation()
+        await advance(1000)
+        expect(chat.getSessionState(sid).kind).toBe(own.state.kind)
+        expect(sidebar.runningFooterView.rows.some((row) => row.id === sid)).toBe(own.state.kind === 'running')
+        expect(sidebar.recentFooterView.rows.some((row) => row.id === sid)).toBe(own.state.kind === 'ready')
+        assertScoped()
+      }
+      calls.length = 0
+      const fork = await chat.forkSession(sid)
+      await advance(1000)
+      expect(sidebar.uiPrefs.expandedParentSessionIds).toContain(sid)
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.recentRows.map((row) => row.id)).toContain(fork!.id)
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.sessionCount).toBe(2)
+      assertScoped()
+      calls.length = 0
+      chat.getMessagesForSession(sid).push({
+        info: { id: '88111', sessionID: sid, role: 'user', runState: 'completed', time: { created: 1 } },
+        parts: [],
+      })
+      const rewound = await chat.revertToMessage(sid, '88111')
+      await advance(1000)
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.recentRows.map((row) => row.id)).toContain(
+        rewound.session.id,
+      )
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.sessionCount).toBe(3)
+      assertScoped()
+      calls.length = 0
+      await chat.deleteSession(sid)
+      // The durable acknowledgement removes the whole visible subtree even
+      // before refreshes can run, including existing footer memberships.
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.recentRows).toHaveLength(0)
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.sessionCount).toBe(0)
+      expect(sidebar.recentFooterView.rows.some((row) => row.id === sid)).toBe(false)
+      await advance(1000)
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.recentRows).toHaveLength(0)
+      expect(sidebar.directorySidebarById[String(workspaces[0])]!.sessionCount).toBe(0)
+      expect(sidebar.recentFooterView.rows.some((row) => row.id === sid)).toBe(false)
+      assertScoped()
+      // Simulate a pre-delete list arriving last. Successful deletion's
+      // tombstone wins for both the parent and cached descendants.
+      setFetch(() =>
+        reply(`workspace:${workspaces[0]}:sessions:roots`, {
+          items: [
+            own,
+            { ...own, id: Number(fork!.id), parent_id: own.id },
+            { ...own, id: Number(rewound.session.id), parent_id: own.id },
+          ],
+          total: 3,
+          page: { has_more: false },
+        }),
+      )
+      bump(`workspace:${workspaces[0]}:sessions:roots`)
+      sync.invalidateResources([`workspace:${workspaces[0]}:sessions:roots`])
+      const lateRead = chatApi.listSessions({ workspaceId: workspaces[0], roots: true })
+      await advance(1000)
+      expect((await lateRead).sessions).toHaveLength(0)
+    } finally {
+      releaseSession()
+      release()
+    }
+  }))
 
 test('a selected file keeps its diff through other-file changes, eviction, hide/show and reopening', () =>
   withRuntime(async ({ mount, advance, doc, tokens, calls, reply, evict, setFetch }) => {
@@ -788,4 +1101,259 @@ test('preview registry identities cannot invalidate or retire core API versions'
     expect(sync.noteResourceVersion(apiKey, 'restarted-api:1', beforeRestart)).toBe(true)
     expect(sync.noteResourceVersion(apiKey, 'independent-api:4')).toBe(false)
     expect(sync.canReuseResource('preview', 'restarted-preview:1')).toBe(true)
+  }))
+
+test('activity controls refresh other mounted projections without SSE or unopened logs', () =>
+  withRuntime(async ({ advance, tokens, calls, reply, setFetch }) => {
+    const { controlActivity } = await vite.ssrLoadModule('/src/lib/activityApi.ts')
+    const activityId = 'task_fresh_control',
+      sid = '99401',
+      otherSid = '99402'
+    let stopped = false
+    const descriptor = () => ({
+      id: activityId,
+      kind: 'task',
+      status: stopped ? 'succeeded' : 'running',
+      title: 'Task',
+      description: '',
+      session_id: Number(sid),
+      last_seq: 1,
+      controls: ['stop'],
+    })
+    for (const key of ['activities', `session:${sid}:state`, `session:${otherSid}:state`])
+      tokens.set(key, 'restarted-api:12000')
+    setFetch((url, init) => {
+      if (url.pathname === `/api/v1/activities/${activityId}/stop` && init?.method === 'POST') {
+        stopped = true
+        tokens.set('activities', 'restarted-api:12001')
+        tokens.set(`session:${sid}:state`, 'restarted-api:12001')
+        return Response.json(descriptor())
+      }
+      if (url.pathname === '/api/v1/activities') return reply('activities', [descriptor()])
+      const target = url.pathname.match(/sessions\/(\d+)\/state/)?.[1]
+      if (target)
+        return reply(`session:${target}:state`, {
+          session: {
+            id: Number(target),
+            workspace_id: 99400,
+            title: 'Session',
+            version: stopped ? 2 : 1,
+            state: { kind: 'ready', data: {} },
+          },
+          parts: [],
+          background_activities: target === sid && !stopped ? [descriptor()] : [],
+        })
+      throw new Error(`Unexpected activity mutation request ${url}`)
+    })
+    const chat = useChatStore(),
+      busy = useSessionActivityStore()
+    const releaseSession = chat.retainSession(sid),
+      releaseOther = chat.retainSession(otherSid),
+      release = sync.startResourceSync()
+    try {
+      sync.invalidateResources(['activities'])
+      const boot = Promise.all([
+        chat.refreshExecutionStatus(sid),
+        chat.refreshExecutionStatus(otherSid),
+        busy.refresh(),
+      ])
+      await advance(1000)
+      await boot
+      expect(chat.sessionBackgroundActivities(sid)).toHaveLength(1)
+      expect(busy.snapshot[sid]?.type).toBe('busy')
+      calls.length = 0
+      await controlActivity(activityId, 'stop')
+      await advance(1000)
+      expect(chat.sessionBackgroundActivities(sid)).toHaveLength(0)
+      expect(busy.snapshot[sid]).toBeUndefined()
+      expect(calls.filter((url) => url.pathname === '/api/v1/activities')).toHaveLength(1)
+      expect(calls.filter((url) => url.pathname === `/api/v1/sessions/${sid}/state`)).toHaveLength(1)
+      expect(calls.some((url) => url.pathname.includes(`/${otherSid}/`) || url.pathname.endsWith('/logs'))).toBe(false)
+    } finally {
+      releaseSession()
+      releaseOther()
+      release()
+    }
+  }))
+
+test('saving a default model updates mounted pickers with one shared runtime read and no model inventory reads', () =>
+  withRuntime(async ({ mount, advance, calls, setFetch }) => {
+    const { useModelSelectionCatalog } = await vite.ssrLoadModule('/src/pages/chat/modelSelectionCatalog.ts')
+    const { mutateModelConfiguration } = await vite.ssrLoadModule('/src/lib/modelConfigurationApi.ts')
+    const { setRuntimeSetting, patchRuntimeSettings } = await vite.ssrLoadModule('/src/lib/runtimeSettings.ts')
+    let model = 'first'
+    setFetch((url, init) => {
+      if (url.pathname === '/api/v1/settings' && ['PATCH', 'PUT'].includes(init?.method || '')) {
+        const body = JSON.parse(String(init?.body || '{}'))
+        if (!body.dry_run && body.reload !== false) {
+          if (body.path === 'providers.default_selection.model') model = body.value
+          else if (body.changes?.default_selection?.model) model = body.changes.default_selection.model
+          else if (!body.path) model = 'second'
+        }
+        return Response.json({ changed: true, dry_run: !!body.dry_run })
+      }
+      if (url.pathname === '/api/v1/runtime')
+        return Response.json({ default_selection: { provider: 'fake', adapter: 'adapter', model } })
+      if (url.pathname === '/api/v1/providers') return Response.json([{ provider_id: 'fake' }])
+      if (url.pathname.endsWith('/configured-models'))
+        return Response.json([
+          {
+            adapter_id: 'adapter',
+            enabled: true,
+            models: ['first', 'second'].map((id) => ({ provider_id: 'fake', adapter_id: 'adapter', id })),
+          },
+        ])
+      throw new Error(`Unexpected model configuration request ${url}`)
+    })
+    const catalogs: Array<ReturnType<typeof useModelSelectionCatalog>> = []
+    mount(() => catalogs.push(useModelSelectionCatalog()))
+    mount(() => catalogs.push(useModelSelectionCatalog()))
+    await Promise.all(catalogs.map((catalog) => catalog.loadProvidersAndModels()))
+    expect(calls.filter((url) => url.pathname === '/api/v1/runtime')).toHaveLength(1)
+    const originalInventories = catalogs.map((catalog) => catalog.providers.value)
+    calls.length = 0
+    await mutateModelConfiguration('/api/v1/settings', { method: 'PATCH', body: '{}' })
+    await advance(500)
+    for (const [i, catalog] of catalogs.entries()) {
+      expect(catalog.runtimeDefaultSelection.value.model).toBe('second')
+      expect(catalog.providers.value).toBe(originalInventories[i])
+    }
+    expect(calls.filter((url) => url.pathname === '/api/v1/runtime')).toHaveLength(1)
+    expect(
+      calls.some((url) => url.pathname === '/api/v1/providers' || url.pathname.endsWith('/configured-models')),
+    ).toBe(false)
+
+    for (const update of [
+      () => setRuntimeSetting('providers.default_selection.model', 'first'),
+      () =>
+        patchRuntimeSettings('providers', {
+          default_selection: { provider: 'fake', adapter: 'adapter', model: 'second' },
+        }),
+    ]) {
+      calls.length = 0
+      await update()
+      await advance(500)
+      for (const [i, catalog] of catalogs.entries()) {
+        expect(catalog.runtimeDefaultSelection.value.model).toBe(model)
+        expect(catalog.providers.value).toBe(originalInventories[i])
+      }
+      expect(calls.filter((url) => url.pathname === '/api/v1/runtime')).toHaveLength(1)
+      expect(
+        calls.some((url) => url.pathname === '/api/v1/providers' || url.pathname.endsWith('/configured-models')),
+      ).toBe(false)
+    }
+
+    // An unrelated setting, validation-only write, or saved-but-not-reloaded
+    // file cannot trigger reads of the runtime/model inventory.
+    calls.length = 0
+    await setRuntimeSetting('runtime.telemetry.enabled', false)
+    await setRuntimeSetting('providers.default_selection.model', 'first', { dry_run: true })
+    await setRuntimeSetting('providers.default_selection.model', 'first', { reload: false })
+    await advance(500)
+    expect(
+      calls.filter(
+        (url) =>
+          url.pathname === '/api/v1/runtime' ||
+          url.pathname === '/api/v1/providers' ||
+          url.pathname.endsWith('/configured-models'),
+      ),
+    ).toHaveLength(0)
+  }))
+
+test('catalog refresh follows completion with small status probes and stops reading when the job finishes', () =>
+  withRuntime(async ({ mount, advance, calls, setFetch }) => {
+    const { default: component } = await vite.ssrLoadModule('/src/components/settings/ModelCatalogPanel.vue')
+    let running = false,
+      finished = false
+    setFetch((url, init) => {
+      if (url.pathname === '/api/v1/model-catalog/refresh' && init?.method === 'POST') {
+        running = true
+        return Response.json({})
+      }
+      if (url.pathname === '/api/v1/model-catalog')
+        return Response.json({
+          summary: { refreshing: running },
+          total: 1,
+          limit: Number(url.searchParams.get('limit')),
+          items: [{ model_id: finished ? 'fresh' : 'previous', source: 'mock' }],
+        })
+      throw new Error(`Unexpected catalog request ${url}`)
+    })
+    let state!: {
+      refreshCatalog(): Promise<void>
+      items: { value: Array<{ model_id: string }> }
+      origin: { value: string }
+    }
+    mount(() => {
+      state = component.setup({}, { expose() {} })
+    })
+    await advance(500)
+    expect(state.items.value[0]!.model_id).toBe('previous')
+    await state.refreshCatalog()
+    await advance(0)
+    calls.length = 0
+    await advance(1500)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.searchParams.get('limit')).toBe('1')
+    running = false
+    finished = true
+    calls.length = 0
+    await advance(1500)
+    expect(state.items.value[0]!.model_id).toBe('fresh')
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.searchParams.get('limit')).toBe('1')
+    expect(Number(calls[1]!.searchParams.get('limit'))).toBeGreaterThan(1)
+    calls.length = 0
+    await advance(60_000)
+    expect(calls).toHaveLength(0)
+    // Switching filters during a slow read must start the new query and
+    // prevent the old result from replacing it.
+    let finishOld!: (response: Response) => void
+    setFetch((url) =>
+      url.searchParams.get('origin') === 'old'
+        ? new Promise<Response>((resolve) => {
+            finishOld = resolve
+          })
+        : Response.json({
+            summary: { refreshing: false },
+            total: 1,
+            items: [{ model_id: 'new-filter', source: 'mock' }],
+          }),
+    )
+    state.origin.value = 'old'
+    await advance(0)
+    state.origin.value = 'new'
+    await advance(0)
+    expect(state.items.value[0]!.model_id).toBe('new-filter')
+    finishOld(
+      Response.json({ summary: { refreshing: false }, total: 1, items: [{ model_id: 'old-filter', source: 'mock' }] }),
+    )
+    await advance(0)
+    expect(state.items.value[0]!.model_id).toBe('new-filter')
+  }))
+
+test('temporary local read contention retries promptly without consuming the network failure backoff', () =>
+  withRuntime(async ({ advance }) => {
+    const { createRevalidator } = await vite.ssrLoadModule('/src/lib/revalidation.ts')
+    let busy = true,
+      reads = 0
+    const queue = createRevalidator(
+      async () => {
+        reads++
+        if (busy) throw new DOMException('Local file read is busy', 'AbortError')
+      },
+      { intervalMs: 250, retryMs: 5000 },
+    )
+    try {
+      await queue.refresh().catch(() => {})
+      await advance(249)
+      expect(reads).toBe(1)
+      busy = false
+      await advance(1)
+      expect(reads).toBe(2)
+      await advance(60_000)
+      expect(reads).toBe(2)
+    } finally {
+      queue.dispose()
+    }
   }))

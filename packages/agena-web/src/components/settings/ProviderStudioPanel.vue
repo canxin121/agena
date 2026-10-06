@@ -11,6 +11,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
+import { mutateModelConfiguration } from '@/lib/modelConfigurationApi'
 import { confirmAction } from '@/lib/appConfirm'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
@@ -1289,7 +1290,7 @@ async function saveDraft() {
   mutationBusy.value = true
   error.value = ''
   try {
-    const response = await apiJson<JsonValue>('/api/v1/provider-studio/save', {
+    const response = await mutateModelConfiguration<JsonValue>('/api/v1/provider-studio/save', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1311,14 +1312,14 @@ async function saveDraft() {
     for (const key of deletedModelKeysSnapshot) {
       const [adapterId, modelId] = key.split('\u001f')
       if (!adapterId || !modelId || deletedAdapterIdsSnapshot.includes(adapterId)) continue
-      await apiJson('/api/v1/provider-studio/delete-model', {
+      await mutateModelConfiguration('/api/v1/provider-studio/delete-model', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ draft: persistedDraftSnapshot, adapter_id: adapterId, model_id: modelId }),
       })
     }
     for (const adapterId of deletedAdapterIdsSnapshot) {
-      await apiJson('/api/v1/provider-studio/delete-adapter', {
+      await mutateModelConfiguration('/api/v1/provider-studio/delete-adapter', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ draft: persistedDraftSnapshot, adapter_id: adapterId }),
@@ -1363,7 +1364,7 @@ async function deleteProvider() {
   )
   mutationBusy.value = true
   try {
-    await apiJson('/api/v1/provider-studio/delete-provider', {
+    await mutateModelConfiguration('/api/v1/provider-studio/delete-provider', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider_id: providerId }),
@@ -1406,10 +1407,13 @@ function scheduleDeviceAuthPoll() {
   clearAuthPollTimer()
   if (!pendingDeviceAuth.value || authPolling.value || document.visibilityState === 'hidden') return
   const intervalSeconds = Math.max(1, Number(pendingDeviceAuth.value.interval_seconds) || 2)
-  authPollTimer = setTimeout(() => {
-    authPollTimer = null
-    void startAuth('continue', true)
-  }, Math.max(intervalSeconds * 1000, authPollAllowedAt - Date.now()))
+  authPollTimer = setTimeout(
+    () => {
+      authPollTimer = null
+      void startAuth('continue', true)
+    },
+    Math.max(intervalSeconds * 1000, authPollAllowedAt - Date.now()),
+  )
 }
 
 async function startAuth(action: 'start' | 'continue', silent = false) {
@@ -1909,7 +1913,7 @@ async function deleteProviderRow(row: ProviderRow) {
     if (!(await confirmAction(st('Delete provider {providerId}?', { providerId: row.providerId })))) return
     mutationBusy.value = true
     try {
-      await apiJson('/api/v1/provider-studio/delete-provider', {
+      await mutateModelConfiguration('/api/v1/provider-studio/delete-provider', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ provider_id: row.providerId }),

@@ -11,6 +11,12 @@ import type { SessionActivity } from '@/types/activity'
 import { apiJson } from '../../lib/api'
 import { conditionalJsonObserved } from '../../lib/conditionalJson'
 import { invalidateResourcePrefix, invalidateResources } from '../../lib/resourceSync'
+import {
+  reconcileSessionMutation,
+  rememberSessionRoute,
+  sessionRoutingScope,
+  sessionWasDeleted,
+} from './sessionMutationSync'
 import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
@@ -226,15 +232,16 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
 }
 
-function toSession(s: unknown): Session | null {
+function toSession(s: unknown, scope = sessionRoutingScope()): Session | null {
   const rec = asRecord(s as JsonValue)
   if (!rec || typeof rec.id !== 'number') return null
   const id = String(rec.id)
+  if (scope === sessionRoutingScope() && sessionWasDeleted(id)) return null
   const title = str(rec.title)
   const lastAt = typeof rec.last_message_at === 'string' ? (rec.last_message_at as string) : null
   const created = str(rec.created_at)
   const updated = str(rec.updated_at)
-  return {
+  const session: Session = {
     ...(rec as unknown as Session),
     id,
     state: normalizeSessionState(rec.state),
@@ -243,6 +250,8 @@ function toSession(s: unknown): Session | null {
     ...(created ? { created_at: created } : {}),
     ...(updated ? { updated_at: updated } : {}),
   }
+  rememberSessionRoute(session, scope)
+  return session
 }
 
 function entriesFromParts(
@@ -726,7 +735,7 @@ export async function listSessions(opts?: {
   const body = asRecord(payload)
   const rawItems = body.items
   const items = Array.isArray(rawItems) ? rawItems : []
-  const sessions = items.map((s) => toSession(s)).filter((s): s is Session => Boolean(s))
+  const sessions = items.map((s) => toSession(s, observation.scope)).filter((s): s is Session => Boolean(s))
   const page = asRecord(body.page)
   const nextCursor = typeof page.next_cursor === 'string' ? (page.next_cursor as string) : null
   return {
@@ -760,32 +769,18 @@ export function buildCreateSessionRequest(input: CreateSessionInput): JsonObject
 /** POST /api/v1/sessions — create a session in a concrete server workspace. */
 export async function createSession(input: CreateSessionInput): Promise<Session> {
   const payload = buildCreateSessionRequest(input)
+  const scope = sessionRoutingScope()
   const created = await apiJson<JsonValue>('/api/v1/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  const session = toSession(created)
+  const session = toSession(created, scope)
   if (!session) throw new Error('Server did not return a session')
   // A successful local write must reconcile its lists even if the stream is
   // disconnected. Probe only this workspace and affected bucket versions;
   // unchanged queries continue to reuse their displayed bodies.
-  const workspaceId = Number(session.workspace_id)
-  invalidateResources([
-    sessionListResourceKey({ workspaceId }),
-    sessionListResourceKey({ workspaceId, roots: true }),
-    `workspace:${workspaceId}:stats`,
-    sessionListResourceKey({ bucket: 'recent' }),
-    sessionListResourceKey({ bucket: 'recent', countOnly: true }),
-  ])
-  if (session.parent_id) {
-    // The immediate parent's child count changes too. Its containing query
-    // may be a nested branch, so check the mounted lists in this workspace.
-    invalidateResourcePrefix(`workspace:${workspaceId}:sessions:`)
-    invalidateResources(
-      ['pinned', 'favorite', 'running', 'attention'].map((bucket) => sessionListResourceKey({ bucket })),
-    )
-  }
+  reconcileSessionMutation(session.id, 'created', scope)
   return session
 }
 
@@ -793,6 +788,7 @@ export async function createSession(input: CreateSessionInput): Promise<Session>
 export async function resolveWorkspace(path: string): Promise<{ id: number; path: string }> {
   const workspacePath = String(path || '').trim()
   if (!workspacePath) throw new Error('A workspace path is required')
+  const scope = sessionRoutingScope()
   const payload = await apiJson<JsonValue>('/api/v1/workspaces/resolve', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -804,7 +800,7 @@ export async function resolveWorkspace(path: string): Promise<{ id: number; path
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || !resolvedPath) {
     throw new Error('Server did not return a workspace')
   }
-  invalidateResources(['workspaces:catalog'])
+  if (scope === sessionRoutingScope()) invalidateResources(['workspaces:catalog'])
   return { id, path: resolvedPath }
 }
 
@@ -860,6 +856,7 @@ export async function uploadWorkspaceFile(
 
 /** POST /api/v1/workspaces — create a workspace (project) by path. Returns the new workspace id. */
 export async function createWorkspace(path: string): Promise<number> {
+  const scope = sessionRoutingScope()
   const created = await apiJson<JsonValue>('/api/v1/workspaces', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -870,6 +867,7 @@ export async function createWorkspace(path: string): Promise<number> {
   if (typeof id !== 'number' || !Number.isFinite(id)) {
     throw new Error('Server did not return a workspace id')
   }
+  if (scope === sessionRoutingScope()) invalidateResources(['workspaces:catalog'])
   return id
 }
 
@@ -877,12 +875,19 @@ export async function createWorkspace(path: string): Promise<number> {
 export async function deleteWorkspace(workspaceId: string): Promise<void> {
   const wid = String(workspaceId || '').trim()
   if (!wid) throw new Error('Missing workspace id')
+  const scope = sessionRoutingScope()
   await apiJson(`/api/v1/workspaces/${encodeURIComponent(wid)}`, { method: 'DELETE' })
+  if (scope !== sessionRoutingScope()) return
+  invalidateResources(['workspaces:catalog'])
+  invalidateResourcePrefix(`workspace:${wid}:`)
+  invalidateResourcePrefix('sessions:bucket:')
 }
 
 /** DELETE /api/v1/sessions/{id} */
 export async function deleteSession(sessionId: string): Promise<void> {
+  const scope = sessionRoutingScope()
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+  reconcileSessionMutation(sessionId, 'deleted', scope)
 }
 
 /** PUT /api/v1/sessions/{id} — atomically update user-editable metadata. */
@@ -890,13 +895,15 @@ export async function patchSessionMetadata(
   sessionId: string,
   patch: { title?: string; favorite?: boolean; pinned?: boolean },
 ): Promise<Session> {
+  const scope = sessionRoutingScope()
   const updated = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
   })
-  const session = toSession(updated)
+  const session = toSession(updated, scope)
   if (!session) throw new Error('Server did not return a session')
+  reconcileSessionMutation(session.id, 'metadata', scope, patch)
   return session
 }
 
@@ -906,14 +913,17 @@ export async function patchSessionTitle(sessionId: string, title: string): Promi
 
 /** GET /api/v1/sessions/{id} — single session read-back. */
 export async function getSession(sessionId: string): Promise<Session> {
-  const session = toSession(await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`))
+  const scope = sessionRoutingScope()
+  const session = toSession(await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`), scope)
   if (!session) throw new Error('Server did not return a session')
   return session
 }
 
 /** GET /api/v1/sessions/{id}/state — execution + parts + tagged session state. */
 export async function getSessionExecution(sessionId: string): Promise<AgenaExecutionState> {
+  const scope = sessionRoutingScope()
   const raw = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/state`)
+  toSession(raw.session, scope)
   return {
     ...raw,
     session: {
@@ -1131,11 +1141,15 @@ export function buildMessageRequestBody(payload: SendMessagePayload): JsonObject
 
 /** POST /api/v1/sessions/{id}/messages — submit a composer document + run options. */
 export async function sendMessage(sessionId: string, payload: SendMessagePayload): Promise<AgenaExecutionState | null> {
-  return await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
+  const scope = sessionRoutingScope()
+  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(buildMessageRequestBody(payload)),
   })
+  toSession(state?.session, scope)
+  reconcileSessionMutation(sessionId, 'execution', scope)
+  return state
 }
 
 /**
@@ -1173,32 +1187,38 @@ export function acceptedAssistantReplyId(state: AgenaExecutionState | null | und
 
 /** POST /api/v1/sessions/{id}/continue — resume a paused/interrupted run. */
 export async function continueSession(sessionId: string, options?: RunOptionsPayload): Promise<void> {
+  const scope = sessionRoutingScope()
   const body = buildRunRequestBody(options)
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/continue`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+  reconcileSessionMutation(sessionId, 'execution', scope)
 }
 
 /** POST /api/v1/sessions/{id}/compact — context compaction. */
 export async function compactSession(sessionId: string, options?: RunOptionsPayload): Promise<void> {
+  const scope = sessionRoutingScope()
   const body = buildRunRequestBody(options)
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+  reconcileSessionMutation(sessionId, 'execution', scope)
 }
 
 /** POST /api/v1/sessions/{id}/cancel — abort an active execution. */
 export async function cancelSession(sessionId: string, executionId?: string | null): Promise<CancellationOutcome> {
+  const scope = sessionRoutingScope()
   const response = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ execution_id: executionId || null }),
   })
   const body = asRecord(response)
+  reconcileSessionMutation(sessionId, 'execution', scope)
   const rawResult = str(body.result)
   const result: CancellationResult =
     rawResult === 'already_terminal' ||
@@ -1226,13 +1246,15 @@ export async function cancelSession(sessionId: string, executionId?: string | nu
 /** POST /api/v1/sessions/{id}/rewind — create a branch before a user message. */
 export async function rewindSession(sessionId: string, atMessageId: number): Promise<Session> {
   if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0) throw new Error('A valid user message id is required')
+  const scope = sessionRoutingScope()
   const created = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/rewind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ at_message_id: atMessageId }),
   })
-  const session = toSession(created.session)
+  const session = toSession(created.session, scope)
   if (!session) throw new Error('Server did not return a rewound session')
+  reconcileSessionMutation(session.id, 'created', scope)
   return session
 }
 
@@ -1241,6 +1263,7 @@ export async function forkSession(
   sessionId: string,
   opts?: { at_message_id?: number; title?: string; conversation_mode?: 'side' },
 ): Promise<Session> {
+  const scope = sessionRoutingScope()
   const body: JsonValue = {}
   if (opts?.at_message_id !== undefined) {
     if (!Number.isSafeInteger(opts.at_message_id) || opts.at_message_id <= 0) {
@@ -1256,8 +1279,9 @@ export async function forkSession(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const session = toSession(asRecord(created).session)
+  const session = toSession(asRecord(created).session, scope)
   if (!session) throw new Error('Server did not return a forked session')
+  reconcileSessionMutation(session.id, 'created', scope)
   return session
 }
 
@@ -1270,6 +1294,7 @@ export async function replyPermission(
   reply: 'once' | 'always' | 'reject' | 'reject_always',
   message?: string,
 ): Promise<boolean> {
+  const scope = sessionRoutingScope()
   const kind =
     reply === 'once'
       ? 'allow_once'
@@ -1287,6 +1312,7 @@ export async function replyPermission(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ reply: replyBody }),
   })
+  reconcileSessionMutation(sessionId, 'execution', scope)
   return true
 }
 
@@ -1296,23 +1322,27 @@ export async function replyQuestion(
   requestId: string,
   answers: Record<string, string[]>,
 ): Promise<boolean> {
+  const scope = sessionRoutingScope()
   const replyBody: JsonValue = { request_id: requestId, kind: 'submit', answers }
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ reply: replyBody }),
   })
+  reconcileSessionMutation(sessionId, 'execution', scope)
   return true
 }
 
 /** POST /api/v1/sessions/{id}/user-input-replies — cancel a question. */
 export async function rejectQuestion(sessionId: string, requestId: string): Promise<boolean> {
+  const scope = sessionRoutingScope()
   const replyBody: JsonValue = { request_id: requestId, kind: 'cancel' }
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ reply: replyBody }),
   })
+  reconcileSessionMutation(sessionId, 'execution', scope)
   return true
 }
 
@@ -1352,7 +1382,7 @@ export async function getSessionExecutionStatus(sessionId: string): Promise<Sess
     ? raw.background_activities.map((item) => str(asRecord(item).kind).toLowerCase()).filter((kind) => kind.length > 0)
     : []
   return {
-    session: toSession(state.session)!,
+    session: toSession(state.session, observation.scope)!,
     state: s,
     execution: state.execution,
     usage: state.usage,

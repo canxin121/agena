@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { RiArrowLeftSLine, RiArrowRightSLine, RiRefreshLine, RiRestartLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -7,6 +7,8 @@ import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import { apiJson } from '@/lib/api'
+import { createRevalidator } from '@/lib/revalidation'
+import { isDocumentVisible } from '@/lib/backgroundReads'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
@@ -96,7 +98,8 @@ const KNOWN_MODEL_KEYS = new Set([
 
 const toasts = useToastsStore()
 const loading = ref(false)
-const refreshing = ref(false)
+const requestingRefresh = ref(false)
+const refreshing = computed(() => requestingRefresh.value || summary.value?.refreshing === true)
 const error = ref('')
 const query = ref('')
 const appliedQuery = ref('')
@@ -170,9 +173,16 @@ function modelSubtitle(model: CatalogModel): string {
 }
 
 const visibleItems = computed(() => items.value)
+let listController: AbortController | null = null
+let monitorController: AbortController | null = null
+let monitoringRefresh = false
+let disposed = false
 
 async function load(options: { reset?: boolean } = {}) {
-  if (loading.value) return
+  if (disposed) return
+  listController?.abort()
+  const request = new AbortController()
+  listController = request
   if (options.reset) offset.value = 0
   loading.value = true
   error.value = ''
@@ -183,18 +193,69 @@ async function load(options: { reset?: boolean } = {}) {
     })
     if (appliedQuery.value.trim()) params.set('q', appliedQuery.value.trim())
     if (origin.value.trim()) params.set('origin', origin.value.trim())
-    const next = await apiJson<ModelCatalogListResponse>(`/api/v1/model-catalog?${params.toString()}`)
+    const next = await apiJson<ModelCatalogListResponse>(`/api/v1/model-catalog?${params.toString()}`, {
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]),
+    })
+    if (request.signal.aborted || listController !== request || disposed) return
     response.value = next && typeof next === 'object' ? next : null
     const availableIds = new Set(items.value.map((item) => item.model_id))
     if (!selectedModelId.value || !availableIds.has(selectedModelId.value)) {
       selectedModelId.value = items.value[0]?.model_id || ''
     }
+    if (next.summary?.refreshing) {
+      monitoringRefresh = true
+      refreshMonitor.invalidate(1500)
+    }
   } catch (reason) {
+    if (request.signal.aborted || listController !== request || disposed) return
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
-    loading.value = false
+    if (listController === request) {
+      listController = null
+      loading.value = false
+    }
   }
 }
+
+// Monitor only an active asynchronous refresh. Probe a one-row response for
+// its summary, and fetch the displayed page once the task has finished.
+const refreshMonitor = createRevalidator(
+  async () => {
+    const request = new AbortController()
+    monitorController = request
+    try {
+      const status = await apiJson<ModelCatalogListResponse>('/api/v1/model-catalog?limit=1', {
+        signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]),
+      })
+      if (disposed || request.signal.aborted) return
+      if (response.value) response.value = { ...response.value, summary: status.summary }
+      if (status.summary?.refreshing) refreshMonitor.invalidate(1500)
+      else {
+        monitoringRefresh = false
+        await load()
+      }
+    } finally {
+      if (monitorController === request) monitorController = null
+    }
+  },
+  { intervalMs: 250, retryMs: 5000, enabled: () => !disposed && monitoringRefresh && isDocumentVisible() },
+)
+
+const visibility = () => {
+  if (isDocumentVisible()) refreshMonitor.resume()
+  else {
+    refreshMonitor.pause()
+    monitorController?.abort()
+  }
+}
+document.addEventListener('visibilitychange', visibility)
+onScopeDispose(() => {
+  disposed = true
+  listController?.abort()
+  monitorController?.abort()
+  refreshMonitor.dispose()
+  document.removeEventListener('visibilitychange', visibility)
+})
 
 function search() {
   appliedQuery.value = query.value.trim()
@@ -221,18 +282,20 @@ function nextPage() {
 
 async function refreshCatalog() {
   if (refreshing.value) return
-  refreshing.value = true
+  requestingRefresh.value = true
   error.value = ''
   try {
     await apiJson('/api/v1/model-catalog/refresh', { method: 'POST' })
     toasts.push('success', st('Model Catalog refresh started'))
     await load({ reset: true })
+    monitoringRefresh = true
+    refreshMonitor.invalidate(0)
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason)
     error.value = message
     toasts.push('error', message)
   } finally {
-    refreshing.value = false
+    requestingRefresh.value = false
   }
 }
 

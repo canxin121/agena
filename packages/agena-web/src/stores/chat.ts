@@ -24,7 +24,7 @@ import { localStorageKeys } from '../lib/persistence/storageKeys'
 import { useToastsStore } from './toasts'
 import { useDirectoryStore } from './directory'
 import { i18n } from '../i18n'
-import { sessionStateExecution, sessionStateRequests } from '../types/chat'
+import { normalizeSessionState, sessionStateExecution, sessionStateRequests } from '../types/chat'
 import type { SseEvent } from '../lib/sse'
 import type {
   AttentionEvent,
@@ -192,7 +192,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       await refreshSessionsInFlight?.catch(() => {})
       await refreshSessions()
     },
-    { intervalMs: 5000, retryMs: 5000, enabled: isDocumentVisible },
+    { intervalMs: 250, retryMs: 5000, enabled: isDocumentVisible },
   )
   const releaseSessionsResource = subscribeResource('sessions', (event) => {
     // Live metadata/deletions are applied to the cache below; visible session
@@ -222,7 +222,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           }
           await refreshMessages(sid, { silent: true })
         },
-        { intervalMs: 1000, enabled: () => isDocumentVisible() && isSessionVisible(sid) },
+        { intervalMs: 250, enabled: () => isDocumentVisible() && isSessionVisible(sid) },
       )
       messageRevalidators.set(sid, queue)
     }
@@ -1059,7 +1059,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           }
           await refreshExecutionStatus(sid)
         },
-        { intervalMs: 2000, retryMs: 5000, enabled: () => isDocumentVisible() && isSessionVisible(sid) },
+        { intervalMs: 250, retryMs: 5000, enabled: () => isDocumentVisible() && isSessionVisible(sid) },
       )
       statusRevalidators.set(sid, queue)
     }
@@ -1552,6 +1552,15 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   // ─── send / abort ─────────────────────────────────────────────────────────
 
+  function reconcileExecutionAfterWrite(sid: string) {
+    transcriptRecovery.delete(sid)
+    executionRecovery.delete(sid)
+    // The API has invalidated only this session and its list projections.
+    // Keep a trailing read when an earlier status/transcript read is active.
+    messageRevalidator(sid).invalidate(0)
+    scheduleSessionStatusRefresh(sid, 0)
+  }
+
   function buildDocument(opts: { text?: string; parts?: JsonValue[] }): JsonValue[] {
     const trimmed = (opts.text || '').trim()
     const providedParts = Array.isArray(opts.parts) ? opts.parts : []
@@ -1622,12 +1631,19 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (document.length === 0) return null
     clearSessionError(sid)
     const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
-    transcriptRecovery.delete(sid)
-    executionRecovery.delete(sid)
-    invalidateResources([`session:${sid}:transcript`, `session:${sid}:state`])
+    if (state?.session) {
+      const session = {
+        ...state.session,
+        id: String(state.session.id),
+        state: normalizeSessionState(state.session.state),
+      } as Session
+      if (Number(getSessionById(sid)?.version || 0) <= Number(session.version || 0)) {
+        upsertSessionCache(session)
+        applyAttention(sid, normalizeSessionState(session.state))
+      }
+    }
     // The acknowledgement is durable even if the SSE patch was lost.
-    messageRevalidator(sid).invalidate(0)
-    scheduleSessionStatusRefresh(sid, 200)
+    reconcileExecutionAfterWrite(sid)
     return state
   }
 
@@ -1639,11 +1655,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     await chatApi.continueSession(sid, buildRunOptions({}))
-    transcriptRecovery.delete(sid)
-    executionRecovery.delete(sid)
-    invalidateResources([`session:${sid}:transcript`, `session:${sid}:state`])
-    messageRevalidator(sid).invalidate(0)
-    scheduleSessionStatusRefresh(sid, 200)
+    reconcileExecutionAfterWrite(sid)
   }
 
   async function uploadWorkspaceAttachment(
@@ -1744,6 +1756,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         removeMessageForRun(sid, outcome.restored_user_run_id)
       }
       clearAttention(sid)
+      reconcileExecutionAfterWrite(sid)
       return outcome
     } catch {
       return null
@@ -1759,7 +1772,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     message?: string,
   ) {
     const ok = await chatApi.replyPermission(sessionId, requestId, reply, message)
-    if (ok) clearAttention((sessionId || '').trim())
+    if (ok) {
+      clearAttention((sessionId || '').trim())
+      reconcileExecutionAfterWrite((sessionId || '').trim())
+    }
     return ok
   }
 
@@ -1785,13 +1801,19 @@ const useChatStoreDefinition = defineStore('chat', () => {
       })
     }
     const ok = await chatApi.replyQuestion(sessionId, requestId, answersMap)
-    if (ok) clearAttention((sessionId || '').trim())
+    if (ok) {
+      clearAttention((sessionId || '').trim())
+      reconcileExecutionAfterWrite((sessionId || '').trim())
+    }
     return ok
   }
 
   async function rejectQuestion(sessionId: string, requestId: string) {
     const ok = await chatApi.rejectQuestion(sessionId, requestId)
-    if (ok) clearAttention((sessionId || '').trim())
+    if (ok) {
+      clearAttention((sessionId || '').trim())
+      reconcileExecutionAfterWrite((sessionId || '').trim())
+    }
     return ok
   }
 
@@ -1801,7 +1823,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return null
     await chatApi.compactSession(sid, buildRunOptions({}))
-    scheduleSessionStatusRefresh(sid, 200)
+    reconcileExecutionAfterWrite(sid)
   }
 
   // ─── fork ─────────────────────────────────────────────────────────────────

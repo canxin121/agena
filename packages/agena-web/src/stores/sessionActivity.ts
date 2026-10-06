@@ -164,7 +164,7 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
   }
 
   const queue = createRevalidator(refreshInternal, {
-    intervalMs: 2000,
+    intervalMs: 250,
     retryMs: 5000,
     enabled: () => !disposed && isDocumentVisible(),
   })

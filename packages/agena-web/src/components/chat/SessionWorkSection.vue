@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
-import { apiJson } from '@/lib/api'
+import { controlActivity } from '@/lib/activityApi'
 import { activityLogText, type SessionActivity } from '@/types/activity'
 import { useActivityLogs } from '@/composables/useActivityLogs'
 import SessionSection from './SessionSection.vue'
@@ -45,10 +45,7 @@ async function control(activity: SessionActivity, action: string) {
   const sid = props.sessionId
   const generation = chat.sessionActivityGeneration(sid)
   try {
-    const result = await apiJson<SessionActivity>(
-      `/api/v1/activities/${encodeURIComponent(activity.id)}/${encodeURIComponent(action)}`,
-      { method: 'POST', signal: AbortSignal.timeout(15_000) },
-    )
+    const result = await controlActivity(activity.id, action)
     if (props.sessionId === sid && selected.value?.id === activity.id) selected.value = result
     chat.applySessionActivity(sid, result, action === 'dismiss' || action === 'delete', generation)
   } catch (cause) {

@@ -4,6 +4,7 @@ import { i18n } from '@/i18n'
 
 import * as chatApi from '@/stores/chat/api'
 import { loadSidebarSessionPage } from './chat/sidebarPaging'
+import { sessionWasDeleted, subscribeSessionDeletions } from './chat/sessionMutationSync'
 import { isDocumentVisible, limitBackgroundReads } from '@/lib/backgroundReads'
 import { createRevalidator } from '@/lib/revalidation'
 import { conditionalJson } from '@/lib/conditionalJson'
@@ -100,7 +101,7 @@ function toSidebarRowFromAgenaSession(
   expandedParents?: Set<string>,
 ): SidebarSessionRow | null {
   const sid = agenaSessionId(record)
-  if (!sid) return null
+  if (!sid || sessionWasDeleted(sid)) return null
   const session: SidebarSessionSummary = { ...(record as UnknownRecord), id: sid }
   const parentId = agenaSessionId({ id: record?.parent_id } as UnknownRecord) || null
   const rootId = agenaSessionId({ id: record?.root_id } as UnknownRecord) || sid
@@ -478,7 +479,7 @@ function normalizeSidebarSessionRow(raw: JsonValue): SidebarSessionRow | null {
   if (!record) return null
 
   const id = typeof record.id === 'string' ? record.id.trim() : ''
-  if (!id) return null
+  if (!id || sessionWasDeleted(id)) return null
 
   const session = toSessionSummarySnapshot(record.session as JsonValue)
   const wireDirectory = toDirectoryEntry(record.directory as JsonValue)
@@ -654,6 +655,9 @@ function mergeSidebarSessionSummary(
   const incomingRecord = incoming && typeof incoming === 'object' ? ({ ...incoming } as SidebarSessionSummary) : null
 
   if (!currentRecord && !incomingRecord) return null
+  if (incomingRecord?.version !== undefined && Number(currentRecord?.version || 0) > Number(incomingRecord.version)) {
+    return currentRecord
+  }
 
   const merged = {
     ...(currentRecord || {}),
@@ -837,8 +841,40 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }),
   ]
   const releaseSessionActions = chat.$onAction(({ name, after }) => {
-    if (name !== 'createSession') return
-    after((session) => {
+    if (name === 'updateSessionMetadata' || name === 'renameSession') {
+      after((session) => {
+        if (disposed || !session) return
+        const previous = knownSidebarRowBySessionId()[session.id]
+        if (Number(previous?.session?.version || 0) > Number(session.version || 0)) return
+        applyHydratedSidebarSessions(
+          new Map([[session.id, { session, directory: directoriesById.value[String(session.workspace_id)] ?? null }]]),
+        )
+        if (previous) {
+          for (const [kind, view] of [
+            ['favorite', favoriteFooterView],
+            ['pinned', pinnedFooterView],
+          ] as const) {
+            const before = previous.session?.[kind] === true
+            const member = session[kind] === true
+            if (before === member) continue
+            const old = view.value
+            let rows = old.rows.filter((row) => row.id !== session.id)
+            if (member && old.page === 0 && uiPrefs.value[`${kind}SessionsOpen`]) {
+              const row = toSidebarRowFromAgenaSession(
+                session as unknown as UnknownRecord,
+                directoriesById.value[String(session.workspace_id)] ?? null,
+              )
+              if (row) rows = [row, ...rows].slice(0, SIDEBAR_FOOTER_PAGE_SIZE)
+            }
+            view.value = { ...old, total: Math.max(0, old.total + (member ? 1 : -1)), rows }
+          }
+        }
+      })
+      return
+    }
+    if (name !== 'createSession' && name !== 'forkSession' && name !== 'revertToMessage') return
+    after((result) => {
+      const session = name === 'revertToMessage' ? result?.session : result
       if (disposed || !session) return
       const directoryId = String(session.workspace_id)
       const needsReveal =
@@ -868,6 +904,42 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         dirtyDirectories.add(directoryId)
         sidebarSync.invalidate(180)
       }
+    })
+  })
+  const releaseSessionDeletions = subscribeSessionDeletions((ids) => {
+    if (disposed) return
+    const removed = new Set(ids)
+    const knownRows = knownSidebarRowBySessionId()
+    for (let previous = 0; previous !== removed.size; ) {
+      previous = removed.size
+      for (const row of Object.values(knownRows)) if (row.parentId && removed.has(row.parentId)) removed.add(row.id)
+    }
+    for (const [id, section] of Object.entries(directorySidebarById.value)) {
+      const affected = new Set(
+        [...section.recentRows, ...section.pinnedRows].filter((row) => removed.has(row.id)).map((row) => row.id),
+      )
+      if (!affected.size) continue
+      directorySidebarById.value[id] = {
+        ...section,
+        sessionCount: Math.max(0, section.sessionCount - affected.size),
+        recentRows: section.recentRows.filter((row) => !removed.has(row.id)),
+        pinnedRows: section.pinnedRows.filter((row) => !removed.has(row.id)),
+        recentRootIds: section.recentRootIds.filter((id) => !removed.has(id)),
+        recentParentById: Object.fromEntries(
+          Object.entries(section.recentParentById).filter(([id]) => !removed.has(id)),
+        ),
+      }
+    }
+    for (const view of [pinnedFooterView, favoriteFooterView, recentFooterView, runningFooterView]) {
+      const old = view.value
+      const rows = old.rows.filter((row) => !removed.has(row.id))
+      if (rows.length !== old.rows.length)
+        view.value = { ...old, total: Math.max(0, old.total - old.rows.length + rows.length), rows }
+    }
+    for (const id of removed) delete stateBySessionId.value[id]
+    uiPrefs.value = patchChatSidebarUiPrefs(uiPrefs.value, {
+      pinnedSessionIds: uiPrefs.value.pinnedSessionIds.filter((id) => !removed.has(id)),
+      expandedParentSessionIds: uiPrefs.value.expandedParentSessionIds.filter((id) => !removed.has(id)),
     })
   })
   watch(
@@ -961,6 +1033,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
   function knownDirectoryForSession(row: SidebarSessionRow): DirectoryEntry | null {
     if (row.directory?.id && row.directory.path) return row.directory
+    const workspace = directoriesById.value[String(row.session?.workspace_id)]
+    if (workspace) return workspace
     const sessionPath = sessionSnapshotDirectory(row.session)
     if (!sessionPath) return null
     return directoryEntryByPath(sessionPath, directoriesById.value)
@@ -1419,7 +1493,6 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       )
       sidebarStateRequestInFlight?.controller?.abort()
       sidebarStateRequestInFlight = null
-      scheduleSidebarRecoverySync('session-pinned-updated', 0, { force: true })
       return true
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
@@ -1780,7 +1853,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       pinnedRows,
       recentRows,
       recentParentById: parentById,
-      recentRootIds: roots.sessions.map((session) => session.id),
+      recentRootIds: roots.sessions.filter((session) => !sessionWasDeleted(session.id)).map((session) => session.id),
     }
   }
 
@@ -1886,6 +1959,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     for (const controller of pageRequests.values()) controller.abort()
     sidebarSync.dispose()
     releaseSessionActions()
+    releaseSessionDeletions()
     for (const release of releaseSidebarResources) release()
     for (const subscription of footerSubscriptions.values()) subscription.release()
     for (const release of workspaceSubscriptions.values()) release()

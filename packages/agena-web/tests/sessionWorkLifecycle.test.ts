@@ -79,14 +79,14 @@ test('session reads cancel on navigation, reject late results, coalesce clicks a
     calls[0]!.resolve('late A')
     await settle()
     expect(state.data.value).toBe(null)
-    await advance(750)
+    await advance(250)
     expect(calls.length).toBe(2)
     calls[1]!.resolve('B')
     await settle()
     expect(state.data.value).toBe('B')
     void state.refresh()
     void state.refresh()
-    await advance(749)
+    await advance(249)
     expect(calls.length).toBe(2)
     await advance(1)
     expect(calls.length).toBe(3)
@@ -145,18 +145,28 @@ test('activity logs deduplicate cursor overlap, bound memory, and isolate activi
 
 test('raw pipe chunks preserve whitespace and delegated run snapshots replace their cursor line', () => {
   const page = (lines: ActivityLog['lines'], last_seq = 3): ActivityLog => ({
-    activity_id: 'shell_a', status: 'running', last_seq, has_more: false, dropped_lines: 0, lines,
+    activity_id: 'shell_a',
+    status: 'running',
+    last_seq,
+    has_more: false,
+    dropped_lines: 0,
+    lines,
   })
   const first = page([{ seq: 1, stream: 'stdout', text: 'first', chunk: true }], 1)
-  const next = mergeActivityLog(first, page([
-    { seq: 2, stream: 'stdout', text: 'second\n  indented\n\n', chunk: true },
-    { seq: 3, stream: 'stderr', text: 'warning', chunk: false },
-  ]))
+  const next = mergeActivityLog(
+    first,
+    page([
+      { seq: 2, stream: 'stdout', text: 'second\n  indented\n\n', chunk: true },
+      { seq: 3, stream: 'stderr', text: 'warning', chunk: false },
+    ]),
+  )
   expect(activityLogText(next)).toBe('firstsecond\n  indented\n\nwarning\n')
 
   const task = { ...page([{ seq: 10, stream: 'assistant', text: 'first reply' }], 10), activity_id: 'task_a' }
   const updated = mergeActivityLog(task, {
-    ...task, status: 'succeeded', lines: [{ seq: 10, stream: 'assistant', text: 'first reply\ncontinued' }],
+    ...task,
+    status: 'succeeded',
+    lines: [{ seq: 10, stream: 'assistant', text: 'first reply\ncontinued' }],
   })
   expect(updated.lines.length).toBe(1)
   expect(activityLogText(updated)).toBe('first reply\ncontinued\n')

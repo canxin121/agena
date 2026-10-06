@@ -1155,7 +1155,6 @@ async function toggleFavorite(id: string, favoriteHint?: boolean) {
   }
   try {
     await chat.updateSessionMetadata(sid, { favorite: nextFavorite })
-    directorySessions.scheduleSidebarRecoverySync('session-favorite-updated', 0, { force: true })
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   } finally {
@@ -1968,8 +1967,6 @@ async function deleteSession(sessionId: string) {
   if (!sid) return
 
   await chat.deleteSession(sid)
-
-  directorySessions.scheduleSidebarRecoverySync('session-deleted', 0, { force: true })
 }
 
 async function addDirectoryEntry() {
@@ -1979,12 +1976,10 @@ async function addDirectoryEntry() {
   await chatApi.createWorkspace(p)
   newDirectoryPath.value = ''
   isAddDirectoryOpen.value = false
-  directorySessions.scheduleSidebarRecoverySync('directory-created', 0, { force: true })
 }
 
 async function removeDirectoryEntry(directoryId: string) {
   await chatApi.deleteWorkspace(directoryId)
-  directorySessions.scheduleSidebarRecoverySync('directory-deleted', 0, { force: true })
 }
 
 const isDirectoryFocused = (directory: DirectoryEntry) => {

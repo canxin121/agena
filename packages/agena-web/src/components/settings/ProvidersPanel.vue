@@ -7,6 +7,7 @@ import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
+import { mutateModelConfiguration } from '@/lib/modelConfigurationApi'
 import { buildDefaultModelSettingsPatch, sameServerModelIdentity } from '@/lib/serverModelSettings'
 import {
   defaultModeValue,
@@ -91,7 +92,9 @@ const defaultSaveError = ref('')
 
 const showDefaults = computed(() => props.view === 'all' || props.view === 'defaults')
 const showInventory = computed(() => props.view === 'all' || props.view === 'inventory')
-const panelTitle = computed(() => (props.view === 'defaults' ? st('Model defaults') : st('Configured provider inventory')))
+const panelTitle = computed(() =>
+  props.view === 'defaults' ? st('Model defaults') : st('Configured provider inventory'),
+)
 const panelDescription = computed(() =>
   props.view === 'defaults'
     ? st('Choose the one runtime-wide default model and its optional execution modes.')
@@ -145,7 +148,9 @@ const defaultModelOptions = computed(() => {
       })
     }
   }
-  return options.sort((left, right) => `${left.description}/${left.label}`.localeCompare(`${right.description}/${right.label}`))
+  return options.sort((left, right) =>
+    `${left.description}/${left.label}`.localeCompare(`${right.description}/${right.label}`),
+  )
 })
 
 const selectedDefaultIdentity = computed(() => parseModelSlug(defaultModelKey.value))
@@ -244,7 +249,7 @@ async function saveDefaultSelection() {
   const desiredVerbosity = defaultVerbosity.value.trim()
   const desiredParallelTools = selectedSupportsParallelTools.value ? defaultParallelToolCalls.value : undefined
   try {
-    await apiJson('/api/v1/settings', {
+    await mutateModelConfiguration('/api/v1/settings', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(
@@ -346,7 +351,11 @@ onMounted(() => void refresh())
         <div>
           <h3 class="text-sm font-semibold">{{ $st('Runtime default model') }}</h3>
           <p class="mt-1 text-xs leading-5 text-muted-foreground">
-            {{ $st('Used when a new run does not provide an explicit model. Provider settings do not define a separate default.') }}
+            {{
+              $st(
+                'Used when a new run does not provide an explicit model. Provider settings do not define a separate default.',
+              )
+            }}
           </p>
         </div>
         <div class="grid gap-3 xl:grid-cols-2">
@@ -413,7 +422,9 @@ onMounted(() => void refresh())
             {{ modelSelectionCatalog.catalogError.value }}
           </div>
           <div v-else-if="defaultSaveError" class="break-words text-xs text-destructive">{{ defaultSaveError }}</div>
-          <span v-else class="text-xs text-muted-foreground">{{ $st('Clear a mode to inherit the model’s native default.') }}</span>
+          <span v-else class="text-xs text-muted-foreground">{{
+            $st('Clear a mode to inherit the model’s native default.')
+          }}</span>
           <Button :disabled="loading || defaultSaveBusy || !defaultModelKey" @click="saveDefaultSelection">
             <RiSave3Line class="mr-2 h-4 w-4" />
             {{ defaultSaveBusy ? $st('Saving…') : $st('Save runtime default') }}

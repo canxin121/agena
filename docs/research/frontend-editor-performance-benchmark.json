@@ -1,0 +1,40 @@
+{
+  "captured_at": "2026-10-06T16:00:32.701Z",
+  "baseline_commit": "eae4b96f255e216113ba9b6c0ffea86f3df20d4b",
+  "runtime": {
+    "bun": "1.4.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M5"
+  },
+  "methodology": {
+    "statistic": "median",
+    "samples": 3,
+    "warmups": 1,
+    "isolated_cpu_only": true,
+    "browser_layout_and_Monaco_diff_excluded": true
+  },
+  "results": [
+    {
+      "lines": 2000,
+      "hunks": 200,
+      "before_ms": 15.10329200000001,
+      "after_ms": 0.09270900000001348,
+      "speedup": 162.9107422148639
+    },
+    {
+      "lines": 10000,
+      "hunks": 300,
+      "before_ms": 148.30341699999997,
+      "after_ms": 0.10037499999998545,
+      "speedup": 1477.4935691160297
+    },
+    {
+      "lines": 50000,
+      "hunks": 500,
+      "before_ms": 1348.5995839999996,
+      "after_ms": 0.4358750000001237,
+      "speedup": 3094.0053547453213
+    }
+  ]
+}

@@ -73,6 +73,28 @@ foreground process group of the changed size.
 closing the entire session and from typing a control byte. Stop and signal
 requests are not queued behind the ordinary shell output-worker limit.
 
+### Windows input
+
+ConPTY expects its own key encoding, so input bytes are normalized on the way to
+the pseudoconsole:
+
+- A line feed becomes a carriage return. A CRLF pair submits one line even when
+  the two bytes arrive in separate `shell.write` calls, because the driver keeps
+  the CR/LF state across writes.
+- The C0 backspace byte (`0x08`) becomes DEL (`0x7f`), which ConPTY translates to
+  `VK_BACK`.
+- Every other byte, including UTF-8 sequences, `\t`, `\u0003`/`\u0004`, and
+  escape sequences, passes through unchanged.
+
+Normalization does not change the write contract: a successful write still
+acknowledges the caller's own input bytes, so the partial-write detection above
+keeps rejecting ambiguous input instead of retrying it. Unix terminals keep
+their existing byte-for-byte behavior.
+
+This normalization is unit-tested on every platform, and its wiring compiles for
+the Windows target. A real ConPTY session must still be exercised on a Windows
+host; platform behavior is not inferred from macOS tests.
+
 ## Output, screen, and bounds
 
 The usual shell payload is retained. Interactive results additionally contain a

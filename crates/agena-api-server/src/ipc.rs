@@ -302,14 +302,17 @@ mod unix {
                 if !live::matches_scope(&item, &scope, store.as_ref()).await {
                     continue;
                 }
+                let revisions = subscription.revisions_for(&item);
                 let notification = match item {
                     LiveItem::SessionChanged(change) => Notification::SessionChanged {
                         subscription: id_for_task.clone(),
                         change: Box::new(change),
+                    revisions,
                     },
                     LiveItem::RuntimeSignal(signal) => Notification::RuntimeSignal {
                         subscription: id_for_task.clone(),
                         signal: Box::new(signal),
+                    revisions,
                     },
                     LiveItem::Lagged(skipped) => Notification::Lagged {
                         subscription: id_for_task.clone(),

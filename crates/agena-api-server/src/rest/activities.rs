@@ -39,7 +39,12 @@ impl From<ListActivitiesQuery> for ListActivitiesParams {
 pub async fn list_activities(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<ListActivitiesQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
+    let read = crate::revisions::ConditionalRead::new(&state, "activities").await?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
     let service = state
         .application()
         .runtime_activities()
@@ -55,13 +60,19 @@ pub async fn list_activities(
         .iter()
         .map(BackgroundActivityResource::from)
         .collect();
-    Ok(Json(resources))
+    Ok(read.json(resources))
 }
 
 pub async fn get_activity(
     State(state): State<AppState>,
     Path(activity_id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
+    let read =
+        crate::revisions::ConditionalRead::new(&state, &format!("activity:{activity_id}")).await?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
     let activity = state
         .application()
         .runtime_activities()
@@ -69,13 +80,13 @@ pub async fn get_activity(
         .get_activity(&activity_id)
         .await
         .map_err(activity_control_error)?;
-    Ok(Json(BackgroundActivityResource::from(&activity)))
+    Ok(read.json(BackgroundActivityResource::from(&activity)))
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for reading activity logs over REST.
 pub struct ActivityLogsQuery {
-    /// Cursor: lines with `seq > since_seq` are returned.
+    /// Cursor: new lines plus an updated cursor line for a streaming task run.
     #[serde(default)]
     pub since_seq: u64,
     /// Max lines to return (clamped server-side).
@@ -90,7 +101,15 @@ pub async fn get_activity_logs(
     State(state): State<AppState>,
     Path(activity_id): Path<String>,
     AxumQuery(query): AxumQuery<ActivityLogsQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
+    let revision =
+        crate::revisions::ConditionalRead::new(&state, &format!("activity:{activity_id}")).await?;
+    if query.wait_ms == 0 {
+        if let Some(response) = revision.not_modified(&headers) {
+            return Ok(response);
+        }
+    }
     let read = state
         .application()
         .runtime_activities()
@@ -98,7 +117,7 @@ pub async fn get_activity_logs(
         .activity_logs(&activity_id, query.since_seq, query.limit, query.wait_ms)
         .await
         .map_err(activity_control_error)?;
-    Ok(Json(BackgroundActivityLogResource::from(read)))
+    Ok(revision.json(BackgroundActivityLogResource::from(read)))
 }
 
 pub async fn stop_activity(

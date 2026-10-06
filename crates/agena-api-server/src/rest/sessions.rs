@@ -43,8 +43,34 @@ async fn assert_if_match_session_version(
 pub async fn list_sessions(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<SessionListQuery>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(state.service().list_sessions(query)).await
+    let key = query.workspace_id.map_or_else(
+        || match query.bucket {
+            Some(bucket) => format!(
+                "sessions:bucket:{}",
+                serde_json::to_value(bucket)
+                    .expect("bucket")
+                    .as_str()
+                    .expect("bucket string")
+            ),
+            None => "sessions".into(),
+        },
+        |id| format!("workspace:{id}:sessions"),
+    );
+    let read = crate::revisions::ConditionalRead::new(&state, &key).await?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
+    let revisions = state.revisions()?;
+    let observed = revisions.token("sessions");
+    let page = state
+        .service()
+        .list_sessions(query)
+        .await
+        .map_err(server_error_from_application)?;
+    revisions.seed_session_list(&page.items, &observed);
+    Ok(read.json(page))
 }
 
 pub async fn get_session(
@@ -60,8 +86,15 @@ pub async fn get_session(
 pub async fn get_session_state(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
+    let read =
+        crate::revisions::ConditionalRead::new(&state, &format!("session:{session_id}:state"))
+            .await?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
+    Ok(read.json(
         state
             .application()
             .session_execution_shell(session_id)
@@ -237,12 +270,22 @@ pub async fn list_session_parts(
 pub async fn get_session_tool_detail(
     State(state): State<AppState>,
     Path((session_id, part_id, section_name)): Path<(i64, i64, String)>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
     let section = section_name
         .parse::<agena_api::live::ToolDetailSection>()
         .map_err(|error| {
             ServerError::bad_request_with_diagnostic("Unknown tool detail section.", error)
         })?;
+    let key = if section == agena_api::live::ToolDetailSection::Presentation {
+        format!("part:{part_id}")
+    } else {
+        format!("part:{part_id}:{}", section.as_str())
+    };
+    let read = crate::revisions::ConditionalRead::new(&state, &key).await?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
     let store = state.session_store()?;
     let view = store
         .load_part_ids(session_id, &[part_id])
@@ -253,10 +296,38 @@ pub async fn get_session_tool_detail(
         .into_iter()
         .find(|part| part.part_id == part_id && part.visibility.visible_to_user())
         .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
+    state.revisions()?.register_part(&part);
     let detail = crate::live::project_tool_detail(&state, &part, section)
         .await
         .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
-    Ok(Json(detail))
+    Ok(read.json(detail))
+}
+
+pub async fn get_session_plan(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ServerError> {
+    let read =
+        crate::revisions::ConditionalRead::new(&state, &format!("session:{session_id}:plan"))
+            .await?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
+    // Validate the scope even if this session has not created a plan.
+    if state.service().get_session(session_id).await?.is_none() {
+        return Err(ServerError::not_found("The session was not found."));
+    }
+    let result = state
+        .application()
+        .invoke_plugin_tool(
+            "agena.plan",
+            "get",
+            serde_json::json!({"view": "full"}),
+            Some(session_id),
+        )
+        .await?;
+    Ok(read.json(result))
 }
 
 fn select_user_visible_part_page(

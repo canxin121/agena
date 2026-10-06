@@ -14,11 +14,15 @@ pub enum Notification {
     SessionChanged {
         subscription: SubscriptionId,
         change: Box<SessionChangeResource>,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        revisions: std::collections::BTreeMap<String, String>,
     },
     /// A non-persistent runtime signal arrived.
     RuntimeSignal {
         subscription: SubscriptionId,
         signal: Box<RuntimeSignalResource>,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        revisions: std::collections::BTreeMap<String, String>,
     },
     /// The subscription's broadcast channel dropped `skipped` messages
     /// because this client was too slow. The client must re-read the current

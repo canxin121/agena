@@ -11,11 +11,13 @@ use std::collections::BTreeMap;
 mod activity;
 mod auth;
 mod conversation;
+mod file_changes;
 mod interaction;
 mod notification;
 pub use activity::*;
 pub use auth::*;
 pub use conversation::*;
+pub use file_changes::*;
 pub use interaction::*;
 pub use notification::*;
 

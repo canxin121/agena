@@ -1,10 +1,12 @@
 //! REST client. Wraps `reqwest` and serializes [`agena_api`] commands/queries
 //! into the current endpoints.
 
-use portable_atomic::AtomicU64;
+use portable_atomic::{AtomicBool, AtomicU64};
 use std::{
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt,
     sync::{Arc, RwLock, atomic::Ordering},
+    time::{Duration, Instant},
 };
 
 use agena_api::{
@@ -157,6 +159,7 @@ async fn read_response_text_bounded(
 pub struct NotificationSubscription {
     rx: mpsc::Receiver<Result<SubscriptionEvent, ClientError>>,
     task: Option<JoinHandle<()>>,
+    revision_lease: Arc<GlobalRevisionLease>,
 }
 
 pub struct BtwSubscription {
@@ -192,6 +195,7 @@ impl NotificationSubscription {
     }
 
     pub fn close(&mut self) {
+        self.revision_lease.release();
         if let Some(task) = self.task.take() {
             task.abort();
         }
@@ -204,7 +208,7 @@ impl Drop for NotificationSubscription {
     }
 }
 
-/// Stateless REST client. Holds a `reqwest::Client` and the base URL like
+/// REST client with bounded shared read caches. Holds a `reqwest::Client` and the base URL like
 /// `http://localhost:7878`.
 #[derive(Clone)]
 /// HTTP client for the Agena runtime API.
@@ -212,6 +216,153 @@ pub struct AgenaClient {
     base_url: url::Url,
     http: reqwest::Client,
     authentication: Arc<ClientAuthentication>,
+    reads: Arc<tokio::sync::Mutex<ResourceReads>>,
+    revision_check: Arc<tokio::sync::Mutex<()>>,
+    read_limit: Arc<tokio::sync::Semaphore>,
+}
+
+#[derive(Clone)]
+struct CachedRead {
+    resource: String,
+    token: String,
+    etag: String,
+    value: serde_json::Value,
+    bytes: usize,
+    used: u64,
+    generation: u64,
+}
+
+#[derive(Default)]
+struct ResourceReads {
+    versions: HashMap<String, String>,
+    bodies: HashMap<String, CachedRead>,
+    locks: HashMap<String, std::sync::Weak<ResourceReadGate>>,
+    checked_at: Option<Instant>,
+    epoch: Option<String>,
+    retired_epochs: VecDeque<String>,
+    bytes: usize,
+    sequence: u64,
+    read_sequence: u64,
+    global_live_users: Arc<AtomicU64>,
+}
+
+struct ResourceReadGate {
+    lock: tokio::sync::Mutex<()>,
+    requested: AtomicU64,
+}
+
+struct GlobalRevisionLease {
+    users: Option<Arc<AtomicU64>>,
+    active: AtomicBool,
+}
+
+impl GlobalRevisionLease {
+    fn release(&self) {
+        if self.active.swap(false, Ordering::AcqRel)
+            && let Some(users) = &self.users
+        {
+            users.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+impl Drop for GlobalRevisionLease {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+struct RevisionStreamGuard(Arc<GlobalRevisionLease>);
+
+impl Drop for RevisionStreamGuard {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+impl ResourceReads {
+    fn observe(&mut self, key: &str, token: &str, expected: Option<&str>) -> bool {
+        let Some((epoch, time)) = token.rsplit_once(':') else {
+            return false;
+        };
+        let Ok(time) = time.parse::<i64>() else {
+            return false;
+        };
+        if self.retired_epochs.iter().any(|retired| retired == epoch) {
+            return false;
+        }
+        if self
+            .epoch
+            .as_deref()
+            .is_some_and(|current| current != epoch)
+        {
+            if expected.is_some_and(|expected| {
+                self.versions
+                    .get(key)
+                    .is_some_and(|current| expected != current)
+            }) {
+                return false;
+            }
+            if let Some(previous) = self.epoch.take() {
+                self.retired_epochs.push_back(previous);
+                if self.retired_epochs.len() > 16 {
+                    self.retired_epochs.pop_front();
+                }
+            }
+            self.versions.clear();
+            self.checked_at = None;
+        }
+        self.epoch = Some(epoch.to_owned());
+        if let Some(previous) = self.versions.get(key) {
+            if let Some((old_epoch, old_time)) = previous.rsplit_once(':') {
+                if old_epoch == epoch && old_time.parse::<i64>().unwrap_or(0) > time {
+                    return false;
+                }
+            }
+        }
+        if self.versions.len() >= 512 && !self.versions.contains_key(key) {
+            self.versions.clear();
+        }
+        self.versions.insert(key.to_owned(), token.to_owned());
+        true
+    }
+
+    fn touch(&mut self, path: &str) {
+        self.sequence = self.sequence.saturating_add(1);
+        if let Some(body) = self.bodies.get_mut(path) {
+            body.used = self.sequence;
+        }
+    }
+
+    fn forget(&mut self, path: &str) {
+        if let Some(body) = self.bodies.remove(path) {
+            self.bytes -= body.bytes;
+        }
+    }
+
+    fn remember(&mut self, path: String, mut body: CachedRead) {
+        self.forget(&path);
+        self.sequence = self.sequence.saturating_add(1);
+        body.used = self.sequence;
+        if body.bytes > 2 * 1024 * 1024 {
+            return;
+        }
+        self.bytes += body.bytes;
+        self.bodies.insert(path, body);
+        while self.bodies.len() > 64 || self.bytes > 4 * 1024 * 1024 {
+            let Some(key) = self
+                .bodies
+                .iter()
+                .min_by_key(|(_, body)| body.used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(body) = self.bodies.remove(&key) {
+                self.bytes -= body.bytes;
+            }
+        }
+    }
 }
 
 impl fmt::Debug for AgenaClient {
@@ -234,16 +385,21 @@ impl AgenaClient {
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()?,
             authentication: Arc::new(ClientAuthentication::anonymous()),
+            reads: Arc::new(tokio::sync::Mutex::new(ResourceReads::default())),
+            revision_check: Arc::new(tokio::sync::Mutex::new(())),
+            read_limit: Arc::new(tokio::sync::Semaphore::new(4)),
         })
     }
 
     pub fn with_bearer_token(mut self, token: impl AsRef<str>) -> Result<Self, ClientError> {
         self.authentication = Arc::new(ClientAuthentication::static_bearer(token.as_ref())?);
+        self.reads = Arc::new(tokio::sync::Mutex::new(ResourceReads::default()));
         Ok(self)
     }
 
     fn with_password_session(mut self, password: &str, token: &str) -> Result<Self, ClientError> {
         self.authentication = Arc::new(ClientAuthentication::password_session(password, token)?);
+        self.reads = Arc::new(tokio::sync::Mutex::new(ResourceReads::default()));
         Ok(self)
     }
 
@@ -481,6 +637,170 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
+    /// Bodies are shared across panes, with exact URL ownership and bounded
+    /// retention. SSE updates the clocks; a shared metadata check closes gaps.
+    async fn conditional_json<T: serde::de::DeserializeOwned>(
+        &self,
+        resource: &str,
+        url: url::Url,
+        force: bool,
+    ) -> Result<T, ClientError> {
+        let path = format!("{resource}\n{url}");
+        let (gate, required_generation) = {
+            let mut reads = self.reads.lock().await;
+            reads.read_sequence = reads.read_sequence.saturating_add(1);
+            let required_generation = reads.read_sequence;
+            reads.locks.retain(|_, lock| lock.strong_count() > 0);
+            let gate = if let Some(gate) = reads.locks.get(&path).and_then(std::sync::Weak::upgrade) {
+                gate
+            } else {
+                let gate = Arc::new(ResourceReadGate {
+                    lock: tokio::sync::Mutex::new(()),
+                    requested: AtomicU64::new(0),
+                });
+                reads.locks.insert(path.clone(), Arc::downgrade(&gate));
+                gate
+            };
+            gate.requested.fetch_max(required_generation, Ordering::AcqRel);
+            (gate, required_generation)
+        };
+        let _gate = gate.lock.lock().await;
+        let (cached, due, live) = {
+            let reads = self.reads.lock().await;
+            (
+                reads.bodies.get(&path).cloned(),
+                reads
+                    .checked_at
+                    .is_none_or(|time| time.elapsed() >= Duration::from_secs(30)),
+                reads.global_live_users.load(Ordering::Acquire) > 0,
+            )
+        };
+        // A client without a global stream cannot know that a cached token
+        // stayed current. Validate its explicit read with If-None-Match;
+        // otherwise ordinary API callers can miss completion for 30 seconds.
+        let reuse = !force && live;
+        if cached.is_some() && due && reuse {
+            let _check = self.revision_check.lock().await;
+            let (keys, observations, due) = {
+                let reads = self.reads.lock().await;
+                let mut keys = reads
+                    .bodies
+                    .values()
+                    .map(|body| body.resource.clone())
+                    .collect::<Vec<_>>();
+                keys.sort_unstable();
+                keys.dedup();
+                (
+                    keys,
+                    reads.versions.clone(),
+                    reads
+                        .checked_at
+                        .is_none_or(|time| time.elapsed() >= Duration::from_secs(30)),
+                )
+            };
+            if due && !keys.is_empty() {
+                // A failed probe has the same shared cooldown as a successful
+                // one; callers cannot turn an outage into a request loop.
+                self.reads.lock().await.checked_at = Some(Instant::now());
+                let mut check_url = self.endpoint("/api/v1/changes/revisions");
+                check_url
+                    .query_pairs_mut()
+                    .append_pair("resources", &serde_json::to_string(&keys)?);
+                let response = self
+                    .send_request(reqwest::Method::GET, check_url, None, None)
+                    .await?;
+                let versions: BTreeMap<String, String> = self.parse_json(response).await?;
+                let mut reads = self.reads.lock().await;
+                for (key, token) in versions {
+                    reads.observe(&key, &token, observations.get(&key).map(String::as_str));
+                }
+                reads.checked_at = Some(Instant::now());
+            }
+        }
+        let observation = self.reads.lock().await.versions.get(resource).cloned();
+        if (reuse || cached.as_ref().is_some_and(|body| body.generation >= required_generation))
+            && let Some(cached) = &cached
+            && observation.as_deref() == Some(cached.token.as_str())
+        {
+            self.reads.lock().await.touch(&path);
+            return Ok(serde_json::from_value(cached.value.clone())?);
+        }
+        let _permit = self.read_limit.acquire().await.map_err(|_| {
+            ClientError::Protocol("display read limiter closed".into())
+        })?;
+        // Calls queued before dispatch share this validated representation,
+        // including forced reads. Calls arriving after dispatch revalidate.
+        let generation = gate.requested.load(Ordering::Acquire);
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(cached) = &cached {
+            headers.insert(
+                reqwest::header::IF_NONE_MATCH,
+                reqwest::header::HeaderValue::from_str(&cached.etag).map_err(|error| {
+                    ClientError::Protocol(format!("invalid resource ETag: {error}"))
+                })?,
+            );
+        }
+        let response = self
+            .send_request_with_headers(reqwest::Method::GET, url, None, None, headers)
+            .await?;
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            let cached = cached.ok_or_else(|| {
+                ClientError::Protocol("304 without a cached representation".into())
+            })?;
+            let mut reads = self.reads.lock().await;
+            if reads.observe(resource, &cached.token, observation.as_deref()) {
+                if let Some(body) = reads.bodies.get_mut(&path) {
+                    body.generation = generation;
+                }
+            }
+            reads.touch(&path);
+            return Ok(serde_json::from_value(cached.value)?);
+        }
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_owned();
+        let token = etag.trim_start_matches("W/").trim_matches('"').to_owned();
+        let value: serde_json::Value = self.parse_json(response).await?;
+        if !token.is_empty() {
+            let mut reads = self.reads.lock().await;
+            if reads.observe(resource, &token, observation.as_deref()) {
+                let bytes = serde_json::to_vec(&value)?.len();
+                reads.remember(
+                    path,
+                    CachedRead {
+                        resource: resource.to_owned(),
+                        token,
+                        etag,
+                        value: value.clone(),
+                        bytes,
+                        used: 0,
+                        generation,
+                    },
+                );
+                reads.checked_at.get_or_insert_with(Instant::now);
+            }
+        } else {
+            self.reads.lock().await.forget(&path);
+        }
+        Ok(serde_json::from_value(value)?)
+    }
+
+    pub async fn session_plan(
+        &self,
+        session_id: i64,
+        force: bool,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.conditional_json(
+            &format!("session:{session_id}:plan"),
+            self.endpoint(&format!("/api/v1/sessions/{session_id}/plan")),
+            force,
+        )
+        .await
+    }
+
     async fn post_json<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -560,16 +880,34 @@ impl AgenaClient {
 
     async fn send_notification_frame(
         tx: &mpsc::Sender<Result<SubscriptionEvent, ClientError>>,
+        reads: &tokio::sync::Mutex<ResourceReads>,
         notification: Notification,
     ) -> bool {
         let item = match notification {
-            Notification::SessionChanged { change, .. } => {
+            Notification::SessionChanged {
+                change, revisions, ..
+            } => {
+                let mut reads = reads.lock().await;
+                for (key, token) in revisions {
+                    reads.observe(&key, &token, None);
+                }
+                drop(reads);
                 Ok(SubscriptionEvent::SessionChanged(*change))
             }
-            Notification::RuntimeSignal { signal, .. } => {
+            Notification::RuntimeSignal {
+                signal, revisions, ..
+            } => {
+                let mut reads = reads.lock().await;
+                for (key, token) in revisions {
+                    reads.observe(&key, &token, None);
+                }
+                drop(reads);
                 Ok(SubscriptionEvent::RuntimeSignal(*signal))
             }
-            Notification::Lagged { skipped, .. } => Ok(SubscriptionEvent::Lagged(skipped)),
+            Notification::Lagged { skipped, .. } => {
+                reads.lock().await.checked_at = None;
+                Ok(SubscriptionEvent::Lagged(skipped))
+            }
             Notification::SubscriptionClosed { reason, .. } => Err(ClientError::Protocol(format!(
                 "sse subscription closed: {reason}"
             ))),
@@ -1015,7 +1353,7 @@ impl AgenaClient {
         input: serde_json::Value,
         session_id: Option<i64>,
     ) -> Result<serde_json::Value, ClientError> {
-        self.post_json(
+        let response: serde_json::Value = self.post_json(
             "/api/v1/plugins/tools/invoke",
             serde_json::json!({
                 "plugin_id": plugin_id,
@@ -1024,7 +1362,21 @@ impl AgenaClient {
                 "session_id": session_id,
             }),
         )
-        .await
+        .await?;
+        if plugin_id == "agena.plan" && tool_name != "get" && let Some(id) = session_id {
+            let resource = format!("session:{id}:plan");
+            let mut reads = self.reads.lock().await;
+            if let Some(next) = response.pointer("/payload/plan") {
+                let keys = reads.bodies.iter().filter(|(_, body)| body.resource == resource
+                    && body.value.pointer("/payload/plan/revision") != next.get("revision"))
+                    .map(|(key, _)| key.clone()).collect::<Vec<_>>();
+                for key in keys { reads.forget(&key); }
+            } else if response.pointer("/payload/cleared") == Some(&serde_json::Value::Bool(true)) {
+                let keys = reads.bodies.iter().filter(|(_, body)| body.resource == resource).map(|(key, _)| key.clone()).collect::<Vec<_>>();
+                for key in keys { reads.forget(&key); }
+            }
+        }
+        Ok(response)
     }
 
     /// Invoke one server-owned plugin command.
@@ -1246,6 +1598,28 @@ impl AgenaClient {
 
     pub async fn git_status(&self) -> Result<serde_json::Value, ClientError> {
         self.get_json("/api/v1/git/status").await
+    }
+
+    /// Durable edits owned by this session, independent of current Git status.
+    pub async fn session_file_changes(
+        &self,
+        session_id: i64,
+        offset: usize,
+        summary: bool,
+        path: Option<&str>,
+        max_bytes: usize,
+    ) -> Result<agena_api::resource::SessionFileChangesResource, ClientError> {
+        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/file-changes"));
+        url.query_pairs_mut()
+            .append_pair("offset", &offset.to_string())
+            .append_pair("limit", "40")
+            .append_pair("summary", if summary { "true" } else { "false" })
+            .append_pair("max_bytes", &max_bytes.to_string());
+        if let Some(path) = path {
+            url.query_pairs_mut().append_pair("path", path);
+        }
+        self.conditional_json(&format!("session:{session_id}:files"), url, false)
+            .await
     }
 
     /// Bounded workbench status shared by terminal and browser clients.
@@ -1597,8 +1971,22 @@ impl AgenaClient {
         &self,
         session_id: i64,
     ) -> Result<SessionExecutionResource, ClientError> {
-        self.get_json(&format!("/api/v1/sessions/{session_id}/state"))
-            .await
+        self.get_session_state_validated(session_id, false).await
+    }
+
+    /// Validate a snapshot after a known notification gap or page mismatch.
+    /// A forced read still uses ETag and shares reads queued before dispatch.
+    pub async fn get_session_state_validated(
+        &self,
+        session_id: i64,
+        force: bool,
+    ) -> Result<SessionExecutionResource, ClientError> {
+        self.conditional_json(
+            &format!("session:{session_id}:state"),
+            self.endpoint(&format!("/api/v1/sessions/{session_id}/state")),
+            force,
+        )
+        .await
     }
 
     pub async fn session_cost_summary(
@@ -1688,10 +2076,19 @@ impl AgenaClient {
         part_id: i64,
         section: agena_api::live::ToolDetailSection,
     ) -> Result<agena_api::live::ToolDetailResource, ClientError> {
-        self.get_json(&format!(
-            "/api/v1/sessions/{session_id}/parts/{part_id}/tool-sections/{}",
-            section.as_str()
-        ))
+        let resource = if section == agena_api::live::ToolDetailSection::Presentation {
+            format!("part:{part_id}")
+        } else {
+            format!("part:{part_id}:{}", section.as_str())
+        };
+        self.conditional_json(
+            &resource,
+            self.endpoint(&format!(
+                "/api/v1/sessions/{session_id}/parts/{part_id}/tool-sections/{}",
+                section.as_str()
+            )),
+            false,
+        )
         .await
     }
 
@@ -1949,7 +2346,25 @@ impl AgenaClient {
             reader,
             SseDecoder::<String>::with_max_size(MAX_SSE_EVENT_BYTES),
         );
+        let reads = self.reads.clone();
+        reads.lock().await.checked_at = None;
+        let lease = if matches!(scope, agena_api::Scope::Global) {
+            let users = reads.lock().await.global_live_users.clone();
+            users.fetch_add(1, Ordering::AcqRel);
+            GlobalRevisionLease {
+                users: Some(users),
+                active: AtomicBool::new(true),
+            }
+        } else {
+            GlobalRevisionLease {
+                users: None,
+                active: AtomicBool::new(false),
+            }
+        };
+        let lease = Arc::new(lease);
+        let stream_lease = RevisionStreamGuard(lease.clone());
         let task = tokio::spawn(async move {
+            let _lease = stream_lease;
             while let Some(frame) = tokio::select! {
                 _ = tx.closed() => None,
                 frame = tokio::time::timeout(std::time::Duration::from_secs(60), frames.next()) => {
@@ -1989,7 +2404,7 @@ impl AgenaClient {
                         return;
                     }
                 };
-                if !Self::send_notification_frame(&tx, notification).await {
+                if !Self::send_notification_frame(&tx, &reads, notification).await {
                     return;
                 }
             }
@@ -1998,6 +2413,7 @@ impl AgenaClient {
         Ok(NotificationSubscription {
             rx,
             task: Some(task),
+            revision_lease: lease,
         })
     }
 
@@ -2442,10 +2858,9 @@ impl AgenaClient {
                         q.append_pair("include_session_count", "true");
                     }
                 }
-                let response = self
-                    .send_request(reqwest::Method::GET, url, None, None)
-                    .await?;
-                Ok(QueryResult::Workspaces(self.parse_json(response).await?))
+                Ok(QueryResult::Workspaces(
+                    self.conditional_json("workspaces", url, false).await?,
+                ))
             }
             Query::GetWorkspace(GetWorkspaceParams { workspace_id }) => Ok(QueryResult::Workspace(
                 self.get_json(&format!("/api/v1/workspaces/{workspace_id}"))
@@ -2500,10 +2915,12 @@ impl AgenaClient {
                         q.append_pair("search", &search);
                     }
                 }
-                let response = self
-                    .send_request(reqwest::Method::GET, url, None, None)
-                    .await?;
-                Ok(QueryResult::Sessions(self.parse_json(response).await?))
+                let resource = workspace_id
+                    .map(|id| format!("workspace:{id}:sessions"))
+                    .unwrap_or_else(|| "sessions".to_owned());
+                Ok(QueryResult::Sessions(
+                    self.conditional_json(&resource, url, false).await?,
+                ))
             }
             Query::GetSession(GetSessionParams { session_id }) => Ok(QueryResult::Session(
                 self.get_json(&format!("/api/v1/sessions/{session_id}"))
@@ -2561,10 +2978,9 @@ impl AgenaClient {
                         q.append_pair("active_only", "true");
                     }
                 }
-                let response = self
-                    .send_request(reqwest::Method::GET, url, None, None)
-                    .await?;
-                Ok(QueryResult::Activities(self.parse_json(response).await?))
+                Ok(QueryResult::Activities(
+                    self.conditional_json("activities", url, false).await?,
+                ))
             }
             Query::GetActivity(GetActivityParams { activity_id }) => Ok(QueryResult::Activity(
                 self.get_json(&format!("/api/v1/activities/{activity_id}"))
@@ -2588,6 +3004,12 @@ impl AgenaClient {
                     if wait_ms > 0 {
                         q.append_pair("wait_ms", &wait_ms.to_string());
                     }
+                }
+                if wait_ms == 0 {
+                    return Ok(QueryResult::ActivityLogs(
+                        self.conditional_json(&format!("activity:{activity_id}"), url, false)
+                            .await?,
+                    ));
                 }
                 let response = self
                     .send_request(reqwest::Method::GET, url, None, None)

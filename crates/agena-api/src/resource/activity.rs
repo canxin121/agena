@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use agena_domain::{BackgroundActivity, BackgroundActivityLogRead};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 /// A background activity (process, task) with its log state.
 pub struct BackgroundActivityResource {
@@ -104,6 +104,8 @@ pub struct BackgroundActivityLogLineResource {
     pub stream: String,
     pub ts_ms: i64,
     pub text: String,
+    #[serde(default)]
+    pub chunk: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +137,7 @@ impl From<BackgroundActivityLogRead> for BackgroundActivityLogResource {
                     stream: line.stream,
                     ts_ms: line.ts_ms,
                     text: line.text,
+                    chunk: line.chunk,
                 })
                 .collect(),
             last_seq: read.last_seq,

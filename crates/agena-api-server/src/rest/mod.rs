@@ -69,6 +69,7 @@ pub(crate) fn server_error_from_store(error: agena_storage::store::StoreError) -
 mod activities;
 mod auth;
 mod conversations;
+mod file_changes;
 mod git;
 mod marketplace;
 mod memory;
@@ -78,11 +79,13 @@ mod operator;
 mod permissions;
 mod plugins;
 mod providers;
+mod revisions;
 mod sessions;
 mod settings;
 mod transcript;
 mod workspaces;
 
+pub use file_changes::*;
 pub use permissions::*;
 pub use sessions::*;
 pub use settings::*;
@@ -99,6 +102,7 @@ pub use notifications::*;
 pub use operator::*;
 pub use plugins::*;
 pub use providers::*;
+pub use revisions::*;
 
 pub use model_catalog::*;
 

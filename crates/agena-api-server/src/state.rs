@@ -1,7 +1,7 @@
 //! Shared application state held by the HTTP/WS/SSE/JSON-RPC transports.
 
 use portable_atomic::AtomicI64;
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{Arc, Mutex, atomic::Ordering};
 
 use agena_application::Application;
 
@@ -13,6 +13,7 @@ pub struct AppState {
     application: Application,
     server: agena_api::resource::ServerIdentityResource,
     next_operator_call_id: Arc<AtomicI64>,
+    revisions: Arc<Mutex<Option<Arc<crate::revisions::ResourceRevisions>>>>,
 }
 
 impl AppState {
@@ -26,11 +27,25 @@ impl AppState {
                 protocol_version: agena_api::PROTOCOL_VERSION,
             },
             next_operator_call_id: Arc::new(AtomicI64::new(1)),
+            revisions: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn server(&self) -> &agena_api::resource::ServerIdentityResource {
         &self.server
+    }
+
+    pub(crate) fn revisions(
+        &self,
+    ) -> Result<Arc<crate::revisions::ResourceRevisions>, ServerError> {
+        let mut revisions = self.revisions.lock().unwrap_or_else(|e| e.into_inner());
+        if revisions.is_none() {
+            *revisions = Some(Arc::new(crate::revisions::ResourceRevisions::new(self)?));
+        }
+        Ok(revisions
+            .as_ref()
+            .expect("initialized revision index")
+            .clone())
     }
 
     pub fn application(&self) -> &Application {

@@ -61,6 +61,10 @@ pub struct ToolDetailResource {
     pub revision: i64,
     pub updated_at_ms: i64,
     pub section: ToolDetailSection,
+    /// Output carries its lifecycle state so a cached section remains useful
+    /// when only a sibling section advances the part's envelope timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part_state: Option<String>,
     pub value: Value,
 }
 

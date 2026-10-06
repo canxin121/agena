@@ -208,10 +208,12 @@ impl WsClient {
                         Notification::SessionChanged {
                             subscription,
                             change,
+                            ..
                         } => (subscription, SubscriptionEvent::SessionChanged(*change)),
                         Notification::RuntimeSignal {
                             subscription,
                             signal,
+                            ..
                         } => (subscription, SubscriptionEvent::RuntimeSignal(*signal)),
                         Notification::Lagged {
                             subscription,
@@ -339,6 +341,7 @@ mod tests {
                 .unwrap();
             for n in 0..600 {
                 let message = ServerMessage::Notification(Notification::RuntimeSignal {
+                    revisions: Default::default(),
                     subscription: id.clone(),
                     signal: Box::new(RuntimeSignalResource {
                         kind: "test".into(),

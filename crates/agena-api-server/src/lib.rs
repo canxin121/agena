@@ -41,6 +41,7 @@ pub mod jsonrpc;
 mod live;
 #[cfg(feature = "http")]
 pub mod rest;
+mod revisions;
 #[cfg(feature = "sse")]
 pub mod sse;
 pub mod state;
@@ -81,6 +82,7 @@ pub fn router(state: AppState) -> Router {
             .route("/readyz", get(rest::readyz))
             .route("/metrics", get(rest::metrics))
             .route("/api/v1/health", get(rest::health))
+            .route("/api/v1/changes/revisions", get(rest::resource_revisions))
             .route("/api/v1/runtime", get(rest::get_runtime_status))
             .route("/api/v1/usage", get(rest::get_usage_stats))
             .route("/api/v1/runtime/reload", post(rest::reload_runtime))
@@ -329,6 +331,7 @@ pub fn router(state: AppState) -> Router {
                 get(rest::list_workspaces).post(rest::create_workspace),
             )
             .route("/api/v1/workspaces/resolve", post(rest::resolve_workspace))
+            .route("/api/v1/workspaces/session-stats", get(rest::workspace_session_stats))
             .route(
                 "/api/v1/workspaces/{workspace_id}",
                 get(rest::get_workspace)
@@ -362,6 +365,14 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/sessions/{session_id}/state",
                 get(rest::get_session_state),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/file-changes",
+                get(rest::get_session_file_changes),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/plan",
+                get(rest::get_session_plan),
             )
             .route(
                 "/api/v1/sessions/{session_id}/cost",
@@ -550,7 +561,9 @@ mod background_task_tests;
 #[cfg(all(test, feature = "http"))]
 mod router_contract_tests {
     mod conversations;
+    mod file_changes;
     mod realtime_consistency;
+    mod revisions;
     use std::collections::{BTreeMap, VecDeque};
 
     use agena_api::{
@@ -1578,7 +1591,7 @@ mod router_contract_tests {
         assert!(matches!(
             notification,
             agena_api::ws::ServerMessage::Notification(
-                agena_api::notifications::Notification::SessionChanged { subscription, change }
+                agena_api::notifications::Notification::SessionChanged { subscription, change, .. }
             ) if subscription == "global-subscription"
                 && matches!(*change, agena_api::live::SessionChangeResource::SessionMetaUpdated {
                     session_id,

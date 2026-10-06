@@ -36,9 +36,17 @@ pub(crate) struct LiveSubscription {
     pending_lag: u64,
     _store_subscription: GlobalSubscription,
     projection_task: tokio::task::JoinHandle<()>,
+    revisions: Arc<crate::revisions::ResourceRevisions>,
 }
 
 impl LiveSubscription {
+    pub(crate) fn revisions_for(&self, item: &LiveItem) -> std::collections::BTreeMap<String, String> {
+        match item {
+            LiveItem::SessionChanged(change) => self.revisions.live_tokens(Some(change), None),
+            LiveItem::RuntimeSignal(signal) => self.revisions.live_tokens(None, Some(signal)),
+            LiveItem::Lagged(_) => Default::default(),
+        }
+    }
     pub(crate) async fn recv(&mut self) -> Option<LiveItem> {
         if self.pending_lag > 0 {
             return Some(LiveItem::Lagged(std::mem::take(&mut self.pending_lag)));
@@ -81,6 +89,7 @@ fn subscribe_with_queue_capacity(
     capacity: usize,
 ) -> Result<LiveSubscription, ServerError> {
     let store = state.session_store()?;
+    let revisions = state.revisions()?;
     let signals = state.live_signals()?;
     let (tx, rx) = mpsc::channel(capacity);
     let (raw_change_tx, mut raw_change_rx) = mpsc::channel(capacity);
@@ -113,6 +122,7 @@ fn subscribe_with_queue_capacity(
                         if !visibility.change_visible(store.as_ref(), &change).await {
                             continue;
                         }
+                        if let Ok(revisions) = projection_state.revisions() { revisions.observe_change(&change); }
                         let Some(change) = project_change(&projection_state, change).await else {
                             continue;
                         };
@@ -122,6 +132,7 @@ fn subscribe_with_queue_capacity(
                 },
                 signal = signal_subscription.recv() => match signal {
                     Some(RuntimeLiveSignalItem::Signal(signal)) => {
+                        if let Ok(revisions) = projection_state.revisions() { revisions.observe_signal(&signal); }
                         let signal = project_signal(signal);
                         if let Some(session_id) = signal.session_id
                             && !visibility.session_visible(store.as_ref(), session_id).await {
@@ -149,6 +160,7 @@ fn subscribe_with_queue_capacity(
         pending_lag: 0,
         _store_subscription: store_subscription,
         projection_task,
+        revisions,
     })
 }
 
@@ -387,7 +399,7 @@ pub(crate) async fn project_tool_detail(
     let value = match section {
         ToolDetailSection::Metadata => serde_json::to_value(content.metadata).ok()?,
         ToolDetailSection::Input => content.input,
-        ToolDetailSection::Output => serde_json::to_value(content.output).ok()?,
+        ToolDetailSection::Output => serde_json::to_value(display_tool_output(&content)).ok()?,
         ToolDetailSection::Presentation => project_tool_presentation(state, part)
             .await
             .and_then(|presentation| serde_json::to_value(presentation).ok())
@@ -398,6 +410,7 @@ pub(crate) async fn project_tool_detail(
         revision: part.revision,
         updated_at_ms: part.updated_at_ms,
         section,
+        part_state: (section == ToolDetailSection::Output).then(|| part.state.as_str().to_owned()),
         value,
     })
 }
@@ -505,17 +518,55 @@ fn is_user_message_marker(part: &PartResource) -> bool {
 /// block. A tool that has not produced anything yet keeps the empty body it had
 /// before, so nothing is invented for a quiet process.
 fn running_live_output_blocks(content: &ToolCallContent) -> Vec<agena_domain::ViewBlock> {
-    content
-        .live_output()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(|text| {
-            vec![agena_domain::ViewBlock::Markdown {
-                id: Some("live-output".to_owned()),
-                text: live_output_markdown(text),
-            }]
-        })
-        .unwrap_or_default()
+    let mut blocks = Vec::new();
+    // Invocation input is deliberately omitted from transcript content, but
+    // the human projection must still show the command before any output
+    // exists. Both clients already render Command as a fenced code surface.
+    if content.name == "shell.run" {
+        let command = match content.input.get("command") {
+            Some(serde_json::Value::String(command)) => command.clone(),
+            Some(serde_json::Value::Array(args)) => args
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => String::new(),
+        };
+        if !command.is_empty() {
+            blocks.push(agena_domain::ViewBlock::Command {
+                id: Some("command".to_owned()),
+                command,
+                cwd: content
+                    .input
+                    .get("workdir")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+            });
+        }
+    }
+    if let Some(text) = content.live_output().filter(|text| !text.is_empty()) {
+        blocks.push(agena_domain::ViewBlock::Markdown {
+            id: Some("live-output".to_owned()),
+            text: live_output_markdown(text),
+        });
+    }
+    blocks
+}
+
+/// A lazy Output disclosure sees the same live tail as presentation. This is
+/// a read-time projection only, never a fabricated terminal tool result.
+fn display_tool_output(content: &ToolCallContent) -> Option<agena_domain::RawOutput> {
+    content.output.clone().or_else(|| {
+        matches!(
+            content.state,
+            agena_domain::ToolResultState::Pending | agena_domain::ToolResultState::Running
+        )
+        .then(|| content.live_output().map(agena_domain::RawOutput::text))
+        .flatten()
+    })
 }
 
 /// Fence what a running process has produced so far, matching the code surface
@@ -532,7 +583,8 @@ fn live_output_markdown(text: &str) -> String {
         }
     }
     let fence = "`".repeat((longest_fence + 1).max(3));
-    format!("{fence}text\n{}\n{fence}\n", text.trim_end())
+    let separator = if text.ends_with('\n') { "" } else { "\n" };
+    format!("{fence}text\n{text}{separator}{fence}\n")
 }
 
 #[cfg(test)]
@@ -576,6 +628,27 @@ mod live_output_tests {
             }
             other => panic!("unexpected blocks: {other:?}"),
         }
+    }
+
+    #[test]
+    fn shell_presentation_shows_the_command_before_output_and_preserves_whitespace() {
+        let mut content = agena_runtime_contracts::part_content::ToolCallContent {
+            name: "shell.run".to_owned(),
+            input: serde_json::json!({"command":"printf 'hello'","workdir":"/repo"}),
+            state: agena_domain::ToolResultState::Running,
+            ..Default::default()
+        };
+        assert!(matches!(running_live_output_blocks(&content).as_slice(),
+            [agena_domain::ViewBlock::Command { command, cwd: Some(cwd), .. }]
+                if command == "printf 'hello'" && cwd == "/repo"));
+        content.set_live_output("  indented\n\n");
+        assert!(matches!(running_live_output_blocks(&content).as_slice(),
+            [agena_domain::ViewBlock::Command { .. }, agena_domain::ViewBlock::Markdown { text, .. }]
+                if text == "```text\n  indented\n\n```\n"));
+        let output = super::display_tool_output(&content).unwrap();
+        assert_eq!(output.text_content(), "  indented\n\n");
+        content.state = agena_domain::ToolResultState::Completed;
+        assert!(super::display_tool_output(&content).is_none());
     }
 }
 
@@ -704,9 +777,19 @@ fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
     match signal {
         RuntimeLiveSignal::Activity(activity) => RuntimeSignalResource {
             kind: "activity".to_owned(),
-            session_id: activity.activity.session_id,
+            // Delegated work is displayed and controlled by its parent. Its
+            // child transcript has a separate stream of part updates.
+            session_id: activity
+                .activity
+                .parent_session_id
+                .or(activity.activity.session_id),
             payload: live_signal_payload(
-                &*activity,
+                &serde_json::json!({
+                    "activity_id": activity.activity_id,
+                    "reason": activity.reason,
+                    "ts_ms": activity.ts_ms,
+                    "activity": agena_api::resource::BackgroundActivityResource::from(&activity.activity),
+                }),
                 "serialize a runtime activity live signal payload",
             ),
         },

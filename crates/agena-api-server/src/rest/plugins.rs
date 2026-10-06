@@ -65,6 +65,9 @@ pub async fn invoke_plugin_tool(
     let plugin_id = request.plugin_id.as_deref().ok_or_else(|| {
         ServerError::bad_request("A plugin id is required for explicit plugin tool invocation.")
     })?;
+    // Install the mutation observer before invoking a plugin that may publish
+    // a change. No-op tools must not manufacture a new resource timestamp.
+    let _revisions = state.revisions()?;
     let response = state
         .application()
         .invoke_plugin_tool(

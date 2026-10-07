@@ -15,6 +15,37 @@ use std::{
 
 const DOMAIN_LIST_REPO: &str = "https://github.com/spider-rs/domain-list.git";
 
+fn watch_optional_input(path: &Path) {
+    // Cargo treats a missing watched file as changed on every invocation.
+    // Watch its nearest existing parent so creating it still invalidates the build.
+    let watched = path
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .expect("build inputs have an existing parent directory");
+    println!("cargo:rerun-if-changed={}", watched.display());
+}
+
+fn watch_asset_inputs(manifest: &Path) {
+    for name in [
+        "SPIDER_FP_ASSETS",
+        "SPIDER_FP_EXPAND_REFERRERS",
+        "SPIDER_FP_DOMAIN_LIST_REV",
+        "SPIDER_FP_CLEANUP_DOMAIN_LIST",
+        "SPIDER_FP_REFRESH_CHROME",
+        "REFERRERS_REFRESH",
+        "REFERRERS_TRIM_TO_1M",
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    for name in [
+        "high_quality_referrers.txt",
+        "referrers_20k_urls.txt",
+        "merged_referrers.txt",
+    ] {
+        watch_optional_input(&manifest.join("assets").join(name));
+    }
+}
+
 fn norm_domain_from_any(s: &str) -> Option<String> {
     let mut t = s.trim().to_lowercase();
     if t.is_empty() {
@@ -176,9 +207,9 @@ fn maybe_refresh_merged_referrers(manifest_dir: &Path) -> io::Result<()> {
     }
     fs::rename(&tmp, &out_path)?;
 
-    println!("cargo:rerun-if-changed={}", tranco_urls.display());
-    println!("cargo:rerun-if-changed={}", majestic_csv.display());
-    println!("cargo:rerun-if-changed={}", existing.display());
+    watch_optional_input(&tranco_urls);
+    watch_optional_input(&majestic_csv);
+    watch_optional_input(&existing);
     Ok(())
 }
 
@@ -371,7 +402,7 @@ fn gen_hq_urls_to_repo() {
     let out_blob = manifest.join("assets").join("hq_urls_blob.bin");
     let out_index = manifest.join("src").join("referrers_hq_index.rs");
 
-    println!("cargo:rerun-if-changed={}", input_txt.display());
+    watch_optional_input(&input_txt);
 
     if !input_txt.exists() {
         eprintln!(
@@ -478,22 +509,9 @@ fn gen_domains_to_repo() {
     let manifest = manifest_dir();
     let (input_txt, cap) = pick_referrers_input(&manifest);
 
-    println!("cargo:rerun-if-changed={}", input_txt.display());
-    // Watch both known inputs so toggling env works without touching files.
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest
-            .join("assets")
-            .join("referrers_20k_urls.txt")
-            .display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest
-            .join("assets")
-            .join("merged_referrers.txt")
-            .display()
-    );
+    watch_optional_input(&input_txt);
+    watch_optional_input(&manifest.join("assets").join("referrers_20k_urls.txt"));
+    watch_optional_input(&manifest.join("assets").join("merged_referrers.txt"));
 
     if !input_txt.exists() {
         eprintln!(
@@ -616,9 +634,17 @@ fn copy_chrome_fallback() {
     let fallback = manifest_dir().join("chrome_versions.rs.fallback");
     let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR"))
         .join("chrome_versions.rs");
-    fs::copy(&fallback, &output).unwrap_or_else(|error| {
-        panic!("failed to copy checked-in Chrome versions {}: {error}", fallback.display())
+    let contents = fs::read(&fallback).unwrap_or_else(|error| {
+        panic!(
+            "failed to read checked-in Chrome versions {}: {error}",
+            fallback.display()
+        )
     });
+    if fs::read(&output).ok().as_deref() != Some(contents.as_slice()) {
+        fs::write(&output, contents).unwrap_or_else(|error| {
+            panic!("failed to write Chrome versions {}: {error}", output.display())
+        });
+    }
     println!("cargo:rerun-if-changed={}", fallback.display());
 }
 
@@ -628,32 +654,10 @@ fn main() {
     copy_chrome_fallback();
 
     let manifest = manifest_dir();
+    watch_asset_inputs(&manifest);
 
     // Optional refresh of merged_referrers.txt
     let _ = maybe_refresh_merged_referrers(&manifest);
-
-    // Ensure builds rerun if inputs change even when SPIDER_FP_ASSETS isn't set.
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest
-            .join("assets")
-            .join("high_quality_referrers.txt")
-            .display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest
-            .join("assets")
-            .join("referrers_20k_urls.txt")
-            .display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest
-            .join("assets")
-            .join("merged_referrers.txt")
-            .display()
-    );
 
     gen_assets_if_enabled();
 }
@@ -661,35 +665,12 @@ fn main() {
 #[cfg(feature = "dynamic-versions")]
 fn main() {
     println!("cargo:rustc-cfg=build_script_ran");
-    println!("cargo:rerun-if-env-changed=SPIDER_FP_REFRESH_CHROME");
 
     let manifest = manifest_dir();
+    watch_asset_inputs(&manifest);
 
     // Optional refresh of merged_referrers.txt
     let _ = maybe_refresh_merged_referrers(&manifest);
-
-    // Ensure rebuild triggers
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest
-            .join("assets")
-            .join("high_quality_referrers.txt")
-            .display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest
-            .join("assets")
-            .join("referrers_20k_urls.txt")
-            .display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest
-            .join("assets")
-            .join("merged_referrers.txt")
-            .display()
-    );
 
     gen_assets_if_enabled();
 

@@ -273,7 +273,17 @@ pub(crate) fn permission_studio_sections(
                 .as_ref()
                 .map(|tools| tools.rules.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
-            keys.retain(|tool_name| matches!(tool_name.as_str(), "agena.shell.run" | "*"));
+            keys.retain(|tool_name| {
+                matches!(
+                    tool_name.as_str(),
+                    "agena.shell.exec"
+                        | "agena.shell.spawn"
+                        | "agena.shell.watch"
+                        | "agena.shell.open"
+                        | "agena.shell.write"
+                        | "*"
+                )
+            });
             keys.sort();
             keys.sort_by_key(|tool_name| tool_name == "*");
             let mut tool_rule_items = keys
@@ -735,9 +745,9 @@ mod tests {
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>();
         for expected in [
-            "agena.shell.run · no-op",
-            "agena.shell.run · routine",
-            "agena.shell.run · dangerous",
+            "agena.shell.exec · no-op",
+            "agena.shell.exec · routine",
+            "agena.shell.exec · dangerous",
             "* · read-only",
         ] {
             assert!(

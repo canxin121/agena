@@ -296,7 +296,7 @@ fn sample_payload(tool: &str) -> Value {
         "settings.delete" => {
             json!({"path": "providers.openai.model", "deleted": true, "changed": true})
         }
-        "shell.run" => json!({
+        "shell.exec" => json!({
             "action": "run", "shell": "bash", "background": false, "status": "exited",
             "output": "all tests passed", "exit_code": 0, "process_id": "p-1"
         }),
@@ -423,14 +423,14 @@ fn sample_input(tool: &str) -> Value {
         }
         "code.search_ast" => json!({"pattern": "fn $NAME()", "path": "src", "language": "rust"}),
         "code.syntax_tree" => json!({"path": "src/lib.rs", "language": "rust"}),
-        "shell.run" => json!({"command": "cargo test"}),
+        "shell.exec" | "shell.spawn" | "shell.watch" => json!({"command": "cargo build"}),
         "shell.logs" | "shell.stop" => json!({"process_id": "p-1"}),
         "shell.write" => {
             json!({"process_id": "p-1", "chars": "hello\r", "reads": [], "writes": [], "network": []})
         }
         "shell.resize" => json!({"process_id": "p-1", "rows": 30, "cols": 100}),
         "shell.signal" => json!({"process_id": "p-1", "signal": "interrupt"}),
-        "monitor.start" => json!({"command": "cargo watch"}),
+        "monitor.start" => json!({"ws": {"url": "wss://example.test/events"}}),
         "monitor.stop" => json!({"monitor_id": "mon-1"}),
         "interaction.ask" => json!({"questions": [{"question": "Continue?"}]}),
         "interaction.notify" => json!({"title": "Build", "body": "Done"}),
@@ -784,9 +784,9 @@ fn high_risk_tool_families_use_stable_operation_blocks() {
         );
     };
 
-    let ids = render_ids("shell.run", sample_raw("shell.run"));
-    assert_has("shell.run", &ids, "command");
-    assert_has("shell.run", &ids, "process-meta");
+    let ids = render_ids("shell.exec", sample_raw("shell.exec"));
+    assert_has("shell.exec", &ids, "command");
+    assert_has("shell.exec", &ids, "process-meta");
 
     let ids = render_ids("shell.list", sample_raw("shell.list"));
     assert_has("shell.list", &ids, "processes");
@@ -2010,7 +2010,7 @@ fn every_cloud_tool_keeps_its_location_visible_in_titles_and_result_views() {
             );
         }
     }
-    for name in ["shell.run", "fs.read", "web.search"] {
+    for name in ["shell.exec", "fs.read", "web.search"] {
         let invocation = ToolInvocation::new(name, StructuredObject::default());
         assert!(!initial_tool_title(&invocation).contains("cloud"));
     }

@@ -667,21 +667,21 @@ mod tests {
 
     #[test]
     fn shell_help_retry_example_contains_every_ref_backed_required_field() {
-        let run = ShellPlugin
+        let exec = ShellPlugin
             .manifest()
             .tools
             .into_iter()
-            .find(|tool| tool.name == "run")
-            .expect("shell.run manifest");
+            .find(|tool| tool.name == "exec")
+            .expect("shell.exec manifest");
         let descriptor = ToolDescriptor {
-            name: "shell.run".to_string(),
+            name: "shell.exec".to_string(),
             plugin_id: None,
             summary: Some("Run one shell process.".to_string()),
             help: None,
-            input_schema: Some(run.input_schema()),
+            input_schema: Some(exec.input_schema()),
         };
 
-        let help = WorkflowPlugin::render_tool_api_help(&descriptor, None);
+        let help = WorkflowPlugin::render_tool_api_help(&descriptor, None, None);
         let route = help
             .output_text
             .lines()

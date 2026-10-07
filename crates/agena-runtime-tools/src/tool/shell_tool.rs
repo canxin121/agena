@@ -1,8 +1,34 @@
-//! Internal process-management handler for the `shell` tool.
+//! Shared Shell launch and lifecycle adapter for foreground commands, background jobs and interactive terminals.
 
-static PROCESS_BLOCKING_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
+static SHELL_READ_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
+static SHELL_LAUNCH_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
 
-use crate::part::ShellToolInput;
+async fn worker_permit(
+    executor: &ToolExecutor,
+    workers: &'static tokio::sync::Semaphore,
+) -> Result<tokio::sync::SemaphorePermit<'static>, ToolError> {
+    executor.ensure_not_cancelled()?;
+    let acquire = workers.acquire();
+    let cancelled = async {
+        match executor.cancellation_token() {
+            Some(token) => token.cancelled().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancelled => Err(ToolError::Cancelled),
+        result = acquire => result.map_err(|_| ToolError::plugin("shell worker pool is unavailable".to_owned())),
+    }
+}
+
+pub(super) async fn launch_worker_permit(
+    executor: &ToolExecutor,
+) -> Result<tokio::sync::SemaphorePermit<'static>, ToolError> {
+    worker_permit(executor, &SHELL_LAUNCH_WORKERS).await
+}
+
+use crate::part::{ShellToolInput, ShellWatchInput, ShellWatchPolicy};
 use agena_domain::{ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary};
 
 use super::shell_tools::{
@@ -14,10 +40,26 @@ use super::{
     ToolPayloadOutput, ToolRuntimeContext, bash, powershell,
 };
 use crate::{
-    MonitorError, MonitorRead, MonitorReadParams as ReadParams, MonitorService, MonitorStart,
-    MonitorStartParams as StartParams, MonitorStopOutcome,
+    MonitorError, MonitorRead, MonitorService, MonitorStart, MonitorStartParams as StartParams,
+    MonitorStopOutcome,
 };
 use agena_tool::shell::powershell_command_for_windows;
+
+enum ManagedLaunch {
+    Spawn,
+    Watch(ShellWatchPolicy),
+    Open(crate::part::ShellOpenInput),
+}
+
+impl ManagedLaunch {
+    fn tool_name(&self) -> &'static str {
+        match self {
+            Self::Spawn => "agena.shell.spawn",
+            Self::Watch(_) => "agena.shell.watch",
+            Self::Open(_) => "agena.shell.open",
+        }
+    }
+}
 
 pub(crate) fn execute(
     executor: &ToolExecutor,
@@ -26,8 +68,10 @@ pub(crate) fn execute(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<ToolPayloadExecution, ToolError> {
     match input {
-        ShellToolInput::Run { .. } => Err(ToolError::plugin(
-            "shell.run must execute through the async process path".to_string(),
+        ShellToolInput::Exec { .. }
+        | ShellToolInput::Spawn { .. }
+        | ShellToolInput::Open { .. } => Err(ToolError::plugin(
+            "shell launches must execute through the async shell path".to_string(),
         )),
         ShellToolInput::List {} => {
             let registry = process_registry(executor)?;
@@ -40,33 +84,64 @@ pub(crate) fn execute(
                     .collect(),
             ))
         }
-        ShellToolInput::Logs {
-            process_id,
-            since_seq,
-            limit,
-            wait_ms,
-        } => {
+        ShellToolInput::Watch { input } => {
+            let ShellWatchInput::Process {
+                process_id,
+                policy,
+                since_seq,
+            } = input.as_ref()
+            else {
+                return Err(ToolError::plugin(
+                    "watched launches require the async launch path",
+                ));
+            };
             let registry = process_registry(executor)?;
             let owner = super::terminal_tool::owner(executor, context.session_id)?;
             if !registry.is_owned(process_id, &owner) {
                 return Err(into_tool_error(MonitorError::NotFound(process_id.clone())));
             }
-            if registry
-                .terminals()
-                .is_some_and(|terminals| terminals.contains(process_id))
-            {
-                return super::terminal_tool::execute(executor, input, context.session_id, cancel);
-            }
-            let read = registry
-                .read(ReadParams {
-                    monitor_id: process_id.clone(),
-                    since_seq: *since_seq,
-                    limit: *limit,
-                    wait_ms: *wait_ms,
-                })
+            let summary = registry
+                .configure_watch(process_id, policy.clone(), *since_seq)
                 .map_err(into_tool_error)?;
-            Ok(render_logs(read))
+            Ok(render_watch_update(summary, policy.is_some()))
         }
+        ShellToolInput::Logs {
+            process_id,
+            since_seq,
+            event_offset,
+            max_output_bytes,
+            limit,
+            wait_ms,
+        } => read_output(
+            executor,
+            input,
+            context.session_id,
+            process_id,
+            crate::ProcessReadOptions {
+                since_seq: Some(*since_seq),
+                event_offset: *event_offset,
+                max_output_bytes: *max_output_bytes,
+                limit: *limit,
+                wait_ms: *wait_ms,
+            },
+            false,
+            cancel,
+        ),
+        ShellToolInput::Read { input: read } => read_output(
+            executor,
+            input,
+            context.session_id,
+            &read.process_id,
+            crate::ProcessReadOptions {
+                since_seq: read.since_seq,
+                event_offset: read.event_offset,
+                max_output_bytes: read.max_output_bytes,
+                limit: read.limit,
+                wait_ms: read.wait_ms,
+            },
+            read.include_screen,
+            cancel,
+        ),
         ShellToolInput::Stop { process_id } => {
             let registry = process_registry(executor)?;
             let owner = super::terminal_tool::owner(executor, context.session_id)?;
@@ -98,28 +173,50 @@ pub(crate) async fn execute_async(
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     match input {
-        ShellToolInput::Run {
+        ShellToolInput::Exec {
             shell: ProcessShell::Bash,
             command,
-            run_in_background: false,
-            monitor: None,
-        } if !command.tty => execute_foreground_bash_async(executor, command, context).await,
-        ShellToolInput::Run {
+        } => execute_foreground_bash_async(executor, command, context).await,
+        ShellToolInput::Exec {
             shell: ProcessShell::Powershell,
             command,
-            run_in_background: false,
-            monitor: None,
-        } if !command.tty => {
+        } => {
             let execution = powershell::execute_async(executor, command, context).await?;
             normalize_foreground_execution(execution, ProcessShell::Powershell, command)
         }
-        ShellToolInput::Run {
-            shell,
-            command,
-            run_in_background,
-            monitor,
-        } if *run_in_background || monitor.is_some() || command.tty => {
-            execute_background_run_async(executor, *shell, command, monitor.as_ref(), context).await
+        ShellToolInput::Spawn { shell, command } => {
+            execute_managed_launch_async(executor, *shell, command, ManagedLaunch::Spawn, context)
+                .await
+        }
+        ShellToolInput::Watch { input }
+            if matches!(input.as_ref(), ShellWatchInput::Launch { .. }) =>
+        {
+            let ShellWatchInput::Launch {
+                shell,
+                command,
+                policy,
+            } = input.as_ref()
+            else {
+                unreachable!()
+            };
+            execute_managed_launch_async(
+                executor,
+                *shell,
+                command,
+                ManagedLaunch::Watch(policy.clone()),
+                context,
+            )
+            .await
+        }
+        ShellToolInput::Open { input } => {
+            execute_managed_launch_async(
+                executor,
+                input.shell,
+                &input.command,
+                ManagedLaunch::Open(input.as_ref().clone()),
+                context,
+            )
+            .await
         }
         _ => {
             let worker_executor = executor.clone();
@@ -128,18 +225,26 @@ pub(crate) async fn execute_async(
             // At most sixteen ordinary workers block; out-of-band controls use
             // the runtime's remaining blocking capacity and never wait on them.
             let urgent = matches!(
-                input,
+                &input,
                 ShellToolInput::Stop { .. } | ShellToolInput::Signal { .. }
-            );
+            ) || matches!(&input, ShellToolInput::Watch { input } if matches!(input.as_ref(), ShellWatchInput::Process { policy: None, .. }));
             let worker_permit = if urgent {
                 None
             } else {
-                Some(PROCESS_BLOCKING_WORKERS.acquire().await.map_err(|error| {
-                    ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
-                        "process worker pool is unavailable",
-                        &error,
-                    ))
-                })?)
+                Some(
+                    worker_permit(
+                        executor,
+                        if matches!(
+                            input,
+                            ShellToolInput::Read { .. } | ShellToolInput::Logs { .. }
+                        ) {
+                            &SHELL_READ_WORKERS
+                        } else {
+                            &SHELL_LAUNCH_WORKERS
+                        },
+                    )
+                    .await?,
+                )
             };
             super::terminal_tool::blocking(executor, move |cancel| {
                 let _worker_permit = worker_permit;
@@ -170,26 +275,31 @@ fn normalize_foreground_execution(
         apply_patch: _,
     } = execution;
 
-    let (status, description, exit_code, output_text) = match output {
-        ToolPayloadOutput::Shell {
-            status,
-            description,
-            exit_code,
-            output,
-            ..
-        } => (
-            status.unwrap_or(ProcessStatus::Exited),
-            description,
-            exit_code,
-            output.unwrap_or_else(|| view.output_text.clone()),
-        ),
-        other => {
-            return Err(ToolError::invalid_input(format!(
-                "shell.run expected process output, got {other:?}"
-            )));
-        }
-    };
-    view.set_title(process_run_title(command));
+    let (status, description, exit_code, output_text, completion_reason, output_archive) =
+        match output {
+            ToolPayloadOutput::Shell {
+                status,
+                description,
+                exit_code,
+                output,
+                completion_reason,
+                output_archive,
+                ..
+            } => (
+                status.unwrap_or(ProcessStatus::Exited),
+                description,
+                exit_code,
+                output.unwrap_or_else(|| view.output_text.clone()),
+                completion_reason,
+                output_archive,
+            ),
+            other => {
+                return Err(ToolError::invalid_input(format!(
+                    "shell.exec expected command output, got {other:?}"
+                )));
+            }
+        };
+    view.set_title(command_title("Execute", command));
     view.metadata.insert("shell".to_string(), shell.to_string());
     view.metadata
         .insert("background".to_string(), "false".to_string());
@@ -197,11 +307,13 @@ fn normalize_foreground_execution(
         .insert("status".to_string(), status.to_string());
 
     let output = ToolPayloadOutput::Shell {
+        output_archive,
         terminal: None,
         dropped_bytes: 0,
-        action: "run".to_string(),
+        action: "exec".to_string(),
         shell: Some(shell),
         background: false,
+        ready: false,
         process_id: None,
         status: Some(status),
         output: Some(output_text),
@@ -209,27 +321,25 @@ fn normalize_foreground_execution(
         events: Vec::new(),
         processes: Vec::new(),
         last_seq: 0,
+        next_event_offset: 0,
         has_more: false,
         dropped_lines: 0,
         exit_code,
+        completion_reason,
     };
     Ok(ToolPayloadExecution::new(output, view))
 }
 
-async fn execute_background_run_async(
+async fn execute_managed_launch_async(
     executor: &ToolExecutor,
     shell: ProcessShell,
     command: &crate::part::ShellCommandInput,
-    monitor: Option<&crate::part::ShellMonitorInput>,
+    mode: ManagedLaunch,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let effects = command.filesystem_effects();
-    if command.tty && monitor.is_some() {
-        return Err(ToolError::invalid_input(
-            "tty cannot be combined with monitor; a quiet terminal is not a completed command",
-        ));
-    }
-    validate_declared_filesystem_effects("shell.run", command.command.as_str(), &effects)?;
+    let tool_name = mode.tool_name();
+    validate_declared_filesystem_effects(tool_name, command.command.as_str(), &effects)?;
     let cwd = resolve_workdir(executor, command.workdir.as_deref())?;
     let ToolRuntimeContext {
         session_id,
@@ -246,7 +356,8 @@ async fn execute_background_run_async(
             Some(prepared) => Some(prepared),
             None => match (session_id, call_id) {
                 (Some(session_id), Some(call_id)) => {
-                    bash::prepare_command_async(executor, command, session_id, call_id).await?
+                    bash::prepare_command_async(executor, command, session_id, call_id, tool_name)
+                        .await?
                 }
                 _ => None,
             },
@@ -277,36 +388,32 @@ async fn execute_background_run_async(
 
     let worker_executor = executor.clone();
     let worker_command = command.clone();
-    let worker_monitor = monitor.cloned();
-    let worker_permit = PROCESS_BLOCKING_WORKERS.acquire().await.map_err(|error| {
-        ToolError::plugin(agena_failure::diagnostic::format_error_chain_with_context(
-            "process worker pool is unavailable",
-            &error,
-        ))
-    })?;
+    let worker_permit = launch_worker_permit(executor).await?;
     super::terminal_tool::blocking(executor, move |cancel| {
         let _worker_permit = worker_permit;
         let process_owner = super::terminal_tool::owner(&worker_executor, session_id)?;
-        let terminal_owner = worker_command.tty.then(|| process_owner.clone());
-        if let Some(owner) = terminal_owner {
+        if let ManagedLaunch::Open(terminal_input) = mode {
             return super::terminal_tool::start_prepared(
                 &worker_executor,
                 shell,
-                &worker_command,
+                &terminal_input,
                 final_command,
                 final_cwd,
                 env,
                 launch.as_ref(),
                 reserved_process_id,
-                owner,
+                process_owner,
                 cancel,
             );
         }
-        execute_background_run_prepared(
+        execute_spawn_prepared(
             &worker_executor,
             shell,
             &worker_command,
-            worker_monitor.as_ref(),
+            match &mode {
+                ManagedLaunch::Watch(policy) => Some(policy),
+                _ => None,
+            },
             PreparedShellCommand {
                 command: final_command,
                 cwd: final_cwd,
@@ -315,19 +422,21 @@ async fn execute_background_run_async(
             },
             reserved_process_id,
             process_owner,
+            &cancel,
         )
     })
     .await
 }
 
-fn execute_background_run_prepared(
+fn execute_spawn_prepared(
     executor: &ToolExecutor,
     shell: ProcessShell,
     command: &crate::part::ShellCommandInput,
-    monitor: Option<&crate::part::ShellMonitorInput>,
+    watch: Option<&ShellWatchPolicy>,
     prepared: PreparedShellCommand,
     reserved_process_id: Option<String>,
     owner: crate::TerminalOwner,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let PreparedShellCommand {
         command: final_command,
@@ -339,50 +448,128 @@ fn execute_background_run_prepared(
         executor,
         match launch.as_ref() {
             Some(spec) => spec.argv(final_command.as_str()),
+            None if shell == ProcessShell::Powershell => {
+                powershell_command_for_windows(&final_command)
+            }
             None => agena_tool::shell::shell_command_for_platform(&final_command),
         },
         command,
         &mut env,
     )?;
     let registry = process_registry(executor)?;
-    let pattern = |value: Option<&String>| {
-        value.map(|value| match monitor.map(|monitor| monitor.pattern_kind) {
-            Some(crate::part::ShellMonitorPatternKind::Literal) => regex::escape(value),
-            _ => value.clone(),
-        })
-    };
     let started = registry
-        .start(StartParams {
-            owner: Some(owner),
-            argv: Some(argv),
-            process_id: reserved_process_id,
-            command: final_command,
-            ws: None,
-            description: command.description.clone(),
-            workdir: final_cwd,
-            timeout_ms: monitor
-                .and_then(|monitor| monitor.timeout_ms)
-                .or(command.timeout_ms),
-            persistent: monitor.map(|monitor| monitor.persistent).unwrap_or(true),
-            monitored: monitor.is_some(),
-            include_pattern: monitor.and_then(|monitor| monitor.include_pattern.clone()),
-            success_pattern: pattern(monitor.and_then(|monitor| monitor.success_pattern.as_ref())),
-            failure_pattern: pattern(monitor.and_then(|monitor| monitor.failure_pattern.as_ref())),
-            quiet_period_ms: monitor.and_then(|monitor| monitor.quiet_period_ms),
-            max_buffered_lines: monitor.and_then(|monitor| monitor.max_buffered_lines),
-            capture_stderr: monitor
-                .map(|monitor| monitor.capture_stderr)
-                .unwrap_or(true),
-            env,
-        })
+        .start_confirmed(
+            StartParams {
+                owner: Some(owner),
+                argv: Some(argv),
+                process_id: reserved_process_id,
+                command: final_command,
+                ws: None,
+                description: command.description.clone(),
+                workdir: final_cwd,
+                timeout_ms: command.timeout_ms,
+                persistent: command.timeout_ms.is_none(),
+                monitored: watch.is_some(),
+                watch: watch.cloned(),
+                include_pattern: None,
+                success_pattern: None,
+                failure_pattern: None,
+                quiet_period_ms: None,
+                max_buffered_lines: None,
+                capture_stderr: true,
+                env,
+            },
+            cancel,
+        )
         .map_err(into_tool_error)?;
-    let mut execution = render_run(started, shell, command, monitor.is_some());
+    let mut execution = render_spawn(started, shell, command, watch.is_some());
     if let Some(spec) = launch.as_ref() {
         for (key, value) in spec.metadata() {
             execution.view.metadata.insert(key, value);
         }
     }
     Ok(execution)
+}
+
+fn read_output(
+    executor: &ToolExecutor,
+    input: &ShellToolInput,
+    session_id: Option<i64>,
+    process_id: &str,
+    options: crate::ProcessReadOptions,
+    include_screen: bool,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<ToolPayloadExecution, ToolError> {
+    let registry = process_registry(executor)?;
+    let owner = super::terminal_tool::owner(executor, session_id)?;
+    if !registry.is_owned(process_id, &owner) {
+        return Err(into_tool_error(MonitorError::NotFound(process_id.into())));
+    }
+    if registry
+        .terminals()
+        .is_some_and(|terminals| terminals.contains(process_id))
+    {
+        return super::terminal_tool::execute(executor, input, session_id, cancel);
+    }
+    if include_screen {
+        return Err(ToolError::invalid_input(
+            "include_screen is available only for shell.open terminals",
+        ));
+    }
+    let read = registry
+        .read_output_cancellable(process_id, options, cancel)
+        .map_err(into_tool_error)?;
+    Ok(render_logs(read, input.action()))
+}
+
+fn render_watch_update(summary: ProcessSummary, enabled: bool) -> ToolPayloadExecution {
+    let mut view = ToolExecutionView::simple(
+        "Configure process watch",
+        if enabled {
+            "Watch updated"
+        } else {
+            "Watch removed"
+        },
+        format!(
+            "{}: process_id={}, status={}, ready={}. The existing process continues and its original completion notification remains active. Read output with shell.read; stop the process with shell.stop.",
+            if enabled {
+                "Replaced output watch"
+            } else {
+                "Removed output watch"
+            },
+            summary.process_id,
+            summary.status,
+            summary.ready
+        ),
+    );
+    insert_summary_metadata(&mut view, &summary);
+    let output = ToolPayloadOutput::Shell {
+        action: if enabled {
+            "watch_update"
+        } else {
+            "watch_remove"
+        }
+        .into(),
+        output_archive: summary.output_archive.clone(),
+        terminal: None,
+        dropped_bytes: 0,
+        shell: None,
+        background: true,
+        ready: summary.ready,
+        process_id: Some(summary.process_id),
+        status: Some(summary.status),
+        output: None,
+        description: None,
+        events: Vec::new(),
+        processes: Vec::new(),
+        last_seq: 0,
+        next_event_offset: 0,
+        has_more: summary.last_seq > 0,
+        dropped_lines: summary.dropped_lines,
+        exit_code: summary.exit_code,
+        completion_reason: summary.completion_reason,
+    };
+    ToolPayloadExecution::new(output, view)
 }
 
 fn finalize_background_command(
@@ -401,10 +588,7 @@ fn finalize_background_command(
                     "powershell tool is only available on Windows".to_string(),
                 ));
             }
-            Ok((
-                powershell_command_for_windows(&command.command).join(" "),
-                cwd,
-            ))
+            Ok((command.command.clone(), cwd))
         }
     }
 }
@@ -430,34 +614,38 @@ fn into_tool_error(err: MonitorError) -> ToolError {
     }
 }
 
-fn process_run_title(command: &crate::part::ShellCommandInput) -> String {
+fn command_title(action: &str, command: &crate::part::ShellCommandInput) -> String {
     let subject = if command.description.trim().is_empty() {
         command.command.trim()
     } else {
         command.description.trim()
     };
-    format!("Run process · {subject}")
+    format!("{action} command · {subject}")
 }
 
-fn render_run(
+fn render_spawn(
     started: MonitorStart,
     shell: ProcessShell,
     command: &crate::part::ShellCommandInput,
-    monitored: bool,
+    watched: bool,
 ) -> ToolPayloadExecution {
     let summary = started.summary;
-    let title = process_run_title(command);
+    let action = if watched { "watch" } else { "spawn" };
+    let title = command_title(if watched { "Watch" } else { "Spawn" }, command);
+    let notifications = if watched {
+        "Readiness notifies once without ending the process; include_pattern notifies once by default. No ordinary output is notified without an include_pattern. Completion is delivered once."
+    } else {
+        "You will receive one system_notification when it ends."
+    };
     let body = format!(
-        "Started {} process {} (status={}). You will be notified with a `system_notification` when it settles — do not poll shell.list/shell.logs waiting for it. Use shell.stop to terminate it.",
-        if monitored { "monitored" } else { "background" },
-        summary.process_id,
-        summary.status
+        "Started background shell job {} (status={}). Continue other work now. {notifications} Do not poll merely to wait. Use shell.read for incremental diagnostics and shell.stop for cleanup.",
+        summary.process_id, summary.status
     );
     let mut view = ToolExecutionView::simple(
         title,
         format!(
             "{} · {}",
-            if monitored { "Monitored" } else { "Background" },
+            if watched { "Watching" } else { "Background" },
             summary.status
         ),
         body,
@@ -465,39 +653,45 @@ fn render_run(
     insert_summary_metadata(&mut view, &summary);
     view.metadata.insert("shell".to_string(), shell.to_string());
     view.metadata
-        .insert("monitored".to_string(), monitored.to_string());
+        .insert("monitored".to_string(), watched.to_string());
 
     let output = ToolPayloadOutput::Shell {
         terminal: None,
         dropped_bytes: 0,
-        action: "run".to_string(),
+        action: action.to_string(),
+        output_archive: summary.output_archive.clone(),
         shell: Some(shell),
         background: true,
+        ready: summary.ready,
         process_id: Some(summary.process_id.clone()),
         status: Some(summary.status),
         output: None,
         description: None,
         events: Vec::new(),
-        processes: vec![summary.clone()],
-        last_seq: summary.last_seq,
+        processes: Vec::new(),
+        // A launch receipt has consumed no output. Returning the registry's
+        // current cursor would make the first shell.logs call skip startup logs.
+        last_seq: 0,
+        next_event_offset: 0,
         has_more: summary.last_seq > 0,
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
+        completion_reason: summary.completion_reason.clone(),
     };
     ToolPayloadExecution::new(output, view)
 }
 
 fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
     let body = if processes.is_empty() {
-        "No background processes registered in this session.".to_string()
+        "No shell jobs or interactive terminals registered in this session.".to_string()
     } else {
-        let mut lines = vec![format!("{} background process(es):", processes.len())];
+        let mut lines = vec![format!("{} shell job(s)/terminal(s):", processes.len())];
         for summary in &processes {
             lines.push(format!(
                 "- {id} [{status}] kind={kind} buffered={buf} last_seq={seq} dropped={dropped}{exit}{reason} :: {command}",
                 id = summary.process_id,
                 status = summary.status,
-                kind = if summary.monitored { "monitor" } else { "process" },
+                kind = if summary.tty { "terminal" } else if summary.websocket { "websocket" } else if summary.monitored { "watch" } else { "background" },
                 buf = summary.buffered_lines,
                 seq = summary.last_seq,
                 dropped = summary.dropped_lines,
@@ -528,8 +722,10 @@ fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
         terminal: None,
         dropped_bytes: 0,
         action: "list".to_string(),
+        output_archive: None,
         shell: None,
         background: true,
+        ready: false,
         process_id: None,
         status: None,
         output: None,
@@ -537,18 +733,22 @@ fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
         events: Vec::new(),
         processes,
         last_seq: 0,
+        next_event_offset: 0,
         has_more: false,
         dropped_lines: 0,
         exit_code: None,
+        completion_reason: None,
     };
     ToolPayloadExecution::new(output, view)
 }
 
-fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
+fn render_logs(read: MonitorRead, action: &str) -> ToolPayloadExecution {
+    // Slicing happens before consumption in the process registry. A partial
+    // event carries its byte cursor, never silently advancing past unseen text.
     let process_id = read.monitor_id.clone();
     let status = read.status;
     let events = read.events;
-    let body = format_process_events(
+    let mut body = format_process_events(
         process_id.as_str(),
         status,
         events.as_slice(),
@@ -558,6 +758,13 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
         read.exit_code,
         read.completion_reason.as_deref(),
     );
+    if let Some(archive) = &read.output_archive {
+        body.push('\n');
+        body.push_str(&crate::process_output_archive::archive_hint(archive));
+    }
+    if read.next_event_offset != 0 {
+        body.push_str(&format!("\n[partial event: continue with since_seq={} and event_offset={} (next_event_offset); no remaining text was discarded]", read.last_seq, read.next_event_offset));
+    }
     let log_summary = if read.has_more {
         format!("{} events · {} · more available", events.len(), status)
     } else {
@@ -588,9 +795,11 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
     let output = ToolPayloadOutput::Shell {
         terminal: None,
         dropped_bytes: 0,
-        action: "logs".to_string(),
+        action: action.to_string(),
+        output_archive: read.output_archive.clone(),
         shell: None,
         background: true,
+        ready: read.ready,
         process_id: Some(process_id),
         status: Some(status),
         output: None,
@@ -598,9 +807,11 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
         events,
         processes: Vec::new(),
         last_seq: read.last_seq,
+        next_event_offset: read.next_event_offset,
         has_more: read.has_more,
         dropped_lines: read.dropped_lines,
         exit_code: read.exit_code,
+        completion_reason: read.completion_reason,
     };
     ToolPayloadExecution::new(output, view)
 }
@@ -633,8 +844,10 @@ fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
         terminal: None,
         dropped_bytes: 0,
         action: "stop".to_string(),
+        output_archive: summary.output_archive.clone(),
         shell: None,
         background: true,
+        ready: summary.ready,
         process_id: Some(summary.process_id.clone()),
         status: Some(summary.status),
         output: None,
@@ -642,9 +855,11 @@ fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
         events: Vec::new(),
         processes: vec![summary.clone()],
         last_seq: summary.last_seq,
+        next_event_offset: 0,
         has_more: false,
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
+        completion_reason: summary.completion_reason.clone(),
     };
     ToolPayloadExecution::new(output, view)
 }

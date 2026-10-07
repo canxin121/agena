@@ -59,6 +59,7 @@ pub struct BashPatternRule {
     matcher: CommandPatternMatcher,
     pattern: String,
     mode: PermissionMode,
+    tool_name: Option<String>,
 }
 
 impl BashPatternRule {
@@ -68,6 +69,7 @@ impl BashPatternRule {
             matcher: CommandPatternMatcher::Wildcard(WildcardPattern::new(&pattern)),
             pattern,
             mode,
+            tool_name: None,
         }
     }
 
@@ -83,7 +85,25 @@ impl BashPatternRule {
             matcher: CommandPatternMatcher::Class(class),
             pattern: keyword.into(),
             mode,
+            tool_name: None,
         }
+    }
+
+    pub(crate) fn for_tool(mut self, name: &str) -> Self {
+        self.tool_name = Some(
+            normalized_shell_command_tool(name)
+                .unwrap_or(name)
+                .to_owned(),
+        );
+        self
+    }
+
+    fn applies_to(&self, names: &[&str]) -> bool {
+        self.tool_name.as_deref().is_none_or(|scope| {
+            names
+                .iter()
+                .any(|name| normalized_shell_command_tool(name).unwrap_or(name) == scope)
+        })
     }
 
     fn matches(&self, input: &str) -> bool {
@@ -218,6 +238,53 @@ fn bash_rule_qualifier_reverse(command: &str, rules: &[BashPatternRule]) -> Opti
         .map(|rule| rule.pattern.clone())
 }
 
+pub(crate) fn normalized_shell_command_tool(name: &str) -> Option<&'static str> {
+    match name {
+        "shell.exec" | "agena.shell.exec" | "agena_shell_exec" => Some("agena.shell.exec"),
+        "shell.spawn" | "agena.shell.spawn" | "agena_shell_spawn" => Some("agena.shell.spawn"),
+        "shell.watch" | "agena.shell.watch" | "agena_shell_watch" => Some("agena.shell.watch"),
+        "shell.open" | "agena.shell.open" | "agena_shell_open" => Some("agena.shell.open"),
+        "shell.write" | "agena.shell.write" | "agena_shell_write" => Some("agena.shell.write"),
+        "monitor.start" | "agena.monitor.start" | "agena_monitor_start" => {
+            Some("agena.monitor.start")
+        }
+        _ => None,
+    }
+}
+
+fn shell_permission_qualifier(
+    command: &str,
+    policy: Option<&ToolPermissionPolicy>,
+    names: &[&str],
+) -> Option<String> {
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
+    }
+    policy
+        .and_then(|policy| {
+            policy
+                .bash_deny_rules
+                .iter()
+                .find(|rule| rule.applies_to(names) && rule.matches(command))
+                .or_else(|| {
+                    policy
+                        .bash_overlay_rules
+                        .iter()
+                        .rev()
+                        .find(|rule| rule.applies_to(names) && rule.matches(command))
+                })
+                .or_else(|| {
+                    policy
+                        .bash_pattern_rules
+                        .iter()
+                        .find(|rule| rule.applies_to(names) && rule.matches(command))
+                })
+                .map(|rule| rule.pattern.clone())
+        })
+        .or_else(|| Some(command.to_owned()))
+}
+
 fn is_terminal_write(names: &[&str]) -> bool {
     names.iter().any(|name| {
         matches!(
@@ -234,7 +301,7 @@ pub fn tool_action(
     policy: Option<&ToolPermissionPolicy>,
 ) -> PermissionAction {
     let qualifier = if ToolTag::is_shell(tags) && !is_terminal_write(&[tool_name]) {
-        command.and_then(|command| bash_permission_qualifier(command, policy))
+        command.and_then(|command| shell_permission_qualifier(command, policy, &[tool_name]))
     } else {
         None
     };
@@ -283,6 +350,27 @@ impl ToolPermissionPolicy {
             .push(BashPatternRule::new_class(class, keyword, mode));
     }
 
+    pub(crate) fn add_shell_tool_pattern(
+        &mut self,
+        tool: &str,
+        pattern: &str,
+        mode: PermissionMode,
+    ) {
+        self.bash_overlay_rules
+            .push(BashPatternRule::new_wildcard(pattern, mode).for_tool(tool));
+    }
+
+    pub(crate) fn add_shell_tool_class(
+        &mut self,
+        tool: &str,
+        class: CommandClass,
+        keyword: &str,
+        mode: PermissionMode,
+    ) {
+        self.bash_overlay_rules
+            .push(BashPatternRule::new_class(class, keyword, mode).for_tool(tool));
+    }
+
     /// Install the read-only tool class, written as `tools.rules."*".read-only`.
     pub fn set_read_only_mode(&mut self, mode: Option<PermissionMode>) {
         self.read_only_mode = mode;
@@ -317,9 +405,10 @@ impl ToolPermissionPolicy {
             }
             if let Some(command) = command {
                 for rule_decision in [
-                    self.evaluate_bash_deny(command),
-                    self.evaluate_bash_overlay_pattern(command),
-                    self.evaluate_bash_pattern(command),
+                    self.evaluate_bash_deny(command, names),
+                    self.evaluate_bash_overlay_pattern(command, names),
+                    self.evaluate_bash_pattern(command, names),
+                    self.evaluate_command_class(command, names),
                 ]
                 .into_iter()
                 .flatten()
@@ -339,19 +428,19 @@ impl ToolPermissionPolicy {
         if ToolTag::is_shell(tags)
             && let Some(command) = command
         {
-            if let Some(decision) = self.evaluate_bash_deny(command) {
+            if let Some(decision) = self.evaluate_bash_deny(command, names) {
                 return decision;
             }
-            if let Some(decision) = self.evaluate_bash_overlay_pattern(command) {
+            if let Some(decision) = self.evaluate_bash_overlay_pattern(command, names) {
                 return decision;
             }
-            if let Some(decision) = self.evaluate_bash_pattern(command) {
+            if let Some(decision) = self.evaluate_bash_pattern(command, names) {
                 return decision;
             }
             // The command classes are defaults: a command the user named under
             // `tools.rules` was answered above, and a command no rule names
             // lands on its class default.
-            if let Some(decision) = self.evaluate_command_class(command) {
+            if let Some(decision) = self.evaluate_command_class(command, names) {
                 return decision;
             }
         }
@@ -446,7 +535,7 @@ impl ToolPermissionPolicy {
     /// `allow` / `allow` / `deny` when the configuration carries none.
     /// A class left at `Auto` is not decided statically and reaches the
     /// approval model.
-    fn evaluate_command_class(&self, command: &str) -> Option<PermissionDecision> {
+    fn evaluate_command_class(&self, command: &str, names: &[&str]) -> Option<PermissionDecision> {
         let normalized = command.trim();
         if normalized.is_empty() {
             return None;
@@ -456,7 +545,7 @@ impl ToolPermissionPolicy {
             .bash_overlay_rules
             .iter()
             .rev()
-            .find(|rule| matches!(rule.matcher, CommandPatternMatcher::Class(rule_class) if rule_class == class))
+            .find(|rule| rule.applies_to(names) && matches!(rule.matcher, CommandPatternMatcher::Class(rule_class) if rule_class == class))
             .map(|rule| rule.mode);
         let mode = configured.unwrap_or_else(|| built_in_command_class_mode(class));
         if mode == PermissionMode::Auto {
@@ -477,13 +566,13 @@ impl ToolPermissionPolicy {
         })
     }
 
-    fn evaluate_bash_pattern(&self, command: &str) -> Option<PermissionDecision> {
+    fn evaluate_bash_pattern(&self, command: &str, names: &[&str]) -> Option<PermissionDecision> {
         let normalized = command.trim();
         if normalized.is_empty() {
             return None;
         }
         for rule in &self.bash_pattern_rules {
-            if rule.matches(normalized) {
+            if rule.applies_to(names) && rule.matches(normalized) {
                 let decision = match rule.mode {
                     PermissionMode::Allow => PermissionDecision::Allow,
                     PermissionMode::Auto => PermissionDecision::Auto {
@@ -511,13 +600,17 @@ impl ToolPermissionPolicy {
         None
     }
 
-    fn evaluate_bash_overlay_pattern(&self, command: &str) -> Option<PermissionDecision> {
+    fn evaluate_bash_overlay_pattern(
+        &self,
+        command: &str,
+        names: &[&str],
+    ) -> Option<PermissionDecision> {
         let normalized = command.trim();
         if normalized.is_empty() {
             return None;
         }
         for rule in self.bash_overlay_rules.iter().rev() {
-            if rule.matches(normalized) {
+            if rule.applies_to(names) && rule.matches(normalized) {
                 let decision = match rule.mode {
                     PermissionMode::Allow => PermissionDecision::Allow,
                     PermissionMode::Auto => PermissionDecision::Auto {
@@ -545,13 +638,13 @@ impl ToolPermissionPolicy {
         None
     }
 
-    fn evaluate_bash_deny(&self, command: &str) -> Option<PermissionDecision> {
+    fn evaluate_bash_deny(&self, command: &str, names: &[&str]) -> Option<PermissionDecision> {
         let normalized = command.trim();
         if normalized.is_empty() {
             return None;
         }
         for rule in &self.bash_deny_rules {
-            if rule.matches(normalized) {
+            if rule.applies_to(names) && rule.matches(normalized) {
                 return Some(PermissionDecision::Deny {
                     reason: format!(
                         "bash command matches deny pattern `{}` and is unconditionally blocked",

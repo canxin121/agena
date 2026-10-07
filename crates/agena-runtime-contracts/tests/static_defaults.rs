@@ -97,21 +97,21 @@ fn temp_file(name: &str) -> String {
         .into_owned()
 }
 
-/// The `agena.shell.run` command-class table of `config`.
+/// The `agena.shell.exec` command-class table of `config`.
 fn shell_classes(config: &PermissionConfig) -> indexmap::IndexMap<String, PermissionMode> {
     match config
         .tools
         .as_ref()
         .expect("tools section")
         .rules
-        .get("agena.shell.run")
+        .get("agena.shell.exec")
     {
         Some(ToolPermissionRules::Ordered(entries)) => entries.clone(),
         other => panic!("the shipped shell rules are an ordered table, got {other:?}"),
     }
 }
 
-/// Set one command-class keyword of `agena.shell.run`, or clear it when `mode`
+/// Set one command-class keyword of `agena.shell.exec`, or clear it when `mode`
 /// is `None`.
 fn set_shell_class(config: &mut PermissionConfig, keyword: &str, mode: Option<PermissionMode>) {
     let mut entries = shell_classes(config);
@@ -124,7 +124,7 @@ fn set_shell_class(config: &mut PermissionConfig, keyword: &str, mode: Option<Pe
         }
     }
     config.tools.as_mut().expect("tools section").rules.insert(
-        "agena.shell.run".to_owned(),
+        "agena.shell.exec".to_owned(),
         ToolPermissionRules::Ordered(entries),
     );
 }
@@ -278,7 +278,7 @@ fn routine_commands_are_allowed_and_dangerous_ones_denied_by_default() {
     assert_eq!(
         check(
             &policy,
-            "agena.shell.run",
+            "agena.shell.exec",
             shell_tags().as_slice(),
             Some("git status")
         ),
@@ -287,7 +287,7 @@ fn routine_commands_are_allowed_and_dangerous_ones_denied_by_default() {
     assert!(matches!(
         check(
             &policy,
-            "agena.shell.run",
+            "agena.shell.exec",
             shell_tags().as_slice(),
             Some("rm -rf /")
         ),
@@ -306,7 +306,7 @@ fn a_dangerous_command_class_set_to_auto_reaches_the_model() {
     }));
     let decision = check(
         &policy,
-        "agena.shell.run",
+        "agena.shell.exec",
         shell_tags().as_slice(),
         Some("rm -rf /"),
     );
@@ -321,7 +321,7 @@ fn an_ambiguous_command_reaches_the_model() {
     let policy = tool_policy(&class_entries(|_| {}));
     let decision = check(
         &policy,
-        "agena.shell.run",
+        "agena.shell.exec",
         shell_tags().as_slice(),
         Some("git push origin main"),
     );
@@ -341,14 +341,14 @@ fn a_configured_tool_rule_wins_over_a_command_class_entry() {
             .as_mut()
             .expect("tools section")
             .names
-            .insert("agena.shell.run".to_owned(), PermissionMode::Ask);
+            .insert("agena.shell.exec".to_owned(), PermissionMode::Ask);
     });
     let policy = tool_policy(&config);
     assert!(
         matches!(
             check(
                 &policy,
-                "agena.shell.run",
+                "agena.shell.exec",
                 shell_tags().as_slice(),
                 Some("git status")
             ),
@@ -365,7 +365,7 @@ fn a_command_pattern_outranks_the_command_class() {
     // class defaults for everything else.
     let config = shipped(|config| {
         config.tools.as_mut().expect("tools section").rules.insert(
-            "agena.shell.run".to_owned(),
+            "agena.shell.exec".to_owned(),
             ToolPermissionRules::Ordered(indexmap::IndexMap::from([
                 ("git status *".to_owned(), PermissionMode::Deny),
                 (
@@ -379,7 +379,7 @@ fn a_command_pattern_outranks_the_command_class() {
     assert!(matches!(
         check(
             &policy,
-            "agena.shell.run",
+            "agena.shell.exec",
             shell_tags().as_slice(),
             Some("git status --short")
         ),
@@ -388,7 +388,7 @@ fn a_command_pattern_outranks_the_command_class() {
     assert_eq!(
         check(
             &policy,
-            "agena.shell.run",
+            "agena.shell.exec",
             shell_tags().as_slice(),
             Some("ls")
         ),

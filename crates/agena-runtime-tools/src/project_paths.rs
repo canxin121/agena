@@ -82,7 +82,7 @@ fn prune_session_dirs(base: &Path, live_session_ids: &[i64]) -> Vec<PathBuf> {
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(|name| name.parse::<i64>().ok())
-            .is_some_and(|session_id| live_session_ids.contains(&session_id));
+            .is_some_and(|session_id| session_id == 0 || live_session_ids.contains(&session_id));
         if !live && std::fs::remove_dir_all(&path).is_ok() {
             removed.push(path);
         }

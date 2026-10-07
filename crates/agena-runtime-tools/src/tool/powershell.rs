@@ -10,7 +10,9 @@ use super::{
 };
 use agena_tool::{
     ShellRequest,
-    shell::{DEFAULT_SHELL_TIMEOUT_MS, powershell_command_for_windows, truncate_shell_output},
+    shell::{
+        DEFAULT_SHELL_TIMEOUT_MS, powershell_command_for_windows, truncate_shell_output_budget,
+    },
 };
 
 pub(super) async fn execute_async(
@@ -46,20 +48,52 @@ pub(super) async fn execute_async(
     (request.command, request.env) =
         crate::shell_sandbox::protect_async(executor, request.command, input, request.env).await?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
+    let archive = crate::process_output_archive::OutputArchive::new(
+        executor.workspace_root(),
+        context.session_id,
+    );
     // A foreground command reports its output while it runs, exactly like the
     // bash path: the sink is display state and never changes the result.
     let execution = executor
-        .execute_shell_command_with_live(&request, context.live_output.clone())
+        .execute_shell_command_with_live(
+            &request,
+            context.live_output.clone(),
+            Some(archive.clone()),
+        )
         .await?;
+    archive.finish_async().await;
     executor.ensure_not_cancelled()?;
-    render_execution(&request, execution)
+    let output_archive = if archive
+        .discard_if_fully_visible(
+            &execution.aggregated_output,
+            crate::process_output::text_budget(input.max_output_bytes, false),
+        )
+        .await
+    {
+        None
+    } else {
+        archive.snapshot()
+    };
+    render_execution(&request, execution, output_archive, input.max_output_bytes)
 }
 
 fn render_execution(
     request: &ShellRequest,
     execution: agena_tool::ShellOutput,
+    output_archive: Option<agena_domain::ProcessOutputArchive>,
+    max_output_bytes: Option<u32>,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let (trimmed_output, truncated) = truncate_shell_output(&execution.aggregated_output);
+    let (mut trimmed_output, truncated) = truncate_shell_output_budget(
+        &execution.aggregated_output,
+        crate::process_output::text_budget(max_output_bytes, false),
+    );
+    if let Some(archive) = output_archive
+        .as_ref()
+        .filter(|archive| truncated || archive.truncated || archive.pending)
+    {
+        trimmed_output.push_str("\n\n");
+        trimmed_output.push_str(&crate::process_output_archive::archive_hint(archive));
+    }
 
     let status_text = if execution.timed_out {
         format!(
@@ -81,11 +115,13 @@ fn render_execution(
     };
 
     let output = ToolPayloadOutput::Shell {
+        output_archive,
         terminal: None,
         dropped_bytes: 0,
-        action: "run".to_string(),
+        action: "exec".to_string(),
         shell: Some(ProcessShell::Powershell),
         background: false,
+        ready: false,
         process_id: None,
         status: Some(if execution.timed_out {
             ProcessStatus::TimedOut
@@ -97,9 +133,18 @@ fn render_execution(
         events: Vec::new(),
         processes: Vec::new(),
         last_seq: 0,
+        next_event_offset: 0,
         has_more: false,
         dropped_lines: 0,
         exit_code: Some(execution.exit_code),
+        completion_reason: Some(
+            if execution.timed_out {
+                "timeout"
+            } else {
+                "exit"
+            }
+            .to_owned(),
+        ),
     };
     let run_summary = if execution.timed_out {
         format!("Timed out · {} ms", execution.duration.as_millis())

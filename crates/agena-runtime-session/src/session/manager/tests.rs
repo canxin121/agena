@@ -2370,6 +2370,8 @@ async fn opening_a_new_subtask_at_running_publication_cannot_be_reconciled_as_ab
     let response = manager
         .run_subtask(SessionSubtaskRequest {
             parent_session_id: parent.id,
+            run_in_background: false,
+            launch_call_id: None,
             description: "race fixture".to_owned(),
             prompt: "finish the fixture".to_owned(),
             commands: None,
@@ -2415,6 +2417,8 @@ async fn subtask_timeout_persists_a_complete_timeout_failure_even_when_cleanup_i
     let response = manager
         .run_subtask(SessionSubtaskRequest {
             parent_session_id: parent.id,
+            run_in_background: false,
+            launch_call_id: None,
             description: "BG child timeout fixture".to_owned(),
             prompt: "wait forever".to_owned(),
             commands: None,
@@ -6350,9 +6354,11 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
         .await
         .expect("start launching run");
     let invocation = ToolInvocation::new(
-        "shell.run",
-        StructuredObject::try_from(serde_json::json!({"run_in_background": true}))
-            .expect("structured shell input"),
+        "shell.spawn",
+        StructuredObject::try_from(
+            serde_json::json!({"command": "sleep 30", "reads": [], "writes": [], "network": []}),
+        )
+        .expect("structured shell input"),
     );
     let operation = agena_runtime_contracts::part::OperationPart::pending(
         41,
@@ -6385,11 +6391,13 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
         .pending_tool_by_part_id(tool_part_id)
         .expect("resolve pending shell tool");
     let output = crate::tool::ToolPayloadOutput::Shell {
+        output_archive: None,
         terminal: None,
         dropped_bytes: 0,
-        action: "run".to_owned(),
+        action: "spawn".to_owned(),
         shell: Some(agena_domain::ProcessShell::Bash),
         background: true,
+        ready: false,
         process_id: Some("proc_durable_launch".to_owned()),
         status: Some(agena_domain::ProcessStatus::Running),
         output: None,
@@ -6397,9 +6405,11 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
         events: Vec::new(),
         processes: Vec::new(),
         last_seq: 0,
+        next_event_offset: 0,
         has_more: false,
         dropped_lines: 0,
         exit_code: None,
+        completion_reason: None,
     }
     .into_tool_output();
     let execution = crate::tool::ToolInvocationExecution::new(

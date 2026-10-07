@@ -843,6 +843,137 @@ impl SessionManager {
         &self,
         request: SessionSubtaskRequest,
     ) -> Result<SessionSubtaskResponse, AppError> {
+        let failure_context = request.run_in_background.then(|| {
+            (
+                request.parent_session_id,
+                request.launch_call_id,
+                request.task_id.clone(),
+            )
+        });
+        let result = self.run_subtask_inner(request).await;
+        if let Err(error) = &result
+            && let Some((parent_id, Some(call_id), task_id)) = failure_context
+        {
+            match self
+                .record_background_task_start_failure(parent_id, call_id, task_id.as_deref(), error)
+                .await
+            {
+                Ok(Some((delivery, notification))) => {
+                    let manager = self.background_handle();
+                    tokio::spawn(async move {
+                        if let Err(error) = manager
+                            .dispatch_background_delivery(delivery, notification)
+                            .await
+                        {
+                            tracing::warn!(%error, "failed task-start notification will be retried");
+                        }
+                    });
+                }
+                Ok(None) => {}
+                Err(record_error) => {
+                    tracing::warn!(%record_error, "failed to persist background task-start failure")
+                }
+            }
+        }
+        result
+    }
+
+    async fn record_background_task_start_failure(
+        &self,
+        parent_id: i64,
+        call_id: i64,
+        task_id: Option<&str>,
+        error: &AppError,
+    ) -> Result<
+        Option<(
+            agena_storage::store::BackgroundDelivery,
+            agena_runtime_contracts::part_content::SystemNotificationContent,
+        )>,
+        AppError,
+    > {
+        use agena_runtime_contracts::part_content::SystemNotificationContent;
+        use agena_storage::store::{
+            BackgroundEventRequest, BackgroundOperationKind, BackgroundOperationPhase,
+            NewBackgroundOperation,
+        };
+
+        self.session_mutations.run(parent_id, async {
+            let parent = self.store.load_session(parent_id).await?;
+            let Some((run_id, tool_part_id)) = parent.parts().iter().find_map(|part| {
+                let operation = super::replies::operation_from_part(part)?;
+                (operation.call_id == call_id && part.role == PartRole::Assistant)
+                    .then_some((part.run_id?, part.part_id))
+            }) else { return Ok(None); };
+            let operations = self.store.facade.active_background_operations_for_session(
+                parent_id, Some(BackgroundOperationKind::Task), 64,
+            ).await.map_err(crate::session::store::store_error)?;
+            let operation = match operations.into_iter().find(|operation| operation.launch_tool_part_id == Some(tool_part_id)) {
+                Some(operation) => operation,
+                None => self.store.create_background_operation(NewBackgroundOperation {
+                    operation_id: super::helpers::background_operation_id(parent_id, tool_part_id),
+                    session_id: parent_id,
+                    launch_run_id: Some(run_id),
+                    launch_tool_part_id: Some(tool_part_id),
+                    kind: BackgroundOperationKind::Task,
+                }).await?,
+            };
+            if operation.phase.is_terminal() { return Ok(None); }
+            if let Some(child_id) = operation.outcome.as_ref()
+                .and_then(|value| value.get("child_session_id"))
+                .and_then(serde_json::Value::as_i64)
+                && !self.execution_registry.is_active(child_id).await
+            {
+                let mut child = self.store.load_session(child_id).await?;
+                if !child.runtime.subtask.status.is_terminal() {
+                    let started = child.runtime.subtask.started_at_ms.or_else(|| {
+                        operation.outcome.as_ref()
+                            .and_then(|value| value.get("started_at_ms"))
+                            .and_then(serde_json::Value::as_i64)
+                    }).unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+                    let finished = chrono::Utc::now().timestamp_millis().max(started);
+                    let status = if matches!(error, AppError::Cancelled) {
+                        agena_domain::SubtaskStatus::Cancelled
+                    } else {
+                        agena_domain::SubtaskStatus::Failed
+                    };
+                    child = self.store.update_subtask_state(
+                        child, Some(status.as_ref().to_owned()), Some(started), Some(finished),
+                        if status == agena_domain::SubtaskStatus::Cancelled { None } else {
+                            Some(serde_json::to_value(error.failure()).map_err(|error| AppError::Internal(format!("encode task failure: {error}")))?)
+                        },
+                    ).await?;
+                }
+                // A completion write may have failed after a successful run.
+                // Preserve the child's committed terminal fact when retrying.
+                return self.record_background_task_completion(&operation, &child, task_id.unwrap_or("task")).await;
+            }
+            let cancelled = matches!(error, AppError::Cancelled);
+            let failure = error.failure();
+            let notification = SystemNotificationContent {
+                operation_id: operation.external_id.clone().unwrap_or_else(|| operation.operation_id.clone()),
+                operation_kind: "task".to_owned(),
+                status: if cancelled { "cancelled" } else { "failed" }.to_owned(),
+                summary: format!("Task {} failed: {}", task_id.unwrap_or("launch"), failure.user.fallback),
+                body: failure.user.fallback.clone(),
+                ..Default::default()
+            };
+            let settled = self.store.record_background_event(BackgroundEventRequest {
+                operation_id: operation.operation_id,
+                event_key: "terminal".to_owned(),
+                event_seq: None,
+                next_phase: Some(if cancelled { BackgroundOperationPhase::Cancelled } else { BackgroundOperationPhase::Failed }),
+                outcome: None,
+                failure: Some(serde_json::json!({"id":failure.id.to_string(),"message":failure.user.fallback})),
+                notification: new_part_from_content("system_notification", PartRole::Assistant, &TypedContent::SystemNotification(notification.clone()), PartState::Completed)?,
+            }).await?;
+            Ok(Some((settled.delivery, notification)))
+        }).await
+    }
+
+    async fn run_subtask_inner(
+        &self,
+        request: SessionSubtaskRequest,
+    ) -> Result<SessionSubtaskResponse, AppError> {
         let task_started = tokio::time::Instant::now();
         let task_timeout = request.timeout_ms.map(std::time::Duration::from_millis);
         let state = self.execution_state();
@@ -912,7 +1043,7 @@ impl SessionManager {
         // Serialize only durable subtask preparation for a direct parent. The
         // bounded coordinator rejects nested acquisition and times out queued
         // writers, so this path cannot wait forever or form a lock cycle.
-        let (resumed, child_id, baseline_message_id, baseline_usage, usage_budget) = self
+        let (resumed, child_id, baseline_message_id, baseline_usage, usage_budget, background_id) = self
             .session_mutations
             .run(parent.id, async {
                 let existing = self
@@ -958,7 +1089,104 @@ impl SessionManager {
                 // ordinary project session look permanently snapshot-scoped.
                 child.runtime.execution.effective_workspace_root =
                     parent.runtime.execution.effective_workspace_root.clone();
-                let started_at_ms = chrono::Utc::now().timestamp_millis();
+                if child.runtime.subtask.status.is_terminal()
+                    && let Some(external_id) = self
+                        .background_task_external_id_for_run(
+                            parent.id,
+                            &task_id,
+                            child.id,
+                            child.runtime.subtask.started_at_ms,
+                        )
+                        .await?
+                    && let Some(operation) = self
+                        .store
+                        .background_operation_by_external_id(
+                            agena_storage::store::BackgroundOperationKind::Task,
+                            &external_id,
+                        )
+                        .await?
+                    && !operation.phase.is_terminal()
+                    && let Some((delivery, notification)) = self
+                        .record_background_task_completion(&operation, &child, &task_id)
+                        .await?
+                {
+                    let manager = self.background_handle();
+                    tokio::spawn(async move {
+                        if let Err(error) = manager
+                            .dispatch_background_delivery(delivery, notification)
+                            .await
+                        {
+                            tracing::warn!(%error, "prior task-run completion delivery will be retried");
+                        }
+                    });
+                }
+                // The timestamp is also the durable run correlation key.
+                // Guarantee uniqueness even for very fast consecutive resumes.
+                let started_at_ms = chrono::Utc::now().timestamp_millis().max(
+                    child.runtime.subtask.started_at_ms.unwrap_or(0).saturating_add(1),
+                );
+                let background_id = if request.run_in_background {
+                    use agena_storage::store::{
+                        BackgroundOperationKind, NewBackgroundOperation,
+                    };
+                    let initial = self
+                        .store
+                        .background_operation_by_external_id(BackgroundOperationKind::Task, &task_id)
+                        .await?;
+                    let launch = request.launch_call_id.and_then(|call_id| {
+                        parent.parts().iter().find_map(|part| {
+                            let operation = super::replies::operation_from_part(part)?;
+                            (operation.call_id == call_id && part.role == PartRole::Assistant)
+                                .then_some((part.run_id?, part.part_id))
+                        })
+                    });
+                    let operation = match initial {
+                        Some(operation)
+                            if operation.session_id == parent.id
+                                && !operation.phase.is_terminal()
+                                && operation.outcome.is_none() => Some(operation),
+                        initial if launch.is_some() => {
+                            let (launch_run_id, launch_tool_part_id) = launch.expect("checked launch receipt");
+                            let run_id = format!("task_run_{}_{started_at_ms}", child.id);
+                            let external_id = if initial.is_none() && !resumed {
+                                task_id.clone()
+                            } else {
+                                run_id.clone()
+                            };
+                            Some(self.prepare_background_launch(
+                                NewBackgroundOperation {
+                                    operation_id: run_id,
+                                    session_id: parent.id,
+                                    launch_run_id: Some(launch_run_id),
+                                    launch_tool_part_id: Some(launch_tool_part_id),
+                                    kind: BackgroundOperationKind::Task,
+                                },
+                                external_id,
+                            )
+                            .await
+                            .map_err(|error| match error {
+                                super::BackgroundLaunchError::Tool(error) => AppError::Config(error.to_string()),
+                                super::BackgroundLaunchError::Session(error) => error,
+                            })?)
+                        }
+                        _ => None,
+                    };
+                    if let Some(operation) = operation {
+                        let operation = self
+                            .bind_background_task_run(
+                                &operation.operation_id,
+                                &task_id,
+                                child.id,
+                                started_at_ms,
+                            )
+                            .await?;
+                        Some(operation.operation_id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let baseline_message_id = child
                     .parts()
                     .iter()
@@ -1003,6 +1231,7 @@ impl SessionManager {
                     baseline_message_id,
                     baseline_usage,
                     usage_budget,
+                    background_id,
                 ))
             })
             .await?;
@@ -1144,7 +1373,9 @@ impl SessionManager {
                 (status, failure, budget_exceeded, session)
             }
         };
-        let finished_at_ms = chrono::Utc::now().timestamp_millis();
+        let finished_at_ms = chrono::Utc::now()
+            .timestamp_millis()
+            .max(session.runtime.subtask.started_at_ms.unwrap_or(0));
         session.runtime.subtask.status = status;
         session.runtime.subtask.finished_at_ms = Some(finished_at_ms);
         session.runtime.subtask.failure = failure.clone();
@@ -1166,6 +1397,38 @@ impl SessionManager {
             )
             .await?;
         let usage = session.aggregate_usage().saturating_sub(&baseline_usage);
+
+        if let Some(background_id) = background_id {
+            let completion = self
+                .session_mutations
+                .run(parent.id, async {
+                    let operation = self
+                        .store
+                        .background_operation(&background_id)
+                        .await?
+                        .ok_or_else(|| {
+                            AppError::Internal(format!(
+                                "background task run {background_id} disappeared"
+                            ))
+                        })?;
+                    self.record_background_task_completion(&operation, &session, &task_id)
+                        .await
+                })
+                .await?;
+            if let Some((delivery, notification)) = completion {
+                let manager = self.background_handle();
+                // A task waiter may still occupy the parent execution. Do not
+                // make the child's return wait for its notification ack.
+                tokio::spawn(async move {
+                    if let Err(error) = manager
+                        .dispatch_background_delivery(delivery, notification)
+                        .await
+                    {
+                        tracing::warn!(%error, "task-run completion delivery will be retried");
+                    }
+                });
+            }
+        }
 
         Ok(SessionSubtaskResponse {
             task_id,

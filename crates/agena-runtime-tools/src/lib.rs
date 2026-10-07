@@ -15,6 +15,8 @@ mod file_diff;
 pub use file_diff::{FileDiffPreview, file_diff_preview};
 pub mod media_input;
 mod monitor;
+mod process_output;
+mod process_output_archive;
 mod project_instructions;
 mod project_paths;
 pub mod shell_sandbox;
@@ -29,7 +31,7 @@ pub use atomic_file::{
 };
 pub use monitor::{
     MonitorError, MonitorListener, MonitorRead, MonitorRegistry, MonitorService, MonitorStart,
-    MonitorStopOutcome, MonitorWsParams, default_monitor_registry,
+    MonitorStopOutcome, MonitorWsParams, ProcessReadOptions, default_monitor_registry,
 };
 pub use monitor::{ReadParams as MonitorReadParams, StartParams as MonitorStartParams};
 

@@ -5,7 +5,11 @@
 //! unified registry; the application-facing [`RuntimeActivityService`]
 //! implementation reads the same state.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use agena_domain::{
     BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
@@ -89,6 +93,7 @@ pub(crate) struct MonitorActivityBridge {
     /// `system_notification` part). Populated after the runtime is assembled,
     /// like `on_finished`.
     pub(crate) on_event: SharedEventCallback,
+    pub(crate) on_watch_changed: SharedFinishedCallback,
 }
 
 type SharedFinishedCallback =
@@ -159,6 +164,18 @@ impl crate::MonitorListener for MonitorActivityBridge {
         }
     }
 
+    fn on_watch_changed(&self, summary: &ProcessSummary) {
+        self.on_started(summary);
+        let callback = self
+            .on_watch_changed
+            .lock()
+            .expect("watch callback lock")
+            .clone();
+        if let Some(callback) = callback {
+            callback(summary);
+        }
+    }
+
     fn on_finished(&self, summary: &ProcessSummary) {
         self.registry
             .upsert(self.carry_forward(shell_activity(summary)));
@@ -197,6 +214,10 @@ fn shell_activity(summary: &ProcessSummary) -> BackgroundActivity {
                 "{} · {label}",
                 if summary.tty {
                     "Terminal"
+                } else if summary.websocket {
+                    "WebSocket"
+                } else if summary.monitored {
+                    "Watch command"
                 } else {
                     "Run process"
                 }
@@ -389,18 +410,101 @@ pub(crate) struct BackgroundCompletionBridge {
     /// Late-bound: the session manager is assembled after the initial
     /// snapshot, so the slot starts empty and is set once the runtime exists.
     manager: Arc<Mutex<Option<Arc<SessionManager>>>>,
+    monitor_events: Arc<Mutex<HashMap<String, MonitorEventRoute>>>,
+}
+
+struct MonitorEventRoute {
+    generation: uuid::Uuid,
+    // None caches an unavailable delivery route until the process finishes.
+    sender: Option<tokio::sync::watch::Sender<MonitorEventTail>>,
+    flushed: tokio::sync::oneshot::Receiver<()>,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+#[derive(Clone, Default)]
+struct MonitorEventTail {
+    lines: VecDeque<(u64, String)>,
+    bytes: usize,
+    last_seq: u64,
+    ready_seq: Option<u64>,
+    output_archive: Option<agena_domain::ProcessOutputArchive>,
+}
+
+impl MonitorEventTail {
+    fn push(&mut self, event: &ProcessEvent, summary: &ProcessSummary) {
+        const MAX_BYTES: usize = 6 * 1024;
+        const MAX_LINES: usize = 64;
+        let stream = match event.stream {
+            ProcessStream::Stdout => "out",
+            ProcessStream::Stderr => "err",
+        };
+        // Bound before copying: a single long line cannot balloon the bridge.
+        let mut start = event.line.len().saturating_sub(MAX_BYTES - 256);
+        while !event.line.is_char_boundary(start) {
+            start += 1;
+        }
+        let line = format!(
+            "#{:>5} {stream} {}{}",
+            event.seq,
+            if start > 0 {
+                format!(
+                    "[notification omits {start} leading bytes; inspect shell.read/output_archive] "
+                )
+            } else {
+                String::new()
+            },
+            &event.line[start..]
+        );
+        let delivery_seq = event.notification_seq.unwrap_or(event.seq);
+        if event.notification.as_deref() == Some("ready") {
+            self.ready_seq = Some(delivery_seq);
+        }
+        self.output_archive = summary.output_archive.clone();
+        self.bytes += line.len();
+        let index = self.lines.partition_point(|(seq, _)| *seq < delivery_seq);
+        self.lines.insert(index, (delivery_seq, line));
+        self.last_seq = self.last_seq.max(delivery_seq);
+        while self.bytes > MAX_BYTES || self.lines.len() > MAX_LINES {
+            if let Some((_, line)) = self.lines.pop_front() {
+                self.bytes -= line.len();
+            }
+        }
+    }
 }
 
 impl BackgroundCompletionBridge {
     pub(crate) fn new(manager: Option<Arc<SessionManager>>) -> Self {
         Self {
             manager: Arc::new(Mutex::new(manager)),
+            monitor_events: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Late-bind the session manager (assembled after the initial snapshot).
     pub(crate) fn set_manager(&self, manager: Option<Arc<SessionManager>>) {
+        let stopping = manager.is_none();
         *self.manager.lock().expect("background manager lock") = manager;
+        if stopping {
+            let mut routes = self
+                .monitor_events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for route in routes.values() {
+                route.cancel.cancel();
+            }
+            routes.clear();
+        }
+    }
+
+    pub(crate) fn update_shell_watch(&self, summary: &ProcessSummary) {
+        if let Some(route) = self
+            .monitor_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&summary.process_id)
+        {
+            route.cancel.cancel();
+        }
     }
 
     /// Facade observer subscription for low-latency task completion. Durable
@@ -422,6 +526,11 @@ impl BackgroundCompletionBridge {
     /// Settle the durable shell/monitor aggregate for a process that just
     /// reached a terminal state.
     pub(crate) fn complete_shell(&self, summary: &ProcessSummary) {
+        // Persistent interactive terminals are explicitly read/written by the
+        // caller. They have no durable background launch or AI wake to settle.
+        if summary.tty || summary.owner_session_id.is_none() {
+            return;
+        }
         let terminal = match summary.status {
             ProcessStatus::Exited => PartState::Completed,
             ProcessStatus::TimedOut | ProcessStatus::Stopped | ProcessStatus::Failed => {
@@ -431,6 +540,17 @@ impl BackgroundCompletionBridge {
             // has nothing to do here.
             ProcessStatus::Running => return,
         };
+        // Closing the publisher lets the one event worker flush its last
+        // bounded tail and releases the per-process route cache.
+        let event_flush = self
+            .monitor_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&summary.process_id)
+            .map(|route| {
+                drop(route.sender);
+                route.flushed
+            });
         let command_label = format!("\"{}\"", summary.command.trim());
         let outcome = if terminal == PartState::Completed {
             Ok(match summary.exit_code {
@@ -460,12 +580,38 @@ impl BackgroundCompletionBridge {
             ProcessStatus::Failed => "failed",
             ProcessStatus::Running => unreachable!("complete_shell filters Running above"),
         };
-        let summary_line = outcome
+        let mut summary_line = outcome
             .as_ref()
             .map(String::as_str)
             .unwrap_or_else(|failure| failure.user.fallback.as_str())
             .to_string();
+        if let Some(archive) = &summary.output_archive {
+            if let Some(path) = &archive.path {
+                summary_line.push_str(&format!(
+                    "\nCaptured output: {path}. Search with fs.grep or read selected lines/byte ranges with fs.read.{}",
+                    if archive.truncated { " The archive is incomplete; storage limits or capture errors omitted output." }
+                    else if archive.pending { " Archive writes are pending; the file may still grow." }
+                    else { "" }
+                ));
+                if let Some(segment) = archive
+                    .segments
+                    .last()
+                    .filter(|_| archive.segments.len() > 1)
+                {
+                    summary_line.push_str(&format!("\nRecent output: {} (captured bytes [{}..{}), local file offsets start at 0). Inspect shell.read output_archive.segments for all retained files.", segment.path, segment.start_byte, segment.end_byte));
+                }
+            } else if let Some(error) = &archive.error {
+                summary_line.push_str(&format!("\nCaptured output could not be saved: {error}. Recent buffered output may still be available from shell.read."));
+            } else if archive.pending {
+                summary_line.push_str("\nOutput archive writes are pending; shell.read exposes the current output_archive path for diagnosis.");
+            }
+        }
         tokio::spawn(async move {
+            // Preserve event-before-completion order without letting a stalled
+            // event/database worker indefinitely delay terminal notification.
+            if let Some(flushed) = event_flush {
+                let _ = tokio::time::timeout(Duration::from_secs(2), flushed).await;
+            }
             let Some((session_id, kind)) = bridge
                 .resolve_background_session_either(&["shell", "monitor"], &process_id)
                 .await
@@ -511,100 +657,203 @@ impl BackgroundCompletionBridge {
 
     /// Project one monitor event as an Assistant-owned `system_notification`
     /// on the monitor's launch run.
-    /// Only `kind:"monitor"` operations (the Monitor tool) project
-    /// events; plain/monitored shells keep their logs in the streaming buffer
-    /// (queryable via `shell.logs`).
+    /// Watched shell commands and WebSocket subscriptions share the bounded
+    /// event bridge while retaining their own durable operation kind.
     pub(crate) fn settle_monitor_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {
-        // PTY output is consumed interactively, not delivered as continuous
-        // monitor notifications. Avoid spawning a DB lookup task per raw chunk.
-        if summary.tty {
+        // Plain shell/PTY logs are read from their process buffer. Only a
+        // monitored process can need transcript event notifications.
+        if summary.tty
+            || summary.owner_session_id.is_none()
+            || !summary.monitored
+            || summary.status != ProcessStatus::Running
+        {
             return;
         }
-        let bridge = self.clone();
         let process_id = summary.process_id.clone();
-        let event_seq = event.seq;
-        let stream = match event.stream {
-            ProcessStream::Stdout => "out",
-            ProcessStream::Stderr => "err",
-        };
-        let summary_line = format!("#{:>5} {} {}", event_seq, stream, event.line);
+        let mut routes = self
+            .monitor_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(route) = routes.get(&process_id) {
+            if let Some(sender) = &route.sender {
+                sender.send_modify(|tail| tail.push(event, summary));
+            }
+            return;
+        }
+        let generation = uuid::Uuid::new_v4();
+        let mut tail = MonitorEventTail::default();
+        tail.push(event, summary);
+        let (sender, mut events) = tokio::sync::watch::channel(tail);
+        let (flushed_tx, flushed) = tokio::sync::oneshot::channel();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        routes.insert(
+            process_id.clone(),
+            MonitorEventRoute {
+                generation,
+                sender: Some(sender),
+                flushed,
+                cancel: cancel.clone(),
+            },
+        );
+        drop(routes);
+        let bridge = self.clone();
         tokio::spawn(async move {
-            let Some(session_id) = bridge
-                .resolve_background_session("monitor", &process_id)
-                .await
-            else {
-                return;
-            };
-            let Some(manager) = bridge
+            // Resolve once through the durable index for either launch kind;
+            // never query the database or start a new worker for every line.
+            let owner = bridge
+                .resolve_background_session_either(&["shell", "monitor"], &process_id)
+                .await;
+            let manager = bridge
                 .manager
                 .lock()
-                .expect("background manager lock")
-                .clone()
-            else {
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let (Some((session_id, kind)), Some(manager)) = (owner, manager) else {
+                bridge.ignore_monitor_events(&process_id, generation);
                 return;
             };
-            let result = manager
-                .settle_background_event(
-                    session_id,
-                    "monitor",
-                    &process_id,
-                    event_seq,
-                    SystemNotificationContent {
+            let mut last_seq = 0;
+            while !cancel.is_cancelled() {
+                let tail = events.borrow_and_update().clone();
+                let lines = tail
+                    .lines
+                    .iter()
+                    .filter(|(seq, _)| *seq > last_seq)
+                    .collect::<Vec<_>>();
+                if !lines.is_empty() {
+                    let missed = lines[0].0.saturating_sub(last_seq.saturating_add(1));
+                    let mut body = String::new();
+                    if missed > 0 {
+                        body.push_str(&format!(
+                            "[{missed} notification sequence positions were filtered or omitted from this bounded notification; inspect shell.read for retained details.]\n"
+                        ));
+                    }
+                    for (_, line) in &lines {
+                        if !body.is_empty() {
+                            body.push('\n');
+                        }
+                        body.push_str(line);
+                    }
+                    let ready = tail.ready_seq.is_some_and(|seq| seq > last_seq);
+                    if ready {
+                        body.insert_str(0, "[service ready; process continues running]\n");
+                    }
+                    body.push_str(&format!("\nProcess {process_id}. Diagnostic replay: shell.read(process_id, since_seq=0); do not poll merely to wait."));
+                    if let Some(archive) = &tail.output_archive {
+                        if let Some(path) = &archive.path {
+                            body.push_str(&format!(
+                                "\nStartup output: {path}. Use fs.grep/fs.read for selected ranges."
+                            ));
+                        }
+                        if let Some(segment) = archive
+                            .segments
+                            .last()
+                            .filter(|_| archive.segments.len() > 1)
+                        {
+                            body.push_str(&format!("\nRecent output: {} (captured bytes [{}..{}), file-local offsets start at 0).", segment.path, segment.start_byte, segment.end_byte));
+                        }
+                        if archive.truncated {
+                            body.push_str(
+                                " Archive is incomplete; inspect output_archive.segments for gaps.",
+                            );
+                        } else if archive.pending {
+                            body.push_str(" Archive writes are pending.");
+                        }
+                    }
+                    let summary = if ready {
+                        format!("Process {process_id} is ready and continues running")
+                    } else if lines.len() == 1 && missed == 0 {
+                        lines[0].1.clone()
+                    } else {
+                        format!(
+                            "Watched output through notification #{} ({} retained events)",
+                            tail.last_seq,
+                            lines.len()
+                        )
+                    };
+                    let notification = SystemNotificationContent {
                         operation_id: process_id.clone(),
-                        operation_kind: "monitor".to_string(),
-                        status: "event".to_string(),
-                        summary: summary_line.clone(),
-                        body: summary_line,
-                        event_seq: Some(event_seq),
+                        operation_kind: kind.clone(),
+                        status: if ready { "ready" } else { "event" }.to_owned(),
+                        summary,
+                        body,
+                        event_seq: Some(tail.last_seq),
                         ..Default::default()
-                    },
-                )
-                .await;
-            if let Err(error) = &result {
-                tracing::warn!(
-                    target: "agena_background",
-                    %session_id, %process_id, event_seq, %error,
-                    "failed to settle monitor event"
-                );
+                    };
+                    let mut settled = false;
+                    // A transient database/delivery failure must not silently
+                    // consume readiness. Retry the same durable event key;
+                    // storage/outbox deduplication prevents duplicate wakes.
+                    for attempt in 0..3 {
+                        if cancel.is_cancelled() {
+                            break;
+                        }
+                        match manager
+                            .settle_background_event(
+                                session_id,
+                                &kind,
+                                &process_id,
+                                tail.last_seq,
+                                notification.clone(),
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                settled = true;
+                                break;
+                            }
+                            Err(error) => {
+                                tracing::warn!(target: "agena_background", %session_id, %process_id, %error, attempt, "failed to settle monitor event batch");
+                                if attempt < 2 {
+                                    tokio::select! {
+                                        _ = cancel.cancelled() => break,
+                                        _ = tokio::time::sleep(Duration::from_millis(100 << attempt)) => {},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !settled {
+                        if !cancel.is_cancelled() {
+                            bridge.ignore_monitor_events(&process_id, generation);
+                        }
+                        break;
+                    }
+                    last_seq = tail.last_seq;
+                }
+                let changed = tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    result = events.changed() => result,
+                };
+                if changed.is_err() {
+                    break;
+                }
+                // One worker and one bounded latest tail per process; neither
+                // output bursts nor slow model acknowledgement spawn more work.
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {},
+                }
             }
+            let _ = flushed_tx.send(());
         });
     }
 
-    /// Resolve exclusively through the durable operation aggregate.
-    async fn resolve_background_session(&self, kind: &str, id: &str) -> Option<i64> {
-        let manager = self
-            .manager
+    fn ignore_monitor_events(&self, process_id: &str, generation: uuid::Uuid) {
+        let mut routes = self
+            .monitor_events
             .lock()
-            .expect("background manager lock")
-            .clone()?;
-        let operation_kind = agena_storage::store::BackgroundOperationKind::parse(kind)?;
-        match manager
-            .background_operation_owner_for_external(&[operation_kind], id)
-            .await
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(route) = routes.get_mut(process_id)
+            && route.generation == generation
         {
-            Ok(Some((session_id, _))) => Some(session_id),
-            Ok(None) => {
-                tracing::error!(
-                    target: "agena_background",
-                    %kind, %id,
-                    "background signal has no durable operation owner"
-                );
-                None
-            }
-            Err(error) => {
-                tracing::error!(
-                    target: "agena_background",
-                    %kind, %id, %error,
-                    "failed to query durable background operation owner"
-                );
-                None
-            }
+            route.sender = None;
         }
     }
 
     /// Resolve the session for a background marker whose launch kind is
     /// ambiguous. The process registry indexes every process under the kind of
-    /// its launch tool: `shell.run` (with or without a `monitor` sub-object)
+    /// its launch tool: `shell.spawn` and `shell.watch`
     /// indexes under `"shell"` while the `monitor.start` tool indexes under
     /// `"monitor"`, and a terminal `on_finished` event does not say which.
     /// Try each candidate kind in order and return the first hit with the kind
@@ -623,28 +872,27 @@ impl BackgroundCompletionBridge {
             .lock()
             .expect("background manager lock")
             .clone()?;
-        match manager
-            .background_operation_owner_for_external(&durable_kinds, id)
-            .await
-        {
-            Ok(Some((session_id, kind))) => Some((session_id, kind.as_str().to_owned())),
-            Ok(None) => {
-                tracing::error!(
-                    target: "agena_background",
-                    ?kinds, %id,
-                    "background completion has no durable operation owner"
-                );
-                None
-            }
-            Err(error) => {
-                tracing::error!(
-                    target: "agena_background",
-                    ?kinds, %id, %error,
-                    "failed to query durable background completion owner"
-                );
-                None
+        for attempt in 0..3 {
+            match manager
+                .background_operation_owner_for_external(&durable_kinds, id)
+                .await
+            {
+                Ok(Some((session_id, kind))) => {
+                    return Some((session_id, kind.as_str().to_owned()));
+                }
+                Ok(None) => {
+                    tracing::error!(target: "agena_background", ?kinds, %id, "background completion has no durable operation owner");
+                    return None;
+                }
+                Err(error) => {
+                    tracing::warn!(target: "agena_background", ?kinds, %id, %error, attempt, "failed to query durable background completion owner");
+                    if attempt < 2 {
+                        tokio::time::sleep(Duration::from_millis(100 << attempt)).await;
+                    }
+                }
             }
         }
+        None
     }
 }
 
@@ -748,6 +996,7 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
         return;
     };
     let child_session_id = meta.id;
+    let started_at_ms = meta.subtask_started_at_ms;
     let notification_status = match status {
         SubtaskStatus::Completed => "completed",
         SubtaskStatus::Failed => "failed",
@@ -766,6 +1015,22 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
         SubtaskStatus::Created | SubtaskStatus::Running => unreachable!("terminal status"),
     };
     tokio::spawn(async move {
+        let external_id = match manager
+            .background_task_external_id_for_run(
+                parent_id,
+                &task_id,
+                child_session_id,
+                started_at_ms,
+            )
+            .await
+        {
+            Ok(Some(external_id)) => external_id,
+            Ok(None) => return, // Inline tasks have no background delivery.
+            Err(error) => {
+                tracing::warn!(%parent_id, %task_id, %error, "failed to resolve task-run completion owner");
+                return;
+            }
+        };
         let outcome = match terminal {
             PartState::Completed => {
                 let final_text = match manager.session_store().load(child_session_id).await {
@@ -812,7 +1077,7 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
             }
         };
         let notification = SystemNotificationContent {
-            operation_id: task_id.clone(),
+            operation_id: external_id.clone(),
             operation_kind: "task".to_string(),
             status: notification_status,
             summary,
@@ -826,7 +1091,7 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
             .settle_background_operation(
                 parent_id,
                 "task",
-                &task_id,
+                &external_id,
                 terminal,
                 outcome,
                 notification,
@@ -987,13 +1252,16 @@ mod tests {
 
     fn summary(tty: bool, session: Option<i64>) -> ProcessSummary {
         ProcessSummary {
+            websocket: false,
             process_id: "proc_live".to_string(),
+            output_archive: None,
             tty,
             command: "cargo test".to_string(),
             description: String::new(),
             status: ProcessStatus::Running,
             background: true,
             monitored: false,
+            ready: false,
             started_at_ms: 1,
             ended_at_ms: None,
             buffered_lines: 0,

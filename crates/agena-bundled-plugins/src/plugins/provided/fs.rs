@@ -142,7 +142,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, read_only),
         summary = "Read workspace files.",
-        help = "Use `read` for text previews and directory listings. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents."
+        help = "Use read for text previews and directory listings. offset/limit page 1-based lines or entries. For very long single lines, use byte_offset (zero-based) and byte_limit (4–16384, default 8192) to seek directly to a small UTF-8 text range; continue with read_info.next_byte_offset. Byte ranges cannot combine with line offsets/limits, directories or attachment mode. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents."
     )]
     async fn invoke_read(
         &self,

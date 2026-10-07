@@ -9,6 +9,99 @@ const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
 const MAX_PAGE_BYTES: usize = 64 * 1024;
 const PREFIX_BYTES: usize = MAX_LINE_CHARS * 4 + 4;
 
+/// Byte paging avoids clipping a giant JSON/log line to its first 2000 chars.
+/// A page reads only its own range, preserving complete UTF-8 code points.
+pub(super) fn read_bytes(
+    executor: &ToolExecutor,
+    input: &ReadToolInput,
+    path: &std::path::Path,
+    display_path: &str,
+) -> Result<ToolPayloadExecution, ToolError> {
+    use std::io::{Seek, SeekFrom};
+    executor.ensure_not_cancelled()?;
+    let offset = input.byte_offset.unwrap_or(0);
+    let limit = input.byte_limit.unwrap_or(8192) as usize;
+    if !(4..=16384).contains(&limit) {
+        return Err(ToolError::invalid_input("byte_limit must be 4–16384"));
+    }
+    let mut file = agena_tool::file_io::open_regular_file(path)?;
+    let before = file.metadata()?;
+    if offset > before.len() {
+        return Err(ToolError::invalid_input(
+            "byte_offset exceeds the file size",
+        ));
+    }
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::with_capacity(limit + 4);
+    (&mut file)
+        .take((limit as u64 + 4).min(before.len() - offset))
+        .read_to_end(&mut bytes)?;
+    executor.ensure_not_cancelled()?;
+    let skip = if offset > 0 {
+        bytes
+            .iter()
+            .take(3)
+            .take_while(|byte| **byte & 0xc0 == 0x80)
+            .count()
+    } else {
+        0
+    };
+    let mut end = bytes.len().min(skip + limit);
+    let text = match std::str::from_utf8(&bytes[skip..end]) {
+        Ok(text) => text.to_owned(),
+        Err(error) if error.error_len().is_none() => {
+            end = skip + error.valid_up_to();
+            std::str::from_utf8(&bytes[skip..end])
+                .expect("valid UTF-8 prefix")
+                .to_owned()
+        }
+        Err(_) => {
+            return Err(ToolError::invalid_input(
+                "selected byte range is not UTF-8; use attachment mode for binary content",
+            ));
+        }
+    };
+    let next_offset = offset + end as u64;
+    let next = (next_offset < before.len()).then_some(next_offset);
+    let after = file.metadata()?;
+    let changed = before.len() != after.len() || before.modified().ok() != after.modified().ok();
+    let info = serde_json::json!({
+        "unit": "bytes",
+        "requested_byte_offset": offset,
+        "byte_offset": offset + skip as u64,
+        "returned_bytes": text.len(),
+        "next_byte_offset": next,
+        "source_bytes": before.len(),
+        "source_changed": changed,
+    });
+    let mut preview = text;
+    if let Some(next) = next {
+        preview.push_str(&format!(
+            "\n[More bytes: continue fs.read with byte_offset={next}, byte_limit={limit}.]"
+        ));
+    }
+    if changed {
+        preview.push_str("\n[Source changed during the read; this range is a live sample.]");
+    }
+    let output = ToolPayloadOutput::Read {
+        preview: Some(preview.clone()),
+        truncated: next.is_some(),
+        loaded_paths: vec![display_path.to_owned()],
+        attachment: None,
+        read_info: Some(info),
+    };
+    let mut view = ToolExecutionView::simple(
+        format!("Read {display_path}"),
+        format!("Byte range from {offset}"),
+        preview,
+    );
+    view.metadata.insert("unit".into(), "bytes".into());
+    view.metadata
+        .insert("byte_offset".into(), offset.to_string());
+    view.metadata.insert("byte_limit".into(), limit.to_string());
+    Ok(ToolPayloadExecution::new(output, view))
+}
+
 pub(super) struct Page {
     pub preview: String,
     pub returned: usize,

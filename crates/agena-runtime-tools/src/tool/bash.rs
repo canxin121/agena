@@ -4,7 +4,7 @@ use super::shell_tools::{
 };
 use agena_tool::{
     ShellOutput, ShellRequest,
-    shell::{DEFAULT_SHELL_TIMEOUT_MS, shell_command_for_platform, truncate_shell_output},
+    shell::{DEFAULT_SHELL_TIMEOUT_MS, shell_command_for_platform, truncate_shell_output_budget},
     shell_analysis::{CommandAnalysis, interpret_exit_code},
 };
 
@@ -22,6 +22,7 @@ pub(super) async fn prepare_command_async(
     input: &ShellCommandInput,
     session_id: i64,
     call_id: i64,
+    tool_name: &str,
 ) -> Result<Option<PreparedShellCommand>, ToolError> {
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
     let mut env = inherited_environment();
@@ -64,7 +65,7 @@ pub(super) async fn prepare_command_async(
         }
         Ok(CommandBeforeOutcome::Abort(reason)) => {
             let action = agena_domain::PermissionAction::Tool {
-                tool_name: "agena.shell.run".to_string(),
+                tool_name: tool_name.to_string(),
                 qualifier: Some(input.command.clone()),
             };
             Err(ToolError::PolicyDenied(Box::new(
@@ -124,7 +125,8 @@ pub(super) async fn execute_async(
         Some(prepared) => Some(prepared),
         None => match (context.session_id, context.call_id) {
             (Some(session_id), Some(call_id)) => {
-                prepare_command_async(executor, input, session_id, call_id).await?
+                prepare_command_async(executor, input, session_id, call_id, "agena.shell.exec")
+                    .await?
             }
             _ => None,
         },
@@ -138,12 +140,13 @@ pub(super) async fn execute_async(
         ),
         None => {
             let mut env = inherited_environment();
+            let launch = prepare_posix_launch(shell_settings(), &mut env).await?;
             env.extend(
                 executor
                     .shell_env_overrides_async(&cwd, context.session_id, context.call_id)
                     .await?,
             );
-            (input.command.clone(), cwd, env, None)
+            (input.command.clone(), cwd, env, Some(launch))
         }
     };
     let final_analysis = analyze_command(final_command.as_str());
@@ -162,9 +165,18 @@ pub(super) async fn execute_async(
     (request.command, request.env) =
         crate::shell_sandbox::protect_async(executor, request.command, input, request.env).await?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
+    let archive = crate::process_output_archive::OutputArchive::new(
+        executor.workspace_root(),
+        context.session_id,
+    );
     let execution = executor
-        .execute_shell_command_with_live(&request, context.live_output.clone())
+        .execute_shell_command_with_live(
+            &request,
+            context.live_output.clone(),
+            Some(archive.clone()),
+        )
         .await?;
+    archive.finish_async().await;
     executor.ensure_not_cancelled()?;
 
     let hook_input = CommandAfterInput {
@@ -193,6 +205,17 @@ pub(super) async fn execute_async(
             execution.aggregated_output.clone()
         }
     };
+    let output_archive = if archive
+        .discard_if_fully_visible(
+            &aggregated_for_display,
+            crate::process_output::text_budget(input.max_output_bytes, false),
+        )
+        .await
+    {
+        None
+    } else {
+        archive.snapshot()
+    };
     render_execution(
         input,
         analysis,
@@ -203,6 +226,7 @@ pub(super) async fn execute_async(
         execution,
         aggregated_for_display,
         launch.as_ref(),
+        output_archive,
     )
 }
 
@@ -217,8 +241,19 @@ fn render_execution(
     execution: ShellOutput,
     aggregated_for_display: String,
     launch: Option<&agena_tool::shell::ShellLaunchSpec>,
+    output_archive: Option<agena_domain::ProcessOutputArchive>,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let (trimmed_output, truncated) = truncate_shell_output(&aggregated_for_display);
+    let (mut trimmed_output, truncated) = truncate_shell_output_budget(
+        &aggregated_for_display,
+        crate::process_output::text_budget(input.max_output_bytes, false),
+    );
+    if let Some(archive) = output_archive
+        .as_ref()
+        .filter(|archive| truncated || archive.truncated || archive.pending)
+    {
+        trimmed_output.push_str("\n\n");
+        trimmed_output.push_str(&crate::process_output_archive::archive_hint(archive));
+    }
     let exit_interpretation =
         interpret_exit_code(&analysis, execution.exit_code, execution.timed_out);
 
@@ -254,11 +289,13 @@ fn render_execution(
     };
 
     let output = ToolPayloadOutput::Shell {
+        output_archive,
         terminal: None,
         dropped_bytes: 0,
-        action: "run".to_string(),
+        action: "exec".to_string(),
         shell: Some(ProcessShell::Bash),
         background: false,
+        ready: false,
         process_id: None,
         status: Some(if execution.timed_out {
             ProcessStatus::TimedOut
@@ -270,9 +307,18 @@ fn render_execution(
         events: Vec::new(),
         processes: Vec::new(),
         last_seq: 0,
+        next_event_offset: 0,
         has_more: false,
         dropped_lines: 0,
         exit_code: Some(execution.exit_code),
+        completion_reason: Some(
+            if execution.timed_out {
+                "timeout"
+            } else {
+                "exit"
+            }
+            .to_owned(),
+        ),
     };
 
     let title = if input.description.trim().is_empty() {

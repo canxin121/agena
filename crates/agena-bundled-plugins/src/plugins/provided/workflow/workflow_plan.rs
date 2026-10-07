@@ -136,8 +136,47 @@ impl WorkflowPlugin {
             record.name.clone(),
             record.summary.clone(),
             record.tags.clone(),
-            None,
+            Some(record.plugin_id.clone()),
         )
+    }
+
+    /// A bounded family overview prevents a paginated/exact search from
+    /// hiding the operations needed to continue a discovered Shell launch.
+    pub(in crate::plugins::provided::workflow) fn shell_discovery_hint(
+        records: &[AvailableToolRecord],
+    ) -> Option<String> {
+        let tools = [
+            ("exec", "wait for command completion"),
+            (
+                "spawn",
+                "background, return immediately and notify completion",
+            ),
+            (
+                "watch",
+                "service readiness and one mutable watch per background process",
+            ),
+            ("open", "interactive shell/terminal/PTY"),
+            ("logs", "explicit-cursor compatibility output"),
+            ("read", "unified job/terminal output without input"),
+            ("write", "terminal input"),
+            ("stop", "process-tree cleanup"),
+            ("signal", "terminal interruption/control"),
+            ("list", "owned jobs/terminals"),
+            ("resize", "terminal dimensions"),
+        ]
+        .into_iter()
+        .filter_map(|(action, purpose)| {
+            records
+                .iter()
+                .find(|record| {
+                    record.plugin_id == "agena.shell"
+                        && (record.name == format!("shell.{action}")
+                            || record.name == format!("agena.shell.{action}"))
+                })
+                .map(|record| format!("`{}` ({purpose})", record.name))
+        })
+        .collect::<Vec<_>>();
+        (!tools.is_empty()).then(|| format!("Available Shell tools: {}. Read detailed contracts with tools_help (batch supported).", tools.join("; ")))
     }
 
     pub(in crate::plugins::provided::workflow) fn plugin_search_document(

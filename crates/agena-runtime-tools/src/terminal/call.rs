@@ -16,7 +16,7 @@ pub(super) fn check(cancel: &CancellationToken) -> Result<(), MonitorError> {
     }
 }
 
-pub(super) fn interaction<'a>(
+pub(crate) fn interaction<'a>(
     mutex: &'a Mutex<()>,
     cancel: &CancellationToken,
 ) -> Result<MutexGuard<'a, ()>, MonitorError> {

@@ -458,6 +458,8 @@ impl WorkflowPlugin {
         let response = host
             .run_subtask(RunSubtaskRequest {
                 parent_session_id: None,
+                run_in_background: false,
+                launch_call_id: None,
                 description: input.description.clone(),
                 prompt: input.prompt.clone(),
                 commands: input.commands.clone(),
@@ -607,6 +609,12 @@ impl WorkflowPlugin {
                         summary
                     ));
                 }
+            }
+            if results.iter().any(|tool| {
+                tool.name.starts_with("shell.") || tool.name.starts_with("agena.shell.")
+            }) && let Some(hint) = Self::shell_discovery_hint(&records)
+            {
+                lines.push(hint);
             }
             if !results.is_empty() {
                 lines.push(format!(
@@ -967,11 +975,11 @@ impl WorkflowPlugin {
             Self::ensure_execution_tool_target(tool_name)?;
         }
         let tools = self.host()?.list_tools().await?;
-        let tag_index = self
-            .available_tool_records()
-            .await?
-            .into_iter()
-            .map(|record| (record.name, record.tags))
+        let records = self.available_tool_records().await?;
+        let shell_hint = Self::shell_discovery_hint(&records);
+        let tag_index = records
+            .iter()
+            .map(|record| (record.name.clone(), record.tags.clone()))
             .collect::<HashMap<_, _>>();
         let mut outputs = Vec::new();
         let mut failures = 0usize;
@@ -980,6 +988,7 @@ impl WorkflowPlugin {
                 Ok(descriptor) => outputs.push(Self::render_tool_api_help(
                     descriptor,
                     tag_index.get(descriptor.name.as_str()).map(Vec::as_slice),
+                    shell_hint.as_deref(),
                 )),
                 Err(error) if requested.len() == 1 => return Err(error),
                 Err(error) => {
@@ -1015,8 +1024,14 @@ impl WorkflowPlugin {
     pub(in crate::plugins::provided::workflow) fn render_tool_api_help(
         descriptor: &ToolDescriptor,
         tags: Option<&[String]>,
+        shell_hint: Option<&str>,
     ) -> ToolInvokeOutput {
         let mut lines = vec![format!("Tool: {}", descriptor.name)];
+        if (descriptor.name.starts_with("shell.") || descriptor.name.starts_with("agena.shell."))
+            && let Some(hint) = shell_hint
+        {
+            lines.push(hint.to_owned());
+        }
         if let Some(tags) = tags.filter(|tags| !tags.is_empty()) {
             lines.push(format!("Tags: {}", tags.join(", ")));
         }

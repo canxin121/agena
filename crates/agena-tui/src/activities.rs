@@ -459,7 +459,7 @@ fn render_list_pane(
             muted_style(),
         )));
         lines.push(Line::from(Span::styled(
-            " Run `shell.run background` or `tasks.run` to create one.",
+            " Run `shell.spawn`, `shell.open` or `tasks.run` to create one.",
             muted_style(),
         )));
     } else {

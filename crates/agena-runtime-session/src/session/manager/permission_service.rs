@@ -67,19 +67,80 @@ pub(crate) fn rule_entry_from_persisted(
     }
 }
 
-/// Group a flat snapshot query result into per-action rule chains, keeping
-/// the repository's global → workspace → session ordering.
+/// Group a flat snapshot into global → workspace → session rule chains. Old
+/// multi-mode Shell approvals retain their qualifier and scope on each new
+/// launch tool; explicit new-tool rules override inheritance within a scope.
 pub(crate) fn group_snapshot_rules(
     rules: &[agena_storage::PersistedPermissionRule],
 ) -> HashMap<String, Vec<agena_permission::RuleEntry>> {
     let mut grouped: HashMap<String, Vec<agena_permission::RuleEntry>> = HashMap::new();
     for rule in rules {
+        let key = serde_json::from_str::<agena_domain::PermissionAction>(&rule.action_key)
+            .ok()
+            .and_then(|action| super::permission_action_key(&action).ok())
+            .unwrap_or_else(|| rule.action_key.clone());
         grouped
-            .entry(rule.action_key.clone())
+            .entry(key)
             .or_default()
             .push(rule_entry_from_persisted(rule));
     }
+    // Alias spellings can produce several persisted rows for one subject.
+    // Keep the latest within each scope before inheriting old launch policy.
+    for chain in grouped.values_mut() {
+        chain.sort_by_key(|entry| {
+            (
+                scope_rank(entry.scope),
+                std::cmp::Reverse(entry.revision_ms),
+                std::cmp::Reverse(entry.id),
+            )
+        });
+        chain.dedup_by_key(|entry| entry.scope);
+    }
+    let legacy_chains = grouped
+        .iter()
+        .filter_map(|(key, chain)| {
+            let Ok(agena_domain::PermissionAction::Tool {
+                tool_name,
+                qualifier,
+            }) = serde_json::from_str(key)
+            else {
+                return None;
+            };
+            let Some(targets) =
+                agena_domain::ToolPermissionConfig::retired_shell_launch_replacements(&tool_name)
+            else {
+                return None;
+            };
+            Some((targets, qualifier, chain.clone()))
+        })
+        .collect::<Vec<_>>();
+    for (targets, qualifier, legacy_chain) in legacy_chains {
+        for target in targets {
+            let action = agena_domain::PermissionAction::Tool {
+                tool_name: target.to_owned(),
+                qualifier: qualifier.clone(),
+            };
+            let key = serde_json::to_string(&action).expect("permission action serializes");
+            let chain = grouped.entry(key).or_default();
+            for legacy in &legacy_chain {
+                if !chain.iter().any(|entry| entry.scope == legacy.scope) {
+                    chain.push(legacy.clone());
+                }
+            }
+        }
+    }
+    for chain in grouped.values_mut() {
+        chain.sort_by_key(|entry| scope_rank(entry.scope));
+    }
     grouped
+}
+
+fn scope_rank(scope: agena_domain::PermissionScope) -> u8 {
+    match scope {
+        agena_domain::PermissionScope::Global => 0,
+        agena_domain::PermissionScope::Workspace => 1,
+        agena_domain::PermissionScope::Session => 2,
+    }
 }
 
 impl SessionManager {

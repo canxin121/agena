@@ -16,8 +16,8 @@ use super::{
 use crate::session::Session;
 use crate::session::prompt_window;
 use crate::session::store::{
-    StoreAdapter, new_part_from_content, run_marker_content, text_content,
-    tool_call_from_operation, typed_content_from_value, typed_content_to_value,
+    new_part_from_content, run_marker_content, text_content, tool_call_from_operation,
+    typed_content_from_value, typed_content_to_value,
 };
 use crate::tool::ToolExecutor;
 use agena_domain::{
@@ -28,12 +28,11 @@ use agena_domain::{
 use agena_domain::{UserInputKind, UserInputRequest, UserInputSource};
 use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{
-    BackgroundOperationPhase, BackgroundOperationTransition, NewBackgroundOperation, Part,
-    PartDelta, PartRole, PartState,
+    BackgroundOperationPhase, NewBackgroundOperation, Part, PartDelta, PartRole, PartState,
 };
 use tracing::Instrument;
 
-use super::super::StableRunContext;
+use super::super::{BackgroundLaunchError, StableRunContext};
 
 /// Outcome of one provider model turn as observed by the stable-run loop.
 #[derive(Debug, Clone, Copy)]
@@ -2105,6 +2104,18 @@ impl SessionManager {
         let session_id = session.id;
         let call_id = resolved.call_id;
         let scoped_executor = batch_executor.clone().with_cancellation_token(cancellation);
+        // Defer known launch/streaming calls before preflight. Preparing then
+        // discarding them would run tool-before and shell-environment hooks a
+        // second time when the sequential executor picks them up.
+        if requested_background_kind(&resolved.invocation).is_some()
+            || scoped_executor.invocation_requires_streaming(&resolved.invocation)
+            || matches!(
+                resolved.invocation.name.as_str(),
+                "agena.tasks.followup" | "tasks.followup" | "agena_tasks_followup"
+            )
+        {
+            return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
+        }
         let PreparedToolPreflight {
             resolved,
             permission_checks,
@@ -2159,11 +2170,12 @@ impl SessionManager {
             AggregatedPermissionOutcome::Allow => {}
         }
 
-        // Background launches must persist their LaunchRequested aggregate
-        // immediately before the external side effect. Keep them on the
-        // canonical sequential path so no parallel executor can bypass that
-        // durable handoff.
-        if requested_background_kind(&resolved.invocation).is_some() {
+        // The concurrent executor uses the buffered entry point. Background
+        // launches need the durable handoff, and declared plugin streams need
+        // their stream consumer; keep both on the canonical sequential path.
+        if requested_background_kind(&resolved.invocation).is_some()
+            || scoped_executor.invocation_requires_streaming(&resolved.invocation)
+        {
             *session = before_prepare;
             return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
         }
@@ -2555,94 +2567,67 @@ impl SessionManager {
                     "background launch {operation_id} has no reserved external identity"
                 ))
             })?;
-            let created = self
-                .store
-                .create_background_operation(NewBackgroundOperation {
-                    operation_id: operation_id.clone(),
-                    session_id: session.id,
-                    launch_run_id: Some(launch_run_id),
-                    launch_tool_part_id: Some(resolved.pending.part.part_id),
-                    kind,
-                })
-                .await?;
-            let launching = if created.phase == BackgroundOperationPhase::LaunchRequested {
-                self.store
-                    .transition_background_operation(BackgroundOperationTransition {
-                        operation_id: operation_id.clone(),
-                        expected_revision: created.revision,
-                        next_phase: BackgroundOperationPhase::Launching,
-                        external_id: Some(external_id.clone()),
-                        outcome: None,
-                        failure: None,
-                        owner_id: Some(StoreAdapter::CLAIMANT.to_owned()),
-                        lease_until_ms: Some(Utc::now().timestamp_millis() + 30_000),
-                    })
-                    .await?
-            } else {
-                created
-            };
-            let running = if launching.phase == BackgroundOperationPhase::Launching {
-                self.store
-                    .transition_background_operation(BackgroundOperationTransition {
+            let running = match self
+                .prepare_background_launch(
+                    NewBackgroundOperation {
                         operation_id,
-                        expected_revision: launching.revision,
-                        next_phase: BackgroundOperationPhase::Running,
-                        external_id: Some(external_id),
-                        outcome: None,
-                        failure: None,
-                        owner_id: Some(StoreAdapter::CLAIMANT.to_owned()),
-                        lease_until_ms: Some(Utc::now().timestamp_millis() + 120_000),
-                    })
-                    .await?
-            } else {
-                launching
+                        session_id: session.id,
+                        launch_run_id: Some(launch_run_id),
+                        launch_tool_part_id: Some(resolved.pending.part.part_id),
+                        kind,
+                    },
+                    external_id,
+                )
+                .await
+            {
+                Ok(operation) => operation,
+                Err(BackgroundLaunchError::Tool(error)) => {
+                    return Box::pin(self.apply_pending_tool_start_error(
+                        session,
+                        &resolved.pending,
+                        error,
+                        state,
+                        false,
+                    ))
+                    .await;
+                }
+                Err(BackgroundLaunchError::Session(error)) => return Err(error),
             };
             Some(running)
         } else {
             None
         };
 
-        let streaming_tool = match scoped_executor
-            .execute_invocation_streaming(&resolved.invocation, session.id, resolved.call_id)
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                if let Some(operation) = background_intent.as_ref() {
-                    self.fail_background_launch_if_active(
-                        &operation.operation_id,
-                        if matches!(error, ToolError::Cancelled) {
-                            BackgroundOperationPhase::Cancelled
-                        } else {
-                            BackgroundOperationPhase::Failed
-                        },
-                        error.to_string(),
-                    )
-                    .await?;
+        // A background launch must return through the durable receipt/handoff
+        // path below. Do not even probe streaming execution: obtaining a stream
+        // can already spawn the process, before the receipt is validated.
+        let streaming_tool = if background_intent.is_some() {
+            None
+        } else {
+            match scoped_executor
+                .execute_invocation_streaming_with_prepared_shell(
+                    &resolved.invocation,
+                    session.id,
+                    resolved.call_id,
+                    resolved.prepared_shell_command.clone(),
+                )
+                .await
+            {
+                Ok(stream) => stream,
+                Err(error) => {
+                    return Box::pin(self.apply_pending_tool_start_error(
+                        session,
+                        &resolved.pending,
+                        error,
+                        state,
+                        true,
+                    ))
+                    .await;
                 }
-                return Box::pin(self.apply_pending_tool_start_error(
-                    session,
-                    &resolved.pending,
-                    error,
-                    state,
-                    true,
-                ))
-                .await;
             }
         };
 
         if let Some(stream) = streaming_tool {
-            if let Some(operation) = background_intent {
-                self.fail_background_launch_if_active(
-                    &operation.operation_id,
-                    BackgroundOperationPhase::Failed,
-                    "background launch unexpectedly entered streaming execution".to_owned(),
-                )
-                .await?;
-                return Err(AppError::Internal(
-                    "background launch unexpectedly entered streaming execution".to_owned(),
-                ));
-            }
             return Box::pin(self.apply_streaming_tool_execution(
                 session,
                 &resolved.pending,
@@ -3150,92 +3135,64 @@ impl SessionManager {
         // Publishing only on a two-second heartbeat loses the last chunk when
         // a command pauses, and makes short commands appear non-streaming.
         let mut streamed_output = String::new();
-        loop {
-            let chunk = match cancellation.as_ref() {
-                Some(cancellation) => tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => {
-                        return self.apply_tool_cancellation(session, pending_tool, state).await;
-                    },
-                    chunk = stream.chunks.recv() => chunk,
-                },
-                None => stream.chunks.recv().await,
-            };
-            let Some(chunk) = chunk else {
-                break;
-            };
-            let Some(delta) = chunk.text_delta.as_deref() else {
-                continue;
-            };
-            if delta.is_empty() {
-                continue;
-            }
-            if stream.output_mode == agena_domain::DeltaMode::Replace {
-                streamed_output.clear();
-            }
-            streamed_output.push_str(delta);
-            let retained = Self::bounded_live_output(&streamed_output);
-            let discarded = streamed_output.len() - retained.len();
-            streamed_output.drain(..discarded);
-            session = self
-                .refresh_streaming_title(
-                    session.id,
-                    pending_tool,
-                    Some(&streamed_output),
-                    state.clone(),
-                )
-                .await?;
-        }
-        session = self
-            .apply_streaming_terminal_output(session.id, state.clone())
-            .await?;
-
-        let stream_end = match cancellation.as_ref() {
-            Some(cancellation) => tokio::select! {
+        let mut chunks_open = true;
+        let stream_end = loop {
+            tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => {
+                _ = async {
+                    match cancellation.as_ref() {
+                        Some(token) => token.cancelled().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    let session = self.load_session_with_workspace_root(session.id).await?;
                     return self.apply_tool_cancellation(session, pending_tool, state).await;
                 },
-                result = stream.end => result,
-            },
-            None => stream.end.await,
+                // The terminal payload contains the complete result. A
+                // retained chunk sender must never hold a finished reply open.
+                result = &mut stream.end => break result,
+                chunk = stream.chunks.recv(), if chunks_open => {
+                    let Some(chunk) = chunk else {
+                        chunks_open = false;
+                        continue;
+                    };
+                    let Some(delta) = chunk.text_delta.as_deref() else {
+                        continue;
+                    };
+                    if delta.is_empty() {
+                        continue;
+                    }
+                    if stream.output_mode == agena_domain::DeltaMode::Replace {
+                        streamed_output.clear();
+                    }
+                    // Bound the incoming delta before allocating a copy too.
+                    streamed_output.push_str(Self::bounded_live_output(delta));
+                    let retained = Self::bounded_live_output(&streamed_output);
+                    let discarded = streamed_output.len() - retained.len();
+                    streamed_output.drain(..discarded);
+                    session = self
+                        .refresh_streaming_title(
+                            session.id,
+                            pending_tool,
+                            Some(&streamed_output),
+                            state.clone(),
+                        )
+                        .await?;
+                },
+            }
         };
         let execution = match stream_end {
             Ok(Ok(execution)) => execution,
-            Ok(Err(ToolError::PolicyDenied(denial))) => {
-                let session = self.load_session_with_workspace_root(session.id).await?;
-                return self
-                    .apply_tool_policy_denied(session, pending_tool, *denial, state)
-                    .await;
-            }
-            Ok(Err(ToolError::UserDeclined(decline))) => {
-                let session = self.load_session_with_workspace_root(session.id).await?;
-                return self
-                    .apply_tool_user_declined(session, pending_tool, *decline, Vec::new(), state)
-                    .await;
-            }
-            Ok(Err(ToolError::CapabilityUnavailable(unavailable))) => {
-                let session = self.load_session_with_workspace_root(session.id).await?;
-                return self
-                    .apply_tool_capability_unavailable(session, pending_tool, *unavailable, state)
-                    .await;
-            }
-            Ok(Err(ToolError::ToolUnavailable(unavailable))) => {
-                let session = self.load_session_with_workspace_root(session.id).await?;
-                return self
-                    .apply_tool_unavailable(session, pending_tool, *unavailable, state)
-                    .await;
-            }
             Ok(Err(err)) => {
                 let session = self.load_session_with_workspace_root(session.id).await?;
                 return self
-                    .apply_tool_error(session, pending_tool, err, None, state)
+                    .route_tool_error(session, pending_tool, err, state)
                     .await;
             }
             Err(error) => {
                 let session = self.load_session_with_workspace_root(session.id).await?;
                 return self
-                    .apply_tool_error(
+                    .route_tool_error(
                         session,
                         pending_tool,
                         ToolError::plugin(
@@ -3246,7 +3203,6 @@ impl SessionManager {
                                 &error,
                             ),
                         ),
-                        None,
                         state,
                     )
                     .await;
@@ -3343,19 +3299,6 @@ impl SessionManager {
         // content-node title column to target.
         self.persist_session_changes(session, vec![pending_tool.part.part_id], None, state)
             .await
-    }
-
-    /// Reload the session at stream end. The single-source payload is written
-    /// once at completion, so no stream checkpoint is persisted: the live
-    /// broadcast carries streaming detail and the terminal frame replaces the
-    /// payload. Nothing here bounds the streamed text, because nothing here
-    /// keeps it.
-    pub(in crate::session::manager) async fn apply_streaming_terminal_output(
-        &self,
-        session_id: i64,
-        _state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        self.load_session_with_workspace_root(session_id).await
     }
 
     pub(in crate::session::manager) async fn apply_tool_success_with_rules(

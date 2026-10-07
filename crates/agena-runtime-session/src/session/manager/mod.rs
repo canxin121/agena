@@ -30,8 +30,9 @@ use agena_failure::Failure;
 use agena_runtime_contracts::part_content::{SystemNotificationContent, TextContent, TypedContent};
 use agena_storage::PersistedPermissionRule;
 use agena_storage::store::{
-    BackgroundDelivery, BackgroundEventRequest, BackgroundOperationKind, BackgroundOperationPhase,
-    BackgroundOperationTransition, NewBackgroundOperation, PartRole, PartState,
+    BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationKind,
+    BackgroundOperationPhase, BackgroundOperationTransition, NewBackgroundOperation, PartRole,
+    PartState,
 };
 use agena_tool::PreparedShellCommand;
 
@@ -166,6 +167,17 @@ struct SessionUserRunRequest {
     idempotency_key: Option<String>,
 }
 
+enum BackgroundLaunchError {
+    Tool(ToolError),
+    Session(AppError),
+}
+
+impl From<AppError> for BackgroundLaunchError {
+    fn from(error: AppError) -> Self {
+        Self::Session(error)
+    }
+}
+
 impl SessionUserRunRequest {
     fn new(session_id: i64, options: SessionRunOptions, parts: Vec<TypedContent>) -> Self {
         Self {
@@ -180,6 +192,8 @@ impl SessionUserRunRequest {
 /// Request to run a subtask within a session.
 pub struct SessionSubtaskRequest {
     pub parent_session_id: i64,
+    pub run_in_background: bool,
+    pub launch_call_id: Option<i64>,
     pub description: String,
     pub prompt: String,
     /// Optional command names or aliases to resolve and attach to the child
@@ -1141,6 +1155,7 @@ impl SessionManager {
         } else {
             match result {
                 Ok(_) => ExecutionOutcome::Completed,
+                Err(AppError::Cancelled) => ExecutionOutcome::Cancelled,
                 Err(error) => {
                     let failure = error.failure();
                     tracing::error!(
@@ -1369,17 +1384,26 @@ impl SessionManager {
         let terminal_result = self
             .finish_execution(session_id, control.as_ref(), outcome)
             .await;
-        // Terminalize the execution first: the run's own persist wrote the
-        // marker's terminal state (complete_run / cancel_run). Reconcile
-        // afterwards so any residual in-flight marker that survived cleanup
-        // (for example a run whose persist was interrupted by a crash) is
-        // aborted by the facade as `process_restart` (17.4). The registry slot
-        // is still held here, so the run this execution just settled is
-        // already terminal and the reconcile pass cannot resurrect it.
-        let reconciliation_result = match self.store.in_flight_run_ids(session_id).await {
-            Ok(run_ids) => self.store.reconcile(session_id, &run_ids).await,
-            Err(error) => Err(error),
-        };
+        // An error between tool/model stages can bypass normal run cleanup.
+        // Persist its real cause while the slot is still exclusively owned;
+        // a user cancellation must not become a failed process_restart marker.
+        let run_error = result.as_ref().err();
+        let reconciliation_result = async {
+            let run_ids = self.store.in_flight_run_ids(session_id).await?;
+            for run_id in &run_ids {
+                if control.cancel.is_cancelled() || matches!(run_error, Some(AppError::Cancelled)) {
+                    self.store.cancel_run(session_id, *run_id).await?;
+                } else if let Some(error) = run_error {
+                    self.terminalize_unfinished_model_run(session_id, *run_id, error)
+                        .await?;
+                }
+            }
+            // Named markers are now terminal on failure/cancellation. The
+            // recovery pass cancels any remaining child parts without changing
+            // their marker's terminal reason or duplicating failure records.
+            self.store.reconcile(session_id, &run_ids).await
+        }
+        .await;
         drop(permit);
         if terminal_result.is_ok()
             && let Err(error) = &reconciliation_result
@@ -1663,43 +1687,33 @@ impl SessionManager {
         // Host/application callbacks are not model tool invocations and do
         // not participate in the model permission state machine.
         if let Some(mut stream) = scoped_executor
-            .execute_invocation_streaming(&invocation, session_id, call_id)
+            .execute_invocation_streaming_with_prepared_shell(
+                &invocation,
+                session_id,
+                call_id,
+                prepared_shell_command.clone(),
+            )
             .await
             .map_err(tool_error_to_app_error)?
         {
             let stream_id = stream.stream_id.clone();
-            // Streaming output is buffered in memory and written once (bounded)
-            // at the end; the durable record never grows per-delta.
-            let mut streamed_output = String::new();
-            loop {
-                let chunk = match cancellation.as_ref() {
-                    Some(cancellation) => tokio::select! {
-                        biased;
-                        _ = cancellation.cancelled() => return Err(AppError::Cancelled),
-                        chunk = stream.chunks.recv() => chunk,
-                    },
-                    None => stream.chunks.recv().await,
-                };
-                let Some(chunk) = chunk else {
-                    break;
-                };
-                let Some(delta) = chunk.text_delta.as_deref() else {
-                    continue;
-                };
-                if delta.is_empty() {
-                    continue;
-                }
-                streamed_output.push_str(delta);
-            }
-            self.apply_streaming_terminal_output(session_id, state.clone())
-                .await?;
-            let end = match cancellation.as_ref() {
-                Some(cancellation) => tokio::select! {
+            let mut chunks_open = true;
+            let end = loop {
+                tokio::select! {
                     biased;
-                    _ = cancellation.cancelled() => return Err(AppError::Cancelled),
-                    end = stream.end => end,
-                },
-                None => stream.end.await,
+                    _ = async {
+                        match cancellation.as_ref() {
+                            Some(token) => token.cancelled().await,
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => return Err(AppError::Cancelled),
+                    end = &mut stream.end => break end,
+                    // Host callers consume the complete terminal payload.
+                    // Drain display deltas without keeping an unused copy.
+                    chunk = stream.chunks.recv(), if chunks_open => {
+                        chunks_open = chunk.is_some();
+                    },
+                }
             };
             return end
                 .map_err(|_| {
@@ -2037,6 +2051,376 @@ impl SessionManager {
             }
         }
         Ok(None)
+    }
+
+    /// A resumed task keeps its child session/task id, but owns a fresh durable
+    /// operation. Resolve the exact run before accepting delayed callbacks.
+    pub async fn background_task_external_id_for_run(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+        child_session_id: i64,
+        started_at_ms: Option<i64>,
+    ) -> Result<Option<String>, AppError> {
+        if let Some(started_at_ms) = started_at_ms {
+            let external_id = format!("task_run_{child_session_id}_{started_at_ms}");
+            if let Some(operation) = self
+                .store
+                .background_operation_by_external_id(BackgroundOperationKind::Task, &external_id)
+                .await?
+                && operation.session_id == parent_session_id
+            {
+                return Ok(Some(external_id));
+            }
+        }
+        let Some(operation) = self
+            .store
+            .background_operation_by_external_id(BackgroundOperationKind::Task, task_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if operation.session_id != parent_session_id {
+            return Ok(None);
+        }
+        let bound_start = operation
+            .outcome
+            .as_ref()
+            .and_then(|value| value.get("started_at_ms"))
+            .and_then(serde_json::Value::as_i64);
+        if bound_start.is_some() && bound_start != started_at_ms {
+            return Ok(None);
+        }
+        Ok(Some(task_id.to_owned()))
+    }
+
+    /// Record the terminal snapshot before a follow-up replaces the child's
+    /// subtask columns. The durable outbox prevents a delayed observer from
+    /// losing the prior result or settling it against the next run.
+    async fn record_background_task_completion(
+        &self,
+        operation: &BackgroundOperation,
+        child: &Session,
+        task_id: &str,
+    ) -> Result<Option<(BackgroundDelivery, SystemNotificationContent)>, AppError> {
+        let (terminal, status) = match child.runtime.subtask.status {
+            agena_domain::SubtaskStatus::Completed => (PartState::Completed, "completed"),
+            agena_domain::SubtaskStatus::Failed => (PartState::Failed, "failed"),
+            agena_domain::SubtaskStatus::Cancelled => (PartState::Cancelled, "cancelled"),
+            agena_domain::SubtaskStatus::TimedOut => (PartState::Failed, "timed_out"),
+            agena_domain::SubtaskStatus::Interrupted => (PartState::Cancelled, "interrupted"),
+            agena_domain::SubtaskStatus::Created | agena_domain::SubtaskStatus::Running => {
+                return Ok(None);
+            }
+        };
+        let external_id = operation.external_id.as_deref().ok_or_else(|| {
+            AppError::Internal("background task completion has no external identity".into())
+        })?;
+        let label = if child.title.trim().is_empty() {
+            task_id.to_owned()
+        } else {
+            format!("\"{}\" ({task_id})", child.title.trim())
+        };
+        let outcome = if terminal == PartState::Completed {
+            Ok(child
+                .parts()
+                .iter()
+                .rev()
+                .filter(|part| part.role == PartRole::Assistant && part.kind == "text")
+                .find_map(|part| part.content.get("text").and_then(serde_json::Value::as_str))
+                .filter(|text| !text.trim().is_empty())
+                .unwrap_or("Task completed.")
+                .to_owned())
+        } else {
+            Err(child.runtime.subtask.failure.clone().unwrap_or_else(|| {
+                if status == "interrupted" {
+                    sessions::interrupted_subtask_failure()
+                } else if terminal == PartState::Cancelled {
+                    AppError::Cancelled.failure()
+                } else {
+                    AppError::Internal(format!(
+                        "delegated task {task_id} ended with status {status} without failure detail"
+                    ))
+                    .failure()
+                }
+            }))
+        };
+        let verb = match status {
+            "completed" => "finished",
+            "cancelled" => "cancelled",
+            "timed_out" => "timed out",
+            "interrupted" => "interrupted",
+            _ => "failed",
+        };
+        let mut summary = format!("Task {label} {verb}");
+        if let Err(failure) = &outcome {
+            let reason = failure.user.fallback.trim().trim_end_matches('.');
+            if !reason.is_empty() {
+                summary.push_str(": ");
+                summary.push_str(reason);
+            }
+        }
+        let notification = SystemNotificationContent {
+            operation_id: external_id.to_owned(),
+            operation_kind: "task".to_owned(),
+            status: status.to_owned(),
+            summary,
+            body: match &outcome {
+                Ok(text) => format!("<result>{text}</result>"),
+                Err(failure) => failure.user.fallback.clone(),
+            },
+            ..Default::default()
+        };
+        let (outcome_value, failure_value) = match outcome {
+            Ok(text) => (Some(serde_json::json!({ "text": text })), None),
+            Err(failure) => (
+                None,
+                Some(serde_json::json!({
+                    "id": failure.id.to_string(),
+                    "message": failure.user.fallback,
+                })),
+            ),
+        };
+        let role = if operation.launch_run_id.is_some() {
+            PartRole::Assistant
+        } else {
+            PartRole::Runtime
+        };
+        let settled = self
+            .store
+            .record_background_event(BackgroundEventRequest {
+                operation_id: operation.operation_id.clone(),
+                event_key: "terminal".to_owned(),
+                event_seq: None,
+                next_phase: Some(match status {
+                    "completed" => BackgroundOperationPhase::Completed,
+                    "cancelled" => BackgroundOperationPhase::Cancelled,
+                    "timed_out" => BackgroundOperationPhase::TimedOut,
+                    "interrupted" => BackgroundOperationPhase::Interrupted,
+                    _ => BackgroundOperationPhase::Failed,
+                }),
+                outcome: outcome_value,
+                failure: failure_value,
+                notification: new_part_from_content(
+                    "system_notification",
+                    role,
+                    &TypedContent::SystemNotification(notification.clone()),
+                    PartState::Completed,
+                )?,
+            })
+            .await?;
+        Ok(Some((settled.delivery, notification)))
+    }
+
+    async fn bind_background_task_run(
+        &self,
+        operation_id: &str,
+        task_id: &str,
+        child_session_id: i64,
+        started_at_ms: i64,
+    ) -> Result<BackgroundOperation, AppError> {
+        for attempt in 0..4 {
+            let current = self
+                .store
+                .background_operation(operation_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "background task operation {operation_id} disappeared"
+                    ))
+                })?;
+            if current.phase.is_terminal() {
+                return Err(AppError::Cancelled);
+            }
+            let result = self
+                .store
+                .transition_background_operation(BackgroundOperationTransition {
+                    operation_id: operation_id.to_owned(),
+                    expected_revision: current.revision,
+                    next_phase: BackgroundOperationPhase::Running,
+                    external_id: None,
+                    outcome: Some(serde_json::json!({
+                        "task_id": task_id,
+                        "child_session_id": child_session_id,
+                        "started_at_ms": started_at_ms,
+                    })),
+                    failure: None,
+                    owner_id: current.owner_id,
+                    lease_until_ms: current.lease_until_ms,
+                })
+                .await;
+            match result {
+                Ok(operation) => return Ok(operation),
+                Err(error) if attempt < 3 => {
+                    // The launch receipt can extend its lease while the
+                    // detached task binds the child. Retry only that revision
+                    // race; an actual persistence failure remains an error.
+                    if self
+                        .store
+                        .background_operation(operation_id)
+                        .await?
+                        .is_some_and(|latest| latest.revision != current.revision)
+                    {
+                        continue;
+                    }
+                    self.fail_background_launch_if_active(
+                        operation_id,
+                        BackgroundOperationPhase::Failed,
+                        error.to_string(),
+                    )
+                    .await?;
+                    return Err(error);
+                }
+                Err(error) => {
+                    self.fail_background_launch_if_active(
+                        operation_id,
+                        BackgroundOperationPhase::Failed,
+                        error.to_string(),
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            }
+        }
+        unreachable!("bounded task-run binding returns from the loop")
+    }
+
+    /// Follow-up external ids describe a run, not the logical task id. Keep
+    /// lease renewal and recovery tied to the exact child/start timestamp.
+    async fn background_task_child(
+        &self,
+        operation: &BackgroundOperation,
+    ) -> Result<Option<(i64, String)>, AppError> {
+        let metadata = operation.outcome.as_ref();
+        let Some(task_id) = metadata
+            .and_then(|value| value.get("task_id"))
+            .and_then(serde_json::Value::as_str)
+            .or(operation.external_id.as_deref())
+        else {
+            return Ok(None);
+        };
+        let child_id = match metadata
+            .and_then(|value| value.get("child_session_id"))
+            .and_then(serde_json::Value::as_i64)
+        {
+            Some(child_id) => Some(child_id),
+            None => {
+                self.store
+                    .find_subagent_by_task_id(operation.session_id, task_id)
+                    .await?
+            }
+        };
+        let Some(child_id) = child_id else {
+            return Ok(None);
+        };
+        if let Some(started_at_ms) = metadata
+            .and_then(|value| value.get("started_at_ms"))
+            .and_then(serde_json::Value::as_i64)
+        {
+            let view = self
+                .store
+                .facade
+                .load_part_ids(child_id, &[])
+                .await
+                .map_err(crate::session::store::store_error)?;
+            if view.meta.parent_id != Some(operation.session_id)
+                || view.meta.task_id.as_deref() != Some(task_id)
+                || view.meta.subtask_started_at_ms != Some(started_at_ms)
+            {
+                return Ok(None);
+            }
+        }
+        Ok(Some((child_id, task_id.to_owned())))
+    }
+
+    /// Reserve an identity before starting any external work. Identity reuse
+    /// is a recoverable tool-input error, including a concurrent reservation
+    /// that loses the database's unique-index race.
+    async fn prepare_background_launch(
+        &self,
+        intent: NewBackgroundOperation,
+        external_id: String,
+    ) -> Result<agena_storage::store::BackgroundOperation, BackgroundLaunchError> {
+        let operation_id = intent.operation_id.clone();
+        let kind = intent.kind;
+        let identity_error = || {
+            let guidance = if kind == BackgroundOperationKind::Task {
+                "Use a new task_id for a new task, or tasks.followup to resume a terminal task."
+            } else {
+                "Start a new operation instead of reusing an existing launch identity."
+            };
+            ToolError::invalid_input(format!(
+                "background {} identity '{external_id}' is already reserved. {guidance}",
+                kind.as_str()
+            ))
+        };
+        if let Some(owner) = self
+            .store
+            .background_operation_by_external_id(kind, &external_id)
+            .await?
+            && owner.operation_id != operation_id
+        {
+            return Err(BackgroundLaunchError::Tool(identity_error()));
+        }
+        let mut current = self.store.create_background_operation(intent).await?;
+        for (expected, next, lease_ms) in [
+            (
+                BackgroundOperationPhase::LaunchRequested,
+                BackgroundOperationPhase::Launching,
+                30_000,
+            ),
+            (
+                BackgroundOperationPhase::Launching,
+                BackgroundOperationPhase::Running,
+                120_000,
+            ),
+        ] {
+            if current.phase != expected {
+                continue;
+            }
+            match self
+                .store
+                .transition_background_operation(BackgroundOperationTransition {
+                    operation_id: operation_id.clone(),
+                    expected_revision: current.revision,
+                    next_phase: next,
+                    external_id: Some(external_id.clone()),
+                    outcome: None,
+                    failure: None,
+                    owner_id: Some(StoreAdapter::CLAIMANT.to_owned()),
+                    lease_until_ms: Some(Utc::now().timestamp_millis() + lease_ms),
+                })
+                .await
+            {
+                Ok(operation) => current = operation,
+                Err(error) => {
+                    let owner = self
+                        .store
+                        .background_operation_by_external_id(kind, &external_id)
+                        .await;
+                    // No side effect has started. Settle only this intent so
+                    // it cannot strand the session in launch_requested.
+                    self.fail_background_launch_if_active(
+                        &operation_id,
+                        BackgroundOperationPhase::Failed,
+                        error.to_string(),
+                    )
+                    .await?;
+                    if let Ok(Some(owner)) = owner
+                        && owner.operation_id != operation_id
+                    {
+                        return Err(BackgroundLaunchError::Tool(identity_error()));
+                    }
+                    return Err(BackgroundLaunchError::Session(error));
+                }
+            }
+        }
+        if current.phase.is_terminal() {
+            return Err(BackgroundLaunchError::Tool(ToolError::invalid_input(
+                "this background launch has already finished; start a new tool call",
+            )));
+        }
+        Ok(current)
     }
 
     /// Terminalize a launch adapter failure without allowing a concurrent
@@ -2619,14 +3003,7 @@ impl SessionManager {
                     .as_deref()
                     .is_some_and(|external_id| running_process_ids.contains(external_id)),
                 BackgroundOperationKind::Task => {
-                    let Some(task_id) = operation.external_id.as_deref() else {
-                        continue;
-                    };
-                    let Some(child_id) = self
-                        .store
-                        .find_subagent_by_task_id(operation.session_id, task_id)
-                        .await?
-                    else {
+                    let Some((child_id, _)) = self.background_task_child(&operation).await? else {
                         continue;
                     };
                     self.execution_registry.is_active(child_id).await
@@ -2693,7 +3070,7 @@ impl SessionManager {
         let now_ms = Utc::now().timestamp_millis();
         let mut reconciled = 0usize;
         for operation in operations {
-            if operation.lease_until_ms.is_some_and(|until| until > now_ms) {
+            if Self::background_launch_handoff_is_live(&operation, now_ms) {
                 continue;
             }
             let Some(external_id) = operation.external_id.clone() else {
@@ -2832,14 +3209,33 @@ impl SessionManager {
             .await?;
         let mut reconciled = 0usize;
         for operation in operations {
-            let Some(task_id) = operation.external_id.as_deref() else {
+            let launch_is_live =
+                Self::background_launch_handoff_is_live(&operation, Utc::now().timestamp_millis());
+            if operation.external_id.is_none() {
+                if launch_is_live {
+                    continue;
+                }
+                // Reservation never completed, so no external work could have
+                // started. Clear historical failed reservations without waking
+                // a model over a task that was never launched.
+                self.fail_background_launch_if_active(
+                    &operation.operation_id,
+                    BackgroundOperationPhase::Failed,
+                    "task launch ended before an external identity was bound".to_owned(),
+                )
+                .await?;
+                reconciled += 1;
                 continue;
-            };
-            let Some(child_id) = self
-                .store
-                .find_subagent_by_task_id(operation.session_id, task_id)
-                .await?
-            else {
+            }
+            let Some((child_id, task_id)) = self.background_task_child(&operation).await? else {
+                if !launch_is_live {
+                    self.record_interrupted_background_operation(
+                        operation,
+                        "task launch has no matching child execution".to_owned(),
+                    )
+                    .await?;
+                    reconciled += 1;
+                }
                 continue;
             };
             let mut child = crate::session::store::session_from_view_async(
@@ -2851,9 +3247,6 @@ impl SessionManager {
             )
             .await?;
             if child.runtime.subtask.status == agena_domain::SubtaskStatus::Running {
-                let launch_is_live = operation
-                    .lease_until_ms
-                    .is_some_and(|until| until > Utc::now().timestamp_millis());
                 if launch_is_live {
                     // The task tool published Running immediately before
                     // execute_registered installs the child's registry slot.
@@ -2876,90 +3269,26 @@ impl SessionManager {
                 continue;
             }
             let child = self.store.load_session(child_id).await?;
-            let (terminal, notification_status) = match status {
-                agena_domain::SubtaskStatus::Completed => (PartState::Completed, "completed"),
-                agena_domain::SubtaskStatus::Failed => (PartState::Failed, "failed"),
-                agena_domain::SubtaskStatus::Cancelled => (PartState::Cancelled, "cancelled"),
-                agena_domain::SubtaskStatus::TimedOut => (PartState::Failed, "timed_out"),
-                agena_domain::SubtaskStatus::Interrupted => (PartState::Cancelled, "interrupted"),
-                agena_domain::SubtaskStatus::Created | agena_domain::SubtaskStatus::Running => {
-                    continue;
-                }
-            };
-            let title = child.title.trim();
-            let task_label = if title.is_empty() {
-                task_id.to_owned()
-            } else {
-                format!("\"{title}\" ({task_id})")
-            };
-            let final_text = child
-                .parts()
-                .iter()
-                .rev()
-                .find_map(|part| {
-                    part.content
-                        .get("text")
-                        .and_then(serde_json::Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .or_else(|| part.summary.clone())
+            let completion = self
+                .session_mutations
+                .run(operation.session_id, async {
+                    self.record_background_task_completion(&operation, &child, &task_id)
+                        .await
                 })
-                .filter(|text| !text.trim().is_empty())
-                .unwrap_or_else(|| "Task completed.".to_owned());
-            let outcome = if status == agena_domain::SubtaskStatus::Completed {
-                Ok(final_text)
-            } else {
-                Err(child.runtime.subtask.failure.clone().unwrap_or_else(|| {
-                    if status == agena_domain::SubtaskStatus::Cancelled {
-                        AppError::Cancelled.failure()
-                    } else {
-                        AppError::Internal(format!(
-                            "delegated task {task_id} ended with status {}",
-                            status.as_ref()
-                        ))
-                        .failure()
-                    }
-                }))
-            };
-            let summary = match &outcome {
-                Ok(_) => format!("Task {task_label} finished"),
-                Err(failure) => {
-                    let reason = failure.user.fallback.trim().trim_end_matches('.');
-                    let verb = match status {
-                        agena_domain::SubtaskStatus::Cancelled
-                        | agena_domain::SubtaskStatus::Interrupted => "cancelled",
-                        agena_domain::SubtaskStatus::TimedOut => "timed out",
-                        _ => "failed",
-                    };
-                    if reason.is_empty() {
-                        format!("Task {task_label} {verb}")
-                    } else {
-                        format!("Task {task_label} {verb}: {reason}")
-                    }
-                }
-            };
-            let notification = SystemNotificationContent {
-                operation_id: task_id.to_owned(),
-                operation_kind: "task".to_owned(),
-                status: notification_status.to_owned(),
-                summary,
-                body: match &outcome {
-                    Ok(text) => format!("<result>{text}</result>"),
-                    Err(failure) => failure.user.fallback.clone(),
-                },
-                ..Default::default()
-            };
-            self.settle_background_operation(
-                operation.session_id,
-                "task",
-                task_id,
-                terminal,
-                outcome,
-                notification,
-            )
-            .await?;
+                .await?;
+            if let Some((delivery, notification)) = completion {
+                self.dispatch_background_delivery(delivery, notification)
+                    .await?;
+            }
             reconciled += 1;
         }
         Ok(reconciled)
+    }
+
+    fn background_launch_handoff_is_live(operation: &BackgroundOperation, now_ms: i64) -> bool {
+        operation.lease_until_ms.is_some_and(|until| until > now_ms)
+            || (operation.phase == BackgroundOperationPhase::LaunchRequested
+                && now_ms < operation.created_at_ms.saturating_add(30_000))
     }
 
     /// Wake the model over a freshly-settled notification (a background

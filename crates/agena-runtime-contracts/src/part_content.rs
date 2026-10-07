@@ -417,7 +417,7 @@ pub struct SystemNotificationContent {
     /// The launching tool_call's provider operation id (`agena.operation_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
-    /// "event" | "completed" | "failed" | "cancelled" | "timed_out".
+    /// "ready" | "event" | "completed" | "failed" | "cancelled" | "timed_out".
     #[serde(default)]
     pub status: String,
     /// One-line summary, e.g. `Task "explore" finished`.
@@ -430,7 +430,7 @@ pub struct SystemNotificationContent {
     /// `<note>…<result>…</result>…</note>` shape.
     #[serde(default)]
     pub body: String,
-    /// Monotonic per-monitor event sequence (see `agena.monitor_event_seq`).
+    /// Monotonic notification delivery sequence (independent of shell raw-log cursors).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_seq: Option<u64>,
     #[serde(flatten)]

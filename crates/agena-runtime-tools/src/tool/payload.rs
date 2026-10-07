@@ -158,8 +158,8 @@ impl ToolPayloadInput {
     ///
     /// Dispatch is deliberately keyed by the resolved registry identity, not
     /// by spelling conventions in `ToolInvocation::name`. The provider uses
-    /// compact names such as `shell.run`, while the registry owns the stable
-    /// identity `agena.shell.run`; guessing from the terminal name (`run`)
+    /// compact names such as `shell.exec`, while the registry owns the stable
+    /// identity `agena.shell.exec`; guessing from the terminal name (`exec`)
     /// previously sent valid built-ins back into their non-executable plugin
     /// adapters.
     pub(crate) fn from_executor_backed_invocation(
@@ -178,7 +178,8 @@ impl ToolPayloadInput {
             (
                 "agena",
                 "shell",
-                action @ ("run" | "list" | "logs" | "stop" | "write" | "resize" | "signal"),
+                action @ ("exec" | "spawn" | "open" | "list" | "logs" | "read" | "stop" | "write"
+                | "resize" | "signal"),
             ) => ("shell", Some(action)),
             ("agena", "monitor", action @ ("start" | "stop")) => ("monitor", Some(action)),
             ("agena", "cron", "create") => ("cron_create", None),
@@ -201,6 +202,62 @@ impl ToolPayloadInput {
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return None,
         };
+        if payload_name == "shell" {
+            // Native adapters must honor the same normalization/constraints
+            // as their live public contracts, before hooks or process launch.
+            let value = serde_json::Value::Object(object.clone());
+            let parsed = match action? {
+                "exec" => crate::part::ShellLaunchInput::parse_input(value).map(|input| {
+                    ShellToolInput::Exec {
+                        shell: input.shell,
+                        command: Box::new(input.command),
+                    }
+                }),
+                "spawn" => crate::part::ShellLaunchInput::parse_input(value).map(|input| {
+                    ShellToolInput::Spawn {
+                        shell: input.shell,
+                        command: Box::new(input.command),
+                    }
+                }),
+                "watch" => crate::part::ShellWatchInput::parse_input(value).map(|input| {
+                    ShellToolInput::Watch {
+                        input: Box::new(input),
+                    }
+                }),
+                "open" => crate::part::ShellOpenInput::parse_input(value).map(|input| {
+                    ShellToolInput::Open {
+                        input: Box::new(input),
+                    }
+                }),
+                "read" => crate::part::ShellReadInput::parse_input(value)
+                    .map(|input| ShellToolInput::Read { input }),
+                "write" => crate::part::ShellWriteInput::parse_input(value)
+                    .map(|input| ShellToolInput::Write { input }),
+                action => {
+                    object.insert(
+                        "action".to_owned(),
+                        serde_json::Value::String(action.to_owned()),
+                    );
+                    ShellToolInput::parse_input(serde_json::Value::Object(object))
+                }
+            };
+            return Some(
+                parsed
+                    .map(Self::Shell)
+                    .map_err(|error| serde::de::Error::custom(error.to_string())),
+            );
+        }
+        if payload_name == "monitor" {
+            object.insert(
+                "action".to_owned(),
+                serde_json::Value::String(action?.to_owned()),
+            );
+            return Some(
+                MonitorToolInput::parse_input(serde_json::Value::Object(object))
+                    .map(Self::Monitor)
+                    .map_err(|error| serde::de::Error::custom(error.to_string())),
+            );
+        }
         object.insert(
             "tool".to_string(),
             serde_json::Value::String(payload_name.to_string()),
@@ -390,6 +447,8 @@ pub enum ToolPayloadOutput {
     Shell {
         action: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_archive: Option<agena_domain::ProcessOutputArchive>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         terminal: Option<agena_domain::TerminalScreen>,
         #[serde(default)]
         dropped_bytes: u64,
@@ -397,6 +456,9 @@ pub enum ToolPayloadOutput {
         shell: Option<ProcessShell>,
         #[serde(default)]
         background: bool,
+        /// Ready for the current watch policy; this is independent of process exit.
+        #[serde(default)]
+        ready: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         process_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -411,12 +473,17 @@ pub enum ToolPayloadOutput {
         processes: Vec<ProcessSummary>,
         #[serde(default)]
         last_seq: u64,
+        /// Bytes already consumed in the next event; pair with last_seq when replaying.
+        #[serde(default)]
+        next_event_offset: u32,
         #[serde(default)]
         has_more: bool,
         #[serde(default)]
         dropped_lines: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        completion_reason: Option<String>,
     },
     /// `monitor.start` / `monitor.stop` output. The monitor keeps running after
     /// `start` returns; its tool part stays `InProgress` until the monitor
@@ -791,21 +858,17 @@ fn payload_name_for_invocation(
     invocation_name: &str,
     input: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
-    for action in ["write", "resize", "signal"] {
-        if [
-            format!("shell.{action}"),
-            format!("agena.shell.{action}"),
-            format!("agena_shell_{action}"),
-        ]
-        .iter()
-        .any(|name| name == invocation_name)
-        {
-            input.insert(
-                "action".to_owned(),
-                serde_json::Value::String(action.to_owned()),
-            );
-            return Some("shell".to_owned());
-        }
+    if let Some(action) = shell_action_for_name(invocation_name) {
+        input.insert(
+            "action".to_owned(),
+            serde_json::Value::String(action.to_owned()),
+        );
+        normalize_historical_shell_input(input);
+        return Some("shell".to_owned());
+    }
+    if invocation_name == "shell" {
+        normalize_historical_shell_input(input);
+        return Some("shell".to_owned());
     }
     match invocation_name {
         "agena_web__fetch" | "web.fetch" | "web_fetch" => return Some("web_fetch".to_string()),
@@ -823,55 +886,6 @@ fn payload_name_for_invocation(
         }
         "agena_fs_apply_patch" | "agena.fs.apply_patch" => {
             return Some("apply_patch".to_string());
-        }
-        "shell.run" | "agena_shell_run" | "agena.shell.run" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("run".to_string()),
-            );
-            return Some("shell".to_string());
-        }
-        "shell.list" | "agena_shell_list" | "agena.shell.list" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("list".to_string()),
-            );
-            return Some("shell".to_string());
-        }
-        "shell.logs" | "agena_shell_logs" | "agena.shell.logs" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("logs".to_string()),
-            );
-            return Some("shell".to_string());
-        }
-        "shell.stop" | "agena_shell_stop" | "agena.shell.stop" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("stop".to_string()),
-            );
-            return Some("shell".to_string());
-        }
-        "shell.write" | "agena_shell_write" | "agena.shell.write" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("write".to_string()),
-            );
-            return Some("shell".to_string());
-        }
-        "shell.resize" | "agena_shell_resize" | "agena.shell.resize" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("resize".to_string()),
-            );
-            return Some("shell".to_string());
-        }
-        "shell.signal" | "agena_shell_signal" | "agena.shell.signal" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("signal".to_string()),
-            );
-            return Some("shell".to_string());
         }
         "monitor.start" | "agena_monitor_start" | "agena.monitor.start" => {
             input.insert(
@@ -893,6 +907,73 @@ fn payload_name_for_invocation(
     payload_name_for_output_tool(invocation_name)
 }
 
+/// Current aliases plus the retired launch name for read-only history decoding.
+/// The retired name is deliberately absent from native dispatch and the registry.
+fn shell_action_for_name(name: &str) -> Option<&'static str> {
+    [
+        "exec", "spawn", "watch", "open", "list", "logs", "read", "write", "stop", "resize",
+        "signal", "run",
+    ]
+    .into_iter()
+    .find(|action| {
+        name == format!("shell.{action}")
+            || name == format!("agena.shell.{action}")
+            || name == format!("agena_shell_{action}")
+    })
+}
+
+fn normalize_historical_shell_input(input: &mut serde_json::Map<String, serde_json::Value>) {
+    if input.get("action").and_then(serde_json::Value::as_str) == Some("run") {
+        let tty = input
+            .remove("tty")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let background = input
+            .remove("run_in_background")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let monitored = input
+            .remove("monitor")
+            .is_some_and(|value| !value.is_null());
+        let action = if tty {
+            "open"
+        } else if background || monitored {
+            "spawn"
+        } else {
+            "exec"
+        };
+        input.insert(
+            "action".to_owned(),
+            serde_json::Value::String(action.to_owned()),
+        );
+        if tty {
+            input
+                .entry("include_screen")
+                .or_insert(serde_json::Value::Bool(true));
+        } else {
+            for field in ["yield_time_ms", "rows", "cols"] {
+                input.remove(field);
+            }
+        }
+    }
+    // Old shell.write used empty input for reading. Only history projection
+    // translates it; the live write contract requires nonempty input.
+    if input.get("action").and_then(serde_json::Value::as_str) == Some("write")
+        && input
+            .get("chars")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        input.insert(
+            "action".to_owned(),
+            serde_json::Value::String("read".to_owned()),
+        );
+        for field in ["chars", "reads", "writes", "network"] {
+            input.remove(field);
+        }
+    }
+}
+
 fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     // Shell/process tools share one `shell` payload variant; the subcommand
     // (`run`/`list`/`logs`/`stop`) lives in `action`, not in the variant tag.
@@ -910,31 +991,7 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     ) {
         return Some("monitor".to_string());
     }
-    if matches!(
-        tool_name,
-        "shell"
-            | "shell.write"
-            | "shell.resize"
-            | "shell.signal"
-            | "agena.shell.write"
-            | "agena.shell.resize"
-            | "agena.shell.signal"
-            | "agena_shell_write"
-            | "agena_shell_resize"
-            | "agena_shell_signal"
-            | "shell.run"
-            | "shell.list"
-            | "shell.logs"
-            | "shell.stop"
-            | "agena.shell.run"
-            | "agena.shell.list"
-            | "agena.shell.logs"
-            | "agena.shell.stop"
-            | "agena_shell_run"
-            | "agena_shell_list"
-            | "agena_shell_logs"
-            | "agena_shell_stop"
-    ) {
+    if tool_name == "shell" || shell_action_for_name(tool_name).is_some() {
         return Some("shell".to_string());
     }
     payload_name_for_table(tool_name)
@@ -960,7 +1017,10 @@ mod tests {
             ("agena.fs", "glob"),
             ("agena.fs", "grep"),
             ("agena.fs", "apply_patch"),
-            ("agena.shell", "run"),
+            ("agena.shell", "exec"),
+            ("agena.shell", "spawn"),
+            ("agena.shell", "open"),
+            ("agena.shell", "read"),
             ("agena.shell", "list"),
             ("agena.shell", "logs"),
             ("agena.shell", "stop"),
@@ -994,6 +1054,7 @@ mod tests {
         }
 
         for (plugin, tool) in [
+            ("agena.shell", "run"),
             ("agena.fs", "write"),
             ("agena.tasks", "run"),
             ("agena.interaction", "notify"),
@@ -1077,7 +1138,7 @@ mod tests {
         let input = ToolPayloadInput::from_invocation(&invocation).expect("shell.run input");
         assert!(matches!(
             input,
-            ToolPayloadInput::Shell(ShellToolInput::Run { .. })
+            ToolPayloadInput::Shell(ShellToolInput::Exec { .. })
         ));
 
         let details = ToolOutput {
@@ -1232,7 +1293,7 @@ mod tests {
         );
         assert_eq!(
             run_input.get("action").and_then(serde_json::Value::as_str),
-            Some("run")
+            Some("exec")
         );
     }
 

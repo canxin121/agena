@@ -40,7 +40,10 @@ pub(crate) struct LiveSubscription {
 }
 
 impl LiveSubscription {
-    pub(crate) fn revisions_for(&self, item: &LiveItem) -> std::collections::BTreeMap<String, String> {
+    pub(crate) fn revisions_for(
+        &self,
+        item: &LiveItem,
+    ) -> std::collections::BTreeMap<String, String> {
         match item {
             LiveItem::SessionChanged(change) => self.revisions.live_tokens(Some(change), None),
             LiveItem::RuntimeSignal(signal) => self.revisions.live_tokens(None, Some(signal)),
@@ -522,7 +525,10 @@ fn running_live_output_blocks(content: &ToolCallContent) -> Vec<agena_domain::Vi
     // Invocation input is deliberately omitted from transcript content, but
     // the human projection must still show the command before any output
     // exists. Both clients already render Command as a fenced code surface.
-    if content.name == "shell.run" {
+    if matches!(
+        agena_domain::ToolPermissionConfig::canonical_shell_tool_name(&content.name),
+        Some("agena.shell.run" | "agena.shell.exec" | "agena.shell.spawn" | "agena.shell.open")
+    ) {
         let command = match content.input.get("command") {
             Some(serde_json::Value::String(command)) => command.clone(),
             Some(serde_json::Value::Array(args)) => args

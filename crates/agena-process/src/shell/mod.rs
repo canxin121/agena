@@ -32,7 +32,7 @@ pub const SHELL_SNAPSHOT_ENV: &str = "AGENA_SHELL_SNAPSHOT";
 /// Which shell dialect family a caller asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellPreference {
-    /// POSIX-shaped command strings (`shell.run`'s default `bash` dialect).
+    /// POSIX-shaped command strings (Shell tools' default `bash` dialect).
     Posix,
     /// PowerShell-shaped command strings.
     Powershell,

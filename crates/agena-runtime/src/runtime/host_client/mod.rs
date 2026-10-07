@@ -635,6 +635,8 @@ impl HostClient for RuntimeHostClient {
                 manager
                     .run_subtask(crate::session::SessionSubtaskRequest {
                         parent_session_id,
+                        run_in_background: req.run_in_background,
+                        launch_call_id: req.launch_call_id,
                         description: req.description,
                         prompt: req.prompt,
                         commands: req.commands,
@@ -1038,6 +1040,7 @@ impl HostClient for RuntimeHostClient {
                 timeout_ms: req.timeout_ms,
                 persistent: req.persistent,
                 monitored: true,
+                watch: None,
                 include_pattern: req.include_pattern,
                 success_pattern: None,
                 failure_pattern: None,

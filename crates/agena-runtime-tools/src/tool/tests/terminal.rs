@@ -1,7 +1,7 @@
 //! Exercise the actual executor-backed tool route, not only the PTY registry.
 use super::*;
 use crate::part::{MonitorToolInput, ShellToolInput};
-use crate::tool::{ToolPayloadExecution, ToolRuntimeContext, monitor_tool, process_tool};
+use crate::tool::{ToolPayloadExecution, ToolRuntimeContext, monitor_tool, shell_tool};
 use agena_domain::{PermissionDecision, ProcessStatus};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -46,7 +46,7 @@ fn invoke(name: &str, input: Value) -> ToolInvocation {
 fn python(script: &str) -> Value {
     json!({
         "command": format!("exec /usr/bin/python3 -u -c '{}'", script.replace('\'', "'\"'\"'")),
-        "tty": true, "yield_time_ms": 1000, "timeout_ms": 10000,
+        "include_screen": true, "yield_time_ms": 1000, "timeout_ms": 10000,
         "reads": [], "writes": [], "network": []
     })
 }
@@ -57,9 +57,10 @@ async fn process(
     session: i64,
     call: i64,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    process_tool::execute_async(
+    shell_tool::execute_async(
         executor,
-        &serde_json::from_value::<ShellToolInput>(input).unwrap(),
+        &ShellToolInput::parse_input(input)
+            .map_err(|error| ToolError::invalid_input(error.to_string()))?,
         ToolRuntimeContext {
             session_id: Some(session),
             call_id: Some(call),
@@ -69,12 +70,25 @@ async fn process(
     .await
 }
 
+fn output_action(executor: &ToolExecutor, id: &str) -> &'static str {
+    if executor
+        .monitor_registry()
+        .unwrap()
+        .terminals()
+        .is_some_and(|terminals| terminals.contains(id))
+    {
+        "read"
+    } else {
+        "logs"
+    }
+}
+
 async fn settle(executor: &ToolExecutor, id: &str, session: i64) -> Value {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let result = process(
                 executor,
-                json!({"action":"logs", "process_id":id, "wait_ms":100}),
+                json!({"action":output_action(executor, id), "process_id":id, "wait_ms":100}),
                 session,
                 90,
             )
@@ -96,7 +110,7 @@ async fn observe(executor: &ToolExecutor, id: &str, session: i64, expected: &str
         loop {
             let result = process(
                 executor,
-                json!({"action":"logs", "process_id":id, "since_seq":0, "wait_ms":100}),
+                json!({"action":"read", "process_id":id, "since_seq":0, "wait_ms":100, "include_screen":true}),
                 session,
                 91,
             )
@@ -128,13 +142,13 @@ async fn real_tool_route_preserves_session_input_screen_and_plain_shell_behavior
         "import sys\nprint('TTY='+str(sys.stdin.isatty()),flush=True)\nwhile True:\n try: value=input('PROMPT> ')\n except EOFError: break\n print('VALUE='+repr(value),flush=True)",
     );
     let started = executor
-        .execute_invocation_detailed(&invoke("shell.run", command), 41, 1)
+        .execute_invocation_detailed(&invoke("shell.open", command), 41, 1)
         .await
         .unwrap();
     let result = Value::from(started.output.payload.clone());
     let id = result["process_id"].as_str().unwrap();
     assert_eq!(result["terminal"]["rows"], 24);
-    assert_eq!(result["background"], true);
+    assert_eq!(result["background"], false);
     assert!(
         !started
             .view
@@ -207,7 +221,7 @@ async fn real_tool_route_preserves_session_input_screen_and_plain_shell_behavior
     let plain = executor
         .execute_invocation_detailed(
             &invoke(
-                "shell.run",
+                "shell.exec",
                 json!({
                     "command":"printf plain","reads":[],"writes":[],"network":[]
                 }),
@@ -228,7 +242,7 @@ async fn real_tool_route_preserves_session_input_screen_and_plain_shell_behavior
 async fn foreign_sessions_cannot_use_monitor_stop_alias_or_discover_terminals() {
     let (_dir, executor) = fixture(ToolPermissionPolicy::allow_all()).await;
     let started = executor
-        .execute_invocation_detailed(&invoke("shell.run", python("input('OWNED> ')")), 41, 1)
+        .execute_invocation_detailed(&invoke("shell.open", python("input('OWNED> ')")), 41, 1)
         .await
         .unwrap();
     let value = Value::from(started.output.payload);
@@ -271,7 +285,7 @@ async fn prefix_allow_rule_cannot_override_terminal_write_denial() {
     policy.add_bash_overlay_rule("echo *", PermissionMode::Allow);
     let (_dir, executor) = fixture(policy).await;
     let run = invoke(
-        "shell.run",
+        "shell.exec",
         json!({"command":"echo safe","reads":[],"writes":[],"network":[]}),
     );
     assert!(matches!(
@@ -303,7 +317,7 @@ async fn successful_launch_survives_cancellation_of_the_original_turn() {
     let started = launch_executor
         .execute_invocation_detailed(
             &invoke(
-                "shell.run",
+                "shell.open",
                 python("value=input('READY> ');print('VALUE='+value,flush=True)"),
             ),
             41,
@@ -332,7 +346,7 @@ async fn cancelling_inflight_launch_cleans_child_and_returns_cancelled() {
     input["yield_time_ms"] = json!(30000);
     let task = tokio::spawn(async move {
         launching
-            .execute_invocation_detailed(&invoke("shell.run", input), 41, 1)
+            .execute_invocation_detailed(&invoke("shell.open", input), 41, 1)
             .await
     });
     let registry = executor.monitor_registry().unwrap();
@@ -363,7 +377,7 @@ async fn dropping_inflight_launch_does_not_leave_child_running() {
     input["yield_time_ms"] = json!(30000);
     let task = tokio::spawn(async move {
         launching
-            .execute_invocation_detailed(&invoke("shell.run", input), 41, 1)
+            .execute_invocation_detailed(&invoke("shell.open", input), 41, 1)
             .await
     });
     let registry = executor.monitor_registry().unwrap();
@@ -385,7 +399,7 @@ async fn incompatible_monitor_is_rejected_without_starting_a_pty() {
     let (_dir, executor) = fixture(ToolPermissionPolicy::allow_all()).await;
     let mut input = python("input('must not start')");
     input["monitor"] = json!({"persistent":true});
-    input["action"] = json!("run");
+    input["action"] = json!("open");
     assert!(process(&executor, input, 41, 1).await.is_err());
     assert!(executor.monitor_registry().unwrap().list().is_empty());
 }
@@ -409,7 +423,7 @@ async fn terminal_input_keeps_explicit_shell_denials() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_processes_and_monitor_aliases_are_owner_scoped() {
     let (_dir, executor) = fixture(ToolPermissionPolicy::allow_all()).await;
-    let started=process(&executor,json!({"action":"run","command":"printf 'OWNED\\n'; exec sleep 30","run_in_background":true,"reads":[],"writes":[],"network":[]}),41,100).await.unwrap();
+    let started=process(&executor,json!({"action":"spawn","command":"printf 'OWNED\\n'; exec sleep 30","reads":[],"writes":[],"network":[]}),41,100).await.unwrap();
     let value = serde_json::to_value(started.output).unwrap();
     let id = value["process_id"].as_str().unwrap();
     let foreign = process(&executor, json!({"action":"list"}), 42, 101)
@@ -454,12 +468,13 @@ async fn ordinary_processes_and_monitor_aliases_are_owner_scoped() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn replay_cannot_change_an_existing_process_launch() {
     let (_dir, executor) = fixture(ToolPermissionPolicy::allow_all()).await;
-    let input = json!({"action":"run","command":"exec sleep 30","run_in_background":true,"reads":[],"writes":[],"network":[]});
+    let input =
+        json!({"action":"spawn","command":"exec sleep 30","reads":[],"writes":[],"network":[]});
     let started = process(&executor, input.clone(), 41, 106).await.unwrap();
     let value = serde_json::to_value(started.output).unwrap();
     let id = value["process_id"].as_str().unwrap();
     process(&executor, input, 41, 106).await.unwrap();
-    assert!(process(&executor,json!({"action":"run","command":"printf 'do-not-run'","run_in_background":true,"reads":[],"writes":[],"network":[]}),41,106).await.is_err());
+    assert!(process(&executor,json!({"action":"spawn","command":"printf 'do-not-run'","reads":[],"writes":[],"network":[]}),41,106).await.is_err());
     process(&executor, json!({"action":"stop","process_id":id}), 41, 107)
         .await
         .unwrap();
@@ -484,14 +499,14 @@ async fn required_sandbox_wraps_foreground_background_and_pty_tool_paths() {
     let outside = tempfile::tempdir().unwrap();
     let target = outside.path().join("forbidden.txt");
     let command = format!("printf forbidden > '{}'", target.display());
-    let mut input = serde_json::json!({"action":"run","command":command,"reads":["."],"writes":[],"network":[]});
+    let mut input = serde_json::json!({"action":"exec","command":command,"reads":["."],"writes":[],"network":[]});
     let foreground = process(&executor, input.clone(), 41, 111).await.unwrap();
     assert_ne!(
         serde_json::to_value(foreground.output).unwrap()["exit_code"],
         0
     );
     assert!(!target.exists());
-    input["run_in_background"] = serde_json::json!(true);
+    input["action"] = serde_json::json!("spawn");
     let started = process(&executor, input.clone(), 41, 112).await.unwrap();
     let id = serde_json::to_value(started.output).unwrap()["process_id"]
         .as_str()
@@ -500,7 +515,7 @@ async fn required_sandbox_wraps_foreground_background_and_pty_tool_paths() {
     let result = settle(&executor, &id, 41).await;
     assert_ne!(result["exit_code"], 0);
     assert!(!target.exists());
-    input["tty"] = serde_json::json!(true);
+    input["action"] = serde_json::json!("open");
     input["yield_time_ms"] = serde_json::json!(1000);
     let started = process(&executor, input, 41, 113).await.unwrap();
     let id = serde_json::to_value(started.output).unwrap()["process_id"]

@@ -399,6 +399,12 @@ pub(crate) fn compact_tool_name(name: &str) -> String {
             "fs.apply_patch".to_string()
         }
         "agena_shell_run" | "agena.shell.run" => "shell.run".to_string(),
+        "agena_shell_exec" | "agena.shell.exec" => "shell.exec".to_string(),
+        "agena_shell_spawn" | "agena.shell.spawn" => "shell.spawn".to_string(),
+        "agena_shell_watch" | "agena.shell.watch" => "shell.watch".to_string(),
+        "agena_shell_open" | "agena.shell.open" => "shell.open".to_string(),
+        "agena_shell_read" | "agena.shell.read" => "shell.read".to_string(),
+
         "agena_shell_list" | "agena.shell.list" => "shell.list".to_string(),
         "agena_shell_logs" | "agena.shell.logs" => "shell.logs".to_string(),
         "agena_shell_stop" | "agena.shell.stop" => "shell.stop".to_string(),

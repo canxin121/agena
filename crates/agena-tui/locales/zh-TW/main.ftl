@@ -737,7 +737,7 @@ permission-studio-field-tool-names = 工具名稱
 
 permission-studio-field-tool-rules = 工具規則
 
-permission-studio-command-rules-shell-only = 命令規則只能配置標準 shell 工具（agena.shell.run）；其他工具請用名稱規則或預設策略。
+permission-studio-command-rules-shell-only = 命令規則適用於 shell.exec、shell.spawn、shell.watch、shell.open 和 shell.write；其他工具請使用名稱規則或預設策略。
 
 permission-studio-field-prompt-json = 輸入 {$field} 的 JSON。留空可清除此覆蓋值。
 

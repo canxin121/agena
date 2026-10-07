@@ -36,6 +36,19 @@ pub(super) fn execute(
     let limit = parse_limit(input.limit);
     let display_path = executor.display_path(&target);
 
+    if input.byte_offset.is_some() || input.byte_limit.is_some() {
+        if input.offset.is_some()
+            || input.limit.is_some()
+            || matches!(input.mode, ReadMode::Attachment)
+            || target.is_dir()
+        {
+            return Err(ToolError::invalid_input(
+                "byte ranges require a text file and cannot be combined with line/entry offset, limit or attachment mode",
+            ));
+        }
+        return stream::read_bytes(executor, input, &target, &display_path);
+    }
+
     if target.is_dir() {
         if matches!(input.mode, ReadMode::Attachment) {
             return Err(ToolError::invalid_field(

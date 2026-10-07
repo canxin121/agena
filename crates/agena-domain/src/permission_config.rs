@@ -37,6 +37,7 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::<ToolPermissionConfig>::deserialize(deserializer)
+        .map(|tools| tools.map(ToolPermissionConfig::with_current_shell_names))
 }
 
 /// The path patterns of the runtime's own per-workspace state directory
@@ -156,12 +157,43 @@ impl PermissionConfig {
                 ]),
                 rules: BTreeMap::from([
                     (
-                        "agena.shell.run".to_string(),
+                        "agena.shell.exec".to_string(),
                         ToolPermissionRules::Ordered(IndexMap::from([
                             (COMMAND_CLASS_NO_OP.to_string(), allow),
                             (COMMAND_CLASS_ROUTINE.to_string(), allow),
                             (COMMAND_CLASS_DANGEROUS.to_string(), deny),
                         ])),
+                    ),
+                    (
+                        "agena.shell.spawn".to_string(),
+                        ToolPermissionRules::Ordered(IndexMap::from([
+                            (COMMAND_CLASS_NO_OP.to_string(), allow),
+                            (COMMAND_CLASS_ROUTINE.to_string(), allow),
+                            (COMMAND_CLASS_DANGEROUS.to_string(), deny),
+                        ])),
+                    ),
+                    (
+                        "agena.shell.watch".to_string(),
+                        ToolPermissionRules::Ordered(IndexMap::from([
+                            (COMMAND_CLASS_NO_OP.to_string(), allow),
+                            (COMMAND_CLASS_ROUTINE.to_string(), allow),
+                            (COMMAND_CLASS_DANGEROUS.to_string(), deny),
+                        ])),
+                    ),
+                    (
+                        "agena.shell.open".to_string(),
+                        ToolPermissionRules::Ordered(IndexMap::from([
+                            (COMMAND_CLASS_NO_OP.to_string(), allow),
+                            (COMMAND_CLASS_ROUTINE.to_string(), allow),
+                            (COMMAND_CLASS_DANGEROUS.to_string(), deny),
+                        ])),
+                    ),
+                    (
+                        "agena.shell.write".to_string(),
+                        ToolPermissionRules::Ordered(IndexMap::from([(
+                            COMMAND_CLASS_DANGEROUS.to_string(),
+                            deny,
+                        )])),
                     ),
                     // Tools whose contract is read-only, and neither shell nor
                     // interactive. Reading cannot change anything.

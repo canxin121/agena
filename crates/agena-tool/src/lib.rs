@@ -63,10 +63,10 @@ pub fn initial_tool_title(invocation: &ToolInvocation) -> String {
 }
 
 /// Return whether a renderer supplied only one spelling of the invocation
-/// identity (for example `shell.run`, `agena.shell.run`, or
-/// `agena_shell_run`) instead of a human action title.  Execution adapters
+/// identity (for example `shell.exec`, `agena.shell.exec`, or
+/// `agena_shell_exec`) instead of a human action title.  Execution adapters
 /// commonly use the raw name as their fallback; treating it as a custom title
-/// would make the completed headline regress to `agena.shell.run · passed`.
+/// would make the completed headline regress to `agena.shell.exec · passed`.
 pub fn is_tool_identity_title(title: &str, invocation: &ToolInvocation) -> bool {
     let title = title.trim();
     !title.is_empty()
@@ -458,12 +458,17 @@ fn tool_result_fragment(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
     // Shell payloads carry both a lifecycle status and the more useful exit
-    // code/process facts. Prefer the latter so `shell.run` ends as `passed`
+    // code/process facts. Prefer the latter so `shell.exec` ends as `passed`
     // or `failed · exit 1`, while list/logs/stop calls still report what they
     // actually returned.
     if matches!(
         key,
         "shell.run"
+            | "shell.exec"
+            | "shell.spawn"
+            | "shell.watch"
+            | "shell.open"
+            | "shell.read"
             | "shell.list"
             | "shell.logs"
             | "shell.stop"
@@ -975,6 +980,18 @@ fn shell_result_fragment(
                 .or_else(|| Some("stopped".to_owned()))
         }
         _ => {
+            if let Some(status) = object
+                .get("status")
+                .or_else(|| object.get("state"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(normalize_result_status)
+                && matches!(
+                    status.as_str(),
+                    "failed" | "cancelled" | "timed out" | "stopped"
+                )
+            {
+                return Some(status);
+            }
             if let Some(exit_code) = object.get("exit_code").and_then(value_as_i64) {
                 return Some(if exit_code == 0 {
                     "passed".to_owned()
@@ -2346,7 +2363,12 @@ fn tool_action_label(tool_name: &str) -> String {
         "code.syntax_tree" => "Inspect syntax tree".to_owned(),
         "code.rewrite_ast" => "Rewrite AST".to_owned(),
         "fs.document" => "Read document".to_owned(),
-        "shell.run" | "shell" => "Run process".to_owned(),
+        "shell.run" | "shell" => "Run command".to_owned(),
+        "shell.exec" => "Execute command".to_owned(),
+        "shell.spawn" => "Spawn background command".to_owned(),
+        "shell.watch" => "Watch command output".to_owned(),
+        "shell.open" => "Open interactive terminal".to_owned(),
+        "shell.read" => "Read terminal output".to_owned(),
         "shell.list" => "List processes".to_owned(),
         "shell.logs" => "Show process logs".to_owned(),
         "shell.stop" => "Stop process".to_owned(),
@@ -2534,9 +2556,28 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
         &["path", "language"]
     } else if key.ends_with("report.findings") {
         &["summary"]
-    } else if key.ends_with("shell.run") {
+    } else if [
+        "shell.run",
+        "shell.exec",
+        "shell.spawn",
+        "shell.watch",
+        "shell.open",
+    ]
+    .iter()
+    .any(|name| key.ends_with(name))
+    {
         &["command", "description"]
-    } else if key.ends_with("shell.logs") || key.ends_with("shell.stop") {
+    } else if [
+        "shell.logs",
+        "shell.read",
+        "shell.write",
+        "shell.stop",
+        "shell.signal",
+        "shell.resize",
+    ]
+    .iter()
+    .any(|name| key.ends_with(name))
+    {
         &["process_id", "id"]
     } else if key.ends_with("monitor.start") {
         &["command", "description", "url"]

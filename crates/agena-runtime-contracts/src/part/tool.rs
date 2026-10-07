@@ -24,32 +24,23 @@ use agena_domain::TimeRange;
         "network[]"
     ),
     non_empty("command"),
-    maximum("yield_time_ms", 30000),
-    minimum("rows", 1),
-    maximum("rows", 200),
-    minimum("cols", 1),
-    maximum("cols", 400)
+    minimum("timeout_ms", 1),
+    maximum("timeout_ms", 86400000),
+    minimum("max_output_bytes", 1024),
+    maximum("max_output_bytes", 16384)
 )]
 #[serde(deny_unknown_fields)]
 /// Input of a shell command execution.
 pub struct ShellCommandInput {
     pub command: String,
-    /// Allocate a persistent pseudo-terminal. Use shell.write for subsequent
-    /// input; yielding output does not stop the process. Incompatible with monitor.
-    #[serde(default)]
-    pub tty: bool,
-    /// Maximum initial wait for terminal output, not a process timeout (0–30000 ms).
-    #[serde(default = "default_terminal_yield_ms")]
-    pub yield_time_ms: u64,
-    /// Initial terminal dimensions, in character cells.
-    #[serde(default = "default_terminal_rows")]
-    pub rows: u16,
-    #[serde(default = "default_terminal_cols")]
-    pub cols: u16,
     #[serde(default)]
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Model output budget, including JSON escaping. Default/max 16384 bytes;
+    /// minimum 1024. Capture and process lifetime are independent of this budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub workdir: Option<String>,
@@ -77,6 +68,179 @@ pub struct ShellCommandInput {
     pub network: Vec<String>,
 }
 
+/// A non-interactive command. The selected tool determines whether it waits
+/// for completion (`shell.exec`) or returns a background receipt (`shell.spawn`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+pub struct ShellLaunchInput {
+    #[serde(default)]
+    pub shell: ProcessShell,
+    #[serde(flatten)]
+    #[input(flatten_shape)]
+    pub command: ShellCommandInput,
+}
+
+/// Either start a command with an atomic watch, or replace/remove the watch on
+/// an existing noninteractive process. A process target never starts a command.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum ShellWatchInput {
+    Launch {
+        #[serde(default)]
+        shell: ProcessShell,
+        #[serde(flatten)]
+        #[input(flatten_shape)]
+        command: ShellCommandInput,
+        #[serde(default)]
+        #[input(nested_shape)]
+        policy: ShellWatchPolicy,
+    },
+    Process {
+        #[arg(trim, non_empty)]
+        process_id: String,
+        /// Replace the entire watch policy. Omit or pass null to remove it;
+        /// removing a watch leaves the process and completion notification intact.
+        #[serde(default)]
+        #[input(nested_shape)]
+        policy: Option<ShellWatchPolicy>,
+        /// Optionally inspect retained output after this sequence on attachment.
+        /// Omit for future output only; unavailable older output is not replayed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_seq: Option<u64>,
+    },
+}
+
+impl ShellWatchInput {
+    pub fn launch_command(&self) -> Option<(ProcessShell, &ShellCommandInput)> {
+        match self {
+            Self::Launch { shell, command, .. } => Some((*shell, command)),
+            Self::Process { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellWatchNotifications {
+    /// Notify on the first include_pattern match per configuration.
+    #[default]
+    Once,
+    /// Notify on changed matches, deduplicated and rate limited.
+    OnChange,
+}
+
+/// Select output notifications and optional completion conditions. The
+/// command's timeout_ms is the only lifetime deadline; omitting it permits
+/// running until exit, stop or a completion condition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default)]
+#[input(
+    min_chars("ready_pattern", 1),
+    min_chars("include_pattern", 1),
+    min_chars("success_pattern", 1),
+    min_chars("failure_pattern", 1),
+    max_chars("ready_pattern", 16384),
+    max_chars("include_pattern", 16384),
+    max_chars("success_pattern", 16384),
+    max_chars("failure_pattern", 16384),
+    minimum("quiet_period_ms", 1),
+    maximum("quiet_period_ms", 3600000),
+    minimum("notification_interval_ms", 1000),
+    maximum("notification_interval_ms", 3600000)
+)]
+#[serde(deny_unknown_fields)]
+pub struct ShellWatchPolicy {
+    /// Notify once when the service is ready, without stopping it. This is
+    /// independent of include notifications and final process completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_pattern: Option<String>,
+    /// Select which lines notify the AI. Omission disables ordinary output
+    /// notifications. All output remains available through shell.read/archive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_pattern: Option<String>,
+    /// Stop the process tree successfully when an output line matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success_pattern: Option<String>,
+    /// Stop the process tree with failure when an output line matches. Failure
+    /// takes precedence if both completion patterns match the same line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_pattern: Option<String>,
+    /// Default once; on_change explicitly enables recurring changed matches.
+    #[serde(default)]
+    pub notifications: ShellWatchNotifications,
+    /// Recurring notifications have at least this interval (default 30000 ms).
+    /// Readiness and completion are never delayed by this throttle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_interval_ms: Option<u64>,
+    /// Applies consistently to all four patterns; regex is the default.
+    #[serde(default)]
+    pub pattern_kind: ShellMonitorPatternKind,
+    /// Stop successfully after this period with no stdout/stderr activity.
+    /// Excluded output also resets this timer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_period_ms: Option<u64>,
+}
+
+/// Open a persistent interactive shell/PTY. Waiting for initial output never
+/// ends the terminal's lifetime and never creates a completion-notified job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    maximum("yield_time_ms", 30000),
+    minimum("rows", 1),
+    maximum("rows", 200),
+    minimum("cols", 1),
+    maximum("cols", 400)
+)]
+#[serde(deny_unknown_fields)]
+pub struct ShellOpenInput {
+    #[serde(default)]
+    pub shell: ProcessShell,
+    #[serde(flatten)]
+    #[input(flatten_shape)]
+    pub command: ShellCommandInput,
+    /// Maximum initial output wait, in milliseconds. This is not a timeout.
+    #[serde(default = "default_terminal_yield_ms")]
+    pub yield_time_ms: u64,
+    #[serde(default = "default_terminal_rows")]
+    pub rows: u16,
+    #[serde(default = "default_terminal_cols")]
+    pub cols: u16,
+    /// Return the current rendered screen in addition to incremental output.
+    /// Enable for full-screen interfaces; ordinary prompts need only output.
+    #[serde(default)]
+    pub include_screen: bool,
+}
+
+/// Read a background job or terminal without input. Explicit cursors replay output;
+/// omitting the cursor consumes only previously unread output.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    trim("process_id"),
+    non_empty("process_id"),
+    maximum("wait_ms", 30000),
+    minimum("limit", 1),
+    maximum("limit", 2000),
+    minimum("max_output_bytes", 1024),
+    maximum("max_output_bytes", 16384)
+)]
+#[serde(deny_unknown_fields)]
+pub struct ShellReadInput {
+    pub process_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_seq: Option<u64>,
+    /// Resume within the next event using the previous next_event_offset.
+    /// A nonzero value requires since_seq; omit both for automatic consumption.
+    #[serde(default)]
+    pub event_offset: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<u32>,
+    #[serde(default = "default_terminal_write_wait_ms")]
+    pub wait_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub include_screen: bool,
+}
+
 pub fn default_terminal_yield_ms() -> u64 {
     1000
 }
@@ -95,21 +259,30 @@ pub fn default_terminal_write_wait_ms() -> u64 {
 #[input(
     trim("process_id", "reads[]", "writes[]", "network[]"),
     non_empty("process_id"),
-    maximum("wait_ms", 30000)
+    min_chars("chars", 1),
+    max_chars("chars", 65536),
+    maximum("wait_ms", 30000),
+    minimum("max_output_bytes", 1024),
+    maximum("max_output_bytes", 16384)
 )]
 #[serde(deny_unknown_fields)]
 pub struct ShellWriteInput {
     pub process_id: String,
-    /// Exact UTF-8 text/control characters. Empty reads without writing. Use
+    /// Nonempty exact UTF-8 text/control characters. Use shell.read to read. Use
     /// \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D; at most 65536 bytes.
-    #[serde(default)]
     pub chars: String,
     /// Output cursor from a previous result. Omit to consume the session's
     /// unread output; explicit cursors permit replay without changing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_seq: Option<u64>,
+    #[serde(default)]
+    pub event_offset: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<u32>,
     #[serde(default = "default_terminal_write_wait_ms")]
     pub wait_ms: u64,
+    #[serde(default)]
+    pub include_screen: bool,
     /// Paths the entered operation may read, relative to the Agena workspace.
     #[serde(default)]
     pub reads: Vec<String>,
@@ -163,9 +336,8 @@ pub enum ShellMonitorPatternKind {
     Regex,
 }
 
-/// Optional completion and capture policy for a managed shell process. Adding
-/// this object makes `shell.run` a monitored background invocation and returns
-/// the same `process_id` consumed by `shell.list`, `shell.logs` and `shell.stop`.
+/// Historical command-monitor policy retained for transcript decoding. New
+/// command listeners use shell.watch and ShellWatchPolicy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
     trim("success_pattern", "failure_pattern", "include_pattern"),
@@ -208,6 +380,7 @@ pub struct ShellMonitorInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(minimum("byte_limit", 4), maximum("byte_limit", 16384))]
 /// Input of the file read tool.
 pub struct ReadToolInput {
     /// File or directory path to read. Relative paths are resolved from the
@@ -220,6 +393,14 @@ pub struct ReadToolInput {
     /// Maximum number of lines or directory entries to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// Zero-based byte position for a text byte-range read. Cannot be combined
+    /// with line/entry offset or limit. Useful for very long single lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_offset: Option<u64>,
+    /// Byte-range page size (4–16384; default 8192). May start at byte 0 when
+    /// byte_offset is omitted. UTF-8 boundaries are preserved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_limit: Option<u32>,
     /// How to render the target: `text`, `attachment`, or `auto`.
     #[serde(default)]
     pub mode: ReadMode,
@@ -431,31 +612,53 @@ pub struct ToolSearchToolInput {
 #[serde(tag = "action", rename_all = "snake_case")]
 /// Input of the shell tool.
 pub enum ShellToolInput {
-    /// Run one process. Set `run_in_background = true` to keep it attached to the session.
+    /// Execute a non-interactive command and wait for its terminal result.
     #[input(non_empty("command"))]
-    Run {
+    Exec {
         #[serde(default)]
         shell: ProcessShell,
         #[serde(flatten)]
         command: Box<ShellCommandInput>,
-        /// If true, keep the process attached to the session and return a process id.
-        #[serde(default, rename = "run_in_background")]
-        run_in_background: bool,
-        /// Optional monitor conditions. When present, the invocation is always
-        /// managed as a background process regardless of `run_in_background`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        monitor: Option<ShellMonitorInput>,
+    },
+    /// Launch a managed, non-interactive background job and return immediately.
+    #[input(non_empty("command"))]
+    Spawn {
+        #[serde(default)]
+        shell: ProcessShell,
+        #[serde(flatten)]
+        command: Box<ShellCommandInput>,
+    },
+    /// Launch a background command with selected output-event notifications.
+    Watch {
+        #[serde(flatten)]
+        input: Box<ShellWatchInput>,
+    },
+    /// Open a persistent interactive terminal.
+    Open {
+        #[serde(flatten)]
+        input: Box<ShellOpenInput>,
     },
     /// List every active or recently-finished background process in this session.
     #[input(default_when_empty = true)]
     List {},
     /// Read buffered logs from a background process; optionally block waiting for new events.
-    #[input(non_empty("process_id"))]
+    #[input(
+        non_empty("process_id"),
+        maximum("wait_ms", 30000),
+        minimum("limit", 1),
+        maximum("limit", 2000),
+        minimum("max_output_bytes", 1024),
+        maximum("max_output_bytes", 16384)
+    )]
     Logs {
         process_id: String,
         /// Return only events with `seq > since_seq`. Default 0.
         #[serde(default)]
         since_seq: u64,
+        #[serde(default)]
+        event_offset: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_output_bytes: Option<u32>,
         /// Max events to return. Default 200, max 2000.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<u32>,
@@ -466,22 +669,66 @@ pub enum ShellToolInput {
     /// Terminate a running background process.
     #[input(non_empty("process_id"))]
     Stop { process_id: String },
+    /// Collect terminal output without sending any input.
+    Read {
+        #[serde(flatten)]
+        input: ShellReadInput,
+    },
     /// Write to a running PTY and collect incremental output.
     Write {
         #[serde(flatten)]
         input: ShellWriteInput,
     },
     /// Change the terminal dimensions and deliver a window-size notification.
+    #[input(
+        non_empty("process_id"),
+        minimum("rows", 1),
+        maximum("rows", 200),
+        minimum("cols", 1),
+        maximum("cols", 400)
+    )]
     Resize {
         process_id: String,
         rows: u16,
         cols: u16,
     },
     /// Interrupt or terminate a terminal process.
+    #[input(non_empty("process_id"))]
     Signal {
         process_id: String,
         signal: ShellSignal,
     },
+}
+
+impl ShellToolInput {
+    /// Shared launch preparation and authorization; execution mode remains
+    /// encoded by the variant, never by flags inside command arguments.
+    pub fn launch_command(&self) -> Option<(ProcessShell, &ShellCommandInput)> {
+        match self {
+            Self::Exec { shell, command } | Self::Spawn { shell, command } => {
+                Some((*shell, command))
+            }
+            Self::Open { input } => Some((input.shell, &input.command)),
+            Self::Watch { input } => input.launch_command(),
+            _ => None,
+        }
+    }
+
+    pub fn action(&self) -> &'static str {
+        match self {
+            Self::Exec { .. } => "exec",
+            Self::Spawn { .. } => "spawn",
+            Self::Watch { .. } => "watch",
+            Self::Open { .. } => "open",
+            Self::List {} => "list",
+            Self::Logs { .. } => "logs",
+            Self::Stop { .. } => "stop",
+            Self::Read { .. } => "read",
+            Self::Write { .. } => "write",
+            Self::Resize { .. } => "resize",
+            Self::Signal { .. } => "signal",
+        }
+    }
 }
 
 /// WebSocket endpoint monitored by the monitor tool.
@@ -501,7 +748,21 @@ pub struct MonitorWsInput {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MonitorToolInput {
     /// Start a background monitor. Pass exactly one of `command` or `ws`.
-    #[input(exactly_one_of("command", "ws"), trim("command", "description"))]
+    #[input(
+        exactly_one_of("command", "ws"),
+        trim(
+            "command",
+            "description",
+            "workdir",
+            "reads[]",
+            "writes[]",
+            "network[]"
+        ),
+        non_empty_if_present("command"),
+        non_empty_if_present("workdir"),
+        minimum("timeout_ms", 1),
+        maximum("timeout_ms", 3600000)
+    )]
     Start {
         /// Shell command whose stdout/stderr lines become events.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -509,7 +770,8 @@ pub enum MonitorToolInput {
         /// WebSocket feed whose text frames become events.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ws: Option<MonitorWsInput>,
-        /// Optional timeout in ms; the monitor is killed when it elapses.
+        /// Deadline in ms. Persistent command monitors ignore it; set
+        /// persistent=false for a finite command deadline. WebSockets enforce it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
         /// Keep the monitor across model turns (default true).
@@ -518,10 +780,49 @@ pub enum MonitorToolInput {
         /// Human-readable description shown in the transcript and activity panel.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         description: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workdir: Option<String>,
+        #[serde(default)]
+        reads: Vec<String>,
+        #[serde(default)]
+        writes: Vec<String>,
+        #[serde(default)]
+        network: Vec<String>,
+        /// Optional command-output matching/capture policy. Command sources
+        /// only; supplied policy takes precedence over top-level lifetime options.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy: Option<ShellMonitorInput>,
     },
     /// Stop a running monitor (kills its command / closes its WebSocket).
     #[input(non_empty("monitor_id"))]
     Stop { monitor_id: String },
+}
+
+impl MonitorToolInput {
+    pub fn shell_command(&self) -> Option<ShellCommandInput> {
+        match self {
+            Self::Start {
+                command: Some(command),
+                description,
+                timeout_ms,
+                workdir,
+                reads,
+                writes,
+                network,
+                ..
+            } => Some(ShellCommandInput {
+                max_output_bytes: None,
+                command: command.clone(),
+                description: description.clone(),
+                timeout_ms: *timeout_ms,
+                workdir: workdir.clone(),
+                reads: reads.clone(),
+                writes: writes.clone(),
+                network: network.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -1301,7 +1602,7 @@ mod current_input_contract_tests {
 
     #[test]
     fn terminal_input_preserves_whitespace_and_control_bytes_through_postprocessing() {
-        for chars in ["  你好 \t\r", "\u{3}", "\u{4}", "\u{1b}[A", "", "\n"] {
+        for chars in ["  你好 \t\r", "\u{3}", "\u{4}", "\u{1b}[A", "\n", "\r", " "] {
             let input = super::ShellWriteInput::parse_input(json!({
                 "process_id": " pty-1 ", "chars": chars, "reads": [], "writes": [], "network": []
             }))
@@ -1319,30 +1620,23 @@ mod current_input_contract_tests {
     }
 
     #[test]
-    fn old_shell_inputs_stay_non_interactive_and_terminal_options_round_trip() {
+    fn explicit_launch_modes_and_terminal_options_round_trip() {
         let plain: ShellCommandInput =
             serde_json::from_value(json!({"command": "echo ok"})).unwrap();
-        assert!(!plain.tty);
+        assert_eq!(plain.command, "echo ok");
         let terminal: super::ShellToolInput = serde_json::from_value(json!({
-            "action": "run", "command": "python3 -q", "tty": true, "yield_time_ms": 250,
+            "action": "open", "command": "python3 -q", "yield_time_ms": 250,
             "rows": 30, "cols": 100, "reads": [], "writes": [], "network": []
         }))
         .unwrap();
         let roundtrip: super::ShellToolInput =
             serde_json::from_value(serde_json::to_value(&terminal).unwrap()).unwrap();
         assert_eq!(terminal, roundtrip);
-        let super::ShellToolInput::Run {
-            command,
-            run_in_background,
-            ..
-        } = terminal
-        else {
-            panic!("run variant");
+        let super::ShellToolInput::Open { input } = terminal else {
+            panic!("open variant");
         };
-        assert!(command.tty);
-        assert!(!run_in_background);
         assert_eq!(
-            (command.rows, command.cols, command.yield_time_ms),
+            (input.rows, input.cols, input.yield_time_ms),
             (30, 100, 250)
         );
     }

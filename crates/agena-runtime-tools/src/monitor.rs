@@ -3,16 +3,17 @@
 //! A background process runs a long-lived shell command and captures every
 //! stdout/stderr line as a numbered event; a monitor may alternatively watch a
 //! WebSocket feed whose text frames become events. The public model-visible
-//! tool surface is `shell` (run/list/logs/stop) plus the `monitor` tool
-//! (start/stop), both backed by this registry.
+//! tool surface is shell.spawn / shell.watch / shell.logs / shell.stop plus
+//! WebSocket monitor.start / monitor.stop, backed by this registry.
 //!
 //! Captured events live in a ring buffer (default 1000 lines) so the model can
 //! walk forward through history without losing recent activity. Lines that get
 //! evicted are counted in `dropped_lines` so the model knows it missed
 //! something. A [`MonitorListener`] receives start/finish transitions and
-//! **every** event as it arrives — the runtime's activity layer projects the
-//! events into the transcript as `system_notification` parts (everything-is-a-
-//! part), while the ring buffer stays the ephemeral "live projection".
+//! selected events as they arrive — the runtime coalesces watched-command and
+//! WebSocket events into bounded system_notification batches. Ordinary jobs
+//! notify only on completion. The ring buffer retains diagnostic output even
+//! when an event is excluded from notifications.
 //!
 //! # Concurrency model
 //!
@@ -34,14 +35,19 @@ use thiserror::Error;
 use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_util::codec::{Decoder, FramedRead, LinesCodec, LinesCodecError};
 use uuid::Uuid;
 
+use crate::part::{ShellMonitorPatternKind, ShellWatchNotifications, ShellWatchPolicy};
+use crate::process_output::{OutputCursor, select_events, text_budget};
 use agena_domain::{ProcessEvent, ProcessStatus, ProcessStream, ProcessSummary};
 use agena_process::ManagedChild;
+#[path = "monitor/watch.rs"]
+mod watch;
+use watch::{OutputMatcher, WatchState};
 
 const DEFAULT_BUFFER_LINES: usize = 1_000;
 const MAX_BUFFER_LINES: usize = 10_000;
+const MAX_BUFFER_BYTES: usize = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS: u64 = 300_000;
 const MAX_TIMEOUT_MS: u64 = 3_600_000;
 const DEFAULT_READ_LIMIT: usize = 200;
@@ -85,6 +91,7 @@ pub struct StartParams {
     pub timeout_ms: Option<u64>,
     pub persistent: bool,
     pub monitored: bool,
+    pub watch: Option<ShellWatchPolicy>,
     pub include_pattern: Option<String>,
     pub success_pattern: Option<String>,
     pub failure_pattern: Option<String>,
@@ -110,13 +117,26 @@ pub struct ReadParams {
     pub wait_ms: u64,
 }
 
+/// Model-facing bounded read; explicit cursors replay, omitted cursors consume.
+#[derive(Debug, Clone, Default)]
+pub struct ProcessReadOptions {
+    pub since_seq: Option<u64>,
+    pub event_offset: u32,
+    pub limit: Option<u32>,
+    pub wait_ms: u64,
+    pub max_output_bytes: Option<u32>,
+}
+
 /// Outcome of a `read` action.
 #[derive(Debug, Clone)]
 pub struct MonitorRead {
     pub monitor_id: String,
+    pub output_archive: Option<agena_domain::ProcessOutputArchive>,
     pub status: ProcessStatus,
+    pub ready: bool,
     pub events: Vec<ProcessEvent>,
     pub last_seq: u64,
+    pub next_event_offset: u32,
     pub has_more: bool,
     pub dropped_lines: u64,
     pub exit_code: Option<i32>,
@@ -127,6 +147,9 @@ pub struct MonitorRead {
 #[derive(Debug, Clone)]
 pub struct MonitorStart {
     pub summary: ProcessSummary,
+    /// The launch identity already existed. Cancelling a replay only cancels
+    /// its wait; it must not terminate the original caller's background job.
+    pub reused: bool,
 }
 
 /// Observer hook called when a background process starts, emits an event, or
@@ -139,6 +162,11 @@ pub struct MonitorStart {
 #[allow(unused_variables)]
 pub trait MonitorListener: Send + Sync + std::fmt::Debug {
     fn on_started(&self, summary: &ProcessSummary) {}
+    /// Replacing/removing a watch invalidates queued notifications from the
+    /// old policy, while leaving the process's completion route intact.
+    fn on_watch_changed(&self, summary: &ProcessSummary) {
+        self.on_started(summary);
+    }
     /// Called for every captured event (`include_pattern`-filtered), with the
     /// monitor's live summary for correlation. The runtime's activity bridge
     /// forwards these as per-event `system_notification` parts.
@@ -164,13 +192,91 @@ pub trait MonitorService: Send + Sync + std::fmt::Debug {
     fn stop_session(&self, _session: i64) {}
     fn shutdown(&self) {}
     fn start(&self, params: StartParams) -> Result<MonitorStart, MonitorError>;
+    /// Called only on a blocking worker. Return after actual process creation,
+    /// not merely after scheduling its Tokio runner.
+    fn start_confirmed(
+        &self,
+        _params: StartParams,
+        _cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<MonitorStart, MonitorError> {
+        Err(MonitorError::Invalid(
+            "confirmed background launches are unavailable".into(),
+        ))
+    }
     fn list(&self) -> Vec<ProcessSummary>;
+    fn configure_watch(
+        &self,
+        _id: &str,
+        _policy: Option<ShellWatchPolicy>,
+        _since_seq: Option<u64>,
+    ) -> Result<ProcessSummary, MonitorError> {
+        Err(MonitorError::Invalid(
+            "watch configuration is unavailable for this process".into(),
+        ))
+    }
+    fn read_output_cancellable(
+        &self,
+        id: &str,
+        options: ProcessReadOptions,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<MonitorRead, MonitorError> {
+        crate::process_output::validate_cursor(options.since_seq, options.event_offset)?;
+        let mut read = self.read_cancellable(
+            ReadParams {
+                monitor_id: id.into(),
+                since_seq: options.since_seq.unwrap_or(0),
+                limit: options.limit,
+                wait_ms: options.wait_ms,
+            },
+            cancel,
+        )?;
+        let slice = select_events(
+            read.events.iter(),
+            OutputCursor {
+                seq: options.since_seq.unwrap_or(0),
+                offset: options.event_offset,
+            },
+            read.last_seq,
+            MAX_READ_LIMIT,
+            text_budget(options.max_output_bytes, false),
+            true,
+            options.since_seq.is_some(),
+            crate::process_output::OutputSelection::Resumable,
+        )?;
+        read.events = slice.events;
+        read.last_seq = slice.cursor.seq;
+        read.next_event_offset = slice.cursor.offset;
+        read.has_more |= slice.has_more;
+        Ok(read)
+    }
     fn read(&self, params: ReadParams) -> Result<MonitorRead, MonitorError>;
+    fn read_cancellable(
+        &self,
+        mut params: ReadParams,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<MonitorRead, MonitorError> {
+        let deadline = Instant::now() + Duration::from_millis(params.wait_ms.min(30_000));
+        loop {
+            if cancel.is_cancelled() {
+                return Err(MonitorError::Invalid("shell log read cancelled".into()));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            params.wait_ms = remaining.as_millis().min(50) as u64;
+            let read = self.read(params.clone())?;
+            if !read.events.is_empty()
+                || read.status != ProcessStatus::Running
+                || Instant::now() >= deadline
+            {
+                return Ok(read);
+            }
+        }
+    }
     fn stop(&self, monitor_id: &str) -> Result<MonitorStopOutcome, MonitorError>;
 }
 
 #[derive(Debug)]
 struct MonitorState {
+    output_archive: Option<crate::process_output_archive::OutputArchive>,
     owner: Option<crate::TerminalOwner>,
     launch: StartParams,
     monitor_id: String,
@@ -179,11 +285,16 @@ struct MonitorState {
     command: String,
     description: String,
     started_at_ms: i64,
-    monitored: bool,
+    watch: Mutex<WatchState>,
+    watch_changed: tokio::sync::Notify,
+    interaction: Mutex<()>,
+    last_activity: Mutex<Instant>,
     last_activity_ms: AtomicI64,
     capacity: usize,
     /// Latest assigned seq (0 means no events yet).
     last_seq: AtomicU64,
+    notification_seq: AtomicU64,
+    notification_delivery: Mutex<()>,
     /// Cumulative count of evicted lines.
     dropped_lines: AtomicU64,
     inner: Mutex<MonitorInner>,
@@ -194,7 +305,11 @@ struct MonitorState {
 
 #[derive(Debug)]
 struct MonitorInner {
+    spawned: bool,
+    ending: bool,
+    cursor: OutputCursor,
     buffer: VecDeque<ProcessEvent>,
+    buffered_bytes: usize,
     status: ProcessStatus,
     exit_code: Option<i32>,
     ended_at_ms: Option<i64>,
@@ -208,12 +323,18 @@ impl MonitorState {
         let inner = self.inner.lock().unwrap();
         ProcessSummary {
             process_id: self.monitor_id.clone(),
+            output_archive: self
+                .output_archive
+                .as_ref()
+                .and_then(|archive| archive.snapshot()),
             tty: false,
+            websocket: self.launch.ws.is_some(),
             command: self.command.clone(),
             description: self.description.clone(),
             status: inner.status,
             background: true,
-            monitored: self.monitored,
+            monitored: self.watch.lock().unwrap().policy.is_some() || self.launch.ws.is_some(),
+            ready: self.watch.lock().unwrap().ready,
             started_at_ms: self.started_at_ms,
             ended_at_ms: inner.ended_at_ms,
             buffered_lines: inner.buffer.len() as u32,
@@ -348,10 +469,15 @@ impl MonitorService for MonitorRegistry {
             }
             _ => {}
         }
-        let timeout_ms = params
-            .timeout_ms
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .min(MAX_TIMEOUT_MS);
+        let timeout_ms =
+            params
+                .timeout_ms
+                .unwrap_or(DEFAULT_TIMEOUT_MS)
+                .min(if params.ws.is_some() {
+                    MAX_TIMEOUT_MS
+                } else {
+                    86_400_000
+                });
         if !params.persistent && timeout_ms == 0 {
             return Err(MonitorError::Invalid(
                 "non-persistent monitors must have timeout_ms > 0".into(),
@@ -361,16 +487,16 @@ impl MonitorService for MonitorRegistry {
             .max_buffered_lines
             .map(|n| (n as usize).clamp(1, MAX_BUFFER_LINES))
             .unwrap_or(DEFAULT_BUFFER_LINES);
-        let include = match params.include_pattern.as_deref() {
-            Some(pattern) if !pattern.is_empty() => Some(Regex::new(pattern)?),
-            _ => None,
-        };
-        let success = compile_optional_pattern(params.success_pattern.as_deref())?;
-        let failure = compile_optional_pattern(params.failure_pattern.as_deref())?;
-        let monitored = params.monitored
-            || success.is_some()
-            || failure.is_some()
-            || params.quiet_period_ms.is_some();
+        let policy = params.watch.clone().or_else(|| {
+            params.monitored.then(|| ShellWatchPolicy {
+                include_pattern: params.include_pattern.clone(),
+                success_pattern: params.success_pattern.clone(),
+                failure_pattern: params.failure_pattern.clone(),
+                quiet_period_ms: params.quiet_period_ms,
+                ..Default::default()
+            })
+        });
+        let watch = WatchState::compile(policy, 0)?;
 
         let handle = self.require_handle()?;
         let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
@@ -392,30 +518,48 @@ impl MonitorService for MonitorRegistry {
                 "reserved background process id must not be empty".into(),
             ));
         }
-        let state = Arc::new(MonitorState {
-            owner: params.owner.clone(),
-            launch: params.clone(),
-            monitor_id: process_id,
-            command: source,
-            description: params.description.clone(),
-            started_at_ms,
-            monitored,
-            last_activity_ms: AtomicI64::new(started_at_ms),
-            capacity,
-            last_seq: AtomicU64::new(0),
-            dropped_lines: AtomicU64::new(0),
-            inner: Mutex::new(MonitorInner {
-                buffer: VecDeque::with_capacity(capacity.min(256)),
-                status: ProcessStatus::Running,
-                exit_code: None,
-                ended_at_ms: None,
-                completion_reason: None,
-                abort: Some(abort_tx),
-                worker: None,
-            }),
-            changed: Condvar::new(),
-            listener: self.listener.clone(),
-        });
+        let state =
+            Arc::new(MonitorState {
+                output_archive: params.owner.as_ref().filter(|_| params.ws.is_none()).map(
+                    |owner| {
+                        crate::process_output_archive::OutputArchive::new(
+                            &owner.workspace,
+                            owner.session_id,
+                        )
+                    },
+                ),
+                owner: params.owner.clone(),
+                launch: params.clone(),
+                monitor_id: process_id,
+                command: source,
+                description: params.description.clone(),
+                started_at_ms,
+                watch: Mutex::new(watch),
+                watch_changed: tokio::sync::Notify::new(),
+                interaction: Mutex::new(()),
+                last_activity: Mutex::new(Instant::now()),
+                last_activity_ms: AtomicI64::new(started_at_ms),
+                capacity,
+                last_seq: AtomicU64::new(0),
+                notification_seq: AtomicU64::new(0),
+                notification_delivery: Mutex::new(()),
+                dropped_lines: AtomicU64::new(0),
+                inner: Mutex::new(MonitorInner {
+                    spawned: false,
+                    ending: false,
+                    cursor: OutputCursor::default(),
+                    buffer: VecDeque::with_capacity(capacity.min(256)),
+                    buffered_bytes: 0,
+                    status: ProcessStatus::Running,
+                    exit_code: None,
+                    ended_at_ms: None,
+                    completion_reason: None,
+                    abort: Some(abort_tx),
+                    worker: None,
+                }),
+                changed: Condvar::new(),
+                listener: self.listener.clone(),
+            });
 
         // Reserve the identity before the worker can emit either an event or
         // completion. This closes the old fast-process race where callbacks
@@ -440,6 +584,7 @@ impl MonitorService for MonitorRegistry {
                 }
                 return Ok(MonitorStart {
                     summary: existing.snapshot(),
+                    reused: true,
                 });
             }
             if monitors
@@ -489,7 +634,6 @@ impl MonitorService for MonitorRegistry {
             let runner_command = params.command.clone();
             let runner_capture_stderr = params.capture_stderr;
             let runner_persistent = params.persistent;
-            let runner_quiet_period_ms = params.quiet_period_ms;
             handle.spawn(async move {
                 run_monitor(
                     runner_state,
@@ -500,10 +644,6 @@ impl MonitorService for MonitorRegistry {
                     runner_capture_stderr,
                     runner_persistent,
                     timeout_ms,
-                    include,
-                    success,
-                    failure,
-                    runner_quiet_period_ms,
                     abort_rx,
                 )
                 .await;
@@ -516,7 +656,10 @@ impl MonitorService for MonitorRegistry {
             }
         }
 
-        Ok(MonitorStart { summary })
+        Ok(MonitorStart {
+            summary,
+            reused: false,
+        })
     }
 
     fn list(&self) -> Vec<ProcessSummary> {
@@ -525,6 +668,204 @@ impl MonitorService for MonitorRegistry {
         out.extend(self.terminals.list());
         out.sort_by_key(|summary| summary.started_at_ms);
         out
+    }
+
+    fn configure_watch(
+        &self,
+        id: &str,
+        policy: Option<ShellWatchPolicy>,
+        since_seq: Option<u64>,
+    ) -> Result<ProcessSummary, MonitorError> {
+        let state = self
+            .lookup(id)
+            .ok_or_else(|| MonitorError::NotFound(id.into()))?;
+        if state.launch.ws.is_some() {
+            return Err(MonitorError::Invalid("shell.watch configures noninteractive shell processes; use monitor tools for WebSocket subscriptions".into()));
+        }
+        // Compile before touching live state: invalid updates leave the old
+        // policy intact. No global registry lock spans compilation or replay.
+        let mut next = WatchState::compile(policy, 0)?;
+        let delivery = state.notification_delivery.lock().unwrap();
+        let retained = {
+            let inner = state.inner.lock().unwrap();
+            if inner.status != ProcessStatus::Running || inner.ending {
+                return Err(MonitorError::Invalid(
+                    "process has ended or begun termination; read its output instead of configuring a watch".into(),
+                ));
+            }
+            let latest = state.last_seq.load(Ordering::Acquire);
+            if since_seq.is_some_and(|seq| seq > latest) {
+                return Err(MonitorError::Invalid(
+                    "watch replay cursor is ahead of this process".into(),
+                ));
+            }
+            let mut watch = state.watch.lock().unwrap();
+            // Repeated attachment with the same configuration is a no-op;
+            // it cannot reset once-only notifications or readiness.
+            if watch.policy == next.policy {
+                drop(watch);
+                drop(inner);
+                return Ok(state.snapshot());
+            }
+            next.revision = watch.revision.wrapping_add(1);
+            next.since_seq = since_seq.unwrap_or(latest);
+            next.configured_at = Instant::now();
+            *watch = next;
+            since_seq
+                .map(|since| {
+                    inner
+                        .buffer
+                        .iter()
+                        .filter(|event| event.seq > since)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        state.watch_changed.notify_waiters();
+        if let Some(listener) = &state.listener {
+            listener.on_watch_changed(&state.snapshot());
+        }
+        drop(delivery);
+        let mut stdout = OutputMatcher::default();
+        let mut stderr = OutputMatcher::default();
+        for event in &retained {
+            match event.stream {
+                ProcessStream::Stdout => stdout.push(&state, event, false),
+                ProcessStream::Stderr => stderr.push(&state, event, false),
+            }
+        }
+        Ok(state.snapshot())
+    }
+
+    fn read_output_cancellable(
+        &self,
+        id: &str,
+        options: ProcessReadOptions,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<MonitorRead, MonitorError> {
+        crate::process_output::validate_cursor(options.since_seq, options.event_offset)?;
+        let state = self
+            .lookup(id)
+            .ok_or_else(|| MonitorError::NotFound(id.into()))?;
+        // Only one consuming read per process; explicit replay uses the same
+        // lock so cursor validation and consumption are a single operation.
+        let _interaction = crate::terminal::call::interaction(&state.interaction, cancel)?;
+        let mut inner = state.inner.lock().unwrap();
+        let cursor = options
+            .since_seq
+            .map(|seq| OutputCursor {
+                seq,
+                offset: options.event_offset,
+            })
+            .unwrap_or(inner.cursor);
+        if cursor.seq > state.last_seq.load(Ordering::Acquire) {
+            return Err(MonitorError::Invalid(
+                "output cursor is ahead of this process".into(),
+            ));
+        }
+        let deadline = Instant::now() + Duration::from_millis(options.wait_ms.min(30_000));
+        loop {
+            if cancel.is_cancelled() {
+                return Err(MonitorError::Invalid("shell output read cancelled".into()));
+            }
+            if state.last_seq.load(Ordering::Acquire) > cursor.seq
+                || inner.status != ProcessStatus::Running
+                || Instant::now() >= deadline
+            {
+                break;
+            }
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(50));
+            inner = state
+                .changed
+                .wait_timeout(inner, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        let slice = select_events(
+            inner.buffer.iter(),
+            cursor,
+            state.last_seq.load(Ordering::Acquire),
+            options
+                .limit
+                .unwrap_or(DEFAULT_READ_LIMIT as u32)
+                .clamp(1, MAX_READ_LIMIT as u32) as usize,
+            text_budget(options.max_output_bytes, false),
+            true,
+            options.since_seq.is_some(),
+            crate::process_output::OutputSelection::Resumable,
+        )?;
+        if options.since_seq.is_none() {
+            inner.cursor = slice.cursor;
+        }
+        Ok(MonitorRead {
+            monitor_id: id.into(),
+            output_archive: state
+                .output_archive
+                .as_ref()
+                .and_then(|archive| archive.snapshot()),
+            status: inner.status,
+            ready: state.watch.lock().unwrap().ready,
+            events: slice.events,
+            last_seq: slice.cursor.seq,
+            next_event_offset: slice.cursor.offset,
+            has_more: slice.has_more,
+            dropped_lines: state.dropped_lines.load(Ordering::Acquire),
+            exit_code: inner.exit_code,
+            completion_reason: inner.completion_reason.clone(),
+        })
+    }
+
+    fn start_confirmed(
+        &self,
+        params: StartParams,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<MonitorStart, MonitorError> {
+        if cancel.is_cancelled() {
+            return Err(MonitorError::Invalid("background launch cancelled".into()));
+        }
+        let started = self.start(params)?;
+        let state = self
+            .lookup(&started.summary.process_id)
+            .ok_or_else(|| MonitorError::NotFound(started.summary.process_id.clone()))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut inner = state
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if cancel.is_cancelled() || Instant::now() >= deadline {
+                drop(inner);
+                if !started.reused {
+                    self.stop(&state.monitor_id)?;
+                }
+                return Err(MonitorError::Invalid(
+                    "background launch cancelled or startup confirmation timed out".into(),
+                ));
+            }
+            if inner.spawned {
+                drop(inner);
+                return Ok(MonitorStart {
+                    summary: state.snapshot(),
+                    reused: started.reused,
+                });
+            }
+            if inner.status != ProcessStatus::Running {
+                return Err(MonitorError::Invalid(
+                    inner
+                        .completion_reason
+                        .clone()
+                        .unwrap_or_else(|| "background process failed to start".into()),
+                ));
+            }
+            inner = state
+                .changed
+                .wait_timeout(inner, Duration::from_millis(50))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
     }
 
     fn read(&self, params: ReadParams) -> Result<MonitorRead, MonitorError> {
@@ -536,10 +877,13 @@ impl MonitorService for MonitorRegistry {
                 params.limit,
             )?;
             return Ok(MonitorRead {
+                output_archive: read.summary.output_archive,
                 monitor_id: read.summary.process_id,
                 status: read.summary.status,
+                ready: read.summary.ready,
                 events: read.events,
                 last_seq: read.last_seq,
+                next_event_offset: read.next_event_offset,
                 has_more: read.has_more,
                 dropped_lines: read.summary.dropped_lines,
                 exit_code: read.summary.exit_code,
@@ -550,6 +894,11 @@ impl MonitorService for MonitorRegistry {
         let state = self
             .lookup(&params.monitor_id)
             .ok_or_else(|| MonitorError::NotFound(params.monitor_id.clone()))?;
+        if params.since_seq > state.last_seq.load(Ordering::Acquire) {
+            return Err(MonitorError::Invalid(
+                "output cursor is ahead of this background job".into(),
+            ));
+        }
         let limit = params
             .limit
             .map(|n| (n as usize).clamp(1, MAX_READ_LIMIT))
@@ -676,27 +1025,28 @@ fn collect_events_locked(
     {
         events.push(event.clone());
     }
-    let last_seq_in_batch = events.last().map(|e| e.seq).unwrap_or(since_seq);
     let global_last = state.last_seq.load(Ordering::Acquire);
+    let last_seq_in_batch = events
+        .last()
+        .map(|e| e.seq)
+        .unwrap_or(global_last.max(since_seq));
     let has_more = global_last > last_seq_in_batch;
     MonitorRead {
         monitor_id: state.monitor_id.clone(),
+        output_archive: state
+            .output_archive
+            .as_ref()
+            .and_then(|archive| archive.snapshot()),
         status,
+        ready: state.watch.lock().unwrap().ready,
         events,
         last_seq: last_seq_in_batch,
+        next_event_offset: 0,
         has_more,
         dropped_lines: state.dropped_lines.load(Ordering::Acquire),
         exit_code,
         completion_reason: inner.completion_reason.clone(),
     }
-}
-
-fn compile_optional_pattern(pattern: Option<&str>) -> Result<Option<Regex>, MonitorError> {
-    pattern
-        .filter(|pattern| !pattern.is_empty())
-        .map(Regex::new)
-        .transpose()
-        .map_err(MonitorError::InvalidPattern)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -709,10 +1059,6 @@ async fn run_monitor(
     capture_stderr: bool,
     persistent: bool,
     timeout_ms: u64,
-    include: Option<Regex>,
-    success: Option<Regex>,
-    failure: Option<Regex>,
-    quiet_period_ms: Option<u64>,
     abort_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut cmd = match argv {
@@ -750,45 +1096,33 @@ async fn run_monitor(
             return;
         }
     };
+    {
+        let mut inner = state
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.spawned = true;
+    }
+    *state.last_activity.lock().unwrap() = Instant::now();
+    state.changed.notify_all();
     let stdout = child.stdout().take();
     let stderr = if capture_stderr {
         child.stderr().take()
     } else {
         None
     };
-    let (condition_tx, mut condition_rx) = tokio::sync::mpsc::channel(2);
-
-    let stdout_state = Arc::clone(&state);
-    let stdout_include = include.clone();
-    let stdout_success = success.clone();
-    let stdout_failure = failure.clone();
-    let stdout_condition_tx = condition_tx.clone();
-    let stdout_task = stdout.map(|s| {
+    let stdout_task = stdout.map(|reader| {
         tokio::spawn(stream_lines(
-            stdout_state,
-            s,
+            Arc::clone(&state),
+            reader,
             ProcessStream::Stdout,
-            stdout_include,
-            stdout_success,
-            stdout_failure,
-            stdout_condition_tx,
         ))
     });
-
-    let stderr_state = Arc::clone(&state);
-    let stderr_include = include.clone();
-    let stderr_success = success;
-    let stderr_failure = failure;
-    let stderr_condition_tx = condition_tx.clone();
-    let stderr_task = stderr.map(|s| {
+    let stderr_task = stderr.map(|reader| {
         tokio::spawn(stream_lines(
-            stderr_state,
-            s,
+            Arc::clone(&state),
+            reader,
             ProcessStream::Stderr,
-            stderr_include,
-            stderr_success,
-            stderr_failure,
-            stderr_condition_tx,
         ))
     });
 
@@ -802,11 +1136,13 @@ async fn run_monitor(
             }
         }
     }
+    let notification_task = tokio::spawn(watch::deliver_notifications(Arc::clone(&state)));
     let _readers = ReaderGuard(
         stdout_task
             .iter()
             .chain(stderr_task.iter())
             .map(tokio::task::JoinHandle::abort_handle)
+            .chain(std::iter::once(notification_task.abort_handle()))
             .collect(),
     );
 
@@ -818,23 +1154,14 @@ async fn run_monitor(
         Some(tokio::time::sleep(Duration::from_millis(timeout_ms)))
     };
     tokio::pin!(timeout_sleep);
-    let quiet_wait = async {
-        if persistent {
-            std::future::pending::<()>().await;
-        }
-        let Some(quiet_period_ms) = quiet_period_ms else {
-            std::future::pending::<()>().await;
-            return;
-        };
-        wait_for_quiet(&state, quiet_period_ms).await;
-    };
-    tokio::pin!(quiet_wait);
-
-    let outcome = tokio::select! {
+    let outcome = loop {
+        let quiet_wait = watch::wait_for_quiet(&state);
+        tokio::pin!(quiet_wait);
+        let outcome = tokio::select! {
         biased;
         _ = &mut abort_rx => TerminationCause::Stopped,
-        Some(condition) = condition_rx.recv() => TerminationCause::Condition(condition),
-        _ = &mut quiet_wait => TerminationCause::Quiet,
+        (condition, revision) = watch::wait_for_condition(&state) => TerminationCause::Condition(condition, revision),
+        revision = &mut quiet_wait => TerminationCause::WatchQuiet(revision),
         _ = async {
             if let Some(sleep) = timeout_sleep.as_mut().as_pin_mut() {
                 sleep.await
@@ -851,6 +1178,38 @@ async fn run_monitor(
                 ),
             ),
         },
+        };
+        // Commit termination under the same state/configuration lock order
+        // used by watch replacement. A removed/changed policy cannot kill the
+        // process through an already-ready old quiet/condition future.
+        let mut inner = state.inner.lock().unwrap();
+        let watch = state.watch.lock().unwrap();
+        match &outcome {
+            TerminationCause::Condition(_, revision)
+                if *revision != watch.revision || watch.outcome == 0 =>
+            {
+                continue;
+            }
+            TerminationCause::WatchQuiet(revision) => {
+                let quiet = watch
+                    .policy
+                    .as_ref()
+                    .and_then(|policy| policy.quiet_period_ms);
+                let last = (*state.last_activity.lock().unwrap()).max(watch.configured_at);
+                if *revision != watch.revision
+                    || quiet.is_none_or(|ms| last.elapsed() < Duration::from_millis(ms))
+                    || state
+                        .output_archive
+                        .as_ref()
+                        .is_some_and(|archive| archive.capture_busy())
+                {
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        inner.ending = true;
+        break outcome;
     };
 
     let (mut final_status, final_exit_code, mut completion_reason) = match outcome {
@@ -861,19 +1220,27 @@ async fn run_monitor(
         TerminationCause::TimedOut => {
             terminate_monitored_child(&state, &mut child, ProcessStatus::TimedOut, "timeout").await
         }
-        TerminationCause::Condition(PatternOutcome::Success) => {
+        TerminationCause::Condition(PatternOutcome::Success, _) => {
             terminate_monitored_child(&state, &mut child, ProcessStatus::Exited, "success_pattern")
                 .await
         }
-        TerminationCause::Condition(PatternOutcome::Failure) => {
+        TerminationCause::Condition(PatternOutcome::Failure, _) => {
             terminate_monitored_child(&state, &mut child, ProcessStatus::Failed, "failure_pattern")
                 .await
         }
-        TerminationCause::Quiet => {
+        TerminationCause::WatchQuiet(_) | TerminationCause::Quiet => {
             terminate_monitored_child(&state, &mut child, ProcessStatus::Exited, "quiet_period")
                 .await
         }
-        TerminationCause::Exited(code) => (ProcessStatus::Exited, code, "process_exit".to_string()),
+        TerminationCause::Exited(code) => (
+            if code == Some(0) {
+                ProcessStatus::Exited
+            } else {
+                ProcessStatus::Failed
+            },
+            code,
+            "process_exit".to_string(),
+        ),
         TerminationCause::WaitError(reason) => {
             push_event(
                 &state,
@@ -899,6 +1266,29 @@ async fn run_monitor(
         completion_reason = "process_tree_cleanup_failed".to_string();
     }
     join_stream_tasks(stdout_task, stderr_task).await;
+    notification_task.abort();
+    watch::flush_pending(&state);
+    // Fast commands may exit before their final output is framed. Reconcile
+    // observed conditions after draining, without masking stop/timeout/cleanup
+    // failures or a nonzero natural exit with a late success pattern.
+    if matches!(
+        completion_reason.as_str(),
+        "process_exit" | "success_pattern" | "quiet_period"
+    ) {
+        match state.watch.lock().unwrap().outcome {
+            2 => {
+                final_status = ProcessStatus::Failed;
+                completion_reason = "failure_pattern".to_owned();
+            }
+            1 if final_status == ProcessStatus::Exited => {
+                completion_reason = "success_pattern".to_owned();
+            }
+            _ => {}
+        }
+    }
+    if let Some(archive) = &state.output_archive {
+        archive.finish();
+    }
 
     {
         let mut inner = state.inner.lock().unwrap();
@@ -1038,7 +1428,7 @@ async fn run_ws_monitor(
         TerminationCause::Quiet => (ProcessStatus::Exited, "quiet_period".to_string()),
         TerminationCause::Exited(_) => (ProcessStatus::Exited, "ws_closed".to_string()),
         TerminationCause::WaitError(reason) => (ProcessStatus::Failed, reason),
-        TerminationCause::Condition(_) => {
+        TerminationCause::Condition(..) | TerminationCause::WatchQuiet(_) => {
             unreachable!("ws monitor has no success/failure patterns")
         }
     };
@@ -1171,7 +1561,8 @@ async fn join_stream_tasks(
 enum TerminationCause {
     Stopped,
     TimedOut,
-    Condition(PatternOutcome),
+    Condition(PatternOutcome, u64),
+    WatchQuiet(u64),
     Quiet,
     Exited(Option<i32>),
     WaitError(String),
@@ -1192,140 +1583,75 @@ fn mark_failed(state: &MonitorState, reason: String) {
     inner.abort = None;
     inner.worker = None;
     drop(inner);
+    if let Some(archive) = &state.output_archive {
+        archive.finish();
+    }
     state.changed.notify_all();
     if let Some(listener) = state.listener.as_ref() {
         listener.on_finished(&state.snapshot());
     }
 }
 
-// A malformed line is a recoverable record, not a transport error. FramedRead
-// pauses after Decoder::Error and may wait for another read even when the next
-// complete line is already buffered and a long-lived process is now silent.
-struct MonitorLinesCodec(LinesCodec);
+// Observe pipe activity before archival backpressure or newline framing.
+// Progress without a newline, filtered lines and overlong records must also
+// reset a watched command's quiet-period deadline.
+struct ProcessActivityReader<R> {
+    reader: R,
+    state: Arc<MonitorState>,
+}
 
-impl Decoder for MonitorLinesCodec {
-    type Item = Result<String, LinesCodecError>;
-    type Error = std::io::Error;
-
-    fn decode(&mut self, bytes: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        Ok(self.0.decode(bytes).transpose())
-    }
-
-    fn decode_eof(
-        &mut self,
-        bytes: &mut bytes::BytesMut,
-    ) -> Result<Option<Self::Item>, Self::Error> {
-        Ok(self.0.decode_eof(bytes).transpose())
+impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for ProcessActivityReader<R> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buffer.filled().len();
+        let result = std::pin::Pin::new(&mut this.reader).poll_read(cx, buffer);
+        if buffer.filled().len() > before {
+            this.state
+                .last_activity_ms
+                .store(Utc::now().timestamp_millis(), Ordering::Release);
+            *this.state.last_activity.lock().unwrap() = Instant::now();
+        }
+        result
     }
 }
 
-async fn stream_lines<R>(
-    state: Arc<MonitorState>,
-    reader: R,
-    stream: ProcessStream,
-    include: Option<Regex>,
-    success: Option<Regex>,
-    failure: Option<Regex>,
-    condition_tx: tokio::sync::mpsc::Sender<PatternOutcome>,
-) where
+async fn stream_lines<R>(state: Arc<MonitorState>, reader: R, stream: ProcessStream)
+where
     R: tokio::io::AsyncRead + Unpin + Send,
 {
-    // Ordinary background commands produce raw segments, just like foreground
-    // commands and PTYs. Only regex monitors need newline framing.
-    if !state.monitored && include.is_none() && success.is_none() && failure.is_none() {
-        use tokio::io::AsyncReadExt;
-        let mut reader = reader;
-        let mut bytes = [0_u8; 8 * 1024];
-        let mut pending_utf8 = Vec::new();
-        loop {
-            match reader.read(&mut bytes).await {
-                Ok(count) => {
-                    if count > 0 {
-                        state
-                            .last_activity_ms
-                            .store(Utc::now().timestamp_millis(), Ordering::Release);
-                    }
-                    let text = crate::tool::shell::decode_output(
-                        &mut pending_utf8,
-                        &bytes[..count],
-                        count == 0,
-                    );
-                    if !text.is_empty() {
-                        push_output_event(&state, stream, text, true);
-                    }
-                    if count == 0 {
-                        break;
-                    }
+    use tokio::io::AsyncReadExt;
+    let mut reader = crate::process_output_archive::ArchivedReader::new(
+        ProcessActivityReader {
+            reader,
+            state: Arc::clone(&state),
+        },
+        state.output_archive.clone(),
+    );
+    let mut bytes = [0_u8; 8 * 1024];
+    let mut utf8 = Vec::new();
+    let mut matcher = OutputMatcher::default();
+    loop {
+        tokio::task::consume_budget().await;
+        match reader.read(&mut bytes).await {
+            Ok(count) => {
+                if count != 0 {
+                    *state.last_activity.lock().unwrap() = Instant::now();
                 }
-                Err(error) => {
-                    push_event(
-                        &state,
-                        ProcessStream::Stderr,
-                        format!("background output pipe read failed: {error}"),
-                    );
+                let text =
+                    crate::tool::shell::decode_output(&mut utf8, &bytes[..count], count == 0);
+                if !text.is_empty() {
+                    let event = push_output_event_filtered(&state, stream, text, true, false);
+                    matcher.push(&state, &event, count == 0);
+                }
+                if count == 0 {
+                    matcher.finish(&state);
                     break;
                 }
             }
-        }
-        return;
-    }
-    let mut reader = FramedRead::new(
-        reader,
-        MonitorLinesCodec(LinesCodec::new_with_max_length(READER_LINE_BYTE_CAP)),
-    );
-    while let Some(event) = reader.next().await {
-        // FramedRead can return an entire buffered batch without polling the
-        // pipe. Filtered lines must also consume a cooperative poll budget.
-        tokio::task::consume_budget().await;
-        match event {
-            Ok(Ok(line)) => {
-                state
-                    .last_activity_ms
-                    .store(Utc::now().timestamp_millis(), Ordering::Release);
-                let pattern_outcome = if failure
-                    .as_ref()
-                    .is_some_and(|pattern| pattern.is_match(&line))
-                {
-                    Some(PatternOutcome::Failure)
-                } else if success
-                    .as_ref()
-                    .is_some_and(|pattern| pattern.is_match(&line))
-                {
-                    Some(PatternOutcome::Success)
-                } else {
-                    None
-                };
-                if let Some(pattern_outcome) = pattern_outcome
-                    && let Err(error) = condition_tx.try_send(pattern_outcome)
-                {
-                    tracing::debug!(
-                        diagnostic = %error,
-                        "monitor pattern outcome was already queued or no longer observed"
-                    );
-                }
-                if let Some(re) = include.as_ref()
-                    && !re.is_match(&line)
-                {
-                    continue;
-                }
-                push_event(&state, stream, line);
-            }
-            Ok(Err(LinesCodecError::MaxLineLengthExceeded)) => {
-                push_event(
-                    &state,
-                    ProcessStream::Stderr,
-                    format!(
-                        "background output line was discarded after exceeding the {READER_LINE_BYTE_CAP}-byte UTF-8 line limit"
-                    ),
-                );
-            }
-            Ok(Err(error)) => push_event(
-                &state,
-                ProcessStream::Stderr,
-                format!(
-                    "background output line was discarded because it is not valid UTF-8: {error}"
-                ),
-            ),
             Err(error) => {
                 push_event(
                     &state,
@@ -1359,6 +1685,19 @@ fn push_event(state: &MonitorState, stream: ProcessStream, line: String) {
 }
 
 fn push_output_event(state: &MonitorState, stream: ProcessStream, line: String, chunk: bool) {
+    let _ = push_output_event_filtered(state, stream, line, chunk, state.launch.ws.is_some());
+}
+
+fn push_output_event_filtered(
+    state: &MonitorState,
+    stream: ProcessStream,
+    line: String,
+    chunk: bool,
+    notify: bool,
+) -> ProcessEvent {
+    let mut inner = state.inner.lock().unwrap();
+    // Assign and append under one lock: concurrent stdout/stderr must not
+    // insert an older sequence after a newer cursor has already been read.
     let seq = state.last_seq.fetch_add(1, Ordering::AcqRel) + 1;
     let event = ProcessEvent {
         seq,
@@ -1366,21 +1705,25 @@ fn push_output_event(state: &MonitorState, stream: ProcessStream, line: String, 
         ts_ms: Utc::now().timestamp_millis(),
         line,
         chunk,
+        notification: None,
+        notification_seq: None,
     };
-    {
-        let mut inner = state.inner.lock().unwrap();
-        if inner.buffer.len() == state.capacity {
-            inner.buffer.pop_front();
+    inner.buffered_bytes += event.line.len();
+    inner.buffer.push_back(event.clone());
+    while inner.buffer.len() > state.capacity || inner.buffered_bytes > MAX_BUFFER_BYTES {
+        if let Some(evicted) = inner.buffer.pop_front() {
+            inner.buffered_bytes -= evicted.line.len();
             state.dropped_lines.fetch_add(1, Ordering::AcqRel);
         }
-        inner.buffer.push_back(event.clone());
     }
+    drop(inner);
     state.changed.notify_all();
     // Forward the event to the observer so the runtime can project it into the
     // transcript as a `system_notification` part (everything-is-a-part).
-    if let Some(listener) = state.listener.as_ref() {
+    if notify && let Some(listener) = state.listener.as_ref() {
         listener.on_event(&event, &state.snapshot());
     }
+    event
 }
 
 fn build_command(command: &str) -> Command {
@@ -1398,38 +1741,6 @@ fn build_command(command: &str) -> Command {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn malformed_lines_resume_buffered_records_without_more_input_or_eof() {
-        use tokio::io::AsyncWriteExt;
-        let mut input = vec![b'x'; READER_LINE_BYTE_CAP + 100];
-        input.extend_from_slice(b"\nREADY\n\xff\nAFTER\n");
-        let (mut writer, reader) = tokio::io::duplex(input.len());
-        writer.write_all(&input).await.unwrap();
-        let mut lines = FramedRead::with_capacity(
-            reader,
-            MonitorLinesCodec(LinesCodec::new_with_max_length(READER_LINE_BYTE_CAP)),
-            input.len(),
-        );
-        // Keep writer alive and silent: all records must come from the first
-        // read. Returning Decoder::Error would stall after the oversized line.
-        tokio::time::timeout(Duration::from_secs(1), async {
-            assert!(matches!(
-                lines.next().await,
-                Some(Ok(Err(LinesCodecError::MaxLineLengthExceeded)))
-            ));
-            assert_eq!(lines.next().await.unwrap().unwrap().unwrap(), "READY");
-            assert!(matches!(
-                lines.next().await,
-                Some(Ok(Err(LinesCodecError::Io(_))))
-            ));
-            assert_eq!(lines.next().await.unwrap().unwrap().unwrap(), "AFTER");
-        })
-        .await
-        .expect("buffered records must not wait for another pipe read");
-        drop(writer);
-        assert!(lines.next().await.is_none());
-    }
 
     fn process_exists(pid: i32) -> bool {
         // SAFETY: signal 0 only checks existence/permission.
@@ -1449,6 +1760,7 @@ mod tests {
             timeout_ms: Some(2_000),
             persistent: false,
             monitored: true,
+            watch: None,
             include_pattern: None,
             success_pattern: None,
             failure_pattern: None,
@@ -1597,7 +1909,7 @@ mod tests {
         let read = wait_for_terminal(registry, id).await;
         assert_eq!(read.status, ProcessStatus::Exited);
         assert_eq!(read.completion_reason.as_deref(), Some("success_pattern"));
-        assert!(read.events.iter().any(|event| event.line == "READY"));
+        assert!(read.events.iter().any(|event| event.line.contains("READY")));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1688,17 +2000,24 @@ mod tests {
             "head -c 100000 /dev/zero | LC_ALL=C tr '\\000' x; printf '\\nREADY\\n'; exec sleep 30",
         );
         params.success_pattern = Some("^READY$".to_string());
-        // This exercises framing, not a two-second host scheduling deadline.
+        // Raw capture and bounded matching must keep observing later records.
         params.timeout_ms = Some(10_000);
         let id = registry.start(params).expect("start").summary.process_id;
         let read = wait_for_terminal(registry, id).await;
 
         assert_eq!(read.completion_reason.as_deref(), Some("success_pattern"));
-        assert!(read.events.iter().any(|event| event.line == "READY"));
-        assert!(read.events.iter().any(|event| {
-            event
-                .line
-                .contains("discarded after exceeding the 65536-byte UTF-8 line limit")
-        }));
+        assert!(read.events.iter().any(|event| event.line.contains("READY")));
+        assert!(
+            read.events
+                .iter()
+                .all(|event| event.chunk && event.line.len() <= 8192)
+        );
+        assert!(
+            read.events
+                .iter()
+                .map(|event| event.line.len())
+                .sum::<usize>()
+                >= 100000
+        );
     }
 }

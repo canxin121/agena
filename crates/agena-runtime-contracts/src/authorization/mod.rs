@@ -117,6 +117,7 @@ pub fn apply_tool_permission_config(
     value: &ToolPermissionConfig,
     mut base: ToolPermissionPolicy,
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
+    let value = value.clone().with_current_shell_names();
     if let Some(mode) = value.default {
         base.default_mode = mode;
     }
@@ -148,18 +149,18 @@ fn apply_tool_permission_rules(
             Ok(base)
         }
         ToolPermissionRules::Ordered(entries) => {
-            if matches!(tool_name, "agena.shell.run") {
+            if let Some(tool_name) = crate::permission::normalized_shell_command_tool(tool_name) {
                 for (pattern, mode) in sorted_rule_entries(entries) {
                     let trimmed = pattern.trim();
                     if trimmed.is_empty() {
                         continue;
                     }
                     if let Some(class) = command_class_keyword(trimmed) {
-                        base.add_bash_class_rule(class, trimmed, mode);
+                        base.add_shell_tool_class(tool_name, class, trimmed, mode);
                     } else if trimmed == "*" {
                         base.tool_modes.insert(tool_name.to_string(), mode);
                     } else {
-                        base.add_bash_overlay_rule(trimmed, mode);
+                        base.add_shell_tool_pattern(tool_name, trimmed, mode);
                     }
                 }
                 Ok(base)

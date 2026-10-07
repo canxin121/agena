@@ -4,7 +4,7 @@
 //! an interaction lock, while stop/shutdown bypass that lock. Neither output
 //! backpressure nor a blocked input writer may prevent process cleanup.
 
-mod call;
+pub(crate) mod call;
 mod driver;
 #[cfg(all(test, unix))]
 mod lifecycle_tests;
@@ -31,7 +31,8 @@ const MAX_HISTORY: usize = 64;
 pub(crate) const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_BUFFER_BYTES: usize = 1024 * 1024;
 const MAX_BUFFER_EVENTS: usize = 2048;
-const MAX_OUTPUT_BYTES: usize = 16 * 1024;
+#[cfg(test)]
+const MAX_OUTPUT_BYTES: usize = crate::process_output::DEFAULT_OUTPUT_BYTES;
 const MAX_WAIT_MS: u64 = 30_000;
 
 /// Trusted owner; never deserialized from model tool arguments. Stateless MCP
@@ -62,6 +63,7 @@ pub struct TerminalRead {
     pub events: Vec<ProcessEvent>,
     pub output: String,
     pub last_seq: u64,
+    pub next_event_offset: u32,
     pub has_more: bool,
     pub dropped_bytes: u64,
     pub screen: TerminalScreen,
@@ -141,6 +143,17 @@ impl TerminalRegistry {
         wait_ms: u64,
         cancel: CancellationToken,
     ) -> Result<TerminalRead, MonitorError> {
+        self.start_cancellable_with_output(params, wait_ms, None, true, cancel)
+    }
+
+    pub(crate) fn start_cancellable_with_output(
+        &self,
+        params: TerminalStartParams,
+        wait_ms: u64,
+        max_output_bytes: Option<u32>,
+        include_screen: bool,
+        cancel: CancellationToken,
+    ) -> Result<TerminalRead, MonitorError> {
         call::check(&cancel)?;
         validate_size(params.rows, params.cols)?;
         validate_wait(wait_ms)?;
@@ -183,7 +196,19 @@ impl TerminalRegistry {
                 let existing = Arc::clone(existing);
                 drop(sessions);
                 // Replaying a launch returns the same output/identity and never spawns again.
-                return existing.read_cancellable(Some(0), wait_ms, None, &cancel);
+                // A concurrent replay still waits for actual process creation;
+                // cancelling it must not stop the original caller's terminal.
+                existing.confirm_started(&cancel, false)?;
+                return existing.read_options_cancellable(
+                    crate::ProcessReadOptions {
+                        since_seq: Some(0),
+                        wait_ms,
+                        max_output_bytes,
+                        ..Default::default()
+                    },
+                    include_screen,
+                    &cancel,
+                );
             }
             if sessions.values().filter(|s| s.is_running()).count() >= MAX_ACTIVE {
                 return Err(invalid(
@@ -205,7 +230,6 @@ impl TerminalRegistry {
             state = Arc::new(State::new(id.clone(), &params, tx, self.listener.clone()));
             sessions.insert(id, Arc::clone(&state));
         }
-        state.notify_started();
         let worker_state = Arc::clone(&state);
         let launch_cancel = cancel.clone();
         let runtime = self.runtime.clone();
@@ -226,7 +250,16 @@ impl TerminalRegistry {
             state.append(format!("Terminal driver could not start: {error}\r\n").as_bytes());
             state.finish(ProcessStatus::Failed, None, "driver_start_failed");
         }
-        state.read_cancellable(None, wait_ms, None, &cancel)
+        state.confirm_started(&cancel, true)?;
+        state.read_options_cancellable(
+            crate::ProcessReadOptions {
+                wait_ms,
+                max_output_bytes,
+                ..Default::default()
+            },
+            include_screen,
+            &cancel,
+        )
     }
 
     pub fn contains(&self, id: &str) -> bool {
@@ -259,6 +292,19 @@ impl TerminalRegistry {
             .read(since_seq, wait_ms, limit)
     }
 
+    pub(crate) fn read_with_output(
+        &self,
+        id: &str,
+        owner: &TerminalOwner,
+        options: crate::ProcessReadOptions,
+        include_screen: bool,
+        cancel: &CancellationToken,
+    ) -> Result<TerminalRead, MonitorError> {
+        self.lookup(id, Some(owner))?
+            .read_options_cancellable(options, include_screen, cancel)
+    }
+
+    #[cfg(test)]
     pub(crate) fn read_cancellable(
         &self,
         id: &str,
@@ -310,7 +356,54 @@ impl TerminalRegistry {
         wait_ms: u64,
         cancel: &CancellationToken,
     ) -> Result<TerminalRead, MonitorError> {
+        self.write_selected_output(
+            id,
+            owner,
+            chars,
+            crate::ProcessReadOptions {
+                since_seq,
+                wait_ms,
+                ..Default::default()
+            },
+            true,
+            cancel,
+            crate::process_output::OutputSelection::WholeEvents,
+        )
+    }
+
+    pub(crate) fn write_with_output(
+        &self,
+        id: &str,
+        owner: &TerminalOwner,
+        chars: &str,
+        options: crate::ProcessReadOptions,
+        include_screen: bool,
+        cancel: &CancellationToken,
+    ) -> Result<TerminalRead, MonitorError> {
+        self.write_selected_output(
+            id,
+            owner,
+            chars,
+            options,
+            include_screen,
+            cancel,
+            crate::process_output::OutputSelection::Resumable,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_selected_output(
+        &self,
+        id: &str,
+        owner: &TerminalOwner,
+        chars: &str,
+        options: crate::ProcessReadOptions,
+        include_screen: bool,
+        cancel: &CancellationToken,
+        selection: crate::process_output::OutputSelection,
+    ) -> Result<TerminalRead, MonitorError> {
         call::check(cancel)?;
+        let wait_ms = options.wait_ms;
         validate_wait(wait_ms)?;
         if chars.len() > MAX_INPUT_BYTES {
             return Err(invalid(
@@ -321,11 +414,11 @@ impl TerminalRegistry {
         let _interaction = call::interaction(&state.interaction, cancel)?;
         // Validate the output cursor before delivering any input. A malformed
         // read request must never report failure after executing a command.
-        state.validate_cursor(since_seq)?;
+        state.validate_options_cursor(&options)?;
         if !chars.is_empty() {
             state.control_cancellable(Control::Write(chars.as_bytes().to_vec()), cancel)?;
         }
-        state.read_locked_cancellable(since_seq, wait_ms, None, cancel)
+        state.read_selected_locked(options, include_screen, cancel, selection)
     }
 
     pub fn resize(
@@ -351,7 +444,14 @@ impl TerminalRegistry {
         let state = self.lookup(id, Some(owner))?;
         let _interaction = call::interaction(&state.interaction, cancel)?;
         state.control_cancellable(Control::Resize(rows, cols), cancel)?;
-        state.read_locked_cancellable(None, 100, None, cancel)
+        state.read_options_locked(
+            crate::ProcessReadOptions {
+                wait_ms: 100,
+                ..Default::default()
+            },
+            true,
+            cancel,
+        )
     }
 
     pub fn signal(
@@ -378,11 +478,19 @@ impl TerminalRegistry {
                 state.control_cancellable(Control::Interrupt, cancel)?;
                 // An out-of-band signal cannot wait behind a long output read.
                 // Explicit cursors leave the automatic read cursor untouched.
-                state.read_locked_cancellable(Some(since), 250, None, cancel)
+                state.read_options_locked(
+                    crate::ProcessReadOptions {
+                        since_seq: Some(since),
+                        wait_ms: 250,
+                        ..Default::default()
+                    },
+                    false,
+                    cancel,
+                )
             }
             ShellSignal::Terminate | ShellSignal::Kill => {
                 state.stop(matches!(signal, ShellSignal::Kill))?;
-                state.read(None, 0, None)
+                state.read_options_cancellable(crate::ProcessReadOptions::default(), false, cancel)
             }
         }
     }

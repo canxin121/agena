@@ -49,7 +49,8 @@ type SessionStateResponse = {
 }
 type ToolCatalogResponse = { permission_tools?: Array<{ name?: string; summary?: string }> }
 
-const SHELL_CAPABLE_TOOLS = ['agena.shell.run'] as const
+const SHELL_LAUNCH_TOOLS = ['agena.shell.exec', 'agena.shell.spawn', 'agena.shell.watch', 'agena.shell.open'] as const
+const SHELL_CAPABLE_TOOLS = [...SHELL_LAUNCH_TOOLS, 'agena.shell.write'] as const
 
 const { t } = useI18n()
 const chat = useChatStore()
@@ -179,7 +180,7 @@ const toolNameRules = computed(() => Object.entries(config.value.tools?.names ||
 const commandRules = computed(() => {
   const rows: Array<{ tool: string; command: string; mode: PermissionMode }> = []
   for (const [tool, rawRules] of Object.entries(config.value.tools?.rules || {})) {
-    // `agena.shell.run` carries the command classes and the patterns; `*`
+    // Shell launch/input tools and command monitors carry command rules; `*`
     // carries the read-only class, which applies to every tool whose
     // permission contract is read-only. Anything else would be inert.
     if (!isShellCapableTool(tool) && tool !== '*') continue
@@ -201,9 +202,12 @@ const commandRules = computed(() => {
 // ordinary rule row: writing it creates an override, clearing it restores the
 // built-in.
 const BUILT_IN_RULES: ReadonlyArray<{ tool: string; command: string }> = [
-  { tool: 'agena.shell.run', command: 'no-op' },
-  { tool: 'agena.shell.run', command: 'routine' },
-  { tool: 'agena.shell.run', command: 'dangerous' },
+  ...SHELL_LAUNCH_TOOLS.flatMap((tool) => [
+    { tool, command: 'no-op' },
+    { tool, command: 'routine' },
+    { tool, command: 'dangerous' },
+  ]),
+  { tool: 'agena.shell.write', command: 'dangerous' },
   { tool: '*', command: 'read-only' },
 ]
 const writtenRules = computed(() => new Set(commandRules.value.map((row) => `${row.tool}\u0000${row.command}`)))
@@ -218,7 +222,7 @@ const builtInRuleRows = computed(() =>
 // of their own. Mirrors `PermissionConfig::global_default()`.
 function builtInRuleMode(tool: string, command: string): PermissionMode {
   if (tool === '*' && command === 'read-only') return 'allow'
-  if (tool === 'agena.shell.run') {
+  if (isShellCapableTool(tool)) {
     if (command === 'dangerous') return 'deny'
     return 'allow'
   }

@@ -684,7 +684,7 @@ pub fn project_classifier_run_text(parts: &[Part]) -> String {
 /// Human-readable target of a tool call.
 ///
 /// Every gateway call projects under the single protocol name `tools_call`, so
-/// a transcript of `tool tools_call call: {"tool":"shell.run",…}` buries the
+/// a transcript of `tool tools_call call: {"tool":"shell.exec",…}` buries the
 /// one fact the reviewer judges — *which* tool ran. The `tool` argument inside
 /// the call payload names it, and names the matching result too (that result
 /// carries no arguments of its own), which keeps a call and its result legible

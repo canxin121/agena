@@ -104,9 +104,9 @@ pub(super) fn access_kind_name(access: AccessKind) -> &'static str {
 pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> {
     if let Some(payload) = ToolPayloadInput::from_invocation(invocation) {
         let command = match payload {
-            ToolPayloadInput::Shell(crate::part::ShellToolInput::Run { command, .. }) => {
-                Some(command.command)
-            }
+            ToolPayloadInput::Shell(ref input) if input.launch_command().is_some() => input
+                .launch_command()
+                .map(|(_, command)| command.command.clone()),
             // Preserve bytes for denial checks and review. PermissionPolicy
             // deliberately does not apply shell prefix approvals to shell.write.
             ToolPayloadInput::Shell(crate::part::ShellToolInput::Write { input }) => {

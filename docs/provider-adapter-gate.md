@@ -80,7 +80,7 @@ Agena 不会：
 
 本门槛不影响 Agena 原生工具，例如：
 
-- `shell.run`
+- `shell.exec / shell.spawn / shell.open`
 - `fs.read`
 - `fs.apply_patch`
 - 浏览器工具

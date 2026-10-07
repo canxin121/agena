@@ -1,42 +1,78 @@
 //! Shell command execution contracts (`ShellRequest`, `ShellOutput`).
 
-use std::cmp::min;
-
 /// Default timeout for a shell-tool process invocation.
 pub const DEFAULT_SHELL_TIMEOUT_MS: u64 = 120_000;
 
-const MAX_OUTPUT_BYTES: usize = 50 * 1024;
-const MAX_OUTPUT_LINES: usize = 2_000;
+const MAX_OUTPUT_BYTES: usize = 16 * 1024;
+const MAX_OUTPUT_LINES: usize = 200;
 
 /// Limit a shell result for model and presentation consumption.
 pub fn truncate_shell_output(output: &str) -> (String, bool) {
-    let mut lines = output.lines().collect::<Vec<_>>();
-    let line_truncated = lines.len() > MAX_OUTPUT_LINES;
-    if line_truncated {
-        lines.truncate(MAX_OUTPUT_LINES);
-    }
+    truncate_shell_output_budget(output, MAX_OUTPUT_BYTES)
+}
 
-    let joined = lines.join("\n");
-    let byte_truncated = joined.len() > MAX_OUTPUT_BYTES;
-    let clipped = if byte_truncated {
-        let bytes = joined.as_bytes();
-        String::from_utf8_lossy(&bytes[..min(bytes.len(), MAX_OUTPUT_BYTES)]).to_string()
-    } else {
-        joined
-    };
-
-    let truncated = line_truncated || byte_truncated;
-    if truncated {
-        (
-            format!(
-                "{}\n\n[output truncated: max {} lines / {} bytes]",
-                clipped, MAX_OUTPUT_LINES, MAX_OUTPUT_BYTES
-            ),
-            true,
-        )
-    } else {
-        (clipped, false)
+/// Apply a requested preview budget before formatting, accounting for JSON
+/// escaping and the omission notice. Disk capture is independent of preview.
+pub fn truncate_shell_output_budget(output: &str, budget: usize) -> (String, bool) {
+    let budget = budget.clamp(384, MAX_OUTPUT_BYTES);
+    let line_count = output.lines().count();
+    if json_text_bytes(output) <= budget && line_count <= MAX_OUTPUT_LINES {
+        return (output.to_owned(), false);
     }
+    let marker = format!(
+        "\n\n[output truncated: preview keeps beginning and end of {line_count} lines / {} bytes. Read output_archive.segments with fs.grep/fs.read for retained output.]\n\n",
+        output.len(),
+    );
+    // Bound bytes before collecting lines: a multi-megabyte single line or
+    // millions of empty lines must not allocate a full line index/copy.
+    let half = budget.saturating_sub(json_text_bytes(&marker)) / 2;
+    let rows = (MAX_OUTPUT_LINES - 6) / 2;
+    let mut head_end = json_prefix_end(output, half);
+    while !output.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = output.len();
+    let mut tail_used = 0;
+    for ch in output.chars().rev() {
+        let cost = json_text_bytes(ch.encode_utf8(&mut [0; 4]));
+        if tail_used + cost > half { break; }
+        tail_used += cost;
+        tail_start -= ch.len_utf8();
+    }
+    while !output.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    let head = output[..head_end]
+        .lines()
+        .take(rows)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut tail = output[tail_start..]
+        .lines()
+        .rev()
+        .take(rows)
+        .collect::<Vec<_>>();
+    tail.reverse();
+    (format!("{head}{marker}{}", tail.join("\n")), true)
+}
+
+fn json_text_bytes(text: &str) -> usize {
+    text.chars().map(|ch| match ch {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        '\u{0}'..='\u{1f}' => 6,
+        _ => ch.len_utf8(),
+    }).sum()
+}
+fn json_prefix_end(text: &str, budget: usize) -> usize {
+    let mut used = 0;
+    let mut end = 0;
+    for ch in text.chars() {
+        let cost = json_text_bytes(ch.encode_utf8(&mut [0; 4]));
+        if used + cost > budget { break; }
+        used += cost;
+        end += ch.len_utf8();
+    }
+    end
 }
 
 /// Build the platform-default shell command for one script expression.

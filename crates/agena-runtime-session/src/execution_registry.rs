@@ -40,6 +40,8 @@ pub enum ExecutionControlError {
     AlreadyActive(i64),
     #[error("run no longer accepts steer input (channel closed)")]
     SteerClosed,
+    #[error("execution was cancelled")]
+    Cancelled,
     #[error("invalid execution transition: {0}")]
     InvalidTransition(String),
 }
@@ -159,17 +161,50 @@ impl<T> ExecutionControl<T> {
     }
 
     pub async fn transition(&self, phase: ExecutionPhase) -> Result<(), ExecutionControlError> {
-        self.lifecycle
-            .lock()
-            .await
+        let mut lifecycle = self.lifecycle.lock().await;
+        // A cancellation can arrive after a caller's last token check. Treat
+        // that race as cancellation, rather than an invalid forward phase
+        // transition that fails the whole reply with an internal error.
+        if phase != ExecutionPhase::Cancelling
+            && (self.cancel.is_cancelled()
+                || matches!(
+                    &*lifecycle,
+                    ExecutionLifecycle::Active {
+                        phase: ExecutionPhase::Cancelling,
+                        ..
+                    }
+                ))
+        {
+            return Err(ExecutionControlError::Cancelled);
+        }
+        lifecycle
             .transition(phase)
             .map_err(|error| ExecutionControlError::invalid_transition_error(&error))
     }
 
+    async fn request_cancel(&self) -> Result<CancellationResult, ExecutionControlError> {
+        let mut lifecycle = self.lifecycle.lock().await;
+        if self.cancel.is_cancelled() || matches!(&*lifecycle, ExecutionLifecycle::Terminal { .. })
+        {
+            return Ok(CancellationResult::AlreadyTerminal);
+        }
+        lifecycle
+            .transition(ExecutionPhase::Cancelling)
+            .map_err(|error| ExecutionControlError::invalid_transition_error(&error))?;
+        // Publish the phase and token under the same lock used by transition
+        // and finish. Repeated requests and completion races are idempotent.
+        self.cancel.cancel();
+        Ok(CancellationResult::CancellationRequested)
+    }
+
     pub async fn finish(&self, outcome: ExecutionOutcome) -> Result<(), ExecutionControlError> {
-        self.lifecycle
-            .lock()
-            .await
+        let mut lifecycle = self.lifecycle.lock().await;
+        let outcome = if self.cancel.is_cancelled() {
+            ExecutionOutcome::Cancelled
+        } else {
+            outcome
+        };
+        lifecycle
             .finish(outcome)
             .map_err(|error| ExecutionControlError::invalid_transition_error(&error))
     }
@@ -392,8 +427,7 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
             .get(&session_id)
             .cloned()
             .ok_or(ExecutionControlError::NoActiveExecution(session_id))?;
-        control.transition(ExecutionPhase::Cancelling).await?;
-        control.cancel.cancel();
+        control.request_cancel().await?;
         Ok(())
     }
 
@@ -411,12 +445,7 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         if control.execution_id() != execution_id {
             return Ok(CancellationResult::ExecutionMismatch);
         }
-        if control.cancel.is_cancelled() {
-            return Ok(CancellationResult::AlreadyTerminal);
-        }
-        control.transition(ExecutionPhase::Cancelling).await?;
-        control.cancel.cancel();
-        Ok(CancellationResult::CancellationRequested)
+        control.request_cancel().await
     }
 
     pub async fn cancellation_token(&self, session_id: i64) -> Option<CancellationToken> {

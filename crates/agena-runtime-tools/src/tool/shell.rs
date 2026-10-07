@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::ToolError;
 
-const MAX_CAPTURE_BYTES_PER_STREAM: usize = 8 * 1024 * 1024;
+const MAX_CAPTURE_BYTES_PER_STREAM: usize = 1024 * 1024;
 const MAX_CONCURRENT_SHELL_WORKERS: usize = 16;
 
 /// Latest display tail, independent of the bounded result captured at exit.
@@ -125,10 +125,20 @@ pub(crate) async fn acquire_worker_permit() -> Result<tokio::sync::OwnedSemaphor
 /// Run a foreground command and, when `live` is attached, report every chunk it
 /// produces while it is still running. The returned [`ShellOutput`] stays the
 /// single source of truth for the terminal result.
+#[cfg(test)]
 pub async fn execute_with_sink(
     request: &ShellRequest,
     cancellation: Option<&CancellationToken>,
     live: Option<ShellOutputSink>,
+) -> Result<ShellOutput, ShellError> {
+    execute_with_archive(request, cancellation, live, None).await
+}
+
+pub(crate) async fn execute_with_archive(
+    request: &ShellRequest,
+    cancellation: Option<&CancellationToken>,
+    live: Option<ShellOutputSink>,
+    archive: Option<crate::process_output_archive::OutputArchive>,
 ) -> Result<ShellOutput, ShellError> {
     validate(request).await?;
 
@@ -153,11 +163,11 @@ pub async fn execute_with_sink(
     let stdout_handle = child
         .stdout()
         .take()
-        .map(|reader| spawn_drain(reader, live.clone()));
+        .map(|reader| spawn_drain_archived(reader, live.clone(), archive.clone()));
     let stderr_handle = child
         .stderr()
         .take()
-        .map(|reader| spawn_drain(reader, live.clone()));
+        .map(|reader| spawn_drain_archived(reader, live.clone(), archive.clone()));
     struct DrainGuard(Vec<tokio::task::AbortHandle>);
     impl Drop for DrainGuard {
         fn drop(&mut self) {
@@ -379,7 +389,8 @@ mod live_output_tests {
             .unwrap();
         drop(writer);
         let captured = drain.await.unwrap().unwrap();
-        assert!(captured.ends_with("[output truncated after 8 MiB]\n"));
+        assert!(captured.contains("[output truncated: retained beginning and end within 1 MiB]"));
+        assert!(captured.ends_with("\nlatest output 🙂"));
         // The reader deliberately never consumed the stream until it closed.
         live.changed().await.unwrap();
         let tail = live.borrow_and_update().clone();
@@ -410,16 +421,31 @@ fn status_to_code(status: ExitStatus) -> i32 {
     })
 }
 
+#[cfg(test)]
 fn spawn_drain<R>(
-    mut reader: R,
+    reader: R,
     live: Option<ShellOutputSink>,
 ) -> tokio::task::JoinHandle<io::Result<String>>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
+    spawn_drain_archived(reader, live, None)
+}
+
+fn spawn_drain_archived<R>(
+    reader: R,
+    live: Option<ShellOutputSink>,
+    archive: Option<crate::process_output_archive::OutputArchive>,
+) -> tokio::task::JoinHandle<io::Result<String>>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
     tokio::spawn(async move {
+        let mut reader = crate::process_output_archive::ArchivedReader::new(reader, archive);
+        let half = MAX_CAPTURE_BYTES_PER_STREAM / 2;
         let mut captured_output = Vec::new();
-        let mut truncated = false;
+        let mut captured_tail = std::collections::VecDeque::<u8>::new();
+        let mut captured_bytes = 0usize;
         let mut pending_utf8 = Vec::new();
         let mut chunk = [0_u8; 8 * 1024];
         loop {
@@ -427,10 +453,13 @@ where
             if read == 0 {
                 break;
             }
-            let remaining = MAX_CAPTURE_BYTES_PER_STREAM.saturating_sub(captured_output.len());
-            let captured = remaining.min(read);
-            captured_output.extend_from_slice(&chunk[..captured]);
-            truncated |= captured < read;
+            captured_bytes = captured_bytes.saturating_add(read);
+            let head_bytes = half.saturating_sub(captured_output.len()).min(read);
+            captured_output.extend_from_slice(&chunk[..head_bytes]);
+            captured_tail.extend(&chunk[head_bytes..read]);
+            if captured_tail.len() > half {
+                captured_tail.drain(..captured_tail.len() - half);
+            }
             if let Some(live) = live.as_ref() {
                 // Display keeps advancing even after the stored result hits
                 // its cap; stdout/stderr still drain independently.
@@ -440,9 +469,12 @@ where
         if let Some(live) = live.as_ref() {
             live.publish(&decode_output(&mut pending_utf8, &[], true));
         }
-        if truncated {
-            captured_output.extend_from_slice(b"\n[output truncated after 8 MiB]\n");
+        if captured_bytes > MAX_CAPTURE_BYTES_PER_STREAM {
+            captured_output.extend_from_slice(
+                b"\n[output truncated: retained beginning and end within 1 MiB]\n",
+            );
         }
+        captured_output.extend(captured_tail);
         Ok(String::from_utf8_lossy(&captured_output).into_owned())
     })
 }

@@ -18,33 +18,43 @@ impl ToolExecutor {
             return Ok((invocation.clone(), None));
         };
         let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
-        let ToolPayloadInput::Shell(crate::part::ShellToolInput::Run {
-            shell: agena_domain::ProcessShell::Bash,
-            command: process_input,
-            run_in_background,
-            monitor,
-        }) = payload
-        else {
+        let process_input = match payload {
+            ToolPayloadInput::Shell(input) => input
+                .launch_command()
+                .filter(|(shell, _)| *shell == agena_domain::ProcessShell::Bash)
+                .map(|(_, command)| command.clone()),
+            ToolPayloadInput::Monitor(input) => input.shell_command(),
+            _ => None,
+        };
+        let Some(process_input) = process_input else {
             return Ok((invocation.clone(), None));
         };
-        let prepared_shell =
-            bash::prepare_command_async(self, process_input.as_ref(), session_id, call_id).await?;
+        let prepared_shell = bash::prepare_command_async(
+            self,
+            &process_input,
+            session_id,
+            call_id,
+            &resolution.canonical_name(),
+        )
+        .await?;
         let Some(prepared_shell) = prepared_shell.clone() else {
             return Ok((invocation.clone(), None));
         };
-        if prepared_shell.command == process_input.command {
+        if prepared_shell.command == process_input.command
+            && prepared_shell.cwd
+                == crate::tool::shell_tools::resolve_workdir(
+                    self,
+                    process_input.workdir.as_deref(),
+                )?
+        {
             return Ok((invocation.clone(), Some(prepared_shell)));
         }
-        let mut rewritten = *process_input;
-        rewritten.command = prepared_shell.command.clone();
-        let rewritten_invocation = ToolPayloadInput::Shell(crate::part::ShellToolInput::Run {
-            shell: agena_domain::ProcessShell::Bash,
-            command: Box::new(rewritten),
-            run_in_background,
-            monitor,
-        })
-        .into_invocation();
-        let input_value = serde_json::Value::from(rewritten_invocation.input);
+        // Rewrite only the command, preserving the launch tool's exact schema
+        // and all terminal options. Preparation and permission hooks run once.
+        let mut input_value = serde_json::Value::from(invocation.input.clone());
+        input_value["command"] = serde_json::Value::String(prepared_shell.command.clone());
+        input_value["workdir"] =
+            serde_json::Value::String(prepared_shell.cwd.to_string_lossy().into_owned());
         let input = StructuredObject::try_from(input_value).map_err(ToolError::invalid_input)?;
         Ok((
             ToolInvocation {
@@ -215,6 +225,20 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<Option<StreamingToolExecution>, ToolError> {
+        self.execute_invocation_streaming_with_prepared_shell(invocation, session_id, call_id, None)
+            .await
+    }
+
+    /// Reuse the shell command and environment authorized during preflight.
+    /// Buffered invocations return `None` before performing any side effect;
+    /// their caller remains responsible for executing them exactly once.
+    pub async fn execute_invocation_streaming_with_prepared_shell(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+        prepared_shell_command: Option<PreparedShellCommand>,
+    ) -> Result<Option<StreamingToolExecution>, ToolError> {
         self.ensure_not_cancelled()?;
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
 
@@ -235,6 +259,13 @@ impl ToolExecutor {
         {
             let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
             if let ToolPayloadInput::Shell(input) = payload {
+                // Only foreground pipe output belongs to this stream. A
+                // background/monitored/PTY launch returns a durable receipt;
+                // starting it here would bypass its caller's launch handoff.
+                // Shell controls and log reads already return bounded results.
+                if !matches!(&input, crate::part::ShellToolInput::Exec { .. }) {
+                    return Ok(None);
+                }
                 let stream_id = format!("bundled-shell:{session_id}:{call_id}");
                 let (chunk_tx, chunks) =
                     tokio::sync::mpsc::channel::<agena_plugin_host::sdk::ToolStreamChunk>(64);
@@ -247,36 +278,38 @@ impl ToolExecutor {
                 tokio::spawn(async move {
                     let (live_tx, mut live_rx) = crate::tool::shell::ShellOutputSink::channel();
                     let forward_stream_id = stream_id_for_task.clone();
-                    let forward = tokio::spawn(async move {
-                        let mut allowed_at = tokio::time::Instant::now();
-                        while live_rx.changed().await.is_ok() {
-                            // Coalesce at the source, before loading sessions or
-                            // making part updates. Pipe drains only replace the
-                            // watch tail and never wait for this display cadence.
-                            tokio::time::sleep_until(allowed_at).await;
-                            let text = live_rx.borrow_and_update().clone();
-                            let sent = chunk_tx
-                                .send(agena_plugin_host::sdk::ToolStreamChunk {
-                                    stream_id: forward_stream_id.clone(),
-                                    text_delta: Some(text),
-                                    metadata: std::collections::BTreeMap::new(),
-                                })
-                                .await;
-                            if sent.is_err() {
-                                break;
+                    let forward =
+                        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                            let mut allowed_at = tokio::time::Instant::now();
+                            while live_rx.changed().await.is_ok() {
+                                // Coalesce at the source, before loading sessions or
+                                // making part updates. Pipe drains only replace the
+                                // watch tail and never wait for this display cadence.
+                                tokio::time::sleep_until(allowed_at).await;
+                                let text = live_rx.borrow_and_update().clone();
+                                let sent = chunk_tx
+                                    .send(agena_plugin_host::sdk::ToolStreamChunk {
+                                        stream_id: forward_stream_id.clone(),
+                                        text_delta: Some(text),
+                                        metadata: std::collections::BTreeMap::new(),
+                                    })
+                                    .await;
+                                if sent.is_err() {
+                                    break;
+                                }
+                                allowed_at = tokio::time::Instant::now()
+                                    + std::time::Duration::from_millis(100);
                             }
-                            allowed_at = tokio::time::Instant::now() + std::time::Duration::from_millis(100);
-                        }
-                    });
+                        }));
                     let context = crate::tool::ToolRuntimeContext {
                         session_id: (session_id >= 0).then_some(session_id),
                         call_id: (call_id >= 0).then_some(call_id),
-                        prepared_shell_command: None,
+                        prepared_shell_command,
                         launch_provenance: None,
                         live_output: Some(live_tx),
                     };
                     let mut lifecycle = Box::pin(async {
-                        let execution = Box::pin(crate::tool::process_tool::execute_async(
+                        let execution = Box::pin(crate::tool::shell_tool::execute_async(
                             &executor, &input, context,
                         ))
                         .await?;
@@ -304,11 +337,12 @@ impl ToolExecutor {
                             result = &mut lifecycle => result,
                         },
                     };
-                    // Cancellation leaves a pending future owning the shell
-                    // sink. Drop it before joining the forwarder, or the watch
-                    // channel can never close and terminal delivery deadlocks.
+                    // The final execution contains the complete collected
+                    // output. Display backpressure must not delay its result.
+                    // Dropping the owned forwarder also aborts it on every
+                    // early return, including a dropped terminal receiver.
                     drop(lifecycle);
-                    let _ = forward.await;
+                    drop(forward);
                     if end_tx.send(result).is_err() {
                         tracing::debug!(
                             stream_id = %stream_id_for_task,
@@ -496,7 +530,7 @@ impl ToolExecutor {
             let execution = Box::pin(async move {
                 let execution = match payload {
                     ToolPayloadInput::Shell(input) => {
-                        crate::tool::process_tool::execute_async(self, &input, context).await?
+                        crate::tool::shell_tool::execute_async(self, &input, context).await?
                     }
                     ToolPayloadInput::Monitor(input) => {
                         crate::tool::monitor_tool::execute_async(self, &input, context).await?

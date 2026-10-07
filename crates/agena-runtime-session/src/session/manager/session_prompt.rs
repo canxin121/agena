@@ -95,16 +95,20 @@ Default execution waits for the task's result. Use `run_in_background: true` whe
 fn render_background_section(tool_names: &[String]) -> String {
     let has = |name: &str| tool_names.iter().any(|tool| tool == name);
     let mut paragraphs = vec!["# Background execution".to_owned()];
-    let launchers = ["shell.run", "tasks.run"]
-        .into_iter()
-        .filter(|name| has(name))
-        .map(|name| format!("`{name}`"))
-        .collect::<Vec<_>>();
-    if !launchers.is_empty() {
-        paragraphs.push(format!("{} with `run_in_background: true` return a handle and later deliver a `system_notification` on completion, failure, timeout or cancellation.", launchers.join(" and ")));
+    if has("shell.exec") {
+        paragraphs.push("`shell.exec` executes a non-interactive command and waits for its final output/exit result. Timeout or cancellation terminates its process tree. Launch mode is selected by the tool name, never by tty/run_in_background flags.".to_owned());
+    }
+    if has("shell.spawn") {
+        paragraphs.push("`shell.spawn` starts a non-interactive background command, confirms actual startup and returns a process_id immediately so you can continue work. Completion, failure, timeout or stop delivers one system_notification. An omitted lifetime timeout permits running until exit/stop; supplied timeout_ms is enforced.".to_owned());
+    }
+    if has("shell.watch") {
+        paragraphs.push("`shell.watch` either starts a command with a watch or targets an existing process_id to replace/remove its single watch without starting a process or background operation. Omit/null policy on an existing target to remove the watch; the original completion notification and launch timeout remain. ready_pattern notifies once and leaves the service running. Ordinary output never wakes you unless include_pattern is supplied; its default is one matching notification. Explicit notifications=on_change deduplicates unchanged matches and coalesces changes (default 30-second interval). success/failure patterns or quiet_period_ms can end the process tree. Patterns filter notifications, not logs/capture. Use shell.read for diagnostic output; do not poll to wait.".to_owned());
+    }
+    if has("tasks.run") {
+        paragraphs.push("`tasks.run` with `run_in_background: true` returns a handle and later delivers a system_notification on completion, failure, timeout or cancellation.".to_owned());
     }
     if has("monitor.start") {
-        paragraphs.push("`monitor.start` listens for events; each event has a sequence and arrives as a `system_notification`. A monitor can end on source exit, timeout, cancellation or session end. Do not restart it just to check for events.".to_owned());
+        paragraphs.push("`monitor.start` subscribes to WebSocket text events; local command-output listeners use shell.watch. Events have sequences and arrive in bounded system_notification batches. A subscription can end on disconnect, timeout, cancellation or session end. Do not restart it just to check for events.".to_owned());
         if has("monitor.stop") {
             paragraphs.push("Use `monitor.stop` when monitoring is no longer needed.".to_owned());
         }
@@ -112,35 +116,49 @@ fn render_background_section(tool_names: &[String]) -> String {
     if has("cron.create") {
         paragraphs.push("`cron.create` schedules wakes as `system_notification` messages at safe turn boundaries and retains the originating assistant run. Use the IANA timezone from `<environment_context>`; returned timestamps are explicit RFC 3339 instants. Jobs are session-only and expire after seven days.".to_owned());
     }
-    paragraphs.push("Continue useful work while waiting. If only a future notification remains, end the current turn with the work still pending; resume from the notification even after an earlier turn ended. Waiting is not task completion: inspect the outcome and verify results before claiming success. Never poll status/logs or sleep merely to wait for completion or events. Bounded output/log reads are appropriate for a concrete diagnosis or missing result details.".to_owned());
-    if has("shell.run") && has("shell.write") {
-        paragraphs.push(r#"Interactive terminals use `shell.run` with `tty: true` and the returned `process_id`. Read incremental output, then send exact input with `shell.write`: `\r` is Enter, `\u0003` is Ctrl-C. Empty `chars` may perform a bounded read to observe a prompt; interactive I/O is allowed. Omit `since_seq` to consume unread output, or pass a cursor for replay. Silence/yield is not process exit. Declare subsequent effects and never resend a whole input after a partial write."#.to_owned());
+    paragraphs.push("Continue useful work while waiting. If only a future notification remains, end the current turn with the work still pending; resume from the notification even after an earlier turn ended. Waiting is not task completion: inspect the outcome and verify results before claiming success. Never poll status/logs or sleep merely to wait for promised background completion notifications or events. Bounded output/log reads are appropriate for a concrete diagnosis or missing result details.".to_owned());
+    if has("shell.open") {
+        paragraphs.push("`shell.open` opens a persistent interactive terminal/PTY and returns its process_id. yield_time_ms controls only the initial output wait; optional timeout_ms controls lifetime. Interactive terminal exit does not send background completion notifications or wake the AI. Silence/yield is not process exit.".to_owned());
+        if has("shell.read") {
+            paragraphs.push("Use `shell.read` for bounded incremental output without sending input, including when interactive output is required to continue; there is no promised background wake to wait for. Omit since_seq for unread output; explicit cursors replay without changing the automatic cursor. Enable include_screen only when the full-screen state is needed.".to_owned());
+        }
+        if has("shell.write") {
+            paragraphs.push(r#"Use `shell.write` for nonempty exact terminal input: `\r` is Enter, `\u0003` is Ctrl-C. It can collect a bounded response in the same call. Declare subsequent effects and never resend a whole input after a partial write."#.to_owned());
+        } else {
+            paragraphs.push("No terminal input tool is available; do not launch an interactive program that needs later keystrokes.".to_owned());
+        }
         let controls = ["shell.resize", "shell.signal", "shell.stop"]
             .into_iter()
             .filter(|name| has(name))
             .map(|name| format!("`{name}`"))
             .collect::<Vec<_>>();
         if !controls.is_empty() {
-            paragraphs.push(format!("Available terminal lifecycle controls: {}. Read their live help for dimensions, interruption or cleanup.", controls.join(", ")));
+            paragraphs.push(format!("Available terminal lifecycle controls: {}. Read live help for dimensions, out-of-band interruption and process-tree cleanup.", controls.join(", ")));
         }
-    } else if has("shell.run") {
-        paragraphs.push("Use non-interactive commands when no terminal input tool is available; do not launch an interactive program that needs later keystrokes.".to_owned());
     }
-    if has("shell.run") && has("shell.logs") {
-        paragraphs.push("Use bounded `shell.logs` reads for diagnostics or to observe an interactive prompt, not as a completion wait loop.".to_owned());
+    if (has("shell.spawn") || has("shell.watch")) && has("shell.logs") {
+        paragraphs.push("Use `shell.read` for background-job diagnostics. Omit cursors to consume unread output; for explicit replay use last_seq together with next_event_offset as event_offset. shell.logs is a compatible explicit-replay entry. Do not read repeatedly merely to wait for completion.".to_owned());
+    }
+    if has("shell.exec") || has("shell.spawn") || has("shell.watch") || has("shell.open") {
+        paragraphs.push("Shell previews share max_output_bytes (1024–16384), independent of capture. Read/open/write return next_event_offset when a raw event is partially returned; pass it with last_seq as event_offset/since_seq to resume, or omit both for automatic unread consumption. output_archive.path is a stable startup prefix; output_archive.segments describes retained chronological files and original byte ranges. Gaps are unavailable output, and each file starts at local byte offset 0. Search retained files with fs.grep and read only needed lines with fs.read (offset/limit). For giant single lines, use a bounded match locator such as rg -b -o, then fs.read with byte_offset/byte_limit; continue with read_info.next_byte_offset. Check archive pending/complete/truncated/error: a shortened preview and lost capture are different facts. Never dump a whole output archive back into the context.".to_owned());
     }
     paragraphs.join("\n\n")
 }
 
 /// Whether the available tool set can launch background work, so the
 /// `# Background execution` discipline section must be injected. Covers
-/// `shell.run` and friends, `tasks.run`, the continuous `monitor.start`, and
+/// `shell.exec`, `shell.spawn`, `shell.watch`, `shell.open`, `tasks.run`, WebSocket `monitor.start`, and
 /// `cron.create` (a scheduled job fires later and wakes the session again).
 fn wants_background_section(tool_names: &[String]) -> bool {
     let has_tasks = tool_names.iter().any(|name| name == "tasks.run");
     let has_monitor = tool_names.iter().any(|name| name == "monitor.start");
     let has_cron = tool_names.iter().any(|name| name == "cron.create");
-    let has_shell = tool_names.iter().any(|name| name == "shell.run");
+    let has_shell = tool_names.iter().any(|name| {
+        matches!(
+            name.as_str(),
+            "shell.exec" | "shell.spawn" | "shell.watch" | "shell.open"
+        )
+    });
     has_shell || has_tasks || has_monitor || has_cron
 }
 
@@ -292,7 +310,11 @@ mod tests {
         "plan.phase",
         "interaction.ask",
         "tasks.run",
-        "shell.run",
+        "shell.exec",
+        "shell.spawn",
+        "shell.watch",
+        "shell.open",
+        "shell.read",
         "shell.write",
         "shell.logs",
         "shell.resize",
@@ -365,13 +387,22 @@ mod tests {
             &["monitor.start"],
             &["monitor.start", "monitor.stop"],
             &["tasks.run"],
-            &["shell.run"],
-            &["shell.run", "shell.logs"],
-            &["shell.run", "shell.write"],
-            &["shell.run", "shell.write", "shell.resize"],
-            &["shell.run", "shell.write", "shell.signal"],
-            &["shell.run", "shell.write", "shell.stop"],
-            &["shell.run", "shell.write", "shell.logs"],
+            &["shell.exec"],
+            &["shell.spawn"],
+            &["shell.spawn", "shell.logs"],
+            &["shell.open"],
+            &["shell.open", "shell.read"],
+            &["shell.open", "shell.write"],
+            &["shell.open", "shell.write", "shell.resize"],
+            &["shell.open", "shell.write", "shell.signal"],
+            &["shell.open", "shell.write", "shell.stop"],
+            &[
+                "shell.exec",
+                "shell.spawn",
+                "shell.open",
+                "shell.read",
+                "shell.write",
+            ],
             &["plan.set"],
             &["plan.review"],
             &["plan.edit"],
@@ -393,18 +424,24 @@ mod tests {
                     );
                 }
             }
-            let wants_background = ["cron.create", "monitor.start", "tasks.run", "shell.run"]
-                .iter()
-                .any(|name| available.contains(name));
+            let wants_background = [
+                "cron.create",
+                "monitor.start",
+                "tasks.run",
+                "shell.exec",
+                "shell.spawn",
+                "shell.open",
+            ]
+            .iter()
+            .any(|name| available.contains(name));
             assert_eq!(
                 rendered.contains("# Background execution"),
                 wants_background,
                 "{available:?}"
             );
-            let wants_terminal =
-                available.contains(&"shell.run") && available.contains(&"shell.write");
+            let wants_terminal = available.contains(&"shell.open");
             assert_eq!(
-                rendered.contains("tty: true"),
+                rendered.contains("persistent interactive terminal/PTY"),
                 wants_terminal,
                 "{available:?}"
             );

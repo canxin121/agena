@@ -213,6 +213,8 @@ impl TasksPlugin {
         let host = self.inner.host()?;
         let request = RunSubtaskRequest {
             parent_session_id: Some(context.session_id),
+            run_in_background: true,
+            launch_call_id: Some(context.call_id),
             description: input.description.clone(),
             prompt: input.prompt.clone(),
             commands: input.commands.clone(),
@@ -483,6 +485,8 @@ impl TasksPlugin {
         state.max_cost_microusd = input.max_cost_microusd.or(state.max_cost_microusd);
         let request = RunSubtaskRequest {
             parent_session_id: Some(state.parent_session_id),
+            run_in_background: true,
+            launch_call_id: Some(context.call_id),
             description: state.description.clone(),
             prompt: state.prompt.clone(),
             commands: None,

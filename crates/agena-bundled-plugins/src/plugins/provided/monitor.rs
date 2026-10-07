@@ -1,6 +1,5 @@
-//! `agena.monitor` plugin: continuous-stream background monitors (a shell
-//! command or a WebSocket endpoint). Every event is projected as a
-//! `system_notification` part (everything-is-a-part, §7.3) — no polling.
+//! `agena.monitor`: WebSocket event subscriptions. Command-output listeners
+//! belong to agena.shell.watch and share Shell process management.
 
 use crate::part::{MonitorToolInput, MonitorWsInput};
 use crate::plugins::provided::router;
@@ -19,16 +18,17 @@ pub(crate) fn new_plugin() -> MonitorPlugin {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    trim("description"),
+    minimum("timeout_ms", 1),
+    maximum("timeout_ms", 3600000)
+)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MonitorStartInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ws: Option<MonitorWsInput>,
+    #[input(nested_shape)]
+    ws: MonitorWsInput,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     timeout_ms: Option<u64>,
-    #[serde(default)]
-    persistent: bool,
     #[serde(default)]
     description: String,
 }
@@ -44,13 +44,13 @@ pub(crate) struct MonitorStopInput {
     namespace = "agena",
     name = "monitor",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Continuous-stream background monitoring tools.",
+    summary = "WebSocket event subscriptions with background notifications. Use shell.watch for local command-output monitoring.",
 )]
 impl MonitorPlugin {
     #[tool(
-        tags(execute, shell, mutate),
-        summary = "Start a continuous background monitor.",
-        help = "Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`; it can also end on source exit/disconnection, timeout, cancellation or session end."
+        tags(execute, network, mutate),
+        summary = "Subscribe to WebSocket text events and notify the AI in bounded batches.",
+        help = "Start a background WebSocket subscription using ws.url and optional protocols. This tool does not execute local commands; use shell.watch for command-output events. The endpoint is checked as a network effect. Return monitor_id and continue working; text events arrive as bounded system_notification batches at most once per second, followed by a final notification when the subscription ends. Do not poll or sleep to wait. timeout_ms defaults to 300000 and is enforced across connection establishment and the feed lifetime (maximum 3600000). The subscription also ends on disconnect, explicit stop, cancellation or session end. Use monitor.stop for cleanup."
     )]
     async fn invoke_start(
         &self,
@@ -60,18 +60,23 @@ impl MonitorPlugin {
         router::invoke_tool(
             "monitor",
             json_input(MonitorToolInput::Start {
-                command: args.command,
-                ws: args.ws,
+                command: None,
+                ws: Some(args.ws),
                 timeout_ms: args.timeout_ms,
-                persistent: args.persistent,
+                persistent: false,
                 description: args.description,
+                workdir: None,
+                reads: Vec::new(),
+                writes: Vec::new(),
+                network: Vec::new(),
+                policy: None,
             })?,
             context.session_id,
             context.call_id,
         )
     }
 
-    #[tool(tags(mutate, execute, shell), summary = "Stop one background monitor.")]
+    #[tool(tags(mutate, network), summary = "Stop one WebSocket subscription.")]
     async fn invoke_stop(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -116,7 +121,7 @@ mod tests {
             .find(|tool| tool.name == "start")
             .expect("monitor.start manifest");
         let schema = serde_json::to_string(&start.input_schema()).expect("serialize schema");
-        assert!(schema.contains("command"));
+        assert!(!schema.contains("\"command\""));
         assert!(schema.contains("ws"));
         assert!(schema.contains("timeout_ms"));
     }

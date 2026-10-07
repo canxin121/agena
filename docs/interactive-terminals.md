@@ -6,12 +6,27 @@ This is a native process backend; it does not depend on tmux or a desktop termin
 
 ## Tool contract
 
-Start a terminal with `shell.run`:
+All command and terminal tools belong to `agena.shell` and are discoverable by
+searching for `shell`, `terminal`, `TTY`, or `PTY`. Choose the launch tool by its
+return semantics:
+
+- `shell.exec`: run a noninteractive command and wait for its final result.
+- `shell.spawn`: start a noninteractive background job, confirm process creation,
+  and return immediately so the AI can continue. Completion is notified once.
+- `shell.watch`: start a command with an atomic readiness/output watch, or
+  attach, replace or remove the single watch on an existing background process.
+- `shell.open`: open a persistent interactive PTY and return after a bounded
+  initial output wait. Terminal exit does not automatically wake the AI.
+
+The old `shell.run` execution entry point and its mode flags are retired. Old
+transcripts remain readable and old command permission configuration is mapped
+to the new launch tools without expanding old command-specific allows to watch controls or terminal input.
+
+Start a terminal with `shell.open`:
 
 ```json
 {
   "command": "python3 -q",
-  "tty": true,
   "workdir": ".",
   "rows": 24,
   "cols": 80,
@@ -22,15 +37,93 @@ Start a terminal with `shell.run`:
 }
 ```
 
-Use the returned `process_id` for subsequent calls. `tty: true` retains the
-process even when `run_in_background` is omitted. `yield_time_ms` is a bounded
+Use the returned `process_id` for subsequent calls. Process creation must
+succeed before the call returns, even with `yield_time_ms: 0`. The terminal
+persists until exit, stop, or its explicit timeout. `yield_time_ms` is a bounded
 wait for initial output, **not** a process deadline. `timeout_ms`, if supplied,
 is the lifetime limit. A quiet prompt does not mean that the program finished.
-Do not combine a PTY with `monitor`: regex/quiet-period completion belongs to
-noninteractive monitored commands.
+Regex/quiet-period completion belongs to `shell.watch`; interactive launch
+has no monitor mode. WebSocket subscriptions remain under `monitor.start`.
 
-`shell.write` sends exact UTF-8 input and returns incremental output and the
-current virtual screen. It never trims text or adds an implicit newline:
+### Watched background commands
+
+`shell.watch` shares the launch preparation, shell selection, command hooks,
+permissions, sandbox and process registry used by `shell.spawn`. It returns the
+same `process_id` contract: use `shell.read`, `shell.list` and `shell.stop` for
+both. There is no separate command `monitor_id` or stop/log tool family.
+
+```json
+{
+  "command": "tail -f application.log",
+  "reads": ["application.log"],
+  "writes": [],
+  "network": [],
+  "timeout_ms": 600000,
+  "policy": {
+    "ready_pattern": "READY",
+    "include_pattern": "ERROR",
+    "failure_pattern": "FATAL",
+    "pattern_kind": "regex"
+  }
+}
+```
+
+Choose `shell.spawn` when only completion matters. For a server, bind
+`ready_pattern` on launch so startup output cannot race with attachment. The
+ready notification happens once and **does not stop the process**. `ready` in
+shell results/summaries is independent of `status`; a ready service is normally
+still `running`.
+
+No ordinary output is notified without `include_pattern`. When supplied, the
+first match notifies once per watch configuration. Set `notifications` to
+`on_change` only for deliberate recurring updates. Unchanged matches are
+suppressed; changes during `notification_interval_ms` are coalesced to the
+latest state and delivered after the interval (default 30,000 ms, allowed
+1,000–3,600,000 ms). Readiness and final completion bypass this throttle. The
+bridge retains at most 6 KiB / 64 selected events for text plus bounded cursor
+and archive recovery information. Single-line shortening includes an explicit
+omission marker. Notification delivery sequences are independent of raw-log
+sequences, so multiple conditions in one pipe read cannot erase each other.
+
+Success/failure patterns stop the whole process tree with the corresponding
+outcome; failure wins when both match one record. `quiet_period_ms` stops after
+no stdout/stderr activity, including excluded output and incomplete lines.
+Quiet time uses a monotonic clock. `timeout_ms` remains the launch's lifetime
+deadline even when the watch changes or is removed. All patterns respect
+`pattern_kind` (regex by default, or literal); whitespace is significant.
+Pattern scanning uses bounded records while capture and diagnostic reads retain
+raw chunks, including output with no newline and excluded lines. Readiness can
+match an unfinished record; include and terminal conditions use completed
+records or the final EOF fragment.
+
+To observe an existing process, use the same tool with a `process_id`:
+
+```json
+{
+  "process_id": "<existing process_id>",
+  "policy": {"ready_pattern": "READY", "include_pattern": "ERROR"},
+  "since_seq": 0
+}
+```
+
+This replaces one watch, never starts a second process or durable operation,
+and routes notifications through the original launch. Omit `since_seq` for
+future output only; provide it to scan retained logs once. Identical policy
+updates preserve readiness and once-only notification state. Invalid patterns
+are compiled before replacing the live policy. PTYs, WebSocket subscriptions
+and ended processes reject watch attachment.
+
+Remove the watch with `{"process_id": "<id>", "policy": null}` (omitting
+`policy` has the same effect). Removal leaves the process, launch deadline and
+original completion notification intact. `policy: {}` is a valid quiet watch
+with no selected output notifications. Use `shell.stop` to stop the process.
+
+The bounded event worker flushes before completion when possible, with a
+two-second wait limit if delivery stalls. The latest pending recurring match
+is considered when the process exits, without producing more workers per line.
+
+`shell.write` sends nonempty exact UTF-8 input and returns incremental output.
+It never trims text or adds an implicit newline:
 
 ```json
 {
@@ -51,12 +144,50 @@ use terminal escape sequences; consult `terminal.application_cursor` when
 choosing cursor-key sequences. For multiline paste, a caller can send bracketed
 paste delimiters when `terminal.bracketed_paste` is enabled.
 
-Empty `chars` reads without typing. With `since_seq` omitted, `shell.write`
-consumes the terminal's unread-output cursor. An explicit `since_seq` replays
-output after that cursor without moving the automatic cursor. Continue from the
-returned `last_seq` while `has_more` is true. `shell.logs` also accepts explicit
-cursors; `shell.list` includes owned terminals. A cursor beyond the latest event
-is rejected **before** any input is delivered.
+Use `shell.read` to read without typing; empty `shell.write.chars` is rejected:
+
+```json
+{
+  "process_id": "<returned process_id>",
+  "wait_ms": 250,
+  "include_screen": true
+}
+```
+
+`shell.read` supports background commands and PTYs. With `since_seq` and
+`event_offset` omitted, reads (and PTY writes) consume only unread output.
+Explicit cursors replay without moving the automatic cursor. `shell.logs`
+remains the explicit-replay compatibility entry, defaulting to `since_seq: 0`.
+
+`last_seq` refers to fully consumed events. If an event exceeds the output
+budget, `next_event_offset` records the byte position in that next event; no
+remaining text is silently discarded. Continue with both values:
+
+```json
+{
+  "process_id": "<id>",
+  "since_seq": 12,
+  "event_offset": 4096,
+  "max_output_bytes": 4096,
+  "wait_ms": 0
+}
+```
+
+Here `4096` is an example returned `next_event_offset`, not a guessed cursor.
+Nonzero offsets require an explicit `since_seq`, must preserve UTF-8 boundaries,
+and reject an evicted partial event with an archive recovery instruction.
+Automatic cursors recover to the oldest retained output after buffer eviction;
+loss counters remain visible. Cursor validation occurs before any input.
+
+`max_output_bytes` is shared by exec/open/read/write/logs (default/max 16,384;
+minimum 1,024). Escaping and event metadata count toward the content budget;
+space is reserved for lifecycle/cursor/recovery information. Byte and line
+bounds are applied before consumption, keeping normal results within the global
+model-history boundary. Smaller previews do not reduce capture. `include_screen`
+defaults to false; it is available only for PTYs and splits the content budget
+between incremental output and bounded screen text. `shell.list` covers owned
+jobs and terminals. Diagnostic waits are capped at 30 seconds and never change
+process lifetime. Background completion notices make polling unnecessary.
 
 `shell.resize` takes `process_id`, `rows`, and `cols`. It updates the operating
 system PTY size and the virtual screen. On Unix the kernel notifies the
@@ -97,11 +228,65 @@ host; platform behavior is not inferred from macOS tests.
 
 ## Output, screen, and bounds
 
-The usual shell payload is retained. Interactive results additionally contain a
-`terminal` screen projection: dimensions, zero-based cursor position, cursor
+Shell output has separate **preview** and **capture** limits. Foreground
+commands show at most 16 KiB / 200 lines, retaining the beginning and end.
+Background log events have a 16 KiB serialized budget, including metadata and
+JSON escaping. PTY reads return at most 16 KiB of incremental text. The session
+layer's existing 50 KiB / 2000-line model-result boundary remains the final
+guard for every tool's complete rendered response.
+
+Before preview shortening, filtering, line decoding or rolling-buffer
+eviction, process output is captured into a private UTF-8 file under the
+workspace's managed tool-output directory. Large foreground results and
+background/PTY results expose an optional `output_archive` with `path`,
+`retained_bytes`, `total_bytes`, `pending`, `complete`, `truncated`, `limit_bytes`
+and optional `error`. Small foreground results already fully visible in the
+preview discard their temporary file. Captured stdout/stderr are interleaved
+in observed read order; command-after plugins may render a different preview.
+
+Search an archive with `fs.grep` and read only relevant lines with `fs.read`.
+Do not send its entire contents back to the model. For a giant single line,
+line-based readers/searchers have their own limits: locate a match with a
+bounded command such as `rg -b -o -- 'needle' '<archive path>'`, then request a
+small byte range:
+
+```json
+{
+  "file_path": "<output_archive.path>",
+  "mode": "text",
+  "byte_offset": 120000,
+  "byte_limit": 4096
+}
+```
+
+Byte positions are zero-based; continue with `read_info.next_byte_offset`.
+Byte ranges preserve complete UTF-8 code points and cannot combine with
+line/entry `offset` or `limit`. A growing file is reported as a live sample.
+
+Capture retains at most **16 MiB per process** with a stable **4 MiB startup
+prefix** and up to **12 MiB of recent output** in rotating 4 MiB segments. The
+shared workspace quota is **256 MiB**. `output_archive.path` identifies the
+stable prefix; `segments` lists every retained file with original captured
+`start_byte`/`end_byte` ranges. Read a segment at file-local offsets beginning
+at 0; subtract its `start_byte` when locating an original captured offset.
+Missing ranges are unavailable output and are never concatenated as though
+continuous. Rotated paths can expire while a process runs; read the current
+segment list before recovery. Rotation or storage failure marks `truncated`;
+`complete` is true only for a finished, fully captured archive with no pending
+writes or gaps. Recent raw output also remains in the in-memory rolling buffer. `has_more=false`
+describes buffered events, not archival completeness. Active captures can
+have pending writes. Files of deleted sessions use the existing managed-output
+cleanup; stateless calls use session directory `0` within the same quota.
+One dedicated archive I/O thread and a bounded queue keep file creation, writes, rotation, deletion and normal close off Tokio workers. PTY queue pressure pauses only output draining while input,
+signals, timeout checks and cleanup continue.
+
+Interactive results return incremental `output`, a cursor, lifecycle state and
+explicit loss indicators. They do not repeat the same output in event arrays or
+process summaries. With `include_screen: true`, the optional `terminal` screen
+projection contains dimensions, zero-based cursor position, cursor
 visibility, alternate-screen state, bracketed-paste mode, application-cursor
 mode, bounded text, and a truncation indicator. `ProcessSummary.tty` distinguishes
-PTY chunks from noninteractive newline-delimited logs. PTY stdout and stderr
+PTY chunks from other process types; noninteractive pipes also retain raw chunks. PTY stdout and stderr
 share one ordered stream, as in a normal terminal.
 
 Output is captured in chunks, including prompts without a trailing newline.
@@ -118,7 +303,9 @@ Current resource limits per registry:
 | Live terminals | 16 |
 | Retained live/completed terminal entries | 64 |
 | Raw output retained per terminal | 1 MiB and 2048 events |
-| Returned raw output / screen text | 16 KiB each |
+| Model preview budget | 1–16 KiB, shared with an optional screen |
+| Foreground capture in memory | 1 MiB per stdout/stderr stream, head/tail |
+| Disk output retention per process | 4 MiB startup + up to 12 MiB recent segments |
 | Single input | 64 KiB |
 | Initial/read wait | 0–30,000 ms |
 | Explicit lifetime timeout | 1–86,400,000 ms |
@@ -163,7 +350,8 @@ Completed output remains readable until bounded-history eviction. Replaying a
 retained launch identity returns the existing entry rather than launching it
 again. Session end, explicit runtime shutdown, and registry destruction request
 cleanup. Terminal handles are in-memory resources and do not survive restarting
-the runtime; durable background reconciliation records interrupted operations.
+the runtime. Interactive terminals do not create durable completion-notification
+rows; durable reconciliation applies to background jobs and monitors.
 
 Unix cleanup covers process groups in the PTY's session. A program deliberately
 creating a separate daemon session is outside this containment boundary. Windows

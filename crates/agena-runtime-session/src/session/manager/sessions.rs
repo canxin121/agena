@@ -799,7 +799,7 @@ impl SessionManager {
     }
 }
 
-fn interrupted_subtask_failure() -> agena_failure::Failure {
+pub(super) fn interrupted_subtask_failure() -> agena_failure::Failure {
     agena_failure::Failure::new(
         agena_failure::FailureCode::new("subtask.interrupted"),
         agena_failure::FailureCategory::DependencyUnavailable,

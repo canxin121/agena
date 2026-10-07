@@ -258,7 +258,7 @@ chip 布局算法（surface.rs）：
 
 #### 4.10.2 数据模型（crates/agena-domain/src/background_activity.rs）
 
-- BackgroundActivityKind（line 20）：Shell（shell.run 长期进程）/ Task（tasks.create|run 委派子任务）/ Runtime（marketplace sync、catalog refresh、runtime reload 等维护任务）/ Browser（web.browser_* 交互会话）
+- BackgroundActivityKind（line 20）：Shell（shell.exec / shell.spawn / shell.open 长期进程）/ Task（tasks.create|run 委派子任务）/ Runtime（marketplace sync、catalog refresh、runtime reload 等维护任务）/ Browser（web.browser_* 交互会话）
 - BackgroundActivityStatus（line 56）：pending / running / succeeded / failed / cancelled / stopped；is_active() = pending|running（line 70）
 - BackgroundActivity（line 92）：id（前缀 proc_ / task_ / rtask_ / browser_）、kind、status、title、description、command、workdir、session_id、parent_session_id、created_at_ms、started_at_ms、finished_at_ms、exit_code、message、failure、last_seq、has_more、dropped_lines、cancellable、dismissible
 

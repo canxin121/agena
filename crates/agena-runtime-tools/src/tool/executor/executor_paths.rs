@@ -46,8 +46,9 @@ impl ToolExecutor {
         &self,
         request: &ShellRequest,
         live: Option<crate::tool::shell::ShellOutputSink>,
+        archive: Option<crate::process_output_archive::OutputArchive>,
     ) -> Result<ShellOutput, ToolError> {
-        match shell::execute_with_sink(request, self.cancellation_token(), live).await {
+        match shell::execute_with_archive(request, self.cancellation_token(), live, archive).await {
             Err(agena_tool::ShellError::Cancelled) => Err(ToolError::Cancelled),
             result => result.map_err(ToolError::from),
         }
@@ -88,7 +89,7 @@ impl ToolExecutor {
     /// paths its tool will touch. What survives is the host resolving the path
     /// arguments of the tools *it* owns (the executor-backed builtins), so an
     /// `ask` rule under `permission.path` still reaches the approval flow for
-    /// `read`, `glob`, `apply_patch`, `shell.run` and friends. A plugin that
+    /// `read`, `glob`, `apply_patch`, `shell.exec` and friends. A plugin that
     /// performs its own I/O is not described here and is not preflighted; it
     /// asks the host itself through `HostClient::check_path_permission`.
     pub(super) fn push_path_checks(

@@ -751,6 +751,14 @@ pub struct RunSubtaskRequest {
     /// callback scope has ended. When absent, the current callback session is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
+    /// Background executions have a durable completion delivery for each run.
+    /// Inline callers receive their result directly instead.
+    #[serde(default)]
+    pub run_in_background: bool,
+    /// Correlate background work with its durable originating tool receipt.
+    /// The host validates the call against the explicit parent session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_call_id: Option<i64>,
     pub description: String,
     pub prompt: String,
     /// Optional command names or aliases attached to the child session's first

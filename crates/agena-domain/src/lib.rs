@@ -184,7 +184,8 @@ pub use permission_resolution::{
 };
 pub use plugin_invocation::PluginInvocation;
 pub use process_values::{
-    ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary, TerminalScreen,
+    ProcessEvent, ProcessOutputArchive, ProcessOutputSegment, ProcessShell, ProcessStatus,
+    ProcessStream, ProcessSummary, TerminalScreen,
 };
 pub use prompt_compaction::{
     PromptCompactionActivity, PromptCompactionCompletedEvent, PromptCompactionStrategy,

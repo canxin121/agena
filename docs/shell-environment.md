@@ -1,6 +1,7 @@
 # Shell environment fidelity
 
-Agena runs model-authored command strings, so those strings should behave the way
+Agena's `shell.exec`, `shell.spawn`, `shell.watch` and `shell.open` run model-authored command
+strings, so those strings should behave the way
 they do in the user's own terminal. Two things decide that: which shell program
 runs them, and which startup state is loaded before they do.
 
@@ -21,7 +22,8 @@ in tool metadata instead (`shell`, `shell_program`, `shell_source`,
 `login_shell`, `shell_snapshot`). Names come from the dialects Agena supports:
 `bash`, `zsh`, `sh`, `powershell`, `cmd`.
 
-Models do not choose the shell. The switch belongs to trusted process
+The `shell` input selects the existing `bash`/`powershell` command dialect, not
+an arbitrary executable. Program resolution belongs to trusted process
 configuration, matching the `AGENA_SHELL_SANDBOX` surface: model input cannot
 change it, and `ProcessShell`'s `bash` value still means "the POSIX dialect the
 user's shell speaks".
@@ -113,7 +115,7 @@ Agena's version is smaller than Codex's equivalent on purpose:
 | Credential virtualization with broker markers | Existing environment filter plus count-only metadata | Matches Agena's existing environment/permission model |
 | Replays environment, aliases, functions, and options | Replays environment, aliases, and options | Function replay needs a literal decoder; tracked as separate work |
 | Richer `ENV` expansion helper | Literal-only whitelist expander | Keeps the "never evaluate" posture |
-| Model-supplied `login`/`shell` parameters | Trusted environment switches | Does not change the model-visible tool contract |
+| Model-supplied shell program/login parameters | Existing dialect selector plus trusted environment switches | Models cannot select an arbitrary shell executable or alter startup policy |
 
 ## Limits
 

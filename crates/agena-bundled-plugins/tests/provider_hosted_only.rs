@@ -52,7 +52,10 @@ fn manifest_exposes_exactly_32_hosted_tools() {
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(provider, HOSTED_TOOLS.iter().copied().collect());
     for native in [
-        "shell.run",
+        "shell.exec",
+        "shell.spawn",
+        "shell.open",
+        "shell.read",
         "shell.write",
         "shell.signal",
         "fs.apply_patch",
@@ -540,7 +543,7 @@ async fn ai_adapter_gate_keeps_discovery_help_and_native_tools_unchanged() {
     );
     let (output, _) = f
         .call(
-            "shell.run",
+            "shell.exec",
             json!({"command":"printf native-ok","reads":[],"writes":[],"network":[]}),
         )
         .await

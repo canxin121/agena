@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **21 plugins and 138 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **21 plugins and 142 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
@@ -25,13 +25,13 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
 - [`agena.memory`](#agenamemory) — Persistent memory with searchable retrieval and write tools. (5 tools)
-- [`agena.monitor`](#agenamonitor) — Continuous-stream background monitoring tools. (2 tools)
+- [`agena.monitor`](#agenamonitor) — WebSocket event subscriptions with background notifications. Use shell.watch for local command-output monitoring. (2 tools)
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
 - [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (6 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
-- [`agena.shell`](#agenashell) — Shell command execution and background process tools. (7 tools)
+- [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (11 tools)
 - [`agena.tasks`](#agenatasks) — Delegated subtask orchestration tools. (7 tools)
 - [`agena.tools`](#agenatools) — Tool API discovery functions. The runtime resolves tools_call directly to its execution target. (7 tools)
 - [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (16 tools)
@@ -3198,11 +3198,13 @@ Filesystem command tools for read/search and explicit edits.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use `read` for text previews and directory listings. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents.
+> Use read for text previews and directory listings. offset/limit page 1-based lines or entries. For very long single lines, use byte_offset (zero-based) and byte_limit (4–16384, default 8192) to seek directly to a small UTF-8 text range; continue with read_info.next_byte_offset. Byte ranges cannot combine with line offsets/limits, directories or attachment mode. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `byte_limit` | `integer / null` | — | — | Byte-range page size (4–16384; default 8192). May start at byte 0 when<br>byte_offset is omitted. UTF-8 boundaries are preserved. |
+| `byte_offset` | `integer / null` | — | — | Zero-based byte position for a text byte-range read. Cannot be combined<br>with line/entry offset or limit. Useful for very long single lines. |
 | `file_path` | `string` | ✓ | — | File or directory path to read. Relative paths are resolved from the<br>workspace root. |
 | `limit` | `integer / null` | — | — | Maximum number of lines or directory entries to return. |
 | `mode` | `ReadMode` | — | `auto` | How to render the target: `text`, `attachment`, or `auto`. |
@@ -3220,11 +3222,32 @@ Filesystem command tools for read/search and explicit edits.
         "auto"
       ],
       "type": "string",
-      "x-agena-order": "000003"
+      "x-agena-order": "000005"
     }
   },
   "description": "Input of the file read tool.",
   "properties": {
+    "byte_limit": {
+      "description": "Byte-range page size (4–16384; default 8192). May start at byte 0 when\nbyte_offset is omitted. UTF-8 boundaries are preserved.",
+      "format": "uint32",
+      "maximum": 16384,
+      "minimum": 4,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "byte_offset": {
+      "description": "Zero-based byte position for a text byte-range read. Cannot be combined\nwith line/entry offset or limit. Useful for very long single lines.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
     "file_path": {
       "description": "File or directory path to read. Relative paths are resolved from the\nworkspace root.",
       "minLength": 1,
@@ -5361,27 +5384,25 @@ Persistent memory with searchable retrieval and write tools.
 
 **Version** `0.1.0` · **Tools** 2
 
-Continuous-stream background monitoring tools.
+WebSocket event subscriptions with background notifications. Use shell.watch for local command-output monitoring.
 
 ### start
 
-`agena.monitor.start` · **Summary**: Start a continuous background monitor.
+`agena.monitor.start` · **Summary**: Subscribe to WebSocket text events and notify the AI in bounded batches.
 
-**Tags**: `execute` `shell` `mutate`
+**Tags**: `execute` `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`; it can also end on source exit/disconnection, timeout, cancellation or session end.
+> Start a background WebSocket subscription using ws.url and optional protocols. This tool does not execute local commands; use shell.watch for command-output events. The endpoint is checked as a network effect. Return monitor_id and continue working; text events arrive as bounded system_notification batches at most once per second, followed by a final notification when the subscription ends. Do not poll or sleep to wait. timeout_ms defaults to 300000 and is enforced across connection establishment and the feed lifetime (maximum 3600000). The subscription also ends on disconnect, explicit stop, cancellation or session end. Use monitor.stop for cleanup.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `command` | `string / null` | — | — |  |
 | `description` | `string` | — | `` |  |
-| `persistent` | `boolean` | — | `false` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
-| `ws` | `MonitorWsInput / null` | — | — |  |
+| `ws` | `object` | ✓ | — |  |
 
 **Input schema**:
 ```json
@@ -5403,58 +5424,61 @@ Continuous-stream background monitoring tools.
       "required": [
         "url"
       ],
-      "type": "object"
+      "type": "object",
+      "x-agena-order": "000000"
     }
   },
   "additionalProperties": false,
   "properties": {
-    "command": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
     "description": {
       "default": "",
       "type": "string",
-      "x-agena-order": "000004"
-    },
-    "persistent": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
     },
     "timeout_ms": {
       "format": "uint64",
-      "minimum": 0,
+      "maximum": 3600000,
+      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000001"
     },
     "ws": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/MonitorWsInput"
+      "$ref": "#/$defs/MonitorWsInput",
+      "properties": {
+        "protocols": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-agena-order": "000000.000001"
         },
-        {
-          "type": "null"
+        "url": {
+          "minLength": 1,
+          "type": "string",
+          "x-agena-order": "000000.000000"
         }
+      },
+      "required": [
+        "url"
       ],
-      "x-agena-order": "000001"
+      "type": "object"
     }
   },
+  "required": [
+    "ws"
+  ],
   "type": "object"
 }
 ```
 
 ### stop
 
-`agena.monitor.stop` · **Summary**: Stop one background monitor.
+`agena.monitor.stop` · **Summary**: Stop one WebSocket subscription.
 
-**Tags**: `mutate` `execute` `shell`
+**Tags**: `mutate` `network`
 
 **Runtime**: streaming `buffered`
 
@@ -6838,13 +6862,147 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 ## agena.shell
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.0` · **Tools** 11
 
-Shell command execution and background process tools.
+Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them.
+
+### exec
+
+`agena.shell.exec` · **Summary**: Execute a non-interactive shell command and wait for its final output and exit result.
+
+**Tags**: `execute` `shell` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Run a command to completion. Declare actual reads/writes paths and network targets; use empty arrays when none. timeout_ms limits lifetime (default 120000); timeout/cancellation cleans up the owned process tree. max_output_bytes sets the output budget (1024–16384, default 16384), accounting for escaping and reserving lifecycle metadata; previews keep beginning/end and at most 200 lines. Capture is independent of preview: output_archive.path is the stable startup prefix, and output_archive.segments lists all retained files with original captured byte ranges. Search each needed file with fs.grep or read selected lines/byte ranges with fs.read. Segment-local byte offsets start at 0; gaps are unavailable output. Retention is 16 MiB per process (4 MiB startup plus up to 12 MiB recent output), 256 MiB per workspace. Check pending/complete/truncated/error. Use shell.spawn for background work, shell.watch for readiness/selected notifications, and shell.open for interactive input.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `command` | `string` | ✓ | — |  |
+| `description` | `string` | — | `` |  |
+| `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
+| `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
+| `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
+| `shell` | `ProcessShell` | — | `bash` |  |
+| `timeout_ms` | `integer / null` | — | — |  |
+| `workdir` | `string / null` | — | — |  |
+| `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ProcessShell": {
+      "description": "Shell used to run a process.",
+      "enum": [
+        "bash",
+        "powershell"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A non-interactive command. The selected tool determines whether it waits\nfor completion (`shell.exec`) or returns a background receipt (`shell.spawn`).",
+  "properties": {
+    "command": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001.000000"
+    },
+    "description": {
+      "default": "",
+      "type": "string",
+      "x-agena-order": "000001.000001"
+    },
+    "max_output_bytes": {
+      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
+      "format": "uint32",
+      "maximum": 16384,
+      "minimum": 1024,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001.000003"
+    },
+    "network": {
+      "default": [],
+      "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
+      "examples": [
+        [
+          "<target>"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000007"
+    },
+    "reads": {
+      "default": [],
+      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "examples": [
+        [
+          "src/lib.rs"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000005"
+    },
+    "shell": {
+      "$ref": "#/$defs/ProcessShell",
+      "default": "bash"
+    },
+    "timeout_ms": {
+      "format": "uint64",
+      "maximum": 86400000,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001.000002"
+    },
+    "workdir": {
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000000"
+    },
+    "writes": {
+      "default": [],
+      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "examples": [
+        [
+          "target/out.txt"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000006"
+    }
+  },
+  "required": [
+    "command"
+  ],
+  "type": "object"
+}
+```
 
 ### list
 
-`agena.shell.list` · **Summary**: List active background processes.
+`agena.shell.list` · **Summary**: List this session's background shell jobs, watched commands and interactive terminals, including their type and state.
 
 **Tags**: `query` `discovery` `shell` `read_only`
 
@@ -6861,18 +7019,23 @@ Shell command execution and background process tools.
 
 ### logs
 
-`agena.shell.logs` · **Summary**: Read background process logs.
+`agena.shell.logs` · **Summary**: Read bounded output with an explicit replay cursor; shell.read is the unified, automatically consuming entry point.
 
-**Tags**: `query` `shell` `read_only`
+**Tags**: `query` `shell` `background` `read_only`
 
 **Runtime**: streaming `buffered`
+
+**Help**:
+> Compatibility replay entry for shell process output. since_seq defaults to 0; continue with last_seq AND next_event_offset as event_offset whenever nonzero. last_seq refers to fully consumed events; partially returned event text is resumable without loss. max_output_bytes (1024–16384, default 16384) includes escaping and event structure, with room reserved for lifecycle/cursor metadata. limit caps event count; wait_ms is a diagnostic wait (max 30000). has_more describes buffered output, not archive completeness. output_archive.path is the startup prefix; segments identify retained recent files and original byte ranges. Use fs.grep/fs.read selected ranges in those files; file-local byte offsets start at 0. Use shell.read without since_seq for new unread output. Background jobs notify when they finish; do not poll to wait.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `event_offset` | `integer` | — | `0` |  |
 | `limit` | `integer / null` | — | — |  |
+| `max_output_bytes` | `integer / null` | — | — |  |
 | `process_id` | `string` | ✓ | — |  |
-| `since_seq` | `integer` | — | `0` |  |
+| `since_seq` | `integer` | — | `0` | Return events after this cursor; continue with the returned last_seq. |
 | `wait_ms` | `integer` | — | `0` |  |
 
 **Input schema**:
@@ -6880,14 +7043,32 @@ Shell command execution and background process tools.
 {
   "additionalProperties": false,
   "properties": {
-    "limit": {
+    "event_offset": {
+      "default": 0,
       "format": "uint32",
       "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000002"
+    },
+    "limit": {
+      "format": "uint32",
+      "maximum": 2000,
+      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000004"
+    },
+    "max_output_bytes": {
+      "format": "uint32",
+      "maximum": 16384,
+      "minimum": 1024,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000003"
     },
     "process_id": {
       "minLength": 1,
@@ -6896,6 +7077,7 @@ Shell command execution and background process tools.
     },
     "since_seq": {
       "default": 0,
+      "description": "Return events after this cursor; continue with the returned last_seq.",
       "format": "uint64",
       "minimum": 0,
       "type": "integer",
@@ -6904,9 +7086,270 @@ Shell command execution and background process tools.
     "wait_ms": {
       "default": 0,
       "format": "uint64",
+      "maximum": 30000,
       "minimum": 0,
       "type": "integer",
+      "x-agena-order": "000005"
+    }
+  },
+  "required": [
+    "process_id"
+  ],
+  "type": "object"
+}
+```
+
+### open
+
+`agena.shell.open` · **Summary**: Open a persistent interactive shell terminal/PTY for a CLI, REPL or full-screen program; continue with shell.read and shell.write.
+
+**Tags**: `execute` `shell` `terminal` `interactive` `tty` `pty` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Return process_id, output, last_seq, next_event_offset and state after confirmed startup. yield_time_ms (default 1000, max 30000) limits only the initial wait, never lifetime; timeout_ms is an optional lifetime deadline. Interactive exit does not send background completion notifications or wake the AI. max_output_bytes (1024–16384, default 16384) controls preview, not capture. With include_screen the available content budget is split between raw output and a bounded screen. Silence/prompt/yield is not exit. Continue with shell.read or exact-input shell.write; shell.signal interrupts/terminates/kills, shell.resize changes dimensions and shell.stop cleans up. Declare initial effects and subsequent write effects.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `cols` | `integer` | — | `80` |  |
+| `command` | `string` | ✓ | — |  |
+| `description` | `string` | — | `` |  |
+| `include_screen` | `boolean` | — | `false` | Return the current rendered screen in addition to incremental output.<br>Enable for full-screen interfaces; ordinary prompts need only output. |
+| `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
+| `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
+| `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
+| `rows` | `integer` | — | `24` |  |
+| `shell` | `ProcessShell` | — | `bash` |  |
+| `timeout_ms` | `integer / null` | — | — |  |
+| `workdir` | `string / null` | — | — |  |
+| `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
+| `yield_time_ms` | `integer` | — | `1000` | Maximum initial output wait, in milliseconds. This is not a timeout. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ProcessShell": {
+      "description": "Shell used to run a process.",
+      "enum": [
+        "bash",
+        "powershell"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Open a persistent interactive shell/PTY. Waiting for initial output never\nends the terminal's lifetime and never creates a completion-notified job.",
+  "properties": {
+    "cols": {
+      "default": 80,
+      "format": "uint16",
+      "maximum": 400,
+      "minimum": 1,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "command": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001.000000"
+    },
+    "description": {
+      "default": "",
+      "type": "string",
+      "x-agena-order": "000001.000001"
+    },
+    "include_screen": {
+      "default": false,
+      "description": "Return the current rendered screen in addition to incremental output.\nEnable for full-screen interfaces; ordinary prompts need only output.",
+      "type": "boolean",
+      "x-agena-order": "000005"
+    },
+    "max_output_bytes": {
+      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
+      "format": "uint32",
+      "maximum": 16384,
+      "minimum": 1024,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001.000003"
+    },
+    "network": {
+      "default": [],
+      "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
+      "examples": [
+        [
+          "<target>"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000007"
+    },
+    "reads": {
+      "default": [],
+      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "examples": [
+        [
+          "src/lib.rs"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000005"
+    },
+    "rows": {
+      "default": 24,
+      "format": "uint16",
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer",
       "x-agena-order": "000003"
+    },
+    "shell": {
+      "$ref": "#/$defs/ProcessShell",
+      "default": "bash"
+    },
+    "timeout_ms": {
+      "format": "uint64",
+      "maximum": 86400000,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001.000002"
+    },
+    "workdir": {
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000000"
+    },
+    "writes": {
+      "default": [],
+      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "examples": [
+        [
+          "target/out.txt"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000006"
+    },
+    "yield_time_ms": {
+      "default": 1000,
+      "description": "Maximum initial output wait, in milliseconds. This is not a timeout.",
+      "format": "uint64",
+      "maximum": 30000,
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000002"
+    }
+  },
+  "required": [
+    "command"
+  ],
+  "type": "object"
+}
+```
+
+### read
+
+`agena.shell.read` · **Summary**: Read bounded incremental output and state from any owned background shell job or interactive terminal, without input.
+
+**Tags**: `query` `shell` `terminal` `interactive` `tty` `pty` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Works with process_id from shell.spawn, shell.watch or shell.open. Omit since_seq and event_offset to consume unread output; explicit since_seq replays without changing the automatic cursor. A partial event returns last_seq for fully consumed events and next_event_offset for the next event; pass both as since_seq/event_offset to resume. A nonzero event_offset requires since_seq and must preserve UTF-8 boundaries. Reads/writes on one process serialize automatic consumption; cancellation leaves it alive. wait_ms defaults to 250 (max 30000) and is a bounded output wait, not completion. max_output_bytes is 1024–16384 (default 16384), counting escaping/event structure and reserving metadata. include_screen is for PTYs only; enabling it splits the content budget with a bounded screen. ready is independent of terminal status. has_more describes the rolling buffer. For evicted text inspect output_archive.segments and use fs.grep/fs.read on only needed files/ranges; original byte ranges may have gaps and file-local offsets start at 0. Background completion is notified once, so do not poll merely to wait.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `event_offset` | `integer` | — | `0` | Resume within the next event using the previous next_event_offset.<br>A nonzero value requires since_seq; omit both for automatic consumption. |
+| `include_screen` | `boolean` | — | `false` |  |
+| `limit` | `integer / null` | — | — |  |
+| `max_output_bytes` | `integer / null` | — | — |  |
+| `process_id` | `string` | ✓ | — |  |
+| `since_seq` | `integer / null` | — | — |  |
+| `wait_ms` | `integer` | — | `250` |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "description": "Read a background job or terminal without input. Explicit cursors replay output;\nomitting the cursor consumes only previously unread output.",
+  "properties": {
+    "event_offset": {
+      "default": 0,
+      "description": "Resume within the next event using the previous next_event_offset.\nA nonzero value requires since_seq; omit both for automatic consumption.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000002"
+    },
+    "include_screen": {
+      "default": false,
+      "type": "boolean",
+      "x-agena-order": "000006"
+    },
+    "limit": {
+      "format": "uint32",
+      "maximum": 2000,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "max_output_bytes": {
+      "format": "uint32",
+      "maximum": 16384,
+      "minimum": 1024,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "process_id": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "since_seq": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "wait_ms": {
+      "default": 250,
+      "format": "uint64",
+      "maximum": 30000,
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
     }
   },
   "required": [
@@ -6918,9 +7361,9 @@ Shell command execution and background process tools.
 
 ### resize
 
-`agena.shell.resize` · **Summary**: Resize an interactive terminal.
+`agena.shell.resize` · **Summary**: Resize an interactive shell.open terminal in character rows and columns.
 
-**Tags**: `mutate` `shell`
+**Tags**: `mutate` `shell` `terminal` `tty` `pty`
 
 **Runtime**: streaming `buffered`
 
@@ -6965,264 +7408,16 @@ Shell command execution and background process tools.
 }
 ```
 
-### run
-
-`agena.shell.run` · **Summary**: Run one shell process.
-
-**Tags**: `execute` `shell` `mutate`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Run a shell command. Declare `reads`, `writes` and outbound `network` targets; use empty arrays when none. Set `tty=true` for an interactive CLI, REPL or full-screen terminal. This retains a PTY across tool calls and returns a process_id, incremental output, last_seq, and a current terminal screen. `yield_time_ms` (default 1000, maximum 30000) only controls this call's initial output wait: it never terminates the process. `timeout_ms`, when supplied, is the terminal's overall lifetime limit. Continue with shell.write; read without input with shell.write(chars="") or shell.logs; use shell.resize for dimensions, shell.signal for interrupt/terminate/kill, and shell.stop for cleanup. Never assume a quiet prompt means completion. tty is incompatible with monitor. Without tty, normal foreground behavior is unchanged. `run_in_background=true` or `monitor` starts a non-interactive managed command; completion is notified by system_notification, so do not poll merely to wait for those jobs.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `cols` | `integer` | — | `80` |  |
-| `command` | `string` | ✓ | — |  |
-| `description` | `string` | — | `` |  |
-| `monitor` | `ShellMonitorInput / null` | — | — |  |
-| `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
-| `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
-| `rows` | `integer` | — | `24` | Initial terminal dimensions, in character cells. |
-| `run_in_background` | `boolean` | — | `false` |  |
-| `shell` | `ProcessShell` | — | `bash` |  |
-| `timeout_ms` | `integer / null` | — | — |  |
-| `tty` | `boolean` | — | `false` | Allocate a persistent pseudo-terminal. Use shell.write for subsequent<br>input; yielding output does not stop the process. Incompatible with monitor. |
-| `workdir` | `string / null` | — | — |  |
-| `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
-| `yield_time_ms` | `integer` | — | `1000` | Maximum initial wait for terminal output, not a process timeout (0–30000 ms). |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ProcessShell": {
-      "description": "Shell used to run a process.",
-      "enum": [
-        "bash",
-        "powershell"
-      ],
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "ShellMonitorInput": {
-      "additionalProperties": false,
-      "description": "Optional completion and capture policy for a managed shell process. Adding\nthis object makes `shell.run` a monitored background invocation and returns\nthe same `process_id` consumed by `shell.list`, `shell.logs` and `shell.stop`.\nPatterns that determine shell command success or failure.",
-      "properties": {
-        "capture_stderr": {
-          "default": true,
-          "type": "boolean"
-        },
-        "failure_pattern": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "include_pattern": {
-          "description": "Optional regex selecting which output lines are retained in the buffer.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "max_buffered_lines": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "pattern_kind": {
-          "$ref": "#/$defs/ShellMonitorPatternKind",
-          "default": "regex"
-        },
-        "persistent": {
-          "default": false,
-          "description": "Keep running until explicit stop or natural exit, ignoring timeout and\nquiet-period completion. Pattern matches still terminate the monitor.",
-          "type": "boolean"
-        },
-        "quiet_period_ms": {
-          "description": "Complete successfully after this many milliseconds without output.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "success_pattern": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "timeout_ms": {
-          "description": "Overall monitor timeout. Defaults to the command timeout, then five minutes.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ShellMonitorPatternKind": {
-      "description": "How a shell monitor pattern is matched.",
-      "enum": [
-        "literal",
-        "regex"
-      ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "description": "Input of a shell command execution.",
-  "properties": {
-    "cols": {
-      "default": 80,
-      "format": "uint16",
-      "maximum": 400,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000001.000004"
-    },
-    "command": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001.000000"
-    },
-    "description": {
-      "default": "",
-      "type": "string",
-      "x-agena-order": "000001.000005"
-    },
-    "monitor": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ShellMonitorInput"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "x-agena-order": "000003"
-    },
-    "network": {
-      "default": [],
-      "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
-      "examples": [
-        [
-          "<target>"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000010"
-    },
-    "reads": {
-      "default": [],
-      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
-      "examples": [
-        [
-          "src/lib.rs"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000008"
-    },
-    "rows": {
-      "default": 24,
-      "description": "Initial terminal dimensions, in character cells.",
-      "format": "uint16",
-      "maximum": 200,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000001.000003"
-    },
-    "run_in_background": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000002"
-    },
-    "shell": {
-      "$ref": "#/$defs/ProcessShell",
-      "default": "bash"
-    },
-    "timeout_ms": {
-      "format": "uint64",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001.000006"
-    },
-    "tty": {
-      "default": false,
-      "description": "Allocate a persistent pseudo-terminal. Use shell.write for subsequent\ninput; yielding output does not stop the process. Incompatible with monitor.",
-      "type": "boolean",
-      "x-agena-order": "000001.000001"
-    },
-    "workdir": {
-      "minLength": 1,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001.000000"
-    },
-    "writes": {
-      "default": [],
-      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
-      "examples": [
-        [
-          "target/out.txt"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000009"
-    },
-    "yield_time_ms": {
-      "default": 1000,
-      "description": "Maximum initial wait for terminal output, not a process timeout (0–30000 ms).",
-      "format": "uint64",
-      "maximum": 30000,
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000001.000002"
-    }
-  },
-  "required": [
-    "command"
-  ],
-  "type": "object"
-}
-```
-
 ### signal
 
-`agena.shell.signal` · **Summary**: Interrupt or terminate an interactive terminal.
+`agena.shell.signal` · **Summary**: Interrupt, gracefully terminate or kill an owned interactive shell terminal.
 
-**Tags**: `mutate` `execute` `shell`
+**Tags**: `mutate` `execute` `shell` `terminal` `interactive` `tty` `pty`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> interrupt targets the current Unix foreground process group without closing the shell (ConPTY uses terminal Ctrl-C). terminate requests graceful session cleanup and then kills remaining jobs; kill skips the grace period. This is distinct from typing a control byte into a raw-mode program. The same owning session/workspace is required. shell.stop is equivalent to terminate.
+> interrupt targets the Unix foreground process group without closing the shell; ConPTY uses terminal Ctrl-C. terminate requests graceful cleanup then kills remaining jobs; kill skips the grace period. Out-of-band interruption also works for raw-mode programs. Requires the owning session/workspace. shell.stop is equivalent to terminate.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7264,9 +7459,143 @@ Shell command execution and background process tools.
 }
 ```
 
+### spawn
+
+`agena.shell.spawn` · **Summary**: Spawn a non-interactive shell command in the background; return immediately so the AI can continue, then notify on completion.
+
+**Tags**: `execute` `shell` `background` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Launch with closed stdin; return process_id only after actual startup and registration. Continue useful work immediately. Completion, failure, timeout or stop is delivered once as system_notification; do not poll merely to wait. Use shell.read for bounded diagnostic output, shell.list for state and shell.stop for cleanup. Omitted timeout_ms permits running until exit/stop; a supplied timeout is enforced. Declare reads/writes/network effects. Attach or replace a watch on this same process with shell.watch(process_id, policy); omit/null policy to remove it. A process-targeted watch never spawns a second command or a second background operation. Use shell.open when later interactive input is required.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `command` | `string` | ✓ | — |  |
+| `description` | `string` | — | `` |  |
+| `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
+| `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
+| `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
+| `shell` | `ProcessShell` | — | `bash` |  |
+| `timeout_ms` | `integer / null` | — | — |  |
+| `workdir` | `string / null` | — | — |  |
+| `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ProcessShell": {
+      "description": "Shell used to run a process.",
+      "enum": [
+        "bash",
+        "powershell"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A non-interactive command. The selected tool determines whether it waits\nfor completion (`shell.exec`) or returns a background receipt (`shell.spawn`).",
+  "properties": {
+    "command": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001.000000"
+    },
+    "description": {
+      "default": "",
+      "type": "string",
+      "x-agena-order": "000001.000001"
+    },
+    "max_output_bytes": {
+      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
+      "format": "uint32",
+      "maximum": 16384,
+      "minimum": 1024,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001.000003"
+    },
+    "network": {
+      "default": [],
+      "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
+      "examples": [
+        [
+          "<target>"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000007"
+    },
+    "reads": {
+      "default": [],
+      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "examples": [
+        [
+          "src/lib.rs"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000005"
+    },
+    "shell": {
+      "$ref": "#/$defs/ProcessShell",
+      "default": "bash"
+    },
+    "timeout_ms": {
+      "format": "uint64",
+      "maximum": 86400000,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001.000002"
+    },
+    "workdir": {
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000000"
+    },
+    "writes": {
+      "default": [],
+      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "examples": [
+        [
+          "target/out.txt"
+        ]
+      ],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000006"
+    }
+  },
+  "required": [
+    "command"
+  ],
+  "type": "object"
+}
+```
+
 ### stop
 
-`agena.shell.stop` · **Summary**: Stop one background process.
+`agena.shell.stop` · **Summary**: Stop an owned background shell job, watched command or interactive terminal and clean up its process tree.
 
 **Tags**: `mutate` `execute` `shell`
 
@@ -7295,21 +7624,437 @@ Shell command execution and background process tools.
 }
 ```
 
-### write
+### watch
 
-`agena.shell.write` · **Summary**: Write to an interactive terminal and read its response.
+`agena.shell.watch` · **Summary**: Start a command with readiness/selected output notifications, or attach, replace or remove the watch on an existing background shell process.
 
-**Tags**: `mutate` `execute` `shell`
+**Tags**: `execute` `shell` `background` `monitor` `watch` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Continue a process started with shell.run(tty=true). chars is exact terminal input: never trim or automatically append a newline. Send \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D, \t for Tab, or terminal escape sequences for arrow/function keys. Use chars="" to read without sending input. Omit since_seq to read previously unread output; use an explicit last_seq to replay/page output. wait_ms defaults to 250 and is capped at 30000; a wait timeout does not kill the CLI. Input is an execution operation: declare every affected reads/writes path (relative to the Agena workspace) and network target, including effects of commands entered inside a shell/REPL. Requires the same owning session and workspace as the launch. A partial-write error requests terminal termination; do not resend the full input blindly. Process exit, not absence of output, indicates completion.
+> Provide either command with shell/effects (new launch) or process_id (existing noninteractive process); never both. Launch binds the watch before the process can output. A process target replaces its single policy and keeps the original launch/completion operation. Omit or pass null policy on a process target to remove the watch without stopping the process; an empty policy disables ordinary notifications. Attach observes future output by default; since_seq optionally scans retained raw logs once. Identical policy updates are idempotent. ready_pattern notifies once and leaves the service running. include_pattern is opt-in; omission sends no ordinary output notifications. notifications defaults to once; on_change deduplicates unchanged matches and coalesces changed matches to the latest, using notification_interval_ms (default 30000, min 1000). Readiness/completion bypass that throttle. success_pattern/failure_pattern stop the process tree; failure wins. pattern_kind applies to all patterns (regex default, literal available); preserve whitespace. quiet_period_ms stops successfully after no raw stdout/stderr activity. timeout_ms belongs only to the launch and remains enforced after watch changes/removal. Logs/archives always retain excluded output. Read with shell.read and stop with shell.stop; do not poll merely to wait. PTYs and WebSocket subscriptions cannot receive this watch.
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ProcessShell": {
+      "description": "Shell used to run a process.",
+      "enum": [
+        "bash",
+        "powershell"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "ShellMonitorPatternKind": {
+      "description": "Applies consistently to all four patterns; regex is the default.",
+      "enum": [
+        "literal",
+        "regex"
+      ],
+      "type": "string",
+      "x-agena-order": "000001.000006"
+    },
+    "ShellWatchNotifications": {
+      "description": "Default once; on_change explicitly enables recurring changed matches.",
+      "oneOf": [
+        {
+          "const": "once",
+          "description": "Notify on the first include_pattern match per configuration.",
+          "type": "string"
+        },
+        {
+          "const": "on_change",
+          "description": "Notify on changed matches, deduplicated and rate limited.",
+          "type": "string"
+        }
+      ],
+      "x-agena-order": "000001.000004"
+    },
+    "ShellWatchPolicy": {
+      "additionalProperties": false,
+      "description": "Select output notifications and optional completion conditions. The\ncommand's timeout_ms is the only lifetime deadline; omitting it permits\nrunning until exit, stop or a completion condition.",
+      "properties": {
+        "failure_pattern": {
+          "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "include_pattern": {
+          "description": "Select which lines notify the AI. Omission disables ordinary output\nnotifications. All output remains available through shell.read/archive.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notification_interval_ms": {
+          "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "notifications": {
+          "$ref": "#/$defs/ShellWatchNotifications",
+          "default": "once",
+          "description": "Default once; on_change explicitly enables recurring changed matches."
+        },
+        "pattern_kind": {
+          "$ref": "#/$defs/ShellMonitorPatternKind",
+          "default": "regex",
+          "description": "Applies consistently to all four patterns; regex is the default."
+        },
+        "quiet_period_ms": {
+          "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ready_pattern": {
+          "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "success_pattern": {
+          "description": "Stop the process tree successfully when an output line matches.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object",
+      "x-agena-order": "000002"
+    }
+  },
+  "anyOf": [
+    {
+      "additionalProperties": false,
+      "description": "Input of a shell command execution.",
+      "properties": {
+        "command": {
+          "minLength": 1,
+          "type": "string",
+          "x-agena-order": "000001.000000"
+        },
+        "description": {
+          "default": "",
+          "type": "string",
+          "x-agena-order": "000001.000001"
+        },
+        "max_output_bytes": {
+          "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
+          "format": "uint32",
+          "maximum": 16384,
+          "minimum": 1024,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-agena-order": "000001.000003"
+        },
+        "network": {
+          "default": [],
+          "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
+          "examples": [
+            [
+              "<target>"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-agena-order": "000001.000007"
+        },
+        "policy": {
+          "$ref": "#/$defs/ShellWatchPolicy",
+          "additionalProperties": false,
+          "default": {
+            "notifications": "once",
+            "pattern_kind": "regex"
+          },
+          "properties": {
+            "failure_pattern": {
+              "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000002.000003"
+            },
+            "include_pattern": {
+              "description": "Select which lines notify the AI. Omission disables ordinary output\nnotifications. All output remains available through shell.read/archive.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000002.000001"
+            },
+            "notification_interval_ms": {
+              "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
+              "format": "uint64",
+              "maximum": 3600000,
+              "minimum": 1000,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-agena-order": "000002.000005"
+            },
+            "notifications": {
+              "$ref": "#/$defs/ShellWatchNotifications",
+              "default": "once",
+              "description": "Default once; on_change explicitly enables recurring changed matches."
+            },
+            "pattern_kind": {
+              "$ref": "#/$defs/ShellMonitorPatternKind",
+              "default": "regex",
+              "description": "Applies consistently to all four patterns; regex is the default."
+            },
+            "quiet_period_ms": {
+              "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
+              "format": "uint64",
+              "maximum": 3600000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-agena-order": "000002.000007"
+            },
+            "ready_pattern": {
+              "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000002.000000"
+            },
+            "success_pattern": {
+              "description": "Stop the process tree successfully when an output line matches.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000002.000002"
+            }
+          },
+          "type": "object"
+        },
+        "reads": {
+          "default": [],
+          "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+          "examples": [
+            [
+              "src/lib.rs"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-agena-order": "000001.000005"
+        },
+        "shell": {
+          "$ref": "#/$defs/ProcessShell",
+          "default": "bash"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "maximum": 86400000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-agena-order": "000001.000002"
+        },
+        "workdir": {
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-agena-order": "000001.000000"
+        },
+        "writes": {
+          "default": [],
+          "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+          "examples": [
+            [
+              "target/out.txt"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-agena-order": "000001.000006"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShellWatchPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Replace the entire watch policy. Omit or pass null to remove it;\nremoving a watch leaves the process and completion notification intact.",
+          "properties": {
+            "failure_pattern": {
+              "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000001.000003"
+            },
+            "include_pattern": {
+              "description": "Select which lines notify the AI. Omission disables ordinary output\nnotifications. All output remains available through shell.read/archive.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000001.000001"
+            },
+            "notification_interval_ms": {
+              "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
+              "format": "uint64",
+              "maximum": 3600000,
+              "minimum": 1000,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-agena-order": "000001.000005"
+            },
+            "notifications": {
+              "$ref": "#/$defs/ShellWatchNotifications",
+              "default": "once",
+              "description": "Default once; on_change explicitly enables recurring changed matches."
+            },
+            "pattern_kind": {
+              "$ref": "#/$defs/ShellMonitorPatternKind",
+              "default": "regex",
+              "description": "Applies consistently to all four patterns; regex is the default."
+            },
+            "quiet_period_ms": {
+              "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
+              "format": "uint64",
+              "maximum": 3600000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-agena-order": "000001.000007"
+            },
+            "ready_pattern": {
+              "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000001.000000"
+            },
+            "success_pattern": {
+              "description": "Stop the process tree successfully when an output line matches.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000001.000002"
+            }
+          },
+          "type": "object",
+          "x-agena-order": "000001"
+        },
+        "process_id": {
+          "minLength": 1,
+          "type": "string",
+          "x-agena-order": "000000"
+        },
+        "since_seq": {
+          "description": "Optionally inspect retained output after this sequence on attachment.\nOmit for future output only; unavailable older output is not replayed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-agena-order": "000002"
+        }
+      },
+      "required": [
+        "process_id"
+      ],
+      "type": "object"
+    }
+  ],
+  "description": "Either start a command with an atomic watch, or replace/remove the watch on\nan existing noninteractive process. A process target never starts a command.",
+  "properties": {},
+  "type": "object"
+}
+```
+
+### write
+
+`agena.shell.write` · **Summary**: Send exact nonempty input to an interactive shell.open terminal and collect a bounded, resumable response.
+
+**Tags**: `mutate` `execute` `shell` `terminal` `interactive` `tty` `pty`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> chars is exact terminal input: never trim or append a newline. Send \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D, \t for Tab, or terminal escape sequences. Use shell.read without input. Omit since_seq/event_offset for unread output; explicit cursors replay without changing automatic consumption. Continue a partial result with last_seq and next_event_offset as since_seq/event_offset. wait_ms defaults to 250 (max 30000), independent of lifetime. max_output_bytes is 1024–16384 (default 16384); include_screen splits that content budget. Cursor/effect validation occurs before sending input. Declare reads/writes/network effects of the entered operation. Requires the owning session/workspace. A partial-write error requests termination; never blindly resend the full input. Use shell.signal for out-of-band interruption and shell.stop for cleanup.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `chars` | `string` | — | `` | Exact UTF-8 text/control characters. Empty reads without writing. Use<br>\r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D; at most 65536 bytes. |
+| `chars` | `string` | ✓ | — | Nonempty exact UTF-8 text/control characters. Use shell.read to read. Use<br>\r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D; at most 65536 bytes. |
+| `event_offset` | `integer` | — | `0` |  |
+| `include_screen` | `boolean` | — | `false` |  |
+| `max_output_bytes` | `integer / null` | — | — |  |
 | `network` | `array<string>` | — | `[]` | Outbound targets the entered operation may contact. |
 | `process_id` | `string` | ✓ | — |  |
 | `reads` | `array<string>` | — | `[]` | Paths the entered operation may read, relative to the Agena workspace. |
@@ -7324,10 +8069,33 @@ Shell command execution and background process tools.
   "description": "Input is terminal data, not a new shell command. Never trim it or append a newline.",
   "properties": {
     "chars": {
-      "default": "",
-      "description": "Exact UTF-8 text/control characters. Empty reads without writing. Use\n\\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D; at most 65536 bytes.",
+      "description": "Nonempty exact UTF-8 text/control characters. Use shell.read to read. Use\n\\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D; at most 65536 bytes.",
+      "maxLength": 65536,
+      "minLength": 1,
       "type": "string",
       "x-agena-order": "000001"
+    },
+    "event_offset": {
+      "default": 0,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000003"
+    },
+    "include_screen": {
+      "default": false,
+      "type": "boolean",
+      "x-agena-order": "000006"
+    },
+    "max_output_bytes": {
+      "format": "uint32",
+      "maximum": 16384,
+      "minimum": 1024,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000004"
     },
     "network": {
       "default": [],
@@ -7336,7 +8104,7 @@ Shell command execution and background process tools.
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000006"
+      "x-agena-order": "000009"
     },
     "process_id": {
       "minLength": 1,
@@ -7350,7 +8118,7 @@ Shell command execution and background process tools.
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000004"
+      "x-agena-order": "000007"
     },
     "since_seq": {
       "description": "Output cursor from a previous result. Omit to consume the session's\nunread output; explicit cursors permit replay without changing it.",
@@ -7368,7 +8136,7 @@ Shell command execution and background process tools.
       "maximum": 30000,
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000003"
+      "x-agena-order": "000005"
     },
     "writes": {
       "default": [],
@@ -7377,11 +8145,12 @@ Shell command execution and background process tools.
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000005"
+      "x-agena-order": "000008"
     }
   },
   "required": [
-    "process_id"
+    "process_id",
+    "chars"
   ],
   "type": "object"
 }

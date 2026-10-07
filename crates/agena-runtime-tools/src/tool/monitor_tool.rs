@@ -1,17 +1,10 @@
-//! Internal handler for the `monitor` tool: continuous-stream background
-//! listeners (a shell command or a WebSocket endpoint) whose every event is
-//! projected as a `system_notification` part (everything-is-a-part, §7.3).
-
-use std::collections::HashMap;
+//! WebSocket subscriptions. Local command listeners use the shared Shell path.
 
 use agena_domain::ProcessSummary;
 
 use crate::part::MonitorToolInput;
-use crate::{
-    MonitorError, MonitorService, MonitorStart, MonitorStartParams as StartParams, MonitorWsParams,
-};
+use crate::{MonitorError, MonitorStart, MonitorStartParams as StartParams, MonitorWsParams};
 
-use super::shell_tools::resolve_workdir;
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 pub(crate) async fn execute_async(
@@ -19,55 +12,74 @@ pub(crate) async fn execute_async(
     input: &MonitorToolInput,
     context: super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let registry = monitor_registry(executor)?;
     match input {
         MonitorToolInput::Start {
             command,
             ws,
             timeout_ms,
-            persistent,
             description,
+            policy,
+            workdir,
+            reads,
+            writes,
+            network,
+            ..
         } => {
-            if command.is_some() && crate::shell_sandbox::enabled()? {
+            // Keep historical payloads decodable without retaining a second
+            // executable local-command entry point or silently dropping effects.
+            if command.is_some() || policy.is_some() {
                 return Err(ToolError::invalid_input(
-                    "monitor.start command has no explicit filesystem effects for offline sandbox; use shell.run with reads/writes and monitor options",
+                    "command-output monitoring uses shell.watch; monitor.start subscribes to WebSockets",
                 ));
             }
-            let started = registry
-                .start(StartParams {
-                    argv: None,
-                    owner: Some(
-                        super::terminal_tool::owner_async(executor, context.session_id).await?,
-                    ),
-                    process_id: context.session_id.zip(context.call_id).map(
-                        |(session_id, call_id)| crate::managed_process_id(session_id, call_id),
-                    ),
-                    command: command.clone().unwrap_or_default(),
-                    ws: ws.as_ref().map(|ws| MonitorWsParams {
-                        url: ws.url.clone(),
-                        protocols: ws.protocols.clone(),
-                    }),
-                    description: description.clone(),
-                    workdir: resolve_workdir(executor, None)?,
-                    timeout_ms: *timeout_ms,
-                    persistent: *persistent,
-                    // Monitor-tool launches are always background; they project
-                    // per-event `system_notification` parts (unlike a monitored
-                    // shell, whose events stay in the streaming buffer).
-                    monitored: true,
-                    include_pattern: None,
-                    success_pattern: None,
-                    failure_pattern: None,
-                    quiet_period_ms: None,
-                    max_buffered_lines: None,
-                    capture_stderr: true,
-                    env: std::env::vars().collect::<HashMap<_, _>>(),
-                })
-                .map_err(into_tool_error)?;
+            if workdir.is_some() || !reads.is_empty() || !writes.is_empty() || !network.is_empty() {
+                return Err(ToolError::invalid_input(
+                    "WebSocket subscriptions do not accept shell workdir or command effects",
+                ));
+            }
+            let ws = ws
+                .as_ref()
+                .ok_or_else(|| ToolError::invalid_input("monitor.start requires ws"))?;
+            let params = StartParams {
+                argv: None,
+                owner: Some(super::terminal_tool::owner_async(executor, context.session_id).await?),
+                process_id: context
+                    .session_id
+                    .zip(context.call_id)
+                    .map(|(session, call)| crate::managed_process_id(session, call)),
+                command: String::new(),
+                ws: Some(MonitorWsParams {
+                    url: ws.url.clone(),
+                    protocols: ws.protocols.clone(),
+                }),
+                description: description.clone(),
+                workdir: executor.workspace_root().to_path_buf(),
+                timeout_ms: *timeout_ms,
+                persistent: false,
+                monitored: true,
+                watch: None,
+                include_pattern: None,
+                success_pattern: None,
+                failure_pattern: None,
+                quiet_period_ms: None,
+                max_buffered_lines: None,
+                capture_stderr: true,
+                env: Default::default(),
+            };
+            let registry = executor
+                .monitor_registry()
+                .cloned()
+                .ok_or_else(|| ToolError::invalid_input("monitor registry unavailable"))?;
+            let permit = super::shell_tool::launch_worker_permit(executor).await?;
+            let started = super::terminal_tool::blocking(executor, move |_cancel| {
+                let _permit = permit;
+                registry.start(params).map_err(into_tool_error)
+            })
+            .await?;
             Ok(render_start(started))
         }
         MonitorToolInput::Stop { monitor_id } => {
-            super::process_tool::execute_async(
+            super::shell_tool::execute_async(
                 executor,
                 &crate::part::ShellToolInput::Stop {
                     process_id: monitor_id.clone(),
@@ -77,17 +89,6 @@ pub(crate) async fn execute_async(
             .await
         }
     }
-}
-
-fn monitor_registry(executor: &ToolExecutor) -> Result<&dyn MonitorService, ToolError> {
-    executor
-        .monitor_registry()
-        .map(|registry| registry.as_ref())
-        .ok_or_else(|| {
-            ToolError::invalid_input(
-                "background process registry is not enabled in this runtime".to_string(),
-            )
-        })
 }
 
 fn into_tool_error(err: MonitorError) -> ToolError {
@@ -103,11 +104,11 @@ fn into_tool_error(err: MonitorError) -> ToolError {
 fn render_start(started: MonitorStart) -> ToolPayloadExecution {
     let summary = started.summary;
     let body = format!(
-        "Monitor started ({}) — you will be notified with a `system_notification` on each event. Keep working; do not poll or sleep.",
+        "WebSocket subscription started ({}) — bounded event batches arrive as `system_notification` messages. Keep working; do not poll or sleep.",
         summary.process_id
     );
     let mut view = ToolExecutionView::simple(
-        "Start monitor",
+        "Subscribe to WebSocket",
         format!("Monitor · {}", summary.status),
         body,
     );

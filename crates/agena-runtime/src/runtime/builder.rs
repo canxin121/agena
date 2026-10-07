@@ -169,6 +169,14 @@ impl AgenaRuntime {
                         }
                     },
                 )))),
+                on_watch_changed: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                    std::sync::Arc::new({
+                        let completion = background_completion.clone();
+                        move |summary: &agena_domain::ProcessSummary| {
+                            completion.update_shell_watch(summary);
+                        }
+                    }),
+                ))),
                 on_event: std::sync::Arc::new(std::sync::Mutex::new(Some(std::sync::Arc::new({
                     let completion = background_completion.clone();
                     move |event: &agena_domain::ProcessEvent,

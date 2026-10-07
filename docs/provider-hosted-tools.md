@@ -77,7 +77,7 @@ Agena 的厂商插件只暴露**当前存在、由厂商侧实际执行或托管
 - 默认：`environment.type = "container_auto"`
 - 已存在容器：`environment.type = "container_reference"`，并提供 `cntr_...` ID
 
-本地环境、空环境、字符串环境和未知环境类型都在网络请求前拒绝。它不是 `shell.run` 的别名，也不能访问 Agena 工作区，除非内容被显式作为允许的输入发送。
+本地环境、空环境、字符串环境和未知环境类型都在网络请求前拒绝。它不是 `shell.exec / shell.spawn / shell.open` 的别名，也不能访问 Agena 工作区，除非内容被显式作为允许的输入发送。
 
 ## 代码执行
 
@@ -85,7 +85,7 @@ Agena 的厂商插件只暴露**当前存在、由厂商侧实际执行或托管
 - Anthropic Code Execution 由 Anthropic 服务端执行；
 - Gemini Code Execution 由 Google 服务端执行。
 
-这些能力与 Agena 本地 `shell.run` / `shell.write` 完全独立。需要访问本地仓库、终端状态或本机依赖时，使用 Agena 原生工具。
+这些能力与 Agena 本地 `shell.exec / shell.spawn / shell.open` / `shell.write` 完全独立。需要访问本地仓库、终端状态或本机依赖时，使用 Agena 原生工具。
 
 ## 图片、文档和云端文件
 

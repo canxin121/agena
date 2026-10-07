@@ -2,7 +2,7 @@
 //! executor; live-process ownership is additionally checked here for every action.
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
-use crate::part::{ShellCommandInput, ShellSignal, ShellToolInput};
+use crate::part::{ShellOpenInput, ShellSignal, ShellToolInput};
 use crate::{TerminalOwner, TerminalRead, TerminalStartParams};
 use agena_domain::{FilesystemEffects, ProcessShell};
 use std::{collections::HashMap, path::PathBuf};
@@ -79,8 +79,8 @@ pub(super) fn registry(executor: &ToolExecutor) -> Result<&crate::TerminalRegist
 #[allow(clippy::too_many_arguments)]
 pub(super) fn start_prepared(
     executor: &ToolExecutor,
-    _shell: ProcessShell,
-    input: &ShellCommandInput,
+    shell: ProcessShell,
+    input: &ShellOpenInput,
     command: String,
     workdir: PathBuf,
     env: HashMap<String, String>,
@@ -104,30 +104,39 @@ pub(super) fn start_prepared(
         executor,
         match launch {
             Some(spec) => spec.argv(command.as_str()),
+            None if shell == ProcessShell::Powershell => {
+                let mut argv = agena_tool::shell::powershell_command_for_windows(&command);
+                if let Some(index) = argv.iter().position(|arg| arg == "-NonInteractive") {
+                    argv.remove(index);
+                }
+                argv
+            }
             None => agena_tool::shell::shell_command_for_platform(&command),
         },
-        input,
+        &input.command,
         &mut env,
     )?;
     let read = registry(executor)?
-        .start_cancellable(
+        .start_cancellable_with_output(
             TerminalStartParams {
                 process_id,
                 owner,
                 command: argv,
                 display_command: command,
-                description: input.description.clone(),
+                description: input.command.description.clone(),
                 workdir,
                 env,
                 rows: input.rows,
                 cols: input.cols,
-                timeout_ms: input.timeout_ms,
+                timeout_ms: input.command.timeout_ms,
             },
             input.yield_time_ms,
+            input.command.max_output_bytes,
+            input.include_screen,
             cancel,
         )
         .map_err(error)?;
-    let mut execution = render("run", read);
+    let mut execution = render("open", read, input.include_screen);
     if let Some(spec) = launch {
         for (key, value) in spec.metadata() {
             execution.view.metadata.insert(key, value);
@@ -144,8 +153,30 @@ pub(super) fn execute(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let owner = owner(executor, session_id)?;
     let terminals = registry(executor)?;
-    let (action, read) = match input {
+    let (action, read, include_screen) = match input {
+        ShellToolInput::Read { input } => (
+            "read",
+            terminals.read_with_output(
+                &input.process_id,
+                &owner,
+                crate::ProcessReadOptions {
+                    since_seq: input.since_seq,
+                    event_offset: input.event_offset,
+                    wait_ms: input.wait_ms,
+                    limit: input.limit,
+                    max_output_bytes: input.max_output_bytes,
+                },
+                input.include_screen,
+                cancel,
+            ),
+            input.include_screen,
+        ),
         ShellToolInput::Write { input } => {
+            if input.chars.is_empty() {
+                return Err(ToolError::invalid_input(
+                    "shell.write requires nonempty chars; use shell.read without input",
+                ));
+            }
             super::shell_tools::validate_declared_filesystem_effects(
                 "shell.write",
                 &input.chars,
@@ -156,14 +187,21 @@ pub(super) fn execute(
             )?;
             (
                 "write",
-                terminals.write_cancellable(
+                terminals.write_with_output(
                     &input.process_id,
                     &owner,
                     &input.chars,
-                    input.since_seq,
-                    input.wait_ms,
+                    crate::ProcessReadOptions {
+                        since_seq: input.since_seq,
+                        event_offset: input.event_offset,
+                        wait_ms: input.wait_ms,
+                        limit: None,
+                        max_output_bytes: input.max_output_bytes,
+                    },
+                    input.include_screen,
                     cancel,
                 ),
+                input.include_screen,
             )
         }
         ShellToolInput::Resize {
@@ -173,41 +211,61 @@ pub(super) fn execute(
         } => (
             "resize",
             terminals.resize_cancellable(process_id, &owner, *rows, *cols, cancel),
+            true,
         ),
         ShellToolInput::Signal { process_id, signal } => (
             "signal",
             terminals.signal_cancellable(process_id, &owner, *signal, cancel),
+            false,
         ),
         ShellToolInput::Stop { process_id } => (
             "stop",
             terminals.signal_cancellable(process_id, &owner, ShellSignal::Terminate, cancel),
+            false,
         ),
         ShellToolInput::Logs {
             process_id,
             since_seq,
+            event_offset,
+            max_output_bytes,
             limit,
             wait_ms,
         } => (
             "logs",
-            terminals.read_cancellable(
+            terminals.read_with_output(
                 process_id,
                 &owner,
-                Some(*since_seq),
-                (*wait_ms).min(30_000),
-                *limit,
+                crate::ProcessReadOptions {
+                    since_seq: Some(*since_seq),
+                    event_offset: *event_offset,
+                    wait_ms: (*wait_ms).min(30_000),
+                    limit: *limit,
+                    max_output_bytes: *max_output_bytes,
+                },
+                false,
                 cancel,
             ),
+            false,
         ),
         _ => return Err(ToolError::invalid_input("not a terminal interaction")),
     };
-    Ok(render(action, read.map_err(error)?))
+    Ok(render(action, read.map_err(error)?, include_screen))
 }
 
-pub(super) fn render(action: &str, read: TerminalRead) -> ToolPayloadExecution {
+pub(super) fn render(
+    action: &str,
+    read: TerminalRead,
+    include_screen: bool,
+) -> ToolPayloadExecution {
     let summary = read.summary;
     let mut body = format!(
-        "Terminal {}: {}, last_seq={}, has_more={}, dropped_bytes={}.",
-        summary.process_id, summary.status, read.last_seq, read.has_more, read.dropped_bytes
+        "Terminal {}: {}, last_seq={}, next_event_offset={}, has_more={}, dropped_bytes={}.",
+        summary.process_id,
+        summary.status,
+        read.last_seq,
+        read.next_event_offset,
+        read.has_more,
+        read.dropped_bytes
     );
     if let Some(code) = summary.exit_code {
         body.push_str(&format!(" Exit code: {code}."));
@@ -219,20 +277,29 @@ pub(super) fn render(action: &str, read: TerminalRead) -> ToolPayloadExecution {
         body.push_str("\nIncremental output (control sequences escaped):\n");
         body.push_str(&display_output(&read.output));
     }
-    body.push_str(&format!(
-        "\nScreen {}x{}, cursor=({}, {}), alternate_screen={}:\n{}",
-        read.screen.cols,
-        read.screen.rows,
-        read.screen.cursor_row,
-        read.screen.cursor_col,
-        read.screen.alternate_screen,
-        read.screen.text
-    ));
-    if read.screen.truncated {
-        body.push_str("\n[screen text truncated]");
+    if include_screen {
+        body.push_str(&format!(
+            "\nScreen {}x{}, cursor=({}, {}), alternate_screen={}:\n{}",
+            read.screen.cols,
+            read.screen.rows,
+            read.screen.cursor_row,
+            read.screen.cursor_col,
+            read.screen.alternate_screen,
+            read.screen.text
+        ));
+        if read.screen.truncated {
+            body.push_str("\n[screen text truncated]");
+        }
+    }
+    if let Some(archive) = &summary.output_archive {
+        body.push_str("\n");
+        body.push_str(&crate::process_output_archive::archive_hint(archive));
+    }
+    if read.next_event_offset != 0 {
+        body.push_str("\n[partial event: use last_seq as since_seq and next_event_offset as event_offset to continue, or omit both to consume unread output]");
     }
     if summary.status == agena_domain::ProcessStatus::Running {
-        body.push_str("\nProcess is still running. Use shell.write for input (\\r = Enter); empty chars reads without typing. Use shell.stop for cleanup.");
+        body.push_str("\nProcess is still running. Use shell.read for output and shell.write for exact input (\\r = Enter). Use shell.stop for cleanup.");
     }
     let mut view = ToolExecutionView::simple(
         format!("Terminal {action}"),
@@ -249,21 +316,27 @@ pub(super) fn render(action: &str, read: TerminalRead) -> ToolPayloadExecution {
     view.metadata
         .insert("has_more".into(), read.has_more.to_string());
     let output = ToolPayloadOutput::Shell {
+        output_archive: summary.output_archive.clone(),
         action: action.into(),
-        terminal: Some(read.screen),
+        terminal: include_screen.then_some(read.screen),
         dropped_bytes: read.dropped_bytes,
         shell: None,
-        background: true,
+        background: false,
+        ready: false,
         process_id: Some(summary.process_id.clone()),
         status: Some(summary.status),
         output: Some(read.output),
         description: Some(summary.description.clone()),
-        events: read.events,
-        processes: vec![summary.clone()],
+        // Raw incremental text is authoritative; repeating it in events and
+        // process summaries multiplies model/network payloads.
+        events: Vec::new(),
+        processes: Vec::new(),
         last_seq: read.last_seq,
+        next_event_offset: read.next_event_offset,
         has_more: read.has_more,
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
+        completion_reason: summary.completion_reason.clone(),
     };
     ToolPayloadExecution::new(output, view)
 }

@@ -5552,10 +5552,12 @@ impl BuiltinHumanRenderer {
                 }
                 ToolPayloadOutput::Shell {
                     action,
+                    output_archive,
                     terminal,
                     dropped_bytes,
                     shell,
                     background,
+                    ready,
                     process_id,
                     status,
                     output,
@@ -5563,9 +5565,11 @@ impl BuiltinHumanRenderer {
                     events,
                     processes,
                     last_seq,
+                    next_event_offset,
                     has_more,
                     dropped_lines,
                     exit_code,
+                    completion_reason,
                 } => {
                     if let Some(screen) = terminal {
                         blocks.push(ViewBlock::Log {
@@ -5586,7 +5590,24 @@ impl BuiltinHumanRenderer {
                                 ),
                             });
                         }
-                    } else if action == "run" {
+                    } else if matches!(
+                        action.as_str(),
+                        "open" | "read" | "write" | "resize" | "signal"
+                    ) || (process_id.is_some() && !background)
+                    {
+                        if background {
+                            blocks.extend(Self::event_log_blocks(&events));
+                        }
+                        if let Some(output) = output.filter(|text| !text.is_empty()) {
+                            blocks.push(ViewBlock::Log {
+                                id: Some("terminal-output".into()),
+                                stream: agena_domain::CommandOutputStream::Stdout,
+                                text: Self::bounded_human_text(
+                                    &super::terminal_tool::display_output(&output),
+                                ),
+                            });
+                        }
+                    } else if matches!(action.as_str(), "run" | "exec" | "spawn" | "watch") {
                         let event_stdout = events
                             .iter()
                             .filter(|event| {
@@ -5607,7 +5628,7 @@ impl BuiltinHumanRenderer {
                         let command = command
                             .filter(|command| !command.trim().is_empty())
                             .map(str::to_owned)
-                            .unwrap_or_else(|| "shell run".to_owned());
+                            .unwrap_or_else(|| format!("shell {action}"));
                         let stderr = events
                             .iter()
                             .filter(|event| {
@@ -5640,11 +5661,50 @@ impl BuiltinHumanRenderer {
                         }
                     }
                     let mut fields = vec![("Action", action.clone())];
+                    if let Some(archive) = output_archive {
+                        if let Some(path) = archive.path {
+                            fields.push(("Captured output", path));
+                        }
+                        fields.push((
+                            "Archive bytes",
+                            format!("{} / {}", archive.retained_bytes, archive.total_bytes),
+                        ));
+                        if let Some(segment) = archive
+                            .segments
+                            .last()
+                            .filter(|_| archive.segments.len() > 1)
+                        {
+                            fields.push((
+                                "Recent output",
+                                format!(
+                                    "{} [{}..{})",
+                                    segment.path, segment.start_byte, segment.end_byte
+                                ),
+                            ));
+                        }
+                        if archive.truncated {
+                            fields.push((
+                                "Archive",
+                                "startup prefix + recent segments; gaps may be omitted".to_owned(),
+                            ));
+                        } else if archive.pending {
+                            fields.push(("Archive", "writes pending".to_owned()));
+                        }
+                        if let Some(error) = archive.error {
+                            fields.push(("Archive issue", error));
+                        }
+                    }
+                    if let Some(reason) = completion_reason {
+                        fields.push(("Completion", reason));
+                    }
                     if dropped_bytes > 0 {
                         fields.push(("Dropped bytes", dropped_bytes.to_string()));
                     }
                     if let Some(shell) = shell {
                         fields.push(("Shell", shell.to_string()));
+                    }
+                    if ready {
+                        fields.push(("Service", "ready; process may continue running".to_owned()));
                     }
                     if background {
                         fields.push(("Background", "yes".to_owned()));
@@ -5654,6 +5714,12 @@ impl BuiltinHumanRenderer {
                     }
                     if let Some(process_id) = process_id {
                         fields.push(("Process", process_id));
+                    }
+                    if next_event_offset != 0 {
+                        fields.push((
+                            "Continue event bytes",
+                            format!("since_seq={last_seq}, event_offset={next_event_offset}"),
+                        ));
                     }
                     if last_seq > 0 {
                         fields.push(("Last event", last_seq.to_string()));

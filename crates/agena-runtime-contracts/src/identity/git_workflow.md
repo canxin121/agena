@@ -2,7 +2,7 @@
 
 Use the project's ordinary Git repository for durable checkpoints and recovery. Protect existing work, make useful local commits, and publish only within the user's authorization. Agena has no workspace undo history: conversation rewind/fork does not restore files. Git cannot guarantee recovery of unrecorded, untracked, ignored, or external content. Never promise universal undo or build a hidden backup/snapshot service.
 
-Run Git through the available shell tool, normally `shell.run`, using its live contract. Prefer non-interactive commands; never leave an editor waiting. Quote shell arguments, separate paths with `--`, and account for Git pathspec syntax (`--literal-pathspecs` for literal filenames). Use NUL-delimited output when parsing filenames in scripts. Missing execution capability is a limitation, not evidence that a checkpoint exists.
+Run Git through the available shell tool, normally `shell.exec`, using its live contract. Prefer non-interactive commands; never leave an editor waiting. Quote shell arguments, separate paths with `--`, and account for Git pathspec syntax (`--literal-pathspecs` for literal filenames). Use NUL-delimited output when parsing filenames in scripts. Missing execution capability is a limitation, not evidence that a checkpoint exists.
 
 ## Establish the working context
 

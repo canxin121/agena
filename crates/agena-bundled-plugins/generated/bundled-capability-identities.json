@@ -46,7 +46,7 @@
       "aliases": [
         "start"
       ],
-      "content_sha256": "a1aee83817394f7b9ba38825fa00e6bb0635465ddba63c6710b71f6d994d3aeb",
+      "content_sha256": "7610d70e9e46696cf8f3fbafa7cafab4859631eeeae3e8bb259ac1744eeac321",
       "name": "run"
     },
     {
@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 131,
+    "execution_tools": 135,
     "gateway_tools": 7,
     "plugins": 21,
-    "tools": 138
+    "tools": 142
   },
   "plugins": [
     {
@@ -680,9 +680,9 @@
         {
           "canonical_name": "agena.fs.read",
           "conditional": null,
-          "definition_identity": "63093c63c0921719c9dcbcc31e783289b212330a992e08d0d685d9e75c895488",
+          "definition_identity": "1cf8b9ce6dd89197bdaa80fa08b16bf5b772557b4f656bd3adc964b5f48b12da",
           "gateway": false,
-          "input_schema_sha256": "464772b58d06502c18c80b73ca273c4b836f359ee57585002ac53b81ffc142a3",
+          "input_schema_sha256": "281d7d5fc3dc4c1a36ddc514ef0a075e7915aaab579b4a4e1a2850c04a300f53",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1245,27 +1245,26 @@
         {
           "canonical_name": "agena.monitor.start",
           "conditional": null,
-          "definition_identity": "8e42815230314ea5f7e1f599602f5d0e67084404e15c77d8adb1c501f0a800d2",
+          "definition_identity": "f504ea17a5cce6c8c8e410ee4717d905fb3bff6b35864ee6554c7758af715294",
           "gateway": false,
-          "input_schema_sha256": "a48fafaa3e33c3c29ec38e89af4d2e49824bd2328b0ce48e56f2116ac5cab9c5",
+          "input_schema_sha256": "3074ad1f2b21e286158145d8d874733bf26e6b96ea822a4b5fa9eabc5aec794f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute",
-            "shell",
+            "network",
             "mutate"
           ]
         },
         {
           "canonical_name": "agena.monitor.stop",
           "conditional": null,
-          "definition_identity": "59f01ef29052f1620fc18381edaaea4141f2a8a6282b0c31deba8c18b64cba14",
+          "definition_identity": "5015672de6633f44eab78a4a697bf48228e89245debc61fa7ea1e0b2234fe3ff",
           "gateway": false,
           "input_schema_sha256": "45822b66ac80380fb6e2cfc3ee7b23ee250f09257564fd8094a65c66c3c1ea9b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "execute",
-            "shell"
+            "network"
           ]
         }
       ],
@@ -1613,9 +1612,22 @@
       "id": "agena.shell",
       "tools": [
         {
+          "canonical_name": "agena.shell.exec",
+          "conditional": null,
+          "definition_identity": "68f05bd2558124ee96f65df64c3dfbd0379ccc7df557bd1819ba3168d80eeed1",
+          "gateway": false,
+          "input_schema_sha256": "2b532bc2ddd5253b27adaa4c2b4db3024ce6b132f120c9b99c741dc3c03bc594",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "execute",
+            "shell",
+            "mutate"
+          ]
+        },
+        {
           "canonical_name": "agena.shell.list",
           "conditional": null,
-          "definition_identity": "6e48dd4d2c3214f51e3342ed02536126e0efc723e9a249030bb0cddc7aa27944",
+          "definition_identity": "abd3f51f58707184e2e95018fa7acdaba2b882caedea5e82640e7c7791a2f00d",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1629,58 +1641,101 @@
         {
           "canonical_name": "agena.shell.logs",
           "conditional": null,
-          "definition_identity": "ccfc2f6461ab4e061fb7cece3e632271aab9969fcee6101eeb738b3514844dc1",
+          "definition_identity": "895b9f3ed6a447265736360429e5d968054cde24d1936de2fb9a14e34cd5cbcf",
           "gateway": false,
-          "input_schema_sha256": "9c38213613cd17a4e0182e19dd3665e984734960958ec6d86f99c81bfbceba75",
+          "input_schema_sha256": "da377623c8ac31aa5d909cb419c615ba7b3655c2c78023ed82a8dd5a3be63d6c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
             "shell",
+            "background",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.open",
+          "conditional": null,
+          "definition_identity": "da7a4b1e7969593fdf43da9534c6aa3115ebafa4b5f60f0e5cac4cc00ee9afe2",
+          "gateway": false,
+          "input_schema_sha256": "a18b24bcf8fc29d6e6273b18767f844e1310ca0db200c58ddffd92b6837c8a5d",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "execute",
+            "shell",
+            "terminal",
+            "interactive",
+            "tty",
+            "pty",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.read",
+          "conditional": null,
+          "definition_identity": "b947c10888f57851e4c7d8b45a4e1e7d071eddb5f44041ae44d804ee651cfeab",
+          "gateway": false,
+          "input_schema_sha256": "5c48fb91c1832701427c872b3cf2ff423d3d7eff360b0ac14e5f6ebc04d1d865",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "shell",
+            "terminal",
+            "interactive",
+            "tty",
+            "pty",
             "read_only"
           ]
         },
         {
           "canonical_name": "agena.shell.resize",
           "conditional": null,
-          "definition_identity": "f3047fb7130cc89422be42cfdb46e522904395e6a999abf4a3ee960579eb08c5",
+          "definition_identity": "49e884fb1609f48c841a49c1d06ba9022e053768110ca6dc9b5397205912ddae",
           "gateway": false,
           "input_schema_sha256": "c554d95e29c8f350dfd6004d55329da410dcbd7be7343285b6ceb54f45545559",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
-            "shell"
-          ]
-        },
-        {
-          "canonical_name": "agena.shell.run",
-          "conditional": null,
-          "definition_identity": "bb9917e53a1dc5093246c9ec36947c7a8868c8b3ffa85419472a10931926ca05",
-          "gateway": false,
-          "input_schema_sha256": "14cf514a05234697f9cd9765a98929ee6a6ef74ce7db1082966e5c8c24697011",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "execute",
             "shell",
-            "mutate"
+            "terminal",
+            "tty",
+            "pty"
           ]
         },
         {
           "canonical_name": "agena.shell.signal",
           "conditional": null,
-          "definition_identity": "d7710ca99722bb0244f9aa360004913b814af07f8eec308f7e6844ca365fe76c",
+          "definition_identity": "4355f30a05ac9cefe59608be8bbf113d80b6efdb1a051bd5a168edf3bac5f248",
           "gateway": false,
           "input_schema_sha256": "bf0e663439569b839e0156899a7e5378ad56ff47f72870474c04c7fd7fdfde8f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
             "execute",
-            "shell"
+            "shell",
+            "terminal",
+            "interactive",
+            "tty",
+            "pty"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.spawn",
+          "conditional": null,
+          "definition_identity": "4154bf97066bc72f04363ecc3aaf1588e30d1529048d0aedc0bf750dae55de2a",
+          "gateway": false,
+          "input_schema_sha256": "2b532bc2ddd5253b27adaa4c2b4db3024ce6b132f120c9b99c741dc3c03bc594",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "execute",
+            "shell",
+            "background",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.shell.stop",
           "conditional": null,
-          "definition_identity": "1c09767bfac0de18059569f0fa4390d68fa84a657bd31433e38c979140488cec",
+          "definition_identity": "41f1a5278a6b69ede01ec1eb90bc62dfa90150fc41648380491d74231097c5e7",
           "gateway": false,
           "input_schema_sha256": "0b746767db7a0e15810a548b448efe51100c66972c397740ed4f45568831d06e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -1691,16 +1746,36 @@
           ]
         },
         {
+          "canonical_name": "agena.shell.watch",
+          "conditional": null,
+          "definition_identity": "bf27835be909f184905788180c4227a44dc40f3ae086dc629ba35ae691b737ce",
+          "gateway": false,
+          "input_schema_sha256": "fffbeb036012b39deb91a154385b22ba1340a0a313833d1e279b3171655fec99",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "execute",
+            "shell",
+            "background",
+            "monitor",
+            "watch",
+            "mutate"
+          ]
+        },
+        {
           "canonical_name": "agena.shell.write",
           "conditional": null,
-          "definition_identity": "4250696d03c22bc78cf3bd3a283f97ef5aa0a78f816d90241b3c470d3fa6d90d",
+          "definition_identity": "cf7c0f44510b567b2533a4270621ac25783f7b06d0cfe3831095b5caf8fba87e",
           "gateway": false,
-          "input_schema_sha256": "2948fb5e5185e166dc0723854cd2bcb1573866ac67508bae9d9688592a1b7a13",
+          "input_schema_sha256": "002d04b5117f1a2d3682b2d2e2db80bbdbb2e080101b24a8d4e3142a72dd065a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
             "execute",
-            "shell"
+            "shell",
+            "terminal",
+            "interactive",
+            "tty",
+            "pty"
           ]
         }
       ],

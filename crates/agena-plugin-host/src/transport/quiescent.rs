@@ -216,26 +216,6 @@ impl PluginTransport for QuiescentTransport {
         let stream_id_for_task = stream_id.clone();
         tokio::spawn(async move {
             let _activity = activity;
-            let forward = async move {
-                let mut forward_chunks = true;
-                while let Some(chunk) = inner.chunks.recv().await {
-                    // A dropped consumer still drains until the transport
-                    // reports completion. Shutdown removes client backpressure.
-                    if !forward_chunks || closing.is_cancelled() {
-                        continue;
-                    }
-                    tokio::select! {
-                        biased;
-                        _ = closing.cancelled() => {}
-                        result = chunk_tx.send(chunk) => {
-                            if result.is_err() {
-                                forward_chunks = false;
-                            }
-                        }
-                    }
-                }
-            };
-            tokio::pin!(forward);
             let terminal = |result: Result<_, tokio::sync::oneshot::error::RecvError>| {
                 result.unwrap_or_else(|error| {
                     Err(PluginError::internal(format!(
@@ -243,17 +223,37 @@ impl PluginTransport for QuiescentTransport {
                     )))
                 })
             };
-            let result = tokio::select! {
-                biased;
-                result = &mut inner.end => {
-                    let result = terminal(result);
-                    // A terminal failure (including handoff cancellation)
-                    // must reach the caller even if its chunk receiver is full.
-                    // Successful completion still delivers all queued chunks.
-                    if result.is_ok() { forward.await; }
-                    result
+            let mut chunks_open = true;
+            let mut forward_chunks = true;
+            let result = 'stream: loop {
+                tokio::select! {
+                    biased;
+                    // The terminal payload is authoritative on both success
+                    // and failure. Never wait for chunk sender destruction or
+                    // client backpressure after the transport has finished.
+                    result = &mut inner.end => break terminal(result),
+                    chunk = inner.chunks.recv(), if chunks_open => {
+                        let Some(chunk) = chunk else {
+                            chunks_open = false;
+                            continue;
+                        };
+                        // Retain the activity until the actual terminal result,
+                        // even when the caller has dropped its chunk receiver.
+                        if !forward_chunks || closing.is_cancelled() {
+                            continue;
+                        }
+                        tokio::select! {
+                            biased;
+                            result = &mut inner.end => break 'stream terminal(result),
+                            _ = closing.cancelled() => {}
+                            result = chunk_tx.send(chunk) => {
+                                if result.is_err() {
+                                    forward_chunks = false;
+                                }
+                            }
+                        }
+                    }
                 }
-                () = &mut forward => terminal(inner.end.await),
             };
             if end_tx.send(result).is_err() {
                 tracing::debug!(

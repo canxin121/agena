@@ -412,8 +412,30 @@ async fn empty_plugin_title_uses_the_initial_action_before_appending_result() {
     summary = "Definition-only shell adapter regression fixture."
 )]
 impl ExecutorBackedShellAdapter {
-    #[tool(name = "run", summary = "Run a shell command.", tags(shell, mutate))]
-    async fn run(&self, _input: &crate::part::ShellCommandInput) -> String {
+    #[tool(
+        name = "exec",
+        summary = "Execute a shell command.",
+        tags(shell, mutate)
+    )]
+    async fn exec(&self, _input: &crate::part::ShellLaunchInput) -> String {
+        "plugin adapter must not execute".to_owned()
+    }
+
+    #[tool(
+        name = "spawn",
+        summary = "Spawn a background job.",
+        tags(shell, mutate)
+    )]
+    async fn spawn(&self, _input: &crate::part::ShellLaunchInput) -> String {
+        "plugin adapter must not execute".to_owned()
+    }
+
+    #[tool(
+        name = "open",
+        summary = "Open an interactive terminal.",
+        tags(shell, mutate)
+    )]
+    async fn open(&self, _input: &crate::part::ShellOpenInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
 
@@ -503,7 +525,7 @@ async fn btw_capability_is_read_only_before_hooks_and_cannot_be_approved_away() 
         .collect::<Vec<_>>();
     assert!(names.iter().any(|name| name == "agena.fs.read"));
     assert!(!names.iter().any(|name| name.starts_with("agena.shell.")));
-    let write = ToolInvocation::new("shell.run", StructuredObject::default());
+    let write = ToolInvocation::new("shell.exec", StructuredObject::default());
     assert!(matches!(
         btw.prepare_invocation(&write, 2, 1).await,
         Err(ToolError::CapabilityUnavailable(_))
@@ -517,7 +539,7 @@ async fn btw_capability_is_read_only_before_hooks_and_cannot_be_approved_away() 
         normal
             .available_execution_tools()
             .iter()
-            .any(|tool| tool.canonical_name() == "agena.shell.run"),
+            .any(|tool| tool.canonical_name() == "agena.shell.exec"),
         "scoping BTW must not restrict the parent"
     );
 }
@@ -658,12 +680,12 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
         tool_api_call: Some(agena_domain::ToolApiCall {
             function: agena_domain::ToolApiFunction::Call,
             arguments: StructuredObject::try_from(serde_json::json!({
-                "tool": "shell.run",
+                "tool": "shell.exec",
                 "input": serde_json::Value::from(shell_input.clone())
             }))
             .expect("valid tools_call envelope"),
         }),
-        name: "shell.run".to_owned(),
+        name: "shell.exec".to_owned(),
         plugin_name: None,
         input: shell_input,
     };

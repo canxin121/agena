@@ -83,6 +83,15 @@ impl ToolExecutor {
             .map(|entry| entry.definition.runtime.streaming)
     }
 
+    /// Declared plugin streams need the streaming entry point even when the
+    /// model returns them in a batch with buffered tools.
+    pub fn invocation_requires_streaming(&self, invocation: &ToolInvocation) -> bool {
+        matches!(
+            self.invocation_streaming_mode(invocation),
+            Some(SdkToolStreamingMode::Streaming)
+        )
+    }
+
     pub(crate) fn authorize_invocation(
         &self,
         invocation: &ToolInvocation,
@@ -117,7 +126,11 @@ impl ToolExecutor {
         }
         let command = shell_command_from_invocation(invocation);
         let resolution = self.plugin_resolution_for_invocation(invocation);
+        let canonical_name = resolution.as_ref().map(|tool| tool.canonical_name());
         let mut tool_name_aliases = vec![tool_name.as_str()];
+        if let Some(name) = canonical_name.as_deref() {
+            tool_name_aliases.push(name);
+        }
         if let Some(resolution) = resolution.as_ref()
             && resolution.tool_name() != tool_name
             && self.plugin_tool_name_is_unambiguous(resolution.tool_name())
@@ -235,11 +248,19 @@ impl ToolExecutor {
             ToolPayloadInput::Shell(input) => {
                 self.collect_shell_effect_checks(checks, &input)?;
             }
-            ToolPayloadInput::Monitor(crate::part::MonitorToolInput::Start {
-                ws: Some(ws),
-                ..
-            }) => {
-                self.push_network_check(checks, ws.url.as_str())?;
+            ToolPayloadInput::Monitor(input) => {
+                if let Some(command) = input.shell_command() {
+                    self.collect_shell_effect_checks(
+                        checks,
+                        &crate::part::ShellToolInput::Exec {
+                            shell: agena_domain::ProcessShell::Bash,
+                            command: Box::new(command),
+                        },
+                    )?;
+                }
+                if let crate::part::MonitorToolInput::Start { ws: Some(ws), .. } = input {
+                    self.push_network_check(checks, ws.url.as_str())?;
+                }
             }
             _ => {}
         }
@@ -261,28 +282,28 @@ impl ToolExecutor {
         checks: &mut Vec<ToolPermissionCheck>,
         input: &crate::part::ShellToolInput,
     ) -> Result<(), ToolError> {
-        let (command, effects, network, workdir) = match input {
-            crate::part::ShellToolInput::Run { command, .. } => (
-                command.command.as_str(),
-                command.filesystem_effects(),
-                command.network.as_slice(),
-                command.workdir.as_deref(),
-            ),
-            crate::part::ShellToolInput::Write { input } => (
-                input.chars.as_str(),
-                agena_domain::FilesystemEffects {
-                    read: input.reads.clone(),
-                    write: input.writes.clone(),
-                },
-                input.network.as_slice(),
-                None,
-            ),
-            crate::part::ShellToolInput::List {}
-            | crate::part::ShellToolInput::Logs { .. }
-            | crate::part::ShellToolInput::Stop { .. }
-            | crate::part::ShellToolInput::Resize { .. }
-            | crate::part::ShellToolInput::Signal { .. } => return Ok(()),
-        };
+        let (command, effects, network, workdir) =
+            if let Some((_, command)) = input.launch_command() {
+                (
+                    command.command.as_str(),
+                    command.filesystem_effects(),
+                    command.network.as_slice(),
+                    command.workdir.as_deref(),
+                )
+            } else {
+                match input {
+                    crate::part::ShellToolInput::Write { input } => (
+                        input.chars.as_str(),
+                        agena_domain::FilesystemEffects {
+                            read: input.reads.clone(),
+                            write: input.writes.clone(),
+                        },
+                        input.network.as_slice(),
+                        None,
+                    ),
+                    _ => return Ok(()),
+                }
+            };
         if !command.is_empty() {
             crate::tool::shell_tools::validate_declared_filesystem_effects(
                 "shell", command, &effects,

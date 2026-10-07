@@ -20,9 +20,9 @@ use strum::{Display, EnumString};
 /// Kind of background activity. Durable tool work keeps the same kind from
 /// its background-operation aggregate all the way through this UI contract.
 pub enum BackgroundActivityKind {
-    /// A long-lived shell process spawned by `shell.run`.
+    /// A long-lived shell process started by `shell.spawn` or `shell.open`.
     Shell,
-    /// A continuously emitting monitor spawned by `monitor.start`.
+    /// An output event from shell.watch or a WebSocket subscription.
     Monitor,
     /// A delegated subagent task spawned by `tasks.create` / `tasks.run`.
     Task,

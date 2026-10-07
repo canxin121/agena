@@ -36,6 +36,7 @@ pub(super) fn execution_control_to_app_error(err: ExecutionControlError) -> AppE
     match err {
         ExecutionControlError::NoActiveExecution(id) => AppError::NoActiveExecution(id),
         ExecutionControlError::AlreadyActive(id) => AppError::ExecutionAlreadyActive(id),
+        ExecutionControlError::Cancelled => AppError::Cancelled,
         ExecutionControlError::SteerClosed => {
             AppError::Internal("steer channel closed for session".to_string())
         }
@@ -150,7 +151,7 @@ pub(super) fn background_operation_from_execution(
             id: task_id,
         });
     }
-    // Monitored shell process: the payload carries `action: "run"`,
+    // Background shell job: the payload carries `action: "spawn"`,
     // `background: true`, and the process id.
     let payload_tool_name = payload_tool_name_for_invocation(invocation);
     if let Some(crate::tool::ToolPayloadOutput::Shell {
@@ -159,7 +160,7 @@ pub(super) fn background_operation_from_execution(
         process_id,
         ..
     }) = crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
-        && action == "run"
+        && matches!(action.as_str(), "spawn" | "watch" | "run")
         && background
         && let Some(process_id) = process_id
     {
@@ -196,12 +197,20 @@ pub(super) fn requested_background_kind(
     use agena_storage::store::BackgroundOperationKind;
 
     match crate::tool::ToolPayloadInput::from_invocation(invocation)? {
-        crate::tool::ToolPayloadInput::Shell(ShellToolInput::Run {
-            run_in_background,
-            monitor,
-            command,
-            ..
-        }) if run_in_background || monitor.is_some() || command.tty => {
+        crate::tool::ToolPayloadInput::Shell(ShellToolInput::Spawn { .. })
+            if matches!(
+                agena_domain::ToolPermissionConfig::canonical_shell_tool_name(&invocation.name),
+                Some("agena.shell.spawn" | "agena.shell.watch")
+            ) =>
+        {
+            Some(BackgroundOperationKind::Shell)
+        }
+        crate::tool::ToolPayloadInput::Shell(ShellToolInput::Watch { input })
+            if input.launch_command().is_some()
+                && agena_domain::ToolPermissionConfig::canonical_shell_tool_name(
+                    &invocation.name,
+                ) == Some("agena.shell.watch") =>
+        {
             Some(BackgroundOperationKind::Shell)
         }
         crate::tool::ToolPayloadInput::Monitor(MonitorToolInput::Start { .. }) => {
@@ -358,7 +367,14 @@ pub(super) async fn persisted_rules_for_reply(
 }
 
 pub(super) fn permission_action_key(action: &PermissionAction) -> Result<String, AppError> {
-    serde_json::to_string(action).map_err(AppError::from)
+    let mut action = action.clone();
+    if let PermissionAction::Tool { tool_name, .. } = &mut action
+        && let Some(canonical) =
+            agena_domain::ToolPermissionConfig::canonical_command_policy_tool_name(tool_name)
+    {
+        *tool_name = canonical.to_owned();
+    }
+    serde_json::to_string(&action).map_err(AppError::from)
 }
 
 pub(super) fn tool_error_to_app_error(err: ToolError) -> AppError {

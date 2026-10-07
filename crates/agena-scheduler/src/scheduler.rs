@@ -1,6 +1,12 @@
 //! The `Scheduler` runtime loop.
 
+mod changes;
 mod owned;
+mod worker;
+
+use changes::SchedulerChanges;
+pub use changes::{SchedulerChange, SchedulerChangeObserver};
+use worker::SchedulerWorker;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +26,7 @@ pub struct Scheduler {
     store: Arc<dyn JobStore>,
     sink: Arc<dyn JobSink>,
     tick: Duration,
+    changes: Arc<SchedulerChanges>,
     handle: parking_lot::Mutex<Option<RunningScheduler>>,
 }
 
@@ -28,20 +35,15 @@ struct RunningScheduler {
     handle: JoinHandle<()>,
 }
 
-// Own only the worker's dependencies. Holding an Arc<Scheduler> across a
-// delivery would prevent its Drop from ever cancelling a wedged sink.
-struct SchedulerWorker {
-    store: Arc<dyn JobStore>,
-    sink: Arc<dyn JobSink>,
-    tick: Duration,
-}
-
 impl Scheduler {
+    /// `tick` bounds low-frequency safety reconciliation. Ordinary changes
+    /// wake immediately, and job deadlines are independent of this interval.
     pub fn new(store: Arc<dyn JobStore>, sink: Arc<dyn JobSink>, tick: Duration) -> Arc<Self> {
         Arc::new(Self {
             store,
             sink,
             tick,
+            changes: Arc::new(SchedulerChanges::default()),
             handle: parking_lot::Mutex::new(None),
         })
     }
@@ -59,6 +61,7 @@ impl Scheduler {
             store: Arc::clone(&self.store),
             sink: Arc::clone(&self.sink),
             tick: self.tick,
+            changes: Arc::clone(&self.changes),
         };
         let stop = CancellationToken::new();
         *g = Some(RunningScheduler {
@@ -67,8 +70,8 @@ impl Scheduler {
         });
     }
 
-    /// Request a graceful stop. Already claimed deliveries are finalized
-    /// before the task exits; no later poll is admitted. `start` can launch
+    /// Request a graceful stop. Admitted deliveries are finalized before the
+    /// task exits; no later delivery is admitted. `start` can launch
     /// another loop after this task has exited.
     pub fn stop(&self) {
         if let Some(running) = self.handle.lock().as_ref() {
@@ -76,12 +79,29 @@ impl Scheduler {
         }
     }
 
+    /// Install the runtime projection before starting the scheduler.
+    pub fn set_change_observer(&self, observer: SchedulerChangeObserver) {
+        self.changes.set_observer(observer);
+    }
+
     pub async fn add(&self, job: ScheduledJob) -> SchedulerResult<()> {
-        self.store.put(job).await
+        let _commit = self.changes.commit.lock().await;
+        self.store.put(job.clone()).await?;
+        self.changes.publish(SchedulerChange::Upsert(job), true);
+        Ok(())
     }
 
     pub async fn remove(&self, id: uuid::Uuid) -> SchedulerResult<bool> {
-        self.store.remove(id).await
+        let _commit = self.changes.commit.lock().await;
+        let Some(expected) = self.store.get(id).await? else {
+            return Ok(false);
+        };
+        if !self.store.remove_checked(&expected).await? {
+            return Err(SchedulerError::Conflict(id));
+        }
+        self.changes
+            .publish(SchedulerChange::Removed(expected.job), true);
+        Ok(true)
     }
 
     pub async fn list(&self) -> SchedulerResult<Vec<ScheduledJob>> {
@@ -139,9 +159,12 @@ impl Scheduler {
         expected: &JobSnapshot,
         job: ScheduledJob,
     ) -> SchedulerResult<ScheduledJob> {
+        let _commit = self.changes.commit.lock().await;
         if !self.store.replace(expected, job.clone()).await? {
             return Err(SchedulerError::Conflict(job.id));
         }
+        self.changes
+            .publish(SchedulerChange::Upsert(job.clone()), true);
         Ok(job)
     }
 
@@ -199,172 +222,6 @@ impl Scheduler {
             return self.persist_edit(&expected, job).await.map(Some);
         }
         Ok(Some(job))
-    }
-}
-
-struct ClaimedDelivery {
-    job: ScheduledJob,
-    delivery: JobDeliveryAttempt,
-    claim_key: String,
-}
-
-impl SchedulerWorker {
-    async fn run_loop(self, stop: CancellationToken) {
-        while !stop.is_cancelled() {
-            match self.store.list_due(Utc::now().timestamp_millis()).await {
-                Ok(candidates) => {
-                    for candidate in candidates {
-                        if stop.is_cancelled() {
-                            break;
-                        }
-                        let id = candidate.job.id;
-                        // Claim just before delivery. Later candidates must not
-                        // lose their lease while queued behind a slow sink.
-                        let result = match self.claim_candidate(candidate, Utc::now()).await {
-                            Ok(Some(claim)) => {
-                                self.deliver_with_lease(claim, CLAIM_HEARTBEAT).await
-                            }
-                            Ok(None) => Ok(()),
-                            Err(error) => Err(error),
-                        };
-                        if let Err(error) = result {
-                            // Preserve the durable row. An abandoned claim is
-                            // recoverable; deleting it here silently loses work.
-                            tracing::error!(target: "agena_scheduler", job_id = %id, %error, "scheduled delivery failed; durable state retained");
-                        }
-                    }
-                }
-                Err(error) => {
-                    tracing::error!(target: "agena_scheduler", %error, "failed to poll scheduled jobs")
-                }
-            }
-            tokio::select! {
-                _ = tokio::time::sleep(self.tick) => {}
-                _ = stop.cancelled() => break,
-            }
-        }
-    }
-
-    async fn claim_candidate(
-        &self,
-        expected: JobSnapshot,
-        now: chrono::DateTime<Utc>,
-    ) -> SchedulerResult<Option<ClaimedDelivery>> {
-        let mut job = expected.job.clone();
-        // Expired ownership is selected by the store. A pending delivery
-        // deliberately fails ordinary due(), but is recoverable with its key.
-        if expected.claim_key().is_none() && !job.due(now) {
-            return Ok(None);
-        }
-        match job.claim_due_delivery(now)? {
-            crate::job::ClaimDueDelivery::NotDue => Ok(None),
-            crate::job::ClaimDueDelivery::StateUpdated => {
-                self.store.replace(&expected, job).await?;
-                Ok(None)
-            }
-            crate::job::ClaimDueDelivery::Deliver(delivery) => {
-                let claim_key = uuid::Uuid::new_v4().to_string();
-                if self
-                    .store
-                    .claim(
-                        &expected,
-                        job.clone(),
-                        claim_key.clone(),
-                        now.timestamp_millis(),
-                    )
-                    .await?
-                {
-                    Ok(Some(ClaimedDelivery {
-                        job,
-                        delivery,
-                        claim_key,
-                    }))
-                } else {
-                    Ok(None) // A concurrent edit or claimant won the comparison.
-                }
-            }
-        }
-    }
-
-    async fn deliver_with_lease(
-        &self,
-        claim: ClaimedDelivery,
-        heartbeat: Duration,
-    ) -> SchedulerResult<()> {
-        let id = claim.job.id;
-        if !self
-            .store
-            .renew(id, &claim.claim_key, Utc::now().timestamp_millis())
-            .await?
-        {
-            return Err(SchedulerError::Conflict(id));
-        }
-        let work = async {
-            let result = self.sink.deliver(&claim.job, &claim.delivery).await;
-            self.persist_completed_delivery(&claim, result, Utc::now())
-                .await
-        };
-        let renewals = async {
-            loop {
-                tokio::time::sleep(heartbeat).await;
-                let renewed = tokio::time::timeout(
-                    CLAIM_HEARTBEAT,
-                    self.store
-                        .renew(id, &claim.claim_key, Utc::now().timestamp_millis()),
-                )
-                .await;
-                match renewed {
-                    Ok(Ok(true)) => {}
-                    Ok(Err(error)) => return Err(error),
-                    Ok(Ok(false)) | Err(_) => return Err(SchedulerError::Conflict(id)),
-                }
-            }
-        };
-        // Poll both futures while renewal waits for a connection: work may
-        // own the very transaction it needs. A finished commit takes priority
-        // over a renewal that now sees the deliberately released claim.
-        // A lost lease drops work, including any in-flight sink future.
-        tokio::select! {
-            biased;
-            result = work => result,
-            result = renewals => result,
-        }
-    }
-
-    async fn persist_completed_delivery(
-        &self,
-        claim: &ClaimedDelivery,
-        result: JobDeliveryResult,
-        finished_at: chrono::DateTime<Utc>,
-    ) -> SchedulerResult<()> {
-        let id = claim.job.id;
-        // Merge against current configuration, not the pre-delivery copy.
-        // Bounded retries tolerate ordinary pause/update races without making
-        // a continuously edited job monopolize the scheduler.
-        for _ in 0..8 {
-            let Some(expected) = self.store.get(id).await? else {
-                return Ok(());
-            };
-            if expected.claim_key() != Some(claim.claim_key.as_str()) {
-                return Err(SchedulerError::Conflict(id));
-            }
-            let mut job = expected.job.clone();
-            job.finish_delivery(finished_at, &claim.delivery, result.clone())?;
-            if self
-                .store
-                .finish(
-                    &expected,
-                    &claim.claim_key,
-                    job,
-                    Utc::now().timestamp_millis(),
-                )
-                .await?
-            {
-                return Ok(());
-            }
-            tokio::task::yield_now().await;
-        }
-        Err(SchedulerError::Conflict(id))
     }
 }
 

@@ -166,11 +166,15 @@ async fn resume_and_update_during_delivery_preserve_the_attempt_and_new_configur
 }
 
 #[tokio::test]
-async fn slow_delivery_does_not_claim_the_rest_of_the_due_batch() {
+async fn slow_delivery_does_not_claim_other_jobs_for_the_same_session() {
     let sink = Arc::new(ControlledSink::default());
     let scheduler = build_in_memory(sink.clone(), Duration::from_secs(60));
-    scheduler.add(due_job("first")).await.unwrap();
-    scheduler.add(due_job("second")).await.unwrap();
+    let mut first = due_job("first");
+    let mut second = due_job("second");
+    first.owner_session_id = Some(1);
+    second.owner_session_id = Some(1);
+    scheduler.add(first).await.unwrap();
+    scheduler.add(second).await.unwrap();
     scheduler.start();
     sink.entered.notified().await;
     let jobs = scheduler.list().await.unwrap();
@@ -214,6 +218,7 @@ async fn worker_renews_a_blocked_sink_and_drops_it_after_ownership_is_lost() {
         store: store.clone(),
         sink: sink.clone(),
         tick: Duration::from_secs(60),
+        changes: Arc::new(super::SchedulerChanges::default()),
     };
     let job = due_job("renew until deleted");
     let id = job.id;
@@ -282,6 +287,7 @@ async fn lease_renewal_does_not_stall_a_finalization_waiting_for_sqlite() {
         store: store.clone(),
         sink: sink.clone(),
         tick: Duration::from_secs(60),
+        changes: Arc::new(super::SchedulerChanges::default()),
     };
     let job = due_job("finish through temporary contention");
     let id = job.id;
@@ -327,6 +333,7 @@ async fn a_prior_cron_occurrence_cannot_finalize_a_later_claim() {
         store: store.clone(),
         sink: Arc::new(NoopSink),
         tick: Duration::from_secs(60),
+        changes: Arc::new(super::SchedulerChanges::default()),
     };
     let mut job = ScheduledJob::new_cron("0 * * * * * *", "recurring", 1).unwrap();
     job.next_fire_at = Some(Utc::now() - chrono::Duration::seconds(2));

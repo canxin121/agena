@@ -12,10 +12,11 @@ impl Scheduler {
         session: Option<i64>,
     ) -> SchedulerResult<Vec<ScheduledJob>> {
         Ok(self
-            .list()
+            .store
+            .list_owned(workspace, session)
             .await?
             .into_iter()
-            .filter(|job| Self::owned(job, workspace, session))
+            .map(|snapshot| snapshot.job)
             .collect())
     }
     pub async fn history_owned(
@@ -43,9 +44,12 @@ impl Scheduler {
         else {
             return Ok(false);
         };
+        let _commit = self.changes.commit.lock().await;
         if !self.store.remove_checked(&expected).await? {
             return Err(SchedulerError::Conflict(id));
         }
+        self.changes
+            .publish(SchedulerChange::Removed(expected.job), true);
         Ok(true)
     }
     pub async fn pause_owned(

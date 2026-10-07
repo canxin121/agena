@@ -1,14 +1,15 @@
 //! Runtime-owned scheduler composition.
 //!
 //! A concrete session adapter supplies the delivery sink; Runtime owns the
-//! in-process store, polling policy, and scheduler task startup.
+//! in-process store and reconciliation policy. Publication installs the
+//! change observer before starting delivery admission.
 
 use std::sync::Arc;
 
 use agena_scheduler::{JobSink, Scheduler};
 use sea_orm::DatabaseConnection;
 
-/// Compose and start the process scheduler with the Runtime polling policy.
+/// Prepare the process scheduler with the Runtime reconciliation policy.
 /// The sink remains generic so this module does not depend on a concrete
 /// session manager or tool executor.
 pub fn compose_scheduler<S>(
@@ -18,11 +19,9 @@ pub fn compose_scheduler<S>(
 where
     S: JobSink + 'static,
 {
-    let scheduler = agena_scheduler::scheduler::build_persistent(
+    agena_scheduler::scheduler::build_persistent(
         scheduler_database,
         sink,
-        crate::RuntimeSchedulingPolicy::default().scheduler_poll_interval,
-    );
-    scheduler.start();
-    scheduler
+        crate::RuntimeSchedulingPolicy::default().scheduler_reconciliation_interval,
+    )
 }

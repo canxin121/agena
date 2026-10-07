@@ -1,12 +1,15 @@
-import type { Ref } from 'vue'
+import { computed, type Ref } from 'vue'
 import { conditionalJsonObserved } from '@/lib/conditionalJson'
 import { useVisibleResource } from '@/pages/chat/useVisibleResource'
 import { mergeActivityLog, type ActivityLog, type SessionActivity } from '@/types/activity'
 
 /** The dock and expanded launch receipt share the activity's log clock. */
 export function useActivityLogs(key: Ref<string>, activity: () => SessionActivity | null) {
+  // Cron describes a scheduled prompt, not an output-producing process. Its
+  // state changes must not trigger unsupported log reads and error retries.
+  const readableKey = computed(() => (activity()?.kind === 'cron' ? '' : key.value))
   const logs = useVisibleResource<ActivityLog>({
-    key,
+    key: readableKey,
     resource: (key) => `activity:${key.slice(key.indexOf('/') + 1)}:logs`,
     minInterval: 1000,
     // Quiet active processes need no polling; real log clocks wake the read.

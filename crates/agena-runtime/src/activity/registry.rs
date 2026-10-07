@@ -221,6 +221,20 @@ impl ActivityRegistry {
         removed
     }
 
+    /// A durable source can delete a row that was only projected by a list
+    /// read (for example after restart), and never entered this live cache.
+    /// Its committed snapshot still supplies the exact owner for the event.
+    pub(crate) fn dismiss_projected(&self, activity: BackgroundActivity) {
+        let mut store = self.store.lock();
+        let activity = store.remove(&activity.id).unwrap_or(activity);
+        self.publish(
+            &mut store,
+            activity,
+            BackgroundActivityEventReason::Dismissed,
+            false,
+        );
+    }
+
     /// Remove every finished record; returns the ids that were removed.
     pub(crate) fn clear_finished(&self) -> Vec<String> {
         let mut store = self.store.lock();

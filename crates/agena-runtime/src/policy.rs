@@ -7,7 +7,9 @@ pub struct RuntimeSchedulingPolicy {
     pub reload_poll_interval: Duration,
     pub session_gc_enabled: bool,
     pub session_gc_interval: Duration,
-    pub scheduler_poll_interval: Duration,
+    /// Safety reconciliation for external writers/clock changes. Ordinary
+    /// scheduling follows exact deadlines and committed-change notifications.
+    pub scheduler_reconciliation_interval: Duration,
 }
 
 impl Default for RuntimeSchedulingPolicy {
@@ -17,7 +19,7 @@ impl Default for RuntimeSchedulingPolicy {
             reload_poll_interval: Duration::from_secs(2),
             session_gc_enabled: true,
             session_gc_interval: Duration::from_secs(30),
-            scheduler_poll_interval: Duration::from_secs(10),
+            scheduler_reconciliation_interval: Duration::from_secs(60),
         }
     }
 }

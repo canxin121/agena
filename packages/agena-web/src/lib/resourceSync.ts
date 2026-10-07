@@ -8,6 +8,8 @@ import type { SseEvent } from './sse'
 // All visible consumers share one small revision heartbeat. Actual bodies are
 // fetched only after a token changes; SSE wakes this check promptly.
 const listeners = new Map<string, Set<(event?: SseEvent) => void>>()
+type InvalidationReason = 'reconcile' | 'mutation'
+const invalidationListeners = new Map<string, Set<(reason: InvalidationReason) => void>>()
 const versions = new Map<string, string>()
 const dirty = new Set<string>()
 const checkedAt = new Map<string, number>()
@@ -85,6 +87,10 @@ function notify(key: string, event?: SseEvent) {
   for (const callback of listeners.get(key) ?? []) callback(event)
 }
 
+function notifyInvalidation(key: string, reason: InvalidationReason) {
+  for (const callback of invalidationListeners.get(key) ?? []) callback(reason)
+}
+
 export function noteResourceVersion(
   key: string,
   token: string,
@@ -137,6 +143,7 @@ export function noteResourceVersion(
       checkedAt.delete(affectedKey)
       dirty.add(affectedKey)
       invalidation.set(affectedKey, (invalidation.get(affectedKey) ?? 0) + 1)
+      notifyInvalidation(affectedKey, 'reconcile')
       if (affectedKey !== key) notify(affectedKey)
     }
   }
@@ -246,7 +253,11 @@ const queue = createRevalidator(
   },
 )
 
-export function subscribeResource(key: string, callback: (event?: SseEvent) => void) {
+export function subscribeResource(
+  key: string,
+  callback: (event?: SseEvent) => void,
+  options?: { onInvalidate?: (reason: InvalidationReason) => void },
+) {
   ensureScope()
   let callbacks = listeners.get(key)
   if (!callbacks) {
@@ -254,10 +265,23 @@ export function subscribeResource(key: string, callback: (event?: SseEvent) => v
     listeners.set(key, callbacks)
   }
   callbacks.add(callback)
+  if (options?.onInvalidate) {
+    let invalidations = invalidationListeners.get(key)
+    if (!invalidations) {
+      invalidations = new Set()
+      invalidationListeners.set(key, invalidations)
+    }
+    invalidations.add(options.onInvalidate)
+  }
   // Give the initial body read a chance to seed its token before the batch.
   queue.invalidate(500)
   return () => {
     callbacks.delete(callback)
+    if (options?.onInvalidate) {
+      const invalidations = invalidationListeners.get(key)
+      invalidations?.delete(options.onInvalidate)
+      if (!invalidations?.size) invalidationListeners.delete(key)
+    }
     if (!callbacks.size) {
       listeners.delete(key)
       prune()
@@ -266,13 +290,17 @@ export function subscribeResource(key: string, callback: (event?: SseEvent) => v
   }
 }
 
-export function invalidateResources(keys: Iterable<string> = listeners.keys()) {
+export function invalidateResources(
+  keys: Iterable<string> = listeners.keys(),
+  reason: InvalidationReason = 'reconcile',
+) {
   ensureScope()
   let changed = false
   for (const key of keys)
     if (listeners.has(key) || versions.has(key)) {
       dirty.add(key)
       invalidation.set(key, (invalidation.get(key) ?? 0) + 1)
+      notifyInvalidation(key, reason)
       changed = true
     }
   if (changed) queue.invalidate(500)

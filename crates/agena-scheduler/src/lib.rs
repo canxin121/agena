@@ -6,8 +6,9 @@
 //! for tests and embedded callers (and as a fallback when no scheduler
 //! database is configured).
 //!
-//! At runtime, [`Scheduler`] spawns a tokio task that wakes up every
-//! `tick_interval` and fires any job whose `next_fire_at` has passed.
+//! At runtime, [`Scheduler`] waits for the next fire, retry, or claim-expiry
+//! deadline. Committed changes interrupt that wait immediately. Reads and
+//! delivery concurrency are bounded; one session's deliveries stay ordered.
 //! When a job fires, the registered [`JobSink`] receives the payload —
 //! callers wire that to their session manager so the prompt is enqueued
 //! into the target session.
@@ -31,5 +32,5 @@ pub use job::{
     JobRunStatus, JobSink, MisfirePolicy, RetryPolicy, ScheduledJob, ScheduledJobLaunchProvenance,
     SchedulerHistoryEntry,
 };
-pub use scheduler::Scheduler;
-pub use store::{InMemoryJobStore, JobSnapshot, JobStore, SqliteJobStore};
+pub use scheduler::{Scheduler, SchedulerChange, SchedulerChangeObserver};
+pub use store::{DueJobQuery, InMemoryJobStore, JobSnapshot, JobStore, SqliteJobStore};

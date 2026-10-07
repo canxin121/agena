@@ -216,8 +216,15 @@ pub(super) fn build_tool_executor(
         scheduler_database,
     } = inputs;
     let principal = build_execution_principal(crate::authorization::PermissionConfig::default());
-    let scheduler =
-        session_manager.map(|session_manager| build_scheduler(session_manager, scheduler_database));
+    let scheduler = session_manager.map(|session_manager| {
+        // A reload changes execution configuration, not the durable scheduler
+        // or its running leases. Reuse it, including the in-memory fallback.
+        session_manager
+            .tool_executor()
+            .scheduler()
+            .cloned()
+            .unwrap_or_else(|| build_scheduler(session_manager, scheduler_database))
+    });
     let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
         principal,

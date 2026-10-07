@@ -286,6 +286,7 @@ impl AgenaRuntime {
             runtime.spawn_background_tasks();
         }
         runtime.spawn_subtask_activity_bridge();
+        runtime.start_scheduler_activity_bridge();
         runtime.spawn_background_delivery_recovery();
         agena_runtime::install_plugin_host(initial_snapshot.plugin_manager());
         Ok(runtime)
@@ -365,6 +366,28 @@ impl AgenaRuntime {
         // Retain the handle for the runtime's lifetime; dropping it would
         // unsubscribe (15.5).
         *self.subtask_bridge.lock().expect("subtask bridge lock") = Some(subscription);
+    }
+
+    /// Publish just the changed cron descriptor. Install before admission so
+    /// startup recovery cannot finish without advancing the resource clocks.
+    fn start_scheduler_activity_bridge(&self) {
+        let Ok(scheduler) = activity_scheduler(self) else {
+            return;
+        };
+        let registry = self.activities.registry.clone();
+        scheduler.set_change_observer(Arc::new(move |change| {
+            let (job, removed) = match change {
+                agena_scheduler::SchedulerChange::Upsert(job) => (job, false),
+                agena_scheduler::SchedulerChange::Removed(job) => (job, true),
+            };
+            let activity = scheduled_job_activity(job.clone(), cron_source_part_id(job));
+            if removed {
+                registry.dismiss_projected(activity);
+            } else {
+                registry.upsert(activity);
+            }
+        }));
+        scheduler.start();
     }
 }
 
@@ -738,35 +761,56 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             // Resolve every registry-backed durable kind first, including
             // terminal operations, then add active aggregates that have no
             // process-local detail (for example after restart).
-            for live_activity in projected.values().cloned().collect::<Vec<_>>() {
-                if let Some(operation) =
-                    durable_operation_for_live_activity(session_store.as_ref(), &live_activity)
-                        .await?
-                {
+            let include_durable = filter.kinds.is_empty()
+                || filter.kinds.iter().any(|kind| {
+                    matches!(
+                        kind,
+                        agena_domain::BackgroundActivityKind::Shell
+                            | agena_domain::BackgroundActivityKind::Monitor
+                            | agena_domain::BackgroundActivityKind::Task
+                    )
+                });
+            if include_durable {
+                for live_activity in projected.values().cloned().collect::<Vec<_>>() {
+                    if let Some(operation) =
+                        durable_operation_for_live_activity(session_store.as_ref(), &live_activity)
+                            .await?
+                    {
+                        let activity = durable_operation_activity(&projected, operation);
+                        projected.insert(activity.id.clone(), activity);
+                    }
+                }
+                let operations = if let Some(session_id) = filter.session_id {
+                    session_store
+                        .active_background_operations_for_session(session_id, None, 4_096)
+                        .await
+                } else {
+                    session_store
+                        .active_background_operations(None, 4_096)
+                        .await
+                }
+                .map_err(|error| {
+                    agena_runtime::ActivityControlError::internal(format!(
+                        "load durable background operations: {error}"
+                    ))
+                })?;
+                for operation in operations {
                     let activity = durable_operation_activity(&projected, operation);
                     projected.insert(activity.id.clone(), activity);
                 }
             }
-            let operations = if let Some(session_id) = filter.session_id {
-                session_store
-                    .active_background_operations_for_session(session_id, None, 4_096)
-                    .await
-            } else {
-                session_store
-                    .active_background_operations(None, 4_096)
-                    .await
-            }
-            .map_err(|error| {
-                agena_runtime::ActivityControlError::internal(format!(
-                    "load durable background operations: {error}"
-                ))
-            })?;
-            for operation in operations {
-                let activity = durable_operation_activity(&projected, operation);
-                projected.insert(activity.id.clone(), activity);
-            }
 
-            if let Some(scheduler) = manager.tool_executor().scheduler().cloned() {
+            if (filter.kinds.is_empty()
+                || filter
+                    .kinds
+                    .contains(&agena_domain::BackgroundActivityKind::Cron))
+                && let Some(scheduler) = manager.tool_executor().scheduler().cloned()
+            {
+                // Persistent schedules are authoritative even after another
+                // process removed a row that remains in this live cache.
+                projected.retain(|_, activity| {
+                    activity.kind != agena_domain::BackgroundActivityKind::Cron
+                });
                 for job in scheduler
                     .list_filtered(filter.session_id, filter.active_only)
                     .await
@@ -809,6 +853,19 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         let live = self.activities.registry.get(activity_id);
         let snapshot = self.current_snapshot();
         if let Some(manager) = snapshot.session_manager() {
+            if let Some(job_id) = activity_id
+                .strip_prefix("cron_")
+                .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                && let Some(scheduler) = manager.tool_executor().scheduler()
+            {
+                let job = scheduler
+                    .get(job_id)
+                    .await
+                    .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
+                    .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
+                let source = cron_source_part_id(&job);
+                return Ok(scheduled_job_activity(job, source));
+            }
             let store = manager.session_store();
             if let Some(activity) = &live {
                 if let Some(operation) =
@@ -844,17 +901,6 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     {
                         return Ok(durable_operation_activity(&BTreeMap::new(), operation));
                     }
-                }
-                if let Some(job_id) = activity_id
-                    .strip_prefix("cron_")
-                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
-                    && let Some(scheduler) = manager.tool_executor().scheduler()
-                    && let Some(job) = scheduler.get(job_id).await.map_err(|error| {
-                        agena_runtime::ActivityControlError::internal_error(&error)
-                    })?
-                {
-                    let source = cron_source_part_id(&job);
-                    return Ok(scheduled_job_activity(job, source));
                 }
             }
         }
@@ -1033,7 +1079,6 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
         let source_part_id = cron_source_part_id(&job);
         let activity = scheduled_job_activity(job, source_part_id);
-        self.activities.registry.upsert(activity.clone());
         Ok(activity)
     }
 
@@ -1050,7 +1095,6 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
         let source_part_id = cron_source_part_id(&job);
         let activity = scheduled_job_activity(job, source_part_id);
-        self.activities.registry.upsert(activity.clone());
         Ok(activity)
     }
 
@@ -1074,7 +1118,6 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         activity.cancellable = false;
         activity.dismissible = true;
         activity.message = Some("Deleted".to_owned());
-        self.activities.registry.upsert(activity.clone());
         Ok(activity)
     }
 
@@ -1089,7 +1132,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
     }
 
     async fn clear_finished(&self) -> Result<usize, agena_runtime::ActivityControlError> {
-        let mut removed = self.activities.registry.clear_finished().len();
+        let mut removed = 0;
         if let Ok(scheduler) = activity_scheduler(self) {
             for job in scheduler
                 .list()
@@ -1105,6 +1148,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                 }
             }
         }
+        removed += self.activities.registry.clear_finished().len();
         Ok(removed)
     }
 }
@@ -2452,6 +2496,9 @@ impl AgenaRuntime {
             service.shutdown();
         }
         if let Some(session_manager) = self.session_manager() {
+            if let Some(scheduler) = session_manager.tool_executor().scheduler() {
+                scheduler.stop();
+            }
             match tokio::runtime::Handle::try_current() {
                 Ok(_handle) => {
                     let broadcast = session_manager
@@ -2530,6 +2577,7 @@ impl AgenaRuntime {
             next.host_client.bind_runtime(self);
             next.publish_session_configuration();
             let _ = self.inner.control_state.swap_snapshot(next.clone());
+            self.start_scheduler_activity_bridge();
             let host_handle = next.plugin_manager().host_handle();
             super::host_client::install_plugin_host_event_publisher(host_handle, self);
             agena_runtime::install_plugin_host(next.plugin_manager());

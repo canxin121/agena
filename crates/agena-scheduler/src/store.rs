@@ -10,6 +10,9 @@ use uuid::Uuid;
 use crate::error::{SchedulerError, SchedulerResult};
 use crate::job::{ScheduledJob, SchedulerHistoryEntry};
 
+mod scheduling;
+pub use scheduling::DueJobQuery;
+
 static JOB_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 pub const MAX_RETAINED_HISTORY_ENTRIES: usize = 1_000;
@@ -86,6 +89,22 @@ pub trait JobStore: Send + Sync {
             .collect())
     }
     async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>>;
+    /// Read an exact immutable owner scope without loading other workspaces.
+    async fn list_owned(
+        &self,
+        workspace: &str,
+        session: Option<i64>,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|entry| {
+                entry.job.owner_workspace.as_deref() == Some(workspace)
+                    && entry.job.owner_session_id == session
+            })
+            .collect())
+    }
     async fn list_filtered(
         &self,
         session_id: Option<i64>,
@@ -125,6 +144,32 @@ pub trait JobStore: Send + Sync {
     /// Due unclaimed jobs and abandoned, unpaused claims. Callers claim each
     /// candidate immediately before delivery, never a batch ahead of time.
     async fn list_due(&self, now_ms: i64) -> SchedulerResult<Vec<JobSnapshot>>;
+    /// Bounded admission read. Exclude busy sessions in the store, before the
+    /// limit, so their backlog cannot hide due work for other sessions.
+    async fn list_due_batch(
+        &self,
+        now_ms: i64,
+        query: &DueJobQuery,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        Ok(self
+            .list_due(now_ms)
+            .await?
+            .into_iter()
+            .filter(|entry| query.allows(&entry.job))
+            .take(query.batch_limit())
+            .collect())
+    }
+    /// Only the next ordinary fire, retry, or abandoned claim deadline. Live
+    /// claims contribute their lease expiry, never their old overdue fire.
+    async fn next_wake_at_ms(&self, query: &DueJobQuery) -> SchedulerResult<Option<i64>> {
+        Ok(self
+            .list()
+            .await?
+            .iter()
+            .filter(|entry| query.allows(&entry.job))
+            .filter_map(JobSnapshot::wake_at_ms)
+            .min())
+    }
     async fn replace(&self, expected: &JobSnapshot, job: ScheduledJob) -> SchedulerResult<bool>;
     async fn claim(
         &self,
@@ -292,6 +337,51 @@ impl JobStore for InMemoryJobStore {
             )
         });
         Ok(jobs)
+    }
+
+    async fn list_owned(
+        &self,
+        workspace: &str,
+        session: Option<i64>,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        let mut jobs: Vec<_> = self
+            .inner
+            .read()
+            .jobs
+            .values()
+            .filter(|entry| {
+                entry.job.owner_workspace.as_deref() == Some(workspace)
+                    && entry.job.owner_session_id == session
+            })
+            .cloned()
+            .collect();
+        jobs.sort_by_key(|entry| {
+            (
+                entry.job.next_fire_at.is_none(),
+                entry.job.next_fire_at,
+                entry.job.id,
+            )
+        });
+        Ok(jobs)
+    }
+
+    async fn list_due_batch(
+        &self,
+        now_ms: i64,
+        query: &DueJobQuery,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        Ok(self.due_batch(now_ms, query))
+    }
+
+    async fn next_wake_at_ms(&self, query: &DueJobQuery) -> SchedulerResult<Option<i64>> {
+        Ok(self
+            .inner
+            .read()
+            .jobs
+            .values()
+            .filter(|entry| query.allows(&entry.job))
+            .filter_map(JobSnapshot::wake_at_ms)
+            .min())
     }
 
     async fn list_due(&self, now_ms: i64) -> SchedulerResult<Vec<JobSnapshot>> {
@@ -652,12 +742,7 @@ impl JobStore for SqliteJobStore {
         session_id: Option<i64>,
         active_only: bool,
     ) -> SchedulerResult<Vec<JobSnapshot>> {
-        // Keep corruption visible. The invalid-JSON partial index makes this
-        // check constant-sized on healthy stores.
-        if let Some(row) = self.db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
-            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE NOT json_valid(job_json) LIMIT 1")).await? {
-            Self::decode_rows(vec![row]).await?;
-        }
+        self.check_invalid_json().await?;
         let mut sql = String::from(
             "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE json_valid(job_json)",
         );
@@ -679,6 +764,38 @@ impl JobStore for SqliteJobStore {
             ))
             .await?;
         Self::decode_rows(rows).await
+    }
+
+    async fn list_owned(
+        &self,
+        workspace: &str,
+        session: Option<i64>,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        self.check_invalid_json().await?;
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs \
+             WHERE json_valid(job_json) AND json_extract(job_json, '$.owner_workspace') = ? \
+               AND json_extract(job_json, '$.owner_session_id') IS ? \
+             ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id",
+                [workspace.to_owned().into(), session.into()],
+            ))
+            .await?;
+        Self::decode_rows(rows).await
+    }
+
+    async fn list_due_batch(
+        &self,
+        now_ms: i64,
+        query: &DueJobQuery,
+    ) -> SchedulerResult<Vec<JobSnapshot>> {
+        self.due_batch(now_ms, query).await
+    }
+
+    async fn next_wake_at_ms(&self, query: &DueJobQuery) -> SchedulerResult<Option<i64>> {
+        self.next_deadline(query).await
     }
 
     async fn pending_jobs_for_session(

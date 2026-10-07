@@ -247,6 +247,9 @@ const INDEXES: &[&str] = &[
 const PERFORMANCE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_session ON agena_scheduler_jobs(json_extract(job_json, '$.owner_session_id'), completed, next_fire_at_ms, id) WHERE json_valid(job_json)",
     "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_invalid_json ON agena_scheduler_jobs(id) WHERE NOT json_valid(job_json)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_owner ON agena_scheduler_jobs(json_extract(job_json, '$.owner_workspace'), json_extract(job_json, '$.owner_session_id'), next_fire_at_ms, id) WHERE json_valid(job_json)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_pending_deadline ON agena_scheduler_jobs(COALESCE(retry_at_ms, next_fire_at_ms), id) WHERE paused = 0 AND completed = 0 AND delivery_key IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_claim_expiry ON agena_scheduler_jobs(claimed_at_ms, id) WHERE paused = 0 AND completed = 0 AND delivery_key IS NOT NULL",
 ];
 
 #[cfg(test)]

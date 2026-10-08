@@ -511,7 +511,7 @@ function toggleOuter() {
       </span>
     </button>
 
-    <div v-if="expanded" class="ml-5 rounded-r-md border-l border-border/60 bg-muted/[0.08] pl-3 pr-1">
+    <div v-if="expanded" class="transcript-content bg-muted/[0.08]">
       <div v-if="operation.userInputs.length" class="space-y-2 py-0.5 text-sm">
         <AgenaInteractionPart
           v-for="interaction in operation.userInputs"
@@ -580,7 +580,7 @@ function toggleOuter() {
         <RiArrowRightSLine class="h-4 w-4 shrink-0" :class="detailsExpanded ? 'rotate-90' : ''" aria-hidden="true" />
         {{ t('chat.toolDetails.label') }}
       </button>
-      <div v-if="detailsExpanded" class="ml-2 border-l border-border/40 pl-3" data-tool-details>
+      <div v-if="detailsExpanded" class="ml-2 border-l border-border/40 pl-2" data-tool-details>
         <section v-for="section in toolDetailSections" :key="section" class="py-0.5">
           <button
             type="button"
@@ -599,7 +599,7 @@ function toggleOuter() {
             <PartLoadingIndicator v-if="sectionPending(section)" />
           </button>
 
-          <div v-if="sectionExpanded(section)" class="min-w-0 pl-5 pt-1" :aria-busy="sectionPending(section)">
+          <div v-if="sectionExpanded(section)" class="min-w-0 pl-3 pt-1" :aria-busy="sectionPending(section)">
             <div v-if="sectionError(section)" role="alert" class="py-1 text-xs text-rose-700 dark:text-rose-300">
               {{ sectionError(section) }}
               <button type="button" class="ml-2 underline" @click="loadSection(section)">

@@ -430,11 +430,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
       </div>
     </header>
 
-    <div
-      class="min-w-0"
-      :class="role === 'user' ? 'rounded-r-md border-l-2 border-primary/35 pl-2' : ''"
-      data-transcript-copy-root="true"
-    >
+    <div class="min-w-0" data-transcript-copy-root="true">
       <div
         v-for="row in transcriptRows"
         :key="row.key"
@@ -547,7 +543,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
 
       <div
         v-if="fallbackError"
-        class="ml-7 rounded-r-md border-l border-rose-400/60 py-1 pl-3 text-sm text-rose-700 dark:text-rose-300"
+        class="transcript-content mx-1 border-rose-400/60 py-1 text-sm text-rose-700 dark:text-rose-300"
       >
         {{ fallbackError }}
       </div>

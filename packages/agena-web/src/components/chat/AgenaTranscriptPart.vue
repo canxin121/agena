@@ -72,11 +72,15 @@ function openAttachment(path: string, url: string) {
     @select="$emit('select')"
   />
 
-  <div v-else-if="part.kind === 'text'" class="min-w-0 py-0.5 pl-7 text-sm leading-snug">
+  <div
+    v-else-if="part.kind === 'text'"
+    class="transcript-content py-0.5 text-sm leading-snug"
+    :class="part.role === 'user' ? 'border-primary/35' : ''"
+  >
     <MarkdownRenderer :content="body" mode="markdown" :stream="Boolean(streaming)" :source-path="sourcePath || ''" />
   </div>
 
-  <div v-else-if="part.kind === 'lifecycle'" class="flex min-w-0 items-baseline gap-2 py-1 pl-3">
+  <div v-else-if="part.kind === 'lifecycle'" class="flex min-w-0 items-baseline gap-2 py-1 px-1">
     <span
       class="w-3 shrink-0 text-center font-mono text-xs"
       :class="{
@@ -135,7 +139,11 @@ function openAttachment(path: string, url: string) {
       >
     </button>
 
-    <div v-if="expanded" class="ml-5 min-w-0 rounded-r-md border-l border-border/60 bg-muted/[0.08] pl-3 pr-1">
+    <div
+      v-if="expanded"
+      class="transcript-content bg-muted/[0.08]"
+      :class="part.role === 'user' ? 'border-primary/35' : ''"
+    >
       <div v-if="part.kind === 'answer' || part.kind === 'text_segment'" class="py-0.5 text-sm leading-snug">
         <template v-if="resources.length && sessionId">
           <AgenaContentText

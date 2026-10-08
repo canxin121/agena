@@ -34,7 +34,13 @@
   .chat-message-column {
     width: min(100%, 72rem);
     margin-inline: auto;
-    padding-inline: calc(clamp(0.75rem, 2.5vw, 1rem) * var(--padding-scale, 1));
+    padding-inline: calc(clamp(0.5rem, 2vw, 0.75rem) * var(--padding-scale, 1));
+  }
+
+  /* Every top-level text or expanded part owns one rail at the row edge.
+     Keep the inset shared by durable messages and their live placeholders. */
+  .transcript-content {
+    @apply min-w-0 rounded-r-md border-l border-border/60 pl-2 pr-1;
   }
 
   @media (min-width: 1280px) {
@@ -50,10 +56,6 @@
   @media (min-width: 1024px) {
     .chat-column {
       padding-inline: calc(clamp(1.25rem, 2.5vw, 2rem) * var(--padding-scale, 1));
-    }
-
-    .chat-message-column {
-      padding-inline: calc(clamp(1rem, 2.5vw, 1.5rem) * var(--padding-scale, 1));
     }
   }
 }

@@ -227,15 +227,15 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
 
   <div v-else-if="messagesLoading" class="space-y-6 py-8 animate-pulse">
     <div v-for="index in 3" :key="index" class="space-y-2">
-      <div class="h-3 w-28 bg-muted/35" />
-      <div class="ml-7 h-3 bg-muted/25" :class="index === 2 ? 'w-2/3' : 'w-5/6'" />
-      <div class="ml-7 h-3 w-1/2 bg-muted/20" />
+      <div class="ml-2 h-3 w-28 bg-muted/35" />
+      <div class="ml-4 h-3 bg-muted/25" :class="index === 2 ? 'w-2/3' : 'w-5/6'" />
+      <div class="ml-4 h-3 w-1/2 bg-muted/20" />
     </div>
   </div>
 
   <div
     v-else-if="messagesError"
-    class="border-l-2 border-rose-500/60 py-2 pl-3 text-sm text-rose-700 dark:text-rose-300"
+    class="transcript-content mx-2 border-rose-500/60 py-2 text-sm text-rose-700 dark:text-rose-300"
   >
     {{ messagesError }}
   </div>
@@ -288,7 +288,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
       <article
         v-if="pendingInteractionFallback"
         :key="`pending-interaction:${pendingInteractionFallback.requestId}`"
-        class="ml-7 min-w-0 rounded-r-md border-l-2 border-primary/45 py-1 pl-3"
+        class="min-w-0 px-1 py-1"
         data-transcript-node="part"
         :data-transcript-key="pendingInteractionPart!.key"
         data-part-kind="operation"
@@ -297,17 +297,19 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         @pointerdown="$emit('nodeSelect', pendingInteractionPart!.key)"
         @focus="$emit('nodeSelect', pendingInteractionPart!.key)"
       >
-        <AgenaTranscriptPart
-          :part="pendingInteractionPart!"
-          :expanded="isPartExpanded(pendingInteractionPart!)"
-          :collapse-signal="activityCollapseSignal"
-          :session-id="selectedSessionId"
-          @toggle="forwardPartToggle(pendingInteractionPart!, !isPartExpanded(pendingInteractionPart!))"
-          @select="$emit('nodeSelect', pendingInteractionPart!.key)"
-        />
+        <div class="min-w-0 rounded-md px-1">
+          <AgenaTranscriptPart
+            :part="pendingInteractionPart!"
+            :expanded="isPartExpanded(pendingInteractionPart!)"
+            :collapse-signal="activityCollapseSignal"
+            :session-id="selectedSessionId"
+            @toggle="forwardPartToggle(pendingInteractionPart!, !isPartExpanded(pendingInteractionPart!))"
+            @select="$emit('nodeSelect', pendingInteractionPart!.key)"
+          />
+        </div>
       </article>
 
-      <article v-if="optimisticUser && showOptimisticUser" :key="optimisticUser.key" class="py-1">
+      <article v-if="optimisticUser && showOptimisticUser" :key="optimisticUser.key" class="px-1 py-1">
         <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
           <span class="font-semibold text-primary">user</span>
           <span v-if="showTimestamps">{{ formatTime(optimisticUser.createdAt) }}</span>
@@ -322,7 +324,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
             </template>
           </span>
         </header>
-        <div class="border-l-2 border-primary/35 py-0.5 pl-7 text-sm leading-snug">
+        <div class="min-w-0 px-1">
           <AgenaTranscriptPart
             v-for="part in optimisticDisplayParts"
             :key="part.key"
@@ -334,33 +336,35 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         </div>
       </article>
 
-      <article v-if="showAssistantPlaceholder" key="assistant-placeholder" class="py-1">
+      <article v-if="showAssistantPlaceholder" key="assistant-placeholder" class="px-1 py-1">
         <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
           <span class="font-semibold text-emerald-700 dark:text-emerald-300">assistant</span>
           <RiLoader4Line class="h-3.5 w-3.5 animate-spin text-primary" />
         </header>
-        <AgenaTranscriptPart
-          :part="assistantPlaceholderPart"
-          :expanded="true"
-          :collapse-signal="activityCollapseSignal"
-          :session-id="selectedSessionId"
-        />
+        <div class="min-w-0 px-1">
+          <AgenaTranscriptPart
+            :part="assistantPlaceholderPart"
+            :expanded="true"
+            :collapse-signal="activityCollapseSignal"
+            :session-id="selectedSessionId"
+          />
+        </div>
       </article>
     </div>
 
-    <article v-if="sessionError" class="mt-3 py-2">
+    <article v-if="sessionError" class="mt-3 px-1 py-2">
       <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
         <span class="font-semibold text-rose-700 dark:text-rose-300">system</span>
         <span v-if="sessionErrorAtLabel()" class="font-mono text-[10px]">{{ sessionErrorAtLabel() }}</span>
       </header>
-      <div class="ml-7 rounded-r-md border-l-2 border-rose-500/60 py-1 pl-3 text-sm text-rose-800 dark:text-rose-200">
+      <div class="min-w-0 px-1 text-sm text-rose-800 dark:text-rose-200">
         <AgenaTranscriptPart
           :part="sessionErrorPart!"
           :expanded="true"
           :collapse-signal="activityCollapseSignal"
           :session-id="selectedSessionId"
         />
-        <div class="mt-2 flex items-center gap-2" data-transcript-chrome="true">
+        <div class="transcript-content mt-2 flex items-center gap-2 border-rose-500/60" data-transcript-chrome="true">
           <ToolbarChipButton
             :tooltip="t('chat.sessionError.actions.copyDetails')"
             :title="t('chat.sessionError.actions.copyDetails')"

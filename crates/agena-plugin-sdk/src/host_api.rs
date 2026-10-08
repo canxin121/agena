@@ -755,7 +755,7 @@ pub struct RunSubtaskRequest {
     /// Inline callers receive their result directly instead.
     #[serde(default)]
     pub run_in_background: bool,
-    /// Correlate background work with its durable originating tool receipt.
+    /// Correlate delegated work and live output with its durable tool receipt.
     /// The host validates the call against the explicit parent session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_call_id: Option<i64>,

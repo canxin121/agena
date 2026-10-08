@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright
 
 def verify(page, output):
     page.goto("http://127.0.0.1:5175/tests/fixtures/part-content.html", wait_until="networkidle")
-    page.wait_for_function("partFixture.streams.size === 2 && partFixture.terminals.size === 2")
+    page.wait_for_function("partFixture.streams.size === 3 && partFixture.terminals.size === 3")
     page.evaluate("window.savedShell = document.querySelector('[data-fixture=shell] .xterm')")
     page.evaluate("partFixture.emit('shell',{type:'log',stream:'stdout',text:'  Building…\\n\\x1b[32mPASS\\x1b[0m  module 1\\n\\n'})")
     page.wait_for_function("partFixture.terminals.get('shell').buffer.active.getLine(1)?.translateToString(true).includes('PASS')")
@@ -29,6 +29,25 @@ def verify(page, output):
     page.evaluate("partFixture.emit('shell',{type:'log',stream:'stderr',text:'warning: diagnostic channel\\n'})")
     page.wait_for_function("partFixture.terminals.get('shell').buffer.active.getLine(5)?.translateToString(true).includes('warning')")
     assert "stderr" in shell.inner_text()
+
+    # Delegated tasks use the same production content viewer as shell logs.
+    task = page.locator('[data-fixture="task"]')
+    page.evaluate("window.savedTask = document.querySelector('[data-fixture=task] .xterm')")
+    page.evaluate("partFixture.emit('task',{type:'log',stream:'stdout',text:'Task: Review project\\nRunning\\n[Assistant]\\nReading project 中文 🧪\\n'})")
+    page.wait_for_function("partFixture.terminals.get('task').buffer.active.getLine(3)?.translateToString(true).includes('Reading project')")
+    page.evaluate("partFixture.emit('task',{type:'log',stream:'stderr',text:'child shell diagnostic\\n'})")
+    page.wait_for_function("partFixture.terminals.get('task').buffer.active.getLine(4)?.translateToString(true).includes('diagnostic')")
+    assert "实时输出" in task.locator('[data-content-output]').inner_text()
+    task.locator('[data-transcript-vim-toggle]').click()
+    assert not page.evaluate("partFixture.expanded.task")
+    page.evaluate("partFixture.emit('task',{type:'log',stream:'stdout',text:'output while task is collapsed\\n'})")
+    task.locator('[data-transcript-vim-toggle]').click()
+    page.wait_for_function("partFixture.terminals.get('task').buffer.active.getLine(5)?.translateToString(true).includes('collapsed')")
+    page.evaluate("window.savedTask = document.querySelector('[data-fixture=task] .xterm')")
+    page.evaluate("partFixture.emit('task',{type:'log',stream:'stdout',text:'[Task completed]\\n'},'complete')")
+    page.wait_for_function("partFixture.terminals.get('task').buffer.active.getLine(6)?.translateToString(true).includes('completed')")
+    assert page.evaluate("savedTask === document.querySelector('[data-fixture=task] .xterm') && partFixture.expanded.task")
+    assert "实时输出" not in task.locator('[data-content-output]').inner_text()
 
     attrs = {"foreground": {"type": "indexed", "index": 2}, "background": None,
              "bold": True, "dim": False, "italic": False, "underline": False, "inverse": False}
@@ -67,9 +86,9 @@ def verify(page, output):
     page.wait_for_function("partFixture.terminals.get('shell').buffer.active.getLine(6)?.translateToString(true).includes('frozen')")
 
     page.evaluate("partFixture.emit('shell',{type:'log',stream:'stdout',text:Array.from({length:100},(_,i)=>`retained line ${i}\\n`).join('')})")
-    page.wait_for_function("partFixture.terminals.get('shell').buffer.active.baseY > 50")
+    page.wait_for_function("partFixture.terminals.get('shell').buffer.active.baseY > 50 && partFixture.terminals.get('shell').rows === 12")
     page.evaluate("partFixture.terminals.get('shell').scrollToTop()")
-    page.wait_for_timeout(50)
+    shell.get_by_role("button", name=re.compile("跟随输出")).wait_for()
     page.evaluate("partFixture.emit('shell',{type:'log',stream:'stdout',text:'new output while scrolled up\\n'})")
     page.wait_for_timeout(100)
     assert page.evaluate("partFixture.terminals.get('shell').buffer.active.viewportY === 0")
@@ -112,7 +131,7 @@ def verify(page, output):
     result = {"scope": "controlled SSE / production Vue components / Xterm write / two animation frames",
               "samples": len(metrics), "p50_ms": metrics[len(metrics)//2],
               "p95_ms": metrics[len(metrics)*95//100], "max_ms": max(metrics),
-              "verified": ["ANSI, CR, Chinese and emoji", "exact whitespace copy", "stdout/stderr",
+              "verified": ["ANSI, CR, Chinese and emoji", "exact whitespace copy", "stdout/stderr", "task live output, collapse/reopen and stable completion",
                            "PTY snapshot and row patch", "selection and scroll freeze / follow",
                            "stable completion DOM and expansion", "Markdown prefix DOM", "CodeBlock user state",
                            "dark and light ANSI palette, native PTY height and screenshots"]}

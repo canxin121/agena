@@ -630,13 +630,18 @@ impl HostClient for RuntimeHostClient {
             None => self.callback_session_and_call()?.0,
         };
         let selection = req.selection.unwrap_or_default();
+        let launch_call_id = req.launch_call_id.or_else(|| {
+            current_host_callback_context()
+                .filter(|context| context.session_id == Some(parent_session_id))
+                .and_then(|context| context.call_id)
+        });
         let response = self
             .use_session_manager(|manager| async move {
                 manager
                     .run_subtask(crate::session::SessionSubtaskRequest {
                         parent_session_id,
                         run_in_background: req.run_in_background,
-                        launch_call_id: req.launch_call_id,
+                        launch_call_id,
                         description: req.description,
                         prompt: req.prompt,
                         commands: req.commands,

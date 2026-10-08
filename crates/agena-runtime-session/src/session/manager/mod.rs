@@ -475,6 +475,7 @@ mod session_mutation;
 mod session_prompt;
 mod sessions;
 mod stats;
+mod task_output;
 #[cfg(test)]
 mod tests;
 

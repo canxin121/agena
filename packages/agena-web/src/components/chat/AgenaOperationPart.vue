@@ -77,6 +77,7 @@ const loadedPartKey = ref('')
 const toolDetailSections: ToolDetailSection[] = ['input', 'output', 'metadata', 'presentation']
 
 const operation = computed(() => operationPresentation(props.part, sectionValues.value, props.expanded))
+const hasContentOutput = computed(() => operation.value.presentationBlocks.some((block) => block.type === 'content'))
 const status = computed(() => partStatusPresentation(props.part.status))
 const chat = useChatStore()
 const linkedActivity = computed(() =>
@@ -543,7 +544,11 @@ function toggleOuter() {
         class="space-y-1 py-0.5"
         data-tool-presentation
       >
-        <ActivityLogView v-if="linkedActivity && sessionId" :session-id="sessionId" :activity="linkedActivity" />
+        <ActivityLogView
+          v-if="linkedActivity && sessionId && !hasContentOutput"
+          :session-id="sessionId"
+          :activity="linkedActivity"
+        />
         <MarkdownRenderer
           v-if="operation.commandMarkdown"
           :content="operation.commandMarkdown"

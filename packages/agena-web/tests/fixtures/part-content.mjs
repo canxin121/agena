@@ -51,8 +51,19 @@ window.fetch = async (url, options) => {
   }
   const id = match[1]
   if (match[2]) {
-    const body = new ReadableStream({ start(controller) { streams.set(id, controller) }, cancel() { streams.delete(id) } })
-    options?.signal?.addEventListener('abort', () => { try { streams.get(id)?.close() } catch {} streams.delete(id) }, {once:true})
+    let connection
+    const release = () => { if (streams.get(id) === connection) streams.delete(id) }
+    const body = new ReadableStream({ start(controller) {
+      connection = controller
+      streams.set(id, controller)
+      // Like the server, resume from the requested cursor before live events.
+      const value = resources.get(id)
+      const chunks = value.chunks.filter((chunk) => chunk.cursor.sequence > Number(parsed.searchParams.get('after') || 0))
+      const page = {resource:{...value,chunks:undefined},chunks,next_cursor:value.cursor,has_more:false,gap:value.dropped_bytes>0}
+      controller.enqueue(encoder.encode(`event: content\ndata: ${JSON.stringify(page)}\n\n`))
+      if (value.state !== 'active') { controller.close(); release() }
+    }, cancel: release })
+    options?.signal?.addEventListener('abort', () => { try { connection?.close() } catch {} release() }, {once:true})
     return new Response(body, {headers:{'Content-Type':'text/event-stream'}})
   }
   const value = resources.get(id)
@@ -70,7 +81,12 @@ function part(id, kind, command) {
 }
 const shell = part('shell', 'log', 'bun run build')
 const pty = part('pty', 'terminal', 'interactive terminal')
-const expanded = reactive({shell:true,pty:true})
+const task = part('task', 'log', 'Review project')
+task.source.agenaContent.name = 'tasks.run'
+task.source.agenaContent.input = { description: 'Review project', prompt: 'Review the project in a child session' }
+task.source.agenaContent.metadata = { child_session_id: 3, task_id: 'task-fixture' }
+task.source.agenaPresentation.blocks = task.source.agenaPresentation.blocks.filter((block) => block.type !== 'command')
+const expanded = reactive({shell:true,pty:true,task:true})
 fixture.expanded = expanded
 fixture.emit = (id, payload, state='active') => {
   const value = resource(id, id === 'pty' ? 'terminal' : 'log')
@@ -84,7 +100,7 @@ fixture.emit = (id, payload, state='active') => {
   const page = {resource:{...value,chunks:undefined},chunks:[chunk],next_cursor:chunk.cursor,has_more:false,gap:false}
   streams.get(id)?.enqueue(encoder.encode(`event: content\ndata: ${JSON.stringify(page)}\n\n`))
   if (state !== 'active') {
-    const operation = id === 'pty' ? pty : shell
+    const operation = id === 'pty' ? pty : id === 'task' ? task : shell
     operation.status = state === 'complete' ? 'completed' : 'failed'
     operation.source.partState = operation.status
     operation.source.agenaContent.state = operation.status
@@ -100,6 +116,7 @@ createApp({render:() => h('main', {class:'mx-auto max-w-4xl space-y-6 p-6',style
   h('h1',{class:'text-xl font-semibold'},'Part streaming'),
   h('section',{'data-fixture':'shell'},[h(OperationPart,{part:shell,expanded:expanded.shell,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.shell=!expanded.shell})]),
   h('section',{'data-fixture':'pty'},[h(OperationPart,{part:pty,expanded:expanded.pty,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.pty=!expanded.pty})]),
+  h('section',{'data-fixture':'task'},[h(OperationPart,{part:task,expanded:expanded.task,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.task=!expanded.task})]),
   h('section',{'data-fixture':'markdown'},[h(Markdown,{content:text.value,stream:true})]),
   h('section',{'data-fixture':'code'},[h(CodeBlock,{code:code.value,lang:'text',compact:true})]),
 ])}).use(createPinia()).use(i18n).mount('#app')

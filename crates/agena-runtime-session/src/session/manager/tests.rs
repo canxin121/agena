@@ -4,6 +4,9 @@
 //! `agena-storage` and `agena-storage-sqlite`; these tests prove the execution
 //! manager's adapter preserves that model at its boundary.
 
+#[path = "task_output_tests.rs"]
+mod task_output_tests;
+
 use std::{collections::BTreeMap, collections::HashMap, sync::Arc};
 
 use agena_domain::{

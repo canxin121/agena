@@ -1022,7 +1022,7 @@ impl SessionManager {
         // Serialize only durable subtask preparation for a direct parent. The
         // bounded coordinator rejects nested acquisition and times out queued
         // writers, so this path cannot wait forever or form a lock cycle.
-        let (resumed, child_id, baseline_message_id, baseline_usage, usage_budget, background_id) = self
+        let (resumed, child_id, baseline_message_id, baseline_part_id, baseline_usage, usage_budget, background_id) = self
             .session_mutations
             .run(parent.id, async {
                 let existing = self
@@ -1113,7 +1113,7 @@ impl SessionManager {
                         .background_operation_by_external_id(BackgroundOperationKind::Task, &task_id)
                         .await?;
                     let launch = request.launch_call_id.and_then(|call_id| {
-                        parent.parts().iter().find_map(|part| {
+                        parent.parts().iter().rev().find_map(|part| {
                             let operation = super::replies::operation_from_part(part)?;
                             (operation.call_id == call_id && part.role == PartRole::Assistant)
                                 .then_some((part.run_id?, part.part_id))
@@ -1173,6 +1173,7 @@ impl SessionManager {
                     .map(|part| part.part_id)
                     .max();
                 let baseline_usage = child.aggregate_usage();
+                let baseline_part_id = child.parts().iter().map(|part| part.part_id).max().unwrap_or(0);
                 let usage_budget = super::SubtaskUsageBudget::new(
                     baseline_usage.clone(),
                     request.max_tokens,
@@ -1208,6 +1209,7 @@ impl SessionManager {
                     resumed,
                     child.id,
                     baseline_message_id,
+                    baseline_part_id,
                     baseline_usage,
                     usage_budget,
                     background_id,
@@ -1216,6 +1218,22 @@ impl SessionManager {
             .await?;
 
         let manager = self.background_handle();
+        let task_output = self
+            .start_subtask_output(
+                parent.id,
+                request.launch_call_id,
+                child_id,
+                baseline_part_id,
+                &task_id,
+                description,
+            )
+            .await
+            .unwrap_or_else(|error| {
+                // A failed preview must not strand a durably prepared child
+                // in Running before its execution has been submitted.
+                tracing::warn!(parent_id = parent.id, child_id, %error, "delegated task output preview unavailable");
+                None
+            });
         let run_options = options.clone();
         let prompt = delegated_prompt.to_string();
         let skill_references = subtask_skill_references;
@@ -1376,6 +1394,10 @@ impl SessionManager {
             )
             .await?;
         let usage = session.aggregate_usage().saturating_sub(&baseline_usage);
+
+        if let Some(output) = task_output {
+            output.finish(status, failure.as_ref()).await;
+        }
 
         if let Some(background_id) = background_id {
             let completion = self

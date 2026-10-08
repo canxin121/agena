@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useResizeObserver } from '@vueuse/core'
 import { RiArrowDownLine, RiEditLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import AttachmentPicker from '@/components/chat/AttachmentPicker.vue'
@@ -25,9 +26,16 @@ const emit = defineEmits<{
   (e: 'removeAttachment', id: string): void
 }>()
 const shellEl = ref<HTMLDivElement | null>(null)
+const statusEl = ref<HTMLDivElement | null>(null)
+const statusHeight = ref(28)
 const editorEl = ref<HTMLDivElement | null>(null)
 const attachmentPickerRef = ref<InstanceType<typeof AttachmentPicker> | null>(null)
 const { t } = useI18n()
+// The status row straddles the shell border. Reserve its lower half outside
+// the scrolling editor so it cannot paint over text, including after scroll.
+useResizeObserver(statusEl, ([entry]) => {
+  if (entry) statusHeight.value = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
+})
 const ATTACHMENT_CHARACTER = '\ufffc'
 let savedStart = 0
 let savedEnd = 0
@@ -413,12 +421,14 @@ defineExpose({
     ref="shellEl"
     class="composer-shell relative flex flex-col overflow-visible rounded-xl border border-input bg-background/85 shadow-sm"
     :class="fullscreen ? 'composer-fullscreen rounded-none' : ''"
+    :style="{ paddingTop: $slots.status || $slots.topRight ? `${Math.ceil(statusHeight / 2)}px` : undefined }"
     data-oc-keyboard-tap="keep"
     @dragover.prevent
     @drop.prevent="$emit('drop', $event)"
   >
     <div
       v-if="$slots.status || $slots.topRight"
+      ref="statusEl"
       class="pointer-events-none absolute inset-x-2 top-0 z-10 flex min-w-0 -translate-y-1/2 items-center gap-2 pr-8 font-mono text-[11px]"
     >
       <div
@@ -464,7 +474,7 @@ defineExpose({
       :aria-label="t('chat.composer.input.placeholder')"
       :data-placeholder="t('chat.composer.input.placeholder')"
       data-chat-input="true"
-      class="composer-editor w-full min-h-[44px] flex-1 overflow-y-auto border-0 bg-transparent px-3 pb-1.5 pt-2 pr-9 text-sm shadow-none focus-visible:outline-none"
+      class="composer-editor w-full min-h-8 flex-1 overflow-y-auto border-0 bg-transparent px-3 pb-1.5 pt-1 pr-9 text-sm shadow-none focus-visible:outline-none"
       :class="fullscreen ? 'composer-textarea-full' : 'max-h-none'"
       spellcheck="false"
       @beforeinput="handleBeforeInput"
@@ -496,6 +506,11 @@ defineExpose({
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   caret-color: currentColor;
+}
+@media (pointer: coarse) {
+  .composer-editor:not(.composer-textarea-full) {
+    min-height: 44px;
+  }
 }
 .composer-editor:empty::before {
   content: attr(data-placeholder);

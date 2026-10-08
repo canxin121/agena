@@ -6,7 +6,7 @@ import { useI18n } from 'vue-i18n'
 import { renderMermaid } from '@/lib/mermaidRenderer'
 import { renderMarkdown, renderMarkdownPlainText, type MarkdownUiLabels } from '@/lib/markdown'
 import { useNearViewport } from '@/composables/useNearViewport'
-import { renderMarkdownAsync } from '@/lib/markdownAsync'
+import { createMarkdownStreamKey, releaseMarkdownStream, renderMarkdownAsync } from '@/lib/markdownAsync'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
@@ -36,7 +36,9 @@ const props = withDefaults(
   },
 )
 
-const html = ref('')
+const html = ref<string[]>([])
+const markdownStreamKey = createMarkdownStreamKey()
+let hasStreamed = false
 const pane = useWorkspacePaneContext()
 let parseController: AbortController | undefined
 let renderVersion = 0
@@ -296,16 +298,17 @@ async function updateNow() {
   parseController = request
   const version = ++renderVersion
   const labels = buildMarkdownLabels()
-  let rendered: string
+  hasStreamed ||= props.stream
+  let rendered: string[]
   try {
     rendered =
-      props.stream || props.content.length > 8192
-        ? await renderMarkdownAsync(props.content, labels, request.signal)
-        : renderMarkdown(props.content, labels)
+      hasStreamed || props.content.length > 8192
+        ? await renderMarkdownAsync(props.content, labels, request.signal, markdownStreamKey)
+        : [renderMarkdown(props.content, labels)]
   } catch (error) {
     if (request.signal.aborted) return
     console.error('Markdown rendering failed', error)
-    rendered = renderMarkdownPlainText(props.content)
+    rendered = [renderMarkdownPlainText(props.content)]
   }
   if (version !== renderVersion || request.signal.aborted) return
   resetMermaid()
@@ -782,7 +785,7 @@ watch(
         imageObserver.disconnect()
         imageObserver = null
       }
-      html.value = ''
+      html.value = []
       return
     }
     if (!props.stream) {
@@ -797,7 +800,6 @@ watch(
     const delay = Math.max(
       0,
       Math.floor(props.streamDebounceMs || 0),
-      Math.min(400, Math.floor(props.content.length / 200)),
     )
     timer = window.setTimeout(() => {
       timer = null
@@ -824,6 +826,7 @@ watch(
 
 onBeforeUnmount(() => {
   parseController?.abort()
+  releaseMarkdownStream(markdownStreamKey)
   resetMermaid()
   clearTimer()
   if (copiedTimer) {
@@ -886,6 +889,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div ref="rootEl" class="prose prose-sm max-w-none break-words" v-html="html || deferredHtml" />
+    <div ref="rootEl" class="prose prose-sm max-w-none break-words">
+      <template v-if="html.length"><div v-for="(part, index) in html" :key="index" class="contents" data-markdown-segment v-html="part" /></template>
+      <div v-else v-html="deferredHtml" />
+    </div>
   </div>
 </template>

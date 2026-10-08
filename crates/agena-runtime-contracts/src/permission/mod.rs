@@ -1005,7 +1005,7 @@ mod tests {
 
         assert!(matches!(
             policy.check_tool(
-                "agena.shell.run",
+                "agena.shell.exec",
                 Some("git status"),
                 shell_tags().as_slice()
             ),
@@ -1013,7 +1013,7 @@ mod tests {
         ));
         assert!(matches!(
             policy.check_tool(
-                "agena.shell.run",
+                "agena.shell.exec",
                 Some("git push origin main"),
                 shell_tags().as_slice(),
             ),
@@ -1021,7 +1021,7 @@ mod tests {
         ));
         assert!(matches!(
             tool_action(
-                "agena.shell.run",
+                "agena.shell.exec",
                 Some("git status"),
                 shell_tags().as_slice(),
                 Some(&policy),

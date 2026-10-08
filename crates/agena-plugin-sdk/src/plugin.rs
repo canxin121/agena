@@ -190,8 +190,7 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     /// Streaming variant of [`Plugin::tool_invoke`]. Default implementation
-    /// falls back to `tool_invoke` and wraps the result as a single-chunk
-    /// stream so plugins that don't care about streaming still work.
+    /// calls `tool_invoke` and emits no intermediate events.
     ///
     /// `sink` lets the plugin push [`ToolStreamChunk`] frames as they are
     /// produced; the host's stream consumer sees them as they arrive. The
@@ -204,14 +203,6 @@ pub trait Plugin: Send + Sync + 'static {
     ) -> Result<ToolStreamEnd> {
         let stream_id = sink.stream_id().to_string();
         let result = self.tool_invoke(input).await?;
-        // Single chunk + end: keeps the default streaming path equivalent to
-        // a normal tool invocation.
-        sink.chunk(ToolStreamChunk {
-            stream_id: stream_id.clone(),
-            text_delta: Some(result.output_text.clone()),
-            metadata: result.metadata.clone(),
-        })
-        .await;
         Ok(ToolStreamEnd::from_output(stream_id, result))
     }
 
@@ -394,8 +385,7 @@ impl ToolStreamSink {
             .tx
             .send(ToolStreamChunk {
                 stream_id: self.stream_id.clone(),
-                text_delta: Some(delta.into()),
-                metadata: Default::default(),
+                payload: agena_domain::ContentInput::Text { text: delta.into() },
             })
             .await
         {

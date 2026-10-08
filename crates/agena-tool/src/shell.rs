@@ -20,7 +20,7 @@ pub fn truncate_shell_output_budget(output: &str, budget: usize) -> (String, boo
         return (output.to_owned(), false);
     }
     let marker = format!(
-        "\n\n[output truncated: preview keeps beginning and end of {line_count} lines / {} bytes. Read output_archive.segments with fs.grep/fs.read for retained output.]\n\n",
+        "\n\n[output truncated: preview keeps beginning and end of {line_count} lines / {} bytes. The output resource retains content independently of this preview.]\n\n",
         output.len(),
     );
     // Bound bytes before collecting lines: a multi-megabyte single line or
@@ -35,7 +35,9 @@ pub fn truncate_shell_output_budget(output: &str, budget: usize) -> (String, boo
     let mut tail_used = 0;
     for ch in output.chars().rev() {
         let cost = json_text_bytes(ch.encode_utf8(&mut [0; 4]));
-        if tail_used + cost > half { break; }
+        if tail_used + cost > half {
+            break;
+        }
         tail_used += cost;
         tail_start -= ch.len_utf8();
     }
@@ -57,18 +59,22 @@ pub fn truncate_shell_output_budget(output: &str, budget: usize) -> (String, boo
 }
 
 fn json_text_bytes(text: &str) -> usize {
-    text.chars().map(|ch| match ch {
-        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
-        '\u{0}'..='\u{1f}' => 6,
-        _ => ch.len_utf8(),
-    }).sum()
+    text.chars()
+        .map(|ch| match ch {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            '\u{0}'..='\u{1f}' => 6,
+            _ => ch.len_utf8(),
+        })
+        .sum()
 }
 fn json_prefix_end(text: &str, budget: usize) -> usize {
     let mut used = 0;
     let mut end = 0;
     for ch in text.chars() {
         let cost = json_text_bytes(ch.encode_utf8(&mut [0; 4]));
-        if used + cost > budget { break; }
+        if used + cost > budget {
+            break;
+        }
         used += cost;
         end += ch.len_utf8();
     }

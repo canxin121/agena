@@ -23,9 +23,40 @@ pub(crate) fn complete_part_status(parts: &mut [Part], part_id: i64) -> Result<(
 pub(crate) fn terminalize_nonterminal_parts(
     parts: &mut [Part],
     terminal_state: PartState,
+    failure: &agena_failure::Failure,
 ) -> Result<(), AppError> {
+    use crate::session::store::{
+        tool_call_from_operation, typed_content_from_value, typed_content_to_value,
+    };
+    use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
+    let outcome = match terminal_state {
+        PartState::Cancelled => agena_domain::ToolResultState::Cancelled,
+        PartState::Failed => agena_domain::ToolResultState::Failed,
+        _ => {
+            return Err(AppError::Internal(
+                "abort requires a failed or cancelled Part state".into(),
+            ));
+        }
+    };
     for part in parts.iter_mut() {
         if matches!(part.state, PartState::Pending | PartState::InProgress) {
+            // Started hosted calls already have durable identity. Their
+            // outcome and interval must agree with the Part terminal fact.
+            if part.part_id > 0
+                && part.kind == "tool_call"
+                && let TypedContent::ToolCall(call) =
+                    typed_content_from_value(&part.kind, &part.content)?
+            {
+                let mut operation = operation_from_tool_call(&call);
+                operation.state = outcome;
+                operation.error = Some(agena_domain::OperationError {
+                    failure: failure.clone(),
+                });
+                operation.lifecycle.end_ms = Some(chrono::Utc::now().timestamp_millis());
+                part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
+                    tool_call_from_operation(&operation),
+                )))?;
+            }
             part.state = terminal_state;
         }
     }

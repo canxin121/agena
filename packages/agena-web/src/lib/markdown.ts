@@ -320,6 +320,61 @@ export function renderMarkdown(content: string, labels?: Partial<MarkdownUiLabel
   }
 }
 
+/** Cache complete top-level blocks while reparsing the last two blocks.
+ * Future reference definitions can change earlier inline content, so those
+ * documents deliberately use a whole-document parse. Markdown semantics
+ * decide reuse; arbitrary blank lines are never treated as safe boundaries.
+ */
+export class MarkdownStreamRenderer {
+  private source = ''
+  private committedOffset = 0
+  private stable: string[] = []
+  private labelsKey = ''
+  parsedBytes = 0
+
+  get retainedCharacters(): number { return this.source.length }
+
+  render(content: string, labels?: Partial<MarkdownUiLabels>): string[] {
+    const key = JSON.stringify({ ...labels, expandLinesTitle: labels?.expandLinesTitle?.(123) })
+    if (key !== this.labelsKey || !content.startsWith(this.source)) {
+      this.committedOffset = 0
+      this.stable = []
+    }
+    this.labelsKey = key
+    this.source = content
+    // Reference links, reference images and bracket math may have dependencies
+    // outside the tail. Preserve their full-document interpretation.
+    if (content.includes('[')) {
+      this.committedOffset = 0
+      this.stable = []
+      this.parsedBytes += content.length
+      return [renderMarkdown(content, labels)]
+    }
+    const tail = content.slice(this.committedOffset)
+    this.parsedBytes += tail.length
+    currentLabels = { ...DEFAULT_LABELS, ...(labels || {}) }
+    try {
+      const environment = {}
+      const tokens = md.parse(tail, environment)
+      const blocks = tokens.flatMap((token, index) => token.level === 0 && token.nesting >= 0 && token.map ? [{ token, index }] : [])
+      const boundary = blocks.at(-2)
+      if (!boundary || boundary.token.map![0] === 0) {
+        return [...this.stable, md.renderer.render(tokens, md.options, environment)]
+      }
+      const line = boundary.token.map![0]
+      let offset = 0
+      for (let i = 0; i < line; i++) {
+        const newline = tail.indexOf('\n', offset)
+        if (newline < 0) return [...this.stable, md.renderer.render(tokens, md.options, environment)]
+        offset = newline + 1
+      }
+      this.stable.push(md.renderer.render(tokens.slice(0, boundary.index), md.options, environment))
+      this.committedOffset += offset
+      return [...this.stable, md.renderer.render(tokens.slice(boundary.index), md.options, environment)]
+    } finally { currentLabels = DEFAULT_LABELS }
+  }
+}
+
 // Convert markdown into plain text for reasoning parts.
 // We intentionally drop fenced/code blocks and images to avoid noisy UI.
 export function stripMarkdownToText(content: string): string {

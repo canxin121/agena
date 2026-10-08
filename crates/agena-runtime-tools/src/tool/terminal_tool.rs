@@ -87,6 +87,7 @@ pub(super) fn start_prepared(
     launch: Option<&agena_tool::shell::ShellLaunchSpec>,
     process_id: Option<String>,
     owner: TerminalOwner,
+    output: Option<agena_storage::content::ContentWriter>,
     cancel: CancellationToken,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let mut env = super::shell::sanitize_env(&env);
@@ -119,6 +120,7 @@ pub(super) fn start_prepared(
     let read = registry(executor)?
         .start_cancellable_with_output(
             TerminalStartParams {
+                output,
                 process_id,
                 owner,
                 command: argv,
@@ -291,9 +293,8 @@ pub(super) fn render(
             body.push_str("\n[screen text truncated]");
         }
     }
-    if let Some(archive) = &summary.output_archive {
-        body.push_str("\n");
-        body.push_str(&crate::process_output_archive::archive_hint(archive));
+    if let Some(resource) = &summary.output_resource {
+        body.push_str(&format!("\nOutput resource: {}", resource.resource_id));
     }
     if read.next_event_offset != 0 {
         body.push_str("\n[partial event: use last_seq as since_seq and next_event_offset as event_offset to continue, or omit both to consume unread output]");
@@ -316,7 +317,7 @@ pub(super) fn render(
     view.metadata
         .insert("has_more".into(), read.has_more.to_string());
     let output = ToolPayloadOutput::Shell {
-        output_archive: summary.output_archive.clone(),
+        output_resource: summary.output_resource.clone(),
         action: action.into(),
         terminal: include_screen.then_some(read.screen),
         dropped_bytes: read.dropped_bytes,

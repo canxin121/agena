@@ -29,6 +29,7 @@ mod attachment;
 mod auto_compaction;
 mod background_activity;
 mod command_events;
+mod content;
 mod context_policy;
 mod doom_loop;
 mod execution;
@@ -108,7 +109,7 @@ pub use activity_kind::{
     ACTIVITY_KIND_REASONING, ACTIVITY_KIND_RESOURCE, ACTIVITY_KIND_TEXT, ActivityKind,
     ActivityKindCategory, ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
 };
-pub use activity_view::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
+pub use activity_view::{ActivityView, DeltaMode, PartDocument, RawOutput, RenderDelta, ViewBlock};
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use background_activity::{
@@ -117,6 +118,13 @@ pub use background_activity::{
     BackgroundActivityLogRead, BackgroundActivityStatus,
 };
 pub use command_events::CommandOutputStream;
+pub use content::{
+    ContentChunk, ContentCursor, ContentDocument, ContentField, ContentFormat, ContentInput,
+    ContentKind, ContentPage, ContentPayload, ContentRange, ContentRef, ContentResource,
+    ContentState, ContentTextPage, ContentTextPosition, ContentTextSlice, DocumentMutation,
+    MAX_DOCUMENT_BLOCKS, MAX_DOCUMENT_BYTES, MAX_TERMINAL_FRAME_BYTES, TerminalAttributes,
+    TerminalCellRun, TerminalColor, TerminalSnapshot,
+};
 pub use context_policy::ContextPolicy;
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use execution::{ExecutionFailureKind, ExecutionOutcome, ExecutionPhase, ExecutionSource};
@@ -128,8 +136,8 @@ pub use execution_selection::ExecutionSelection;
 pub use execution_status::{ExecutionStatus, ExecutionStatusTransitionError};
 pub use finish_reason::{FinishReason, RunAbortReason};
 pub use ids::{
-    ActivityId, AssistantReplyId, ExecutionId, MessageId, PartId, RunId, TextSegmentId, ToolCallId,
-    TurnId,
+    ActivityId, AssistantReplyId, ContentId, ExecutionId, MessageId, PartId, RunId, TextSegmentId,
+    ToolCallId, TurnId,
 };
 pub use interaction_notification::InteractionNotificationLevel;
 pub use json_path::{JsonPathError, format_json_path, get_json_path, parse_json_path};
@@ -184,8 +192,7 @@ pub use permission_resolution::{
 };
 pub use plugin_invocation::PluginInvocation;
 pub use process_values::{
-    ProcessEvent, ProcessOutputArchive, ProcessOutputSegment, ProcessShell, ProcessStatus,
-    ProcessStream, ProcessSummary, TerminalScreen,
+    ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary, TerminalScreen,
 };
 pub use prompt_compaction::{
     PromptCompactionActivity, PromptCompactionCompletedEvent, PromptCompactionStrategy,

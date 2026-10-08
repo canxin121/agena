@@ -76,7 +76,7 @@ impl App {
                     .send(AppMessage::SessionEventArrived {
                         session_id,
                         generation,
-                        live,
+                        live: Box::new(live),
                     })
                     .await
                     .is_err()
@@ -344,24 +344,40 @@ impl App {
         }
         if let Some((origin, part)) = live.part_update {
             let id = part.part_id;
-            if part.kind == "tool_call" && matches!(part.state.as_str(), "completed" | "failed" | "cancelled") {
-                let name = part.content.get("name").and_then(serde_json::Value::as_str).unwrap_or_default();
-                if matches!(name, "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast") || name.starts_with("shell.") {
+            if part.kind == "tool_call"
+                && matches!(part.state.as_str(), "completed" | "failed" | "cancelled")
+            {
+                let name = part
+                    .content
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                if matches!(
+                    name,
+                    "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast"
+                ) || name.starts_with("shell.")
+                {
                     self.mark_session_files_changed(session_id);
                 }
             }
             let known = self.transcript.parts.iter().any(|old| old.part_id == id);
             if known {
-                let previous = self.transcript.parts.iter().find(|old| old.part_id == id).expect("known part");
-                if (previous.revision, previous.updated_at_ms) >= (part.revision, part.updated_at_ms) { return; }
-                let content_only = matches!(part.kind.as_str(), "text" | "reasoning") || (part.kind == "tool_call"
-                    && previous.state == part.state
-                    && previous.content.get("user_input") == part.content.get("user_input"));
-                let mut parts = self.transcript.parts.clone();
-                if let Some(old) = parts.iter_mut().find(|old| old.part_id == id) {
-                    *old = part;
+                let previous = self
+                    .transcript
+                    .parts
+                    .iter()
+                    .find(|old| old.part_id == id)
+                    .expect("known part");
+                if (previous.revision, previous.updated_at_ms)
+                    >= (part.revision, part.updated_at_ms)
+                {
+                    return;
                 }
-                self.transcript.merge_parts(parts);
+                let content_only = matches!(part.kind.as_str(), "text" | "reasoning")
+                    || (part.kind == "tool_call"
+                        && previous.state == part.state
+                        && previous.content.get("user_input") == part.content.get("user_input"));
+                self.transcript.merge_part(part);
                 self.request_expanded_tool_details(&[id]);
                 if content_only || origin != session_id {
                     return;

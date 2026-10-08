@@ -39,6 +39,11 @@ pub enum ClientMessage {
         #[serde(flatten)]
         request: SubscribeRequest,
     },
+    /// Resource interest and cursor, independent of observer presentation.
+    WatchContent {
+        id: SubscriptionId,
+        request: crate::content::ReadContentParams,
+    },
     /// Close an existing subscription. Server responds with
     /// [`ServerMessage::Unsubscribed`].
     Unsubscribe { id: SubscriptionId },
@@ -74,6 +79,10 @@ pub enum ServerMessage {
     Unsubscribed { id: SubscriptionId },
     /// Asynchronous push from a subscription.
     Notification(Notification),
+    Content {
+        subscription: SubscriptionId,
+        page: agena_domain::ContentPage,
+    },
     /// Generic per-request error. `id` matches the originating request, or is
     /// absent for transport-level / unsolicited errors.
     Error {

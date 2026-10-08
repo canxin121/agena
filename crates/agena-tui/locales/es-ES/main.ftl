@@ -1733,3 +1733,13 @@ overlay-provider-delete-adapter-last-body = Este es el último adaptador configu
 overlay-provider-delete-model-body = ¿Eliminar el modelo configurado {$provider}/{$adapter}/{$model}?
 
 permission-studio-page-tool-defaults = Acceso a herramientas / Valores predeterminados
+
+# Generic inline content resources
+content-loading = Cargando salida…
+content-active = Salida en directo
+content-complete = Salida completada
+content-interrupted = Salida interrumpida
+content-gap = Parte de la salida original ya no se conserva.
+content-reconnecting = Reconectando la salida…
+
+content-window = Parte de la salida queda fuera de la ventana mostrada.

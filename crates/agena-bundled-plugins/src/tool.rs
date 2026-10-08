@@ -9,6 +9,14 @@ use crate::plugins::provided::{
     settings, shell, tasks, terminal, tool_api,
 };
 
+pub fn content_plugin_id() -> &'static str {
+    "agena.content"
+}
+
+pub fn new_content_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::plugins::provided::content::ContentPlugin
+}
+
 pub fn commands_plugin_id() -> &'static str {
     commands::COMMANDS_PLUGIN_ID
 }

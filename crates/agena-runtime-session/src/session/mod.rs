@@ -1,5 +1,6 @@
 //! Session model: state, persistence, history, and execution services.
 
+mod content_result;
 pub(crate) mod cost;
 mod doom_loop;
 mod manager;

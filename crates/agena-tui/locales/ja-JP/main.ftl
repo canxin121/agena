@@ -1734,3 +1734,13 @@ overlay-provider-delete-adapter-last-body = これは最後の設定済みアダ
 overlay-provider-delete-model-body = 設定済みモデル {$provider}/{$adapter}/{$model} を削除しますか？
 
 permission-studio-page-tool-defaults = ツールアクセス / 既定値
+
+# Generic inline content resources
+content-loading = 出力を読み込み中…
+content-active = リアルタイム出力
+content-complete = 出力完了
+content-interrupted = 出力が中断されました
+content-gap = 保持範囲外となった出力があります。
+content-reconnecting = 出力に再接続しています…
+
+content-window = 表示範囲外の出力があります。

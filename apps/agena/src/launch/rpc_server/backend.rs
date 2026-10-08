@@ -1,18 +1,18 @@
 use crate::error::AgenaProcessError;
 use agena_api::{
     commands::{Command, CommandResult, ResolveWorkspaceParams},
-    queries::{ListSessionsParams, Query, QueryResult},
+    live::SessionPartsResource,
+    queries::{ListSessionsParams, Query, QueryResult, ReadPartsParams},
     resource::{
         ModelRef, PermissionReply, PermissionReplyKind, PermissionScope, ProviderSummaryResource,
-        RunOptions, SessionState, SessionTranscriptPart,
+        RunOptions, SessionState,
     },
 };
 use agena_api_server::jsonrpc::protocol::{
     CancelRunParams, CancelRunResult, CreateSessionParams, CreateSessionResult,
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
     PermissionDecision as AppPermissionDecision, PermissionRememberScope, PermissionReplyParams,
-    PermissionReplyResult, ReadPartsParams, ReadPartsResult, SessionListItem, SubmitRunParams,
-    SubmitRunResult,
+    PermissionReplyResult, SessionListItem, SubmitRunParams, SubmitRunResult,
 };
 use agena_api_server::jsonrpc::{self, AppServerError};
 use agena_cli::{RpcServerRequest, RpcServerTransport};
@@ -247,11 +247,9 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             })
             .await
             .map_err(client_backend_error)?;
-        let (run_id, parts) = latest_run_parts(&execution.parts);
         Ok(SubmitRunResult {
             session_id: execution.session.id,
-            run_id,
-            parts,
+            receipt: execution.receipt,
         })
     }
 
@@ -297,18 +295,48 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         })
     }
 
-    async fn read_messages(
+    async fn read_parts(
         &self,
         params: ReadPartsParams,
-    ) -> Result<ReadPartsResult, AppServerError> {
-        let execution = self
+    ) -> Result<SessionPartsResource, AppServerError> {
+        let response = self
             .client
-            .get_session_state(params.session_id)
+            .query(Query::ReadParts(params))
             .await
             .map_err(client_backend_error)?;
-        Ok(ReadPartsResult {
-            parts: execution.parts,
-        })
+        let QueryResult::Parts(page) = response else {
+            return Err(AppServerError::Backend(
+                "server returned the wrong Part window result".to_owned(),
+            ));
+        };
+        Ok(page)
+    }
+
+    async fn read_content(
+        &self,
+        params: agena_api::content::ReadContentParams,
+    ) -> Result<agena_domain::ContentPage, AppServerError> {
+        let response = self
+            .client
+            .query(Query::ReadContent(params))
+            .await
+            .map_err(client_backend_error)?;
+        let QueryResult::Content(page) = response else {
+            return Err(AppServerError::Backend(
+                "server returned the wrong content result".into(),
+            ));
+        };
+        Ok(page)
+    }
+
+    async fn read_content_text(
+        &self,
+        params: agena_api::content::ReadContentTextParams,
+    ) -> Result<agena_domain::ContentTextPage, AppServerError> {
+        self.client
+            .read_content_text(params)
+            .await
+            .map_err(client_backend_error)
     }
 
     async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError> {
@@ -331,24 +359,6 @@ fn process_client_error(context: &str, error: &ClientError) -> AgenaProcessError
 
 fn client_backend_error(error: ClientError) -> AppServerError {
     AppServerError::Backend(error.operator_diagnostic())
-}
-
-fn latest_run_parts(parts: &[SessionTranscriptPart]) -> (Option<i64>, Vec<SessionTranscriptPart>) {
-    let run_id = parts
-        .iter()
-        .rev()
-        .find(|part| part.kind == "run")
-        .map(|part| part.part_id);
-    let selected = run_id
-        .map(|run_id| {
-            parts
-                .iter()
-                .filter(|part| part.part_id == run_id || part.run_id == Some(run_id))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    (run_id, selected)
 }
 
 fn app_permission_reply_kind(
@@ -374,7 +384,6 @@ fn app_permission_scope(scope: PermissionRememberScope) -> PermissionScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_api::resource::SessionTranscriptPart;
 
     fn backend_with_public_provider_metadata() -> AgenaAppServerBackend {
         AgenaAppServerBackend {
@@ -384,23 +393,6 @@ mod tests {
                 provider_id: "example".to_owned(),
                 adapters: Vec::new(),
             }],
-        }
-    }
-
-    fn part(part_id: i64, kind: &str, run_id: Option<i64>) -> SessionTranscriptPart {
-        SessionTranscriptPart {
-            revision: 0,
-            updated_at_ms: 0,
-            part_id,
-            kind: kind.to_owned(),
-            role: "assistant".to_owned(),
-            state: "completed".to_owned(),
-            content: serde_json::json!({}),
-            presentation: None,
-            summary: None,
-            created_at_ms: part_id,
-            parent_part_id: None,
-            run_id,
         }
     }
 
@@ -425,23 +417,6 @@ mod tests {
             backend.resolve_model_target("missing"),
             Err(AppServerError::InvalidParams(_))
         ));
-    }
-
-    #[test]
-    fn submit_result_contains_only_the_newest_run_parts() {
-        let parts = vec![
-            part(1, "run", Some(1)),
-            part(2, "text", Some(1)),
-            part(3, "run", Some(3)),
-            part(4, "reasoning", Some(3)),
-            part(5, "text", Some(3)),
-        ];
-        let (run_id, latest) = latest_run_parts(&parts);
-        assert_eq!(run_id, Some(3));
-        assert_eq!(
-            latest.iter().map(|part| part.part_id).collect::<Vec<_>>(),
-            vec![3, 4, 5]
-        );
     }
 
     #[tokio::test]

@@ -4,6 +4,8 @@ import { computed } from 'vue'
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaDiffBlock from '@/components/chat/AgenaDiffBlock.vue'
+import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
+import type { ContentFormat, ContentRef } from '@/lib/content'
 import {
   jsonArray,
   fencedCodeBlock,
@@ -15,7 +17,9 @@ import {
 } from '@/pages/chat/transcriptPartPresentation'
 import type { JsonValue } from '@/types/json'
 
-const props = defineProps<{ block: JsonRecord }>()
+const props = defineProps<{ block: JsonRecord; sessionId?: string | null }>()
+const contentResource = computed(() => jsonRecord(props.block.resource) as unknown as ContentRef)
+const contentFormat = computed(() => (['markdown', 'code', 'diff', 'json'].includes(stringValue(props.block.format)) ? stringValue(props.block.format) : 'plain') as ContentFormat)
 
 const kind = computed(() => stringValue(props.block.type) || stringValue(props.block.kind) || 'unknown')
 const bodyText = computed(() => {
@@ -120,16 +124,22 @@ const checklistItems = computed(() =>
     }
   }),
 )
-const progressPercent = computed(() =>
-  typeof props.block.percent === 'number' && Number.isFinite(props.block.percent)
-    ? Math.max(0, Math.min(100, props.block.percent))
-    : null,
-)
+const progressPercent = computed(() => typeof props.block.total === 'number' && props.block.total > 0 && typeof props.block.completed === 'number'
+  ? Math.max(0, Math.min(100, Math.floor(props.block.completed * 100 / props.block.total))) : null)
+const progressCount = computed(() => typeof props.block.completed === 'number'
+  ? `${props.block.completed}${typeof props.block.total === 'number' ? `/${props.block.total}` : ''}${stringValue(props.block.unit) ? ` ${stringValue(props.block.unit)}` : ''}` : '')
 </script>
 
 <template>
   <div class="min-w-0 text-[13px] leading-relaxed">
-    <MarkdownRenderer v-if="kind === 'markdown'" :content="bodyText" mode="markdown" :stream="false" />
+    <AgenaContentOutput
+      v-if="kind === 'content' && sessionId"
+      :key="contentResource.resource_id"
+      :resource="contentResource"
+      :session-id="sessionId"
+      :format="contentFormat"
+    />
+    <MarkdownRenderer v-else-if="kind === 'markdown'" :content="bodyText" mode="markdown" :stream="false" />
 
     <pre
       v-else-if="kind === 'text' || kind === 'log'"
@@ -303,12 +313,13 @@ const progressPercent = computed(() =>
 
     <div v-else-if="kind === 'progress'" class="space-y-1.5 border-y border-border/50 py-2">
       <div class="flex items-center justify-between gap-3 text-xs">
-        <span class="min-w-0 break-words">{{ stringValue(block.message) }}</span>
+        <span class="min-w-0 break-words">{{ stringValue(block.phase) }}</span>
+        <span class="shrink-0 font-mono text-[10px] text-muted-foreground">{{ progressCount }}</span>
         <span v-if="progressPercent !== null" class="shrink-0 font-mono text-[10px] text-muted-foreground">
           {{ progressPercent }}%
         </span>
       </div>
-      <div v-if="progressPercent !== null" class="h-1 overflow-hidden bg-muted">
+      <div v-if="progressPercent !== null" class="h-1 overflow-hidden rounded-full bg-muted" role="progressbar" :aria-valuenow="progressPercent" :aria-valuemin="0" :aria-valuemax="100" :aria-label="stringValue(block.phase)">
         <div class="h-full bg-primary" :style="{ width: `${progressPercent}%` }" />
       </div>
     </div>

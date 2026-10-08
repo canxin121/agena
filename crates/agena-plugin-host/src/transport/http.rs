@@ -314,7 +314,7 @@ impl PluginTransport for HttpTransport {
     async fn ingest_stream_event(
         &self,
         method: &str,
-        params: serde_json::Value,
+        mut params: serde_json::Value,
     ) -> Result<bool, TransportError> {
         if !matches!(
             method,
@@ -331,6 +331,12 @@ impl PluginTransport for HttpTransport {
                 )
             })?;
         let context = serde_json::from_value(context.clone())?;
+        // Authority is transport routing, outside the strict source payload.
+        // Validate it before decoding the canonical chunk.
+        params
+            .as_object_mut()
+            .expect("context belongs to an object")
+            .remove("context");
         let event = match method {
             method::TOOL_STREAM_CHUNK => StreamEvent::Chunk(serde_json::from_value(params)?),
             method::TOOL_STREAM_END => StreamEvent::End(serde_json::from_value(params)?),

@@ -815,7 +815,7 @@ async fn native_http_stream_defers_self_reload_until_its_terminal_result() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(first.text_delta.as_deref(), Some("queued"));
+    assert_eq!(first.payload.text_content(), Some("queued"));
     assert_eq!(runtime.current_snapshot().generation(), 1);
     assert!(matches!(
         stream.end.try_recv(),
@@ -826,7 +826,7 @@ async fn native_http_stream_defers_self_reload_until_its_terminal_result() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(last.text_delta.as_deref(), Some("complete"));
+    assert_eq!(last.payload.text_content(), Some("complete"));
     assert!(
         tokio::time::timeout(WAIT, stream.chunks.recv())
             .await

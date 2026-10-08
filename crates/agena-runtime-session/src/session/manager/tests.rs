@@ -20,8 +20,7 @@ use agena_provider::{
     CompletionStreamEvent, CompletionUsage,
 };
 use agena_storage::store::{
-    NewPart, PartDelta, PartRole, PartState, PartVisibility, SessionChange, SessionState,
-    SubmitOutcome,
+    NewPart, PartRole, PartState, PartVisibility, SessionChange, SessionState, SubmitOutcome,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 
@@ -125,6 +124,42 @@ async fn create_with_model(
         .expect("persist explicit test model selection")
 }
 
+async fn resource_part_texts(
+    manager: &SessionManager,
+    parts: &[agena_storage::store::Part],
+) -> std::collections::HashMap<i64, String> {
+    let mut texts = std::collections::HashMap::new();
+    for part in parts.iter().filter(|part| part.kind == "text") {
+        let mut body = String::new();
+        if let Some(resources) = part
+            .content
+            .get("resources")
+            .and_then(serde_json::Value::as_array)
+        {
+            for value in resources {
+                let reference: agena_domain::ContentRef =
+                    serde_json::from_value(value.clone()).expect("content reference");
+                let content = manager
+                    .session_store()
+                    .contents()
+                    .read_text(reference.resource_id, 64 * 1024)
+                    .await
+                    .expect("resource text");
+                assert!(
+                    !content.gap && !content.truncated,
+                    "fixture output must be complete"
+                );
+                body.push_str(&content.text);
+            }
+        }
+        if let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str) {
+            body.push_str(text);
+        }
+        texts.insert(part.part_id, body);
+    }
+    texts
+}
+
 #[tokio::test]
 async fn bounded_subtask_logs_keep_utf8_tails_and_advance_past_empty_runs() {
     let manager = test_manager().await;
@@ -136,7 +171,7 @@ async fn bounded_subtask_logs_keep_utf8_tails_and_advance_past_empty_runs() {
         .unwrap();
     let facade = &manager.store.facade;
     let empty = facade
-        .start_run(child, "continue".into(), serde_json::json!({}), None)
+        .start_run(child, "continue", serde_json::json!({}), None)
         .await
         .unwrap();
     let first = facade
@@ -1847,17 +1882,23 @@ async fn query_projection_is_derived_from_persisted_parts() {
         vec![TypedContent::Text(text_content("query me"))],
     )
     .await;
-    let projected = manager
-        .list_projected_runs(session.id)
+    let page = manager
+        .store
+        .facade
+        .load_run_window(session.id, None, 8, 8)
         .await
-        .expect("list projected messages");
-    assert_eq!(projected.len(), 1);
-    assert_eq!(projected[0].parts.len(), 1);
+        .unwrap();
+    assert_eq!(page.runs.len(), 1);
+    let children = page
+        .parts
+        .iter()
+        .filter(|p| p.run_id == Some(page.runs[0].run_id))
+        .collect::<Vec<_>>();
+    assert_eq!(children.len(), 1);
     assert_eq!(
-        projected[0].parts[0]
+        children[0]
             .content
-            .as_ref()
-            .and_then(|value| value.get("text"))
+            .get("text")
             .and_then(serde_json::Value::as_str),
         Some("query me")
     );
@@ -1912,24 +1953,19 @@ async fn projection_preserves_precise_part_kind() {
         .await
         .expect("append assistant parts");
 
-    let projected = manager
-        .list_projected_runs(session.id)
+    let page = manager
+        .store
+        .facade
+        .load_run_window(session.id, None, 8, 8)
         .await
-        .expect("list projected runs");
-    let assistant_run = projected
-        .iter()
-        .find(|run| run.role == Role::Assistant)
-        .expect("assistant run");
-    let kinds = assistant_run
+        .unwrap();
+    let kinds = page
         .parts
         .iter()
+        .filter(|part| part.run_id == Some(run_id))
         .map(|part| part.kind.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(
-        kinds,
-        ["think", "tool_call"],
-        "projection must preserve the precise part kind, not collapse to \"activity\""
-    );
+    assert_eq!(kinds, ["think", "tool_call"]);
 }
 
 #[tokio::test]
@@ -2546,7 +2582,7 @@ struct ToolSearchLoopProvider {
 /// can be committed before the current part reaches the stable-loop boundary.
 /// The second request is the notification response. This deterministically
 /// reproduces the fast-background-completion ordering observed with a real
-/// `shell.run`.
+/// `shell.exec`.
 struct AssistantHookBoundaryProvider {
     model: ModelId,
     first_request_uses_tool: bool,
@@ -3019,8 +3055,7 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
 
 #[tokio::test]
 async fn processor_run_turn_streams_parts_through_the_facade_once() {
-    // 25 deltas > STREAMING_FLUSH_DELTA_COUNT (8): the facade must amortize
-    // them into coalesced flushes rather than one revision per token.
+    // Model deltas update only the independent source, regardless of token count.
     let tokens: Vec<String> = (0..25).map(|i| format!("tok{i} ")).collect();
     let full_text: String = tokens.concat();
     let provider = Arc::new(FakeProvider {
@@ -3053,6 +3088,7 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
         .expect("start run marker");
 
     let run = SessionRunRequest {
+        content_writers: Default::default(),
         retry_registry: Default::default(),
         session_id: session.id,
         model: ModelRef::new("fake", "fake-model"),
@@ -3113,7 +3149,39 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
     assert_eq!(text_parts.len(), 1, "streamed text coalesces into one part");
     assert_eq!(text_parts[0].state, PartState::Completed);
     assert_eq!(text_parts[0].run_id, Some(run_id));
-    assert_eq!(text_parts[0].content["text"], full_text);
+    assert_eq!(text_parts[0].content["text"], "");
+    let reference: agena_domain::ContentRef =
+        serde_json::from_value(text_parts[0].content["resources"][0].clone()).unwrap();
+    let resource = manager
+        .session_store()
+        .contents()
+        .describe(reference.resource_id)
+        .await
+        .unwrap();
+    assert_eq!(resource.state, agena_domain::ContentState::Complete);
+    assert_eq!(resource.cursor, resource.committed_cursor);
+    let page = manager
+        .session_store()
+        .contents()
+        .read(
+            reference.resource_id,
+            Some(agena_domain::ContentCursor {
+                epoch: resource.cursor.epoch,
+                sequence: 0,
+            }),
+            1024 * 1024,
+        )
+        .await
+        .unwrap();
+    let text: String = page
+        .chunks
+        .iter()
+        .filter_map(|chunk| match &chunk.payload {
+            agena_domain::ContentPayload::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, full_text);
     assert!(
         text_parts[0].revision < 25,
         "D10 amortizes deltas into coalesced flushes: 25 deltas produced revision {}",
@@ -3145,64 +3213,6 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
             .all(|part| part.kind == "run" || part.run_id == Some(run_id)),
         "every content part hangs off the run marker"
     );
-
-    // A mid-stream InProgress part exposes its buffered partial text through
-    // load() before any flush (the facade's streaming-buffer overlay) — the
-    // exact per-token `update_part(content_text_delta)` path the processor
-    // drives, amortized in the buffer rather than committed per token.
-    let run2 = manager
-        .store
-        .start_run(
-            session.id,
-            "continue",
-            serde_json::json!({"run_kind": "continue"}),
-        )
-        .await
-        .expect("start second marker");
-    let created = manager
-        .store
-        .append_parts(
-            session.id,
-            run2,
-            vec![NewPart {
-                kind: "text".to_owned(),
-                role: PartRole::Assistant,
-                content: serde_json::json!({ "type": "text", "text": "" }),
-                summary: None,
-                visibility: PartVisibility::Both,
-                parent_part_id: None,
-                state: PartState::InProgress,
-            }],
-        )
-        .await
-        .expect("append in-progress text part");
-    let part_id = created[0].part_id;
-    for chunk in ["live", " ", "delta", "s"] {
-        manager
-            .store
-            .update_part(
-                session.id,
-                part_id,
-                PartDelta {
-                    content_text_delta: Some(chunk.to_owned()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("push stream delta");
-    }
-    let mid = manager
-        .session_store()
-        .load(session.id)
-        .await
-        .expect("load mid-stream view");
-    let mid_part = mid
-        .parts
-        .iter()
-        .find(|part| part.part_id == part_id)
-        .expect("mid-stream part");
-    assert_eq!(mid_part.state, PartState::InProgress);
-    assert_eq!(mid_part.content["text"], "live deltas");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3256,11 +3266,8 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
         tool_call.output.is_some(),
         "completed tool call keeps its raw output"
     );
-    assert!(completed.parts().iter().any(|part| {
-        part.kind == "text"
-            && part.content.get("text").and_then(serde_json::Value::as_str)
-                == Some("TOOL_SEARCH_OK fs.read")
-    }));
+    let texts = resource_part_texts(&manager, completed.parts()).await;
+    assert!(texts.values().any(|text| text == "TOOL_SEARCH_OK fs.read"));
 
     let requests = provider.requests();
     assert_eq!(
@@ -3430,11 +3437,8 @@ async fn stable_run_continues_after_mixed_failed_and_completed_parallel_tool_bat
             replayed_tool_turn.parts
         );
     }
-    assert!(completed.parts().iter().any(|part| {
-        part.kind == "text"
-            && part.content.get("text").and_then(serde_json::Value::as_str)
-                == Some("MIXED_TOOL_BATCH_OK")
-    }));
+    let texts = resource_part_texts(&manager, completed.parts()).await;
+    assert!(texts.values().any(|text| text == "MIXED_TOOL_BATCH_OK"));
 }
 
 #[tokio::test]
@@ -3757,16 +3761,19 @@ async fn provider_native_completion_preserves_started_identity_and_context() {
             .and_then(agena_domain::StructuredValue::as_text),
         Some("fixture")
     );
-    assert_eq!(
-        operation.provider_raw().and_then(|raw| raw["id"].as_str()),
-        Some("ws_fixture_1")
-    );
-    assert_eq!(
-        operation
-            .provider_raw()
-            .and_then(|raw| raw["result"].as_str()),
-        Some("done")
-    );
+    let reference = operation
+        .provider_trace()
+        .expect("native protocol trace reference");
+    assert!(operation.resources.contains(&reference));
+    let body = manager
+        .session_store()
+        .contents()
+        .read_text(reference.resource_id, 1024 * 1024)
+        .await
+        .expect("read protocol trace");
+    let trace: serde_json::Value = serde_json::from_str(&body.text).expect("JSON protocol trace");
+    assert_eq!(trace["id"], "ws_fixture_1");
+    assert_eq!(trace["result"], "done");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3819,6 +3826,21 @@ async fn unfinished_provider_native_call_fails_instead_of_wedging_the_run() {
             .iter()
             .all(|part| part.kind != "tool_call" || !part.state.is_in_flight()),
         "a malformed hosted call must not leave an executable ghost operation"
+    );
+    let hosted = reloaded
+        .parts()
+        .iter()
+        .find(|part| part.kind == "tool_call")
+        .expect("an externally started hosted call keeps its durable identity");
+    let operation = operation_from_part(hosted).expect("decode failed hosted operation");
+    assert_eq!(hosted.state, PartState::Failed);
+    assert_eq!(operation.status(), agena_domain::ExecutionStatus::Failed);
+    assert!(operation.lifecycle.end_ms.is_some());
+    assert!(
+        operation
+            .error_message()
+            .unwrap()
+            .contains("unfinished provider-native tool calls")
     );
 }
 
@@ -5070,7 +5092,7 @@ async fn install_test_background_operation(
         1,
         ToolInvocation::new(
             match kind {
-                agena_storage::store::BackgroundOperationKind::Shell => "shell.run",
+                agena_storage::store::BackgroundOperationKind::Shell => "shell.exec",
                 agena_storage::store::BackgroundOperationKind::Task => "task",
                 agena_storage::store::BackgroundOperationKind::Monitor => "monitor.start",
                 agena_storage::store::BackgroundOperationKind::ScheduledDelivery => {
@@ -5338,12 +5360,13 @@ async fn assistant_hook_mid_model_part_waits_for_the_boundary_and_keeps_the_turn
         "AI-launched hooks create no synthetic Runtime ingress turn"
     );
 
+    let texts = resource_part_texts(&manager, parts).await;
     let response_text = parts
         .iter()
         .find(|part| {
-            part.kind == "text"
-                && part.content.get("text").and_then(serde_json::Value::as_str)
-                    == Some("BG_BOUNDARY_NOTIFICATION_RECEIVED")
+            texts
+                .get(&part.part_id)
+                .is_some_and(|text| text == "BG_BOUNDARY_NOTIFICATION_RECEIVED")
         })
         .expect("notification response text");
     let response_run_id = response_text.run_id.expect("response run id");
@@ -5512,22 +5535,23 @@ async fn assistant_hook_after_a_terminal_text_part_opens_a_clean_follow_up_run()
         .expect("stable run must not hang")
         .expect("stable run task joins")
         .expect("stable run completes");
+    let texts = resource_part_texts(&manager, completed.parts()).await;
     let first_text = completed
         .parts()
         .iter()
         .find(|part| {
-            part.kind == "text"
-                && part.content.get("text").and_then(serde_json::Value::as_str)
-                    == Some("FIRST_PROVIDER_PART_COMPLETED")
+            texts
+                .get(&part.part_id)
+                .is_some_and(|text| text == "FIRST_PROVIDER_PART_COMPLETED")
         })
         .expect("first terminal provider text");
     let response_text = completed
         .parts()
         .iter()
         .find(|part| {
-            part.kind == "text"
-                && part.content.get("text").and_then(serde_json::Value::as_str)
-                    == Some("BG_BOUNDARY_NOTIFICATION_RECEIVED")
+            texts
+                .get(&part.part_id)
+                .is_some_and(|text| text == "BG_BOUNDARY_NOTIFICATION_RECEIVED")
         })
         .expect("hook response text");
     assert_ne!(
@@ -6391,7 +6415,7 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
         .pending_tool_by_part_id(tool_part_id)
         .expect("resolve pending shell tool");
     let output = crate::tool::ToolPayloadOutput::Shell {
-        output_archive: None,
+        output_resource: None,
         terminal: None,
         dropped_bytes: 0,
         action: "spawn".to_owned(),
@@ -7163,15 +7187,18 @@ async fn a_settle_whose_steer_reaches_a_turn_that_never_drains_it_still_wakes_th
         .get_session(session_id)
         .await
         .expect("reload session");
-    let runs = parts_into_runs(reloaded.parts());
-    let wake_text = runs
+    let texts = resource_part_texts(&manager, reloaded.parts()).await;
+    let wake_text = reloaded
+        .parts()
         .iter()
         .rev()
-        .find_map(|run| {
-            let visible = run_visible_text_lossy(run);
-            (!visible.trim().is_empty()).then_some(visible)
+        .filter(|part| part.role == PartRole::Assistant)
+        .find_map(|part| {
+            texts
+                .get(&part.part_id)
+                .filter(|text| !text.trim().is_empty())
         })
-        .expect("the wake turn produced a reply");
+        .expect("wake reply text");
     assert_eq!(
         wake_text.trim(),
         "acknowledged the finished background operation",

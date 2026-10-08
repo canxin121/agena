@@ -1,14 +1,15 @@
 //! Transcript render model: lines, blocks, and layout.
 
+use crate::display_types::TranscriptRun;
 use agena_api::{
-    live::HumanPresentationResource,
     part::{
         AttachmentPartResource, CommandReferencePartResource, ErrorPartResource,
         PartDetailResource, PartExecutionStatusResource, ReasoningPartResource, TextPartResource,
         ToolCallPartResource,
     },
-    resource::{RunResource, RunRole, RunStatus},
+    resource::{RunRole, RunStatus},
 };
+use agena_domain::PartDocument;
 use agena_domain::{
     ActivityId, ActivityPayload, AssistantReplyId, RawOutput, TextSegmentActivity, TextSegmentId,
     TimeRange, ToolOutput, TurnId,
@@ -94,14 +95,17 @@ pub struct TranscriptEntryPart<'a> {
 #[derive(Debug, Clone)]
 pub struct ToolCallView {
     pub operation: OperationPart,
-    pub presentation: HumanPresentationResource,
+    pub presentation: PartDocument,
+    /// Bounded client-local frames; never serialized into Part facts.
+    pub contents: std::collections::BTreeMap<
+        agena_domain::ContentId,
+        std::sync::Arc<crate::content::ContentFrame>,
+    >,
+    pub content_errors: std::collections::BTreeMap<agena_domain::ContentId, String>,
 }
 
 impl ToolCallView {
-    pub fn from_operation(
-        operation: OperationPart,
-        presentation: Option<HumanPresentationResource>,
-    ) -> Self {
+    pub fn from_operation(operation: OperationPart, presentation: Option<PartDocument>) -> Self {
         let presentation = presentation.unwrap_or_else(|| {
             let title = operation
                 .output
@@ -116,7 +120,7 @@ impl ToolCallView {
                 .unwrap_or_else(|| {
                     agena_tool::tool_title_for_state(&operation.invocation, operation.state)
                 });
-            HumanPresentationResource {
+            PartDocument {
                 title,
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -125,12 +129,14 @@ impl ToolCallView {
         Self {
             operation,
             presentation,
+            contents: Default::default(),
+            content_errors: Default::default(),
         }
     }
 
     pub fn from_api(
         value: ToolCallPartResource,
-        presentation: Option<agena_api::live::HumanPresentationResource>,
+        presentation: Option<agena_domain::PartDocument>,
     ) -> Self {
         Self::from_operation(
             OperationPart {
@@ -139,6 +145,7 @@ impl ToolCallView {
                 authorization: value.authorization,
                 user_input: value.user_input,
                 output: value.output,
+                resources: value.resources,
                 state: value.state,
                 error: value.error,
                 metadata: value.metadata,
@@ -336,7 +343,7 @@ pub struct TranscriptActivityPresentation {
 /// presentation is the only home for it, so it travels with every kind
 /// rather than hiding inside the tool-call detail.
 pub fn transcript_part_content(
-    part: &agena_api::part::PartResource,
+    part: &crate::display_types::TranscriptPart,
 ) -> Option<TranscriptPartContent<'static>> {
     let content = part.content.clone()?;
     Some(match content {
@@ -387,8 +394,8 @@ pub struct TranscriptEntry<'a> {
     pub parts: Vec<TranscriptEntryPart<'a>>,
 }
 
-impl<'a> From<&'a RunResource> for TranscriptEntry<'a> {
-    fn from(message: &RunResource) -> Self {
+impl<'a> From<&TranscriptRun> for TranscriptEntry<'a> {
+    fn from(message: &TranscriptRun) -> Self {
         Self {
             id: TranscriptEntryId::StoredMessage(message.id),
             role: Some(message.role),
@@ -433,7 +440,7 @@ pub struct RenderedTranscript {
     pub width: u16,
     pub palette: ThemePalette,
     pub remote_image_generation: u64,
-    pub lines: Vec<RenderedLine>,
+    pub lines: Vec<std::sync::Arc<RenderedLine>>,
     pub search_matches: Vec<usize>,
     pub nodes: Vec<RenderedTranscriptNode>,
     pub line_nodes: Vec<Option<usize>>,
@@ -477,6 +484,12 @@ pub struct RenderedLine {
     pub style: Style,
     pub rich_line: Option<Line<'static>>,
     pub math: Vec<MathLinePlacement>,
+}
+
+impl AsRef<RenderedLine> for RenderedLine {
+    fn as_ref(&self) -> &RenderedLine {
+        self
+    }
 }
 
 /// Copy projections never carry the transient spinner frame: the inline

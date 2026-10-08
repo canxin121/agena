@@ -17,7 +17,6 @@ use ratatui::{
 use std::time::{Duration, Instant};
 
 mod requests;
-mod inline;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -64,7 +63,6 @@ pub(crate) struct SessionWorkState {
     detail: Option<Detail>,
     detail_activity: Option<BackgroundActivityResource>,
     logs: Option<BackgroundActivityLogResource>,
-    inline_logs: std::collections::BTreeMap<String, inline::InlineLogState>,
     diff: String,
     diff_limit: usize,
     diff_truncated: bool,
@@ -213,17 +211,16 @@ impl App {
         self.heal_session_work_selection(id);
         let state = self.session_work.get_mut(&id).expect("work state exists");
         let now = Instant::now();
-        let interval = if state.file_error.is_some() {
-            60
-        } else {
-            30
-        };
+        let interval = if state.file_error.is_some() { 60 } else { 30 };
         let files_due = state.file_task.is_none()
-            && state
-                .file_at
-                .is_none_or(|at| now.duration_since(at) >= if state.file_dirty && state.file_error.is_none() {
-                    Duration::from_millis(750)
-                } else { Duration::from_secs(interval) });
+            && state.file_at.is_none_or(|at| {
+                now.duration_since(at)
+                    >= if state.file_dirty && state.file_error.is_none() {
+                        Duration::from_millis(750)
+                    } else {
+                        Duration::from_secs(interval)
+                    }
+            });
         let detail_due = state.expanded
             && state.detail.is_some()
             && state.detail_task.is_none()
@@ -231,7 +228,8 @@ impl App {
                 now.duration_since(at)
                     >= Duration::from_millis(if state.detail_error.is_some() {
                         30_000
-                    } else if state.detail_dirty || state.logs.as_ref().is_some_and(|logs| logs.has_more)
+                    } else if state.detail_dirty
+                        || state.logs.as_ref().is_some_and(|logs| logs.has_more)
                     {
                         750
                     } else {
@@ -249,31 +247,63 @@ impl App {
     pub(crate) fn mark_session_files_changed(&mut self, id: i64) {
         let state = self.session_work.entry(id).or_default();
         state.file_dirty = true;
-        if matches!(state.detail, Some(Detail::File(_))) { state.detail_dirty = true; }
+        if matches!(state.detail, Some(Detail::File(_))) {
+            state.detail_dirty = true;
+        }
     }
 
-    pub(crate) fn apply_session_activity(&mut self, id: i64, time: i64, dismissed: bool, activity: BackgroundActivityResource) {
+    pub(crate) fn apply_session_activity(
+        &mut self,
+        id: i64,
+        time: i64,
+        dismissed: bool,
+        activity: BackgroundActivityResource,
+    ) {
         let state = self.session_work.entry(id).or_default();
-        if state.activity_times.get(&activity.id).is_some_and(|previous| *previous >= time) { return; }
-        if state.activity_times.len() >= 512 && !state.activity_times.contains_key(&activity.id) {
-            if let Some(oldest) = state.activity_times.iter().min_by_key(|(_, time)| *time).map(|(id, _)| id.clone()) {
-                state.activity_times.remove(&oldest);
-            }
+        if state
+            .activity_times
+            .get(&activity.id)
+            .is_some_and(|previous| *previous >= time)
+        {
+            return;
+        }
+        if state.activity_times.len() >= 512
+            && !state.activity_times.contains_key(&activity.id)
+            && let Some(oldest) = state
+                .activity_times
+                .iter()
+                .min_by_key(|(_, time)| *time)
+                .map(|(id, _)| id.clone())
+        {
+            state.activity_times.remove(&oldest);
         }
         state.activity_times.insert(activity.id.clone(), time);
-        if let Some(logs) = state.inline_logs.get_mut(&activity.id) { logs.dirty = true; }
         if matches!(&state.detail, Some(Detail::Task(task)) if task == &activity.id) {
-            if state.detail_activity.as_ref() != Some(&activity) { state.detail_activity = Some(activity.clone()); }
+            if state.detail_activity.as_ref() != Some(&activity) {
+                state.detail_activity = Some(activity.clone());
+            }
             state.detail_dirty = true;
         }
         let mut representation_changed = false;
         let execution_absent = self.transcript.execution.is_none();
         if let Some(execution) = self.transcript.execution.as_mut() {
             if dismissed {
-                representation_changed = execution.background_activities.iter().any(|row| row.id == activity.id);
-                execution.background_activities.retain(|row| row.id != activity.id);
-            } else if let Some(row) = execution.background_activities.iter_mut().find(|row| row.id == activity.id) {
-                if row != &activity { *row = activity; representation_changed = true; }
+                representation_changed = execution
+                    .background_activities
+                    .iter()
+                    .any(|row| row.id == activity.id);
+                execution
+                    .background_activities
+                    .retain(|row| row.id != activity.id);
+            } else if let Some(row) = execution
+                .background_activities
+                .iter_mut()
+                .find(|row| row.id == activity.id)
+            {
+                if row != &activity {
+                    *row = activity;
+                    representation_changed = true;
+                }
             } else {
                 execution.background_activities.insert(0, activity);
                 representation_changed = true;
@@ -281,7 +311,11 @@ impl App {
         }
         // A snapshot already in flight may precede this event. Leave one
         // trailing refresh so applying that older body cannot erase the event.
-        if execution_absent || (representation_changed && (self.transcript.refresh_in_flight_since.is_some() || self.transcript.state_load_in_flight_since.is_some())) {
+        if execution_absent
+            || (representation_changed
+                && (self.transcript.refresh_in_flight_since.is_some()
+                    || self.transcript.state_load_in_flight_since.is_some()))
+        {
             self.pending_refresh_for(id);
         }
         self.heal_session_work_selection(id);
@@ -512,10 +546,11 @@ impl App {
     }
 }
 
-fn merge_log_tail(previous: Option<BackgroundActivityLogResource>, mut logs: BackgroundActivityLogResource) -> BackgroundActivityLogResource {
-    if let Some(old) = previous
-        .filter(|old| old.activity_id == logs.activity_id)
-    {
+fn merge_log_tail(
+    previous: Option<BackgroundActivityLogResource>,
+    mut logs: BackgroundActivityLogResource,
+) -> BackgroundActivityLogResource {
+    if let Some(old) = previous.filter(|old| old.activity_id == logs.activity_id) {
         logs.last_seq = logs.last_seq.max(old.last_seq);
         let mut lines = old
             .lines

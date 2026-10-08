@@ -125,8 +125,7 @@ pub use agena_runtime_config::{
     ProviderAuthConfig, ProviderClientVersionSettings, ProviderGitlabAuthConfig, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig,
     SessionCompactionConfig, SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions,
-    TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, UiConfig,
-    config_resolution_json_value, resolved_config_json_value,
+    UiConfig, config_resolution_json_value, resolved_config_json_value,
 };
 pub use agena_runtime_config::{ConfigEnvironment, ProcessEnvironment};
 pub(crate) use agena_runtime_config::{
@@ -152,7 +151,6 @@ pub use agena_runtime_config::{
 pub(crate) use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig};
 pub use agena_runtime_config::{
     RuntimeConfigurationError, RuntimeConfigurationService, RuntimeConfigurationSnapshot,
-    RuntimeTuiColorScheme, RuntimeTuiGraphicsMode, RuntimeUiConfiguration,
 };
 pub(crate) use agena_runtime_config::{default_workspace_root, project_config_path};
 pub(crate) use agena_runtime_plugins::CallbackOnDrop;
@@ -201,8 +199,7 @@ pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
 };
 pub use agena_runtime_session::{
-    SessionExecutionContext, SessionPresentation, SessionProjectedPart, SessionProjectedPartDetail,
-    SessionProjectedRun, SessionProjectedRunHeader, SessionQueryError, SessionQueryService,
+    SessionExecutionContext, SessionPresentation, SessionQueryError, SessionQueryService,
 };
 pub use agena_runtime_session::{SessionExecutionControl, SessionExecutionControlError};
 pub use agena_runtime_session::{

@@ -37,7 +37,7 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::<ToolPermissionConfig>::deserialize(deserializer)
-        .map(|tools| tools.map(ToolPermissionConfig::with_current_shell_names))
+        .map(|tools| tools.map(ToolPermissionConfig::with_canonical_tool_names))
 }
 
 /// The path patterns of the runtime's own per-workspace state directory

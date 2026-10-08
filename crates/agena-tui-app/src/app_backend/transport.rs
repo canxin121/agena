@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use agena_api::part::PartResource;
 use agena_api::{
     commands::{
         Command, CommandResult, ForkSessionParams, RewindSessionParams, UpdateSessionParams,
@@ -19,7 +20,7 @@ use agena_api::{
     queries::{GetSessionParams, ListSessionsParams, Query, QueryResult},
     resource::{
         PermissionReply, ProviderSummaryResource, RunOptions, SessionExecutionResource,
-        SessionOverviewResource, SessionResource, SessionTranscriptPart, UserInputReply,
+        SessionOverviewResource, SessionResource, UserInputReply,
     },
 };
 use agena_client::{AgenaClient, SubscriptionEvent};
@@ -34,8 +35,8 @@ pub(crate) const OLDER_TRANSCRIPT_PAGE_SIZE: u64 = 6;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionTranscriptPage {
-    pub parts: Vec<SessionTranscriptPart>,
-    pub folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+    pub parts: Vec<PartResource>,
+    pub folds: Vec<agena_tui_transcript::TranscriptFold>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
@@ -44,25 +45,6 @@ pub(crate) struct SessionTranscriptPage {
 pub(crate) struct SessionStateWithTranscriptPage {
     pub execution: SessionExecutionResource,
     pub page: SessionTranscriptPage,
-}
-
-pub(crate) fn transcript_part_from_resource(
-    part: agena_api::live::PartResource,
-) -> SessionTranscriptPart {
-    SessionTranscriptPart {
-        revision: part.revision,
-        updated_at_ms: part.updated_at_ms,
-        part_id: part.part_id,
-        kind: part.kind,
-        role: part.role,
-        state: part.state,
-        content: part.content,
-        presentation: part.presentation,
-        summary: part.summary,
-        created_at_ms: part.created_at_ms,
-        parent_part_id: part.parent_part_id,
-        run_id: part.run_id,
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +64,7 @@ fn classify_session_subscription_event(
     session_id: i64,
 ) -> SessionSubscriptionDispatch {
     match event {
+        SubscriptionEvent::Content(_) => SessionSubscriptionDispatch::Ignore,
         SubscriptionEvent::SessionChanged(change) => {
             if change.session_id() != session_id {
                 return SessionSubscriptionDispatch::Ignore;
@@ -303,6 +286,18 @@ fn image_mime_from_path(path: &str) -> String {
 }
 
 impl TuiBackend {
+    pub(crate) async fn stream_content(
+        &self,
+        session_id: i64,
+        id: agena_domain::ContentId,
+        after: Option<agena_domain::ContentCursor>,
+    ) -> Result<agena_client::ContentSubscription> {
+        Ok(self
+            .inner
+            .client
+            .stream_content(session_id, id, after, 64 * 1024)
+            .await?)
+    }
     /// Connect to and validate a server, then resolve the local
     /// workspace path into the server's public workspace identity.
     pub async fn connect_remote(
@@ -652,7 +647,7 @@ impl TuiBackend {
     /// The resolved UI preferences projected from the server's effective
     /// configuration, for launching the terminal with the same
     /// theme/graphics/locale as an embedded runtime.
-    pub fn tui_preferences(&self) -> agena_application::dto::TuiPreferencesResource {
+    pub fn tui_preferences(&self) -> crate::TuiPreferencesResource {
         super::config::ui_configuration(self)
     }
 
@@ -1073,11 +1068,7 @@ impl TuiBackend {
             .await;
     }
 
-    async fn localize_workspace_image_parts(
-        &self,
-        session_id: i64,
-        parts: &mut [SessionTranscriptPart],
-    ) {
+    async fn localize_workspace_image_parts(&self, session_id: i64, parts: &mut [PartResource]) {
         const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
         let mut references = Vec::new();
@@ -1168,24 +1159,31 @@ impl TuiBackend {
         agena_plugin_host::PluginToolInvokeResponse,
         agena_application::ApplicationError,
     > {
-        let response = if plugin_id == "agena.plan" && tool_name == "get" && session_id.is_some() {
-            self.client().session_plan(session_id.expect("checked session id"), false).await
+        let response = if plugin_id == "agena.plan"
+            && tool_name == "get"
+            && let Some(session_id) = session_id
+        {
+            self.client().session_plan(session_id, false).await
         } else {
-            self.client().invoke_plugin_tool(plugin_id, tool_name, input, session_id).await
+            self.client()
+                .invoke_plugin_tool(plugin_id, tool_name, input, session_id)
+                .await
         }
-            .map_err(|error| {
-                agena_application::ApplicationError::internal(format!(
-                    "failed to invoke plugin tool `{tool_name}` through the server: {}",
-                    error.operator_diagnostic()
-                ))
-            })?;
+        .map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "failed to invoke plugin tool `{tool_name}` through the server: {}",
+                error.operator_diagnostic()
+            ))
+        })?;
         let response = serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal_error_with_context(
                 format!("plugin tool `{tool_name}` returned a response this TUI cannot decode"),
                 &error,
             )
         })?;
-        if tool_name != "get" && let Err(error) = self.refresh_plugin_presentation_snapshot().await {
+        if tool_name != "get"
+            && let Err(error) = self.refresh_plugin_presentation_snapshot().await
+        {
             tracing::warn!(
                 diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
                 "plugin tool invocation succeeded, but refreshing the TUI plugin presentation snapshot failed"
@@ -1879,16 +1877,32 @@ impl TuiBackend {
         &self,
         session_id: i64,
     ) -> Result<SessionStateWithTranscriptPage> {
+        self.transcript_page_with_execution(session_id, None).await
+    }
+
+    async fn transcript_page_with_execution(
+        &self,
+        session_id: i64,
+        mut initial: Option<SessionExecutionResource>,
+    ) -> Result<SessionStateWithTranscriptPage> {
         // `/state` is an execution shell. Load only the newest bounded
-        // collapsed transcript page separately; the server skips raw folded
-        // activity before it crosses this transport boundary.
+        // run windows separately. Disclosure and role grouping are local.
         let mut attempts = 0;
         let (mut execution, page_resource) = loop {
             let (execution, page) = tokio::try_join!(
-                self.client().get_session_state_validated(session_id, attempts > 0),
-                self.client().session_transcript_page(
+                async {
+                    if let Some(execution) = initial.take() {
+                        Ok(execution)
+                    } else {
+                        self.client()
+                            .get_session_state_validated(session_id, attempts > 0)
+                            .await
+                    }
+                },
+                self.client().session_run_window(
                     session_id,
                     SESSION_TRANSCRIPT_PAGE_SIZE,
+                    32,
                     None
                 ),
             )?;
@@ -1900,13 +1914,10 @@ impl TuiBackend {
                 bail!("session changed while loading the transcript snapshot");
             }
         };
+        let folds = agena_tui_transcript::folds_from_run_window(&page_resource);
         let mut page = SessionTranscriptPage {
-            parts: page_resource
-                .parts
-                .into_iter()
-                .map(transcript_part_from_resource)
-                .collect(),
-            folds: page_resource.folds,
+            parts: page_resource.parts,
+            folds,
             next_cursor: page_resource.page.next_cursor,
             has_more: page_resource.page.has_more,
         };
@@ -1924,15 +1935,12 @@ impl TuiBackend {
     ) -> Result<SessionTranscriptPage> {
         let page_resource = self
             .client()
-            .session_transcript_page(session_id, limit, Some(cursor))
+            .session_run_window(session_id, limit, 32, Some(cursor))
             .await?;
+        let folds = agena_tui_transcript::folds_from_run_window(&page_resource);
         let mut page = SessionTranscriptPage {
-            parts: page_resource
-                .parts
-                .into_iter()
-                .map(transcript_part_from_resource)
-                .collect(),
-            folds: page_resource.folds,
+            parts: page_resource.parts,
+            folds,
             next_cursor: page_resource.page.next_cursor,
             has_more: page_resource.page.has_more,
         };
@@ -1944,20 +1952,18 @@ impl TuiBackend {
     pub(crate) async fn list_session_transcript_fold_page(
         &self,
         session_id: i64,
+        run_ids: &[i64],
         limit: u64,
         cursor: &str,
     ) -> Result<SessionTranscriptPage> {
         let page_resource = self
             .client()
-            .session_transcript_fold_page(session_id, limit, cursor)
+            .session_run_parts_window(session_id, run_ids, limit, Some(cursor))
             .await?;
+        let folds = agena_tui_transcript::folds_from_run_window(&page_resource);
         let mut page = SessionTranscriptPage {
-            parts: page_resource
-                .parts
-                .into_iter()
-                .map(transcript_part_from_resource)
-                .collect(),
-            folds: page_resource.folds,
+            parts: page_resource.parts,
+            folds,
             next_cursor: page_resource.page.next_cursor,
             has_more: page_resource.page.has_more,
         };
@@ -1996,7 +2002,10 @@ impl TuiBackend {
         after_seq: Option<i64>,
         force: bool,
     ) -> Result<SessionRefresh> {
-        let execution = self.client().get_session_state_validated(session_id, force).await?;
+        let execution = self
+            .client()
+            .get_session_state_validated(session_id, force)
+            .await?;
         if !force && after_seq.is_some() && execution.latest_event_seq == after_seq {
             return Ok(SessionRefresh {
                 execution_only: Some(execution),
@@ -2007,7 +2016,7 @@ impl TuiBackend {
             });
         }
         let snapshot = self
-            .get_session_state_with_transcript_page(session_id)
+            .transcript_page_with_execution(session_id, Some(execution))
             .await?;
         let latest_event_seq = snapshot.execution.latest_event_seq;
         let event_count = after_seq
@@ -2506,23 +2515,45 @@ impl TuiBackend {
                         && signal.session_id == Some(session_id)
                     {
                         let incremental = if signal.kind == "activity" {
-                            signal.payload.get("activity").cloned()
+                            signal
+                                .payload
+                                .get("activity")
+                                .cloned()
                                 .and_then(|value| serde_json::from_value(value).ok())
                                 .map(|activity| LiveEvent {
                                     activity_update: Some((
-                                        signal.payload.get("ts_ms").and_then(serde_json::Value::as_i64).unwrap_or(0),
-                                        signal.payload.get("reason").and_then(serde_json::Value::as_str) == Some("dismissed"),
+                                        signal
+                                            .payload
+                                            .get("ts_ms")
+                                            .and_then(serde_json::Value::as_i64)
+                                            .unwrap_or(0),
+                                        signal
+                                            .payload
+                                            .get("reason")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some("dismissed"),
                                         activity,
                                     )),
                                     ..LiveEvent::default()
                                 })
                         } else if signal.kind == "plugin"
-                            && signal.payload.get("kind").and_then(serde_json::Value::as_str) == Some("plan.changed")
+                            && signal
+                                .payload
+                                .get("kind")
+                                .and_then(serde_json::Value::as_str)
+                                == Some("plan.changed")
                         {
-                            Some(LiveEvent { plan_changed: true, ..LiveEvent::default() })
-                        } else { None };
+                            Some(LiveEvent {
+                                plan_changed: true,
+                                ..LiveEvent::default()
+                            })
+                        } else {
+                            None
+                        };
                         if let Some(live) = incremental {
-                            if tx.send(live).await.is_err() { return; }
+                            if tx.send(live).await.is_err() {
+                                return;
+                            }
                             continue;
                         }
                     }
@@ -2552,10 +2583,7 @@ impl TuiBackend {
                     {
                         if tx
                             .send(LiveEvent {
-                                part_update: Some((
-                                    *origin,
-                                    agena_api::resource::SessionTranscriptPart::from(*part.clone()),
-                                )),
+                                part_update: Some((*origin, *part.clone())),
                                 session_deleted: false,
                                 snapshot: None,
                                 force_refresh: false,

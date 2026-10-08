@@ -408,7 +408,7 @@ async fn early_stream_terminal_does_not_discard_buffered_chunks_or_hide_overflow
         let mut chunks = Vec::new();
         tokio::time::timeout(Duration::from_secs(3), async {
             while let Some(chunk) = stream.chunks.recv().await {
-                chunks.push(chunk.text_delta.unwrap());
+                chunks.push(chunk.payload.text_content().unwrap().to_owned());
             }
         })
         .await
@@ -468,7 +468,7 @@ async fn restart_fails_old_stream_and_allows_the_new_process_to_reuse_its_stream
     let fixture = Fixture::new(RestartMode::OnFailure, None).await;
     let mut old = open_stream(&fixture, false).await;
     assert_eq!(
-        old.chunks.recv().await.unwrap().text_delta.as_deref(),
+        old.chunks.recv().await.unwrap().payload.text_content(),
         Some("first")
     );
     fixture
@@ -489,7 +489,7 @@ async fn restart_fails_old_stream_and_allows_the_new_process_to_reuse_its_stream
     let mut chunks = Vec::new();
     tokio::time::timeout(Duration::from_secs(3), async {
         while let Some(chunk) = new.chunks.recv().await {
-            chunks.push(chunk.text_delta.unwrap());
+            chunks.push(chunk.payload.text_content().unwrap().to_owned());
         }
     })
     .await

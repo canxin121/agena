@@ -245,6 +245,7 @@ fn pending_operation_for_resolved(
 /// key conflicts; pending-only context fills the remaining keys.
 fn inherit_operation_context(target: &mut OperationPart, source: OperationPart) {
     target.user_input = source.user_input;
+    target.resources = source.resources;
     for (key, value) in source.metadata {
         target.metadata.entry(key).or_insert(value);
     }
@@ -918,7 +919,7 @@ impl SessionManager {
         let operation = move |manager: SessionManager, control: Arc<ExecutionControl>, steer_rx| async move {
             let execution_manager = manager.background_handle();
             let execution_state = state.clone();
-            let execution_tool = resolved_tool.clone();
+            let mut execution_tool = resolved_tool.clone();
             let cancellation = control.cancel.clone();
             let scoped_executor = execution_state
                 .tool_executor
@@ -929,15 +930,34 @@ impl SessionManager {
                     &execution_tool.session_runtime.execution.selection,
                 ))
                 .with_cancellation_token(Some(cancellation));
+            let mut latest = manager.load_session_with_workspace_root(session_id).await?;
+            manager
+                .prepare_tool_content(&mut latest, &mut execution_tool, &scoped_executor)
+                .await?;
+            if execution_tool.content_writer.is_some() {
+                manager
+                    .persist_session_changes(
+                        latest,
+                        vec![execution_tool.pending.part.part_id],
+                        None,
+                        execution_state.clone(),
+                    )
+                    .await?;
+            }
             let host_user_input_sequence = execution_manager
                 .host_user_input_sequence_guard(session_id, execution_tool.call_id);
             let execution = scoped_executor
-                .execute_invocation_detailed_with_launch_provenance(
+                .execute_invocation(
                     &execution_tool.invocation,
-                    session_id,
-                    execution_tool.call_id,
-                    execution_tool.prepared_shell_command.clone(),
-                    Some(execution_tool.scheduled_job_launch_provenance(session_id)),
+                    crate::tool::ToolRuntimeContext {
+                        session_id: Some(session_id),
+                        call_id: Some(execution_tool.call_id),
+                        prepared_shell_command: execution_tool.prepared_shell_command.clone(),
+                        launch_provenance: Some(
+                            execution_tool.scheduled_job_launch_provenance(session_id),
+                        ),
+                        output: execution_tool.content_writer.clone(),
+                    },
                 )
                 .await;
             drop(host_user_input_sequence);
@@ -1767,10 +1787,9 @@ use super::{
     PermissionScope, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
     ProviderPromptAnchor, ResolvedPendingTool, SessionExecutionReplyRequest, SessionManager,
     SessionManagerState, SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest,
-    SessionRunTermination, StreamingToolExecution, TimeRange, ToolError, ToolInvocation,
-    ToolInvocationExecution, UserInputReplyKind, Utc, background_operation_from_execution,
-    background_operation_id, completed_lifecycle, execution_control_to_app_error,
-    host_user_input_response, mpsc, permission_action_key, persisted_rules_for_reply,
-    requested_background_kind, reserve_background_external_id, resolve_pending_tool,
-    run_abort_reason, user_input_execution,
+    SessionRunTermination, TimeRange, ToolError, ToolInvocation, ToolInvocationExecution,
+    UserInputReplyKind, Utc, background_operation_from_execution, background_operation_id,
+    completed_lifecycle, execution_control_to_app_error, host_user_input_response, mpsc,
+    permission_action_key, persisted_rules_for_reply, requested_background_kind,
+    reserve_background_external_id, resolve_pending_tool, run_abort_reason, user_input_execution,
 };

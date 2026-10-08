@@ -439,19 +439,16 @@ async fn completed_user_send_is_a_terminal_input_receipt_not_a_liveness_guard() 
 }
 
 #[tokio::test]
-async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
+async fn semantic_checkpoint_commits_part_before_companion_append() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let durable_probe = engine.clone();
-    let facade = SessionFacade::new(engine, 16)
-        // Keep the synthetic InProgress content update buffered until the
-        // background transaction explicitly checkpoints it.
-        .with_streaming_flush_delta_count(64);
+    let facade = SessionFacade::new(engine, 16);
 
     let mut tool = NewPart::pending(
         "tool_call",
         PartRole::Assistant,
-        json!({"name": "shell.run", "input": {}, "metadata": {"phase": "starting"}}),
+        json!({"name": "shell.exec", "input": {}, "metadata": {"phase": "starting"}}),
     );
     tool.state = PartState::InProgress;
     let launched = facade
@@ -461,7 +458,7 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
     let run_id = launched.run_id;
     let tool_part_id = launched.parts[1].part_id;
     let marker_content = json!({
-        "name": "shell.run",
+        "name": "shell.exec",
         "input": {},
         "metadata": {
             "phase": "launched",
@@ -469,9 +466,7 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
         }
     });
 
-    // Reproduce the original failure shape: this semantic InProgress update
-    // enters D10's stream buffer and is visible through the facade, but is not
-    // in the durable engine row yet.
+    // A semantic launch update is durable immediately.
     facade
         .update_part(
             session_id,
@@ -495,8 +490,8 @@ async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
             .find(|part| part.part_id == tool_part_id)
             .expect("durable tool part")
             .content["metadata"]["phase"],
-        "starting",
-        "the fixture must prove the marker is still memory-only"
+        "launched",
+        "semantic facts must be durable before their notification"
     );
 
     let mut guard = NewPart::pending(
@@ -1062,7 +1057,7 @@ async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_appen
             streamed_id,
             agena_storage::store::PartDelta {
                 state: Some(PartState::Completed),
-                content_text_delta: Some(" complete".to_owned()),
+                content: Some(json!({"text": "partial complete"})),
                 ..Default::default()
             },
             1_000_001,
@@ -1727,7 +1722,12 @@ async fn jsonl_round_trip_preserves_single_source_tool_output_and_ordering() {
         .await
         .expect("workspace");
     let imported = engine
-        .import_session_jsonl(workspace_id, &bundle, 1_000_000)
+        .import_session_jsonl(
+            workspace_id,
+            &bundle,
+            1_000_000,
+            &agena_storage::content::ContentHub::in_memory(),
+        )
         .await
         .expect("import");
 
@@ -2266,7 +2266,12 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
         .await
         .expect("export");
     let imported_id = engine
-        .import_session_jsonl(workspace_id, &bundle, 1_000_010)
+        .import_session_jsonl(
+            workspace_id,
+            &bundle,
+            1_000_010,
+            &agena_storage::content::ContentHub::in_memory(),
+        )
         .await
         .expect("import");
     assert_eq!(engine.session_meta(imported_id).await.unwrap().version, 2);

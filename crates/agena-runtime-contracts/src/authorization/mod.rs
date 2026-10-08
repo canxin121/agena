@@ -117,7 +117,7 @@ pub fn apply_tool_permission_config(
     value: &ToolPermissionConfig,
     mut base: ToolPermissionPolicy,
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
-    let value = value.clone().with_current_shell_names();
+    let value = value.clone().with_canonical_tool_names();
     if let Some(mode) = value.default {
         base.default_mode = mode;
     }

@@ -12,7 +12,7 @@
 //! This projection owns every value: parts arrive as JSON and are decoded into
 //! the render model here, so entries are `'static`.
 
-use agena_api::live::SessionTranscriptFoldResource;
+use agena_api::part::PartResource;
 use agena_api::{
     part::{
         AttachmentPartResource, CommandReferencePartResource, ErrorPartResource,
@@ -20,8 +20,8 @@ use agena_api::{
     },
     resource::{
         PartAttachment, PartAttachmentKind, PartAttachmentSource, PartCommandReference, RunRole,
-        RunStatus, SessionTranscriptPart, UserInputOption, UserInputQuestion, UserInputReply,
-        UserInputReplyKind, UserInputRequest,
+        RunStatus, UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind,
+        UserInputRequest,
     },
 };
 use agena_domain::AssistantReplyId;
@@ -39,6 +39,36 @@ use crate::{
     TranscriptPartContent,
 };
 
+/// Client-owned disclosure state derived from bounded run windows.
+#[derive(Debug, Clone)]
+pub struct TranscriptFold {
+    pub run_id: i64,
+    pub run_ids: Vec<i64>,
+    pub anchor_part_id: i64,
+    pub hidden_count: u64,
+    pub next_cursor: Option<String>,
+}
+
+pub fn folds_from_run_window(page: &agena_api::live::SessionPartsResource) -> Vec<TranscriptFold> {
+    page.runs
+        .iter()
+        .filter_map(|run| {
+            let hidden_count = run.part_count.saturating_sub(run.page.returned);
+            if hidden_count == 0 {
+                return None;
+            }
+            let anchor = page.parts.iter().find(|p| p.run_id == Some(run.run_id))?;
+            Some(TranscriptFold {
+                run_id: run.run_id,
+                run_ids: vec![run.run_id],
+                anchor_part_id: anchor.part_id,
+                hidden_count,
+                next_cursor: run.page.next_cursor.clone(),
+            })
+        })
+        .collect()
+}
+
 /// Project an ordered v2 part list into transcript entries. Each `run` marker
 /// starts an entry, except that consecutive assistant runs fold into a single
 /// entry: a multi-round tool loop emits one run marker per model turn (tool
@@ -48,24 +78,24 @@ use crate::{
 /// later while still belonging to the assistant run that launched it.
 /// Content parts whose referenced marker is absent are excluded: the current
 /// wire contract has no owner reconstruction rule.
-pub fn parts_entries(parts: &[SessionTranscriptPart]) -> Vec<TranscriptEntry<'static>> {
+pub fn parts_entries(parts: &[PartResource]) -> Vec<TranscriptEntry<'static>> {
     parts_entries_with_folds(parts, &[])
 }
 
-/// Project ordered parts and server-provided presentation fold metadata into
+/// Project ordered parts and client-owned disclosure state into
 /// the same render model as the lossless projection. Fold markers are inserted
 /// immediately before their first visible activity part; their omitted raw
 /// prefix is fetched by the app when the marker is expanded.
 pub fn parts_entries_with_folds(
-    parts: &[SessionTranscriptPart],
-    folds: &[SessionTranscriptFoldResource],
+    parts: &[PartResource],
+    folds: &[TranscriptFold],
 ) -> Vec<TranscriptEntry<'static>> {
     let marker_ids = parts
         .iter()
         .filter(|part| part.kind == "run")
         .map(|part| part.part_id)
         .collect::<std::collections::BTreeSet<_>>();
-    let mut content_by_run = std::collections::BTreeMap::<i64, Vec<&SessionTranscriptPart>>::new();
+    let mut content_by_run = std::collections::BTreeMap::<i64, Vec<&PartResource>>::new();
     for part in parts.iter().filter(|part| part.kind != "run") {
         if let Some(run_id) = part.run_id
             && marker_ids.contains(&run_id)
@@ -131,7 +161,7 @@ pub fn parts_entries_with_folds(
 
 /// Whether any run marker in the part list has a non-terminal state. The app
 /// uses this as a safety net to force a refresh after a terminal execution.
-pub fn parts_have_non_terminal_runs(parts: &[SessionTranscriptPart]) -> bool {
+pub fn parts_have_non_terminal_runs(parts: &[PartResource]) -> bool {
     parts
         .iter()
         .filter(|part| part.kind == "run")
@@ -141,7 +171,7 @@ pub fn parts_have_non_terminal_runs(parts: &[SessionTranscriptPart]) -> bool {
 /// Count of user run markers that carry at least one text part. This is the
 /// optimistic-entry boundary: a user input becomes visible exactly when its
 /// run's text part appears in the projection.
-pub fn parts_visible_user_inputs(parts: &[SessionTranscriptPart]) -> usize {
+pub fn parts_visible_user_inputs(parts: &[PartResource]) -> usize {
     let user_runs = parts
         .iter()
         .filter(|part| part.kind == "run" && part.role == "user")
@@ -158,7 +188,7 @@ pub fn parts_visible_user_inputs(parts: &[SessionTranscriptPart]) -> usize {
 /// The last assistant reply's text from the parts projection: the text parts
 /// of the final assistant `run` marker (design §4.1.1 marker == turn), joined
 /// with newlines. Returns `None` when no assistant run carries text.
-pub fn last_assistant_reply_text(parts: &[SessionTranscriptPart]) -> Option<String> {
+pub fn last_assistant_reply_text(parts: &[PartResource]) -> Option<String> {
     let mut last: Option<(i64, String)> = None;
     let mut current_run: Option<(i64, &str)> = None;
     let mut current_text = String::new();
@@ -198,7 +228,7 @@ pub fn last_assistant_reply_text(parts: &[SessionTranscriptPart]) -> Option<Stri
     Some(text)
 }
 
-fn run_marker_entry(marker: &SessionTranscriptPart) -> TranscriptEntry<'static> {
+fn run_marker_entry(marker: &PartResource) -> TranscriptEntry<'static> {
     TranscriptEntry {
         id: TranscriptEntryId::StoredMessage(marker.part_id),
         role: role_from_string(&marker.role),
@@ -289,7 +319,7 @@ fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'s
 /// The summary the runtime already projected for this part. Presentation
 /// data is carried by the part, so it must win over re-probing the content
 /// JSON with client-side field guesses.
-fn part_summary(part: &SessionTranscriptPart) -> Option<String> {
+fn part_summary(part: &PartResource) -> Option<String> {
     part.summary
         .as_deref()
         .map(str::trim)
@@ -309,7 +339,7 @@ fn attachment_kind_from_value(content: &serde_json::Value) -> Option<PartAttachm
     }
 }
 
-fn entry_part(part: &SessionTranscriptPart) -> TranscriptEntryPart<'static> {
+fn entry_part(part: &PartResource) -> TranscriptEntryPart<'static> {
     TranscriptEntryPart {
         id: TranscriptContentId::StoredPart(part.part_id),
         status: part_status_from_string(&part.state),
@@ -317,7 +347,7 @@ fn entry_part(part: &SessionTranscriptPart) -> TranscriptEntryPart<'static> {
     }
 }
 
-fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> {
+fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
     // Every kind decodes through its canonical contract shape: no field is
     // guessed from raw JSON and no kind is re-encoded as another. Content that
     // cannot be decoded degrades to a readable text part, never silently
@@ -327,7 +357,9 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             let Some(content) = decode_part_content::<TextContent>(part) else {
                 return fallback_text_part(part);
             };
-            if part.role == "assistant" && !content.text.trim().is_empty() {
+            if part.role == "assistant"
+                && (!content.text.trim().is_empty() || !content.resources.is_empty())
+            {
                 // Assistant reply text projects as an owned activity so it
                 // renders as a toggleable part. [`finalize_run_entry`] promotes
                 // the final non-tool-followed text part to `Answer` (default
@@ -502,7 +534,7 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
 
 /// Decode one part's content through its canonical contract shape. A part whose
 /// content cannot be decoded is reported and degraded by the caller.
-fn decode_part_content<T>(part: &SessionTranscriptPart) -> Option<T>
+fn decode_part_content<T>(part: &PartResource) -> Option<T>
 where
     T: for<'de> TryFrom<&'de serde_json::Value, Error = String>,
 {
@@ -522,7 +554,7 @@ where
 
 /// A readable stand-in for content that could not be decoded: the raw payload
 /// stays visible instead of the part disappearing from the transcript.
-fn fallback_text_part(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> {
+fn fallback_text_part(part: &PartResource) -> TranscriptPartContent<'static> {
     TranscriptPartContent::Text(TextPartResource {
         text: fallback_json_text(&part.content),
         synthetic: false,
@@ -531,7 +563,7 @@ fn fallback_text_part(part: &SessionTranscriptPart) -> TranscriptPartContent<'st
 
 /// Decode the canonical `tool_call` facts and keep the human presentation in
 /// its native `ViewBlock` form. No API envelope or flattened mirror is built.
-fn tool_call_view_from_part(part: &SessionTranscriptPart) -> Option<ToolCallView> {
+fn tool_call_view_from_part(part: &PartResource) -> Option<ToolCallView> {
     // Transcript snapshots intentionally omit collapsed tool detail sections.
     // The canonical durable decoder requires `input`, so provide only the
     // empty structural default needed to decode a presentation-only snapshot;
@@ -767,10 +799,10 @@ fn assistant_reply_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_api::resource::SessionTranscriptPart;
+    use agena_api::part::PartResource;
 
-    fn run(part_id: i64, role: &str, state: &str) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    fn run(part_id: i64, role: &str, state: &str) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -783,6 +815,7 @@ mod tests {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: None,
+            ..Default::default()
         }
     }
 
@@ -791,7 +824,7 @@ mod tests {
         kind: &str,
         role: &str,
         content: serde_json::Value,
-    ) -> SessionTranscriptPart {
+    ) -> PartResource {
         content_part_for(1, part_id, kind, role, content)
     }
 
@@ -801,8 +834,8 @@ mod tests {
         kind: &str,
         role: &str,
         content: serde_json::Value,
-    ) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    ) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -815,6 +848,7 @@ mod tests {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         }
     }
 
@@ -1295,7 +1329,7 @@ mod tests {
                 "lifecycle": { "start_ms": 100, "end_ms": 200 }
             }),
         );
-        tool.presentation = Some(agena_api::live::HumanPresentationResource {
+        tool.presentation = Some(agena_domain::PartDocument {
             title: "Search tools".to_owned(),
             summary: "Returned 3 matching tools.".to_owned(),
             blocks: vec![agena_domain::ViewBlock::Log {
@@ -1397,7 +1431,7 @@ mod tests {
     fn last_assistant_reply_text_takes_the_final_assistant_run() {
         // Each content part backlinks its enclosing run marker, matching the
         // durable projection's `run_id` contract.
-        let content = |run_id: i64, part_id: i64, role: &str, text: &str| SessionTranscriptPart {
+        let content = |run_id: i64, part_id: i64, role: &str, text: &str| PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -1410,6 +1444,7 @@ mod tests {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         };
         let parts = vec![
             run(1, "user", "completed"),

@@ -1,4 +1,12 @@
 export default {
+  content: {
+    live: 'Live output', complete: 'Output complete', interrupted: 'Interrupted output',
+    follow: 'Follow output', copy: 'Copy', label: 'Tool output', waiting: 'Waiting for output…',
+    gap: 'Some source output is unavailable from the retained ranges.',
+    window: 'Earlier output is outside this display window; retained content is available when copying.',
+    recovering: 'Reconnecting to output…',
+    copyLimit: 'This output exceeds the 16 MiB copy limit. Select a smaller range to copy.',
+  },
   app: {
     title: 'Agena',
   },

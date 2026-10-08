@@ -32,6 +32,9 @@ pub enum ExportRecord {
         provider_anchors_json: Option<Value>,
     },
     Part(Part),
+    Content {
+        archive: Box<crate::content::ContentArchive>,
+    },
 }
 
 #[cfg(test)]
@@ -116,6 +119,16 @@ fn push_line(record: ExportRecord) -> Result<String, StoreError> {
     Ok(line)
 }
 
+pub(crate) fn append_resource(
+    out: &mut String,
+    archive: crate::content::ContentArchive,
+) -> Result<(), StoreError> {
+    out.push_str(&push_line(ExportRecord::Content {
+        archive: Box::new(archive),
+    })?);
+    Ok(())
+}
+
 /// A parsed JSONL bundle: the metadata line plus the ordered parts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedBundle {
@@ -125,12 +138,19 @@ pub struct ParsedBundle {
     pub config_json: Option<Value>,
     pub provider_anchors_json: Option<Value>,
     pub parts: Vec<Part>,
+    pub resources: Vec<crate::content::ContentArchive>,
 }
 
 /// Parse a JSONL bundle produced by [`serialize`].
 pub fn parse(bundle: &str) -> Result<ParsedBundle, StoreError> {
+    if bundle.len() > 512 * 1024 * 1024 {
+        return Err(StoreError::Constraint(
+            "session bundle exceeds its byte budget".into(),
+        ));
+    }
     let mut meta: Option<ExportRecord> = None;
     let mut parts = Vec::new();
+    let mut resources = Vec::new();
     for (index, line) in bundle.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
@@ -143,7 +163,8 @@ pub fn parse(bundle: &str) -> Result<ParsedBundle, StoreError> {
             ExportRecord::Meta { .. } if meta.is_none() => {
                 meta = Some(record);
             }
-            ExportRecord::Part(part) => parts.push(part),
+            ExportRecord::Part(part) if meta.is_some() => parts.push(part),
+            ExportRecord::Content { archive } if meta.is_some() => resources.push(*archive),
             other => {
                 return Err(StoreError::Serialization(format!(
                     "unexpected JSONL record at line {}: {other:?}",
@@ -172,5 +193,109 @@ pub fn parse(bundle: &str) -> Result<ParsedBundle, StoreError> {
         config_json,
         provider_anchors_json,
         parts,
+        resources,
     })
+}
+
+/// Validate the complete bundle before publishing anything. Resource identity
+/// belongs to the owning Part; import creates a fresh owner and generation.
+pub fn prepare_resource_import(
+    parts: &mut [Part],
+    archives: Vec<crate::content::ContentArchive>,
+    session_id: i64,
+    id_map: &std::collections::HashMap<i64, i64>,
+) -> Result<Vec<crate::content::ContentArchive>, StoreError> {
+    use std::collections::HashMap;
+    let mut expected = HashMap::new();
+    for part in parts.iter() {
+        for reference in part.resources()? {
+            if expected
+                .insert(
+                    reference.resource_id,
+                    (part.part_id, part.origin_session_id, reference.kind),
+                )
+                .is_some()
+            {
+                return Err(StoreError::Constraint(
+                    "a content resource must have exactly one owning Part".into(),
+                ));
+            }
+        }
+        for target in [part.run_id, part.parent_part_id].into_iter().flatten() {
+            if !id_map.contains_key(&target) {
+                return Err(StoreError::Constraint(
+                    "imported Part refers to a Part outside the bundle".into(),
+                ));
+            }
+        }
+    }
+    let mut restored = Vec::with_capacity(archives.len());
+    let mut resources = HashMap::new();
+    for mut archive in archives {
+        archive.validate()?;
+        let id = archive.resource.resource_id;
+        let Some((part_id, origin, kind)) = expected.remove(&id) else {
+            return Err(StoreError::Constraint(
+                "unreferenced or duplicate content archive".into(),
+            ));
+        };
+        if archive.resource.part_id != part_id
+            || archive.resource.owner_session_id != origin
+            || archive.resource.kind != kind
+        {
+            return Err(StoreError::Constraint(
+                "content archive differs from its Part owner".into(),
+            ));
+        }
+        let new_id = agena_domain::ContentId::new();
+        archive.remap(new_id, session_id, id_map[&part_id]);
+        resources.insert(id, new_id);
+        restored.push(archive);
+    }
+    if !expected.is_empty() {
+        return Err(StoreError::Constraint(
+            "session bundle is missing referenced content archives".into(),
+        ));
+    }
+    fn rewrite(
+        value: &mut Value,
+        resources: &HashMap<agena_domain::ContentId, agena_domain::ContentId>,
+    ) {
+        if value.as_object().is_some_and(|object| {
+            object.len() == 2 && object.contains_key("resource_id") && object.contains_key("kind")
+        }) && let Ok(mut reference) =
+            serde_json::from_value::<agena_domain::ContentRef>(value.clone())
+        {
+            if let Some(id) = resources.get(&reference.resource_id) {
+                reference.resource_id = *id;
+                *value = serde_json::to_value(reference).expect("resource reference serializes");
+            }
+            return;
+        }
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    rewrite(value, resources);
+                }
+            }
+            Value::Object(values) => {
+                for value in values.values_mut() {
+                    rewrite(value, resources);
+                }
+            }
+            _ => {}
+        }
+    }
+    for part in parts {
+        if let Some(value) = part.content.get_mut("resources") {
+            rewrite(value, &resources);
+        }
+        if let Some(value) = part.content.get_mut("output") {
+            rewrite(value, &resources);
+        }
+        if let Some(value) = part.content.pointer_mut("/metadata/agena.provider_trace") {
+            rewrite(value, &resources);
+        }
+    }
+    Ok(restored)
 }

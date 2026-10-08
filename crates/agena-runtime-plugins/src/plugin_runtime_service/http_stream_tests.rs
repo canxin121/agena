@@ -369,7 +369,9 @@ async fn serve(router: Router) -> (String, JoinHandle<()>) {
 
 fn event(method: &str, stream_id: &str, context: Value) -> Value {
     let mut params = match method {
-        method::TOOL_STREAM_CHUNK => json!({"stream_id": stream_id, "text_delta": "injected"}),
+        method::TOOL_STREAM_CHUNK => {
+            json!({"stream_id": stream_id, "payload": {"type": "text", "text": "injected"}})
+        }
         method::TOOL_STREAM_END => {
             serde_json::to_value(ToolStreamEnd::text(stream_id, "injected")).unwrap()
         }
@@ -388,7 +390,7 @@ async fn collect(
     tokio::time::timeout(WAIT, async {
         let mut chunks = Vec::new();
         while let Some(chunk) = stream.chunks.recv().await {
-            chunks.push(chunk.text_delta.unwrap());
+            chunks.push(chunk.payload.text_content().unwrap().to_owned());
         }
         (chunks, stream.end.await.unwrap())
     })

@@ -4284,13 +4284,13 @@ mod tests {
             "result": {
                 "tools": [
                     {"name": "fs.read"},
-                    {"name": "shell.run"}
+                    {"name": "shell.exec"}
                 ]
             }
         });
         let auth_requirements = HashMap::from([
             ("fs.read".to_owned(), false),
-            ("shell.run".to_owned(), true),
+            ("shell.exec".to_owned(), true),
         ]);
         let payload = add_tool_security_schemes(payload, McpAuthMode::Mixed, &auth_requirements)
             .expect("mixed tools/list payload");

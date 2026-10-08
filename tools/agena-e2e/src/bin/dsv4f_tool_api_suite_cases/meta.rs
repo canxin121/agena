@@ -146,9 +146,10 @@ pub(crate) async fn run_tool_api_meta_suite(
             "input": {"label": "second", "payload": {"marker": "TOOL_API_BATCH_SECOND"}}
         });
         let start_message_count = harness
-            .session_queries
-            .list_projected_runs(session)
+            .session_store
+            .load_run_markers(session)
             .await?
+            .parts
             .len();
         let mut options = harness.options.clone();
         options.request_override.set_parallel_tool_calls(Some(true));
@@ -221,9 +222,10 @@ pub(crate) async fn run_tool_api_meta_suite(
             }
         });
         let start_message_count = harness
-            .session_queries
-            .list_projected_runs(session)
+            .session_store
+            .load_run_markers(session)
             .await?
+            .parts
             .len();
         let prompt = format!(
             "This is an automated Tool API recovery test. First call function tools_call exactly once with the intentionally incomplete arguments {}. It must be rejected with embedded tool help. Read that help, do not call tools_help, then call tools_call exactly once with the corrected arguments {}. After the corrected call succeeds, reply exactly DSV4F_TOOLS_CALL_AUTO_HELP_OK.",

@@ -86,63 +86,53 @@ async fn main() -> anyhow::Result<()> {
     let mut last_key = String::new();
     loop {
         if poll {
-            // Poll the EXACT query surface the TUI refresh path uses
-            // (`list_projected_runs` behind `get_session_state`), plus the
-            // durable watermark, plus the raw facade view. Report how the
-            // run-marker set and streaming deltas evolve over the run.
+            // Observe the bounded, factual run window and resource cursors.
             let t0 = tokio::time::Instant::now();
-            if let Ok(projected) = queries.list_projected_runs(session_id).await {
+            if let Ok(window) = store.load_run_window(session_id, None, 8, 32).await {
                 let elapsed_ms = t0.elapsed().as_millis();
-                let runs = projected
-                    .iter()
-                    .map(|run| {
-                        let think_units = run
-                            .parts
-                            .iter()
-                            .filter(|part| part.kind == "think")
-                            .filter_map(|part| part.content.as_ref())
-                            .filter_map(|c| c.get("summary"))
-                            .filter_map(|s| s.as_array())
-                            .map(|a| a.len())
-                            .sum::<usize>();
-                        let text_len = run
-                            .parts
-                            .iter()
-                            .filter(|part| part.kind == "text")
-                            .filter_map(|part| part.content.as_ref())
-                            .filter_map(|c| c.get("text"))
-                            .filter_map(serde_json::Value::as_str)
-                            .map(str::len)
-                            .sum::<usize>();
-                        let tool_calls = run
-                            .parts
-                            .iter()
-                            .filter(|part| part.kind == "tool_call")
-                            .count();
-                        let results = run
-                            .parts
-                            .iter()
-                            .filter(|part| part.kind == "tool_result")
-                            .count();
-                        format!(
-                            "run{}:{:?}:{:?} t={} h={} c={} r={}",
-                            run.id, run.role, run.state, think_units, text_len, tool_calls, results
-                        )
-                    })
-                    .collect::<Vec<_>>();
+                let mut runs = Vec::new();
+                let mut overlay_think = 0u64;
+                for run in &window.runs {
+                    let marker = window.parts.iter().find(|part| part.part_id == run.run_id);
+                    let mut text_bytes = 0u64;
+                    let mut think_bytes = 0u64;
+                    let children = window
+                        .parts
+                        .iter()
+                        .filter(|part| part.run_id == Some(run.run_id));
+                    let mut tool_calls = 0;
+                    for part in children {
+                        tool_calls += usize::from(part.kind == "tool_call");
+                        if let Some(resources) = part
+                            .content
+                            .get("resources")
+                            .and_then(serde_json::Value::as_array)
+                        {
+                            for value in resources {
+                                let reference: agena_domain::ContentRef =
+                                    serde_json::from_value(value.clone())?;
+                                let content =
+                                    store.contents().describe(reference.resource_id).await?;
+                                if part.kind == "think" {
+                                    think_bytes += content.total_bytes;
+                                }
+                                if part.kind == "text" {
+                                    text_bytes += content.total_bytes;
+                                }
+                            }
+                        }
+                    }
+                    overlay_think += think_bytes;
+                    runs.push(format!(
+                        "run{}:{:?} text_bytes={} think_bytes={} calls={}",
+                        run.run_id,
+                        marker.map(|part| part.state),
+                        text_bytes,
+                        think_bytes,
+                        tool_calls
+                    ));
+                }
                 let watermark = queries.latest_event_seq(session_id).await.ok().flatten();
-                let live_view = store.load(session_id).await.ok();
-                let overlay_think = live_view
-                    .map(|v| {
-                        v.parts
-                            .iter()
-                            .filter(|part| part.kind == "think")
-                            .filter_map(|part| part.content.get("summary"))
-                            .filter_map(|s| s.as_array())
-                            .map(|a| a.len())
-                            .sum::<usize>()
-                    })
-                    .unwrap_or(0);
                 let key = format!(
                     "runs=[{}] wm={:?} overlay_think={} load_ms={}",
                     runs.join(" | "),
@@ -181,14 +171,33 @@ async fn main() -> anyhow::Result<()> {
         .iter()
         .filter(|part| part.kind == "tool_call")
         .collect::<Vec<_>>();
-    let final_text = view
+    let final_part = view
         .parts
         .iter()
         .rev()
-        .find(|part| part.kind == "text" && format!("{:?}", part.role) == "Assistant")
-        .and_then(|part| part.content.get("text"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+        .find(|part| part.kind == "text" && part.role.as_str() == "assistant");
+    let mut final_text = String::new();
+    if let Some(part) = final_part {
+        if let Some(refs) = part
+            .content
+            .get("resources")
+            .and_then(serde_json::Value::as_array)
+        {
+            for value in refs {
+                let reference: agena_domain::ContentRef = serde_json::from_value(value.clone())?;
+                final_text.push_str(
+                    &store
+                        .contents()
+                        .read_text(reference.resource_id, 64 * 1024)
+                        .await?
+                        .text,
+                );
+            }
+        }
+        if let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str) {
+            final_text.push_str(text);
+        }
+    }
     let error_parts = view
         .parts
         .iter()

@@ -42,6 +42,9 @@ use tokio_util::{codec::FramedRead, io::StreamReader};
 use crate::error::ClientError;
 use crate::ws::SubscriptionEvent;
 
+mod content;
+pub use content::ContentSubscription;
+
 const MAX_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TEXT_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -313,12 +316,12 @@ impl ResourceReads {
             self.checked_at = None;
         }
         self.epoch = Some(epoch.to_owned());
-        if let Some(previous) = self.versions.get(key) {
-            if let Some((old_epoch, old_time)) = previous.rsplit_once(':') {
-                if old_epoch == epoch && old_time.parse::<i64>().unwrap_or(0) > time {
-                    return false;
-                }
-            }
+        if let Some(previous) = self.versions.get(key)
+            && let Some((old_epoch, old_time)) = previous.rsplit_once(':')
+            && old_epoch == epoch
+            && old_time.parse::<i64>().unwrap_or(0) > time
+        {
+            return false;
         }
         if self.versions.len() >= 512 && !self.versions.contains_key(key) {
             self.versions.clear();
@@ -651,7 +654,8 @@ impl AgenaClient {
             reads.read_sequence = reads.read_sequence.saturating_add(1);
             let required_generation = reads.read_sequence;
             reads.locks.retain(|_, lock| lock.strong_count() > 0);
-            let gate = if let Some(gate) = reads.locks.get(&path).and_then(std::sync::Weak::upgrade) {
+            let gate = if let Some(gate) = reads.locks.get(&path).and_then(std::sync::Weak::upgrade)
+            {
                 gate
             } else {
                 let gate = Arc::new(ResourceReadGate {
@@ -661,7 +665,8 @@ impl AgenaClient {
                 reads.locks.insert(path.clone(), Arc::downgrade(&gate));
                 gate
             };
-            gate.requested.fetch_max(required_generation, Ordering::AcqRel);
+            gate.requested
+                .fetch_max(required_generation, Ordering::AcqRel);
             (gate, required_generation)
         };
         let _gate = gate.lock.lock().await;
@@ -718,16 +723,21 @@ impl AgenaClient {
             }
         }
         let observation = self.reads.lock().await.versions.get(resource).cloned();
-        if (reuse || cached.as_ref().is_some_and(|body| body.generation >= required_generation))
+        if (reuse
+            || cached
+                .as_ref()
+                .is_some_and(|body| body.generation >= required_generation))
             && let Some(cached) = &cached
             && observation.as_deref() == Some(cached.token.as_str())
         {
             self.reads.lock().await.touch(&path);
             return Ok(serde_json::from_value(cached.value.clone())?);
         }
-        let _permit = self.read_limit.acquire().await.map_err(|_| {
-            ClientError::Protocol("display read limiter closed".into())
-        })?;
+        let _permit = self
+            .read_limit
+            .acquire()
+            .await
+            .map_err(|_| ClientError::Protocol("display read limiter closed".into()))?;
         // Calls queued before dispatch share this validated representation,
         // including forced reads. Calls arriving after dispatch revalidate.
         let generation = gate.requested.load(Ordering::Acquire);
@@ -748,10 +758,10 @@ impl AgenaClient {
                 ClientError::Protocol("304 without a cached representation".into())
             })?;
             let mut reads = self.reads.lock().await;
-            if reads.observe(resource, &cached.token, observation.as_deref()) {
-                if let Some(body) = reads.bodies.get_mut(&path) {
-                    body.generation = generation;
-                }
+            if reads.observe(resource, &cached.token, observation.as_deref())
+                && let Some(body) = reads.bodies.get_mut(&path)
+            {
+                body.generation = generation;
             }
             reads.touch(&path);
             return Ok(serde_json::from_value(cached.value)?);
@@ -1353,27 +1363,46 @@ impl AgenaClient {
         input: serde_json::Value,
         session_id: Option<i64>,
     ) -> Result<serde_json::Value, ClientError> {
-        let response: serde_json::Value = self.post_json(
-            "/api/v1/plugins/tools/invoke",
-            serde_json::json!({
-                "plugin_id": plugin_id,
-                "tool": tool_name,
-                "input": input,
-                "session_id": session_id,
-            }),
-        )
-        .await?;
-        if plugin_id == "agena.plan" && tool_name != "get" && let Some(id) = session_id {
+        let response: serde_json::Value = self
+            .post_json(
+                "/api/v1/plugins/tools/invoke",
+                serde_json::json!({
+                    "plugin_id": plugin_id,
+                    "tool": tool_name,
+                    "input": input,
+                    "session_id": session_id,
+                }),
+            )
+            .await?;
+        if plugin_id == "agena.plan"
+            && tool_name != "get"
+            && let Some(id) = session_id
+        {
             let resource = format!("session:{id}:plan");
             let mut reads = self.reads.lock().await;
             if let Some(next) = response.pointer("/payload/plan") {
-                let keys = reads.bodies.iter().filter(|(_, body)| body.resource == resource
-                    && body.value.pointer("/payload/plan/revision") != next.get("revision"))
-                    .map(|(key, _)| key.clone()).collect::<Vec<_>>();
-                for key in keys { reads.forget(&key); }
+                let keys = reads
+                    .bodies
+                    .iter()
+                    .filter(|(_, body)| {
+                        body.resource == resource
+                            && body.value.pointer("/payload/plan/revision") != next.get("revision")
+                    })
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>();
+                for key in keys {
+                    reads.forget(&key);
+                }
             } else if response.pointer("/payload/cleared") == Some(&serde_json::Value::Bool(true)) {
-                let keys = reads.bodies.iter().filter(|(_, body)| body.resource == resource).map(|(key, _)| key.clone()).collect::<Vec<_>>();
-                for key in keys { reads.forget(&key); }
+                let keys = reads
+                    .bodies
+                    .iter()
+                    .filter(|(_, body)| body.resource == resource)
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>();
+                for key in keys {
+                    reads.forget(&key);
+                }
             }
         }
         Ok(response)
@@ -2140,7 +2169,7 @@ impl AgenaClient {
     pub async fn session_all_parts(
         &self,
         session_id: i64,
-    ) -> Result<Vec<agena_api::resource::SessionTranscriptPart>, ClientError> {
+    ) -> Result<Vec<agena_api::part::PartResource>, ClientError> {
         let mut cursor: Option<String> = None;
         let mut pages = Vec::new();
         loop {
@@ -2165,24 +2194,22 @@ impl AgenaClient {
             cursor = Some(next_cursor);
         }
         pages.reverse();
-        Ok(pages.into_iter().flatten().map(Into::into).collect())
+        Ok(pages.into_iter().flatten().collect())
     }
 
-    /// Fetch one presentation-oriented transcript page. The server skips
-    /// folded assistant raw parts before responding, so this endpoint is
-    /// suitable for interactive Web/TUI history. Both transcript endpoints
-    /// keep collapsed tool detail sections lazy; use `session_tool_detail`
-    /// for an explicitly opened raw section.
-    pub async fn session_transcript_page(
+    /// Read bounded run membership windows and factual summaries.
+    pub async fn session_run_window(
         &self,
         session_id: i64,
         limit: u64,
+        part_limit: u64,
         cursor: Option<&str>,
     ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
-        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/transcript"));
+        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/runs"));
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("limit", &limit.to_string());
+            query.append_pair("part_limit", &part_limit.to_string());
             if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
                 query.append_pair("cursor", cursor);
             }
@@ -2193,43 +2220,30 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    /// Fetch one server-side expansion chunk for a folded assistant run.
-    pub async fn session_transcript_run_page(
+    /// Read a bounded child range in one or more runs. Visual grouping is
+    /// entirely the caller's responsibility.
+    pub async fn session_run_parts_window(
         &self,
         session_id: i64,
-        run_id: i64,
+        run_ids: &[i64],
         limit: u64,
         cursor: Option<&str>,
     ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
-        let mut url = self.endpoint(&format!(
-            "/api/v1/sessions/{session_id}/transcript/runs/{run_id}"
-        ));
+        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/parts"));
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("limit", &limit.to_string());
+            query.append_pair(
+                "run_ids",
+                &run_ids
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
                 query.append_pair("cursor", cursor);
             }
-        }
-        let response = self
-            .send_request(reqwest::Method::GET, url, None, None)
-            .await?;
-        self.parse_json(response).await
-    }
-
-    /// Fetch one server-side expansion chunk for a folded logical assistant
-    /// reply. The opaque cursor carries the full adjacent-run set.
-    pub async fn session_transcript_fold_page(
-        &self,
-        session_id: i64,
-        limit: u64,
-        cursor: &str,
-    ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
-        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/transcript/folds"));
-        {
-            let mut query = url.query_pairs_mut();
-            query.append_pair("limit", &limit.to_string());
-            query.append_pair("cursor", cursor);
         }
         let response = self
             .send_request(reqwest::Method::GET, url, None, None)
@@ -2793,6 +2807,99 @@ impl AgenaClient {
     /// Generic query escape hatch over the existing REST surface.
     pub async fn query(&self, q: Query) -> Result<QueryResult, ClientError> {
         match q {
+            Query::ReadContentText(params) => Ok(QueryResult::ContentText(
+                self.read_content_text(params).await?,
+            )),
+            Query::ReadParts(params) => {
+                let mut url =
+                    self.endpoint(&format!("/api/v1/sessions/{}/parts", params.session_id));
+                {
+                    let mut query = url.query_pairs_mut();
+                    if !params.ids.is_empty() {
+                        query.append_pair(
+                            "ids",
+                            &params
+                                .ids
+                                .iter()
+                                .map(i64::to_string)
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        );
+                    }
+                    if !params.run_ids.is_empty() {
+                        query.append_pair(
+                            "run_ids",
+                            &params
+                                .run_ids
+                                .iter()
+                                .map(i64::to_string)
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        );
+                    }
+                    if let Some(cursor) = params.cursor {
+                        query.append_pair("cursor", &cursor);
+                    }
+                    if let Some(limit) = params.limit {
+                        query.append_pair("limit", &limit.to_string());
+                    }
+                    if !params.sections.is_empty() {
+                        query.append_pair(
+                            "sections",
+                            &params
+                                .sections
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        );
+                    }
+                }
+                let response = self
+                    .send_request(reqwest::Method::GET, url, None, None)
+                    .await?;
+                Ok(QueryResult::Parts(self.parse_json(response).await?))
+            }
+            Query::ReadRuns(params) => {
+                let mut url =
+                    self.endpoint(&format!("/api/v1/sessions/{}/runs", params.session_id));
+                {
+                    let mut query = url.query_pairs_mut();
+                    if let Some(cursor) = params.cursor {
+                        query.append_pair("cursor", &cursor);
+                    }
+                    if let Some(limit) = params.limit {
+                        query.append_pair("limit", &limit.to_string());
+                    }
+                    if let Some(limit) = params.part_limit {
+                        query.append_pair("part_limit", &limit.to_string());
+                    }
+                    if !params.sections.is_empty() {
+                        query.append_pair(
+                            "sections",
+                            &params
+                                .sections
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        );
+                    }
+                }
+                let response = self
+                    .send_request(reqwest::Method::GET, url, None, None)
+                    .await?;
+                Ok(QueryResult::Parts(self.parse_json(response).await?))
+            }
+            Query::ReadContent(params) => Ok(QueryResult::Content(
+                self.read_content(
+                    params.session_id,
+                    params.resource_id,
+                    params.after,
+                    params.max_bytes,
+                )
+                .await?,
+            )),
             Query::Health => Ok(QueryResult::Health(self.health().await?)),
             Query::Runtime => Ok(QueryResult::Runtime(
                 self.get_json("/api/v1/runtime").await?,

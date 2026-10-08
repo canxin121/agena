@@ -10,7 +10,7 @@ use crate::session::store::{
 };
 use agena_provider::merge_provider_metadata;
 use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
-use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+use agena_storage::store::{NewPart, Part, PartRole, PartState, PartVisibility};
 
 impl SessionProcessor {
     pub(crate) async fn ensure_pending_tool_call_part(
@@ -224,7 +224,6 @@ impl SessionProcessor {
         let invocation = pending.invocation.clone().unwrap_or_else(|| {
             ToolInvocation::new("provider_native_tool", StructuredObject::default())
         });
-        let raw = pending.raw.clone();
         let operation_id = pending
             .id
             .as_deref()
@@ -234,7 +233,6 @@ impl SessionProcessor {
         let now = Utc::now();
 
         if pending.part_id.is_none() {
-            let part_id = run.part_ids.reserve().await?;
             let call_id = run.next_call_id;
             run.next_call_id += 1;
             let start = now;
@@ -247,7 +245,7 @@ impl SessionProcessor {
                 },
             );
             operation.set_provider_only(true);
-            operation.set_provider_raw(raw.clone());
+            operation.state = agena_domain::ToolResultState::Running;
             if let Some(operation_id) = &operation_id {
                 operation.metadata.insert(
                     OPERATION_ID_METADATA_KEY.to_owned(),
@@ -257,12 +255,29 @@ impl SessionProcessor {
             let content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
                 tool_call_from_operation(&operation),
             )))?;
-            parts.push(placeholder_part(
-                part_id,
-                run_id,
-                start.timestamp_millis(),
-                content,
-            ));
+            // A provider-native start reports an operation already executing
+            // at the provider. It needs durable identity now, unlike incomplete
+            // local function arguments which remain deferred until validated.
+            let part = run
+                .store
+                .append_parts(
+                    run.session_id,
+                    run_id,
+                    vec![NewPart {
+                        state: PartState::InProgress,
+                        ..NewPart::pending("tool_call", PartRole::Assistant, content)
+                    }],
+                )
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "append_parts returned no provider-native Part for run {run_id}"
+                    ))
+                })?;
+            let part_id = part.part_id;
+            parts.push(part);
             pending.part_id = Some(part_id);
             pending.call_id = Some(call_id);
             pending.started_at_ms = Some(start.timestamp_millis());
@@ -287,7 +302,7 @@ impl SessionProcessor {
                 },
             );
             operation.set_provider_only(true);
-            operation.set_provider_raw(raw.clone());
+            operation.state = agena_domain::ToolResultState::Running;
             if let Some(operation_id) = &operation_id {
                 operation.metadata.insert(
                     OPERATION_ID_METADATA_KEY.to_owned(),
@@ -331,7 +346,6 @@ impl SessionProcessor {
             merge_provider_native_tool_invocation(pending.invocation.as_ref(), invocation);
         pending.invocation = Some(invocation.clone());
         let raw = merge_provider_metadata(pending.raw.take(), raw);
-        pending.raw = raw.clone();
         self.ensure_provider_native_tool_call_part(run, run_id, parts, &mut pending)
             .await?;
 
@@ -346,19 +360,32 @@ impl SessionProcessor {
                     "provider tool part missing from turn accumulator: {part_id}"
                 ))
             })?;
+        let output = agena_domain::RawOutput::from_parts(
+            details.to_json_payload().or_else(|| {
+                let text = output_text.trim();
+                (!text.is_empty()).then(|| serde_json::json!({ "text": text }))
+            }),
+            output_text,
+            attachments,
+            details.managed_outputs.clone(),
+            details.truncated,
+        );
+        let output = crate::session::content_result::externalize_result(
+            run.store.facade.contents(),
+            run.session_id,
+            part_id,
+            output,
+        )
+        .await?;
+        let resources = output
+            .fields
+            .iter()
+            .map(|field| field.resource.clone())
+            .collect();
         let mut operation = OperationPart::completed(
             pending.call_id.unwrap_or_default(),
             invocation.clone(),
-            agena_domain::RawOutput::from_parts(
-                details.to_json_payload().or_else(|| {
-                    let text = output_text.trim();
-                    (!text.is_empty()).then(|| serde_json::json!({ "text": text }))
-                }),
-                output_text,
-                attachments,
-                details.managed_outputs.clone(),
-                details.truncated,
-            ),
+            output,
             TimeRange {
                 start_ms: pending
                     .started_at_ms
@@ -366,8 +393,29 @@ impl SessionProcessor {
                 end_ms: Some(Utc::now().timestamp_millis()),
             },
         );
+        operation.resources = resources;
         operation.set_provider_only(true);
-        operation.set_provider_raw(raw.clone());
+        if let Some(raw) = raw {
+            match crate::session::content_result::archive_provider_trace(
+                run.store.facade.contents(),
+                run.session_id,
+                part_id,
+                raw,
+            )
+            .await
+            {
+                Ok(reference) => operation.set_provider_trace(Some(reference)),
+                Err(error) => {
+                    // Diagnostics cannot turn a successful hosted operation
+                    // into a failed model turn. Keep capture loss explicit,
+                    // without retaining the raw diagnostic on the Part.
+                    operation.metadata.insert(
+                        "agena.provider_trace_error".to_owned(),
+                        serde_json::Value::String(error.to_string()),
+                    );
+                }
+            }
+        }
         if let Some(operation_id) = pending
             .id
             .as_deref()
@@ -385,7 +433,7 @@ impl SessionProcessor {
         if part.state != PartState::Completed {
             part.state = PartState::Completed;
         }
-
+        self.persist_part_state(run, parts, part_id).await?;
         Ok(())
     }
 }

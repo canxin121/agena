@@ -21,6 +21,8 @@ const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 
 #[derive(Clone)]
 pub(crate) struct SessionRunRequest {
+    pub content_writers:
+        Arc<std::sync::Mutex<BTreeMap<i64, agena_storage::content::ContentWriter>>>,
     pub retry_registry: retry::RetryRegistry,
     pub session_id: i64,
     pub model: ModelRef,
@@ -39,10 +41,9 @@ pub(crate) struct SessionRunRequest {
     pub input_notification_part_ids: Vec<i64>,
     pub part_ids: ProcessorPartIdAllocator,
     pub next_call_id: i64,
-    /// The facade-backed store. Parts are the only durable write source for a
-    /// model turn: the processor appends content parts under the run marker
-    /// (`append_parts`), streams deltas (`update_part`), and terminalizes the
-    /// run (`complete_run`/`cancel_run`) itself.
+    /// The facade-backed store commits Part identities, resource references
+    /// and semantic state transitions. Tokens go through `content_writers`;
+    /// their final cursors are sealed before the run is terminalized.
     pub store: Arc<StoreAdapter>,
     /// Optional cancel handle. When the token fires the stream loop
     /// terminates between provider events and surfaces a `RunAbortReason::

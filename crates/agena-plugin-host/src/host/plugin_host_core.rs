@@ -932,18 +932,6 @@ impl PluginHost {
         let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(8);
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
         let stream_id = format!("emu-{}", uuid::Uuid::new_v4().simple());
-        let chunk = ToolStreamChunk {
-            stream_id: stream_id.clone(),
-            text_delta: Some(result.output_text.clone()),
-            metadata: result.metadata.clone(),
-        };
-        if let Err(error) = tx.send(chunk).await {
-            tracing::debug!(
-                stream_id,
-                diagnostic = %error,
-                "emulated plugin stream chunk receiver was dropped"
-            );
-        }
         drop(tx);
         if end_tx
             .send(Ok(ToolStreamEnd {

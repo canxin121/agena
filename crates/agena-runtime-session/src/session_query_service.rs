@@ -28,118 +28,6 @@ pub struct SessionPresentation {
     pub workflow_state: WorkflowState,
 }
 
-#[derive(Debug, Clone)]
-/// Header of a projected run.
-pub struct SessionProjectedRunHeader {
-    pub id: i64,
-    pub role: agena_domain::Role,
-    pub state: agena_domain::ExecutionStatus,
-    pub created_at: DateTime<Utc>,
-    pub metadata: serde_json::Value,
-    pub usage: Option<serde_json::Value>,
-    pub part_count: u64,
-}
-
-/// Stable transcript projection for presentation paths that need run-part
-/// summaries without depending on private run aggregates. Detail payloads
-/// remain opaque JSON until the full transcript detail contract moves.
-#[derive(Debug, Clone)]
-/// A projected session run.
-pub struct SessionProjectedRun {
-    pub revision: i64,
-    pub updated_at_ms: i64,
-    pub id: i64,
-    pub role: agena_domain::Role,
-    pub state: agena_domain::ExecutionStatus,
-    pub created_at: DateTime<Utc>,
-    pub metadata: serde_json::Value,
-    pub usage: Option<serde_json::Value>,
-    pub parts: Vec<SessionProjectedPart>,
-}
-
-#[derive(Debug, Clone)]
-/// A projected run part.
-pub struct SessionProjectedPart {
-    pub revision: i64,
-    pub updated_at_ms: i64,
-    pub id: i64,
-    pub run_id: i64,
-    pub part_index: i32,
-    pub status: agena_domain::ExecutionStatus,
-    /// The precise part kind (`text`, `think`, `tool_call`, ...). The
-    /// v1 `PartKind` binary (Text/Activity) is gone: the transcript surfaces
-    /// dispatch on this exact kind, so it must round-trip the storage column.
-    pub kind: String,
-    pub name: Option<String>,
-    pub summary: Option<String>,
-    pub has_detail: bool,
-    pub activity_id: Option<agena_domain::ActivityId>,
-    pub segment_id: Option<agena_domain::TextSegmentId>,
-    pub operation_id: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub detail: Option<SessionProjectedPartDetail>,
-    pub content: Option<serde_json::Value>,
-}
-
-/// A stable, runtime-owned projection of a recorded hook run. Hook activity
-/// (for example the workflow plan's `agent.stop` autorun continuation) rides
-/// the same transcript pipeline as tool calls.
-#[derive(Debug, Clone)]
-/// A projected hook part.
-pub struct SessionProjectedHookPart {
-    pub hook: String,
-    pub plugin_id: Option<String>,
-    pub summary: String,
-    pub detail: Option<String>,
-    /// The message the hook sent to keep the run going, when it blocked the
-    /// stop. Carried by the hook activity, never injected as a separate
-    /// assistant message.
-    pub message: Option<String>,
-}
-
-/// Typed detail values that are already stable outside Runtime's persisted
-/// aggregate. Every current message-part variant has an explicit projection.
-#[derive(Debug, Clone)]
-/// Detail kind of a projected part.
-pub enum SessionProjectedPartDetail {
-    Text {
-        text: String,
-        synthetic: bool,
-    },
-    Reasoning {
-        summary: Vec<String>,
-        raw_content: Vec<String>,
-        encrypted_content: Option<String>,
-    },
-    Error {
-        problem: agena_failure::UserProblem,
-    },
-    Attachment(agena_plugin_host::sdk::attachment::AttachmentPart),
-    CommandReference(crate::part::CommandReferencePart),
-    UserInputRequest {
-        request: agena_domain::UserInputRequest,
-        reply: Option<agena_domain::UserInputReply>,
-    },
-    ToolCall(Box<agena_runtime_contracts::part_content::ToolCallContent>),
-    Hook(Box<SessionProjectedHookPart>),
-    Notice {
-        summary: String,
-        detail: Option<String>,
-    },
-    /// A background-operation completion/event notification (the agena analog
-    /// of Claude's `<task-notification>`).
-    SystemNotification {
-        operation_id: String,
-        operation_kind: String,
-        status: String,
-        summary: String,
-        detail: Option<String>,
-        body: String,
-        event_seq: Option<u64>,
-    },
-    Opaque(serde_json::Value),
-}
-
 /// Stable execution-state projection needed by application presentation.
 /// Runtime retains session/message persistence and lifecycle materialization.
 #[derive(Debug, Clone)]
@@ -210,10 +98,12 @@ pub trait SessionQueryService: Send + Sync {
         session_id: i64,
     ) -> Result<SessionPresentation, SessionQueryError>;
 
-    async fn list_projected_runs(
+    async fn read_part_window(
         &self,
         session_id: i64,
-    ) -> Result<Vec<SessionProjectedRun>, SessionQueryError>;
+        before: Option<agena_storage::store::PartCursor>,
+        limit: i64,
+    ) -> Result<agena_storage::store::SessionPartPage, SessionQueryError>;
     async fn list_session_tree(
         &self,
         root_id: i64,
@@ -283,11 +173,13 @@ mod tests {
             })
         }
 
-        async fn list_projected_runs(
+        async fn read_part_window(
             &self,
             _session_id: i64,
-        ) -> Result<Vec<super::SessionProjectedRun>, SessionQueryError> {
-            Ok(Vec::new())
+            _before: Option<agena_storage::store::PartCursor>,
+            _limit: i64,
+        ) -> Result<agena_storage::store::SessionPartPage, SessionQueryError> {
+            Err(SessionQueryError::internal("fixture has no part window"))
         }
         async fn list_session_tree(
             &self,

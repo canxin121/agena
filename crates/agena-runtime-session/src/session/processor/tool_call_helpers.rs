@@ -416,7 +416,7 @@ mod tests {
         let available = vec![tools_call()];
         // Session 66 regression: `\|` is an invalid JSON escape inside the
         // command string, so the whole arguments value fails to parse.
-        let arguments_json = r#"{"tool":"shell.run","input":{"command":"grep -rn 'a\|b' src"}}"#;
+        let arguments_json = r#"{"tool":"shell.exec","input":{"command":"grep -rn 'a\|b' src"}}"#;
         let invocation = parse_tool_invocation_lossy(13, "tools_call", arguments_json, &available)
             .expect("malformed arguments must produce a diagnostic invocation");
         assert_eq!(invocation.name, "tools_call");

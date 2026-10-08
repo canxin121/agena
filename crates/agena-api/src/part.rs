@@ -5,6 +5,7 @@
 //! implementation or its persistence representations.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::resource::{PartAttachment, PartCommandReference};
 
@@ -12,44 +13,48 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Stable wire header for one message part. Detail is represented by the
-/// content resource once every runtime content variant has an explicit API
-/// projection.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// One persisted part as exposed by the public API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct PartResource {
-    pub id: i64,
-    pub message_id: i64,
-    pub part_index: i32,
-    pub status: PartExecutionStatusResource,
-    pub kind: PartKindResource,
+    pub part_id: i64,
+    pub kind: String,
+    pub role: String,
+    pub state: String,
+    pub content: Value,
+    /// An omitted section is unloaded. A listed section may have an empty or
+    /// null value; its revision identifies the exact facts it was derived from.
+    pub sections: Vec<LoadedPartSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub presentation: Option<agena_domain::PartDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub has_detail: bool,
+    pub visibility: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub activity_id: Option<agena_domain::ActivityId>,
+    pub parent_part_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub segment_id: Option<agena_domain::TextSegmentId>,
+    pub run_id: Option<i64>,
+    pub origin_session_id: i64,
+    pub revision: i64,
+    pub started_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation_id: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    /// Human presentation of this part's durable facts. Kind-agnostic: every
-    /// part kind may carry one, so consumers never probe `content` to render a
-    /// row.
+    pub finished_at_ms: Option<i64>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    /// 1-based ordinal of this part among the session's user-send messages in
+    /// durable `(created_at_ms, part_id)` order. Present only on user-send run
+    /// markers. Derived from the durable order rather than a stored counter, so
+    /// it is always contiguous (`1..=user_message_count`) and never drifts
+    /// after rewind, fork, compaction, import, or withdrawal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presentation: Option<crate::live::HumanPresentationResource>,
+    pub user_message_ordinal: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<PartDetailResource>,
+    pub provider_state: Option<Value>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Kind of a message part; pairs with [`agena_domain::PartKind`] and drives how the part is rendered.
-pub enum PartKindResource {
-    Text,
-    Activity,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoadedPartSection {
+    pub section: crate::live::ToolDetailSection,
+    pub revision: i64,
 }
 
 /// Execution state for a message part, operation, or interactive request.
@@ -172,6 +177,7 @@ pub struct ToolCallPartResource {
     pub user_input: agena_domain::OperationUserInput,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<agena_domain::RawOutput>,
+    pub resources: Vec<agena_domain::ContentRef>,
     #[serde(default)]
     pub state: agena_domain::ToolResultState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -202,6 +208,7 @@ mod tests {
     fn canonical_tool_calls_do_not_contain_projection_copies() {
         let value = serde_json::to_value(PartDetailResource::ToolCall(Box::new(
             super::ToolCallPartResource {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: agena_domain::ToolInvocation::new(
                     "fs.read",
@@ -221,40 +228,6 @@ mod tests {
         assert!(value.get("result").is_none());
         assert!(value.get("blocks").is_none());
         assert!(value.get("output").is_some());
-    }
-
-    #[test]
-    fn part_presentation_is_kind_agnostic() {
-        let part = super::PartResource {
-            id: 1,
-            message_id: 2,
-            part_index: 0,
-            status: super::PartExecutionStatusResource::Completed,
-            kind: super::PartKindResource::Activity,
-            name: None,
-            summary: None,
-            has_detail: true,
-            activity_id: None,
-            segment_id: None,
-            operation_id: None,
-            created_at: chrono::Utc::now(),
-            presentation: Some(crate::live::HumanPresentationResource {
-                title: String::new(),
-                summary: "hook finished".to_owned(),
-                blocks: Vec::new(),
-            }),
-            content: Some(PartDetailResource::Text(TextPartResource {
-                text: "non-tool kind".to_owned(),
-                synthetic: false,
-            })),
-        };
-        let value = serde_json::to_value(part).expect("serialize part");
-        assert_eq!(
-            value
-                .get("presentation")
-                .and_then(|presentation| presentation.get("summary")),
-            Some(&serde_json::json!("hook finished")),
-        );
     }
 
     #[test]

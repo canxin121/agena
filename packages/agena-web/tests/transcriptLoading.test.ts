@@ -91,7 +91,10 @@ const fold = (anchor = 14, hidden = 10) => ({
 })
 const page = (ids: number[], cursor: string | null, folds: ReturnType<typeof fold>[] = []) => ({
   parts: ids.map(part),
-  folds,
+  runs: folds.map((fold) => {
+    const returned = ids.filter((id) => id !== 3).length
+    return { run_id: 3, part_count: returned + fold.hidden_count, page: { returned, has_more: true, next_cursor: fold.next_cursor } }
+  }),
   user_message_count: 10,
   page: { has_more: cursor !== null, next_cursor: cursor },
 })
@@ -121,7 +124,7 @@ test('history and reply paging are independent, empty fold pages advance, refres
   })
   const { chat, close } = harness((url) => {
     requests.push(url)
-    if (url.pathname.endsWith('/folds')) {
+    if (url.searchParams.has('run_ids')) {
       return response(
         url.searchParams.get('cursor') === 'before-14' ? page([], 'before-12') : page([9, 10, 11, 12, 13], 'before-9'),
       )
@@ -153,7 +156,7 @@ test('history and reply paging are independent, empty fold pages advance, refres
 test('a failed or stalled reply request releases its lock and can be retried', async () => {
   let stalled = true
   const { chat, close } = harness((url) => {
-    if (url.pathname.endsWith('/folds'))
+    if (url.searchParams.has('run_ids'))
       return response(stalled ? page([], 'before-14') : page([4, 5, 6, 7, 8, 9, 10, 11, 12, 13], null))
     return response(page([3, 14, 15, 16, 17, 18], 'history', [fold()]))
   })
@@ -180,7 +183,7 @@ test('an in-flight older fold response cannot overwrite a new streaming gap', as
   })
   let streamed = false
   const { chat, close } = harness((url) => {
-    if (url.pathname.endsWith('/folds')) return pending
+    if (url.searchParams.has('run_ids')) return pending
     return response(
       streamed
         ? page([3, 24, 25, 26, 27, 28], 'history', [fold(24, 20)])
@@ -206,7 +209,7 @@ test('an in-flight older fold response cannot overwrite a new streaming gap', as
 test('load all detects a multi-page cursor cycle and leaves the fold retryable', async () => {
   let count = 0
   const { chat, close } = harness((url) => {
-    if (url.pathname.endsWith('/folds')) {
+    if (url.searchParams.has('run_ids')) {
       count++
       return response(page([], count === 1 ? 'before-12' : 'before-14'))
     }

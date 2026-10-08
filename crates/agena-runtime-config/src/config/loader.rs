@@ -84,7 +84,6 @@ mod tests {
     use std::{collections::BTreeMap, path::PathBuf, sync::atomic::Ordering};
 
     use super::*;
-    use crate::{TuiColorSchemeConfig, TuiGraphicsModeConfig};
 
     #[derive(Clone, Default)]
     struct TestEnvironment {
@@ -114,110 +113,39 @@ mod tests {
     }
 
     #[test]
-    fn loads_tui_appearance_from_canonical_config() {
+    fn preserves_client_preferences_without_interpreting_them() {
         let root = test_root();
-        let config_dir = root.join("agena");
-        std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        let config = root.join("agena.json");
+        std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
-            config_dir.join("agena.json"),
-            r#"{"ui":{"tui":{"color_scheme":"light","graphics":"unicode","theme":"paper"}}}"#,
+            &config,
+            r#"{"ui":{"observer":{"appearance":"custom","future":{"scale":2}}}}"#,
         )
-        .expect("write test config");
-        let env = TestEnvironment {
-            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
-        };
-        let resolution = ConfigLoader::new(env)
+        .unwrap();
+        let resolution = ConfigLoader::new(TestEnvironment::default())
             .load(&LoadConfigRequest {
+                config_path: Some(config),
                 workspace_root: Some(root.join("workspace")),
-                ..LoadConfigRequest::default()
+                overrides: vec!["ui.observer.future.scale=3".parse().unwrap()],
             })
-            .expect("load config");
+            .unwrap();
         assert_eq!(
-            resolution.config.ui.tui.color_scheme,
-            TuiColorSchemeConfig::Light
+            resolution.config.ui.preferences["observer"],
+            serde_json::json!({"appearance":"custom","future":{"scale":3}})
         );
-        assert_eq!(
-            resolution.config.ui.tui.graphics,
-            TuiGraphicsModeConfig::Unicode
-        );
-        assert_eq!(resolution.config.ui.tui.theme.as_deref(), Some("paper"));
-        let _ = std::fs::remove_dir_all(root);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn tui_environment_overrides_are_validated_and_resolved() {
-        let root = test_root();
-        let env = TestEnvironment {
-            values: BTreeMap::from([
-                ("HOME".to_owned(), root.display().to_string()),
-                ("AGENA_TUI_COLOR_SCHEME".to_owned(), "dark".to_owned()),
-                ("AGENA_TUI_GRAPHICS".to_owned(), "native".to_owned()),
-                ("AGENA_TUI_THEME".to_owned(), "night-owl".to_owned()),
-            ]),
-        };
-        let resolution = ConfigLoader::new(env)
-            .load(&LoadConfigRequest {
-                workspace_root: Some(root.join("workspace")),
-                ..LoadConfigRequest::default()
-            })
-            .expect("load config");
-        assert_eq!(
-            resolution.config.ui.tui.color_scheme,
-            TuiColorSchemeConfig::Dark
-        );
-        assert_eq!(resolution.config.ui.tui.theme.as_deref(), Some("night-owl"));
-        assert_eq!(
-            resolution.config.ui.tui.graphics,
-            TuiGraphicsModeConfig::Native
-        );
-
-        let invalid_env = TestEnvironment {
-            values: BTreeMap::from([
-                ("HOME".to_owned(), root.display().to_string()),
-                ("AGENA_TUI_COLOR_SCHEME".to_owned(), "sepia".to_owned()),
-            ]),
-        };
-        assert!(
-            ConfigLoader::new(invalid_env)
-                .load(&LoadConfigRequest {
-                    workspace_root: Some(root.join("workspace")),
-                    ..LoadConfigRequest::default()
-                })
-                .is_err()
-        );
-
-        let invalid_graphics_env = TestEnvironment {
-            values: BTreeMap::from([
-                ("HOME".to_owned(), root.display().to_string()),
-                ("AGENA_TUI_GRAPHICS".to_owned(), "ansi-art".to_owned()),
-            ]),
-        };
-        assert!(
-            ConfigLoader::new(invalid_graphics_env)
-                .load(&LoadConfigRequest {
-                    workspace_root: Some(root.join("workspace")),
-                    ..LoadConfigRequest::default()
-                })
-                .is_err()
-        );
-
-        let cli_override = ConfigLoader::new(TestEnvironment {
-            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+    fn server_does_not_interpret_client_environment() {
+        let raw = RawConfig::from_env(&TestEnvironment {
+            values: BTreeMap::from([(
+                "AGENA_TUI_COLOR_SCHEME".to_owned(),
+                "uninterpreted".to_owned(),
+            )]),
         })
-        .load(&LoadConfigRequest {
-            workspace_root: Some(root.join("workspace")),
-            overrides: vec![
-                "ui.tui.graphics=unicode"
-                    .parse()
-                    .expect("parse graphics override"),
-            ],
-            ..LoadConfigRequest::default()
-        })
-        .expect("load config with graphics override");
-        assert_eq!(
-            cli_override.config.ui.tui.graphics,
-            TuiGraphicsModeConfig::Unicode
-        );
+        .unwrap();
+        assert!(raw.ui.is_none());
     }
 
     #[test]

@@ -72,7 +72,7 @@ export function reconcileSessionMutation(
   if (change === 'execution') {
     buckets.add('running')
     buckets.add('attention')
-    keys.add(`session:${sessionId}:transcript`)
+    keys.add(`session:${sessionId}:parts`)
   }
   if (patch?.favorite !== undefined) buckets.add('favorite')
   if (patch?.pinned !== undefined) buckets.add('pinned')

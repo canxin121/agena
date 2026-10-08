@@ -248,19 +248,8 @@ impl ToolExecutor {
             ToolPayloadInput::Shell(input) => {
                 self.collect_shell_effect_checks(checks, &input)?;
             }
-            ToolPayloadInput::Monitor(input) => {
-                if let Some(command) = input.shell_command() {
-                    self.collect_shell_effect_checks(
-                        checks,
-                        &crate::part::ShellToolInput::Exec {
-                            shell: agena_domain::ProcessShell::Bash,
-                            command: Box::new(command),
-                        },
-                    )?;
-                }
-                if let crate::part::MonitorToolInput::Start { ws: Some(ws), .. } = input {
-                    self.push_network_check(checks, ws.url.as_str())?;
-                }
+            ToolPayloadInput::Monitor(crate::part::MonitorToolInput::Start { ws, .. }) => {
+                self.push_network_check(checks, ws.url.as_str())?;
             }
             _ => {}
         }

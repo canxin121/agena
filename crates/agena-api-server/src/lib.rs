@@ -397,20 +397,24 @@ pub fn router(state: AppState) -> Router {
                 get(rest::list_session_parts),
             )
             .route(
+                "/api/v1/sessions/{session_id}/content/{resource_id}",
+                get(rest::read_content),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/content/{resource_id}/text",
+                get(rest::read_content_text),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/content/{resource_id}/stream",
+                get(rest::stream_content),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/parts/{part_id}/tool-sections/{section}",
                 get(rest::get_session_tool_detail),
             )
             .route(
-                "/api/v1/sessions/{session_id}/transcript",
-                get(rest::list_session_transcript),
-            )
-            .route(
-                "/api/v1/sessions/{session_id}/transcript/runs/{run_id}",
-                get(rest::list_session_transcript_run_parts),
-            )
-            .route(
-                "/api/v1/sessions/{session_id}/transcript/folds",
-                get(rest::list_session_transcript_fold_parts),
+                "/api/v1/sessions/{session_id}/runs",
+                get(rest::read_session_runs),
             )
             .route(
                 "/api/v1/sessions/{session_id}/changes/stream",
@@ -2251,11 +2255,24 @@ mod router_contract_tests {
             .expect("submit test run")
     }
 
+    #[derive(Debug)]
+    struct ObservedExecution {
+        execution: SessionExecutionResource,
+        text: String,
+    }
+
+    impl std::ops::Deref for ObservedExecution {
+        type Target = SessionExecutionResource;
+        fn deref(&self) -> &Self::Target {
+            &self.execution
+        }
+    }
+
     async fn wait_for_execution(
         client: &AgenaClient,
         session_id: i64,
-        predicate: impl Fn(&SessionExecutionResource) -> bool,
-    ) -> SessionExecutionResource {
+        predicate: impl Fn(&ObservedExecution) -> bool,
+    ) -> ObservedExecution {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let mut execution = client
@@ -2266,28 +2283,33 @@ mod router_contract_tests {
                 .session_all_parts(session_id)
                 .await
                 .expect("read session parts");
-            if predicate(&execution) {
-                return execution;
+            let mut text = String::new();
+            for part in execution.parts.iter().filter(|part| part.kind == "text") {
+                text.push_str(
+                    &client
+                        .part_text(session_id, part, 64 * 1024)
+                        .await
+                        .expect("read resource-backed text"),
+                );
+            }
+            let observed = ObservedExecution { execution, text };
+            if predicate(&observed) {
+                return observed;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "timed out waiting for session {session_id}: state={:?}, workflow={:?}, pending={}, parts={:#?}",
-                execution.session.state,
-                execution.session.state.workflow_state(),
-                execution.session.state.pending_interactive_requests().len(),
-                execution.parts,
+                observed.session.state,
+                observed.session.state.workflow_state(),
+                observed.session.state.pending_interactive_requests().len(),
+                observed.parts,
             );
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     }
 
-    fn execution_text(execution: &SessionExecutionResource) -> String {
-        execution
-            .parts
-            .iter()
-            .filter_map(|part| part.content.get("text").and_then(serde_json::Value::as_str))
-            .collect::<Vec<_>>()
-            .join("")
+    fn execution_text(execution: &ObservedExecution) -> &str {
+        &execution.text
     }
 
     #[tokio::test]
@@ -3113,8 +3135,18 @@ mod router_contract_tests {
             "one racing client must consume the durable permission: B={reply_b:?}, C={reply_c:?}"
         );
 
-        tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
-            .await
+        let continuation =
+            tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv()).await;
+        if continuation.is_err() {
+            let execution = client_c
+                .get_session_state(session_id)
+                .await
+                .expect("read stalled permission state");
+            panic!(
+                "permission continuation stalled: B={reply_b:?}, C={reply_c:?}, state={execution:#?}"
+            );
+        }
+        continuation
             .expect("fake provider receives exactly one permission continuation")
             .expect("permission continuation provider request exists");
         let completed = wait_for_execution(&client_c, session_id, |execution| {

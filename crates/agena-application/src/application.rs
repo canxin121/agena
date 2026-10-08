@@ -11,7 +11,6 @@ use crate::dto::{
     CatalogModelMatchResource, CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse,
     ModelCatalogRefreshResponse, ModelCatalogResponse, ModelCatalogSourceKind,
     RuntimeDiagnosticsResource, RuntimeMetricsResource, RuntimeSnapshotSummaryResource,
-    TuiPreferencesResource,
 };
 use crate::service::ApplicationService;
 
@@ -45,6 +44,7 @@ pub struct Application {
     execution_commands: Option<Arc<dyn agena_runtime::SessionExecutionCommandService>>,
     tool_execution: Option<Arc<dyn agena_runtime::SessionToolExecutionService>>,
     plugin_commands: Option<Arc<dyn agena_runtime::SessionPluginCommandService>>,
+    pub(crate) part_documents: Arc<crate::application_tools::PartDocumentCache>,
 }
 
 #[derive(Default)]
@@ -171,6 +171,7 @@ impl Application {
             execution_commands,
             tool_execution,
             plugin_commands,
+            part_documents: Arc::new(Default::default()),
         };
         application.spawn_notification_aggregator();
         Ok(application)
@@ -611,17 +612,16 @@ impl Application {
                     agena_runtime::RuntimeLiveSignalItem::Signal(signal) => signal,
                     agena_runtime::RuntimeLiveSignalItem::Lagged(_) => continue,
                 };
-                if let agena_runtime::RuntimeLiveSignal::Activity(activity) = signal {
-                    if let Err(error) = store
+                if let agena_runtime::RuntimeLiveSignal::Activity(activity) = signal
+                    && let Err(error) = store
                         .ingest_with(move || {
                             agena_runtime_notifications::from_background_activity(
                                 &activity.activity,
                             )
                         })
                         .await
-                    {
-                        tracing::error!(%error, "background activity notification failed");
-                    }
+                {
+                    tracing::error!(%error, "background activity notification failed");
                 }
             }
         });
@@ -684,15 +684,6 @@ impl Application {
     /// Projects process-wide Runtime counters for transport presentation.
     pub fn runtime_metrics(&self) -> RuntimeMetricsResource {
         self.runtime_control.runtime_metrics().into()
-    }
-
-    /// Projects Runtime-owned persisted terminal preferences for startup and
-    /// palette reload without exposing Runtime configuration values to the App.
-    pub fn tui_preferences(&self) -> Result<TuiPreferencesResource, ApplicationError> {
-        self.runtime_configuration
-            .runtime_configuration()
-            .map(|configuration| configuration.ui.into())
-            .map_err(|error| ApplicationError::internal_error(&error))
     }
 
     /// Returns the complete configuration-source read model used by terminal
@@ -1425,6 +1416,7 @@ mod notification_aggregator_tests {
                 role: PartRole::User,
                 state: PartState::Completed,
                 content: agena_runtime_contracts::part_content::TextContent {
+                    resources: Vec::new(),
                     text: "hello".to_owned(),
                     synthetic: false,
                     extra: Default::default(),

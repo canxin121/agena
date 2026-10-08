@@ -36,7 +36,7 @@ pub use tool_activity::{
 };
 
 /// Compose one compact tool headline from an action and a detail fragment
-/// (for example `Run process · cargo test` or
+/// (for example `Execute command · cargo test` or
 /// `Read README.md · 12 lines`). The first value is retained when the detail
 /// is empty, and the result is always bounded by the title contract.
 pub fn compose_tool_title(tool_name: impl AsRef<str>, summary: impl AsRef<str>) -> String {
@@ -56,7 +56,7 @@ pub fn compose_tool_title(tool_name: impl AsRef<str>, summary: impl AsRef<str>) 
 /// This deliberately uses only the invocation name and input.  The title is
 /// human-facing, so a namespace such as `agena.fs` is translated into an
 /// action and the most useful safe input values become its subject:
-/// `Read README.md`, `Search files · TODO`, or `Run process · cargo test`.
+/// `Read README.md`, `Search files · TODO`, or `Execute command · cargo test`.
 pub fn initial_tool_title(invocation: &ToolInvocation) -> String {
     let input = serde_json::Value::from(invocation.input.clone());
     render_invocation_title(invocation.name.as_str(), &input)
@@ -463,8 +463,7 @@ fn tool_result_fragment(
     // actually returned.
     if matches!(
         key,
-        "shell.run"
-            | "shell.exec"
+        "shell.exec"
             | "shell.spawn"
             | "shell.watch"
             | "shell.open"
@@ -499,6 +498,23 @@ fn tool_result_fragment(
         return Some(status.to_owned());
     }
     match key {
+        "content.read" => {
+            if let Some(slices) = object.get("slices").and_then(serde_json::Value::as_array) {
+                let bytes = slices
+                    .iter()
+                    .filter_map(|slice| slice.get("text").and_then(serde_json::Value::as_str))
+                    .map(str::len)
+                    .sum::<usize>();
+                let mut fragment = format!("{bytes} bytes read");
+                if object.get("has_more").and_then(serde_json::Value::as_bool) == Some(true) {
+                    fragment.push_str(" · more available");
+                }
+                if object.get("gap").and_then(serde_json::Value::as_bool) == Some(true) {
+                    fragment.push_str(" · retention gap");
+                }
+                return Some(fragment);
+            }
+        }
         "code.search_ast" => {
             let matches = object.get("matches").and_then(array_len_or_u64);
             let scanned_files = object.get("scanned_files").and_then(value_as_u64);
@@ -2351,6 +2367,7 @@ fn tool_action_label(tool_name: &str) -> String {
         return tool.title.to_owned();
     }
     match key.as_str() {
+        "content.read" => "Read content".to_owned(),
         "fs.read" | "read" => "Read".to_owned(),
         "fs.read_many" => "Read files".to_owned(),
         "fs.write" | "write" => "Write".to_owned(),
@@ -2363,7 +2380,7 @@ fn tool_action_label(tool_name: &str) -> String {
         "code.syntax_tree" => "Inspect syntax tree".to_owned(),
         "code.rewrite_ast" => "Rewrite AST".to_owned(),
         "fs.document" => "Read document".to_owned(),
-        "shell.run" | "shell" => "Run command".to_owned(),
+        "shell" => "Run command".to_owned(),
         "shell.exec" => "Execute command".to_owned(),
         "shell.spawn" => "Spawn background command".to_owned(),
         "shell.watch" => "Watch command output".to_owned(),
@@ -2556,15 +2573,9 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
         &["path", "language"]
     } else if key.ends_with("report.findings") {
         &["summary"]
-    } else if [
-        "shell.run",
-        "shell.exec",
-        "shell.spawn",
-        "shell.watch",
-        "shell.open",
-    ]
-    .iter()
-    .any(|name| key.ends_with(name))
+    } else if ["shell.exec", "shell.spawn", "shell.watch", "shell.open"]
+        .iter()
+        .any(|name| key.ends_with(name))
     {
         &["command", "description"]
     } else if [
@@ -3156,8 +3167,8 @@ mod tool_title_tests {
 
     #[test]
     fn composed_titles_fall_back_to_the_bare_tool_name() {
-        assert_eq!(compose_tool_title("shell.run", ""), "shell.run");
-        assert_eq!(compose_tool_title("shell.run", "   "), "shell.run");
+        assert_eq!(compose_tool_title("shell.exec", ""), "shell.exec");
+        assert_eq!(compose_tool_title("shell.exec", "   "), "shell.exec");
         assert_eq!(compose_tool_title("fs.read", "fs.read"), "fs.read");
         assert_eq!(compose_tool_title("", ""), "");
     }
@@ -3222,10 +3233,10 @@ mod tool_title_tests {
         assert_eq!(initial_tool_title(&read), "Read README.md");
 
         let shell = ToolInvocation::new(
-            "agena.shell.run",
+            "agena.shell.exec",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("structured input"),
         );
-        assert_eq!(initial_tool_title(&shell), "Run process · cargo test");
+        assert_eq!(initial_tool_title(&shell), "Execute command · cargo test");
 
         let search = ToolInvocation::new(
             "tools_search",
@@ -3366,7 +3377,7 @@ mod tool_title_tests {
         );
 
         let shell = ToolInvocation::new(
-            "agena.shell.run",
+            "agena.shell.exec",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("structured input"),
         );
         let output = RawOutput {
@@ -3375,7 +3386,7 @@ mod tool_title_tests {
         };
         assert_eq!(
             completed_tool_title(&shell, &output),
-            "Run process · cargo test · passed"
+            "Execute command · cargo test · passed"
         );
 
         let glob = ToolInvocation::new(
@@ -3428,7 +3439,7 @@ mod tool_title_tests {
 
         assert_eq!(
             super::tool_title_for_state(&shell, ToolResultState::Failed),
-            "Run process · cargo test · failed"
+            "Execute command · cargo test · failed"
         );
     }
 
@@ -3538,7 +3549,7 @@ mod tool_title_tests {
     #[test]
     fn completed_titles_keep_shell_and_provider_results_compact() {
         let shell = ToolInvocation::new(
-            "agena.shell.run",
+            "agena.shell.exec",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("input"),
         );
         assert_eq!(
@@ -3546,7 +3557,7 @@ mod tool_title_tests {
                 &shell,
                 &RawOutput {
                     payload: Some(json!({
-                        "action": "run",
+                        "action": "exec",
                         "status": "completed",
                         "exit_code": 0,
                         "output": "all tests passed"
@@ -3554,7 +3565,7 @@ mod tool_title_tests {
                     ..RawOutput::default()
                 }
             ),
-            "Run process · cargo test · passed"
+            "Execute command · cargo test · passed"
         );
 
         let provider = ToolInvocation::new(
@@ -3943,7 +3954,7 @@ mod tool_title_tests {
     #[test]
     fn completed_titles_use_result_fields_and_terminal_states() {
         let invocation = ToolInvocation::new(
-            "agena.shell.run",
+            "agena.shell.exec",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("structured input"),
         );
         let title = completed_tool_title(
@@ -3953,7 +3964,7 @@ mod tool_title_tests {
                 ..RawOutput::default()
             },
         );
-        assert_eq!(title, "Run process · cargo test · passed");
+        assert_eq!(title, "Execute command · cargo test · passed");
 
         let timeout = completed_tool_title(
             &ToolInvocation::new(
@@ -3973,14 +3984,14 @@ mod tool_title_tests {
                 ToolResultState::Cancelled,
                 &RawOutput::default(),
             ),
-            "Run process · cargo test · cancelled"
+            "Execute command · cargo test · cancelled"
         );
     }
 
     #[test]
     fn completed_titles_use_complete_payload_and_truncation_facts() {
         let invocation = ToolInvocation::new(
-            "agena.shell.run",
+            "agena.shell.exec",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("input"),
         );
 
@@ -3993,7 +4004,7 @@ mod tool_title_tests {
         );
         assert_eq!(
             title,
-            "Run process · cargo test · failed · exit 1 · truncated"
+            "Execute command · cargo test · failed · exit 1 · truncated"
         );
 
         let generic = result_title_fragment(&RawOutput {
@@ -4006,7 +4017,7 @@ mod tool_title_tests {
     #[test]
     fn lifecycle_state_is_visible_when_raw_output_is_partial_or_empty() {
         let shell = ToolInvocation::new(
-            "agena.shell.run",
+            "agena.shell.exec",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("structured input"),
         );
         assert_eq!(
@@ -4021,7 +4032,7 @@ mod tool_title_tests {
                     false
                 ),
             ),
-            "Run process · cargo test · process stopped before an exit code was recorded · failed"
+            "Execute command · cargo test · process stopped before an exit code was recorded · failed"
         );
         assert_eq!(
             super::completed_tool_title_for_state(
@@ -4029,7 +4040,7 @@ mod tool_title_tests {
                 ToolResultState::Completed,
                 &RawOutput::default(),
             ),
-            "Run process · cargo test · completed"
+            "Execute command · cargo test · completed"
         );
         assert_eq!(
             super::completed_tool_title_for_state(
@@ -4040,20 +4051,20 @@ mod tool_title_tests {
                     ..RawOutput::default()
                 },
             ),
-            "Run process · cargo test"
+            "Execute command · cargo test"
         );
     }
 
     #[test]
     fn raw_tool_name_spellings_are_not_custom_action_titles() {
         let invocation = ToolInvocation::new(
-            "agena.shell.run",
+            "agena.shell.exec",
             StructuredObject::try_from(json!({"command": "cargo test"})).expect("structured input"),
         );
-        assert!(is_tool_identity_title("shell.run", &invocation));
-        assert!(is_tool_identity_title("agena_shell_run", &invocation));
+        assert!(is_tool_identity_title("shell.exec", &invocation));
+        assert!(is_tool_identity_title("agena_shell_exec", &invocation));
         assert!(!is_tool_identity_title(
-            "Run process · cargo test",
+            "Execute command · cargo test",
             &invocation
         ));
     }

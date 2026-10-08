@@ -11,8 +11,8 @@
 //!
 //! [`SessionChange`](super::SessionChange) notifications are derived from an
 //! operation and never persisted or replayed (14.3). Semantic mutations are
-//! emitted after commit; streaming text also publishes throttled in-memory
-//! checkpoints with the same durable revision and a monotonic update time.
+//! emitted after commit. Live content uses independent resource cursors and
+//! subscriptions, and never changes a Part revision per chunk.
 //! The facade emits both through an in-process [`NotificationBus`] (15.5). Cross-process
 //! reconnect is an explicit snapshot read validated by session version and
 //! member cursor; this store does not claim database-backed push delivery.
@@ -20,9 +20,8 @@
 //! ## Write path (commit-then-notify, 15.6)
 //!
 //! Every ordinary facade write commits one transaction through the engine, then
-//! notifies subscribers before returning. Text-stream deltas are accumulated
-//! in the [`MemoryLayer`] and flushed after a bounded number of deltas or when
-//! the run ends (D10); ordinary semantic checkpoints remain commit-synchronous.
+//! notifies subscribers before returning. Source content is batched independently
+//! by [`crate::content::ContentHub`]. Part updates are semantic checkpoints.
 
 use portable_atomic::AtomicU64;
 use std::collections::{HashMap, HashSet};
@@ -37,21 +36,12 @@ use serde_json::{Value, json};
 use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationKind,
     BackgroundOperationTransition, BackgroundSettleOutcome, MaintenanceOutcome,
-    NewBackgroundOperation, NewPart, NewSession, Part, PartCheckpoint, PartCursor, PartDelta,
-    PartState, PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
+    NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta, PartState,
+    PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
     SessionMetadataPatch, SessionPartPage, SessionPresentation, SessionState, SessionSummary,
     SessionView, StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
-    prepare_part_update, presentation,
+    presentation,
 };
-
-/// Safety ceiling for streaming deltas buffered in memory before one durable
-/// part update. Streaming is end-only by default: a part's deltas accumulate
-/// in the in-memory buffer and are committed once when the part reaches a
-/// terminal/state change (or when its run ends), so a run's mid-flight
-/// streaming never writes the database repeatedly. This threshold only
-/// bounds an unusually long single part so an unbounded buffer cannot grow
-/// without ever touching the durable store (crash-safety backstop).
-pub const STREAMING_FLUSH_DELTA_COUNT: usize = 512;
 
 // Full-history copies must not block stream updates or the async executor.
 static SESSION_SNAPSHOTS: BlockingPool = BlockingPool::new(2);
@@ -95,11 +85,30 @@ pub type SessionObserver = Arc<dyn Fn(SessionChange) + Send + Sync + 'static>;
 /// deployments).
 #[async_trait]
 pub trait SessionStore: Send + Sync {
+    async fn load_run_window(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        run_limit: usize,
+        part_limit: usize,
+    ) -> Result<super::SessionRunPage, StoreError>;
+
+    async fn load_visible_part_window(
+        &self,
+        session_id: i64,
+        run_ids: &[i64],
+        before: Option<PartCursor>,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError>;
+    /// Independently readable content. Its source writer, batching and
+    /// subscriptions do not mutate session or Part database rows.
+    fn contents(&self) -> &crate::content::ContentHub;
+
     /// Load a session's metadata plus parts ordered by
     /// `(created_at_ms, part_id)` — cache first, then one membership JOIN.
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError>;
 
-    /// A bounded membership read, including in-memory stream checkpoints.
+    /// A bounded membership read, of committed Part facts.
     async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError>;
 
     async fn load_owned_parts_by_kind(
@@ -506,76 +515,13 @@ pub trait SessionStore: Send + Sync {
         parts: Vec<NewPart>,
     ) -> Result<Vec<Part>, StoreError>;
 
-    /// Apply a streaming delta to one part (revision++, notify on flush).
-    /// Returns the updated part (the in-memory buffer overlay when the delta
-    /// is still buffered, the durable row once flushed).
+    /// Commit changed Part facts and notify. Streaming bodies belong to contents().
     async fn update_part(
         &self,
         session_id: i64,
         part_id: i64,
         delta: PartDelta,
     ) -> Result<Part, StoreError>;
-
-    /// Append live text without copying the whole growing part back to the
-    /// runtime on every token. Other store implementations retain the same
-    /// semantics through this default; the facade supplies the fast path.
-    async fn append_live_text(
-        &self,
-        session_id: i64,
-        part_id: i64,
-        text: String,
-    ) -> Result<PartCheckpoint, StoreError> {
-        let part = self
-            .update_part(
-                session_id,
-                part_id,
-                PartDelta {
-                    content_text_delta: Some(text),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        Ok(PartCheckpoint {
-            revision: part.revision,
-            updated_at_ms: part.updated_at_ms,
-        })
-    }
-
-    async fn append_live_reasoning(
-        &self,
-        session_id: i64,
-        part_id: i64,
-        text: String,
-    ) -> Result<PartCheckpoint, StoreError> {
-        let mut part = self
-            .load_part_ids(session_id, &[part_id])
-            .await?
-            .parts
-            .into_iter()
-            .next()
-            .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
-        if part.kind != "think" || part.state != PartState::InProgress {
-            return Err(StoreError::InvalidState(
-                "reasoning append requires an in-progress think part".to_owned(),
-            ));
-        }
-        super::part_update::append_reasoning_summary(&mut part.content, text)?;
-        let updated = self
-            .update_part(
-                session_id,
-                part_id,
-                PartDelta {
-                    state: Some(PartState::InProgress),
-                    content: Some(part.content),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        Ok(PartCheckpoint {
-            revision: updated.revision,
-            updated_at_ms: updated.updated_at_ms,
-        })
-    }
 
     /// Finish a run marker with the given terminal outcome. Returns the
     /// terminal marker row.
@@ -743,48 +689,14 @@ struct CacheEntry {
     newest_cursor: Option<(i64, i64)>,
 }
 
-/// One in-memory text stream checkpoint waiting for its bounded durable
-/// flush. `part.revision` remains the last committed revision until the
-/// engine accepts the coalesced update.
-#[derive(Debug, Clone)]
-struct StreamingBuffer {
-    part: Part,
-    pending_deltas: usize,
-    notification_pending: bool,
-    notified_at_ms: i64,
-    flush_requested: bool,
-}
-
 #[derive(Debug)]
 struct CacheSlot {
     entry: Arc<Mutex<CacheEntry>>,
     recency: u64,
 }
 
-#[derive(Debug)]
-struct StreamingSlot {
-    // Serialize changes and their durable flush for this part only. The buffer
-    // mutex is acquired only by finite blocking workers, never by async tasks.
-    gate: Arc<tokio::sync::Mutex<()>>,
-    run_id: Option<i64>,
-    buffer: Mutex<StreamingBuffer>,
-}
-
-enum StreamUpdate {
-    Buffered(Part),
-    Checkpoint(PartCheckpoint),
-    Committed(Part),
-}
-
-enum BufferedDelta {
-    Part(PartDelta),
-    Reasoning(String),
-}
-
 /// The internal memory layer (15.3): a per-session LRU cache of
-/// [`SessionView`]s validated against the persisted position. (The streaming
-/// buffers of 15.3 are introduced with the execution engine's throttled flush
-/// path, which has a real consumer for them.)
+/// [`SessionView`]s validated against the persisted position.
 #[derive(Debug)]
 pub struct MemoryLayer {
     /// session_id -> cached view (LRU, capped by `max_cached_sessions`).
@@ -793,8 +705,6 @@ pub struct MemoryLayer {
     clock: AtomicU64,
     /// Maximum number of sessions held in the cache.
     max_cached_sessions: usize,
-    /// `(session_id, part_id)` text streams awaiting a bounded flush.
-    streaming: Mutex<HashMap<(i64, i64), Arc<StreamingSlot>>>,
     part_gates: Mutex<HashMap<(i64, i64), std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
 
@@ -810,7 +720,6 @@ impl MemoryLayer {
             cache: Mutex::new(HashMap::new()),
             clock: AtomicU64::new(1),
             max_cached_sessions,
-            streaming: Mutex::new(HashMap::new()),
             part_gates: Mutex::new(HashMap::new()),
         }
     }
@@ -976,14 +885,6 @@ impl MemoryLayer {
         };
     }
 
-    fn streaming_slot(&self, session_id: i64, part_id: i64) -> Option<Arc<StreamingSlot>> {
-        self.streaming
-            .lock()
-            .expect("streaming lock")
-            .get(&(session_id, part_id))
-            .cloned()
-    }
-
     fn part_gate(&self, key: (i64, i64)) -> Arc<tokio::sync::Mutex<()>> {
         let mut gates = self.part_gates.lock().expect("part gates lock");
         if let Some(gate) = gates.get(&key).and_then(std::sync::Weak::upgrade) {
@@ -996,68 +897,6 @@ impl MemoryLayer {
         gates.insert(key, Arc::downgrade(&gate));
         gate
     }
-
-    fn is_current_stream(&self, key: (i64, i64), slot: &Arc<StreamingSlot>) -> bool {
-        self.streaming
-            .lock()
-            .expect("streaming lock")
-            .get(&key)
-            .is_some_and(|current| Arc::ptr_eq(current, slot))
-    }
-
-    fn remove_stream(&self, key: (i64, i64), slot: &Arc<StreamingSlot>) {
-        let removed = {
-            let mut streaming = self.streaming.lock().expect("streaming lock");
-            if streaming
-                .get(&key)
-                .is_some_and(|current| Arc::ptr_eq(current, slot))
-            {
-                streaming.remove(&key)
-            } else {
-                None
-            }
-        };
-        drop(removed);
-    }
-
-    /// Take only cheap handles under the shared map lock. Clone a live part
-    /// under its own lock, on a snapshot worker, without blocking other streams.
-    fn overlay_streaming(&self, _session_id: i64, view: &mut SessionView) {
-        for part in &mut view.parts {
-            if let Some(slot) = self.streaming_slot(part.origin_session_id, part.part_id) {
-                let buffer = slot.buffer.lock().expect("part stream lock");
-                if (buffer.part.revision, buffer.part.updated_at_ms)
-                    >= (part.revision, part.updated_at_ms)
-                {
-                    *part = buffer.part.clone();
-                }
-            }
-        }
-    }
-
-    fn clear_streaming_session(&self, session_id: i64) {
-        let removed = {
-            let mut streaming = self.streaming.lock().expect("streaming lock");
-            let keys = streaming
-                .keys()
-                .filter(|(id, _)| *id == session_id)
-                .copied()
-                .collect::<Vec<_>>();
-            keys.into_iter()
-                .filter_map(|key| streaming.remove(&key))
-                .collect::<Vec<_>>()
-        };
-        drop(removed);
-    }
-
-    fn clear_streaming_part(&self, session_id: i64, part_id: i64) {
-        let removed = self
-            .streaming
-            .lock()
-            .expect("streaming lock")
-            .remove(&(session_id, part_id));
-        drop(removed);
-    }
 }
 
 /// The in-process live-update bus (15.5). `SessionChange`s are emitted after
@@ -1068,8 +907,7 @@ pub struct NotificationBus {
     next_observer_id: AtomicU64,
     observers: Mutex<HashMap<i64, HashMap<u64, SessionObserver>>>,
     global_observers: Mutex<HashMap<u64, SessionObserver>>,
-    // Streaming checkpoints use the committed revision plus a monotonic
-    // timestamp. Remember both so identical engine results emit no event.
+    // Remember committed positions so identical engine results emit no event.
     positions: Mutex<HashMap<(i64, i64), (i64, i64)>>,
 }
 
@@ -1199,9 +1037,9 @@ pub struct SessionFacade<E> {
     engine: E,
     memory: Arc<MemoryLayer>,
     bus: Arc<NotificationBus>,
+    contents: crate::content::ContentHub,
 
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
-    streaming_flush_delta_count: usize,
 }
 
 impl<E> SessionFacade<E>
@@ -1228,15 +1066,13 @@ where
             engine,
             memory: Arc::new(memory),
             bus: Arc::new(bus),
+            contents: crate::content::ContentHub::in_memory(),
             now_ms: Arc::new(now_ms),
-            streaming_flush_delta_count: STREAMING_FLUSH_DELTA_COUNT,
         }
     }
 
-    /// Override the D10 text-stream flush threshold. Primarily useful for
-    /// deterministic tests and benchmarks; zero is normalized to one.
-    pub fn with_streaming_flush_delta_count(mut self, delta_count: usize) -> Self {
-        self.streaming_flush_delta_count = delta_count.max(1);
+    pub fn with_contents(mut self, contents: crate::content::ContentHub) -> Self {
+        self.contents = contents;
         self
     }
 
@@ -1262,37 +1098,6 @@ where
             .run(move || operation(&memory, &bus))
             .await
             .map_err(|error| StoreError::Io(format!("session memory worker failed: {error}")))
-    }
-
-    /// A started blocking operation survives cancellation of its async caller.
-    /// Keep the acquired part gate alive on that worker until its mutation or
-    /// cleanup finishes, so the next caller cannot race with detached work.
-    async fn in_part_memory<T: Send + 'static>(
-        &self,
-        gate: &Arc<tokio::sync::OwnedMutexGuard<()>>,
-        operation: impl FnOnce(&MemoryLayer, &NotificationBus) -> T + Send + 'static,
-    ) -> Result<T, StoreError> {
-        let gate = Arc::clone(gate);
-        self.in_memory(move |memory, bus| {
-            let _gate = gate;
-            operation(memory, bus)
-        })
-        .await
-    }
-
-    async fn overlay(
-        &self,
-        session_id: i64,
-        mut view: SessionView,
-    ) -> Result<SessionView, StoreError> {
-        let memory = Arc::clone(&self.memory);
-        SESSION_SNAPSHOTS
-            .run(move || {
-                memory.overlay_streaming(session_id, &mut view);
-                view
-            })
-            .await
-            .map_err(|error| StoreError::Io(format!("session snapshot worker failed: {error}")))
     }
 
     async fn publish_meta(&self, meta: SessionMeta) -> Result<SessionMeta, StoreError> {
@@ -1352,7 +1157,7 @@ where
     }
 
     /// Validate the cached durable position using async SQL, then perform the
-    /// full snapshot copy and stream overlay on a bounded worker.
+    /// full snapshot copy on a bounded worker.
     async fn load_cached(&self, session_id: i64) -> Result<SessionView, StoreError> {
         let meta = self.engine.session_meta(session_id).await?;
         let version = meta.version;
@@ -1364,7 +1169,6 @@ where
                     .get(session_id, Some(version), cursor)
                     .map(|mut view| {
                         view.meta = meta;
-                        memory.overlay_streaming(session_id, &mut view);
                         view
                     })
             })
@@ -1373,7 +1177,7 @@ where
         if let Some(view) = cached {
             return Ok(view);
         }
-        let mut view = self.engine.load_session(session_id).await?;
+        let view = self.engine.load_session(session_id).await?;
         // Use the position of the snapshot actually read, rather than an older
         // metadata read that may have preceded a concurrent commit.
         let memory = Arc::clone(&self.memory);
@@ -1386,7 +1190,6 @@ where
                     .map(|part| (part.created_at_ms, part.part_id))
                     .max();
                 memory.insert(session_id, view.clone(), version, cursor);
-                memory.overlay_streaming(session_id, &mut view);
                 view
             })
             .await
@@ -1414,255 +1217,6 @@ where
         .await?
     }
 
-    /// Keep the buffer registered until a durable flush succeeds. Cancellation
-    /// or a database error leaves the uncommitted tail available for a retry.
-    async fn update_streaming_part(
-        &self,
-        session_id: i64,
-        part_id: i64,
-        delta: BufferedDelta,
-        snapshot: bool,
-        gate: &Arc<tokio::sync::OwnedMutexGuard<()>>,
-    ) -> Result<StreamUpdate, StoreError> {
-        let key = (session_id, part_id);
-        loop {
-            let slot = match self.memory.streaming_slot(session_id, part_id) {
-                Some(slot) => slot,
-                None => {
-                    // Stream setup only needs this part, never the full history.
-                    let base = self
-                        .engine
-                        .load_part_ids(session_id, &[part_id])
-                        .await?
-                        .parts
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
-                    if base.origin_session_id != session_id {
-                        return Err(StoreError::InvalidState(format!(
-                            "part {part_id} is shared; only its origin session may update it in place"
-                        )));
-                    }
-                    self.in_part_memory(gate, move |memory, _| {
-                        let candidate = Arc::new(StreamingSlot {
-                            gate: memory.part_gate(key),
-                            run_id: base.run_id,
-                            buffer: Mutex::new(StreamingBuffer {
-                                notified_at_ms: base.updated_at_ms,
-                                part: base,
-                                pending_deltas: 0,
-                                notification_pending: false,
-                                flush_requested: false,
-                            }),
-                        });
-                        let slot = memory
-                            .streaming
-                            .lock()
-                            .expect("streaming lock")
-                            .entry(key)
-                            .or_insert_with(|| Arc::clone(&candidate))
-                            .clone();
-                        // Release an unused candidate outside the registry lock.
-                        drop(candidate);
-                        slot
-                    })
-                    .await?
-                }
-            };
-            if !self.memory.is_current_stream(key, &slot) {
-                self.in_part_memory(gate, move |_, _| drop(slot)).await?;
-                continue;
-            }
-            let worker_slot = Arc::clone(&slot);
-            let memory = Arc::clone(&self.memory);
-            let bus = Arc::clone(&self.bus);
-            let now = self.now();
-            let threshold = self.streaming_flush_delta_count;
-            let (part, flush) = self
-                .in_part_memory(gate, move |_, _| {
-                    let mut buffer = worker_slot.buffer.lock().expect("part stream lock");
-                    let previous_updated_at = buffer.part.updated_at_ms;
-                    let state_changed = match delta {
-                        BufferedDelta::Part(delta) => {
-                            apply_buffered_delta(&mut buffer.part, delta, now)?
-                        }
-                        BufferedDelta::Reasoning(text) => {
-                            super::part_update::append_buffered_reasoning(
-                                &mut buffer.part,
-                                text,
-                                now,
-                            )?;
-                            false
-                        }
-                    };
-                    if buffer.part.updated_at_ms != previous_updated_at {
-                        buffer.pending_deltas += 1;
-                    }
-                    buffer.flush_requested |= state_changed || buffer.pending_deltas >= threshold;
-                    let flush = buffer.flush_requested;
-                    let part = if snapshot || flush {
-                        StreamUpdate::Buffered(buffer.part.clone())
-                    } else {
-                        StreamUpdate::Checkpoint(PartCheckpoint {
-                            revision: buffer.part.revision,
-                            updated_at_ms: buffer.part.updated_at_ms,
-                        })
-                    };
-                    drop(buffer);
-                    if !flush {
-                        Self::schedule_streaming_notification(&memory, &bus, key, &worker_slot);
-                    }
-                    Ok::<_, StoreError>((part, flush))
-                })
-                .await??;
-            if !flush {
-                return Ok(part);
-            }
-            let StreamUpdate::Buffered(part) = part else {
-                unreachable!("flush requests a full checkpoint")
-            };
-            let updated = self.flush_streaming_part(session_id, part).await?;
-            self.in_part_memory(gate, move |memory, _| memory.remove_stream(key, &slot))
-                .await?;
-            return Ok(StreamUpdate::Committed(updated));
-        }
-    }
-
-    async fn flush_streaming_part(&self, session_id: i64, part: Part) -> Result<Part, StoreError> {
-        self.engine
-            .update_part(
-                session_id,
-                part.part_id,
-                PartDelta {
-                    state: Some(part.state),
-                    content: Some(part.content),
-                    content_text_delta: None,
-                    summary: part.summary,
-                    provider_state: part.provider_state,
-                    finished_at_ms: part.finished_at_ms,
-                },
-                part.updated_at_ms.max(self.now()),
-            )
-            .await
-    }
-
-    /// Called on the admitted update worker. The delayed snapshot and callback
-    /// fanout also run on workers; only the timer itself occupies an async task.
-    fn schedule_streaming_notification(
-        memory: &Arc<MemoryLayer>,
-        bus: &Arc<NotificationBus>,
-        key: (i64, i64),
-        slot: &Arc<StreamingSlot>,
-    ) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        {
-            let mut buffer = slot.buffer.lock().expect("part stream lock");
-            if buffer.notification_pending || buffer.notified_at_ms == buffer.part.updated_at_ms {
-                return;
-            }
-            buffer.notification_pending = true;
-        }
-        let memory = Arc::downgrade(memory);
-        let bus = Arc::downgrade(bus);
-        let slot = Arc::downgrade(slot);
-        runtime.spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let (Some(memory), Some(bus), Some(slot)) =
-                (memory.upgrade(), bus.upgrade(), slot.upgrade())
-            else {
-                return;
-            };
-            if let Err(error) = SESSION_UPDATES
-                .run(move || {
-                    if !memory.is_current_stream(key, &slot) {
-                        return;
-                    }
-                    let part = {
-                        let mut buffer = slot.buffer.lock().expect("part stream lock");
-                        buffer.notification_pending = false;
-                        // A semantic boundary awaiting commit must not publish
-                        // an uncommitted terminal state through the live bus.
-                        if buffer.flush_requested {
-                            return;
-                        }
-                        buffer.notified_at_ms = buffer.part.updated_at_ms;
-                        buffer.part.clone()
-                    };
-                    bus.emit(SessionChange::PartUpdated {
-                        session_id: key.0,
-                        part,
-                    });
-                })
-                .await
-            {
-                tracing::error!(%error, "stream notification worker failed");
-            }
-        });
-    }
-
-    /// Serialize and flush each part independently; other sessions and other
-    /// parts can still advance. Failed or cancelled flushes retain their buffer.
-    async fn flush_streaming_run(&self, session_id: i64, run_id: i64) -> Result<(), StoreError> {
-        let slots = {
-            let streaming = self.memory.streaming.lock().expect("streaming lock");
-            streaming
-                .iter()
-                .filter(|((id, part_id), slot)| {
-                    *id == session_id && (*part_id == run_id || slot.run_id == Some(run_id))
-                })
-                .map(|(key, slot)| (*key, Arc::clone(slot)))
-                .collect::<Vec<_>>()
-        };
-        let mut flushed = Vec::with_capacity(slots.len());
-        let mut failure = None;
-        for (key, slot) in slots {
-            let gate = Arc::new(Arc::clone(&slot.gate).lock_owned().await);
-            if !self.memory.is_current_stream(key, &slot) {
-                self.in_part_memory(&gate, move |_, _| drop(slot)).await?;
-                continue;
-            }
-            let worker_slot = Arc::clone(&slot);
-            let part = self
-                .in_part_memory(&gate, move |_, _| {
-                    worker_slot
-                        .buffer
-                        .lock()
-                        .expect("part stream lock")
-                        .part
-                        .clone()
-                })
-                .await?;
-            match self.flush_streaming_part(session_id, part).await {
-                Ok(part) => {
-                    self.in_part_memory(&gate, move |memory, _| memory.remove_stream(key, &slot))
-                        .await?;
-                    flushed.push(part);
-                }
-                Err(error) => {
-                    failure = Some(error);
-                    break;
-                }
-            }
-        }
-        // Announce earlier successful flushes even when a later part failed.
-        if !flushed.is_empty() {
-            let meta = self.engine.session_meta(session_id).await?;
-            let known_writes = flushed.len();
-            self.publish_parts_with_writes(
-                session_id,
-                meta,
-                flushed,
-                Vec::as_slice,
-                false,
-                known_writes,
-            )
-            .await?;
-        }
-        failure.map_or(Ok(()), Err)
-    }
-
     /// Reconcile a session left with an ownerless in-flight run (17.4):
     /// mark in-flight run markers `failed` (`process_restart`) and their
     /// non-terminal children `cancelled`. Idempotent. The caller decides
@@ -1676,10 +1230,6 @@ where
     }
 
     async fn reconcile(&self, session_id: i64, run_ids: &[i64]) -> Result<(), StoreError> {
-        // A process-restart reconciliation cannot safely commit a process-local
-        // stream tail. Drop it before deriving/announcing the terminal rows.
-        self.in_memory(move |memory, _| memory.clear_streaming_session(session_id))
-            .await?;
         let outcome = self
             .engine
             .reconcile(session_id, run_ids, self.now())
@@ -1704,13 +1254,40 @@ impl<E> SessionStore for SessionFacade<E>
 where
     E: PersistenceEngine,
 {
+    async fn load_run_window(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        run_limit: usize,
+        part_limit: usize,
+    ) -> Result<super::SessionRunPage, StoreError> {
+        self.engine
+            .load_run_window(session_id, before, run_limit, part_limit)
+            .await
+    }
+
+    async fn load_visible_part_window(
+        &self,
+        session_id: i64,
+        run_ids: &[i64],
+        before: Option<PartCursor>,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError> {
+        self.engine
+            .load_visible_part_window(session_id, run_ids, before, limit)
+            .await
+    }
+    fn contents(&self) -> &crate::content::ContentHub {
+        &self.contents
+    }
+
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError> {
         self.load_cached(session_id).await
     }
 
     async fn load_part_ids(&self, session_id: i64, ids: &[i64]) -> Result<SessionView, StoreError> {
         let view = self.engine.load_part_ids(session_id, ids).await?;
-        self.overlay(session_id, view).await
+        Ok(view)
     }
 
     async fn load_owned_parts_by_kind(
@@ -1722,7 +1299,7 @@ where
             .engine
             .load_owned_parts_by_kind(session_id, kind)
             .await?;
-        self.overlay(session_id, view).await
+        Ok(view)
     }
 
     async fn load_owned_file_change_parts(
@@ -1730,7 +1307,7 @@ where
         session_id: i64,
     ) -> Result<SessionView, StoreError> {
         let view = self.engine.load_owned_file_change_parts(session_id).await?;
-        self.overlay(session_id, view).await
+        Ok(view)
     }
 
     async fn load_runs_after(
@@ -1747,14 +1324,13 @@ where
             meta: page.meta.clone(),
             parts: page.parts,
         };
-        let view = self.overlay(session_id, view).await?;
         page.parts = view.parts;
         Ok(page)
     }
 
     async fn load_control_parts(&self, session_id: i64) -> Result<SessionView, StoreError> {
         let view = self.engine.load_control_parts(session_id).await?;
-        self.overlay(session_id, view).await
+        Ok(view)
     }
 
     async fn load_run_markers(&self, session_id: i64) -> Result<SessionView, StoreError> {
@@ -1795,7 +1371,6 @@ where
             meta: page.meta.clone(),
             parts: std::mem::take(&mut page.parts),
         };
-        let view = self.overlay(session_id, view).await?;
         page.parts = view.parts;
         Ok(page)
     }
@@ -1815,7 +1390,6 @@ where
             meta: page.meta.clone(),
             parts: std::mem::take(&mut page.parts),
         };
-        let view = self.overlay(session_id, view).await?;
         page.parts = view
             .parts
             .into_iter()
@@ -2143,18 +1717,7 @@ where
         tool_part: Option<(i64, PartState, Value)>,
         parts: Vec<NewPart>,
     ) -> Result<Vec<Part>, StoreError> {
-        // The launching tool part may still be buffered as a streaming
-        // InProgress overlay. Drop that one part's buffer so the engine's
-        // atomic launch/settle transaction is authoritative — otherwise a
-        // background marker can remain memory-only forever because its run
-        // deliberately stays in-flight until that same background operation
-        // settles. Only the tool part's buffer is cleared: another execution
-        // may still be streaming unrelated parts.
         let tool_part_id = tool_part.as_ref().map(|(part_id, _, _)| *part_id);
-        if let Some(tool_part_id) = tool_part_id {
-            self.in_memory(move |memory, _| memory.clear_streaming_part(session_id, tool_part_id))
-                .await?;
-        }
         let created = self
             .engine
             .settle_background_run(session_id, run_id, tool_part, parts, self.now())
@@ -2207,123 +1770,16 @@ where
         part_id: i64,
         delta: PartDelta,
     ) -> Result<Part, StoreError> {
-        // Take the same gate before reading the base, buffering, or doing a
-        // direct durable edit. Concurrent first deltas cannot seed stale rows
-        // after another delta's flush removed the preceding buffer.
-        let gate = Arc::new(
-            self.memory
-                .part_gate((session_id, part_id))
-                .lock_owned()
-                .await,
-        );
-        let has_buffer = self.memory.streaming_slot(session_id, part_id).is_some();
-        let is_text_delta = delta.content.is_none() && delta.content_text_delta.is_some();
-        let streaming_content_update =
-            delta.content.is_some() && delta.state == Some(PartState::InProgress);
-        let updated = if has_buffer || is_text_delta || streaming_content_update {
-            match self
-                .update_streaming_part(session_id, part_id, BufferedDelta::Part(delta), true, &gate)
-                .await?
-            {
-                StreamUpdate::Buffered(part) => return Ok(part),
-                StreamUpdate::Committed(part) => part,
-                StreamUpdate::Checkpoint(_) => unreachable!("snapshot was requested"),
-            }
-        } else {
-            self.engine
-                .update_part(session_id, part_id, delta, self.now())
-                .await?
-        };
-        // Observer callbacks may reenter this part. Publish only after the
-        // durable edit and buffer cleanup have released their serialization.
-        drop(gate);
+        let gate = self.memory.part_gate((session_id, part_id));
+        let guard = gate.lock().await;
+        let updated = self
+            .engine
+            .update_part(session_id, part_id, delta, self.now())
+            .await?;
+        drop(guard);
         let meta = self.engine.session_meta(session_id).await?;
         self.publish_parts(session_id, meta, updated, std::slice::from_ref, false)
             .await
-    }
-
-    async fn append_live_text(
-        &self,
-        session_id: i64,
-        part_id: i64,
-        text: String,
-    ) -> Result<PartCheckpoint, StoreError> {
-        let gate = Arc::new(
-            self.memory
-                .part_gate((session_id, part_id))
-                .lock_owned()
-                .await,
-        );
-        let delta = PartDelta {
-            content_text_delta: Some(text),
-            ..Default::default()
-        };
-        let updated = self
-            .update_streaming_part(
-                session_id,
-                part_id,
-                BufferedDelta::Part(delta),
-                false,
-                &gate,
-            )
-            .await?;
-        drop(gate);
-        match updated {
-            StreamUpdate::Checkpoint(position) => Ok(position),
-            StreamUpdate::Committed(part) => {
-                let position = PartCheckpoint {
-                    revision: part.revision,
-                    updated_at_ms: part.updated_at_ms,
-                };
-                let meta = self.engine.session_meta(session_id).await?;
-                self.publish_parts(session_id, meta, part, std::slice::from_ref, false)
-                    .await?;
-                Ok(position)
-            }
-            StreamUpdate::Buffered(_) => {
-                unreachable!("only a lightweight checkpoint was requested")
-            }
-        }
-    }
-
-    async fn append_live_reasoning(
-        &self,
-        session_id: i64,
-        part_id: i64,
-        text: String,
-    ) -> Result<PartCheckpoint, StoreError> {
-        let gate = Arc::new(
-            self.memory
-                .part_gate((session_id, part_id))
-                .lock_owned()
-                .await,
-        );
-        let updated = self
-            .update_streaming_part(
-                session_id,
-                part_id,
-                BufferedDelta::Reasoning(text),
-                false,
-                &gate,
-            )
-            .await?;
-        drop(gate);
-        match updated {
-            StreamUpdate::Checkpoint(position) => Ok(position),
-            StreamUpdate::Committed(part) => {
-                let position = PartCheckpoint {
-                    revision: part.revision,
-                    updated_at_ms: part.updated_at_ms,
-                };
-                let meta = self.engine.session_meta(session_id).await?;
-                self.publish_parts(session_id, meta, part, std::slice::from_ref, false)
-                    .await?;
-                Ok(position)
-            }
-            StreamUpdate::Buffered(_) => {
-                unreachable!("only a lightweight checkpoint was requested")
-            }
-        }
     }
 
     async fn complete_run(
@@ -2332,7 +1788,6 @@ where
         run_id: i64,
         outcome: RunOutcome,
     ) -> Result<Part, StoreError> {
-        self.flush_streaming_run(session_id, run_id).await?;
         let marker = self
             .engine
             .complete_run(session_id, run_id, outcome, self.now())
@@ -2487,7 +1942,6 @@ where
     }
 
     async fn cancel_run(&self, session_id: i64, run_id: i64) -> Result<Vec<Part>, StoreError> {
-        self.flush_streaming_run(session_id, run_id).await?;
         let updated_parts = self
             .engine
             .cancel_run(session_id, run_id, self.now())
@@ -2506,7 +1960,6 @@ where
         session_id: i64,
         run_id: i64,
     ) -> Result<Vec<Part>, StoreError> {
-        self.flush_streaming_run(session_id, run_id).await?;
         let removed_parts = self
             .engine
             .withdraw_user_run(session_id, run_id, self.now())
@@ -2516,7 +1969,6 @@ where
         }
         let meta = self.engine.session_meta(session_id).await?;
         self.in_memory(move |memory, bus| {
-            memory.clear_streaming_session(session_id);
             memory.invalidate(session_id);
             for part in &removed_parts {
                 bus.emit(SessionChange::PartRemoved {
@@ -2623,7 +2075,6 @@ where
         self.in_memory(move |memory, bus| {
             removed_memberships.sort_by_key(|(id, _, _, _)| *id);
             for (deleted_id, workspace_id, temporary, part_ids) in removed_memberships {
-                memory.clear_streaming_session(deleted_id);
                 memory.invalidate(deleted_id);
                 for part_id in part_ids {
                     bus.emit(SessionChange::PartRemoved {
@@ -2642,7 +2093,18 @@ where
     }
 
     async fn export_session_jsonl(&self, session_id: i64) -> Result<String, StoreError> {
-        self.engine.export_session_jsonl(session_id).await
+        let mut bundle = self.engine.export_session_jsonl(session_id).await?;
+        let parsed = super::jsonl::parse(&bundle)?;
+        let mut seen = std::collections::HashSet::new();
+        for part in parsed.parts {
+            for reference in part.resources()? {
+                if seen.insert(reference.resource_id) {
+                    let archive = self.contents.export_snapshot(reference.resource_id).await?;
+                    super::jsonl::append_resource(&mut bundle, archive)?;
+                }
+            }
+        }
+        Ok(bundle)
     }
 
     async fn import_session_jsonl(
@@ -2650,9 +2112,10 @@ where
         workspace_id: i64,
         bundle: &str,
     ) -> Result<i64, StoreError> {
+        let _import = self.contents.import_guard().await;
         let session_id = self
             .engine
-            .import_session_jsonl(workspace_id, bundle, self.now())
+            .import_session_jsonl(workspace_id, bundle, self.now(), &self.contents)
             .await?;
         let view = self.engine.load_session(session_id).await?;
         self.in_memory(move |_, bus| {
@@ -2673,7 +2136,12 @@ where
     }
 
     async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
-        self.engine.maintenance(now_ms).await
+        let _collection = self.contents.collection_guard().await;
+        let outcome = self.engine.maintenance(now_ms).await?;
+        let referenced = self.engine.referenced_content_ids().await?;
+        let collected = self.contents.collect_orphans(referenced).await?;
+        tracing::debug!(collected, "unreferenced content resources collected");
+        Ok(outcome)
     }
 
     fn subscribe(&self, session_id: i64, observer: SessionObserver) -> Subscription {
@@ -2702,43 +2170,6 @@ fn wall_clock_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Apply a streaming delta to the in-memory checkpoint without advancing the
-/// persisted revision. The engine advances revision once when the coalesced
-/// checkpoint is committed.
-fn apply_buffered_delta(
-    part: &mut Part,
-    delta: PartDelta,
-    now_ms: i64,
-) -> Result<bool, StoreError> {
-    if !part.is_run_marker()
-        && part.state == PartState::InProgress
-        && part.finished_at_ms.is_none()
-        && delta.state.is_none()
-        && delta.content.is_none()
-        && delta.summary.is_none()
-        && delta.provider_state.is_none()
-        && delta.finished_at_ms.is_none()
-        && let Some(text) = delta.content_text_delta.as_deref()
-    {
-        super::part_update::append_buffered_text(part, text, now_ms)?;
-        return Ok(false);
-    }
-    let revision = part.revision;
-    // Buffered checkpoints have a logical clock (several tokens can arrive in
-    // one wall-clock millisecond). Preserve it when the terminal delta lands.
-    let mut next = prepare_part_update(part.clone(), delta, now_ms.max(part.updated_at_ms))?;
-    let state_changed = next.state != part.state;
-    if next.revision != revision {
-        // Buffered updates keep the committed revision. Their logical clock
-        // must advance even when wall time hasn't, so the live-update bus
-        // can distinguish successive checkpoints.
-        next.updated_at_ms = next.updated_at_ms.max(part.updated_at_ms.saturating_add(1));
-    }
-    next.revision = revision;
-    *part = next;
-    Ok(state_changed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2748,6 +2179,132 @@ mod tests {
     };
     use agena_domain::SessionRelationKind;
     use portable_atomic::AtomicI64;
+
+    #[tokio::test]
+    async fn content_stream_advances_without_part_mutations_or_session_notifications() {
+        use agena_domain::{ContentCursor, ContentKind, ContentPayload, ContentState};
+
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "resource stream").await;
+        let run = facade
+            .submit_user_run(
+                session_id,
+                vec![NewPart {
+                    state: PartState::InProgress,
+                    ..NewPart::pending("text", PartRole::Assistant, json!({"text": ""}))
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+        let part = &run.parts[1];
+        let writer = facade
+            .contents()
+            .open(session_id, part.part_id, ContentKind::Text)
+            .await
+            .unwrap();
+        let reference = writer.resource().reference();
+        let attached = facade
+            .update_part(
+                session_id,
+                part.part_id,
+                PartDelta {
+                    content: Some(json!({"text": "", "resources": [reference]})),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let baseline = facade.engine().load_session(session_id).await.unwrap();
+        let notifications = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe(session_id, {
+            let notifications = notifications.clone();
+            Arc::new(move |change| notifications.lock().unwrap().push(change))
+        });
+        let mut watch = facade.contents().subscribe(reference.resource_id).unwrap();
+        for _ in 0..1000 {
+            writer.append_text("中").await.unwrap();
+        }
+        watch.changed().await.unwrap();
+        assert_eq!(watch.borrow().cursor.sequence, 1000);
+        assert!(notifications.lock().unwrap().is_empty());
+        let mid = facade.engine().load_session(session_id).await.unwrap();
+        assert_eq!(mid.parts, baseline.parts);
+        assert_eq!(mid.meta.version, baseline.meta.version);
+
+        let sealed = writer.finish().await.unwrap();
+        assert_eq!(sealed.state, ContentState::Complete);
+        assert_eq!(sealed.cursor, sealed.committed_cursor);
+        let page = facade
+            .contents()
+            .read(
+                reference.resource_id,
+                Some(ContentCursor {
+                    epoch: sealed.cursor.epoch,
+                    sequence: 0,
+                }),
+                1024 * 1024,
+            )
+            .await
+            .unwrap();
+        let text: String = page
+            .chunks
+            .iter()
+            .filter_map(|chunk| match &chunk.payload {
+                ContentPayload::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "中".repeat(1000));
+        let completed = facade
+            .update_part(
+                session_id,
+                part.part_id,
+                PartDelta {
+                    state: Some(PartState::Completed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(completed.revision, attached.revision + 1);
+        assert_eq!(completed.content, attached.content);
+    }
+
+    #[tokio::test]
+    async fn in_progress_semantic_facts_are_committed_before_notification() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "semantic update").await;
+        let run = facade
+            .submit_user_run(
+                session_id,
+                vec![NewPart {
+                    state: PartState::InProgress,
+                    ..NewPart::pending("tool_call", PartRole::Assistant, json!({"input": {}}))
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+        let part = facade
+            .update_part(
+                session_id,
+                run.parts[1].part_id,
+                PartDelta {
+                    state: Some(PartState::InProgress),
+                    content: Some(json!({"input": {}, "phase": "started"})),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let durable = facade
+            .engine()
+            .load_part_ids(session_id, &[part.part_id])
+            .await
+            .unwrap();
+        assert_eq!(durable.parts, vec![part]);
+    }
 
     /// Deterministic clock shared with the facade so tests can advance time.
     #[derive(Clone)]
@@ -2874,293 +2431,6 @@ mod tests {
 
         let view = facade.load(session_id).await.expect("load");
         assert_eq!(view.parts.len(), 2, "marker + text");
-    }
-
-    #[tokio::test]
-    async fn text_stream_deltas_are_amortized_and_run_end_flushes_the_tail() {
-        let clock = Clock::new(1_000_000);
-        let engine = InMemoryEngine::default();
-        let facade = SessionFacade::with_clock(
-            engine.clone(),
-            MemoryLayer::new(16),
-            NotificationBus::new(),
-            {
-                let clock = clock.clone();
-                move || clock.get()
-            },
-        )
-        .with_streaming_flush_delta_count(3);
-        let session_id = ready_session(&facade, 1, "stream").await;
-        let outcome = facade
-            .submit_user_run(
-                session_id,
-                vec![NewPart {
-                    kind: "text".to_owned(),
-                    role: PartRole::Assistant,
-                    content: json!({"text": ""}),
-                    summary: None,
-                    visibility: crate::store::PartVisibility::Both,
-                    parent_part_id: None,
-                    state: PartState::InProgress,
-                }],
-                None,
-            )
-            .await
-            .expect("start streamed part");
-        let run_id = outcome.run_id;
-        let part_id = engine
-            .load_session(session_id)
-            .await
-            .expect("load persisted stream")
-            .parts[1]
-            .part_id;
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let observer: SessionObserver = {
-            let seen = Arc::clone(&seen);
-            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
-        };
-        let _subscription = facade.subscribe(session_id, observer);
-
-        for delta in ["a", "b"] {
-            facade
-                .update_part(
-                    session_id,
-                    part_id,
-                    PartDelta {
-                        content_text_delta: Some(delta.to_owned()),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .expect("buffer delta");
-        }
-        let persisted_before_threshold = engine
-            .load_session(session_id)
-            .await
-            .expect("load before threshold");
-        assert_eq!(persisted_before_threshold.parts[1].content["text"], "");
-        assert_eq!(persisted_before_threshold.parts[1].revision, 1);
-        assert_eq!(
-            facade.load(session_id).await.expect("overlay stream").parts[1].content["text"],
-            "ab",
-            "same-process readers see the in-memory stream before its checkpoint"
-        );
-
-        facade
-            .update_part(
-                session_id,
-                part_id,
-                PartDelta {
-                    content_text_delta: Some("c".to_owned()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("threshold delta");
-        let first_flush = engine
-            .load_session(session_id)
-            .await
-            .expect("load first flush");
-        assert_eq!(first_flush.parts[1].content["text"], "abc");
-        assert_eq!(first_flush.parts[1].revision, 2, "three deltas, one write");
-
-        for delta in ["d", "e"] {
-            facade
-                .update_part(
-                    session_id,
-                    part_id,
-                    PartDelta {
-                        content_text_delta: Some(delta.to_owned()),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .expect("buffer tail delta");
-        }
-        assert_eq!(
-            engine
-                .load_session(session_id)
-                .await
-                .expect("tail remains buffered")
-                .parts[1]
-                .content["text"],
-            "abc"
-        );
-
-        facade
-            .complete_run(
-                session_id,
-                run_id,
-                RunOutcome {
-                    status: PartState::Completed,
-                    abort_reason: None,
-                    content: None,
-                    provider_state: None,
-                },
-            )
-            .await
-            .expect("run completion flushes tail");
-        let completed = engine
-            .load_session(session_id)
-            .await
-            .expect("load completed stream");
-        assert_eq!(completed.parts[1].content["text"], "abcde");
-        assert_eq!(
-            completed.parts[1].revision, 3,
-            "five deltas persisted in two part updates"
-        );
-        let content_flushes = seen
-            .lock()
-            .expect("seen lock")
-            .iter()
-            .filter(|change| {
-                matches!(
-                    change,
-                    SessionChange::PartUpdated { part, .. } if part.part_id == part_id
-                )
-            })
-            .count();
-        assert_eq!(content_flushes, 2, "notifications follow committed flushes");
-    }
-
-    #[tokio::test]
-    async fn in_progress_content_updates_are_end_only_and_terminalize_in_one_write() {
-        let (facade, _clock) = harness();
-        let session_id = ready_session(&facade, 1, "stream").await;
-        let _outcome = facade
-            .submit_user_run(
-                session_id,
-                vec![NewPart {
-                    kind: "think".to_owned(),
-                    role: PartRole::Assistant,
-                    content: json!({"summary": []}),
-                    summary: None,
-                    visibility: crate::store::PartVisibility::Both,
-                    parent_part_id: None,
-                    state: PartState::InProgress,
-                }],
-                None,
-            )
-            .await
-            .expect("start streamed part");
-        let part_id = facade
-            .engine()
-            .load_session(session_id)
-            .await
-            .expect("load persisted stream")
-            .parts[1]
-            .part_id;
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let observer: SessionObserver = {
-            let seen = Arc::clone(&seen);
-            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
-        };
-        let _subscription = facade.subscribe(session_id, observer);
-
-        // A long in-progress content stream (a reasoning part rewriting its
-        // whole content document per token) must stay in the in-memory buffer:
-        // zero durable writes and zero session version bumps until the part
-        // terminalizes.
-        for i in 0..40 {
-            facade
-                .update_part(
-                    session_id,
-                    part_id,
-                    PartDelta {
-                        state: Some(PartState::InProgress),
-                        content: Some(json!({"summary": [format!("t{i}")]})),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .expect("buffer content delta");
-        }
-        let persisted_mid_stream = facade
-            .engine()
-            .load_session(session_id)
-            .await
-            .expect("load mid-stream");
-        let persisted_part = persisted_mid_stream
-            .parts
-            .iter()
-            .find(|part| part.part_id == part_id)
-            .expect("streamed part present");
-        assert_eq!(
-            persisted_part.revision, 1,
-            "in-progress content deltas must not write the durable store"
-        );
-        assert_eq!(
-            persisted_part.content["summary"],
-            json!([]),
-            "the durable row stays at its creation shape"
-        );
-        assert_eq!(
-            facade
-                .engine()
-                .session_meta(session_id)
-                .await
-                .expect("session meta")
-                .version,
-            persisted_mid_stream.parts[0].part_id + 1,
-            "session version must not advance on buffered content deltas"
-        );
-        assert_eq!(
-            facade
-                .load(session_id)
-                .await
-                .expect("overlay")
-                .parts
-                .iter()
-                .find(|part| part.part_id == part_id)
-                .expect("overlaid part")
-                .content["summary"],
-            json!(["t39"]),
-            "same-process readers see the live stream through the buffer overlay"
-        );
-
-        // Terminalizing the part flushes exactly once.
-        facade
-            .update_part(
-                session_id,
-                part_id,
-                PartDelta {
-                    state: Some(PartState::Completed),
-                    content: Some(json!({"summary": ["final"]})),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("terminalize flushes");
-        let persisted_after = facade
-            .engine()
-            .load_session(session_id)
-            .await
-            .expect("load after terminalize");
-        let terminal_part = persisted_after
-            .parts
-            .iter()
-            .find(|part| part.part_id == part_id)
-            .expect("terminal part present");
-        assert_eq!(
-            terminal_part.revision, 2,
-            "one terminal write commits all deltas"
-        );
-        assert_eq!(terminal_part.content["summary"], json!(["final"]));
-        let content_flushes = seen
-            .lock()
-            .expect("seen lock")
-            .iter()
-            .filter(|change| {
-                matches!(
-                    change,
-                    SessionChange::PartUpdated { part, .. } if part.part_id == part_id
-                )
-            })
-            .count();
-        assert_eq!(
-            content_flushes, 1,
-            "one notification for the end-only flush"
-        );
     }
 
     #[tokio::test]
@@ -3429,77 +2699,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn buffered_stream_publishes_a_bounded_trailing_snapshot_without_durable_writes() {
-        let (facade, _clock) = harness();
-        let session_id = ready_session(&facade, 1, "live buffer").await;
-        let run = facade
-            .submit_user_run(
-                session_id,
-                vec![NewPart {
-                    state: PartState::InProgress,
-                    ..NewPart::pending("text", PartRole::Assistant, json!({"text": ""}))
-                }],
-                None,
-            )
-            .await
-            .unwrap();
-        let part_id = run
-            .parts
-            .iter()
-            .find(|part| part.kind == "text")
-            .unwrap()
-            .part_id;
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let _subscription = facade.subscribe(session_id, {
-            let seen = seen.clone();
-            Arc::new(move |change| seen.lock().unwrap().push(change))
-        });
-        for _ in 0..20 {
-            facade
-                .update_part(
-                    session_id,
-                    part_id,
-                    PartDelta {
-                        content_text_delta: Some("x".into()),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap();
-        }
-        assert!(seen.lock().unwrap().is_empty());
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while seen.lock().unwrap().is_empty() {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
-        {
-            let changes = seen.lock().unwrap();
-            assert_eq!(
-                changes.len(),
-                1,
-                "a token burst produces one trailing patch"
-            );
-            let SessionChange::PartUpdated { part, .. } = &changes[0] else {
-                panic!("part patch expected")
-            };
-            assert_eq!(part.content["text"], "x".repeat(20));
-        }
-        let persisted = facade.engine().load_session(session_id).await.unwrap();
-        assert_eq!(
-            persisted
-                .parts
-                .iter()
-                .find(|part| part.part_id == part_id)
-                .unwrap()
-                .content["text"],
-            ""
-        );
-    }
-
-    #[tokio::test]
     async fn deleting_an_empty_session_notifies_global_subscribers() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "empty").await;
@@ -3731,6 +2930,161 @@ mod tests {
             "marker + text survive the round trip"
         );
         assert_eq!(imported_view.parts[1].content["text"], "export me");
+    }
+
+    #[tokio::test]
+    async fn resource_bundle_is_independent_of_the_source_and_remaps_all_ownership() {
+        use agena_domain::ContentKind;
+        let (source, _) = harness();
+        let session_id = ready_session(&source, 1, "portable content").await;
+        let run = source
+            .submit_user_run(
+                session_id,
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::Assistant,
+                    json!({"text": ""}),
+                )],
+                None,
+            )
+            .await
+            .unwrap();
+        let part_id = run.parts[1].part_id;
+        let writer = source
+            .contents()
+            .open(session_id, part_id, ContentKind::Text)
+            .await
+            .unwrap();
+        let old = writer.resource().reference();
+        source
+            .update_part(
+                session_id,
+                part_id,
+                PartDelta {
+                    content: Some(json!({"text": "", "resources": [old], "metadata":{"agena.provider_trace":old}})),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        writer.append_text("  中文\n\npartial").await.unwrap();
+        let complete = writer.finish().await.unwrap();
+        let bundle = source.export_session_jsonl(session_id).await.unwrap();
+        let (destination, _) = harness();
+        // Force different numeric identities, as with an unrelated database.
+        ready_session(&destination, 1, "existing").await;
+        let imported = destination.import_session_jsonl(1, &bundle).await.unwrap();
+        source.delete(session_id).await.unwrap();
+        source.maintenance(1_000_000).await.unwrap();
+        assert!(source.contents().describe(old.resource_id).await.is_err());
+        let view = destination.load(imported).await.unwrap();
+        let imported_part = view.parts.iter().find(|part| part.kind == "text").unwrap();
+        let reference = imported_part.resources().unwrap().pop().unwrap();
+        assert_eq!(
+            imported_part
+                .content
+                .pointer("/metadata/agena.provider_trace/resource_id"),
+            Some(&json!(reference.resource_id))
+        );
+        assert_ne!(reference.resource_id, old.resource_id);
+        let resource = destination
+            .contents()
+            .describe(reference.resource_id)
+            .await
+            .unwrap();
+        assert_eq!(resource.owner_session_id, imported);
+        assert_eq!(resource.part_id, imported_part.part_id);
+        assert_ne!(resource.cursor.epoch, complete.cursor.epoch);
+        assert_eq!(
+            destination
+                .contents()
+                .read_text(reference.resource_id, 1024)
+                .await
+                .unwrap()
+                .text,
+            "  中文\n\npartial"
+        );
+    }
+
+    #[tokio::test]
+    async fn maintenance_preserves_fork_resources_and_active_unattached_writers() {
+        use agena_domain::ContentKind;
+        let (facade, _) = harness();
+        let session_id = ready_session(&facade, 1, "shared content").await;
+        let run = facade
+            .submit_user_run(
+                session_id,
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::Assistant,
+                    json!({"text": ""}),
+                )],
+                None,
+            )
+            .await
+            .unwrap();
+        let part_id = run.parts[1].part_id;
+        let writer = facade
+            .contents()
+            .open(session_id, part_id, ContentKind::Text)
+            .await
+            .unwrap();
+        writer.append_text("shared prefix").await.unwrap();
+        let resource = writer.finish().await.unwrap();
+        facade
+            .update_part(
+                session_id,
+                part_id,
+                PartDelta {
+                    content: Some(json!({"text": "", "resources": [resource.reference()]})),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let fork = facade
+            .fork(session_id, part_id, "fork".into())
+            .await
+            .unwrap();
+        // Withdraw the origin's reference; the fork still owns membership of
+        // that Part and must retain access to the exact same resource.
+        facade
+            .withdraw_user_run(session_id, run.run_id)
+            .await
+            .unwrap();
+        let unattached = facade
+            .contents()
+            .open(fork, part_id, ContentKind::Text)
+            .await
+            .unwrap();
+        facade.maintenance(1_000_000).await.unwrap();
+        assert_eq!(
+            facade
+                .contents()
+                .read_text(resource.resource_id, 1024)
+                .await
+                .unwrap()
+                .text,
+            "shared prefix"
+        );
+        assert!(
+            facade
+                .contents()
+                .describe(unattached.resource().resource_id)
+                .await
+                .is_ok()
+        );
+        let unreferenced_id = unattached.finish().await.unwrap().resource_id;
+        facade.delete(fork).await.unwrap();
+        facade.maintenance(1_000_001).await.unwrap();
+        assert!(
+            facade
+                .contents()
+                .describe(resource.resource_id)
+                .await
+                .is_err()
+        );
+        assert!(facade.contents().describe(unreferenced_id).await.is_err());
     }
 
     #[tokio::test]
@@ -4222,6 +3576,34 @@ mod tests {
 
     #[async_trait]
     impl PersistenceEngine for CountingEngine {
+        async fn referenced_content_ids(
+            &self,
+        ) -> Result<std::collections::HashSet<agena_domain::ContentId>, StoreError> {
+            self.inner.referenced_content_ids().await
+        }
+        async fn load_run_window(
+            &self,
+            session_id: i64,
+            before: Option<PartCursor>,
+            run_limit: usize,
+            part_limit: usize,
+        ) -> Result<super::super::SessionRunPage, StoreError> {
+            self.inner
+                .load_run_window(session_id, before, run_limit, part_limit)
+                .await
+        }
+
+        async fn load_visible_part_window(
+            &self,
+            session_id: i64,
+            run_ids: &[i64],
+            before: Option<PartCursor>,
+            limit: usize,
+        ) -> Result<SessionPartPage, StoreError> {
+            self.inner
+                .load_visible_part_window(session_id, run_ids, before, limit)
+                .await
+        }
         async fn create_session(&self, new_session: NewSession) -> Result<SessionMeta, StoreError> {
             self.inner.create_session(new_session).await
         }
@@ -4684,9 +4066,10 @@ mod tests {
             workspace_id: i64,
             bundle: &str,
             now_ms: i64,
+            contents: &crate::content::ContentHub,
         ) -> Result<i64, StoreError> {
             self.inner
-                .import_session_jsonl(workspace_id, bundle, now_ms)
+                .import_session_jsonl(workspace_id, bundle, now_ms, contents)
                 .await
         }
     }

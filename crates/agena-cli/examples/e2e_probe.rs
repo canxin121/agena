@@ -122,10 +122,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut observed_execution = false;
     let mut last_snapshot = None;
     loop {
-        let runs = queries.list_projected_runs(session_id).await?;
+        let page = queries.read_part_window(session_id, None, 256).await?;
+        let runs = page
+            .parts
+            .iter()
+            .filter(|part| part.kind == "run")
+            .collect::<Vec<_>>();
         let assistant_seen = runs
             .iter()
-            .any(|run| run.role == agena_domain::Role::Assistant);
+            .any(|run| run.role == agena_storage::store::PartRole::Assistant);
         let all_runs_terminal = !runs.is_empty() && runs.iter().all(|run| run.state.is_terminal());
         let active_execution = execution_control.active_execution(session_id).await;
         observed_execution |= active_execution.is_some() || assistant_seen;
@@ -174,52 +179,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
 
-    // Dump the projected transcript: every run, its parts, and the tool
-    // names + payloads for tool calls.
-    let runs = queries.list_projected_runs(session_id).await?;
-    println!();
-    println!("==== TRANSCRIPT (session {session_id}) ====");
-    for run in &runs {
+    // Read canonical factual windows and resolve source-backed bodies explicitly.
+    let mut before = None;
+    let mut parts = Vec::new();
+    loop {
+        let page = queries.read_part_window(session_id, before, 256).await?;
+        before = page
+            .parts
+            .last()
+            .map(|part| agena_storage::store::PartCursor {
+                created_at_ms: part.created_at_ms,
+                part_id: part.part_id,
+            });
+        parts.extend(page.parts);
+        if !page.has_more {
+            break;
+        }
+    }
+    parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
+    println!("TRANSCRIPT (session {session_id})");
+    for part in parts {
         println!(
-            "-- run {} role={:?} state={:?} parts={}",
-            run.id,
-            run.role,
-            run.state,
-            run.parts.len()
+            "-- part {} run={:?} role={:?} state={:?} kind={}",
+            part.part_id, part.run_id, part.role, part.state, part.kind
         );
-        for part in &run.parts {
-            match part.detail.as_ref() {
-                Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {
-                    let text = text.trim();
-                    if !text.is_empty() {
-                        println!("   text: {text}");
+        println!("   facts: {}", part.content);
+        if let Some(resources) = part
+            .content
+            .get("resources")
+            .and_then(serde_json::Value::as_array)
+        {
+            for reference in resources {
+                let reference: agena_domain::ContentRef =
+                    serde_json::from_value(reference.clone())?;
+                let descriptor = session_store
+                    .contents()
+                    .describe(reference.resource_id)
+                    .await?;
+                let mut cursor = agena_domain::ContentCursor {
+                    sequence: 0,
+                    ..descriptor.cursor
+                };
+                loop {
+                    let page = session_store
+                        .contents()
+                        .read(reference.resource_id, Some(cursor), 64 * 1024)
+                        .await?;
+                    if page.gap {
+                        println!("   [content retention gap]");
                     }
-                }
-                Some(agena_runtime::SessionProjectedPartDetail::Reasoning { summary, .. }) => {
-                    println!("   think: {}", summary.join(" "));
-                }
-                _ => {}
-            }
-            let name = part.name.as_deref().unwrap_or("");
-            match part.kind.as_str() {
-                "tool_call" => {
-                    let payload = part
-                        .content
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_default();
-                    println!("   tool_call name={name} content={payload}");
-                }
-                "run" => {
-                    let meta = part
-                        .content
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_default();
-                    println!("   run-marker name={name} meta={meta}");
-                }
-                other => {
-                    println!("   {other} name={name}");
+                    for chunk in page.chunks {
+                        println!("   content: {:?}", chunk.payload);
+                    }
+                    cursor = page.next_cursor;
+                    if !page.has_more {
+                        break;
+                    }
                 }
             }
         }

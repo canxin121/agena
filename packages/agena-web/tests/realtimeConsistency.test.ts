@@ -50,7 +50,7 @@ const part = (revision = 1, text = 'old', id = 2) => ({
   revision,
   updated_at_ms: revision,
 })
-const page = (parts: unknown[], version = 1) => ({ parts, version, user_message_count: 0, page: { has_more: false } })
+const page = (parts: unknown[], version = 1) => ({ parts, version, runs: [], user_message_count: 0, page: { has_more: false } })
 const state = (id = 7, version = 1) => ({
   session: { id, version, title: 'Session', state: { kind: 'ready', data: {} } },
   execution: {},
@@ -129,7 +129,7 @@ test('an older HTTP snapshot or live patch cannot roll text back, including buff
   withChat(async (chat) => {
     const pending = deferred<Response>()
     globalThis.fetch = (async (url) =>
-      String(url).includes('/transcript') ? pending.promise : Response.json(state())) as typeof fetch
+      String(url).includes('/runs') ? pending.promise : Response.json(state())) as typeof fetch
     const reading = chat.refreshMessages('7')
     chat.applyEvent({ type: 'session_changed', properties: { kind: 'part_added', session_id: 7, part: marker() } })
     chat.applyEvent({
@@ -192,7 +192,7 @@ test('removed memberships and deleted sessions cannot be resurrected by pending 
   withChat(async (chat) => {
     const pending = deferred<Response>()
     globalThis.fetch = (async (url) =>
-      String(url).includes('/transcript') ? pending.promise : Response.json(state())) as typeof fetch
+      String(url).includes('/runs') ? pending.promise : Response.json(state())) as typeof fetch
     const reading = chat.refreshMessages('7')
     chat.applyEvent({ type: 'session_changed', properties: { kind: 'part_removed', session_id: 7, part_id: 2 } })
     pending.resolve(Response.json(page([marker(), part()])))
@@ -209,7 +209,7 @@ test('a send acknowledgement forces a fresh transcript even when a pre-send read
     const pending = deferred<Response>()
     let reads = 0
     globalThis.fetch = (async (url) => {
-      if (String(url).includes('/transcript'))
+      if (String(url).includes('/runs'))
         return ++reads === 1 ? pending.promise : Response.json(page([marker(), part(2, 'accepted')]))
       return Response.json(state())
     }) as typeof fetch
@@ -239,7 +239,7 @@ test('reconnect reconciles every mounted conversation and removes missed deletio
         assert.equal(parsed.searchParams.get('ids'), '1,2')
         return Response.json(page([marker()]))
       }
-      if (parsed.pathname.endsWith('/transcript')) return Response.json(page([marker()]))
+      if (parsed.pathname.endsWith('/runs')) return Response.json(page([marker()]))
       return Response.json(state(sid))
     }) as typeof fetch
     chat.reconcileLiveState()
@@ -252,7 +252,7 @@ test('session caches reject an older list or execution version', async () =>
   withChat(async (chat) => {
     chat.cacheSessions([{ id: '7', version: 9, title: 'latest', state: { kind: 'ready', data: {} } }])
     globalThis.fetch = (async (url) =>
-      String(url).includes('/transcript')
+      String(url).includes('/runs')
         ? Response.json(page([]))
         : String(url).includes('/state')
           ? Response.json(state(7, 1))

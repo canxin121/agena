@@ -21,54 +21,6 @@ use super::ToolError;
 const MAX_CAPTURE_BYTES_PER_STREAM: usize = 1024 * 1024;
 const MAX_CONCURRENT_SHELL_WORKERS: usize = 16;
 
-/// Latest display tail, independent of the bounded result captured at exit.
-/// A slow consumer skips intermediate snapshots without blocking pipe drains
-/// or growing an unbounded queue. The final unseen snapshot survives closure.
-#[derive(Debug, Clone)]
-pub struct ShellOutputSink(tokio::sync::watch::Sender<String>);
-
-impl ShellOutputSink {
-    pub(crate) fn channel() -> (Self, tokio::sync::watch::Receiver<String>) {
-        let (tx, rx) = tokio::sync::watch::channel(String::new());
-        (Self(tx), rx)
-    }
-
-    fn publish(&self, text: &str) {
-        const MAX_LIVE_BYTES: usize = 8 * 1024;
-        if text.is_empty() || self.0.is_closed() {
-            return;
-        }
-        self.0.send_if_modified(|tail| {
-            if text.len() >= MAX_LIVE_BYTES {
-                let mut start = text.len() - MAX_LIVE_BYTES;
-                while !text.is_char_boundary(start) {
-                    start += 1;
-                }
-                if tail.as_str() == &text[start..] {
-                    return false;
-                }
-                tail.clear();
-                tail.push_str(&text[start..]);
-            } else {
-                let mut start = (tail.len() + text.len()).saturating_sub(MAX_LIVE_BYTES);
-                while !tail.is_char_boundary(start) {
-                    start += 1;
-                }
-                let retained = tail.len() - start;
-                if tail.len() == retained + text.len()
-                    && tail.as_bytes()[..retained] == tail.as_bytes()[start..]
-                    && &tail.as_bytes()[retained..] == text.as_bytes()
-                {
-                    return false;
-                }
-                tail.drain(..start);
-                tail.push_str(text);
-            }
-            true
-        });
-    }
-}
-
 /// Decode arbitrary pipe segments without corrupting a character split across
 /// reads. Only an incomplete final code point is retained (at most 3 bytes).
 pub(crate) fn decode_output(pending: &mut Vec<u8>, bytes: &[u8], eof: bool) -> String {
@@ -125,20 +77,10 @@ pub(crate) async fn acquire_worker_permit() -> Result<tokio::sync::OwnedSemaphor
 /// Run a foreground command and, when `live` is attached, report every chunk it
 /// produces while it is still running. The returned [`ShellOutput`] stays the
 /// single source of truth for the terminal result.
-#[cfg(test)]
-pub async fn execute_with_sink(
+pub(crate) async fn execute_with_sink(
     request: &ShellRequest,
     cancellation: Option<&CancellationToken>,
-    live: Option<ShellOutputSink>,
-) -> Result<ShellOutput, ShellError> {
-    execute_with_archive(request, cancellation, live, None).await
-}
-
-pub(crate) async fn execute_with_archive(
-    request: &ShellRequest,
-    cancellation: Option<&CancellationToken>,
-    live: Option<ShellOutputSink>,
-    archive: Option<crate::process_output_archive::OutputArchive>,
+    live: Option<agena_storage::content::ContentWriter>,
 ) -> Result<ShellOutput, ShellError> {
     validate(request).await?;
 
@@ -160,14 +102,20 @@ pub(crate) async fn execute_with_archive(
 
     let started = Instant::now();
     let mut child = agena_process::spawn(command).map_err(ShellError::Spawn)?;
-    let stdout_handle = child
-        .stdout()
-        .take()
-        .map(|reader| spawn_drain_archived(reader, live.clone(), archive.clone()));
-    let stderr_handle = child
-        .stderr()
-        .take()
-        .map(|reader| spawn_drain_archived(reader, live.clone(), archive.clone()));
+    let stdout_handle = child.stdout().take().map(|reader| {
+        spawn_drain_channel(
+            reader,
+            live.clone(),
+            agena_domain::CommandOutputStream::Stdout,
+        )
+    });
+    let stderr_handle = child.stderr().take().map(|reader| {
+        spawn_drain_channel(
+            reader,
+            live.clone(),
+            agena_domain::CommandOutputStream::Stderr,
+        )
+    });
     struct DrainGuard(Vec<tokio::task::AbortHandle>);
     impl Drop for DrainGuard {
         fn drop(&mut self) {
@@ -310,96 +258,6 @@ enum WaitOutcome {
     Cancelled,
 }
 
-#[cfg(test)]
-mod live_output_tests {
-    use super::{ShellOutputSink, execute_with_sink};
-    use agena_tool::ShellRequest;
-    use std::collections::HashMap;
-
-    fn request(script: &str) -> ShellRequest {
-        ShellRequest {
-            command: vec!["sh".to_string(), "-c".to_string(), script.to_string()],
-            cwd: std::env::temp_dir(),
-            env: HashMap::new(),
-            timeout_ms: Some(5_000),
-        }
-    }
-
-    #[tokio::test]
-    async fn live_chunks_arrive_before_the_command_exits() {
-        let request = request("printf 'first'; sleep 0.6; printf 'second'");
-        let (tx, mut rx) = ShellOutputSink::channel();
-        let running =
-            tokio::spawn(async move { execute_with_sink(&request, None, Some(tx)).await });
-
-        tokio::time::timeout(std::time::Duration::from_secs(5), rx.changed())
-            .await
-            .expect("a live chunk arrives while the command still runs")
-            .expect("the stream stays open");
-        assert!(rx.borrow().contains("first"));
-        assert!(
-            !running.is_finished(),
-            "the command must still be running when its first chunk is delivered"
-        );
-
-        let output = running
-            .await
-            .expect("the execution task joins")
-            .expect("the command completes");
-        assert_eq!(output.exit_code, 0);
-        assert!(output.stdout.contains("second"));
-    }
-
-    #[tokio::test]
-    async fn a_dropped_consumer_does_not_fail_the_command() {
-        let request = request("printf 'kept'");
-        let (tx, rx) = ShellOutputSink::channel();
-        drop(rx);
-        let output = execute_with_sink(&request, None, Some(tx))
-            .await
-            .expect("a dropped live consumer never fails the command");
-        assert_eq!(output.stdout, "kept");
-    }
-
-    #[test]
-    fn pipe_segments_preserve_split_utf8_and_replace_invalid_bytes() {
-        let mut pending = Vec::new();
-        let emoji = "🙂".as_bytes();
-        assert_eq!(super::decode_output(&mut pending, &emoji[..2], false), "");
-        assert_eq!(super::decode_output(&mut pending, &emoji[2..], false), "🙂");
-        assert_eq!(
-            super::decode_output(&mut pending, b"a\xffb\xe4", false),
-            "a�b"
-        );
-        assert_eq!(super::decode_output(&mut pending, &[], true), "�");
-        assert!(pending.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_slow_live_reader_sees_the_final_tail_after_the_capture_cap_and_closure() {
-        use tokio::io::AsyncWriteExt;
-        let (mut writer, reader) = tokio::io::duplex(8192);
-        let (sink, mut live) = ShellOutputSink::channel();
-        let drain = super::spawn_drain(reader, Some(sink));
-        let bytes = vec![b'x'; super::MAX_CAPTURE_BYTES_PER_STREAM + 1];
-        writer.write_all(&bytes).await.unwrap();
-        writer
-            .write_all("\nlatest output 🙂".as_bytes())
-            .await
-            .unwrap();
-        drop(writer);
-        let captured = drain.await.unwrap().unwrap();
-        assert!(captured.contains("[output truncated: retained beginning and end within 1 MiB]"));
-        assert!(captured.ends_with("\nlatest output 🙂"));
-        // The reader deliberately never consumed the stream until it closed.
-        live.changed().await.unwrap();
-        let tail = live.borrow_and_update().clone();
-        assert!(tail.len() <= 8192);
-        assert!(tail.ends_with("\nlatest output 🙂"));
-        assert!(live.changed().await.is_err());
-    }
-}
-
 async fn terminate_process_tree(child: &mut ManagedChild) -> Result<ExitStatus, ShellError> {
     child
         .terminate(Duration::from_millis(150))
@@ -424,24 +282,24 @@ fn status_to_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 fn spawn_drain<R>(
     reader: R,
-    live: Option<ShellOutputSink>,
+    live: Option<agena_storage::content::ContentWriter>,
 ) -> tokio::task::JoinHandle<io::Result<String>>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    spawn_drain_archived(reader, live, None)
+    spawn_drain_channel(reader, live, agena_domain::CommandOutputStream::Stdout)
 }
 
-fn spawn_drain_archived<R>(
+fn spawn_drain_channel<R>(
     reader: R,
-    live: Option<ShellOutputSink>,
-    archive: Option<crate::process_output_archive::OutputArchive>,
+    live: Option<agena_storage::content::ContentWriter>,
+    stream: agena_domain::CommandOutputStream,
 ) -> tokio::task::JoinHandle<io::Result<String>>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        let mut reader = crate::process_output_archive::ArchivedReader::new(reader, archive);
+        let mut reader = reader;
         let half = MAX_CAPTURE_BYTES_PER_STREAM / 2;
         let mut captured_output = Vec::new();
         let mut captured_tail = std::collections::VecDeque::<u8>::new();
@@ -463,11 +321,22 @@ where
             if let Some(live) = live.as_ref() {
                 // Display keeps advancing even after the stored result hits
                 // its cap; stdout/stderr still drain independently.
-                live.publish(&decode_output(&mut pending_utf8, &chunk[..read], false));
+                let text = decode_output(&mut pending_utf8, &chunk[..read], false);
+                let bytes = text.len();
+                if let Err(error) = live.capture(agena_domain::ContentInput::Log {
+                    stream: stream.clone(),
+                    text,
+                }) {
+                    live.record_loss(bytes, &error);
+                }
             }
         }
         if let Some(live) = live.as_ref() {
-            live.publish(&decode_output(&mut pending_utf8, &[], true));
+            let text = decode_output(&mut pending_utf8, &[], true);
+            let bytes = text.len();
+            if let Err(error) = live.capture(agena_domain::ContentInput::Log { stream, text }) {
+                live.record_loss(bytes, &error);
+            }
         }
         if captured_bytes > MAX_CAPTURE_BYTES_PER_STREAM {
             captured_output.extend_from_slice(
@@ -477,6 +346,216 @@ where
         captured_output.extend(captured_tail);
         Ok(String::from_utf8_lossy(&captured_output).into_owned())
     })
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+    use agena_domain::{CommandOutputStream, ContentKind, ContentPayload};
+    use agena_storage::content::ContentHub;
+
+    struct StalledPersistence {
+        memory: agena_storage::content::MemoryContentBackend,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Semaphore,
+        waiting: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl agena_storage::content::ContentBackend for StalledPersistence {
+        async fn commit(
+            &self,
+            resource: agena_domain::ContentResource,
+            chunks: &[Arc<agena_domain::ContentChunk>],
+        ) -> Result<agena_domain::ContentResource, agena_storage::store::StoreError> {
+            if !chunks.is_empty()
+                && self
+                    .waiting
+                    .swap(false, std::sync::atomic::Ordering::AcqRel)
+            {
+                self.entered.notify_one();
+                self.release.acquire().await.unwrap().forget();
+            }
+            self.memory.commit(resource, chunks).await
+        }
+        async fn read(
+            &self,
+            id: agena_domain::ContentId,
+            after: Option<agena_domain::ContentCursor>,
+            max_bytes: usize,
+        ) -> Result<agena_domain::ContentPage, agena_storage::store::StoreError> {
+            self.memory.read(id, after, max_bytes).await
+        }
+        async fn restore(
+            &self,
+            archive: &agena_storage::content::ContentArchive,
+        ) -> Result<(), agena_storage::store::StoreError> {
+            self.memory.restore(archive).await
+        }
+        async fn prune(
+            &self,
+            protected: &std::collections::HashSet<agena_domain::ContentId>,
+        ) -> Result<usize, agena_storage::store::StoreError> {
+            self.memory.prune(protected).await
+        }
+        async fn delete(
+            &self,
+            id: agena_domain::ContentId,
+        ) -> Result<(), agena_storage::store::StoreError> {
+            self.memory.delete(id).await
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_real_subprocess_drains_both_pipes_while_content_persistence_is_stalled() {
+        let backend = Arc::new(StalledPersistence {
+            memory: Default::default(),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+            waiting: std::sync::atomic::AtomicBool::new(true),
+        });
+        let hub = ContentHub::new(
+            backend.clone(),
+            agena_storage::content::ContentConfig {
+                max_resident_bytes: 32 * 1024,
+                memory_bytes: 32 * 1024,
+                pending_bytes: 32 * 1024,
+                chunk_bytes: 8192,
+                flush_bytes: 1,
+                ..Default::default()
+            },
+        );
+        let writer = hub.open(1, 2, ContentKind::Log).await.unwrap();
+        let source = writer.clone();
+        let process = tokio::spawn(async move {
+            execute_with_sink(&request("head -c 2097152 /dev/zero; printf '\\nDRAINED\\n'; head -c 2097152 /dev/zero >&2; printf '\\nSTDERR DRAINED\\n' >&2"), None, Some(source)).await
+        });
+        tokio::time::timeout(Duration::from_secs(2), backend.entered.notified())
+            .await
+            .unwrap();
+        // The commit remains blocked until after the process has exited. A
+        // reader that awaits archival capacity would deadlock on pipe writes.
+        let result = tokio::time::timeout(Duration::from_secs(3), process)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.ends_with("\nDRAINED\n"));
+        assert!(result.stderr.ends_with("\nSTDERR DRAINED\n"));
+        assert!(writer.resource().dropped_bytes > 0);
+        backend.release.add_permits(1);
+        let resource = writer.finish().await.unwrap();
+        assert_eq!(resource.state, agena_domain::ContentState::Interrupted);
+        assert_eq!(resource.cursor, resource.committed_cursor);
+        assert!(resource.capture_error.is_some());
+    }
+
+    fn request(script: &str) -> ShellRequest {
+        ShellRequest {
+            command: vec!["sh".into(), "-c".into(), script.into()],
+            cwd: std::env::temp_dir(),
+            env: HashMap::new(),
+            timeout_ms: Some(5000),
+        }
+    }
+
+    #[tokio::test]
+    async fn process_output_is_visible_before_exit_and_retains_both_channels() {
+        let hub = ContentHub::in_memory();
+        let writer = hub.open(1, 2, ContentKind::Log).await.unwrap();
+        let id = writer.resource().resource_id;
+        let mut changes = hub.subscribe(id).unwrap();
+        let source = writer.clone();
+        let running = tokio::spawn(async move {
+            execute_with_sink(
+                &request("printf '  first'; sleep 0.5; printf 'second'; printf 'warning' >&2"),
+                None,
+                Some(source),
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), changes.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        let live = hub.read(id, None, 1024).await.unwrap();
+        assert!(live.chunks.iter().any(|chunk| matches!(&chunk.payload,
+            ContentPayload::Log { stream: CommandOutputStream::Stdout, text } if text == "  first")));
+        assert!(!running.is_finished());
+        let result = running.await.unwrap().unwrap();
+        assert_eq!(result.stdout, "  firstsecond");
+        assert_eq!(result.stderr, "warning");
+        writer.finish().await.unwrap();
+        let final_output = hub.read(id, None, 1024).await.unwrap();
+        assert!(final_output.chunks.iter().any(|chunk| matches!(&chunk.payload,
+            ContentPayload::Log { stream: CommandOutputStream::Stderr, text } if text == "warning")));
+    }
+
+    #[tokio::test]
+    async fn absent_observers_do_not_change_execution_or_capture() {
+        let hub = ContentHub::in_memory();
+        let writer = hub.open(1, 2, ContentKind::Log).await.unwrap();
+        let result = execute_with_sink(&request("printf 'kept'"), None, Some(writer.clone()))
+            .await
+            .unwrap();
+        assert_eq!(result.stdout, "kept");
+        let complete = writer.finish().await.unwrap();
+        let page = hub.read(complete.resource_id, None, 1024).await.unwrap();
+        assert_eq!(
+            page.chunks[0].payload,
+            ContentPayload::Log {
+                stream: CommandOutputStream::Stdout,
+                text: "kept".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn pipe_segments_preserve_split_utf8_and_replace_invalid_bytes() {
+        let mut pending = Vec::new();
+        let emoji = "🙂".as_bytes();
+        assert_eq!(decode_output(&mut pending, &emoji[..2], false), "");
+        assert_eq!(decode_output(&mut pending, &emoji[2..], false), "🙂");
+        assert_eq!(decode_output(&mut pending, b"a\xffb\xe4", false), "a�b");
+        assert_eq!(decode_output(&mut pending, &[], true), "�");
+    }
+
+    #[tokio::test]
+    async fn source_retains_output_beyond_the_tool_capture_limit() {
+        use tokio::io::AsyncWriteExt;
+        let hub = ContentHub::in_memory();
+        let source = hub.open(1, 2, ContentKind::Log).await.unwrap();
+        let (mut input, reader) = tokio::io::duplex(8192);
+        let drain = spawn_drain(reader, Some(source.clone()));
+        input
+            .write_all(&vec![b'x'; MAX_CAPTURE_BYTES_PER_STREAM + 1])
+            .await
+            .unwrap();
+        input
+            .write_all("\nlatest output 🙂".as_bytes())
+            .await
+            .unwrap();
+        drop(input);
+        let captured = drain.await.unwrap().unwrap();
+        assert!(captured.contains("[output truncated:"));
+        let resource = source.finish().await.unwrap();
+        assert!(resource.total_bytes > MAX_CAPTURE_BYTES_PER_STREAM as u64);
+        let page = hub
+            .read(resource.resource_id, None, 64 * 1024)
+            .await
+            .unwrap();
+        let text = page
+            .chunks
+            .iter()
+            .filter_map(|chunk| match &chunk.payload {
+                ContentPayload::Log { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert!(text.ends_with("\nlatest output 🙂"));
+    }
 }
 
 async fn collect_drains(

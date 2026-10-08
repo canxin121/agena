@@ -96,6 +96,7 @@ pub(super) fn resolve_pending_tool(
     let advertised_tool_identity = operation.advertised_tool_identity().map(ToOwned::to_owned);
 
     Ok(ResolvedPendingTool {
+        content_writer: None,
         pending: normalized_pending,
         operation_id: operation_id_from_part(part).unwrap_or_default(),
         call_id: operation.call_id,
@@ -633,7 +634,13 @@ mod tests {
         };
         assert_eq!(rewritten.task_id.as_deref(), Some("task_53_901"));
 
-        let mut monitor = invocation_named("agena.monitor.start");
+        let mut monitor = ToolInvocation::new(
+            "agena.monitor.start",
+            agena_domain::StructuredObject::try_from(
+                serde_json::json!({"ws":{"url":"wss://example.com/stream"}}),
+            )
+            .unwrap(),
+        );
         let reserved = reserve_background_external_id(&mut monitor, 53, 902, 8)
             .expect("reserve monitor identity")
             .expect("background monitor identity");

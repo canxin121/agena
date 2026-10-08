@@ -14,33 +14,12 @@ pub(crate) async fn execute_async(
 ) -> Result<ToolPayloadExecution, ToolError> {
     match input {
         MonitorToolInput::Start {
-            command,
             ws,
             timeout_ms,
             description,
-            policy,
-            workdir,
-            reads,
-            writes,
-            network,
-            ..
         } => {
-            // Keep historical payloads decodable without retaining a second
-            // executable local-command entry point or silently dropping effects.
-            if command.is_some() || policy.is_some() {
-                return Err(ToolError::invalid_input(
-                    "command-output monitoring uses shell.watch; monitor.start subscribes to WebSockets",
-                ));
-            }
-            if workdir.is_some() || !reads.is_empty() || !writes.is_empty() || !network.is_empty() {
-                return Err(ToolError::invalid_input(
-                    "WebSocket subscriptions do not accept shell workdir or command effects",
-                ));
-            }
-            let ws = ws
-                .as_ref()
-                .ok_or_else(|| ToolError::invalid_input("monitor.start requires ws"))?;
             let params = StartParams {
+                output: context.output.clone(),
                 argv: None,
                 owner: Some(super::terminal_tool::owner_async(executor, context.session_id).await?),
                 process_id: context

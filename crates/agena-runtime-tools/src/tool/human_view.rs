@@ -1304,6 +1304,18 @@ impl BuiltinHumanRenderer {
     }
 
     fn raw_flags(blocks: &mut Vec<ViewBlock>, raw: &RawOutput) {
+        if let Some(error) = raw
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("output_capture_error"))
+            .and_then(Value::as_str)
+        {
+            blocks.push(Self::details_block(
+                "capture-error",
+                "Output capture interrupted",
+                &[("Reason", error.to_owned())],
+            ));
+        }
         if !raw.truncated && raw.managed_outputs.is_empty() {
             return;
         }
@@ -5098,6 +5110,60 @@ impl BuiltinHumanRenderer {
         })
     }
 
+    fn specific_content_blocks(object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
+        let Ok(page) =
+            serde_json::from_value::<agena_domain::ContentTextPage>(Value::Object(object.clone()))
+        else {
+            return Vec::new();
+        };
+        let position = page.next_position;
+        let state = match page.resource.state {
+            agena_domain::ContentState::Active => "Capturing",
+            agena_domain::ContentState::Complete => "Complete",
+            agena_domain::ContentState::Interrupted => "Capture interrupted",
+        };
+        let mut summary = format!(
+            "### Content page\n{state} · {} bytes · {} slices{}\n\nNext position: record {}, byte {}.",
+            page.slices
+                .iter()
+                .map(|slice| slice.text.len())
+                .sum::<usize>(),
+            page.slices.len(),
+            if page.has_more {
+                " · more available"
+            } else {
+                ""
+            },
+            position.after.sequence,
+            position.offset,
+        );
+        if page.gap || page.resource.dropped_bytes > 0 {
+            summary.push_str("\n\nSome source output is unavailable in the retained capture.");
+        }
+        if let Some(error) = &page.resource.capture_error {
+            summary.push_str(&format!("\n\nCapture error: {}", Self::inline_code(error)));
+        }
+        let mut blocks = vec![Self::markdown_block("content-page", summary)];
+        for slice in page.slices {
+            let id = Some(format!(
+                "content-slice-{}-{}",
+                slice.cursor.sequence, slice.offset
+            ));
+            blocks.push(match slice.stream {
+                Some(stream) => ViewBlock::Log {
+                    id,
+                    stream,
+                    text: slice.text,
+                },
+                None => ViewBlock::Text {
+                    id,
+                    text: slice.text,
+                },
+            });
+        }
+        blocks
+    }
+
     fn specific_tool_blocks(tool_name: &str, raw: &RawOutput) -> Vec<ViewBlock> {
         let key = Self::normalized_tool_name(tool_name);
         let Some(object) = Self::specific_result_object(raw) else {
@@ -5129,6 +5195,7 @@ impl BuiltinHumanRenderer {
             Vec::new()
         };
         match key.as_str() {
+            "content.read" => blocks.extend(Self::specific_content_blocks(&object)),
             value if value.starts_with("fs.") => {
                 blocks.extend(Self::specific_filesystem_blocks(value, &object));
             }
@@ -5552,7 +5619,7 @@ impl BuiltinHumanRenderer {
                 }
                 ToolPayloadOutput::Shell {
                     action,
-                    output_archive,
+                    output_resource,
                     terminal,
                     dropped_bytes,
                     shell,
@@ -5593,8 +5660,7 @@ impl BuiltinHumanRenderer {
                     } else if matches!(
                         action.as_str(),
                         "open" | "read" | "write" | "resize" | "signal"
-                    ) || (process_id.is_some() && !background)
-                    {
+                    ) {
                         if background {
                             blocks.extend(Self::event_log_blocks(&events));
                         }
@@ -5661,38 +5727,12 @@ impl BuiltinHumanRenderer {
                         }
                     }
                     let mut fields = vec![("Action", action.clone())];
-                    if let Some(archive) = output_archive {
-                        if let Some(path) = archive.path {
-                            fields.push(("Captured output", path));
-                        }
-                        fields.push((
-                            "Archive bytes",
-                            format!("{} / {}", archive.retained_bytes, archive.total_bytes),
-                        ));
-                        if let Some(segment) = archive
-                            .segments
-                            .last()
-                            .filter(|_| archive.segments.len() > 1)
-                        {
-                            fields.push((
-                                "Recent output",
-                                format!(
-                                    "{} [{}..{})",
-                                    segment.path, segment.start_byte, segment.end_byte
-                                ),
-                            ));
-                        }
-                        if archive.truncated {
-                            fields.push((
-                                "Archive",
-                                "startup prefix + recent segments; gaps may be omitted".to_owned(),
-                            ));
-                        } else if archive.pending {
-                            fields.push(("Archive", "writes pending".to_owned()));
-                        }
-                        if let Some(error) = archive.error {
-                            fields.push(("Archive issue", error));
-                        }
+                    if let Some(resource) = output_resource {
+                        blocks.push(ViewBlock::Content {
+                            id: "output".into(),
+                            resource,
+                            format: agena_domain::ContentFormat::Plain,
+                        });
                     }
                     if let Some(reason) = completion_reason {
                         fields.push(("Completion", reason));
@@ -5861,30 +5901,6 @@ impl BuiltinHumanRenderer {
                             items,
                         });
                     }
-                }
-                ToolPayloadOutput::EnterSnapshot {
-                    path,
-                    branch,
-                    backend,
-                    note,
-                } => {
-                    blocks.push(Self::details_block(
-                        "snapshot",
-                        "Snapshot entered",
-                        &[
-                            ("Path", path),
-                            ("Branch", branch),
-                            ("Backend", backend.unwrap_or_default()),
-                            ("Note", note.unwrap_or_default()),
-                        ],
-                    ));
-                }
-                ToolPayloadOutput::ExitSnapshot { action, path } => {
-                    blocks.push(Self::details_block(
-                        "snapshot",
-                        "Snapshot exited",
-                        &[("Action", action), ("Path", path)],
-                    ));
                 }
                 ToolPayloadOutput::CronCreate { id, next_fire_at } => {
                     blocks.push(Self::details_block(
@@ -6193,14 +6209,17 @@ mod tests {
             ..RawOutput::default()
         };
         let blocks = logs.render_human(&ctx(), &raw).expect("render");
-        assert!(blocks.iter().any(|block| matches!(
-            block,
-            ViewBlock::Log {
-                id: Some(id),
-                stream: agena_domain::CommandOutputStream::Stdout,
-                text
-            } if id == "stdout" && text.contains("started")
-        )));
+        assert!(
+            blocks.iter().any(|block| matches!(
+                block,
+                ViewBlock::Log {
+                    id: Some(id),
+                    stream: agena_domain::CommandOutputStream::Stdout,
+                    text
+                } if id == "stdout" && text.contains("started")
+            )),
+            "shell.logs blocks: {blocks:?}"
+        );
         assert!(blocks.iter().any(|block| matches!(
             block,
             ViewBlock::Log {

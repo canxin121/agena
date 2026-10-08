@@ -95,7 +95,6 @@ fn tool_section_hashes(part: &agena_storage::store::Part) -> [u64; 3] {
         hash((
             part.state.as_str(),
             part.content.get("output"),
-            part.content.pointer("/metadata/live_output"),
             part.content.get("error"),
         )),
     ]
@@ -544,7 +543,7 @@ impl Clock {
                     self.stats_changed(id);
                 }
                 self.bump(format!("session:{id}:state"));
-                self.bump(format!("session:{id}:transcript"));
+                self.bump(format!("session:{id}:parts"));
             }
             SessionChange::SessionDeleted {
                 workspace_id,
@@ -600,7 +599,7 @@ impl Clock {
                 self.bump(format!("session:{id}:state"));
                 self.bump(format!("session:{id}:files"));
                 self.bump(format!("session:{id}:plan"));
-                self.bump(format!("session:{id}:transcript"));
+                self.bump(format!("session:{id}:parts"));
             }
             SessionChange::PartAdded { part, .. } | SessionChange::PartUpdated { part, .. } => {
                 self.record_file_fact(
@@ -657,7 +656,7 @@ impl Clock {
                 );
                 // The transcript carries the session version as well as its
                 // user-visible projection, including hidden-part mutations.
-                self.bump(format!("session:{id}:transcript"));
+                self.bump(format!("session:{id}:parts"));
                 if !part.visibility.visible_to_user() {
                     return;
                 }
@@ -703,7 +702,7 @@ impl Clock {
                 }
             }
             SessionChange::PartRemoved { part_id, .. } => {
-                self.bump(format!("session:{id}:transcript"));
+                self.bump(format!("session:{id}:parts"));
                 self.invalidate_part(*part_id);
                 self.parts.remove(&(id, *part_id));
                 self.tool_sections.remove(part_id);
@@ -921,10 +920,8 @@ impl ResourceRevisions {
         let sections = (part.kind == "tool_call").then(|| tool_section_hashes(part));
         let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
         clock.part_sessions.insert(part_id, part.origin_session_id);
-        if part.kind == "tool_call" {
-            if !clock.tool_sections.contains_key(&part_id) {
-                clock.tool_sections.insert(part_id, sections.unwrap());
-            }
+        if part.kind == "tool_call" && !clock.tool_sections.contains_key(&part_id) {
+            clock.tool_sections.insert(part_id, sections.unwrap());
         }
     }
 
@@ -1069,7 +1066,7 @@ impl ResourceRevisions {
                 }
                 for id in &changed {
                     // Plan storage has a separate revision from transcripts.
-                    for suffix in ["state", "files", "transcript"] {
+                    for suffix in ["state", "files", "parts"] {
                         clock.bump(format!("session:{id}:{suffix}"));
                     }
                     if let Some((workspace, _)) = durable.sessions.get(id) {
@@ -1190,7 +1187,7 @@ impl ResourceRevisions {
                 "workspaces:catalog".to_owned(),
                 format!("session:{id}:state"),
                 format!("session:{id}:files"),
-                format!("session:{id}:transcript"),
+                format!("session:{id}:parts"),
             ]);
             keys.extend(
                 ["pinned", "favorite", "recent", "running", "attention"]
@@ -1281,10 +1278,9 @@ impl ResourceRevisions {
                     .get("kind")
                     .and_then(serde_json::Value::as_str)
                     == Some("plan.changed")
+                && let Some(id) = signal.session_id
             {
-                if let Some(id) = signal.session_id {
-                    keys.push(format!("session:{id}:plan"));
-                }
+                keys.push(format!("session:{id}:plan"));
             }
         }
         keys.into_iter()

@@ -7,6 +7,7 @@ impl ToolExecutor {
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     ) -> Self {
         Self {
+            content_store: None,
             conversation: None,
             workspace_root: workspace_root.into(),
             principal,
@@ -26,6 +27,14 @@ impl ToolExecutor {
 
     pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {
         self.scheduler.as_ref()
+    }
+
+    pub fn with_content_store(
+        mut self,
+        store: Arc<dyn agena_storage::store::SessionStore>,
+    ) -> Self {
+        self.content_store = Some(store);
+        self
     }
 
     pub fn lsp_registry(&self) -> Option<&Arc<agena_lsp::LspRegistry>> {

@@ -185,8 +185,8 @@ mod tests {
         let budget = DenialBudget::default();
         for action in [
             tool("mcp.read", None),
-            tool("shell.run", Some("rm -rf /")),
-            tool("shell.run", Some("cargo test")),
+            tool("shell.exec", Some("rm -rf /")),
+            tool("shell.exec", Some("cargo test")),
             tool("fs.write", None),
         ] {
             let outcome = decide_sync(&auto("auto"), &action, &budget);

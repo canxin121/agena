@@ -509,7 +509,7 @@ mod tests {
         let created = service
             .create_permission_rule_command(PermissionRuleWriteCommand {
                 action: PermissionAction::Tool {
-                    tool_name: "agena.shell.run".to_owned(),
+                    tool_name: "agena.shell.exec".to_owned(),
                     qualifier: Some("git status".to_owned()),
                 },
                 mode: PermissionMode::Allow,
@@ -533,7 +533,7 @@ mod tests {
         let error = service
             .create_permission_rule_command(PermissionRuleWriteCommand {
                 action: PermissionAction::Tool {
-                    tool_name: "agena.shell.run".to_owned(),
+                    tool_name: "agena.shell.exec".to_owned(),
                     qualifier: None,
                 },
                 mode: PermissionMode::Ask,

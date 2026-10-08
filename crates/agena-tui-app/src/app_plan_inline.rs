@@ -159,10 +159,14 @@ impl InlinePlanState {
         } else {
             60
         };
-        self.refreshed_at
-            .is_none_or(|last| now.saturating_duration_since(last) >= if self.dirty && self.error.is_none() {
-                Duration::from_millis(750)
-            } else { Duration::from_secs(seconds) })
+        self.refreshed_at.is_none_or(|last| {
+            now.saturating_duration_since(last)
+                >= if self.dirty && self.error.is_none() {
+                    Duration::from_millis(750)
+                } else {
+                    Duration::from_secs(seconds)
+                }
+        })
     }
 }
 

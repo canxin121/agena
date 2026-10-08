@@ -36,6 +36,7 @@
 
 pub mod client_command;
 pub mod commands;
+pub mod content;
 pub mod error;
 pub mod live;
 pub mod notifications;

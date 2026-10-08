@@ -2267,3 +2267,13 @@ session-work-operation-history = Operation history, not a session net diff (no c
 session-work-operation-diff = Whole patch operation diff (may include other files).
 session-work-recorded-truncated = Diff truncated; only persisted content can be loaded.
 session-work-no-recorded-diff = No recorded textual diff.
+
+# Generic inline content resources
+content-loading = Loading output…
+content-active = Live output
+content-complete = Output complete
+content-interrupted = Output interrupted
+content-gap = Some source output is unavailable from the retained ranges.
+content-reconnecting = Reconnecting to output…
+
+content-window = Earlier output is outside the current display window.

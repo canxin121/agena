@@ -5,16 +5,16 @@
 //! This module merges both best-effort sources without inventing persistence,
 //! replay, or a global sequence.
 
+use agena_api::part::PartResource;
+use agena_domain::PartDocument;
 use portable_atomic::AtomicU64;
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-#[cfg(any(feature = "ws", feature = "sse"))]
 use agena_api::Scope;
 use agena_api::live::{
-    HumanPresentationResource, PartResource, RuntimeSignalResource, SessionChangeResource,
-    SessionPartsResource, ToolDetailResource, ToolDetailSection,
+    RuntimeSignalResource, SessionChangeResource, SessionPartsResource, ToolDetailResource,
+    ToolDetailSection,
 };
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
 use agena_runtime_contracts::part_content::ToolCallContent;
@@ -23,6 +23,60 @@ use tokio::sync::mpsc;
 
 use crate::{error::ServerError, state::AppState};
 
+#[cfg(feature = "ws")]
+pub(crate) async fn spawn_content_delivery(
+    state: &AppState,
+    id: agena_api::subscribe::SubscriptionId,
+    request: agena_api::content::ReadContentParams,
+    tx: mpsc::Sender<agena_api::ws::ServerMessage>,
+) -> Result<tokio::task::JoinHandle<()>, ServerError> {
+    use agena_api::ws::ServerMessage;
+    let watch = state
+        .application()
+        .watch_content(request.session_id, request.resource_id)
+        .await?;
+    watch.read(request.after, 1).await?; // Reject an invalid cursor before acknowledging.
+    let mut delivery = watch.delivery(request.after, request.max_bytes);
+    tx.send(ServerMessage::Subscribed { id: id.clone() })
+        .await
+        .map_err(|_| ServerError::bad_request("The subscription connection closed."))?;
+    Ok(tokio::spawn(async move {
+        loop {
+            let page = tokio::select! {
+                _ = tx.closed() => return,
+                page = delivery.next() => page,
+            };
+            let message = match page {
+                Ok(Some(page)) => ServerMessage::Content {
+                    subscription: id.clone(),
+                    page,
+                },
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = tx
+                        .send(ServerMessage::Error {
+                            id: Some(id.clone()),
+                            error: ServerError::from(error).into_api(),
+                        })
+                        .await;
+                    break;
+                }
+            };
+            if tx.send(message).await.is_err() {
+                return;
+            }
+        }
+        let _ = tx
+            .send(ServerMessage::Notification(
+                agena_api::notifications::Notification::SubscriptionClosed {
+                    subscription: id,
+                    reason: "content subscription ended".into(),
+                },
+            ))
+            .await;
+    }))
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum LiveItem {
     SessionChanged(SessionChangeResource),
@@ -30,11 +84,20 @@ pub(crate) enum LiveItem {
     Lagged(u64),
 }
 
+enum StoreSubscription {
+    All {
+        _handle: GlobalSubscription,
+    },
+    Session {
+        _handle: agena_storage::store::Subscription,
+    },
+}
+
 pub(crate) struct LiveSubscription {
     rx: mpsc::Receiver<LiveItem>,
     dropped: Arc<AtomicU64>,
     pending_lag: u64,
-    _store_subscription: GlobalSubscription,
+    _store_subscription: StoreSubscription,
     projection_task: tokio::task::JoinHandle<()>,
     revisions: Arc<crate::revisions::ResourceRevisions>,
 }
@@ -73,22 +136,24 @@ impl Drop for LiveSubscription {
     }
 }
 
-pub(crate) fn subscribe(state: &AppState) -> Result<LiveSubscription, ServerError> {
+pub(crate) fn subscribe(state: &AppState, scope: Scope) -> Result<LiveSubscription, ServerError> {
     const LIVE_QUEUE_CAPACITY: usize = 256;
 
-    subscribe_with_queue_capacity(state, LIVE_QUEUE_CAPACITY)
+    subscribe_with_queue_capacity(state, scope, LIVE_QUEUE_CAPACITY)
 }
 
 #[cfg(test)]
 pub(crate) fn subscribe_with_capacity(
     state: &AppState,
+    scope: Scope,
     capacity: usize,
 ) -> Result<LiveSubscription, ServerError> {
-    subscribe_with_queue_capacity(state, capacity.max(1))
+    subscribe_with_queue_capacity(state, scope, capacity.max(1))
 }
 
 fn subscribe_with_queue_capacity(
     state: &AppState,
+    scope: Scope,
     capacity: usize,
 ) -> Result<LiveSubscription, ServerError> {
     let store = state.session_store()?;
@@ -98,11 +163,11 @@ fn subscribe_with_queue_capacity(
     let (raw_change_tx, mut raw_change_rx) = mpsc::channel(capacity);
     let dropped = Arc::new(AtomicU64::new(0));
     let change_dropped = Arc::clone(&dropped);
-    let visibility = SessionVisibility::default();
+    let visibility = SessionFilter::new(scope.clone());
     let change_visibility = visibility.clone();
-    let store_subscription = store.subscribe_all(Arc::new(move |change| {
+    let observer: agena_storage::store::SessionObserver = Arc::new(move |change| {
         if !change_visible_to_user(&change)
-            || change_visibility.known_change_visible(&change) == Some(false)
+            || change_visibility.known_change_allowed(&change) == Some(false)
         {
             return;
         }
@@ -113,7 +178,15 @@ fn subscribe_with_queue_capacity(
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {}
         }
-    }));
+    });
+    let store_subscription = match scope {
+        Scope::Session { session_id } => StoreSubscription::Session {
+            _handle: store.subscribe(session_id, observer),
+        },
+        _ => StoreSubscription::All {
+            _handle: store.subscribe_all(observer),
+        },
+    };
     let mut signal_subscription = signals.subscribe();
     let projection_state = state.clone();
     let projection_task = tokio::spawn(async move {
@@ -122,7 +195,7 @@ fn subscribe_with_queue_capacity(
                 _ = tx.closed() => break,
                 change = raw_change_rx.recv() => match change {
                     Some(change) => {
-                        if !visibility.change_visible(store.as_ref(), &change).await {
+                        if !visibility.change_allowed(store.as_ref(), &change).await {
                             continue;
                         }
                         if let Ok(revisions) = projection_state.revisions() { revisions.observe_change(&change); }
@@ -135,12 +208,18 @@ fn subscribe_with_queue_capacity(
                 },
                 signal = signal_subscription.recv() => match signal {
                     Some(RuntimeLiveSignalItem::Signal(signal)) => {
-                        if let Ok(revisions) = projection_state.revisions() { revisions.observe_signal(&signal); }
-                        let signal = project_signal(signal);
-                        if let Some(session_id) = signal.session_id
-                            && !visibility.session_visible(store.as_ref(), session_id).await {
+                        let session_id = match &signal {
+                            RuntimeLiveSignal::Activity(activity) => activity.activity.parent_session_id.or(activity.activity.session_id),
+                            RuntimeLiveSignal::Plugin { session_id, .. } => *session_id,
+                            RuntimeLiveSignal::ToolRegistryChanged(_) => None,
+                        };
+                        if session_id.is_none() && !matches!(visibility.scope, Scope::Global) { continue; }
+                        if let Some(session_id) = session_id
+                            && !visibility.session_allowed(store.as_ref(), session_id).await {
                             continue;
                         }
+                        if let Ok(revisions) = projection_state.revisions() { revisions.observe_signal(&signal); }
+                        let signal = project_signal(signal);
                         Some(LiveItem::RuntimeSignal(signal))
                     }
                     Some(RuntimeLiveSignalItem::Lagged(skipped)) => {
@@ -167,79 +246,103 @@ fn subscribe_with_queue_capacity(
     })
 }
 
-/// Cache classification per connection, so streamed parts do not trigger a
-/// database query per token. The bound also covers very long-lived clients.
-#[derive(Clone, Default)]
-struct SessionVisibility {
-    visible: Arc<Mutex<HashMap<i64, bool>>>,
+/// Scope and visibility are resolved before projection and serialization.
+/// Session subscriptions attach directly to their membership bus; workspace
+/// subscriptions cache factual classification rather than reading per event.
+#[derive(Clone)]
+struct SessionFilter {
+    scope: Scope,
+    sessions: Arc<Mutex<lru::LruCache<i64, (bool, i64)>>>,
 }
 
-impl SessionVisibility {
-    fn remember(&self, session_id: i64, visible: bool) {
-        let mut cache = self
-            .visible
+impl SessionFilter {
+    fn new(scope: Scope) -> Self {
+        Self {
+            scope,
+            sessions: Arc::new(Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(4096).unwrap(),
+            ))),
+        }
+    }
+    fn scope_allows(&self, session_id: i64, workspace_id: i64) -> bool {
+        match self.scope {
+            Scope::Global => true,
+            Scope::Session {
+                session_id: expected,
+            } => session_id == expected,
+            Scope::Workspace {
+                workspace_id: expected,
+            } => workspace_id == expected,
+        }
+    }
+    fn known_change_allowed(&self, change: &SessionChange) -> Option<bool> {
+        let session_id = change.session_id();
+        if let Scope::Session {
+            session_id: expected,
+        } = self.scope
+            && session_id != expected
+        {
+            return Some(false);
+        }
+        let mut sessions = self
+            .sessions
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if cache.len() >= 4096 && !cache.contains_key(&session_id) {
-            cache.clear();
+        match change {
+            SessionChange::SessionMetaUpdated { meta, .. } => {
+                let visible = !meta.is_temporary();
+                sessions.put(session_id, (visible, meta.workspace_id));
+                Some(visible && self.scope_allows(session_id, meta.workspace_id))
+            }
+            SessionChange::SessionDeleted {
+                workspace_id,
+                temporary,
+                ..
+            } => {
+                sessions.pop(&session_id);
+                Some(!temporary && self.scope_allows(session_id, *workspace_id))
+            }
+            _ => sessions
+                .get(&session_id)
+                .map(|(visible, workspace)| *visible && self.scope_allows(session_id, *workspace)),
         }
-        cache.insert(session_id, visible);
     }
-
-    fn cached(&self, session_id: i64) -> Option<bool> {
-        self.visible
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&session_id)
-            .copied()
-    }
-
-    async fn session_visible(&self, store: &dyn SessionStore, session_id: i64) -> bool {
-        if let Some(visible) = self.cached(session_id) {
-            return visible;
+    async fn session_allowed(&self, store: &dyn SessionStore, session_id: i64) -> bool {
+        if let Scope::Session {
+            session_id: expected,
+        } = self.scope
+            && session_id != expected
+        {
+            return false;
         }
-        // An empty membership selection reads metadata without loading the
-        // transcript, including when a client connects halfway through BTW.
+        {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some((visible, workspace)) = sessions.get(&session_id) {
+                return *visible && self.scope_allows(session_id, *workspace);
+            }
+        }
         match store.load_part_ids(session_id, &[]).await {
             Ok(view) => {
                 let visible = !view.meta.is_temporary();
-                self.remember(session_id, visible);
-                visible
+                self.sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .put(session_id, (visible, view.meta.workspace_id));
+                visible && self.scope_allows(session_id, view.meta.workspace_id)
             }
-            Err(agena_storage::store::StoreError::NotFound(_)) => false,
             Err(error) => {
-                tracing::warn!(session_id, %error, "could not classify live session visibility");
+                tracing::warn!(session_id,%error,"could not authorize live session scope");
                 false
             }
         }
     }
-
-    // Filter known temporary changes before the bounded projection queue.
-    // In particular, deleting a long inherited history must not flood every
-    // UI subscriber with thousands of invisible membership removals.
-    fn known_change_visible(&self, change: &SessionChange) -> Option<bool> {
-        let session_id = change.session_id();
-        match change {
-            SessionChange::SessionMetaUpdated { meta, .. } => {
-                let visible = !meta.is_temporary();
-                self.remember(session_id, visible);
-                Some(visible)
-            }
-            SessionChange::SessionDeleted { temporary, .. } => {
-                self.visible
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .remove(&session_id);
-                Some(!temporary)
-            }
-            _ => self.cached(session_id),
-        }
-    }
-
-    async fn change_visible(&self, store: &dyn SessionStore, change: &SessionChange) -> bool {
-        match self.known_change_visible(change) {
-            Some(visible) => visible,
-            None => self.session_visible(store, change.session_id()).await,
+    async fn change_allowed(&self, store: &dyn SessionStore, change: &SessionChange) -> bool {
+        match self.known_change_allowed(change) {
+            Some(allowed) => allowed,
+            None => self.session_allowed(store, change.session_id()).await,
         }
     }
 }
@@ -257,86 +360,20 @@ fn change_visible_to_user(change: &SessionChange) -> bool {
     }
 }
 
-#[cfg(any(feature = "ws", feature = "sse"))]
-pub(crate) async fn matches_scope(
-    item: &LiveItem,
-    scope: &Scope,
-    store: &dyn SessionStore,
-) -> bool {
-    if matches!(scope, Scope::Global) {
-        return true;
-    }
-    if let (
-        LiveItem::SessionChanged(SessionChangeResource::SessionDeleted { workspace_id, .. }),
-        Scope::Workspace {
-            workspace_id: expected,
-        },
-    ) = (item, scope)
-    {
-        return workspace_id == expected;
-    }
-    let session_id = match item {
-        LiveItem::SessionChanged(change) => Some(change.session_id()),
-        LiveItem::RuntimeSignal(signal) => signal.session_id,
-        LiveItem::Lagged(_) => return true,
-    };
-    let Some(session_id) = session_id else {
-        return false;
-    };
-    match scope {
-        Scope::Global => true,
-        Scope::Session {
-            session_id: expected,
-        } => session_id == *expected,
-        Scope::Workspace { workspace_id } => match store.get_session_summary(session_id).await {
-            Ok(summary) => summary.is_some_and(|summary| summary.workspace_id == *workspace_id),
-            Err(error) => {
-                // Scope filtering is an authorization boundary. A lookup
-                // failure must deny the event, but it must not disappear as
-                // though the session simply belonged to another workspace.
-                tracing::error!(
-                    session_id,
-                    workspace_id,
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "load a session summary while applying a live workspace scope",
-                        &error,
-                    ),
-                    "live event was denied because its workspace scope could not be verified"
-                );
-                false
-            }
-        },
-    }
-}
-
 pub(crate) async fn session_parts(
     state: &AppState,
-    store: &dyn SessionStore,
     session_id: i64,
 ) -> Result<SessionPartsResource, ServerError> {
-    let view = store
-        .load(session_id)
+    state
+        .application()
+        .read_runs(agena_api::queries::ReadRunsParams {
+            session_id,
+            limit: Some(8),
+            part_limit: Some(32),
+            ..Default::default()
+        })
         .await
-        .map_err(|error| ServerError::internal_error(&error))?;
-    let visible = view
-        .parts
-        .into_iter()
-        .filter(|part| part.visibility.visible_to_user())
-        .collect::<Vec<_>>();
-    let mut parts = project_parts_for_user(state, &visible).await;
-    assign_user_message_ordinals(store, session_id, &mut parts).await?;
-    Ok(SessionPartsResource {
-        session_id,
-        version: view.meta.version,
-        page: agena_api::pagination::PageInfo {
-            next_cursor: None,
-            has_more: false,
-            returned: parts.len() as u64,
-        },
-        parts,
-        folds: Vec::new(),
-        user_message_count: None,
-    })
+        .map_err(ServerError::from)
 }
 
 pub(crate) async fn project_part_for_user(state: &AppState, part: &Part) -> PartResource {
@@ -352,39 +389,7 @@ pub(crate) async fn project_part_for_sections(
     part: &Part,
     sections: &[ToolDetailSection],
 ) -> PartResource {
-    let presentation = if sections.contains(&ToolDetailSection::Presentation) {
-        project_tool_presentation(state, part).await
-    } else {
-        None
-    };
-    PartResource {
-        part_id: part.part_id,
-        // The stored kind keeps user payloads under `text`; clients need the
-        // canonical kind to render an attachment row at all.
-        kind: agena_runtime_contracts::part_content::canonical_kind(&part.kind, &part.content),
-        role: part.role.as_str().to_owned(),
-        state: part.state.as_str().to_owned(),
-        content: if part.kind == ToolCallContent::kind() {
-            agena_api::live::project_tool_call_content(&part.content, sections)
-        } else {
-            part.content.clone()
-        },
-        presentation,
-        summary: part.summary.clone(),
-        visibility: part.visibility.as_str().to_owned(),
-        parent_part_id: part.parent_part_id,
-        run_id: part.run_id,
-        origin_session_id: part.origin_session_id,
-        revision: part.revision,
-        started_at_ms: part.started_at_ms,
-        finished_at_ms: part.finished_at_ms,
-        created_at_ms: part.created_at_ms,
-        updated_at_ms: part.updated_at_ms,
-        // Assigned by `assign_user_message_ordinals` at the response boundary,
-        // which is the only layer that knows the surrounding page/window.
-        user_message_ordinal: None,
-        provider_state: part.provider_state.clone(),
-    }
+    state.application().project_part(part, sections).await
 }
 
 /// Project exactly one tool-call detail section. The returned value never
@@ -402,7 +407,7 @@ pub(crate) async fn project_tool_detail(
     let value = match section {
         ToolDetailSection::Metadata => serde_json::to_value(content.metadata).ok()?,
         ToolDetailSection::Input => content.input,
-        ToolDetailSection::Output => serde_json::to_value(display_tool_output(&content)).ok()?,
+        ToolDetailSection::Output => serde_json::to_value(content.output).ok()?,
         ToolDetailSection::Presentation => project_tool_presentation(state, part)
             .await
             .and_then(|presentation| serde_json::to_value(presentation).ok())
@@ -418,60 +423,11 @@ pub(crate) async fn project_tool_detail(
     })
 }
 
-pub(crate) async fn project_parts_for_user(state: &AppState, parts: &[Part]) -> Vec<PartResource> {
-    let mut projected = Vec::with_capacity(parts.len());
-    for part in parts {
-        if part.visibility.visible_to_user() {
-            projected.push(project_part_for_user(state, part).await);
-        }
-    }
-    projected
-}
-
-/// Attach durable user-message ordinals to the user-send run markers in
-/// `parts`, which must already be in chronological
-/// `(created_at_ms, part_id)` order — the order every read path projects.
-///
-/// The ordinal of the first user marker present is resolved from the store;
-/// every following marker advances by one. That is exact because each read
-/// path returns a contiguous slice of the session's role-grouped blocks, so
-/// the user markers it contains are themselves a contiguous slice of the
-/// session's user-message sequence. Deriving from the durable order (rather
-/// than a stored counter) is what keeps the numbering contiguous after
-/// rewind, fork, compaction, import, and withdrawal.
-pub(crate) async fn assign_user_message_ordinals(
-    store: &dyn SessionStore,
-    session_id: i64,
-    parts: &mut [PartResource],
-) -> Result<(), ServerError> {
-    let marker_indices = parts
-        .iter()
-        .enumerate()
-        .filter(|(_, part)| is_user_message_marker(part))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    let Some(&first) = marker_indices.first() else {
-        return Ok(());
-    };
-    let start = store
-        .user_message_ordinal(session_id, parts[first].part_id)
-        .await
-        .map_err(|error| ServerError::internal_error(&error))?;
-    let mut ordinals = parts
-        .iter()
-        .map(|part| part.user_message_ordinal)
-        .collect::<Vec<_>>();
-    number_user_markers(&mut ordinals, &marker_indices, start);
-    for (part, ordinal) in parts.iter_mut().zip(ordinals) {
-        part.user_message_ordinal = ordinal;
-    }
-    Ok(())
-}
-
 /// Number the user markers at `marker_indices` (ascending) starting at
 /// `start`, incrementing by one. Kept pure and index-based so the walk — the
 /// only place a page could be silently mis-numbered — is unit-testable
 /// without a store.
+#[cfg(test)]
 fn number_user_markers(ordinals: &mut [Option<u64>], marker_indices: &[usize], start: Option<u64>) {
     let mut next = start;
     for index in marker_indices {
@@ -517,205 +473,11 @@ fn is_user_message_marker(part: &PartResource) -> bool {
     part.kind == "run" && part.role == "user"
 }
 
-/// Project what a still-running process has produced so far as one Markdown
-/// block. A tool that has not produced anything yet keeps the empty body it had
-/// before, so nothing is invented for a quiet process.
-fn running_live_output_blocks(content: &ToolCallContent) -> Vec<agena_domain::ViewBlock> {
-    let mut blocks = Vec::new();
-    // Invocation input is deliberately omitted from transcript content, but
-    // the human projection must still show the command before any output
-    // exists. Both clients already render Command as a fenced code surface.
-    if matches!(
-        agena_domain::ToolPermissionConfig::canonical_shell_tool_name(&content.name),
-        Some("agena.shell.run" | "agena.shell.exec" | "agena.shell.spawn" | "agena.shell.open")
-    ) {
-        let command = match content.input.get("command") {
-            Some(serde_json::Value::String(command)) => command.clone(),
-            Some(serde_json::Value::Array(args)) => args
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" "),
-            _ => String::new(),
-        };
-        if !command.is_empty() {
-            blocks.push(agena_domain::ViewBlock::Command {
-                id: Some("command".to_owned()),
-                command,
-                cwd: content
-                    .input
-                    .get("workdir")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-            });
-        }
-    }
-    if let Some(text) = content.live_output().filter(|text| !text.is_empty()) {
-        blocks.push(agena_domain::ViewBlock::Markdown {
-            id: Some("live-output".to_owned()),
-            text: live_output_markdown(text),
-        });
-    }
-    blocks
-}
-
-/// A lazy Output disclosure sees the same live tail as presentation. This is
-/// a read-time projection only, never a fabricated terminal tool result.
-fn display_tool_output(content: &ToolCallContent) -> Option<agena_domain::RawOutput> {
-    content.output.clone().or_else(|| {
-        matches!(
-            content.state,
-            agena_domain::ToolResultState::Pending | agena_domain::ToolResultState::Running
-        )
-        .then(|| content.live_output().map(agena_domain::RawOutput::text))
-        .flatten()
-    })
-}
-
-/// Fence what a running process has produced so far, matching the code surface
-/// of its terminal result.
-fn live_output_markdown(text: &str) -> String {
-    let mut longest_fence = 0;
-    let mut run = 0;
-    for character in text.chars() {
-        if character == '`' {
-            run += 1;
-            longest_fence = longest_fence.max(run);
-        } else {
-            run = 0;
-        }
-    }
-    let fence = "`".repeat((longest_fence + 1).max(3));
-    let separator = if text.ends_with('\n') { "" } else { "\n" };
-    format!("{fence}text\n{text}{separator}{fence}\n")
-}
-
-#[cfg(test)]
-mod live_output_tests {
-    use super::{live_output_markdown, running_live_output_blocks};
-
-    #[test]
-    fn fences_what_a_still_running_process_produced() {
-        assert_eq!(
-            live_output_markdown("one\ntwo\n"),
-            "```text\none\ntwo\n```\n"
-        );
-    }
-
-    #[test]
-    fn a_fence_inside_the_output_widens_the_block() {
-        assert_eq!(
-            live_output_markdown("echo ```x```"),
-            "````text\necho ```x```\n````\n"
-        );
-    }
-
-    #[test]
-    fn a_running_process_shows_its_output_as_one_markdown_block() {
-        let mut content = agena_runtime_contracts::part_content::ToolCallContent {
-            name: "command".to_owned(),
-            input: serde_json::json!({ "command": ["echo", "hi"] }),
-            call_id: 1,
-            state: agena_domain::ToolResultState::Running,
-            ..Default::default()
-        };
-        assert!(
-            running_live_output_blocks(&content).is_empty(),
-            "a quiet process keeps the empty body"
-        );
-
-        content.set_live_output("one\ntwo\n");
-        match running_live_output_blocks(&content).as_slice() {
-            [agena_domain::ViewBlock::Markdown { text, .. }] => {
-                assert_eq!(text.as_str(), "```text\none\ntwo\n```\n")
-            }
-            other => panic!("unexpected blocks: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn shell_presentation_shows_the_command_before_output_and_preserves_whitespace() {
-        let mut content = agena_runtime_contracts::part_content::ToolCallContent {
-            name: "shell.run".to_owned(),
-            input: serde_json::json!({"command":"printf 'hello'","workdir":"/repo"}),
-            state: agena_domain::ToolResultState::Running,
-            ..Default::default()
-        };
-        assert!(matches!(running_live_output_blocks(&content).as_slice(),
-            [agena_domain::ViewBlock::Command { command, cwd: Some(cwd), .. }]
-                if command == "printf 'hello'" && cwd == "/repo"));
-        content.set_live_output("  indented\n\n");
-        assert!(matches!(running_live_output_blocks(&content).as_slice(),
-            [agena_domain::ViewBlock::Command { .. }, agena_domain::ViewBlock::Markdown { text, .. }]
-                if text == "```text\n  indented\n\n```\n"));
-        let output = super::display_tool_output(&content).unwrap();
-        assert_eq!(output.text_content(), "  indented\n\n");
-        content.state = agena_domain::ToolResultState::Completed;
-        assert!(super::display_tool_output(&content).is_none());
-    }
-}
-
-async fn project_tool_presentation(
-    state: &AppState,
-    part: &Part,
-) -> Option<HumanPresentationResource> {
-    if part.kind != ToolCallContent::kind() {
-        return None;
-    }
-    let content = match ToolCallContent::try_from(&part.content) {
-        Ok(content) => content,
-        Err(error) => {
-            tracing::warn!(
-                part_id = part.part_id,
-                diagnostic = %error,
-                "tool presentation skipped malformed persisted tool-call content"
-            );
-            return None;
-        }
-    };
-    // A process that is still running reports what it produced so far, so the
-    // reader can watch the command instead of waiting for its result. Read it
-    // before the fields below move into the invocation.
-    let live_blocks = running_live_output_blocks(&content);
-    let input = match agena_domain::StructuredObject::try_from(content.input) {
-        Ok(input) => input,
-        Err(error) => {
-            tracing::warn!(
-                part_id = part.part_id,
-                diagnostic = %format!(
-                    "decode persisted tool-call input for user presentation: {error}"
-                ),
-                "tool presentation skipped malformed persisted tool-call input"
-            );
-            return None;
-        }
-    };
-    let invocation = agena_domain::ToolInvocation {
-        tool_api_call: content.tool_api_call,
-        name: content.name,
-        plugin_name: content.plugin,
-        input,
-    };
-    let Some(output) = content.output else {
-        return Some(HumanPresentationResource {
-            title: agena_tool::tool_title_for_state(&invocation, content.state),
-            summary: part.summary.clone().unwrap_or_default(),
-            blocks: live_blocks,
-        });
-    };
-    let projection = state
+async fn project_tool_presentation(state: &AppState, part: &Part) -> Option<PartDocument> {
+    state
         .application()
-        .render_tool_result(&invocation, &output)
-        .await;
-    let title = agena_tool::completed_tool_title_for_state(&invocation, content.state, &output);
-    Some(HumanPresentationResource {
-        title,
-        summary: projection.human.summary,
-        blocks: projection.human.blocks,
-    })
+        .part_document(&agena_application::session::part_resource_from_fact(part))
+        .await
 }
 
 async fn project_change(state: &AppState, change: SessionChange) -> Option<SessionChangeResource> {
@@ -827,11 +589,12 @@ fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
 #[cfg(test)]
 mod ordinal_tests {
     use super::{is_user_message_marker, number_user_markers};
-    use agena_api::live::PartResource;
+    use agena_api::part::PartResource;
 
     /// The minimal `PartResource` the ordinal walk inspects.
     fn part(part_id: i64, kind: &str, role: &str) -> PartResource {
         PartResource {
+            sections: Vec::new(),
             part_id,
             kind: kind.to_owned(),
             role: role.to_owned(),

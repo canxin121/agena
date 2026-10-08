@@ -21,7 +21,7 @@ pub use facade::{
     Subscription,
 };
 pub use in_memory::{InMemoryEngine, InMemoryEngineConfig};
-pub use jsonl::{ExportRecord, ParsedBundle, parse, serialize};
+pub use jsonl::{ExportRecord, ParsedBundle, parse, prepare_resource_import, serialize};
 pub use part_update::{prepare_part_update, prepare_run_completion, validate_run_content};
 pub use state::{
     InFlightRun, PendingInteraction, StateInputs, apply_part_transition, derive_session_state,

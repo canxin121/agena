@@ -19,8 +19,10 @@
 
 mod application;
 mod application_config;
+mod application_content;
 mod application_conversations;
 mod application_models;
+mod application_parts;
 mod application_plugins;
 mod application_provider_studio;
 mod application_sessions;
@@ -36,6 +38,7 @@ pub mod session;
 
 pub use application::model_catalog_source_kind_from_domain;
 pub use application::{Application, ApplicationSessionServices, AuthLoginKind};
+pub use application_content::{ContentDelivery, ContentWatch};
 pub use error::ApplicationError;
 pub use provider_queries::provider_model_resource_from_domain;
 pub use service::{permission_config_domain_from_resource, permission_config_resource_from_domain};

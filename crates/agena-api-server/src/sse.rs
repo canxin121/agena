@@ -39,11 +39,10 @@ pub async fn handler(
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ServerError> {
     let scope = query.into_scope()?;
-    let store = state.session_store()?;
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
     let subscription_id: smol_str::SmolStr = "sse".into();
-    let mut subscription = live::subscribe(&state)?;
+    let mut subscription = live::subscribe(&state, scope)?;
     let _ = tx.try_send(Ok(Event::default().comment("subscribed")));
 
     let producer = tokio::spawn(async move {
@@ -52,9 +51,6 @@ pub async fn handler(
             item = subscription.recv() => item,
         } {
             tokio::task::consume_budget().await;
-            if !live::matches_scope(&item, &scope, store.as_ref()).await {
-                continue;
-            }
             let revisions = subscription.revisions_for(&item);
             let notification = match item {
                 LiveItem::SessionChanged(change) => Notification::SessionChanged {

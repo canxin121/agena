@@ -43,59 +43,30 @@ pub async fn session_user_input_reply_request(
     .await
 }
 
-/// Flatten projected session runs into the part transcript projection.
-///
-/// Each projected run is one run: its id is the run marker part id, so the
-/// projection emits a `run` marker part followed by the run's content parts in
-/// order. `role` is the run's role; content parts carry `run_id` linking them
-/// back to the marker. This is the shared transcript shape for the REST
-/// `SessionExecutionResource.parts` and the JSON-RPC `messages/list` /
-/// `message/submit` surfaces.
-pub fn project_session_transcript(
-    runs: &[agena_runtime::SessionProjectedRun],
-) -> Vec<agena_api::resource::SessionTranscriptPart> {
-    let mut parts = Vec::new();
-    for run in runs {
-        let run_id = run.id;
-        parts.push(agena_api::resource::SessionTranscriptPart {
-            revision: run.revision,
-            updated_at_ms: run.updated_at_ms,
-            part_id: run_id,
-            kind: "run".to_owned(),
-            role: run.role.to_string(),
-            state: run.state.to_string(),
-            content: if run.metadata.is_object() {
-                run.metadata.clone()
-            } else {
-                serde_json::json!({})
-            },
-            presentation: None,
-            summary: None,
-            created_at_ms: run.created_at.timestamp_millis(),
-            parent_part_id: None,
-            run_id: None,
-        });
-        for part in &run.parts {
-            let content = part.content.clone().unwrap_or(serde_json::Value::Null);
-            parts.push(agena_api::resource::SessionTranscriptPart {
-                revision: part.revision,
-                updated_at_ms: part.updated_at_ms,
-                part_id: part.id,
-                // Clients render by kind, and a user message stores every
-                // payload under `text`; publish the canonical kind.
-                kind: agena_runtime_contracts::part_content::canonical_kind(&part.kind, &content),
-                role: run.role.to_string(),
-                state: part.status.to_string(),
-                content,
-                presentation: None,
-                summary: part.summary.clone(),
-                created_at_ms: part.created_at.timestamp_millis(),
-                parent_part_id: None,
-                run_id: Some(run_id),
-            });
-        }
+/// The canonical API envelope, preserving ownership, lifecycle and source
+/// references across lists, snapshots and live delivery.
+pub fn part_resource_from_fact(part: &agena_storage::store::Part) -> agena_api::part::PartResource {
+    agena_api::part::PartResource {
+        part_id: part.part_id,
+        sections: Vec::new(),
+        kind: agena_runtime_contracts::part_content::canonical_kind(&part.kind, &part.content),
+        role: part.role.as_str().into(),
+        state: part.state.as_str().into(),
+        content: part.content.clone(),
+        presentation: None,
+        summary: part.summary.clone(),
+        visibility: part.visibility.as_str().into(),
+        parent_part_id: part.parent_part_id,
+        run_id: part.run_id,
+        origin_session_id: part.origin_session_id,
+        revision: part.revision,
+        started_at_ms: part.started_at_ms,
+        finished_at_ms: part.finished_at_ms,
+        created_at_ms: part.created_at_ms,
+        updated_at_ms: part.updated_at_ms,
+        user_message_ordinal: None,
+        provider_state: part.provider_state.clone(),
     }
-    parts
 }
 
 pub async fn resolve_session_run_options(

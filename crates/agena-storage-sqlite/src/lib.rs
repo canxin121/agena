@@ -15,6 +15,8 @@
 //! The `schema_invariants` module installs database triggers that keep
 //! invariants enforced at the storage layer.
 
+mod content_backend;
+mod database_content;
 mod engine;
 mod model_catalog_repository;
 mod permission_rule_repository;
@@ -23,6 +25,8 @@ mod schema_invariants;
 mod transaction;
 mod workspace_repository;
 
+pub use content_backend::{FileContentBackend, FileContentConfig};
+pub use database_content::DatabaseContentBackend;
 pub use engine::SqliteEngine;
 pub use model_catalog_repository::SeaModelCatalogRepository;
 pub use permission_rule_repository::{

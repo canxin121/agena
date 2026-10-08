@@ -61,9 +61,12 @@ fn durable_projection_and_refresh_backoff() {
     state.data = Some(data);
     assert!(!state.refresh_due(false, now + Duration::from_secs(29)));
     assert!(state.refresh_due(false, now + Duration::from_secs(30)));
-    assert!(state.refresh_due(true, now + Duration::from_secs(5)));
+    assert!(!state.refresh_due(true, now + Duration::from_secs(5)));
     state.expanded = true;
-    assert!(state.refresh_due(false, now + Duration::from_secs(5)));
+    assert!(!state.refresh_due(false, now + Duration::from_secs(5)));
+    state.dirty = true;
+    assert!(!state.refresh_due(false, now + Duration::from_millis(749)));
+    assert!(state.refresh_due(false, now + Duration::from_millis(750)));
 }
 
 #[tokio::test]

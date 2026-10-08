@@ -6,12 +6,12 @@ use super::{
     SessionLoadScope, TranscriptDetailDefaults, TranscriptInteraction, TranscriptNodeKey,
     TranscriptTextPosition, TranscriptViewport,
 };
-#[cfg(test)]
-use agena_api::resource::RunResource;
 pub(crate) use agena_tui_session::session_hub::{
     SessionHubItem, SessionHubPresentation, SessionHubSection, SessionHubSectionKind,
 };
 pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
+#[cfg(test)]
+use agena_tui_transcript::display_types::TranscriptRun;
 
 /// App-owned concrete effect map for the TUI-owned generic selection picker.
 /// The TUI sees only opaque display keys; configuration/session effects remain
@@ -94,7 +94,7 @@ pub(crate) struct RewindTarget {
 
 impl RewindTarget {
     pub(crate) fn from_run(
-        marker: &agena_api::resource::SessionTranscriptPart,
+        marker: &agena_api::part::PartResource,
         sequence: i64,
         document: agena_domain::ComposerDocument,
     ) -> Self {
@@ -185,10 +185,10 @@ pub(crate) struct TranscriptState {
     pub(crate) session_id: Option<i64>,
     pub(crate) session_title: String,
     #[cfg(test)]
-    pub(crate) messages: Vec<RunResource>,
+    pub(crate) messages: Vec<TranscriptRun>,
     /// The session's canonical part transcript (ordered parts, including
     /// `run` markers), mirroring `SessionExecutionResource.parts`.
-    pub(crate) parts: Vec<agena_api::resource::SessionTranscriptPart>,
+    pub(crate) parts: Vec<agena_api::part::PartResource>,
     /// Last failure observed per run marker. A continuation run clears the
     /// runtime failure projection when the reply recovers, but the chat keeps
     /// the last failure so the error Activity remains visible. Keyed by the
@@ -218,7 +218,7 @@ pub(crate) struct TranscriptState {
     /// Once an older page has been prepended, subsequent recent snapshots must
     /// update only their newest window so they do not discard loaded history.
     pub(crate) transcript_older_pages_loaded: bool,
-    pub(crate) transcript_folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+    pub(crate) transcript_folds: Vec<agena_tui_transcript::TranscriptFold>,
     /// Parts explicitly revealed from a folded reply, including its already
     /// visible tail and run markers. Bounded recent snapshots must retain them.
     pub(crate) transcript_revealed_part_ids: BTreeSet<i64>,
@@ -230,11 +230,10 @@ pub(crate) struct TranscriptState {
     pub(crate) tool_detail_tasks:
         BTreeMap<(i64, agena_api::live::ToolDetailSection), tokio::task::AbortHandle>,
     /// Independent activity output, never written into a launch receipt.
-    pub(crate) background_output: BTreeMap<i64, String>,
+    pub(crate) content_reads:
+        BTreeMap<agena_domain::ContentId, crate::app_session_events::content_reads::ContentRead>,
     /// Freshness is separate from the displayed value: live patches retain
     /// rendered details while a replacement is being fetched.
-    pub(crate) tool_detail_versions:
-        BTreeMap<(i64, agena_api::live::ToolDetailSection), (String, i64, i64)>,
     pub(crate) tool_detail_pending: BTreeSet<(i64, agena_api::live::ToolDetailSection)>,
     pub(crate) tool_detail_allowed_at: BTreeMap<(i64, agena_api::live::ToolDetailSection), Instant>,
     pub(crate) tool_detail_failures: BTreeMap<(i64, agena_api::live::ToolDetailSection), u32>,
@@ -266,6 +265,12 @@ pub(crate) struct TranscriptState {
     /// interaction parts ("everything is a part").
     pub(crate) interaction_views: BTreeMap<String, agena_tui_transcript::PendingInteractionView>,
     pub(crate) rendered: Option<RenderedTranscript>,
+    pub(crate) projected_entries: Option<Vec<agena_tui_transcript::TranscriptEntry<'static>>>,
+    pub(crate) projected_resource_ids: BTreeMap<i64, Vec<agena_domain::ContentId>>,
+    pub(crate) entry_render_cache: BTreeMap<
+        agena_tui_transcript::TranscriptEntryId,
+        crate::transcript_state::CachedEntryRender,
+    >,
 }
 
 /// Session-scoped in-memory transcript cache. The TUI keeps this across
@@ -273,12 +278,12 @@ pub(crate) struct TranscriptState {
 /// cursor pages; dropping the App drops the cache with the TUI process.
 #[derive(Debug, Clone)]
 pub(crate) struct TranscriptCache {
-    pub(crate) parts: Vec<agena_api::resource::SessionTranscriptPart>,
+    pub(crate) parts: Vec<agena_api::part::PartResource>,
     pub(crate) reply_failures: BTreeMap<i64, agena_failure::UserProblem>,
     pub(crate) transcript_next_cursor: Option<String>,
     pub(crate) transcript_has_more: bool,
     pub(crate) transcript_older_pages_loaded: bool,
-    pub(crate) transcript_folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+    pub(crate) transcript_folds: Vec<agena_tui_transcript::TranscriptFold>,
     pub(crate) transcript_revealed_part_ids: BTreeSet<i64>,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,

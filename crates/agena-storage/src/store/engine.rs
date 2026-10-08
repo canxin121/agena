@@ -62,6 +62,32 @@ pub struct MaintenanceOutcome {
 /// at runtime; external code never talks to this trait directly.
 #[async_trait]
 pub trait PersistenceEngine: Send + Sync {
+    /// Distinct resource references from Parts with at least one membership.
+    /// Used only for maintenance, never on the per-chunk path.
+    async fn referenced_content_ids(
+        &self,
+    ) -> Result<std::collections::HashSet<agena_domain::ContentId>, StoreError>;
+
+    /// Read a keyset page of visible run markers and at most `part_limit`
+    /// children per run, plus indexed membership counts. Backends must not
+    /// decode omitted child bodies to compute counts.
+    async fn load_run_window(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        run_limit: usize,
+        part_limit: usize,
+    ) -> Result<super::SessionRunPage, StoreError>;
+
+    /// Chronological membership selection for the public Part window. An
+    /// empty run set selects the whole session; all reads remain bounded.
+    async fn load_visible_part_window(
+        &self,
+        session_id: i64,
+        run_ids: &[i64],
+        before: Option<PartCursor>,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError>;
     // --- sessions ---
 
     /// Create a session row and return its metadata.
@@ -720,5 +746,6 @@ pub trait PersistenceEngine: Send + Sync {
         workspace_id: i64,
         bundle: &str,
         now_ms: i64,
+        contents: &crate::content::ContentHub,
     ) -> Result<i64, StoreError>;
 }

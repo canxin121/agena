@@ -795,7 +795,7 @@ mod tests {
                     agena_provider::CompletionToolCall::Function {
                         id: "call-slow".to_owned(),
                         name: "tools_call".to_owned(),
-                        arguments_json: "{\"tool\":\"shell.run\",\"input\":{}}".to_owned(),
+                        arguments_json: "{\"tool\":\"shell.exec\",\"input\":{}}".to_owned(),
                     },
                 ],
                 usage: None,
@@ -847,7 +847,7 @@ mod tests {
                 (
                     Some("call-slow"),
                     Some("tools_call"),
-                    "{\"tool\":\"shell.run\",\"input\":{}}"
+                    "{\"tool\":\"shell.exec\",\"input\":{}}"
                 ),
             ]
         );

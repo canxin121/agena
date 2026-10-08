@@ -16,8 +16,7 @@ fn context(call: i64) -> HostCallbackContext {
 fn chunk(stream_id: &str, text: &str) -> StreamEvent {
     StreamEvent::Chunk(ToolStreamChunk {
         stream_id: stream_id.into(),
-        text_delta: Some(text.into()),
-        metadata: Default::default(),
+        payload: agena_domain::ContentInput::Text { text: text.into() },
     })
 }
 
@@ -82,7 +81,7 @@ async fn cancelling_pending_registration_discards_early_events() {
     streams.ingest(context(2), chunk("stream", "new")).unwrap();
     streams.ingest(context(2), end("stream")).unwrap();
     assert_eq!(
-        handle.chunks.recv().await.unwrap().text_delta.as_deref(),
+        handle.chunks.recv().await.unwrap().payload.text_content(),
         Some("new")
     );
     assert!(handle.chunks.recv().await.is_none());
@@ -119,7 +118,7 @@ async fn pending_callbacks_cannot_claim_another_invocations_stream_id() {
     streams.ingest(context(2), end("second")).unwrap();
     for (handle, expected) in [(&mut first, "first-early"), (&mut second, "second-early")] {
         assert_eq!(
-            handle.chunks.recv().await.unwrap().text_delta.as_deref(),
+            handle.chunks.recv().await.unwrap().payload.text_content(),
             Some(expected)
         );
         assert!(handle.chunks.recv().await.is_none());
@@ -144,7 +143,7 @@ async fn duplicate_stream_response_preserves_the_original_consumer() {
         .unwrap();
     streams.ingest(context(1), end("shared")).unwrap();
     assert_eq!(
-        first.chunks.recv().await.unwrap().text_delta.as_deref(),
+        first.chunks.recv().await.unwrap().payload.text_content(),
         Some("original")
     );
     assert!(first.end.await.unwrap().is_ok());
@@ -203,7 +202,7 @@ async fn delayed_abandonment_monitor_preserves_a_reused_id() {
     streams.ingest(context(2), chunk("reused", "new")).unwrap();
     streams.ingest(context(2), end("reused")).unwrap();
     assert_eq!(
-        second.chunks.recv().await.unwrap().text_delta.as_deref(),
+        second.chunks.recv().await.unwrap().payload.text_content(),
         Some("new")
     );
     assert!(second.end.await.unwrap().is_ok());
@@ -251,11 +250,11 @@ async fn registration_keeps_early_chunks_before_concurrent_later_chunks() {
         let mut handle = registration.await.unwrap();
         streams.ingest(context(call), end("stream")).unwrap();
         assert_eq!(
-            handle.chunks.recv().await.unwrap().text_delta.as_deref(),
+            handle.chunks.recv().await.unwrap().payload.text_content(),
             Some("early")
         );
         assert_eq!(
-            handle.chunks.recv().await.unwrap().text_delta.as_deref(),
+            handle.chunks.recv().await.unwrap().payload.text_content(),
             Some("later")
         );
         assert!(handle.chunks.recv().await.is_none());

@@ -10,6 +10,7 @@ mod driver;
 mod lifecycle_tests;
 mod osc_guard;
 mod protocol;
+mod screen;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -45,6 +46,7 @@ pub struct TerminalOwner {
 
 #[derive(Debug, Clone)]
 pub struct TerminalStartParams {
+    pub output: Option<agena_storage::content::ContentWriter>,
     pub process_id: Option<String>,
     pub owner: TerminalOwner,
     pub command: Vec<String>,

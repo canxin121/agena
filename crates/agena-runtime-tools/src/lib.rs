@@ -16,7 +16,6 @@ pub use file_diff::{FileDiffPreview, file_diff_preview};
 pub mod media_input;
 mod monitor;
 mod process_output;
-mod process_output_archive;
 mod project_instructions;
 mod project_paths;
 pub mod shell_sandbox;
@@ -46,7 +45,6 @@ pub use project_paths::{
     MAX_GENERATED_IMAGE_BYTES, ManagedGeneratedImageArtifact, ManagedGeneratedImageError,
     agena_home_dir, generated_image_artifact_path, generated_media_extension,
     parse_base64_image_data_url, persist_generated_image_artifact, project_state_dir,
-    prune_tool_output, tool_output_spill_dir, tool_output_spill_path,
 };
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Request to execute a tool.

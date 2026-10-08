@@ -2267,3 +2267,13 @@ session-work-operation-history = 操作历史，不是会话净差异（缺少�
 session-work-operation-diff = 整个补丁操作的差异（可能包含其他文件）。
 session-work-recorded-truncated = 差异已截断；只能读取已持久记录的内容。
 session-work-no-recorded-diff = 没有已记录的文本差异。
+
+# Generic inline content resources
+content-loading = 正在加载输出…
+content-active = 实时输出
+content-complete = 输出已完成
+content-interrupted = 输出已中断
+content-gap = 部分源输出已不在保留范围内。
+content-reconnecting = 正在重新连接输出…
+
+content-window = 当前仅显示部分输出。

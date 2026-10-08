@@ -88,7 +88,7 @@ pub async fn list_sessions(
         .await
         .map_err(server_error_from_application)?;
     revisions.seed_session_list(&page.items, &observed);
-    Ok(read.json(page).await?)
+    read.json(page).await
 }
 
 pub async fn get_session(
@@ -112,14 +112,13 @@ pub async fn get_session_state(
     if let Some(response) = read.not_modified(&headers) {
         return Ok(response);
     }
-    Ok(read
-        .json(
-            state
-                .application()
-                .session_execution_shell(session_id)
-                .await?,
-        )
-        .await?)
+    read.json(
+        state
+            .application()
+            .session_execution_shell(session_id)
+            .await?,
+    )
+    .await
 }
 
 pub async fn get_session_cost(
@@ -197,94 +196,37 @@ pub async fn list_session_parts(
     Path(session_id): Path<i64>,
     AxumQuery(query): AxumQuery<SessionPartListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let store = state.session_store()?;
-    if let Some(ids) = query.ids.as_deref() {
-        if query.cursor.is_some() || query.limit.is_some() {
-            return Err(ServerError::bad_request(
-                "ids cannot be combined with pagination",
-            ));
-        }
-        let ids = ids
-            .split(',')
-            .map(str::parse::<i64>)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| ServerError::bad_request("ids must contain positive part ids"))?;
-        if ids.len() > 256 || ids.iter().any(|id| *id <= 0) {
-            return Err(ServerError::bad_request(
-                "ids must contain at most 256 positive part ids",
-            ));
-        }
-        let view = store
-            .load_part_ids(session_id, &ids)
-            .await
-            .map_err(crate::rest::server_error_from_store)?;
-        let mut parts = crate::live::project_parts_for_user(&state, &view.parts).await;
-        let user_ids = parts
-            .iter()
-            .filter(|part| part.kind == "run" && part.role == "user")
-            .map(|part| part.part_id)
-            .collect::<Vec<_>>();
-        let ordinals = store
-            .user_message_ordinals(session_id, &user_ids)
-            .await
-            .map_err(crate::rest::server_error_from_store)?;
-        for part in &mut parts {
-            part.user_message_ordinal = ordinals.get(&part.part_id).copied();
-        }
-        return Ok(Json(agena_api::live::SessionPartsResource {
-            session_id,
-            version: view.meta.version,
-            page: agena_api::pagination::PageInfo {
-                returned: parts.len() as u64,
-                has_more: false,
-                next_cursor: None,
-            },
-            parts,
-            folds: Vec::new(),
-            user_message_count: None,
-        }));
+    fn ids(value: Option<&str>) -> Result<Vec<i64>, ServerError> {
+        value
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::parse)
+                    .collect::<Result<Vec<i64>, _>>()
+            })
+            .transpose()
+            .map(|value| value.unwrap_or_default())
+            .map_err(|_| ServerError::bad_request("Invalid Part selection."))
     }
-    let limit = agena_application::pagination::normalize_limit(query.limit);
-    let decoded = query
-        .cursor
-        .as_deref()
-        .map(
-            agena_application::pagination::decode_cursor::<
-                agena_application::pagination::SessionPartCursor,
-            >,
-        )
-        .transpose()
-        .map_err(server_error_from_application)?;
-    if let Some(cursor) = decoded
-        && cursor.session_id != session_id
-    {
-        return Err(ServerError::bad_request(
-            "The page cursor belongs to a different session.",
-        ));
-    }
-    let before = decoded.map(|cursor| agena_storage::store::PartCursor {
-        created_at_ms: cursor.created_at_ms,
-        part_id: cursor.part_id,
-    });
-    let page = store
-        .load_page(session_id, before, i64::try_from(limit).unwrap_or(i64::MAX))
-        .await
-        .map_err(crate::rest::server_error_from_store)?;
-    let (parts, next_cursor) = select_user_visible_part_page(session_id, page.parts)?;
-    let mut projected = crate::live::project_parts_for_user(&state, &parts).await;
-    crate::live::assign_user_message_ordinals(store.as_ref(), session_id, &mut projected).await?;
-    Ok(Json(agena_api::live::SessionPartsResource {
-        session_id,
-        version: page.meta.version,
-        parts: projected,
-        folds: Vec::new(),
-        user_message_count: None,
-        page: agena_api::pagination::PageInfo {
-            next_cursor,
-            has_more: page.has_more,
-            returned: parts.len() as u64,
-        },
-    }))
+    Ok(Json(
+        state
+            .application()
+            .read_parts(agena_api::queries::ReadPartsParams {
+                session_id,
+                ids: ids(query.ids.as_deref())?,
+                run_ids: ids(query.run_ids.as_deref())?,
+                cursor: query.cursor,
+                limit: query.limit,
+                sections: query
+                    .sections
+                    .as_deref()
+                    .map(|v| v.split(',').map(str::parse).collect::<Result<Vec<_>, _>>())
+                    .transpose()
+                    .map_err(|_| ServerError::bad_request("Unknown Part section."))?
+                    .unwrap_or_default(),
+            })
+            .await?,
+    ))
 }
 
 /// Load one tool-call detail section on demand. The normal transcript
@@ -323,7 +265,7 @@ pub async fn get_session_tool_detail(
     let detail = crate::live::project_tool_detail(&state, &part, section)
         .await
         .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
-    Ok(read.json(detail).await?)
+    read.json(detail).await
 }
 
 pub async fn get_session_plan(
@@ -350,34 +292,7 @@ pub async fn get_session_plan(
             Some(session_id),
         )
         .await?;
-    Ok(read.json(result).await?)
-}
-
-fn select_user_visible_part_page(
-    session_id: i64,
-    raw_parts: Vec<agena_storage::store::Part>,
-) -> Result<(Vec<agena_storage::store::Part>, Option<String>), ServerError> {
-    // Advance by the raw page boundary, even when every row in that page is
-    // AI-only. Otherwise a human client would request the same invisible page
-    // forever.
-    let next_cursor = raw_parts.last().map(|part| {
-        agena_application::pagination::encode_cursor(
-            &agena_application::pagination::SessionPartCursor {
-                session_id,
-                created_at_ms: part.created_at_ms,
-                part_id: part.part_id,
-            },
-        )
-    });
-    let next_cursor = next_cursor
-        .transpose()
-        .map_err(server_error_from_application)?;
-    let mut parts = raw_parts
-        .into_iter()
-        .filter(|part| part.visibility.visible_to_user())
-        .collect::<Vec<_>>();
-    parts.reverse();
-    Ok((parts, next_cursor))
+    read.json(result).await
 }
 
 pub async fn stream_session_changes(
@@ -388,21 +303,24 @@ pub async fn stream_session_changes(
     // Subscribe before reading the snapshot so mutations committed during the
     // read remain queued. The snapshot is current state, not replay.
     #[cfg(test)]
-    let mut subscription =
-        crate::live::subscribe_with_capacity(&state, query.test_queue_capacity.unwrap_or(256))?;
+    let mut subscription = crate::live::subscribe_with_capacity(
+        &state,
+        agena_api::Scope::Session { session_id },
+        query.test_queue_capacity.unwrap_or(256),
+    )?;
     #[cfg(not(test))]
-    let mut subscription = crate::live::subscribe(&state)?;
+    let mut subscription =
+        crate::live::subscribe(&state, agena_api::Scope::Session { session_id })?;
     #[cfg(test)]
     if let Some(probe) = query.test_subscription_probe.clone() {
         super::mark_test_session_stream_subscription(probe);
     }
-    let store = state.session_store()?;
     let session_queries = state.application().session_query_service()?;
     #[cfg(test)]
     if let Some(delay_ms) = query.test_snapshot_delay_ms.filter(|delay| *delay > 0) {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
     }
-    let initial = crate::live::session_parts(&state, store.as_ref(), session_id).await?;
+    let initial = crate::live::session_parts(&state, session_id).await?;
 
     let stream = stream! {
         if query.since_version != Some(initial.version) {
@@ -675,65 +593,3 @@ use super::{
     State, UserInputReply, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,
 };
-
-#[cfg(test)]
-mod visibility_tests {
-    use super::select_user_visible_part_page;
-    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
-
-    fn part(id: i64, visibility: PartVisibility) -> Part {
-        Part {
-            part_id: id,
-            kind: "text".to_owned(),
-            role: PartRole::Assistant,
-            state: PartState::Completed,
-            content: serde_json::json!({"text": id.to_string()}),
-            summary: None,
-            visibility,
-            parent_part_id: None,
-            run_id: Some(1),
-            origin_session_id: 1,
-            revision: 0,
-            started_at_ms: id,
-            finished_at_ms: Some(id),
-            created_at_ms: id,
-            updated_at_ms: id,
-            provider_state: None,
-        }
-    }
-
-    #[test]
-    fn parts_page_exposes_both_and_user_but_not_ai() {
-        let raw_newest_first = vec![
-            part(3, PartVisibility::Both),
-            part(2, PartVisibility::Ai),
-            part(1, PartVisibility::User),
-        ];
-
-        let (visible, _) = select_user_visible_part_page(7, raw_newest_first).unwrap();
-
-        assert_eq!(
-            visible
-                .iter()
-                .map(|part| (part.part_id, part.visibility))
-                .collect::<Vec<_>>(),
-            vec![(1, PartVisibility::User), (3, PartVisibility::Both)]
-        );
-    }
-
-    #[test]
-    fn ai_only_raw_page_still_advances_the_parts_cursor() {
-        let raw_newest_first = vec![part(12, PartVisibility::Ai), part(11, PartVisibility::Ai)];
-
-        let (visible, cursor) = select_user_visible_part_page(7, raw_newest_first).unwrap();
-
-        assert!(visible.is_empty());
-        let cursor = agena_application::pagination::decode_cursor::<
-            agena_application::pagination::SessionPartCursor,
-        >(cursor.as_deref().expect("raw page cursor"))
-        .unwrap();
-        assert_eq!(cursor.session_id, 7);
-        assert_eq!(cursor.part_id, 11);
-        assert_eq!(cursor.created_at_ms, 11);
-    }
-}

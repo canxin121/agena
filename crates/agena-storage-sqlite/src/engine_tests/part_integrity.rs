@@ -69,7 +69,7 @@ async fn both_backends_reject_invalid_run_content_without_advancing_versions() {
 }
 
 #[tokio::test]
-async fn rejected_streaming_delta_preserves_part_state_and_session_version_in_both_backends() {
+async fn rejected_semantic_delta_preserves_part_state_and_session_version_in_both_backends() {
     for memory in [false, true] {
         let (engine, session) = engine(memory).await;
         let submitted = engine
@@ -97,14 +97,14 @@ async fn rejected_streaming_delta_preserves_part_state_and_session_version_in_bo
                 session,
                 part_id,
                 PartDelta {
-                    state: Some(PartState::InProgress),
-                    content_text_delta: Some("cannot append to this shape".to_owned()),
+                    state: Some(PartState::Completed),
+                    finished_at_ms: Some(0),
                     ..Default::default()
                 },
                 1_000_001,
             )
             .await
-            .expect_err("streaming delta requires text-shaped content");
+            .expect_err("terminal timestamp must follow the start timestamp");
         let after = engine.load_session(session).await.unwrap();
         assert_eq!(
             after.parts, before.parts,

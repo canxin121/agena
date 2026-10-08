@@ -1,96 +1,14 @@
 use super::{BTreeMap, Deserialize, ProviderAuthConfig, ResolvedProviderAdapterConfig, Serialize};
 use agena_provider::{ProviderNetworkConfig, ResolvedProviderModelConfig};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-/// Resolved UI configuration.
+/// Opaque client preferences. Runtime and storage preserve this document;
+/// clients validate and interpret their own entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct UiConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
-    pub tui: TuiUiConfig,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-/// TUI color scheme preference.
-pub enum TuiColorSchemeConfig {
-    #[default]
-    Auto,
-    Dark,
-    Light,
-}
-
-impl std::str::FromStr for TuiColorSchemeConfig {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "auto" => Ok(Self::Auto),
-            "dark" => Ok(Self::Dark),
-            "light" => Ok(Self::Light),
-            _ => Err(format!(
-                "ui.tui.color_scheme expects one of auto,dark,light, got `{value}`"
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-/// TUI graphics mode preference.
-pub enum TuiGraphicsModeConfig {
-    /// Negotiate the best native image protocol when the complete terminal
-    /// path can be established, otherwise retain semantic Unicode/text output.
-    #[default]
-    Auto,
-    /// Probe for native graphics even when the transport path cannot be
-    /// established automatically. Intended for expert-configured paths.
-    Native,
-    /// Skip native graphics negotiation and keep all rich content in the
-    /// deterministic Unicode/text renderer.
-    Unicode,
-}
-
-impl std::str::FromStr for TuiGraphicsModeConfig {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "" | "auto" => Ok(Self::Auto),
-            "native" | "image" | "images" | "on" | "1" => Ok(Self::Native),
-            "unicode" | "text" | "halfblocks" | "off" | "0" => Ok(Self::Unicode),
-            _ => Err(format!(
-                "ui.tui.graphics expects one of auto,native,unicode, got `{value}`"
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
-/// Resolved TUI configuration.
-pub struct TuiUiConfig {
-    pub color_scheme: TuiColorSchemeConfig,
-    pub graphics: TuiGraphicsModeConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
-    pub transcript: TuiUiTranscriptConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-/// Resolved transcript configuration of the TUI.
-pub struct TuiUiTranscriptConfig {
-    /// Default expansion for activities without a kind-specific override.
-    pub activity_default_expanded: bool,
-    /// Per-kind expansion overrides keyed by activity kind id.
-    pub activity_kinds: BTreeMap<String, bool>,
-}
-
-impl Default for TuiUiTranscriptConfig {
-    fn default() -> Self {
-        Self {
-            activity_default_expanded: false,
-            activity_kinds: BTreeMap::from([(agena_domain::ACTIVITY_KIND_TEXT.to_owned(), true)]),
-        }
-    }
+    #[serde(flatten)]
+    pub preferences: BTreeMap<String, serde_json::Value>,
 }
 
 /// Runtime identity settings that affect provider request headers.

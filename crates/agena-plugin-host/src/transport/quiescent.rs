@@ -225,13 +225,23 @@ impl PluginTransport for QuiescentTransport {
             };
             let mut chunks_open = true;
             let mut forward_chunks = true;
-            let result = 'stream: loop {
+            let mut outcome = None;
+            let result = loop {
+                if !chunks_open {
+                    break match outcome {
+                        Some(result) => result,
+                        None => terminal(inner.end.await),
+                    };
+                }
                 tokio::select! {
                     biased;
-                    // The terminal payload is authoritative on both success
-                    // and failure. Never wait for chunk sender destruction or
-                    // client backpressure after the transport has finished.
-                    result = &mut inner.end => break terminal(result),
+                    // Completion seals ingress, then drains every accepted
+                    // record. A ready terminal must never overtake buffered
+                    // output, even before the initial HTTP response arrives.
+                    result = &mut inner.end, if outcome.is_none() => {
+                        outcome = Some(terminal(result));
+                        inner.chunks.close();
+                    }
                     chunk = inner.chunks.recv(), if chunks_open => {
                         let Some(chunk) = chunk else {
                             chunks_open = false;
@@ -242,19 +252,36 @@ impl PluginTransport for QuiescentTransport {
                         if !forward_chunks || closing.is_cancelled() {
                             continue;
                         }
-                        tokio::select! {
-                            biased;
-                            result = &mut inner.end => break 'stream terminal(result),
-                            _ = closing.cancelled() => {}
-                            result = chunk_tx.send(chunk) => {
-                                if result.is_err() {
+                        loop {
+                            // Errors must release the terminal waiter even
+                            // when it never consumes output. Preserve what
+                            // fits; the error describes the incomplete tail.
+                            if outcome.as_ref().is_some_and(Result::is_err) {
+                                if chunk_tx.try_send(chunk).is_err() {
                                     forward_chunks = false;
+                                }
+                                break;
+                            }
+                            tokio::select! {
+                                biased;
+                                result = &mut inner.end, if outcome.is_none() => {
+                                    outcome = Some(terminal(result));
+                                    inner.chunks.close();
+                                }
+                                _ = closing.cancelled() => break,
+                                result = chunk_tx.reserve() => {
+                                    match result {
+                                        Ok(permit) => { permit.send(chunk); }
+                                        Err(_) => forward_chunks = false,
+                                    }
+                                    break;
                                 }
                             }
                         }
                     }
                 }
             };
+            drop(chunk_tx);
             if end_tx.send(result).is_err() {
                 tracing::debug!(
                     stream_id = %stream_id_for_task,
@@ -289,7 +316,6 @@ impl PluginTransport for QuiescentTransport {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -528,8 +554,9 @@ mod tests {
                     if chunk_tx
                         .send(ToolStreamChunk {
                             stream_id: "stream-1".to_string(),
-                            text_delta: Some(format!("chunk-{index}")),
-                            metadata: BTreeMap::new(),
+                            payload: agena_domain::ContentInput::Text {
+                                text: format!("chunk-{index}"),
+                            },
                         })
                         .await
                         .is_err()

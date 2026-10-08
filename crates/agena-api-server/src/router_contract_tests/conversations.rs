@@ -254,7 +254,7 @@ async fn closing_btw_cancels_only_the_temporary_execution_and_hides_it_from_list
         .unwrap();
     let before = store.load(parent).await.unwrap();
     let live_state = AppState::from_application(application_for_test(&server.runtime));
-    let mut live = crate::live::subscribe(&live_state).unwrap();
+    let mut live = crate::live::subscribe(&live_state, agena_api::Scope::Global).unwrap();
     let stream = client
         .ask_btw(
             parent,
@@ -299,7 +299,7 @@ async fn closing_btw_cancels_only_the_temporary_execution_and_hides_it_from_list
         .await
         .unwrap()[0]
         .id;
-    let mut midstream_live = crate::live::subscribe(&live_state).unwrap();
+    let mut midstream_live = crate::live::subscribe(&live_state, agena_api::Scope::Global).unwrap();
     // Connecting after creation must classify parts from metadata, rather
     // than depending on having observed the temporary fork's creation.
     store
@@ -409,7 +409,7 @@ async fn side_identity_and_hidden_boundary_survive_reopening() {
             .parent_session_id,
         parent
     );
-    client
+    let accepted = client
         .submit_message(SubmitRunParams {
             session_id: child.session.id,
             options: Default::default(),
@@ -419,12 +419,16 @@ async fn side_identity_and_hidden_boundary_survive_reopening() {
         })
         .await
         .unwrap();
+    let receipt = accepted
+        .receipt
+        .expect("accepted identity is independent of the Part snapshot");
+    assert_ne!(receipt.execution_id, uuid::Uuid::nil());
     let done = wait_for_execution(&client, child.session.id, |execution| {
         execution_text(execution).contains("Side answer") && !execution.session.state.is_running()
     })
     .await;
     assert_eq!(
-        done.execution.conversation.unwrap().mode,
+        done.execution.execution.conversation.unwrap().mode,
         ConversationMode::Side
     );
     assert!(

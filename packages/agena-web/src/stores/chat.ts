@@ -210,7 +210,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const executionRecovery = new Set<string>()
   const executionObservations = new Map<string, ReturnType<typeof captureResourceObservation>>()
   const sessionRecoveryResources = () =>
-    [...visibleSessions.keys()].flatMap((sid) => [`session:${sid}:state`, `session:${sid}:transcript`])
+    [...visibleSessions.keys()].flatMap((sid) => [`session:${sid}:state`, `session:${sid}:parts`])
   const visibleSessions = new Map<string, number>()
   const sessionResourceSubscriptions = new Map<string, () => void>()
   const messageRevalidators = new Map<string, ReturnType<typeof createRevalidator>>()
@@ -236,7 +236,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         async () => {
           await refreshMessagesInFlightBySession.get(sid)
           if (transcriptRecovery.has(sid)) {
-            const key = `session:${sid}:transcript`
+            const key = `session:${sid}:parts`
             const observed = transcriptObservations.get(sid)
             if (observed?.token) await checkResourceVersions(sessionRecoveryResources())
             if (
@@ -265,7 +265,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         if (event?.type === 'runtime_signal' && event.properties?.kind === 'activity') return
         scheduleSessionStatusRefresh(sid)
       })
-      const releaseTranscript = subscribeResource(`session:${sid}:transcript`, (event) => {
+      const releaseTranscript = subscribeResource(`session:${sid}:parts`, (event) => {
         if (event?.type === 'session_changed') return
         transcriptRecovery.add(sid)
         membershipRevalidation.add(sid)
@@ -306,7 +306,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     for (const sid of new Set([...visibleSessions.keys(), selectedSessionId.value].filter(Boolean) as string[])) {
       transcriptRecovery.add(sid)
       executionRecovery.add(sid)
-      invalidateResources([`session:${sid}:transcript`, `session:${sid}:state`])
+      invalidateResources([`session:${sid}:parts`, `session:${sid}:state`])
       messageRevalidator(sid).invalidate(0)
       scheduleSessionStatusRefresh(sid, 0)
     }
@@ -793,7 +793,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
             )
       setSessionMessages(sid, nextMessages)
       markMessagesHydrated(sid)
-      if (page.observation && page.observation.scope === captureResourceObservation(`session:${sid}:transcript`).scope)
+      if (page.observation && page.observation.scope === captureResourceObservation(`session:${sid}:parts`).scope)
         transcriptObservations.set(sid, page.observation)
       historyUserMessageCountBySession.value = {
         ...historyUserMessageCountBySession.value,

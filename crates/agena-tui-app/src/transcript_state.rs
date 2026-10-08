@@ -1,5 +1,77 @@
 use std::time::Instant;
 
+/// A source frame invalidates only the entry that observes it. Static Part
+/// projection and Markdown/tool layout survive every other resource update.
+pub(crate) struct CachedEntryRender {
+    width: u16,
+    palette: agena_tui_components::theme::ThemePalette,
+    remote_image_generation: u64,
+    frames: Vec<std::sync::Arc<agena_tui_transcript::content::ContentFrame>>,
+    errors: Vec<(agena_domain::ContentId, String)>,
+    block: std::sync::Arc<SharedEntryBlock>,
+}
+
+struct SharedEntryBlock {
+    lines: Vec<std::sync::Arc<agena_tui_transcript::RenderedLine>>,
+    nodes: Vec<agena_tui_transcript::RenderedTranscriptNode>,
+    line_nodes: Vec<Option<usize>>,
+}
+
+impl SharedEntryBlock {
+    fn new(
+        mut rendered: agena_tui_transcript::RenderedMessageBlock,
+        entry_id: agena_tui_transcript::TranscriptEntryId,
+        has_header: bool,
+    ) -> Self {
+        let mut line_nodes = vec![None; rendered.lines.len()];
+        for (index, node) in rendered.nodes.iter().enumerate() {
+            for slot in &mut line_nodes[node.start_line..node.end_line] {
+                slot.get_or_insert(index);
+            }
+        }
+        if has_header {
+            let body = rendered
+                .nodes
+                .iter()
+                .filter(|node| node.contributes_to_aggregate_copy())
+                .map(|node| node.copy_text.as_ref())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let header = rendered
+                .lines
+                .first()
+                .map(|line| line.copy_text.as_str())
+                .unwrap_or_default();
+            let copy = [header, &body]
+                .into_iter()
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            rendered
+                .nodes
+                .push(agena_tui_transcript::RenderedTranscriptNode {
+                    key: agena_tui_transcript::TranscriptNodeKey::Entry { entry_id },
+                    kind: agena_tui_transcript::TranscriptNodeKind::Message,
+                    start_line: 0,
+                    end_line: rendered.lines.len(),
+                    copy_text: copy.into(),
+                    atomic: false,
+                    toggleable: false,
+                    expanded: true,
+                });
+        }
+        Self {
+            lines: rendered
+                .lines
+                .into_iter()
+                .map(std::sync::Arc::new)
+                .collect(),
+            nodes: rendered.nodes,
+            line_nodes,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TranscriptRevealPolicy {
     /// Keep the current viewport while the cursor remains visible; otherwise
@@ -18,40 +90,32 @@ pub(crate) enum TranscriptViewportRow {
     Bottom,
 }
 
-fn fold_run_ids(
-    fold: &agena_api::live::SessionTranscriptFoldResource,
-) -> impl Iterator<Item = i64> + '_ {
+fn fold_run_ids(fold: &agena_tui_transcript::TranscriptFold) -> impl Iterator<Item = i64> + '_ {
     std::iter::once(fold.run_id).chain(fold.run_ids.iter().copied())
 }
 
 fn folds_share_runs(
-    left: &agena_api::live::SessionTranscriptFoldResource,
-    right: &agena_api::live::SessionTranscriptFoldResource,
+    left: &agena_tui_transcript::TranscriptFold,
+    right: &agena_tui_transcript::TranscriptFold,
 ) -> bool {
     fold_run_ids(left).any(|id| fold_run_ids(right).any(|other| id == other))
 }
 
 fn tool_detail_section_loaded(
-    part: &agena_api::resource::SessionTranscriptPart,
+    part: &agena_api::part::PartResource,
     section: agena_api::live::ToolDetailSection,
 ) -> bool {
     if part.kind != "tool_call" {
         return false;
     }
-    let Some(content) = part.content.as_object() else {
-        return false;
-    };
-    match section {
-        agena_api::live::ToolDetailSection::Metadata => content.contains_key("metadata"),
-        agena_api::live::ToolDetailSection::Input => content.contains_key("input"),
-        agena_api::live::ToolDetailSection::Output => content.contains_key("output"),
-        agena_api::live::ToolDetailSection::Presentation => part.presentation.is_some(),
-    }
+    part.sections
+        .iter()
+        .any(|loaded| loaded.section == section && loaded.revision == part.revision)
 }
 
 fn preserve_loaded_tool_sections(
-    previous: &agena_api::resource::SessionTranscriptPart,
-    incoming: &mut agena_api::resource::SessionTranscriptPart,
+    previous: &agena_api::part::PartResource,
+    incoming: &mut agena_api::part::PartResource,
 ) {
     if previous.kind != "tool_call" || incoming.kind != "tool_call" {
         return;
@@ -69,17 +133,36 @@ fn preserve_loaded_tool_sections(
     ] {
         if (section == agena_api::live::ToolDetailSection::Input
             || previous.state == incoming.state)
-            && !incoming_content.contains_key(section.as_str())
-            && tool_detail_section_loaded(previous, section)
+            && !incoming
+                .sections
+                .iter()
+                .any(|loaded| loaded.section == section)
+            && let Some(loaded) = previous
+                .sections
+                .iter()
+                .find(|loaded| loaded.section == section)
             && let Some(value) = previous_content.get(section.as_str())
         {
             incoming_content.insert(section.as_str().to_owned(), value.clone());
+            incoming.sections.push(loaded.clone());
         }
+    }
+    if !incoming
+        .sections
+        .iter()
+        .any(|loaded| loaded.section == agena_api::live::ToolDetailSection::Presentation)
+        && let Some(loaded) = previous
+            .sections
+            .iter()
+            .find(|loaded| loaded.section == agena_api::live::ToolDetailSection::Presentation)
+    {
+        incoming.presentation = previous.presentation.clone();
+        incoming.sections.push(loaded.clone());
     }
 }
 
 fn apply_tool_detail_value(
-    part: &mut agena_api::resource::SessionTranscriptPart,
+    part: &mut agena_api::part::PartResource,
     section: agena_api::live::ToolDetailSection,
     value: serde_json::Value,
 ) -> bool {
@@ -99,6 +182,11 @@ fn apply_tool_detail_value(
             part.presentation = serde_json::from_value(value).ok();
         }
     }
+    part.sections.retain(|loaded| loaded.section != section);
+    part.sections.push(agena_api::part::LoadedPartSection {
+        section,
+        revision: part.revision,
+    });
     true
 }
 
@@ -107,12 +195,12 @@ mod tool_detail_tests {
     use super::{
         apply_tool_detail_value, preserve_loaded_tool_sections, tool_detail_section_loaded,
     };
-    use agena_api::{live::ToolDetailSection, resource::SessionTranscriptPart};
+    use agena_api::{live::ToolDetailSection, part::PartResource};
     use serde_json::{Value, json};
 
-    fn tool_part(state: &str, fields: Value) -> SessionTranscriptPart {
+    fn tool_part(state: &str, fields: Value) -> PartResource {
         let mut content = json!({
-            "name": "shell.run",
+            "name": "shell.exec",
             "call_id": 1,
             "state": state,
             "lifecycle": {"start_ms": 1, "end_ms": (state == "completed").then_some(2)}
@@ -121,7 +209,19 @@ mod tool_detail_tests {
             .as_object_mut()
             .unwrap()
             .extend(fields.as_object().unwrap().clone());
-        SessionTranscriptPart {
+        let sections = [
+            ToolDetailSection::Metadata,
+            ToolDetailSection::Input,
+            ToolDetailSection::Output,
+        ]
+        .into_iter()
+        .filter(|section| fields.get(section.as_str()).is_some())
+        .map(|section| agena_api::part::LoadedPartSection {
+            section,
+            revision: 0,
+        })
+        .collect();
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id: 1,
@@ -129,11 +229,13 @@ mod tool_detail_tests {
             role: "assistant".to_owned(),
             state: state.to_owned(),
             content,
+            sections,
             presentation: None,
             summary: None,
             created_at_ms: 1,
             parent_part_id: None,
             run_id: Some(2),
+            ..Default::default()
         }
     }
 
@@ -224,48 +326,85 @@ mod tool_detail_tests {
             parts: vec![tool_part("in_progress", json!({}))],
             ..Default::default()
         };
-        let first = transcript.begin_tool_detail_load(1, ToolDetailSection::Output).unwrap();
+        let first = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Output)
+            .unwrap();
         transcript.parts[0].revision = 1;
         transcript.parts[0].updated_at_ms = 10;
-        assert!(transcript.begin_tool_detail_load(1, ToolDetailSection::Output).is_none());
+        assert!(
+            transcript
+                .begin_tool_detail_load(1, ToolDetailSection::Output)
+                .is_none()
+        );
         assert!(transcript.accept_tool_detail_load(1, ToolDetailSection::Output, first));
         assert!(transcript.finish_tool_detail_load(ToolDetailResource {
             part_state: None,
-            part_id: 1, section: ToolDetailSection::Output, revision: 0, updated_at_ms: 0,
+            part_id: 1,
+            section: ToolDetailSection::Output,
+            revision: 0,
+            updated_at_ms: 0,
             value: json!({"payload":{"text":"first"}}),
         }));
-        assert_eq!(transcript.parts[0].content["output"]["payload"]["text"], "first");
-        let catch_up = transcript.begin_tool_detail_load(1, ToolDetailSection::Output).unwrap();
+        assert_eq!(
+            transcript.parts[0].content["output"]["payload"]["text"],
+            "first"
+        );
+        let catch_up = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Output)
+            .unwrap();
         let mut incoming = tool_part("in_progress", json!({}));
         incoming.revision = 2;
         incoming.updated_at_ms = 20;
         preserve_loaded_tool_sections(&transcript.parts[0], &mut incoming);
         transcript.parts[0] = incoming;
-        assert_eq!(transcript.parts[0].content["output"]["payload"]["text"], "first");
+        assert_eq!(
+            transcript.parts[0].content["output"]["payload"]["text"],
+            "first"
+        );
         assert!(transcript.accept_tool_detail_load(1, ToolDetailSection::Output, catch_up));
         assert!(transcript.finish_tool_detail_load(ToolDetailResource {
             part_state: None,
-            part_id: 1, section: ToolDetailSection::Output, revision: 1, updated_at_ms: 10,
+            part_id: 1,
+            section: ToolDetailSection::Output,
+            revision: 1,
+            updated_at_ms: 10,
             value: json!({"payload":{"text":"intermediate"}}),
         }));
-        let running = transcript.begin_tool_detail_load(1, ToolDetailSection::Output).unwrap();
+        let running = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Output)
+            .unwrap();
         transcript.parts[0].state = "completed".into();
         transcript.parts[0].revision = 3;
-        let completed = transcript.begin_tool_detail_load(1, ToolDetailSection::Output).unwrap();
+        let completed = transcript
+            .begin_tool_detail_load(1, ToolDetailSection::Output)
+            .unwrap();
         assert!(!transcript.accept_tool_detail_load(1, ToolDetailSection::Output, running));
         assert!(transcript.accept_tool_detail_load(1, ToolDetailSection::Output, completed));
         assert!(!transcript.finish_tool_detail_load(ToolDetailResource {
             part_state: None,
-            part_id: 1, section: ToolDetailSection::Output, revision: 2, updated_at_ms: 20,
+            part_id: 1,
+            section: ToolDetailSection::Output,
+            revision: 2,
+            updated_at_ms: 20,
             value: json!({"payload":{"text":"old running output"}}),
         }));
         assert!(transcript.finish_tool_detail_load(ToolDetailResource {
             part_state: None,
-            part_id: 1, section: ToolDetailSection::Output, revision: 3, updated_at_ms: 30,
+            part_id: 1,
+            section: ToolDetailSection::Output,
+            revision: 3,
+            updated_at_ms: 30,
             value: json!({"payload":{"text":"final"}}),
         }));
-        assert_eq!(transcript.parts[0].content["output"]["payload"]["text"], "final");
-        assert!(transcript.begin_tool_detail_load(1, ToolDetailSection::Output).is_none());
+        assert_eq!(
+            transcript.parts[0].content["output"]["payload"]["text"],
+            "final"
+        );
+        assert!(
+            transcript
+                .begin_tool_detail_load(1, ToolDetailSection::Output)
+                .is_none()
+        );
     }
 
     #[test]
@@ -357,11 +496,10 @@ impl TranscriptState {
             transcript_fold_errors: BTreeMap::new(),
             tool_detail_loads: BTreeMap::new(),
             tool_detail_tasks: BTreeMap::new(),
-            background_output: BTreeMap::new(),
+            content_reads: BTreeMap::new(),
             tool_detail_pending: BTreeSet::new(),
             tool_detail_allowed_at: BTreeMap::new(),
             tool_detail_failures: BTreeMap::new(),
-            tool_detail_versions: BTreeMap::new(),
             last_history_load_at: None,
             transcript_fold_seen_cursors: BTreeMap::new(),
             refresh_failures: 0,
@@ -378,6 +516,9 @@ impl TranscriptState {
             activity_summary_visible_counts: BTreeMap::new(),
             interaction_views: BTreeMap::new(),
             rendered: None,
+            projected_entries: None,
+            projected_resource_ids: BTreeMap::new(),
+            entry_render_cache: BTreeMap::new(),
         }
     }
 
@@ -409,13 +550,14 @@ impl TranscriptState {
         self.transcript_fold_loads.clear();
         self.transcript_fold_errors.clear();
         self.tool_detail_loads.clear();
-        for task in self.tool_detail_tasks.values() { task.abort(); }
+        for task in self.tool_detail_tasks.values() {
+            task.abort();
+        }
         self.tool_detail_tasks.clear();
-        self.background_output.clear();
+        self.content_reads.clear();
         self.tool_detail_pending.clear();
         self.tool_detail_allowed_at.clear();
         self.tool_detail_failures.clear();
-        self.tool_detail_versions.clear();
         self.last_history_load_at = None;
         self.transcript_fold_seen_cursors.clear();
         self.refresh_failures = 0;
@@ -467,13 +609,14 @@ impl TranscriptState {
         self.transcript_fold_loads.clear();
         self.transcript_fold_errors.clear();
         self.tool_detail_loads.clear();
-        for task in self.tool_detail_tasks.values() { task.abort(); }
+        for task in self.tool_detail_tasks.values() {
+            task.abort();
+        }
         self.tool_detail_tasks.clear();
-        self.background_output.clear();
+        self.content_reads.clear();
         self.tool_detail_pending.clear();
         self.tool_detail_allowed_at.clear();
         self.tool_detail_failures.clear();
-        self.tool_detail_versions.clear();
         self.last_history_load_at = None;
         self.transcript_fold_seen_cursors.clear();
         self.refresh_failures = 0;
@@ -556,7 +699,7 @@ impl TranscriptState {
         agena_tui_transcript::parts_have_non_terminal_runs(&self.parts)
     }
 
-    pub(crate) fn merge_parts(&mut self, parts: Vec<agena_api::resource::SessionTranscriptPart>) {
+    pub(crate) fn merge_parts(&mut self, parts: Vec<agena_api::part::PartResource>) {
         let mut parts = parts;
         parts.retain(|part| !self.removed_part_ids.contains(&part.part_id));
         let previous = self
@@ -575,21 +718,49 @@ impl TranscriptState {
             }
         }
         self.apply_parts_change(|current| *current = parts);
-        self.tool_detail_versions
+        self.tool_detail_pending
+            .retain(|(id, _)| self.parts.iter().any(|part| part.part_id == *id));
+        self.tool_detail_allowed_at
             .retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
-        self.tool_detail_pending.retain(|(id, _)| self.parts.iter().any(|part| part.part_id == *id));
-        self.tool_detail_allowed_at.retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
-        self.tool_detail_failures.retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
+        self.tool_detail_failures
+            .retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
         self.invalidate_render();
     }
 
-    /// Reserve one lazy section request. The loaded state is inferred from the
-    /// merged canonical part so refreshes can preserve it without maintaining
-    /// a second transcript cache.
-    pub(crate) fn tool_detail_is_current(&self, part_id: i64, section: agena_api::live::ToolDetailSection) -> bool {
-        self.parts.iter().find(|part| part.part_id == part_id).is_some_and(|part|
-            tool_detail_section_loaded(part, section)
-                && self.tool_detail_versions.get(&(part_id, section)) == Some(&(part.state.clone(), part.revision, part.updated_at_ms)))
+    /// A semantic patch changes one fact. Loaded sibling sections and all
+    /// other Part allocations remain intact.
+    pub(crate) fn merge_part(&mut self, mut part: agena_api::part::PartResource) -> bool {
+        if self.removed_part_ids.contains(&part.part_id) {
+            return false;
+        }
+        let Some(index) = self
+            .parts
+            .iter()
+            .position(|old| old.part_id == part.part_id)
+        else {
+            return false;
+        };
+        let previous = &self.parts[index];
+        if (part.revision, part.updated_at_ms) <= (previous.revision, previous.updated_at_ms) {
+            return false;
+        }
+        preserve_loaded_tool_sections(previous, &mut part);
+        self.apply_parts_change(move |parts| parts[index] = part);
+        self.invalidate_render();
+        true
+    }
+
+    /// Loaded sections identify their factual revision explicitly. A cached
+    /// older body may stay visible while a fresh request catches up.
+    pub(crate) fn tool_detail_is_current(
+        &self,
+        part_id: i64,
+        section: agena_api::live::ToolDetailSection,
+    ) -> bool {
+        self.parts
+            .iter()
+            .find(|part| part.part_id == part_id)
+            .is_some_and(|part| tool_detail_section_loaded(part, section))
     }
 
     pub(crate) fn begin_tool_detail_load(
@@ -601,9 +772,7 @@ impl TranscriptState {
             .parts
             .iter()
             .find(|part| part.part_id == part_id && part.kind == "tool_call")?;
-        let stamp = (part.state.clone(), part.revision, part.updated_at_ms);
-        if (tool_detail_section_loaded(part, section)
-            && self.tool_detail_versions.get(&(part_id, section)) == Some(&stamp))
+        if tool_detail_section_loaded(part, section)
             || self
                 .tool_detail_loads
                 .get(&(part_id, section))
@@ -664,15 +833,14 @@ impl TranscriptState {
         {
             return false;
         }
-        self.tool_detail_versions.insert(
-            (resource.part_id, resource.section),
-            (
-                part.state.clone(),
-                part.revision,
-                part.updated_at_ms,
-            ),
-        );
         let changed = apply_tool_detail_value(part, resource.section, resource.value);
+        if let Some(loaded) = part
+            .sections
+            .iter_mut()
+            .find(|loaded| loaded.section == resource.section)
+        {
+            loaded.revision = resource.revision;
+        }
         if changed {
             self.invalidate_render();
         }
@@ -683,7 +851,7 @@ impl TranscriptState {
     /// loaded from the beginning of the transcript. Part ids are monotonic, so
     /// everything before the oldest incoming recent part belongs to the older
     /// window and can be retained safely.
-    fn merge_recent_parts(&mut self, recent: Vec<agena_api::resource::SessionTranscriptPart>) {
+    fn merge_recent_parts(&mut self, recent: Vec<agena_api::part::PartResource>) {
         let Some(oldest_recent_id) = recent.iter().map(|part| part.part_id).min() else {
             return;
         };
@@ -735,7 +903,7 @@ impl TranscriptState {
 
     pub(crate) fn merge_transcript_folds(
         &mut self,
-        folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+        folds: Vec<agena_tui_transcript::TranscriptFold>,
     ) {
         let order = self
             .parts
@@ -784,7 +952,7 @@ impl TranscriptState {
     pub(crate) fn transcript_fold_for_node(
         &self,
         key: &TranscriptNodeKey,
-    ) -> Option<agena_api::live::SessionTranscriptFoldResource> {
+    ) -> Option<agena_tui_transcript::TranscriptFold> {
         let TranscriptNodeKey::Activity { content_id, .. } = key else {
             return None;
         };
@@ -805,7 +973,7 @@ impl TranscriptState {
         &mut self,
         run_id: i64,
         anchor_part_id: i64,
-        parts: Vec<agena_api::resource::SessionTranscriptPart>,
+        parts: Vec<agena_api::part::PartResource>,
         next_cursor: Option<String>,
         has_more: bool,
     ) -> bool {
@@ -969,8 +1137,8 @@ impl TranscriptState {
     /// cursor after the request completes.
     pub(crate) fn prepend_transcript_parts(
         &mut self,
-        older: Vec<agena_api::resource::SessionTranscriptPart>,
-        folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+        older: Vec<agena_api::part::PartResource>,
+        folds: Vec<agena_tui_transcript::TranscriptFold>,
         width: u16,
         height: u16,
     ) -> bool {
@@ -1001,10 +1169,7 @@ impl TranscriptState {
     /// transcript boundary: a user run marker crossing from no-text to
     /// text-carrying replaces exactly one pending user entry, while
     /// permission continuations with empty input replace none.
-    fn apply_parts_change(
-        &mut self,
-        change: impl FnOnce(&mut Vec<agena_api::resource::SessionTranscriptPart>),
-    ) {
+    fn apply_parts_change(&mut self, change: impl FnOnce(&mut Vec<agena_api::part::PartResource>)) {
         let visible_before = agena_tui_transcript::parts_visible_user_inputs(&self.parts);
 
         change(&mut self.parts);
@@ -1764,146 +1929,246 @@ impl TranscriptState {
         let mut lines = Vec::new();
         let mut nodes = Vec::new();
         let mut line_nodes = Vec::new();
-        let mut entries =
-            agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds);
-        for part in entries.iter_mut().flat_map(|entry| &mut entry.parts) {
-            let agena_tui_transcript::TranscriptContentId::StoredPart(id) = part.id else { continue; };
-            let Some(text) = self.background_output.get(&id) else { continue; };
-            let agena_tui_transcript::TranscriptPartContent::Activity(
-                agena_tui_transcript::TranscriptActivityContent::Operation(tool)
-            ) = &mut part.content else { continue; };
-            if tool.presentation.blocks.is_empty() && !tool.presentation.summary.is_empty() {
-                tool.presentation.blocks.push(agena_domain::ViewBlock::Markdown {
-                    id: None, text: tool.presentation.summary.clone(),
-                });
-            }
-            tool.presentation.blocks.push(agena_domain::ViewBlock::Text {
-                id: Some("background-output".into()), text: text.clone(),
-            });
-        }
-        inject_remembered_failures(&mut entries, &self.reply_failures);
-        #[cfg(test)]
-        let entries = if self.parts.is_empty() {
-            self.messages
+        if self.projected_entries.is_none() {
+            let mut entries =
+                agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds);
+            inject_remembered_failures(&mut entries, &self.reply_failures);
+            #[cfg(test)]
+            let entries = if self.parts.is_empty() {
+                self.messages
+                    .iter()
+                    .map(agena_tui_transcript::TranscriptEntry::from)
+                    .collect::<Vec<_>>()
+            } else {
+                entries
+            };
+            self.projected_resource_ids = self
+                .parts
                 .iter()
-                .map(agena_tui_transcript::TranscriptEntry::from)
-                .collect::<Vec<_>>()
+                .map(|part| {
+                    let ids = part
+                        .content
+                        .get("resources")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|reference| reference.get("resource_id").cloned())
+                        .filter_map(|id| serde_json::from_value::<agena_domain::ContentId>(id).ok())
+                        .collect();
+                    (part.part_id, ids)
+                })
+                .collect();
+            self.projected_entries = Some(entries);
+        }
+        let pending_entries;
+        let entries = if self.pending_user_messages.is_empty() {
+            self.projected_entries.as_ref().expect("projected entries")
         } else {
-            entries
+            pending_entries = weave_pending_user_entries(
+                &self.parts,
+                self.projected_entries
+                    .as_ref()
+                    .expect("projected entries")
+                    .clone(),
+                self.pending_user_messages.as_slice(),
+            );
+            &pending_entries
         };
-        let entries =
-            weave_pending_user_entries(&self.parts, entries, self.pending_user_messages.as_slice());
         if entries.is_empty() && self.pending_user_messages.is_empty() && self.session_id.is_some()
         {
-            lines.push(
+            lines.push(std::sync::Arc::new(
                 RenderedLine::dim(ui_text::t(&self.i18n, "transcript-empty-session"))
                     .with_copy_projection(String::new(), 0),
-            );
+            ));
             line_nodes.push(None);
         }
 
-        for entry in &entries {
-            let mut rendered =
-                agena_tui_transcript::render_entry_detailed_with_progressive_expansion(
-                    entry,
-                    width,
-                    &self.i18n,
-                    &self.detail_expanded_by_default,
-                    &self.node_expansions,
-                    &self.activity_summary_visible_counts,
-                    &self.interaction_views,
-                );
-            for node in &rendered.nodes {
-                if let TranscriptNodeKey::Activity {
-                    content_id: TranscriptContentId::TranscriptFold { run_id, .. },
-                    ..
-                } = &node.key
-                {
-                    let fold = self
-                        .transcript_folds
+        for entry in entries {
+            let frames = entry
+                .parts
+                .iter()
+                .filter_map(|part| match part.id {
+                    TranscriptContentId::StoredPart(id) => self.projected_resource_ids.get(&id),
+                    _ => None,
+                })
+                .flatten()
+                .filter_map(|id| {
+                    self.content_reads
+                        .get(id)
+                        .and_then(|read| read.displayed.clone())
+                })
+                .collect::<Vec<_>>();
+            let errors = entry
+                .parts
+                .iter()
+                .filter_map(|part| match part.id {
+                    TranscriptContentId::StoredPart(id) => self.projected_resource_ids.get(&id),
+                    _ => None,
+                })
+                .flatten()
+                .filter_map(|id| {
+                    self.content_reads
+                        .get(id)
+                        .and_then(|read| read.displayed_error.clone())
+                        .map(|error| (*id, error))
+                })
+                .collect::<Vec<_>>();
+            let cached = self.entry_render_cache.get(&entry.id).filter(|cached| {
+                cached.width == width
+                    && cached.palette == palette
+                    && cached.remote_image_generation == remote_image_generation
+                    && cached.frames.len() == frames.len()
+                    && cached.errors == errors
+                    && cached
+                        .frames
                         .iter()
-                        .find(|fold| fold.run_id == *run_id);
-                    let owns_run = |id: &i64| {
-                        id == run_id || fold.is_some_and(|fold| fold.run_ids.contains(id))
-                    };
-                    let label = if self
-                        .transcript_fold_loads
-                        .keys()
-                        .any(|(id, _)| owns_run(id))
-                    {
-                        Some(self.i18n.text("transcript-fold-loading"))
+                        .zip(&frames)
+                        .all(|(old, new)| std::sync::Arc::ptr_eq(old, new))
+            });
+            let rendered = if let Some(cached) = cached {
+                cached.block.clone()
+            } else {
+                let mut current = entry.clone();
+                for part in &mut current.parts {
+                    let part_frames = if let TranscriptContentId::StoredPart(id) = part.id {
+                        self.projected_resource_ids
+                            .get(&id)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|id| {
+                                self.content_reads
+                                    .get(id)
+                                    .and_then(|read| read.displayed.as_ref())
+                            })
+                            .collect::<Vec<_>>()
                     } else {
-                        self.transcript_fold_errors.iter().find(|(id, _)| owns_run(id)).map(|(_, error)| self.i18n.text_args(
-                            "transcript-fold-error", &agena_tui::fl_args!("error" => agena_tui::sanitize_picker_text(error)),
-                        ))
+                        Vec::new()
                     };
-                    if let Some(label) = label
-                        && let Some(line) = rendered.lines.get_mut(node.start_line)
+                    let text = part_frames
+                        .iter()
+                        .filter(|frame| frame.resource.kind == agena_domain::ContentKind::Text)
+                        .map(|frame| frame.text.as_ref())
+                        .collect::<String>();
+                    use agena_tui_transcript::{TranscriptActivityContent, TranscriptPartContent};
+                    if !text.is_empty() {
+                        match &mut part.content {
+                            TranscriptPartContent::Text(body) => {
+                                body.text = format!("{text}{}", body.text)
+                            }
+                            TranscriptPartContent::Activity(
+                                TranscriptActivityContent::TextSegment(body)
+                                | TranscriptActivityContent::Answer(body),
+                            ) => body.text = format!("{text}{}", body.text),
+                            TranscriptPartContent::Activity(
+                                TranscriptActivityContent::Reasoning(body),
+                            ) => body.summary = vec![format!("{text}{}", body.summary.join(""))],
+                            _ => {}
+                        }
+                    }
+                    if let TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
+                        tool,
+                    )) = &mut part.content
                     {
-                        *line = RenderedLine::dim(label).with_copy_projection(String::new(), 0);
+                        for frame in part_frames {
+                            tool.contents
+                                .insert(frame.resource.resource_id, frame.clone());
+                        }
+                        for resource in &tool.operation.resources {
+                            if let Some(error) = self
+                                .content_reads
+                                .get(&resource.resource_id)
+                                .and_then(|read| read.displayed_error.clone())
+                            {
+                                tool.content_errors.insert(resource.resource_id, error);
+                            }
+                        }
                     }
                 }
-            }
+                let mut rendered =
+                    agena_tui_transcript::render_entry_detailed_with_progressive_expansion(
+                        &current,
+                        width,
+                        &self.i18n,
+                        &self.detail_expanded_by_default,
+                        &self.node_expansions,
+                        &self.activity_summary_visible_counts,
+                        &self.interaction_views,
+                    );
+                for node in &rendered.nodes {
+                    if let TranscriptNodeKey::Activity {
+                        content_id: TranscriptContentId::TranscriptFold { run_id, .. },
+                        ..
+                    } = &node.key
+                    {
+                        let fold = self
+                            .transcript_folds
+                            .iter()
+                            .find(|fold| fold.run_id == *run_id);
+                        let owns_run = |id: &i64| {
+                            id == run_id || fold.is_some_and(|fold| fold.run_ids.contains(id))
+                        };
+                        let label = if self
+                            .transcript_fold_loads
+                            .keys()
+                            .any(|(id, _)| owns_run(id))
+                        {
+                            Some(self.i18n.text("transcript-fold-loading"))
+                        } else {
+                            self.transcript_fold_errors.iter().find(|(id, _)| owns_run(id)).map(|(_, error)| self.i18n.text_args(
+                            "transcript-fold-error", &agena_tui::fl_args!("error" => agena_tui::sanitize_picker_text(error)),
+                        ))
+                        };
+                        if let Some(label) = label
+                            && let Some(line) = rendered.lines.get_mut(node.start_line)
+                        {
+                            *line = RenderedLine::dim(label).with_copy_projection(String::new(), 0);
+                        }
+                    }
+                }
+                let rendered = std::sync::Arc::new(SharedEntryBlock::new(
+                    rendered,
+                    entry.id,
+                    entry.role.is_some(),
+                ));
+                self.entry_render_cache.insert(
+                    entry.id,
+                    CachedEntryRender {
+                        width,
+                        palette,
+                        remote_image_generation,
+                        frames,
+                        errors,
+                        block: rendered.clone(),
+                    },
+                );
+                rendered
+            };
             let base_line = lines.len();
             let base_node = nodes.len();
-            lines.extend(rendered.lines);
+            lines.extend(rendered.lines.iter().cloned());
             nodes.extend(
                 rendered
                     .nodes
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(|node| RenderedTranscriptNode {
                         start_line: node.start_line.saturating_add(base_line),
                         end_line: node.end_line.saturating_add(base_line),
                         ..node
                     }),
             );
-            let added_lines = lines.len().saturating_sub(base_line);
-            let body_copy_text = nodes[base_node..]
-                .iter()
-                .filter(|node| node.contributes_to_aggregate_copy())
-                .map(|node| node.copy_text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            let header_copy_text = if entry.role.is_some() {
-                lines[base_line..]
-                    .first()
-                    .map(|line| line.copy_text.as_str())
-                    .unwrap_or_default()
-            } else {
-                ""
-            };
-            let message_copy_text = [header_copy_text, body_copy_text.as_str()]
-                .into_iter()
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            line_nodes.extend((0..added_lines).map(|offset| {
-                nodes
+            line_nodes.extend(
+                rendered
+                    .line_nodes
                     .iter()
-                    .enumerate()
-                    .skip(base_node)
-                    .find(|(_, node)| {
-                        let line_index = base_line.saturating_add(offset);
-                        line_index >= node.start_line && line_index < node.end_line
-                    })
-                    .map(|(index, _)| index)
-            }));
-            // Keep a message-level parent after its leaf nodes. `line_nodes`
-            // deliberately continues to point at leaves, so line navigation
-            // stays precise while h/l can first select the whole reply.
-            if entry.role.is_some() {
-                nodes.push(RenderedTranscriptNode {
-                    key: TranscriptNodeKey::Entry { entry_id: entry.id },
-                    kind: TranscriptNodeKind::Message,
-                    start_line: base_line,
-                    end_line: lines.len(),
-                    copy_text: message_copy_text,
-                    atomic: false,
-                    toggleable: false,
-                    expanded: true,
-                });
-            }
+                    .map(|index| index.map(|index| base_node + index)),
+            );
         }
+        let loaded = entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        self.entry_render_cache.retain(|id, _| loaded.contains(id));
 
         let search_matches = if self.search_query.trim().is_empty() {
             Vec::new()
@@ -1947,6 +2212,13 @@ impl TranscriptState {
     }
 
     pub(crate) fn invalidate_render(&mut self) {
+        self.rendered = None;
+        self.projected_entries = None;
+        self.projected_resource_ids.clear();
+        self.entry_render_cache.clear();
+    }
+
+    pub(crate) fn invalidate_content_render(&mut self) {
         self.rendered = None;
     }
 
@@ -3803,7 +4075,7 @@ impl TranscriptState {
 /// user messages are woven just ahead of such envelopes so the just-sent input
 /// is visible while the assistant streams.
 fn weave_pending_user_entries<'a>(
-    parts: &[agena_api::resource::SessionTranscriptPart],
+    parts: &[agena_api::part::PartResource],
     canonical_entries: Vec<agena_tui_transcript::TranscriptEntry<'a>>,
     pending_messages: &'a [PendingUserMessage],
 ) -> Vec<agena_tui_transcript::TranscriptEntry<'a>> {
@@ -3835,7 +4107,7 @@ fn weave_pending_user_entries<'a>(
     entries
 }
 
-fn empty_active_run_ids(parts: &[agena_api::resource::SessionTranscriptPart]) -> BTreeSet<i64> {
+fn empty_active_run_ids(parts: &[agena_api::part::PartResource]) -> BTreeSet<i64> {
     let text_run_ids = parts
         .iter()
         .filter(|part| part.kind == "text")
@@ -4341,8 +4613,8 @@ mod stall_recovery_tests {
     use super::*;
     use std::time::Instant;
 
-    fn text_part(part_id: i64, text: &str) -> agena_api::resource::SessionTranscriptPart {
-        agena_api::resource::SessionTranscriptPart {
+    fn text_part(part_id: i64, text: &str) -> agena_api::part::PartResource {
+        agena_api::part::PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -4355,11 +4627,12 @@ mod stall_recovery_tests {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: None,
+            ..Default::default()
         }
     }
 
-    fn run_part(part_id: i64, role: &str) -> agena_api::resource::SessionTranscriptPart {
-        agena_api::resource::SessionTranscriptPart {
+    fn run_part(part_id: i64, role: &str) -> agena_api::part::PartResource {
+        agena_api::part::PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -4372,11 +4645,12 @@ mod stall_recovery_tests {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: None,
+            ..Default::default()
         }
     }
 
-    fn assistant_activity(part_id: i64, run_id: i64) -> agena_api::resource::SessionTranscriptPart {
-        agena_api::resource::SessionTranscriptPart {
+    fn assistant_activity(part_id: i64, run_id: i64) -> agena_api::part::PartResource {
+        agena_api::part::PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -4389,6 +4663,7 @@ mod stall_recovery_tests {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         }
     }
 
@@ -4400,6 +4675,125 @@ mod stall_recovery_tests {
                 kind_defaults: std::collections::BTreeMap::new(),
             },
         )
+    }
+
+    #[tokio::test]
+    async fn live_content_reuses_historical_rows_and_preserves_copy_and_selection() {
+        use agena_domain::{ContentCursor, ContentId, ContentKind, ContentResource, ContentState};
+        use agena_tui_transcript::content::ContentFrame;
+        use std::sync::Arc;
+        let mut state = state();
+        let id = ContentId::new();
+        let cursor = ContentCursor {
+            epoch: id.0,
+            sequence: 1,
+        };
+        let mut live = text_part(501, "");
+        live.run_id = Some(500);
+        live.content =
+            serde_json::json!({"text":"", "resources":[{"resource_id":id,"kind":"text"}]});
+        let mut parts = (1..=150)
+            .flat_map(|id| {
+                let marker = run_part(2 * id - 1, "user");
+                let mut body = text_part(2 * id, &format!("history {id}"));
+                body.run_id = Some(marker.part_id);
+                body.role = "user".into();
+                [marker, body]
+            })
+            .collect::<Vec<_>>();
+        parts.push(run_part(500, "assistant"));
+        parts.push(live);
+        state.merge_parts(parts);
+        let frame = |body: &str, sequence| {
+            Arc::new(ContentFrame {
+                resource: ContentResource {
+                    resource_id: id,
+                    owner_session_id: 1,
+                    part_id: 501,
+                    kind: ContentKind::Text,
+                    state: ContentState::Active,
+                    cursor: ContentCursor { sequence, ..cursor },
+                    committed_cursor: cursor,
+                    total_bytes: body.len() as u64,
+                    dropped_bytes: 0,
+                    retained_ranges: vec![],
+                    capture_error: None,
+                },
+                lines: vec![],
+                wrapped: vec![],
+                terminal_size: None,
+                gap: false,
+                windowed: false,
+                text: body.into(),
+                document: None,
+            })
+        };
+        state.content_reads.insert(
+            id,
+            crate::app_session_events::content_reads::ContentRead::fixture(frame("live first", 1)),
+        );
+        let rendered = state.rendered(80);
+        let old_rows = rendered.lines.clone();
+        let old_nodes = rendered.nodes.clone();
+        let historical_line = rendered
+            .lines
+            .iter()
+            .position(|line| line.copy_text.contains("history 1"))
+            .unwrap();
+        let selection = TranscriptTextSelection {
+            anchor: TranscriptTextPosition {
+                line: historical_line,
+                column: 0,
+            },
+            head: TranscriptTextPosition {
+                line: historical_line,
+                column: usize::MAX,
+            },
+        };
+        let copied = transcript_text_selection_text(
+            &rendered.lines,
+            &rendered.nodes,
+            &rendered.line_nodes,
+            selection,
+        );
+        state.interaction.text_selection = Some(selection);
+        state.content_reads.get_mut(&id).unwrap().displayed = Some(frame("live second", 2));
+        state.invalidate_content_render();
+        let rendered = state.rendered(80);
+        assert_eq!(
+            copied,
+            transcript_text_selection_text(
+                &rendered.lines,
+                &rendered.nodes,
+                &rendered.line_nodes,
+                selection
+            )
+        );
+        for (before, after) in old_rows
+            .iter()
+            .zip(&rendered.lines)
+            .take(historical_line + 1)
+        {
+            assert!(Arc::ptr_eq(before, after));
+        }
+        assert!(Arc::ptr_eq(
+            &old_nodes[0].copy_text,
+            &rendered.nodes[0].copy_text
+        ));
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.copy_text.contains("live second"))
+        );
+        assert!(
+            !rendered
+                .lines
+                .iter()
+                .any(|line| line.copy_text.contains("live first"))
+        );
+        assert_eq!(state.interaction.text_selection, Some(selection));
+        assert!(state.entry_render_cache.len() > 128);
     }
 
     #[test]
@@ -4488,22 +4882,21 @@ mod stall_recovery_tests {
     #[test]
     fn in_progress_reply_counts_as_non_terminal_until_completed() {
         let mut state = state();
-        state
-            .parts
-            .push(agena_api::resource::SessionTranscriptPart {
-                revision: 0,
-                updated_at_ms: 0,
-                part_id: 1,
-                kind: "run".to_owned(),
-                role: "assistant".to_owned(),
-                state: "in_progress".to_owned(),
-                content: serde_json::json!({}),
-                presentation: None,
-                summary: None,
-                created_at_ms: 0,
-                parent_part_id: None,
-                run_id: None,
-            });
+        state.parts.push(agena_api::part::PartResource {
+            revision: 0,
+            updated_at_ms: 0,
+            part_id: 1,
+            kind: "run".to_owned(),
+            role: "assistant".to_owned(),
+            state: "in_progress".to_owned(),
+            content: serde_json::json!({}),
+            presentation: None,
+            summary: None,
+            created_at_ms: 0,
+            parent_part_id: None,
+            run_id: None,
+            ..Default::default()
+        });
 
         assert!(state.has_non_terminal_replies());
 

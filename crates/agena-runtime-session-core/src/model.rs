@@ -1277,6 +1277,7 @@ mod parts_projection_tests {
             authorization: operation.authorization.clone(),
             user_input: operation.user_input.clone(),
             output: operation.output.clone(),
+            resources: operation.resources.clone(),
             error: operation.error.clone(),
             metadata: operation.metadata.clone(),
             lifecycle: operation.lifecycle.clone(),

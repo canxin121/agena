@@ -67,9 +67,7 @@ pub(crate) fn rule_entry_from_persisted(
     }
 }
 
-/// Group a flat snapshot into global → workspace → session rule chains. Old
-/// multi-mode Shell approvals retain their qualifier and scope on each new
-/// launch tool; explicit new-tool rules override inheritance within a scope.
+/// Group current tool policies into global → workspace → session chains.
 pub(crate) fn group_snapshot_rules(
     rules: &[agena_storage::PersistedPermissionRule],
 ) -> HashMap<String, Vec<agena_permission::RuleEntry>> {
@@ -85,7 +83,7 @@ pub(crate) fn group_snapshot_rules(
             .push(rule_entry_from_persisted(rule));
     }
     // Alias spellings can produce several persisted rows for one subject.
-    // Keep the latest within each scope before inheriting old launch policy.
+    // Keep the latest within each scope.
     for chain in grouped.values_mut() {
         chain.sort_by_key(|entry| {
             (
@@ -95,39 +93,6 @@ pub(crate) fn group_snapshot_rules(
             )
         });
         chain.dedup_by_key(|entry| entry.scope);
-    }
-    let legacy_chains = grouped
-        .iter()
-        .filter_map(|(key, chain)| {
-            let Ok(agena_domain::PermissionAction::Tool {
-                tool_name,
-                qualifier,
-            }) = serde_json::from_str(key)
-            else {
-                return None;
-            };
-            let Some(targets) =
-                agena_domain::ToolPermissionConfig::retired_shell_launch_replacements(&tool_name)
-            else {
-                return None;
-            };
-            Some((targets, qualifier, chain.clone()))
-        })
-        .collect::<Vec<_>>();
-    for (targets, qualifier, legacy_chain) in legacy_chains {
-        for target in targets {
-            let action = agena_domain::PermissionAction::Tool {
-                tool_name: target.to_owned(),
-                qualifier: qualifier.clone(),
-            };
-            let key = serde_json::to_string(&action).expect("permission action serializes");
-            let chain = grouped.entry(key).or_default();
-            for legacy in &legacy_chain {
-                if !chain.iter().any(|entry| entry.scope == legacy.scope) {
-                    chain.push(legacy.clone());
-                }
-            }
-        }
     }
     for chain in grouped.values_mut() {
         chain.sort_by_key(|entry| scope_rank(entry.scope));

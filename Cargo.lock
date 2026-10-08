@@ -374,6 +374,7 @@ dependencies = [
  "smol_str",
  "strum 0.28.0",
  "thiserror 2.0.20",
+ "unicode-width 0.2.2",
  "url",
  "uuid",
 ]
@@ -635,6 +636,7 @@ version = "0.1.0"
 dependencies = [
  "abi_stable",
  "agena-async",
+ "agena-domain",
  "agena-failure",
  "agena-plugin-sdk",
  "agena-process",
@@ -1119,7 +1121,9 @@ dependencies = [
  "agena-provider",
  "agena-runtime-contracts",
  "agena-scheduler",
+ "agena-storage",
  "agena-tool",
+ "async-trait",
  "base64 0.22.1",
  "blake3",
  "bytes",
@@ -1224,8 +1228,10 @@ dependencies = [
  "agena-storage",
  "async-trait",
  "chrono",
+ "lru",
  "path-clean",
  "sea-orm",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -1475,6 +1481,7 @@ dependencies = [
  "tui-markdown",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+ "vt100",
 ]
 
 [[package]]

@@ -427,7 +427,7 @@ struct MonitorEventTail {
     bytes: usize,
     last_seq: u64,
     ready_seq: Option<u64>,
-    output_archive: Option<agena_domain::ProcessOutputArchive>,
+    output_resource: Option<agena_domain::ContentRef>,
 }
 
 impl MonitorEventTail {
@@ -448,7 +448,7 @@ impl MonitorEventTail {
             event.seq,
             if start > 0 {
                 format!(
-                    "[notification omits {start} leading bytes; inspect shell.read/output_archive] "
+                    "[notification omits {start} leading bytes; inspect shell.read/output_resource] "
                 )
             } else {
                 String::new()
@@ -459,7 +459,7 @@ impl MonitorEventTail {
         if event.notification.as_deref() == Some("ready") {
             self.ready_seq = Some(delivery_seq);
         }
-        self.output_archive = summary.output_archive.clone();
+        self.output_resource = summary.output_resource.clone();
         self.bytes += line.len();
         let index = self.lines.partition_point(|(seq, _)| *seq < delivery_seq);
         self.lines.insert(index, (delivery_seq, line));
@@ -585,26 +585,8 @@ impl BackgroundCompletionBridge {
             .map(String::as_str)
             .unwrap_or_else(|failure| failure.user.fallback.as_str())
             .to_string();
-        if let Some(archive) = &summary.output_archive {
-            if let Some(path) = &archive.path {
-                summary_line.push_str(&format!(
-                    "\nCaptured output: {path}. Search with fs.grep or read selected lines/byte ranges with fs.read.{}",
-                    if archive.truncated { " The archive is incomplete; storage limits or capture errors omitted output." }
-                    else if archive.pending { " Archive writes are pending; the file may still grow." }
-                    else { "" }
-                ));
-                if let Some(segment) = archive
-                    .segments
-                    .last()
-                    .filter(|_| archive.segments.len() > 1)
-                {
-                    summary_line.push_str(&format!("\nRecent output: {} (captured bytes [{}..{}), local file offsets start at 0). Inspect shell.read output_archive.segments for all retained files.", segment.path, segment.start_byte, segment.end_byte));
-                }
-            } else if let Some(error) = &archive.error {
-                summary_line.push_str(&format!("\nCaptured output could not be saved: {error}. Recent buffered output may still be available from shell.read."));
-            } else if archive.pending {
-                summary_line.push_str("\nOutput archive writes are pending; shell.read exposes the current output_archive path for diagnosis.");
-            }
+        if let Some(resource) = &summary.output_resource {
+            summary_line.push_str(&format!("\nOutput resource: {}", resource.resource_id));
         }
         tokio::spawn(async move {
             // Preserve event-before-completion order without letting a stalled
@@ -739,26 +721,8 @@ impl BackgroundCompletionBridge {
                         body.insert_str(0, "[service ready; process continues running]\n");
                     }
                     body.push_str(&format!("\nProcess {process_id}. Diagnostic replay: shell.read(process_id, since_seq=0); do not poll merely to wait."));
-                    if let Some(archive) = &tail.output_archive {
-                        if let Some(path) = &archive.path {
-                            body.push_str(&format!(
-                                "\nStartup output: {path}. Use fs.grep/fs.read for selected ranges."
-                            ));
-                        }
-                        if let Some(segment) = archive
-                            .segments
-                            .last()
-                            .filter(|_| archive.segments.len() > 1)
-                        {
-                            body.push_str(&format!("\nRecent output: {} (captured bytes [{}..{}), file-local offsets start at 0).", segment.path, segment.start_byte, segment.end_byte));
-                        }
-                        if archive.truncated {
-                            body.push_str(
-                                " Archive is incomplete; inspect output_archive.segments for gaps.",
-                            );
-                        } else if archive.pending {
-                            body.push_str(" Archive writes are pending.");
-                        }
+                    if let Some(resource) = &tail.output_resource {
+                        body.push_str(&format!("\nOutput resource: {}", resource.resource_id));
                     }
                     let summary = if ready {
                         format!("Process {process_id} is ready and continues running")
@@ -1254,7 +1218,7 @@ mod tests {
         ProcessSummary {
             websocket: false,
             process_id: "proc_live".to_string(),
-            output_archive: None,
+            output_resource: None,
             tty,
             command: "cargo test".to_string(),
             description: String::new(),

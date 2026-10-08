@@ -697,7 +697,7 @@ mod tests {
             .expect("call A added");
         assert_eq!(update_stream_key(&added_a[0]), "call:call_00");
 
-        // Call B: shell.run (output_index 1)
+        // Call B: shell.exec (output_index 1)
         let added_b = accumulator
             .ingest(
                 "openai",
@@ -747,7 +747,7 @@ mod tests {
                     &["item:fc_2", "idx:1"],
                     "fc_2",
                     None,
-                    Some(r#"{"tool":"shell.run","input":{"command":"grep"}"#),
+                    Some(r#"{"tool":"shell.exec","input":{"command":"grep"}"#),
                 ),
             )
             .expect("call B delta 1");
@@ -783,7 +783,7 @@ mod tests {
                     &["item:fc_2", "idx:1", "call:call_01"],
                     "fc_2",
                     Some("call_01"),
-                    Some(r#"{"tool":"shell.run","input":{"command":"grep -r","extra":2}}"#),
+                    Some(r#"{"tool":"shell.exec","input":{"command":"grep -r","extra":2}}"#),
                 ),
             )
             .expect("call B done");

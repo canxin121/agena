@@ -1733,3 +1733,13 @@ overlay-provider-delete-adapter-last-body = Il s’agit du dernier adaptateur co
 overlay-provider-delete-model-body = Supprimer le modèle configuré {$provider}/{$adapter}/{$model} ?
 
 permission-studio-page-tool-defaults = Accès aux outils / Valeurs par défaut
+
+# Generic inline content resources
+content-loading = Chargement de la sortie…
+content-active = Sortie en direct
+content-complete = Sortie terminée
+content-interrupted = Sortie interrompue
+content-gap = Une partie de la sortie source n’est plus conservée.
+content-reconnecting = Reconnexion à la sortie…
+
+content-window = Une partie de la sortie est hors de la fenêtre affichée.

@@ -1,4 +1,12 @@
 export default {
+  content: {
+    live: '实时输出', complete: '输出已完成', interrupted: '输出已中断',
+    follow: '跟随输出', copy: '复制', label: '工具输出', waiting: '等待输出…',
+    gap: '部分源输出已不在保留范围内。',
+    window: '当前仅显示部分输出；复制时会读取仍然保留的内容。',
+    recovering: '正在重新连接输出…',
+    copyLimit: '输出超过 16 MiB 的复制上限，请选择较小的范围复制。',
+  },
   app: {
     title: 'Agena',
   },

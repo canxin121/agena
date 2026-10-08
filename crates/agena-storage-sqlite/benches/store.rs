@@ -25,7 +25,6 @@ const USAGE_ROWS: usize = 2_000;
 const USAGE_ITERATIONS: usize = 200;
 const STREAM_SAMPLES: usize = 25;
 const STREAM_DELTAS: usize = 65;
-const STREAM_FLUSH_THRESHOLD: usize = 8;
 
 fn main() -> Result<(), Box<dyn Error>> {
     tokio::runtime::Builder::new_multi_thread()
@@ -44,8 +43,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let workspace_id = SeaWorkspaceRepository::new(Arc::clone(&db))
         .ensure_id("/bench/workspace")
         .await?;
-    let facade = SessionFacade::new(SqliteEngine::new(db), 32)
-        .with_streaming_flush_delta_count(STREAM_FLUSH_THRESHOLD);
+    let facade = SessionFacade::new(SqliteEngine::new(db), 32);
     let session_id = facade
         .create_session(NewSession {
             workspace_id,
@@ -211,19 +209,40 @@ async fn benchmark_streaming(
             .expect("streamed part")
             .part_id;
 
+        let writer = facade
+            .contents()
+            .open(
+                session_id,
+                streamed_part_id,
+                agena_domain::ContentKind::Text,
+            )
+            .await?;
+        let reference = writer.resource().reference();
+        facade
+            .update_part(
+                session_id,
+                streamed_part_id,
+                PartDelta {
+                    content: Some(json!({"text": "", "resources": [reference]})),
+                    ..Default::default()
+                },
+            )
+            .await?;
         let started = Instant::now();
         for _ in 0..STREAM_DELTAS {
-            facade
-                .update_part(
-                    session_id,
-                    streamed_part_id,
-                    PartDelta {
-                        content_text_delta: Some("x".to_owned()),
-                        ..Default::default()
-                    },
-                )
-                .await?;
+            writer.append_text("x").await?;
         }
+        writer.finish().await?;
+        facade
+            .update_part(
+                session_id,
+                streamed_part_id,
+                PartDelta {
+                    state: Some(PartState::Completed),
+                    ..Default::default()
+                },
+            )
+            .await?;
         facade
             .complete_run(
                 session_id,
@@ -245,14 +264,10 @@ async fn benchmark_streaming(
             .into_iter()
             .find(|part| part.part_id == streamed_part_id)
             .expect("persisted streamed part");
+        assert_eq!(persisted.content["text"], "");
         assert_eq!(
-            persisted.content["text"].as_str().unwrap().len(),
-            STREAM_DELTAS
-        );
-        assert_eq!(
-            persisted.revision,
-            1 + STREAM_DELTAS.div_ceil(STREAM_FLUSH_THRESHOLD) as i64,
-            "D10 persists one part revision per bounded checkpoint"
+            persisted.revision, 3,
+            "source chunks never change Part revisions"
         );
     }
     report(

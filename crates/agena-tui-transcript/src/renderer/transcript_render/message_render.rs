@@ -16,12 +16,13 @@ use super::operation_render::{
 };
 use super::request_render::preview_for_part;
 use crate::activity_presentation::activity_presentation;
+use crate::display_types::TranscriptRun;
 use crate::ui_text;
 use crate::{
     ToolCallView, TranscriptActivityContent, TranscriptActivitySection,
     TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
-use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource, RunResource};
+use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -133,7 +134,7 @@ pub(crate) fn append_rendered_part_node(
             kind: node.kind,
             start_line,
             end_line,
-            copy_text: node.copy_text,
+            copy_text: node.copy_text.into(),
             atomic,
             toggleable: node.toggleable,
             expanded: node.expanded,
@@ -688,7 +689,7 @@ fn rendered_activity_section_node(
         kind: TranscriptNodeKind::Activity,
         start_line,
         end_line,
-        copy_text,
+        copy_text: copy_text.into(),
         atomic: lines[start_line..end_line]
             .iter()
             .any(|line| !line.math.is_empty()),
@@ -747,7 +748,7 @@ fn append_answer_markdown_blocks(
                 kind: block.kind,
                 start_line,
                 end_line: out.len(),
-                copy_text: block.copy_text.clone(),
+                copy_text: block.copy_text.clone().into(),
                 atomic,
                 toggleable: false,
                 expanded: true,
@@ -910,7 +911,7 @@ pub(crate) fn render_transcript_entries_export_markdown(
     out.join("\n")
 }
 
-pub fn rewind_message_preview(message: &RunResource, i18n: &I18n) -> String {
+pub fn rewind_message_preview(message: &TranscriptRun, i18n: &I18n) -> String {
     entry_preview(&TranscriptEntry::from(message), i18n)
 }
 
@@ -921,7 +922,7 @@ pub fn render_parts_export_markdown(
     session_id: Option<i64>,
     session_title: &str,
     execution: Option<&SessionExecutionResource>,
-    parts: &[agena_api::resource::SessionTranscriptPart],
+    parts: &[agena_api::part::PartResource],
 ) -> String {
     let entries = crate::parts_entries(parts);
     render_transcript_entries_export_markdown(

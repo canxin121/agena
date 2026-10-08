@@ -296,10 +296,11 @@ impl ApplicationService {
             .ok_or_else(|| ApplicationError::not_found("The session was not found."))?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await?;
-        let transcript = if include_parts {
-            session_transcript_parts(session_queries, session_id).await?
+        let (transcript, part_page) = if include_parts {
+            let (parts, page) = session_transcript_parts(session_queries, session_id).await?;
+            (parts, Some(page))
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
         let pending_interactive_requests =
             pending_interactive_requests(session_queries, session_id).await?;
@@ -329,8 +330,10 @@ impl ApplicationService {
 
         let snapshot_version = session_resource.version;
         Ok(SessionExecutionResource {
+            receipt: None,
             session: session_resource,
             parts: transcript,
+            part_page,
             latest_event_seq: Some(snapshot_version),
             automation: session_automation_resource(&scheduler_jobs, session_id),
             background_activities: Vec::new(),
@@ -561,18 +564,35 @@ fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationEr
     ApplicationError::from_failure(*error.failure)
 }
 
-/// Project a session's part transcript for presentation. Reads the runtime
-/// part projection (`list_projected_runs`) and flattens each run into its
-/// run marker plus content parts (shared `project_session_transcript`).
+/// Bounded factual window. Clients own visual grouping and expansion.
 async fn session_transcript_parts(
     session_queries: &dyn agena_runtime::SessionQueryService,
     session_id: i64,
-) -> ApplicationResult<Vec<agena_api::resource::SessionTranscriptPart>> {
-    let runs = session_queries
-        .list_projected_runs(session_id)
+) -> ApplicationResult<(
+    Vec<agena_api::part::PartResource>,
+    agena_api::pagination::PageInfo,
+)> {
+    let page = session_queries
+        .read_part_window(session_id, None, 256)
         .await
         .map_err(session_query_error)?;
-    Ok(crate::session::project_session_transcript(&runs))
+    let next = page.parts.last().map(|p| agena_storage::store::PartCursor {
+        created_at_ms: p.created_at_ms,
+        part_id: p.part_id,
+    });
+    let mut parts = page
+        .parts
+        .iter()
+        .filter(|part| part.visibility.visible_to_user())
+        .map(crate::session::part_resource_from_fact)
+        .collect::<Vec<_>>();
+    parts.sort_unstable_by_key(|p| (p.created_at_ms, p.part_id));
+    let info = agena_api::pagination::PageInfo {
+        returned: parts.len() as u64,
+        has_more: page.has_more,
+        next_cursor: crate::application_parts::encode_part_cursor(session_id, next)?,
+    };
+    Ok((parts, info))
 }
 
 fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError {

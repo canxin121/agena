@@ -76,17 +76,22 @@ static FILE_PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::
 const MAX_FILE_FACT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) struct FileChangesProjectionCache {
-    entries: Mutex<(
-        LruCache<i64, (String, Arc<RecordedFileFacts>, usize)>,
-        usize,
-    )>,
+    entries: Mutex<FileChangesCacheEntries>,
     max_bytes: usize,
+}
+
+struct FileChangesCacheEntries {
+    facts: LruCache<i64, (String, Arc<RecordedFileFacts>, usize)>,
+    bytes: usize,
 }
 
 impl Default for FileChangesProjectionCache {
     fn default() -> Self {
         Self {
-            entries: Mutex::new((LruCache::new(NonZeroUsize::new(32).unwrap()), 0)),
+            entries: Mutex::new(FileChangesCacheEntries {
+                facts: LruCache::new(NonZeroUsize::new(32).unwrap()),
+                bytes: 0,
+            }),
             max_bytes: MAX_FILE_FACT_CACHE_BYTES,
         }
     }
@@ -98,7 +103,7 @@ impl FileChangesProjectionCache {
             .entries
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let (cached, facts, _) = cache.0.get(&id)?;
+        let (cached, facts, _) = cache.facts.get(&id)?;
         (cached == token).then(|| facts.clone())
     }
 
@@ -109,8 +114,8 @@ impl FileChangesProjectionCache {
             .entries
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let Some((_, facts, previous)) = cache.0.pop(&id) {
-            cache.1 -= previous;
+        if let Some((_, facts, previous)) = cache.facts.pop(&id) {
+            cache.bytes -= previous;
             retired.push(facts);
         }
         if bytes > self.max_bytes {
@@ -118,19 +123,20 @@ impl FileChangesProjectionCache {
             drop(retired);
             return;
         }
-        while cache.1.saturating_add(bytes) > self.max_bytes {
-            let Some((_, (_, facts, previous))) = cache.0.pop_lru() else {
+        while cache.bytes.saturating_add(bytes) > self.max_bytes {
+            let Some((_, (_, facts, previous))) = cache.facts.pop_lru() else {
                 break;
             };
-            cache.1 -= previous;
+            cache.bytes -= previous;
             retired.push(facts);
         }
-        if let Some((_, (_, facts, previous))) = cache.0.push(id, (token.to_owned(), facts, bytes))
+        if let Some((_, (_, facts, previous))) =
+            cache.facts.push(id, (token.to_owned(), facts, bytes))
         {
-            cache.1 -= previous;
+            cache.bytes -= previous;
             retired.push(facts);
         }
-        cache.1 += bytes;
+        cache.bytes += bytes;
         drop(cache);
         drop(retired);
     }
@@ -631,7 +637,7 @@ mod tests {
         cache.insert(2, "second", facts.clone());
         cache.insert(3, "second", facts.clone());
         assert!(cache.get(1, "second").is_none());
-        assert!(cache.entries.lock().unwrap().1 <= bytes * 2);
+        assert!(cache.entries.lock().unwrap().bytes <= bytes * 2);
         let oversized = FileChangesProjectionCache {
             max_bytes: bytes - 1,
             ..Default::default()
@@ -642,7 +648,7 @@ mod tests {
         for id in 0..40 {
             count.insert(id, "same", facts.clone());
         }
-        assert_eq!(count.entries.lock().unwrap().0.len(), 32);
+        assert_eq!(count.entries.lock().unwrap().facts.len(), 32);
         assert!(count.get(0, "same").is_none());
     }
 
@@ -743,7 +749,7 @@ mod tests {
             "fs.write",
             json!({"path":"b.txt","kind":"created","sha256":"c","diff":"+B"}),
         );
-        let first = project(1, &[a.clone()], &detail());
+        let first = project(1, std::slice::from_ref(&a), &detail());
         let second = project(
             1,
             &[a.clone(), b],
@@ -811,7 +817,7 @@ mod tests {
 
     #[test]
     fn shell_declarations_never_become_edits_and_summary_pages_are_lazy() {
-        let mut shell = part(100, "shell.run", json!({"exit_code":0}));
+        let mut shell = part(100, "shell.exec", json!({"exit_code":0}));
         shell.content["input"] = json!({"writes":["declared.txt"]});
         let mut parts = (0..83)
             .map(|n| {

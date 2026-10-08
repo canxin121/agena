@@ -1778,3 +1778,13 @@ plugin-workbench-kind-string = 字串
 plugin-workbench-kind-value = 值
 
 permission-studio-page-tool-defaults = 工具權限 / 預設值
+
+# Generic inline content resources
+content-loading = 正在載入輸出…
+content-active = 即時輸出
+content-complete = 輸出已完成
+content-interrupted = 輸出已中斷
+content-gap = 部分來源輸出已不在保留範圍內。
+content-reconnecting = 正在重新連線輸出…
+
+content-window = 目前僅顯示部分輸出。

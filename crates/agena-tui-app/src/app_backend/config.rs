@@ -6,9 +6,8 @@
 //! helpers are synchronous because settings presentation runs in the TUI event
 //! loop.
 
-use agena_application::dto::{
-    ConfigJsonSources, TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
-};
+use crate::{TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource};
+use agena_application::dto::ConfigJsonSources;
 use anyhow::{Context, Result};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -23,10 +22,37 @@ pub(crate) fn config_json_sources(application: &crate::TuiBackend) -> Result<Con
 /// Persisted UI preferences (theme, graphics mode, …), projected from the
 /// resolved configuration document's `ui` section.
 pub(crate) fn ui_configuration(application: &crate::TuiBackend) -> TuiPreferencesResource {
-    application
+    let mut preferences = application
         .config_sources()
         .map(|sources| tui_preferences_from_effective(&sources.effective))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    apply_environment(&mut preferences, |key| std::env::var(key).ok());
+    preferences
+}
+
+fn apply_environment(
+    preferences: &mut TuiPreferencesResource,
+    get: impl Fn(&str) -> Option<String>,
+) {
+    if let Some(value) = get("AGENA_TUI_THEME").filter(|value| !value.trim().is_empty()) {
+        preferences.theme = Some(value);
+    }
+    if let Some(value) = get("AGENA_TUI_COLOR_SCHEME") {
+        match value.trim() {
+            "auto" => preferences.color_scheme = TuiColorSchemeResource::Auto,
+            "dark" => preferences.color_scheme = TuiColorSchemeResource::Dark,
+            "light" => preferences.color_scheme = TuiColorSchemeResource::Light,
+            _ => tracing::warn!("invalid AGENA_TUI_COLOR_SCHEME; expected auto, dark or light"),
+        }
+    }
+    if let Some(value) = get("AGENA_TUI_GRAPHICS") {
+        match value.trim() {
+            "auto" => preferences.graphics = TuiGraphicsModeResource::Auto,
+            "native" => preferences.graphics = TuiGraphicsModeResource::Native,
+            "unicode" => preferences.graphics = TuiGraphicsModeResource::Unicode,
+            _ => tracing::warn!("invalid AGENA_TUI_GRAPHICS; expected auto, native or unicode"),
+        }
+    }
 }
 
 fn tui_preferences_from_effective(effective: &JsonValue) -> TuiPreferencesResource {

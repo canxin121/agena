@@ -99,7 +99,7 @@ async fn concurrent_permission_upsert_never_conflicts() {
         id: None,
         created_at_ms: None,
         updated_at_ms: None,
-        action_key: "agena.shell.run".to_owned(),
+        action_key: "agena.shell.exec".to_owned(),
         mode,
         scope: PermissionScope::Global,
         session_id: None,

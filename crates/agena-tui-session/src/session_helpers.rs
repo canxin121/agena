@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use agena_api::resource::{RunResource, RunRole, RunStatus, SessionExecutionContextResource};
+use agena_api::resource::SessionExecutionContextResource;
 use agena_domain::{ModelRef, UserInputQuestion};
 use agena_tui::user_input::UserInputAnswerDraft;
 use unicode_segmentation::UnicodeSegmentation;
@@ -60,10 +60,6 @@ pub fn execution_model_name_status_label(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-}
-
-pub fn is_rewind_target_message(message: &RunResource) -> bool {
-    message.role == RunRole::User && message.state == RunStatus::Completed
 }
 
 pub fn user_input_answer_values(

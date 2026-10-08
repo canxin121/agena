@@ -15,6 +15,32 @@ use agena_domain::TimeRange;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
+    trim("resource_id", "epoch"),
+    non_empty("resource_id"),
+    non_empty_if_present("epoch"),
+    minimum("max_bytes", 4),
+    maximum("max_bytes", 4096)
+)]
+#[serde(deny_unknown_fields)]
+pub struct ContentReadToolInput {
+    /// Canonical opaque resource id from a Part or tool result.
+    pub resource_id: String,
+    /// Epoch returned with next_position. Omit only for the first read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<String>,
+    /// Last fully consumed record sequence from next_position.after.
+    #[serde(default)]
+    pub after: u64,
+    /// UTF-8 bytes consumed in the next record from next_position.offset.
+    #[serde(default)]
+    pub offset: usize,
+    /// Raw text byte budget; default/max 4096. Cursor and JSON escaping are additional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
     trim(
         "command",
         "description",
@@ -747,82 +773,22 @@ pub struct MonitorWsInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MonitorToolInput {
-    /// Start a background monitor. Pass exactly one of `command` or `ws`.
+    /// Subscribe to a WebSocket feed. Command capture uses shell.watch.
     #[input(
-        exactly_one_of("command", "ws"),
-        trim(
-            "command",
-            "description",
-            "workdir",
-            "reads[]",
-            "writes[]",
-            "network[]"
-        ),
-        non_empty_if_present("command"),
-        non_empty_if_present("workdir"),
+        trim("description"),
         minimum("timeout_ms", 1),
         maximum("timeout_ms", 3600000)
     )]
     Start {
-        /// Shell command whose stdout/stderr lines become events.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        command: Option<String>,
-        /// WebSocket feed whose text frames become events.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        ws: Option<MonitorWsInput>,
-        /// Deadline in ms. Persistent command monitors ignore it; set
-        /// persistent=false for a finite command deadline. WebSockets enforce it.
+        ws: MonitorWsInput,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
-        /// Keep the monitor across model turns (default true).
-        #[serde(default = "default_true")]
-        persistent: bool,
-        /// Human-readable description shown in the transcript and activity panel.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         description: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        workdir: Option<String>,
-        #[serde(default)]
-        reads: Vec<String>,
-        #[serde(default)]
-        writes: Vec<String>,
-        #[serde(default)]
-        network: Vec<String>,
-        /// Optional command-output matching/capture policy. Command sources
-        /// only; supplied policy takes precedence over top-level lifetime options.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        policy: Option<ShellMonitorInput>,
     },
     /// Stop a running monitor (kills its command / closes its WebSocket).
     #[input(non_empty("monitor_id"))]
     Stop { monitor_id: String },
-}
-
-impl MonitorToolInput {
-    pub fn shell_command(&self) -> Option<ShellCommandInput> {
-        match self {
-            Self::Start {
-                command: Some(command),
-                description,
-                timeout_ms,
-                workdir,
-                reads,
-                writes,
-                network,
-                ..
-            } => Some(ShellCommandInput {
-                max_output_bytes: None,
-                command: command.clone(),
-                description: description.clone(),
-                timeout_ms: *timeout_ms,
-                workdir: workdir.clone(),
-                reads: reads.clone(),
-                writes: writes.clone(),
-                network: network.clone(),
-            }),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -1134,6 +1100,8 @@ pub struct OperationPart {
     pub user_input: OperationUserInput,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<RawOutput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<agena_domain::ContentRef>,
     #[serde(default)]
     pub state: ToolResultState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1148,7 +1116,7 @@ pub struct OperationPart {
 
 const PROVIDER_ONLY_METADATA_KEY: &str = "provider_only";
 const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
-const PROVIDER_RAW_METADATA_KEY: &str = "agena.provider_raw";
+const PROVIDER_TRACE_METADATA_KEY: &str = "agena.provider_trace";
 /// Marker that an operation was launched into the background (a monitored
 /// shell process or a delegated task) and must keep rendering as in-progress
 /// on the transcript part until the background work actually finishes. The
@@ -1180,6 +1148,7 @@ impl OperationPart {
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
             output: None,
+            resources: Vec::new(),
             state: ToolResultState::Pending,
             error: None,
             metadata: BTreeMap::new(),
@@ -1199,6 +1168,7 @@ impl OperationPart {
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
             output: (!output.is_empty()).then_some(output),
+            resources: Vec::new(),
             state: ToolResultState::Completed,
             error: None,
             metadata: BTreeMap::new(),
@@ -1219,6 +1189,7 @@ impl OperationPart {
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
             output: (!output.is_empty()).then_some(output),
+            resources: Vec::new(),
             state: ToolResultState::Failed,
             error: Some(OperationError { failure }),
             metadata: BTreeMap::new(),
@@ -1299,6 +1270,7 @@ impl OperationPart {
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
             output: (!output.is_empty()).then_some(output),
+            resources: Vec::new(),
             state,
             error: None,
             metadata: BTreeMap::new(),
@@ -1417,20 +1389,33 @@ impl OperationPart {
         self.output.get_or_insert_with(RawOutput::default)
     }
 
-    pub fn set_provider_raw(&mut self, raw: Option<serde_json::Value>) {
-        match raw {
-            Some(raw) => {
-                self.metadata
-                    .insert(PROVIDER_RAW_METADATA_KEY.to_owned(), raw);
+    /// Protocol diagnostics use the same canonical content resources as all
+    /// other large facts. Opaque provider continuation lives on its run.
+    pub fn set_provider_trace(&mut self, reference: Option<agena_domain::ContentRef>) {
+        if let Some(previous) = self.provider_trace() {
+            self.resources
+                .retain(|resource| resource.resource_id != previous.resource_id);
+        }
+        match reference {
+            Some(reference) => {
+                if !self.resources.contains(&reference) {
+                    self.resources.push(reference.clone());
+                }
+                self.metadata.insert(
+                    PROVIDER_TRACE_METADATA_KEY.to_owned(),
+                    serde_json::to_value(reference).expect("content reference serializes"),
+                );
             }
             None => {
-                self.metadata.remove(PROVIDER_RAW_METADATA_KEY);
+                self.metadata.remove(PROVIDER_TRACE_METADATA_KEY);
             }
         }
     }
 
-    pub fn provider_raw(&self) -> Option<&serde_json::Value> {
-        self.metadata.get(PROVIDER_RAW_METADATA_KEY)
+    pub fn provider_trace(&self) -> Option<agena_domain::ContentRef> {
+        self.metadata
+            .get(PROVIDER_TRACE_METADATA_KEY)
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
     }
 
     /// Best-effort model-visible text carved from the single payload. The
@@ -1561,18 +1546,19 @@ mod operation_part_tests {
                 id: "p-1".into(),
             })
         );
-        op.set_provider_raw(Some(serde_json::json!({"id": "provider-1"})));
-        assert_eq!(
-            op.provider_raw().and_then(|raw| raw["id"].as_str()),
-            Some("provider-1")
-        );
+        let reference = agena_domain::ContentRef {
+            resource_id: agena_domain::ContentId::new(),
+            kind: agena_domain::ContentKind::Text,
+        };
+        op.set_provider_trace(Some(reference.clone()));
+        assert_eq!(op.provider_trace(), Some(reference.clone()));
         assert!(op.output.is_none());
         assert_eq!(
-            op.metadata[super::PROVIDER_RAW_METADATA_KEY]["id"],
-            "provider-1"
+            op.metadata[super::PROVIDER_TRACE_METADATA_KEY]["resource_id"],
+            reference.resource_id.to_string()
         );
-        op.set_provider_raw(None);
-        assert!(op.provider_raw().is_none());
+        op.set_provider_trace(None);
+        assert!(op.provider_trace().is_none());
     }
 
     #[test]
@@ -1583,14 +1569,18 @@ mod operation_part_tests {
             ..Default::default()
         };
         op.output = Some(output.clone());
-        op.set_provider_raw(Some(serde_json::json!({"id": "provider-1"})));
+        let reference = agena_domain::ContentRef {
+            resource_id: agena_domain::ContentId::new(),
+            kind: agena_domain::ContentKind::Text,
+        };
+        op.set_provider_trace(Some(reference.clone()));
         assert_eq!(op.output.as_ref(), Some(&output));
 
         let encoded = serde_json::to_value(&op).unwrap();
         let decoded: OperationPart = serde_json::from_value(encoded).unwrap();
-        assert_eq!(decoded.provider_raw(), op.provider_raw());
+        assert_eq!(decoded.provider_trace(), op.provider_trace());
         assert_eq!(decoded.output.as_ref(), Some(&output));
-        op.set_provider_raw(None);
+        op.set_provider_trace(None);
         assert_eq!(op.output.as_ref(), Some(&output));
     }
 }

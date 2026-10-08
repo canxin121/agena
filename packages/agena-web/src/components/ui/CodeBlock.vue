@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { RiArrowDownSLine, RiArrowUpSLine, RiCheckLine, RiClipboardLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -23,21 +23,16 @@ const isLarge = computed(() => {
   return lines.value > 18 || len > 1400
 })
 
-const expanded = ref(false)
+const userExpanded = ref<boolean>()
+const expanded = computed({
+  get: () => userExpanded.value ?? !isLarge.value,
+  set: (value: boolean) => { userExpanded.value = value },
+})
 
 const toasts = useToastsStore()
 const { t } = useI18n()
 const copyState = ref<'idle' | 'copied' | 'error'>('idle')
 let copyTimer: number | null = null
-
-watch(
-  () => props.code,
-  () => {
-    // Default fold for large blocks to keep activity compact.
-    expanded.value = !isLarge.value
-  },
-  { immediate: true },
-)
 
 const highlighted = computed(() => {
   const code = expanded.value ? props.code : props.code.split('\n', 24).join('\n').slice(0, 4096)

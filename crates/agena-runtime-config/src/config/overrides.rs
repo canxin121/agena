@@ -1,7 +1,7 @@
 //! Runtime-private adapter that materializes Runtime-owned parsed overrides into the
 //! raw configuration schema.
 
-use super::{RawConfig, RawTracingConfig, RawTuiUiConfig, RawUiConfig};
+use super::{RawConfig, RawTracingConfig, RawUiConfig};
 use crate::ConfigOverride;
 
 pub fn apply_config_override(override_value: &ConfigOverride, config: &mut RawConfig) {
@@ -27,29 +27,27 @@ pub fn apply_config_override(override_value: &ConfigOverride, config: &mut RawCo
         ConfigOverride::UiLocale(locale) => {
             config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale.clone());
         }
-        ConfigOverride::UiTuiColorScheme(color_scheme) => {
-            config
-                .ui
-                .get_or_insert_with(RawUiConfig::default)
-                .tui
-                .get_or_insert_with(RawTuiUiConfig::default)
-                .color_scheme = Some(*color_scheme);
-        }
-        ConfigOverride::UiTuiGraphics(graphics) => {
-            config
-                .ui
-                .get_or_insert_with(RawUiConfig::default)
-                .tui
-                .get_or_insert_with(RawTuiUiConfig::default)
-                .graphics = Some(*graphics);
-        }
-        ConfigOverride::UiTuiTheme(theme) => {
-            config
-                .ui
-                .get_or_insert_with(RawUiConfig::default)
-                .tui
-                .get_or_insert_with(RawTuiUiConfig::default)
-                .theme = Some(theme.clone());
+        ConfigOverride::UiPreference { path, value } => {
+            if let Some((key, nested)) = path.split_first() {
+                let preferences = &mut config
+                    .ui
+                    .get_or_insert_with(RawUiConfig::default)
+                    .preferences;
+                let mut entry = preferences
+                    .entry(key.clone())
+                    .or_insert(serde_json::Value::Null);
+                for key in nested {
+                    if !entry.is_object() {
+                        *entry = serde_json::json!({});
+                    }
+                    entry = entry
+                        .as_object_mut()
+                        .expect("object above")
+                        .entry(key)
+                        .or_insert(serde_json::Value::Null);
+                }
+                *entry = value.clone();
+            }
         }
         ConfigOverride::ProviderRequestTimeoutSecs { provider_id, value } => {
             config

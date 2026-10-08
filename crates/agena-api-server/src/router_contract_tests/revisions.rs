@@ -102,7 +102,7 @@ async fn resource_versions_are_scoped_and_conditional_reads_survive_mutation_and
         format!("workspace:{}:sessions", server.workspace_id),
         format!("workspace:{second_id}:sessions"),
         format!("session:{}:state", session.id),
-        format!("session:{}:transcript", session.id),
+        format!("session:{}:parts", session.id),
     ];
     let initial = tokens(&server.url, &keys).await;
     assert_eq!(
@@ -130,7 +130,7 @@ async fn resource_versions_are_scoped_and_conditional_reads_survive_mutation_and
         .unwrap();
     assert_eq!(unchanged.status(), reqwest::StatusCode::NOT_MODIFIED);
     assert!(unchanged.bytes().await.unwrap().is_empty());
-    let transcript_endpoint = format!("{}/api/v1/sessions/{}/transcript", server.url, session.id);
+    let transcript_endpoint = format!("{}/api/v1/sessions/{}/runs", server.url, session.id);
     let transcript = http
         .get(&transcript_endpoint)
         .send()
@@ -409,13 +409,12 @@ async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships
     let store = application_for_test(&server.runtime)
         .session_store_facade()
         .unwrap();
-    let mut tool = agena_runtime_contracts::part_content::ToolCallContent {
+    let tool = agena_runtime_contracts::part_content::ToolCallContent {
         name: "shell.exec".into(),
         input: serde_json::json!({"command":"echo hello"}),
         state: agena_domain::ToolResultState::Running,
         ..Default::default()
     };
-    tool.set_live_output("hello");
     let content = tool.as_value();
     let run = store
         .submit_user_run(
@@ -456,7 +455,7 @@ async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships
         .unwrap();
     let output_etag = output.headers()["etag"].to_str().unwrap().to_owned();
     let mut next = content;
-    next["metadata"]["live_output"] = serde_json::json!("hello again");
+    next["output"] = serde_json::json!({"payload":{"text":"hello again"},"truncated":false});
     store
         .update_part(
             session.id,

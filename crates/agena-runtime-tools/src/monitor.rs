@@ -71,6 +71,7 @@ pub enum MonitorError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Parameters for starting a monitored process.
 pub struct StartParams {
+    pub output: Option<agena_storage::content::ContentWriter>,
     /// Trusted argv overrides the display command without another outer shell.
     pub argv: Option<Vec<String>>,
     /// Trusted workspace/session identity. None is host-only and invisible to AI tools.
@@ -131,7 +132,7 @@ pub struct ProcessReadOptions {
 #[derive(Debug, Clone)]
 pub struct MonitorRead {
     pub monitor_id: String,
-    pub output_archive: Option<agena_domain::ProcessOutputArchive>,
+    pub output_resource: Option<agena_domain::ContentRef>,
     pub status: ProcessStatus,
     pub ready: bool,
     pub events: Vec<ProcessEvent>,
@@ -276,7 +277,6 @@ pub trait MonitorService: Send + Sync + std::fmt::Debug {
 
 #[derive(Debug)]
 struct MonitorState {
-    output_archive: Option<crate::process_output_archive::OutputArchive>,
     owner: Option<crate::TerminalOwner>,
     launch: StartParams,
     monitor_id: String,
@@ -323,10 +323,11 @@ impl MonitorState {
         let inner = self.inner.lock().unwrap();
         ProcessSummary {
             process_id: self.monitor_id.clone(),
-            output_archive: self
-                .output_archive
+            output_resource: self
+                .launch
+                .output
                 .as_ref()
-                .and_then(|archive| archive.snapshot()),
+                .map(|writer| writer.resource().reference()),
             tty: false,
             websocket: self.launch.ws.is_some(),
             command: self.command.clone(),
@@ -518,48 +519,45 @@ impl MonitorService for MonitorRegistry {
                 "reserved background process id must not be empty".into(),
             ));
         }
-        let state =
-            Arc::new(MonitorState {
-                output_archive: params.owner.as_ref().filter(|_| params.ws.is_none()).map(
-                    |owner| {
-                        crate::process_output_archive::OutputArchive::new(
-                            &owner.workspace,
-                            owner.session_id,
-                        )
-                    },
-                ),
-                owner: params.owner.clone(),
-                launch: params.clone(),
-                monitor_id: process_id,
-                command: source,
-                description: params.description.clone(),
-                started_at_ms,
-                watch: Mutex::new(watch),
-                watch_changed: tokio::sync::Notify::new(),
-                interaction: Mutex::new(()),
-                last_activity: Mutex::new(Instant::now()),
-                last_activity_ms: AtomicI64::new(started_at_ms),
-                capacity,
-                last_seq: AtomicU64::new(0),
-                notification_seq: AtomicU64::new(0),
-                notification_delivery: Mutex::new(()),
-                dropped_lines: AtomicU64::new(0),
-                inner: Mutex::new(MonitorInner {
-                    spawned: false,
-                    ending: false,
-                    cursor: OutputCursor::default(),
-                    buffer: VecDeque::with_capacity(capacity.min(256)),
-                    buffered_bytes: 0,
-                    status: ProcessStatus::Running,
-                    exit_code: None,
-                    ended_at_ms: None,
-                    completion_reason: None,
-                    abort: Some(abort_tx),
-                    worker: None,
-                }),
-                changed: Condvar::new(),
-                listener: self.listener.clone(),
-            });
+        let state = Arc::new(MonitorState {
+            owner: params.owner.clone(),
+            launch: StartParams {
+                output: params
+                    .output
+                    .as_ref()
+                    .map(agena_storage::content::ContentWriter::delegate_lifecycle),
+                ..params.clone()
+            },
+            monitor_id: process_id,
+            command: source,
+            description: params.description.clone(),
+            started_at_ms,
+            watch: Mutex::new(watch),
+            watch_changed: tokio::sync::Notify::new(),
+            interaction: Mutex::new(()),
+            last_activity: Mutex::new(Instant::now()),
+            last_activity_ms: AtomicI64::new(started_at_ms),
+            capacity,
+            last_seq: AtomicU64::new(0),
+            notification_seq: AtomicU64::new(0),
+            notification_delivery: Mutex::new(()),
+            dropped_lines: AtomicU64::new(0),
+            inner: Mutex::new(MonitorInner {
+                spawned: false,
+                ending: false,
+                cursor: OutputCursor::default(),
+                buffer: VecDeque::with_capacity(capacity.min(256)),
+                buffered_bytes: 0,
+                status: ProcessStatus::Running,
+                exit_code: None,
+                ended_at_ms: None,
+                completion_reason: None,
+                abort: Some(abort_tx),
+                worker: None,
+            }),
+            changed: Condvar::new(),
+            listener: self.listener.clone(),
+        });
 
         // Reserve the identity before the worker can emit either an event or
         // completion. This closes the old fast-process race where callbacks
@@ -802,10 +800,11 @@ impl MonitorService for MonitorRegistry {
         }
         Ok(MonitorRead {
             monitor_id: id.into(),
-            output_archive: state
-                .output_archive
+            output_resource: state
+                .launch
+                .output
                 .as_ref()
-                .and_then(|archive| archive.snapshot()),
+                .map(|writer| writer.resource().reference()),
             status: inner.status,
             ready: state.watch.lock().unwrap().ready,
             events: slice.events,
@@ -877,7 +876,7 @@ impl MonitorService for MonitorRegistry {
                 params.limit,
             )?;
             return Ok(MonitorRead {
-                output_archive: read.summary.output_archive,
+                output_resource: read.summary.output_resource,
                 monitor_id: read.summary.process_id,
                 status: read.summary.status,
                 ready: read.summary.ready,
@@ -1033,10 +1032,11 @@ fn collect_events_locked(
     let has_more = global_last > last_seq_in_batch;
     MonitorRead {
         monitor_id: state.monitor_id.clone(),
-        output_archive: state
-            .output_archive
+        output_resource: state
+            .launch
+            .output
             .as_ref()
-            .and_then(|archive| archive.snapshot()),
+            .map(|writer| writer.resource().reference()),
         status,
         ready: state.watch.lock().unwrap().ready,
         events,
@@ -1198,10 +1198,6 @@ async fn run_monitor(
                 let last = (*state.last_activity.lock().unwrap()).max(watch.configured_at);
                 if *revision != watch.revision
                     || quiet.is_none_or(|ms| last.elapsed() < Duration::from_millis(ms))
-                    || state
-                        .output_archive
-                        .as_ref()
-                        .is_some_and(|archive| archive.capture_busy())
                 {
                     continue;
                 }
@@ -1286,8 +1282,10 @@ async fn run_monitor(
             _ => {}
         }
     }
-    if let Some(archive) = &state.output_archive {
-        archive.finish();
+    if let Some(writer) = &state.launch.output
+        && let Err(error) = writer.finalize(agena_domain::ContentState::Complete).await
+    {
+        tracing::error!(%error, "background content seal failed");
     }
 
     {
@@ -1583,8 +1581,12 @@ fn mark_failed(state: &MonitorState, reason: String) {
     inner.abort = None;
     inner.worker = None;
     drop(inner);
-    if let Some(archive) = &state.output_archive {
-        archive.finish();
+    if let Some(writer) = state.launch.output.clone() {
+        tokio::spawn(async move {
+            let _ = writer
+                .finalize(agena_domain::ContentState::Interrupted)
+                .await;
+        });
     }
     state.changed.notify_all();
     if let Some(listener) = state.listener.as_ref() {
@@ -1624,13 +1626,10 @@ where
     R: tokio::io::AsyncRead + Unpin + Send,
 {
     use tokio::io::AsyncReadExt;
-    let mut reader = crate::process_output_archive::ArchivedReader::new(
-        ProcessActivityReader {
-            reader,
-            state: Arc::clone(&state),
-        },
-        state.output_archive.clone(),
-    );
+    let mut reader = ProcessActivityReader {
+        reader,
+        state: Arc::clone(&state),
+    };
     let mut bytes = [0_u8; 8 * 1024];
     let mut utf8 = Vec::new();
     let mut matcher = OutputMatcher::default();
@@ -1644,6 +1643,19 @@ where
                 let text =
                     crate::tool::shell::decode_output(&mut utf8, &bytes[..count], count == 0);
                 if !text.is_empty() {
+                    if let Some(writer) = &state.launch.output {
+                        let channel = match stream {
+                            ProcessStream::Stdout => agena_domain::CommandOutputStream::Stdout,
+                            ProcessStream::Stderr => agena_domain::CommandOutputStream::Stderr,
+                        };
+                        let byte_count = text.len();
+                        if let Err(error) = writer.capture(agena_domain::ContentInput::Log {
+                            stream: channel,
+                            text: text.clone(),
+                        }) {
+                            writer.record_loss(byte_count, &error);
+                        }
+                    }
                     let event = push_output_event_filtered(&state, stream, text, true, false);
                     matcher.push(&state, &event, count == 0);
                 }
@@ -1750,6 +1762,7 @@ mod tests {
 
     fn start_params(command: &str) -> StartParams {
         StartParams {
+            output: None,
             argv: None,
             owner: None,
             process_id: None,

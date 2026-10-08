@@ -525,15 +525,15 @@ mod tests {
     #[test]
     fn search_matches_small_typos() {
         let docs = vec![
-            doc("agena.shell/run", "Run a foreground command", &["shell"]),
+            doc("agena.shell/exec", "Run a foreground command", &["shell"]),
             doc("agena.shell/logs", "Read process logs", &["read_only"]),
         ];
 
-        let results = search_tools(&docs, "rn", 5);
+        let results = search_tools(&docs, "exxc", 5);
 
         assert_eq!(
             results.first().map(|doc| doc.name.as_str()),
-            Some("agena.shell/run")
+            Some("agena.shell/exec")
         );
     }
 
@@ -559,15 +559,15 @@ mod tests {
     #[test]
     fn search_treats_tool_name_punctuation_as_token_boundaries() {
         let docs = vec![
-            doc("shell.run", "Run one shell process", &["shell"]),
+            doc("shell.exec", "Run one shell process", &["shell"]),
             doc("shell.logs", "Read process logs", &["shell"]),
         ];
 
-        let results = search_tools(&docs, "shell.run", 3);
+        let results = search_tools(&docs, "shell.exec", 3);
 
         assert_eq!(
             results.first().map(|doc| doc.name.as_str()),
-            Some("shell.run")
+            Some("shell.exec")
         );
     }
 
@@ -650,7 +650,7 @@ mod tests {
                 &[],
             ),
             doc("monitor.startup", "Inspect process startup", &[]),
-            doc("shell.run", "Run a shell command", &[]),
+            doc("shell.exec", "Run a shell command", &[]),
         ];
 
         // `monitor.startup` is a different tool. A complete-name query must not

@@ -5,6 +5,249 @@ use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 
 use crate::{provider::project_completion_input, tool::ToolApiBinding};
+
+/// Resolve resource-backed bodies into a temporary model projection. The
+/// original facts and references remain untouched and cannot be re-persisted
+/// accidentally by a later session transition.
+pub(crate) async fn resolve_content_for_model(
+    session: &Session,
+    hub: &agena_storage::content::ContentHub,
+) -> Result<Session, crate::error::AppError> {
+    use agena_domain::{ContentCursor, ContentKind, ContentPayload, ContentRef};
+    let active_ids = session
+        .active_window_parts()
+        .iter()
+        .map(|part| part.part_id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut remaining = 8 * 1024 * 1024usize;
+    let mut projected = session.clone();
+    for part in projected
+        .parts
+        .iter_mut()
+        .rev()
+        .filter(|part| active_ids.contains(&part.part_id))
+    {
+        let mut field_resources = std::collections::HashSet::new();
+        if let Some(reference) = part
+            .content
+            .pointer("/metadata/agena.provider_trace")
+            .and_then(|value| serde_json::from_value::<ContentRef>(value.clone()).ok())
+        {
+            field_resources.insert(reference.resource_id);
+        }
+        if part.kind == "tool_call"
+            && let Some(value) = part.content.get("output").cloned()
+        {
+            let mut output: agena_domain::RawOutput =
+                serde_json::from_value(value).map_err(|error| {
+                    crate::AppError::Internal(format!("decode raw model output: {error}"))
+                })?;
+            for field in &output.fields {
+                field_resources.insert(field.resource.resource_id);
+                if remaining == 0 {
+                    break;
+                }
+                let content = hub
+                    .read_text(field.resource.resource_id, remaining.min(512 * 1024))
+                    .await
+                    .map_err(|error| {
+                        crate::AppError::Internal(format!("read model result field: {error}"))
+                    })?;
+                remaining = remaining.saturating_sub(content.text.len());
+                let value = if field.format == agena_domain::ContentFormat::Json
+                    && !content.gap
+                    && !content.truncated
+                {
+                    serde_json::from_str(&content.text).map_err(|error| {
+                        crate::AppError::Internal(format!(
+                            "decode model result field JSON: {error}"
+                        ))
+                    })?
+                } else {
+                    let mut text = content.text;
+                    if content.gap {
+                        text.push_str("\n[Some content is outside the retained range.]");
+                    }
+                    if content.truncated {
+                        text.push_str(&format!(
+                            "\n[Model preview truncated. Full content resource: {}.]",
+                            field.resource.resource_id
+                        ));
+                    }
+                    serde_json::Value::String(text)
+                };
+                if let Some(target) = output
+                    .payload
+                    .as_mut()
+                    .and_then(|payload| payload.pointer_mut(&field.pointer))
+                {
+                    *target = value;
+                }
+            }
+            part.content["output"] = serde_json::to_value(output).map_err(|error| {
+                crate::AppError::Internal(format!("encode raw model output: {error}"))
+            })?;
+        }
+        let Some(values) = part
+            .content
+            .get("resources")
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        let references = values
+            .iter()
+            .cloned()
+            .map(serde_json::from_value::<ContentRef>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                crate::error::AppError::Internal(format!("decode model resource: {error}"))
+            })?;
+        let mut body = String::new();
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        for reference in references {
+            if field_resources.contains(&reference.resource_id) {
+                continue;
+            }
+            if remaining == 0 {
+                body.push_str("\n[Content omitted by the model input budget.]\n");
+                break;
+            }
+            let mut resource_budget = remaining.min(512 * 1024);
+            let resource = hub.describe(reference.resource_id).await.map_err(|error| {
+                crate::error::AppError::Internal(format!("describe model resource: {error}"))
+            })?;
+            let mut cursor = ContentCursor {
+                epoch: resource.cursor.epoch,
+                sequence: 0,
+            };
+            let mut bootstrap = matches!(
+                reference.kind,
+                ContentKind::Structured | ContentKind::Document | ContentKind::Terminal
+            );
+            let mut document: Option<(ContentCursor, agena_domain::ContentDocument)> = None;
+            let mut terminal: Option<agena_domain::TerminalSnapshot> = None;
+            loop {
+                let page = hub
+                    .read(
+                        reference.resource_id,
+                        if bootstrap { None } else { Some(cursor) },
+                        resource_budget.min(64 * 1024),
+                    )
+                    .await
+                    .map_err(|error| {
+                        crate::error::AppError::Internal(format!("read model resource: {error}"))
+                    })?;
+                bootstrap = false;
+                if page.gap {
+                    body.push_str("\n[Earlier output is outside the retained range.]\n");
+                }
+                for chunk in page.chunks {
+                    let bytes = chunk.payload.byte_len();
+                    if bytes > resource_budget {
+                        body.push_str("\n[Content omitted by the model input budget.]\n");
+                        resource_budget = 0;
+                        break;
+                    }
+                    resource_budget -= bytes;
+                    remaining -= bytes;
+                    match chunk.payload {
+                        ContentPayload::Text { text } => body.push_str(&text),
+                        ContentPayload::Log { stream, text } => {
+                            body.push_str(&text);
+                            match stream {
+                                agena_domain::CommandOutputStream::Stdout => stdout.push_str(&text),
+                                agena_domain::CommandOutputStream::Stderr => stderr.push_str(&text),
+                            }
+                        }
+                        ContentPayload::StructuredSnapshot { document: snapshot } => {
+                            document = Some((chunk.cursor, snapshot))
+                        }
+                        ContentPayload::Structured { base_cursor, event } => {
+                            document = document
+                                .as_ref()
+                                .filter(|(cursor, _)| *cursor == base_cursor)
+                                .and_then(|(_, document)| document.updated(&event).ok())
+                                .map(|document| (chunk.cursor, document));
+                            if document.is_none() {
+                                body.push_str(
+                                    "\n[Structured content dependency is unavailable.]\n",
+                                );
+                            }
+                        }
+                        ContentPayload::Terminal { screen } => terminal = Some(screen),
+                        ContentPayload::TerminalPatch {
+                            screen,
+                            rows_changed,
+                            ..
+                        } => {
+                            if let Some(current) = terminal.as_mut() {
+                                current.cells.retain(|run| !rows_changed.contains(&run.row));
+                                current.cells.extend(screen.cells);
+                                current.cells.sort_unstable_by_key(|run| (run.row, run.col));
+                                current.cursor_row = screen.cursor_row;
+                                current.cursor_col = screen.cursor_col;
+                            }
+                        }
+                    }
+                }
+                if !page.has_more || page.next_cursor == cursor {
+                    break;
+                }
+                if resource_budget == 0 {
+                    body.push_str("\n[Content omitted by the model input budget.]\n");
+                    break;
+                }
+                cursor = page.next_cursor;
+            }
+            if let Some((_, document)) = document {
+                body.push('\n');
+                body.push_str(&serde_json::to_string(&document.blocks).map_err(|error| {
+                    crate::AppError::Internal(format!("encode model document: {error}"))
+                })?);
+            }
+            if let Some(screen) = terminal {
+                body.push_str("\n[Terminal screen]\n");
+                body.push_str(&screen.plain_text());
+            }
+        }
+        if body.is_empty() {
+            continue;
+        }
+        match part.kind.as_str() {
+            "text" => {
+                body.push_str(
+                    part.content
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                );
+                part.content["text"] = body.into();
+            }
+            "think" => part.content["summary"] = serde_json::json!([body]),
+            "tool_call" if !body.is_empty() => {
+                if let Some(payload) = part
+                    .content
+                    .pointer_mut("/output/payload")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    if !stdout.is_empty() || !stderr.is_empty() {
+                        payload.insert("output".into(), body.clone().into());
+                        payload.insert("text".into(), body.into());
+                        payload.insert("stdout".into(), stdout.into());
+                        payload.insert("stderr".into(), stderr.into());
+                    } else {
+                        payload.insert("streamed_content".into(), body.into());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    projected.refresh_derived();
+    Ok(projected)
+}
 use agena_domain::{Role, ToolCallId};
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
@@ -1230,10 +1473,11 @@ pub(crate) async fn render_tool_results_for_model(
             .unwrap_or_else(|| operation.call_id.to_string());
         // Provider call ids can be reused in later rounds. Keep every durable
         // occurrence instead of letting the newest result overwrite history.
-        operations
-            .entry(call_id)
-            .or_default()
-            .push((operation.invocation, output));
+        operations.entry(call_id).or_default().push((
+            operation.invocation,
+            output,
+            operation.resources,
+        ));
     }
 
     let mut visible_counts = std::collections::HashMap::<String, usize>::new();
@@ -1268,12 +1512,23 @@ pub(crate) async fn render_tool_results_for_model(
             // durable records in its original order.
             let record_index = records.len().saturating_sub(visible_count) + *occurrence;
             *occurrence += 1;
-            let Some((invocation, Some(output))) = records.get(record_index) else {
+            let Some((invocation, Some(output), resources)) = records.get(record_index) else {
                 continue;
             };
             let projection = executor.render_tool_result(invocation, output).await;
             if let Some(model) = projection.model {
                 *output_json = model;
+            }
+            if !resources.is_empty() {
+                use std::fmt::Write as _;
+                // Keep references after plugin projection. A custom renderer
+                // can omit payload fields, but must not hide recovery handles.
+                let references =
+                    serde_json::json!({ "resources": resources, "fields": output.fields });
+                let _ = write!(
+                    output_json,
+                    "\n<agena_content_resources>{references}</agena_content_resources>\nUse content.read to retrieve retained source bytes with resumable next_position."
+                );
             }
 
             if !output.attachments.is_empty() {

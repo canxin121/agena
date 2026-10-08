@@ -16,6 +16,29 @@ struct ManifestInput {
     text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum OptionalNumericVariantInput {
+    Logs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[arg(minimum = 1, maximum = 100)]
+        limit: Option<u32>,
+    },
+}
+
+#[test]
+fn omitted_optional_numeric_variant_fields_do_not_validate_a_synthetic_null() {
+    assert_eq!(
+        OptionalNumericVariantInput::parse_input(json!({"action":"logs"})).unwrap(),
+        OptionalNumericVariantInput::Logs { limit: None }
+    );
+    assert_eq!(
+        OptionalNumericVariantInput::parse_input(json!({"action":"logs", "limit":3})).unwrap(),
+        OptionalNumericVariantInput::Logs { limit: Some(3) }
+    );
+    assert!(OptionalNumericVariantInput::parse_input(json!({"action":"logs", "limit":0})).is_err());
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ManifestOutput {

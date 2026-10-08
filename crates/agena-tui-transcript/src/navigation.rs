@@ -138,7 +138,7 @@ pub struct RenderedTranscriptNode {
     pub kind: TranscriptNodeKind,
     pub start_line: usize,
     pub end_line: usize,
-    pub copy_text: String,
+    pub copy_text: std::sync::Arc<str>,
     /// A single semantic object whose terminal representation cannot be split
     /// into meaningful rows (for example an image, diagram, or one logical
     /// formula row). Structured display-math blocks may override the formula
@@ -191,14 +191,14 @@ pub enum TranscriptVerticalNavigationStep {
 }
 
 pub fn transcript_semantic_line_range(
-    lines: &[RenderedLine],
+    lines: &[impl AsRef<RenderedLine>],
     node: &RenderedTranscriptNode,
     line: usize,
 ) -> Option<std::ops::Range<usize>> {
     if line < node.start_line || line >= node.end_line {
         return None;
     }
-    let rendered_line = lines.get(line)?;
+    let rendered_line = lines.get(line)?.as_ref();
     let Some(unit) = rendered_line.navigation_unit else {
         return (!rendered_line.copy_text.is_empty()).then_some(line..line.saturating_add(1));
     };
@@ -207,7 +207,7 @@ pub fn transcript_semantic_line_range(
     while start > node.start_line
         && lines
             .get(start.saturating_sub(1))
-            .is_some_and(|candidate| candidate.navigation_unit == Some(unit))
+            .is_some_and(|candidate| candidate.as_ref().navigation_unit == Some(unit))
     {
         start = start.saturating_sub(1);
     }
@@ -215,7 +215,7 @@ pub fn transcript_semantic_line_range(
     while end < node.end_line
         && lines
             .get(end)
-            .is_some_and(|candidate| candidate.navigation_unit == Some(unit))
+            .is_some_and(|candidate| candidate.as_ref().navigation_unit == Some(unit))
     {
         end = end.saturating_add(1);
     }
@@ -223,7 +223,7 @@ pub fn transcript_semantic_line_range(
 }
 
 fn transcript_node_entry_line(
-    lines: &[RenderedLine],
+    lines: &[impl AsRef<RenderedLine>],
     node: &RenderedTranscriptNode,
     direction: TranscriptMoveDirection,
 ) -> Option<usize> {
@@ -242,7 +242,7 @@ fn transcript_node_entry_line(
 /// renderer-owned rows as independent navigation stops.
 pub fn transcript_vertical_navigation_step(
     nodes: &[RenderedTranscriptNode],
-    lines: &[RenderedLine],
+    lines: &[impl AsRef<RenderedLine>],
     cursor_line: usize,
     selected_cursor: Option<&TranscriptBlockCursor>,
     direction: TranscriptMoveDirection,
@@ -384,7 +384,7 @@ pub fn transcript_vertical_navigation_step(
 
 pub fn transcript_vertical_line_navigation_step(
     nodes: &[RenderedTranscriptNode],
-    lines: &[RenderedLine],
+    lines: &[impl AsRef<RenderedLine>],
     cursor_line: usize,
     direction: TranscriptMoveDirection,
 ) -> Option<TranscriptVerticalNavigationStep> {

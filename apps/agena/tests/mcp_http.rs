@@ -468,7 +468,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
     assert!(
         modern_tool_list
             .iter()
-            .any(|tool| tool["name"] == "shell.run")
+            .any(|tool| tool["name"] == "shell.exec")
     );
     assert!(modern_tool_list.iter().all(|tool| {
         !tool_name_is_hidden_from_stateless_mcp(tool["name"].as_str().unwrap_or_default())

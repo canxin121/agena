@@ -1733,3 +1733,13 @@ overlay-provider-delete-adapter-last-body = 이것은 마지막으로 구성된 
 overlay-provider-delete-model-body = 구성된 모델 {$provider}/{$adapter}/{$model}을 삭제하시겠습니까?
 
 permission-studio-page-tool-defaults = 도구 접근 / 기본값
+
+# Generic inline content resources
+content-loading = 출력 불러오는 중…
+content-active = 실시간 출력
+content-complete = 출력 완료
+content-interrupted = 출력 중단됨
+content-gap = 보관 범위에서 제외된 출력이 있습니다.
+content-reconnecting = 출력에 다시 연결하는 중…
+
+content-window = 현재 출력의 일부만 표시합니다.

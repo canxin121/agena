@@ -461,31 +461,6 @@ impl StoreAdapter {
             })
     }
 
-    /// Append live text and return a lightweight acknowledgement.
-    pub(crate) async fn append_live_text(
-        &self,
-        session_id: i64,
-        part_id: i64,
-        text: String,
-    ) -> Result<agena_storage::store::PartCheckpoint, AppError> {
-        self.facade
-            .append_live_text(session_id, part_id, text)
-            .await
-            .map_err(store_error)
-    }
-
-    pub(crate) async fn append_live_reasoning(
-        &self,
-        session_id: i64,
-        part_id: i64,
-        text: String,
-    ) -> Result<agena_storage::store::PartCheckpoint, AppError> {
-        self.facade
-            .append_live_reasoning(session_id, part_id, text)
-            .await
-            .map_err(store_error)
-    }
-
     /// Apply a streaming delta to one part and return the updated part.
     pub(crate) async fn update_part(
         &self,
@@ -1148,6 +1123,7 @@ pub(crate) fn command_ref_from_reference(
 /// Build the canonical `text` typed content for a plain text payload.
 pub(crate) fn text_content(text: impl Into<String>) -> part_content::TextContent {
     part_content::TextContent {
+        resources: Vec::new(),
         text: text.into(),
         synthetic: false,
         extra: BTreeMap::new(),
@@ -1700,6 +1676,7 @@ mod tests {
     #[test]
     fn part_content_round_trips_through_json() {
         let content = TypedContent::Text(part_content::TextContent {
+            resources: Vec::new(),
             text: "round trip".to_owned(),
             synthetic: false,
             extra: BTreeMap::new(),
@@ -1713,6 +1690,7 @@ mod tests {
     #[test]
     fn new_part_serializes_content_and_role() {
         let content = TypedContent::Text(part_content::TextContent {
+            resources: Vec::new(),
             text: "payload".to_owned(),
             synthetic: false,
             extra: BTreeMap::new(),
@@ -1732,10 +1710,12 @@ mod tests {
     fn part_factories_do_not_store_a_second_body_in_the_summary_column() {
         for content in [
             TypedContent::Text(part_content::TextContent {
+                resources: Vec::new(),
                 text: "one canonical body".to_owned(),
                 ..Default::default()
             }),
             TypedContent::Think(part_content::ThinkContent {
+                resources: Vec::new(),
                 summary: vec!["one canonical reasoning body".to_owned()],
                 ..Default::default()
             }),
@@ -1785,6 +1765,7 @@ mod tests {
     /// Canonical `text` payload helper used by the storage fixtures below.
     fn text_content_value(text: &str) -> Value {
         part_content::TextContent {
+            resources: Vec::new(),
             text: text.to_owned(),
             synthetic: false,
             extra: BTreeMap::new(),

@@ -15,7 +15,7 @@ use crate::{
 /// character-selectable, while formula/image line boxes opt in explicitly.
 pub fn normalize_transcript_text_selection(
     selection: TranscriptTextSelection,
-    lines: &[RenderedLine],
+    lines: &[impl AsRef<RenderedLine>],
     nodes: &[RenderedTranscriptNode],
     line_nodes: &[Option<usize>],
 ) -> TranscriptTextSelection {
@@ -75,12 +75,12 @@ fn atomic_node_at(
 }
 
 fn atomic_semantic_range_at(
-    lines: &[RenderedLine],
+    lines: &[impl AsRef<RenderedLine>],
     nodes: &[RenderedTranscriptNode],
     line_nodes: &[Option<usize>],
     position: TranscriptTextPosition,
 ) -> Option<std::ops::Range<usize>> {
-    let line = lines.get(position.line)?;
+    let line = lines.get(position.line)?.as_ref();
     if line.pointer_selection != TranscriptPointerSelection::SemanticUnit {
         return None;
     }
@@ -96,7 +96,7 @@ fn atomic_semantic_range_at(
 /// text. UI prefixes are projected away, grapheme clusters remain intact, and
 /// graphical units are emitted once even when they occupy multiple rows.
 pub fn transcript_text_selection_text(
-    lines: &[RenderedLine],
+    lines: &[impl AsRef<RenderedLine>],
     nodes: &[RenderedTranscriptNode],
     line_nodes: &[Option<usize>],
     selection: TranscriptTextSelection,
@@ -122,9 +122,9 @@ pub fn transcript_text_selection_text(
                 {
                     return copied_atomic_nodes
                         .insert(node_index)
-                        .then(|| (line, node.copy_text.clone()));
+                        .then(|| (line, node.copy_text.to_string()));
                 }
-                if let Some(rendered_line) = lines.get(line)
+                if let Some(rendered_line) = lines.get(line).map(AsRef::as_ref)
                     && rendered_line.pointer_selection == TranscriptPointerSelection::SemanticUnit
                     && let Some(unit) = rendered_line.navigation_unit
                 {
@@ -134,8 +134,10 @@ pub fn transcript_text_selection_text(
                 }
             }
             let range = selection.cell_range_for_line(line)?;
-            let rendered_line = &lines[line];
-            if node_index.is_some() && rendered_line.copy_text.is_empty() {
+            let rendered_line = lines[line].as_ref();
+            let source_blank = rendered_line.copy_text.is_empty()
+                && (rendered_line.navigation_unit.is_some() || rendered_line.copy_column > 0);
+            if node_index.is_some() && rendered_line.copy_text.is_empty() && !source_blank {
                 return None;
             }
             let text = if rendered_line.copy_segments.is_empty() {
@@ -146,7 +148,7 @@ pub fn transcript_text_selection_text(
             } else {
                 segmented_line_slice(rendered_line, range)
             };
-            (!text.is_empty()).then_some((line, text))
+            (!text.is_empty() || source_blank).then_some((line, text))
         })
         .collect::<Vec<_>>();
     join_selection_fragments(lines, fragments)
@@ -176,13 +178,18 @@ fn segmented_line_slice(line: &RenderedLine, selected: std::ops::Range<usize>) -
     output
 }
 
-fn join_selection_fragments(lines: &[RenderedLine], fragments: Vec<(usize, String)>) -> String {
+fn join_selection_fragments(
+    lines: &[impl AsRef<RenderedLine>],
+    fragments: Vec<(usize, String)>,
+) -> String {
     let mut output = String::new();
     let mut previous_line: Option<usize> = None;
     for (line, fragment) in fragments {
         if let Some(previous) = previous_line {
             let same_character_unit = lines.get(previous).is_some_and(|left| {
                 lines.get(line).is_some_and(|right| {
+                    let left = left.as_ref();
+                    let right = right.as_ref();
                     left.pointer_selection == TranscriptPointerSelection::Character
                         && right.pointer_selection == TranscriptPointerSelection::Character
                         && left.navigation_unit.is_some()
@@ -244,7 +251,7 @@ mod tests {
             kind,
             start_line: 0,
             end_line,
-            copy_text: "semantic source".to_string(),
+            copy_text: "semantic source".into(),
             atomic,
             toggleable: false,
             expanded: true,

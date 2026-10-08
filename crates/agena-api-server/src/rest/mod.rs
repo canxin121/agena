@@ -74,6 +74,7 @@ pub(crate) fn server_error_from_store(error: agena_storage::store::StoreError) -
 
 mod activities;
 mod auth;
+mod content;
 mod conversations;
 mod file_changes;
 mod git;
@@ -86,20 +87,21 @@ mod permissions;
 mod plugins;
 mod providers;
 mod revisions;
+mod runs;
 mod sessions;
 mod settings;
-mod transcript;
 mod workspaces;
 
 pub use file_changes::*;
 pub use permissions::*;
+pub use runs::*;
 pub use sessions::*;
 pub use settings::*;
-pub use transcript::*;
 pub use workspaces::*;
 
 pub use activities::*;
 pub use auth::*;
+pub use content::*;
 pub use conversations::*;
 pub use git::*;
 pub use marketplace::*;
@@ -137,7 +139,11 @@ pub(crate) fn take_test_session_stream_subscription(probe: &str) -> bool {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for the ordered session-parts snapshot.
+#[serde(deny_unknown_fields)]
 pub struct SessionPartListQuery {
+    pub sections: Option<String>,
+    #[serde(default)]
+    pub run_ids: Option<String>,
     /// Comma-separated loaded part identities. This exact-membership read
     /// is bounded to 256 ids and cannot be combined with pagination.
     pub ids: Option<String>,

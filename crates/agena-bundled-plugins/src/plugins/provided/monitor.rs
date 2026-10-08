@@ -60,16 +60,9 @@ impl MonitorPlugin {
         router::invoke_tool(
             "monitor",
             json_input(MonitorToolInput::Start {
-                command: None,
-                ws: Some(args.ws),
+                ws: args.ws,
                 timeout_ms: args.timeout_ms,
-                persistent: false,
                 description: args.description,
-                workdir: None,
-                reads: Vec::new(),
-                writes: Vec::new(),
-                network: Vec::new(),
-                policy: None,
             })?,
             context.session_id,
             context.call_id,

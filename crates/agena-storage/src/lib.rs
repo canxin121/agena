@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 mod memory_store;
 pub use memory_store::MemoryStore;
 
+pub mod content;
 pub mod store;
 
 /// Unified database storage configuration.

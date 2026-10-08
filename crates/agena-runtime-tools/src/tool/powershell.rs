@@ -48,51 +48,29 @@ pub(super) async fn execute_async(
     (request.command, request.env) =
         crate::shell_sandbox::protect_async(executor, request.command, input, request.env).await?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
-    let archive = crate::process_output_archive::OutputArchive::new(
-        executor.workspace_root(),
-        context.session_id,
-    );
-    // A foreground command reports its output while it runs, exactly like the
-    // bash path: the sink is display state and never changes the result.
     let execution = executor
-        .execute_shell_command_with_live(
-            &request,
-            context.live_output.clone(),
-            Some(archive.clone()),
-        )
+        .execute_shell_command_with_live(&request, context.output.clone())
         .await?;
-    archive.finish_async().await;
     executor.ensure_not_cancelled()?;
-    let output_archive = if archive
-        .discard_if_fully_visible(
-            &execution.aggregated_output,
-            crate::process_output::text_budget(input.max_output_bytes, false),
-        )
-        .await
-    {
-        None
-    } else {
-        archive.snapshot()
-    };
-    render_execution(&request, execution, output_archive, input.max_output_bytes)
+    let output_resource = context
+        .output
+        .as_ref()
+        .map(|writer| writer.resource().reference());
+    render_execution(&request, execution, output_resource, input.max_output_bytes)
 }
 
 fn render_execution(
     request: &ShellRequest,
     execution: agena_tool::ShellOutput,
-    output_archive: Option<agena_domain::ProcessOutputArchive>,
+    output_resource: Option<agena_domain::ContentRef>,
     max_output_bytes: Option<u32>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let (mut trimmed_output, truncated) = truncate_shell_output_budget(
         &execution.aggregated_output,
         crate::process_output::text_budget(max_output_bytes, false),
     );
-    if let Some(archive) = output_archive
-        .as_ref()
-        .filter(|archive| truncated || archive.truncated || archive.pending)
-    {
-        trimmed_output.push_str("\n\n");
-        trimmed_output.push_str(&crate::process_output_archive::archive_hint(archive));
+    if let Some(resource) = &output_resource {
+        trimmed_output.push_str(&format!("\n\nOutput resource: {}", resource.resource_id));
     }
 
     let status_text = if execution.timed_out {
@@ -115,7 +93,7 @@ fn render_execution(
     };
 
     let output = ToolPayloadOutput::Shell {
-        output_archive,
+        output_resource,
         terminal: None,
         dropped_bytes: 0,
         action: "exec".to_string(),

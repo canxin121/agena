@@ -60,7 +60,7 @@ pub async fn list_activities(
         .iter()
         .map(BackgroundActivityResource::from)
         .collect();
-    Ok(read.json(resources).await?)
+    read.json(resources).await
 }
 
 pub async fn get_activity(
@@ -80,9 +80,7 @@ pub async fn get_activity(
         .get_activity(&activity_id)
         .await
         .map_err(activity_control_error)?;
-    Ok(read
-        .json(BackgroundActivityResource::from(&activity))
-        .await?)
+    read.json(BackgroundActivityResource::from(&activity)).await
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -108,10 +106,10 @@ pub async fn get_activity_logs(
     let revision =
         crate::revisions::ConditionalRead::new(&state, &format!("activity:{activity_id}:logs"))
             .await?;
-    if query.wait_ms == 0 {
-        if let Some(response) = revision.not_modified(&headers) {
-            return Ok(response);
-        }
+    if query.wait_ms == 0
+        && let Some(response) = revision.not_modified(&headers)
+    {
+        return Ok(response);
     }
     let read = state
         .application()
@@ -120,9 +118,9 @@ pub async fn get_activity_logs(
         .activity_logs(&activity_id, query.since_seq, query.limit, query.wait_ms)
         .await
         .map_err(activity_control_error)?;
-    Ok(revision
+    revision
         .json(BackgroundActivityLogResource::from(read))
-        .await?)
+        .await
 }
 
 pub async fn stop_activity(

@@ -37,6 +37,30 @@ impl SessionProcessor {
             ))
         })?;
         let part_id = persisted.part_id;
+        let writer = run
+            .store
+            .facade
+            .contents()
+            .open(run.session_id, part_id, agena_domain::ContentKind::Text)
+            .await
+            .map_err(|error| AppError::Internal(format!("open model content: {error}")))?;
+        let mut content = persisted.content;
+        content["resources"] = serde_json::json!([writer.resource().reference()]);
+        let persisted = run
+            .store
+            .update_part(
+                run.session_id,
+                part_id,
+                PartDelta {
+                    content: Some(content),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        run.content_writers
+            .lock()
+            .expect("model content writers")
+            .insert(part_id, writer);
         parts.push(persisted);
         Ok(part_id)
     }
@@ -75,54 +99,57 @@ impl SessionProcessor {
             ))
         })?;
         let part_id = persisted.part_id;
+        let writer = run
+            .store
+            .facade
+            .contents()
+            .open(run.session_id, part_id, agena_domain::ContentKind::Text)
+            .await
+            .map_err(|error| AppError::Internal(format!("open model content: {error}")))?;
+        let mut content = persisted.content;
+        content["resources"] = serde_json::json!([writer.resource().reference()]);
+        let persisted = run
+            .store
+            .update_part(
+                run.session_id,
+                part_id,
+                PartDelta {
+                    content: Some(content),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        run.content_writers
+            .lock()
+            .expect("model content writers")
+            .insert(part_id, writer);
         parts.push(persisted);
         Ok(part_id)
     }
 
-    /// Append text to the store and the local turn accumulator. The store
-    /// returns only a revision/time checkpoint for an unflushed delta, avoiding
-    /// a full growing-text snapshot and repeated deep copies per token.
+    /// Only source memory and its cursor advance on model tokens. Part facts
+    /// stay small and immutable until a semantic state transition.
     pub(crate) async fn append_text_delta(
         &self,
         run: &SessionRunRequest,
-        parts: &mut [Part],
+        _parts: &mut [Part],
         part_id: i64,
         delta: &str,
     ) -> Result<(), AppError> {
-        let part = parts
-            .iter_mut()
-            .find(|part| part.part_id == part_id)
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "active text part missing from turn accumulator: {part_id}"
-                ))
-            })?;
-        if part.kind != "text" || part.state != PartState::InProgress {
-            return Err(AppError::Internal(format!(
-                "failed to append text delta to part {part_id}: kind or state mismatch"
-            )));
-        }
-        let text = match &mut part.content {
-            serde_json::Value::String(text) => Some(text),
-            serde_json::Value::Object(map) => match map.get_mut("text") {
-                Some(serde_json::Value::String(text)) => Some(text),
-                _ => None,
-            },
-            _ => None,
-        }
-        .ok_or_else(|| AppError::Internal(format!("text part {part_id} has non-text content")))?;
-        let checkpoint = run
-            .store
-            .append_live_text(run.session_id, part_id, delta.to_owned())
-            .await?;
-        text.push_str(delta);
-        part.revision = checkpoint.revision;
-        part.updated_at_ms = checkpoint.updated_at_ms;
+        let writer = run
+            .content_writers
+            .lock()
+            .expect("model content writers")
+            .get(&part_id)
+            .cloned()
+            .ok_or_else(|| AppError::Internal(format!("model source missing: {part_id}")))?;
+        writer
+            .append_text(delta)
+            .await
+            .map_err(|error| AppError::Internal(format!("append model content: {error}")))?;
         Ok(())
     }
 
-    /// Append one canonical thinking summary element without decoding,
-    /// copying and re-encoding the complete accumulated reasoning per token.
     pub(crate) async fn append_reasoning_delta(
         &self,
         run: &SessionRunRequest,
@@ -130,43 +157,14 @@ impl SessionProcessor {
         part_id: i64,
         delta: &str,
     ) -> Result<(), AppError> {
-        let part = parts
-            .iter_mut()
-            .find(|part| part.part_id == part_id)
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "active reasoning part missing from turn accumulator: {part_id}"
-                ))
-            })?;
-        if part.kind != "think" || part.state != PartState::InProgress {
-            return Err(AppError::Internal(format!(
-                "failed to append reasoning delta to part {part_id}: kind or state mismatch"
-            )));
-        }
-        let summary = part
-            .content
-            .get_mut("summary")
-            .and_then(serde_json::Value::as_array_mut)
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "reasoning part {part_id} has non-array summary content"
-                ))
-            })?;
-        let checkpoint = run
-            .store
-            .append_live_reasoning(run.session_id, part_id, delta.to_owned())
-            .await?;
-        summary.push(serde_json::Value::String(delta.to_owned()));
-        part.revision = checkpoint.revision;
-        part.updated_at_ms = checkpoint.updated_at_ms;
-        Ok(())
+        self.append_text_delta(run, parts, part_id, delta).await
     }
 
     /// Push a part's current in-memory state/content onto its durable row
     /// (`update_part`) and refresh the turn accumulator. The caller must have
     /// terminalized the part in the accumulator first (via `complete_part_status`
-    /// or `cancel_nonterminal_parts`/`fail_nonterminal_parts`); this is what
-    /// flushes the part's buffered stream deltas onto the engine row (D10).
+    /// or `cancel_nonterminal_parts`/`fail_nonterminal_parts`). The independent
+    /// source commits its final cursor before the terminal Part fact.
     pub(crate) async fn persist_part_state(
         &self,
         run: &SessionRunRequest,
@@ -181,6 +179,20 @@ impl SessionProcessor {
                     "part missing from turn accumulator while persisting: {part_id}"
                 ))
             })?;
+        let writer = run
+            .content_writers
+            .lock()
+            .expect("model content writers")
+            .remove(&part_id);
+        if let Some(writer) = writer {
+            let final_state = if part.state == PartState::Completed {
+                agena_domain::ContentState::Complete
+            } else {
+                agena_domain::ContentState::Interrupted
+            };
+            let sealed = writer.finalize(final_state).await;
+            sealed.map_err(|error| AppError::Internal(format!("commit model content: {error}")))?;
+        }
         let content = typed_content_from_value(&part.kind, &part.content)?;
         let content = typed_content_to_value(&content)?;
         let updated = run
@@ -191,7 +203,6 @@ impl SessionProcessor {
                 PartDelta {
                     state: Some(part.state),
                     content: Some(content),
-                    content_text_delta: None,
                     summary: part.summary.clone(),
                     provider_state: None,
                     finished_at_ms: part

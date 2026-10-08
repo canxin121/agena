@@ -3,8 +3,6 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::{TuiColorSchemeConfig, TuiGraphicsModeConfig};
-
 /// Parsed `--set key=value` input. This is a schema value: applying it to a
 /// concrete raw configuration document remains the responsibility of that
 /// document's owning configuration adapter.
@@ -14,9 +12,10 @@ pub enum ConfigOverride {
     TracingDatabase(String),
     TracingAdapter(String),
     UiLocale(String),
-    UiTuiColorScheme(TuiColorSchemeConfig),
-    UiTuiGraphics(TuiGraphicsModeConfig),
-    UiTuiTheme(String),
+    UiPreference {
+        path: Vec<String>,
+        value: serde_json::Value,
+    },
     ProviderRequestTimeoutSecs {
         provider_id: String,
         value: u64,
@@ -93,17 +92,17 @@ impl FromStr for ConfigOverride {
             "tracing.database" => Ok(Self::TracingDatabase(raw_value.to_owned())),
             "tracing.adapter" => Ok(Self::TracingAdapter(raw_value.to_owned())),
             "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
-            "ui.tui.color_scheme" => Ok(Self::UiTuiColorScheme(
-                raw_value
-                    .parse()
-                    .map_err(RuntimeConfigOverrideError::Validation)?,
-            )),
-            "ui.tui.graphics" => Ok(Self::UiTuiGraphics(
-                raw_value
-                    .parse()
-                    .map_err(RuntimeConfigOverrideError::Validation)?,
-            )),
-            "ui.tui.theme" => Ok(Self::UiTuiTheme(raw_value.to_owned())),
+            _ if key.starts_with("ui.") => {
+                let path = key[3..].split('.').map(str::to_owned).collect::<Vec<_>>();
+                if path.iter().any(String::is_empty) {
+                    return Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned()));
+                }
+                Ok(Self::UiPreference {
+                    path,
+                    value: serde_json::from_str(raw_value)
+                        .unwrap_or_else(|_| serde_json::Value::String(raw_value.to_owned())),
+                })
+            }
             _ if key.starts_with("providers.") => parse_provider_override(key, raw_value),
             _ => Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned())),
         }

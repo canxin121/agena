@@ -23,7 +23,6 @@ impl ToolExecutor {
                 .launch_command()
                 .filter(|(shell, _)| *shell == agena_domain::ProcessShell::Bash)
                 .map(|(_, command)| command.clone()),
-            ToolPayloadInput::Monitor(input) => input.shell_command(),
             _ => None,
         };
         let Some(process_input) = process_input else {
@@ -216,263 +215,40 @@ impl ToolExecutor {
         Ok(checks)
     }
 
-    /// Execute a streaming tool. The executor is deliberately policy-free:
-    /// model-call authorization is owned by the session permission state
-    /// machine, while application and host invocations execute directly.
-    pub async fn execute_invocation_streaming(
+    /// Describe the source before starting execution, so its stable reference
+    /// can be committed on the Part before a process produces its first byte.
+    pub fn streaming_content_kind(
         &self,
         invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-    ) -> Result<Option<StreamingToolExecution>, ToolError> {
-        self.execute_invocation_streaming_with_prepared_shell(invocation, session_id, call_id, None)
-            .await
-    }
-
-    /// Reuse the shell command and environment authorized during preflight.
-    /// Buffered invocations return `None` before performing any side effect;
-    /// their caller remains responsible for executing them exactly once.
-    pub async fn execute_invocation_streaming_with_prepared_shell(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-        prepared_shell_command: Option<PreparedShellCommand>,
-    ) -> Result<Option<StreamingToolExecution>, ToolError> {
-        self.ensure_not_cancelled()?;
-        let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
-
+    ) -> Result<Option<agena_domain::ContentKind>, ToolError> {
         let resolution = self
             .plugin_resolution_for_invocation(invocation)
-            .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
-        self.check_cloud_tool_adapter(&resolution.canonical_name())?;
-
-        // Bundled tools execute inside this crate; their plugin handler is a
-        // definition-only adapter that cannot run anything, so a plugin-level
-        // streaming declaration would describe a stream nobody produces. This
-        // crate owns the process instead: a bundled foreground shell is
-        // streamable by construction, and its terminal frame is finalized
-        // exactly like the non-streaming bundled path so live output and the
-        // final result always agree.
+            .ok_or_else(|| self.unknown_tool_error(invocation.name.as_str()))?;
         if let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
         {
             let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
-            if let ToolPayloadInput::Shell(input) = payload {
-                // Only foreground pipe output belongs to this stream. A
-                // background/monitored/PTY launch returns a durable receipt;
-                // starting it here would bypass its caller's launch handoff.
-                // Shell controls and log reads already return bounded results.
-                if !matches!(&input, crate::part::ShellToolInput::Exec { .. }) {
-                    return Ok(None);
+            return Ok(match payload {
+                ToolPayloadInput::Shell(crate::part::ShellToolInput::Open { .. }) => {
+                    Some(agena_domain::ContentKind::Terminal)
                 }
-                let stream_id = format!("bundled-shell:{session_id}:{call_id}");
-                let (chunk_tx, chunks) =
-                    tokio::sync::mpsc::channel::<agena_plugin_host::sdk::ToolStreamChunk>(64);
-                let (mut end_tx, end) = tokio::sync::oneshot::channel();
-                let executor = self.clone();
-                let cancellation = self.cancellation_token.clone();
-                let tool_name = resolution.canonical_name();
-                let invocation = invocation.clone();
-                let stream_id_for_task = stream_id.clone();
-                tokio::spawn(async move {
-                    let (live_tx, mut live_rx) = crate::tool::shell::ShellOutputSink::channel();
-                    let forward_stream_id = stream_id_for_task.clone();
-                    let forward =
-                        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-                            let mut allowed_at = tokio::time::Instant::now();
-                            while live_rx.changed().await.is_ok() {
-                                // Coalesce at the source, before loading sessions or
-                                // making part updates. Pipe drains only replace the
-                                // watch tail and never wait for this display cadence.
-                                tokio::time::sleep_until(allowed_at).await;
-                                let text = live_rx.borrow_and_update().clone();
-                                let sent = chunk_tx
-                                    .send(agena_plugin_host::sdk::ToolStreamChunk {
-                                        stream_id: forward_stream_id.clone(),
-                                        text_delta: Some(text),
-                                        metadata: std::collections::BTreeMap::new(),
-                                    })
-                                    .await;
-                                if sent.is_err() {
-                                    break;
-                                }
-                                allowed_at = tokio::time::Instant::now()
-                                    + std::time::Duration::from_millis(100);
-                            }
-                        }));
-                    let context = crate::tool::ToolRuntimeContext {
-                        session_id: (session_id >= 0).then_some(session_id),
-                        call_id: (call_id >= 0).then_some(call_id),
-                        prepared_shell_command,
-                        launch_provenance: None,
-                        live_output: Some(live_tx),
-                    };
-                    let mut lifecycle = Box::pin(async {
-                        let execution = Box::pin(crate::tool::shell_tool::execute_async(
-                            &executor, &input, context,
-                        ))
-                        .await?;
-                        executor.ensure_not_cancelled()?;
-                        executor
-                            .finalize_execution_async(
-                                &invocation,
-                                session_id,
-                                tool_name.as_str(),
-                                call_id,
-                                execution.into(),
-                            )
-                            .await
-                    });
-                    let result = match cancellation.as_ref() {
-                        Some(cancellation) => tokio::select! {
-                            biased;
-                            _ = end_tx.closed() => return,
-                            _ = cancellation.cancelled() => Err(ToolError::Cancelled),
-                            result = &mut lifecycle => result,
-                        },
-                        None => tokio::select! {
-                            biased;
-                            _ = end_tx.closed() => return,
-                            result = &mut lifecycle => result,
-                        },
-                    };
-                    // The final execution contains the complete collected
-                    // output. Display backpressure must not delay its result.
-                    // Dropping the owned forwarder also aborts it on every
-                    // early return, including a dropped terminal receiver.
-                    drop(lifecycle);
-                    drop(forward);
-                    if end_tx.send(result).is_err() {
-                        tracing::debug!(
-                            stream_id = %stream_id_for_task,
-                            "bundled tool stream terminal-result receiver was dropped"
-                        );
-                    }
-                });
-                return Ok(Some(StreamingToolExecution {
-                    stream_id,
-                    chunks,
-                    end,
-                    output_mode: agena_domain::DeltaMode::Replace,
-                }));
-            }
-            // An executor-backed payload without a live sink is buffered: only
-            // the shell implements one today. Returning here keeps it away from
-            // the plugin host, whose bundled handler cannot run anything.
-            return Ok(None);
+                ToolPayloadInput::Shell(
+                    crate::part::ShellToolInput::Exec { .. }
+                    | crate::part::ShellToolInput::Spawn { .. },
+                ) => Some(agena_domain::ContentKind::Log),
+                ToolPayloadInput::Shell(crate::part::ShellToolInput::Watch { input })
+                    if matches!(input.as_ref(), crate::part::ShellWatchInput::Launch { .. }) =>
+                {
+                    Some(agena_domain::ContentKind::Log)
+                }
+                _ => None,
+            });
         }
-
-        // Plugin tools stream only when their own definition declares it; the
-        // bundled tools were already served above.
-        if !matches!(
+        Ok(matches!(
             self.invocation_streaming_mode(invocation),
             Some(SdkToolStreamingMode::Streaming)
-        ) {
-            return Ok(None);
-        }
-
-        let invoke_stream = self.plugins.invoke_tool_stream(
-            &resolution,
-            PluginToolInvokeInput {
-                tool_name: resolution.tool_name().to_string(),
-                session_id,
-                call_id,
-                workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
-            },
-        );
-        let stream = match self.cancellation_token() {
-            Some(cancellation) => tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-                result = invoke_stream => result,
-            },
-            None => invoke_stream.await,
-        }
-        .map_err(|err| {
-            if self
-                .cancellation_token()
-                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
-            {
-                ToolError::Cancelled
-            } else {
-                ToolError::from_plugin_error(err)
-            }
-        })?;
-        let stream_id = stream.stream_id;
-        let chunks = stream.chunks;
-        let end = stream.end;
-        let model_tool_name = resolution.canonical_name();
-        let executor = self.clone();
-        let cancellation = self.cancellation_token.clone();
-        let invocation = invocation.clone();
-        let (mut end_tx, end_rx) = tokio::sync::oneshot::channel();
-        let stream_id_for_task = stream_id.clone();
-        tokio::spawn(async move {
-            let lifecycle = async {
-                match end.await {
-                    Ok(Ok(end)) => {
-                        let view = ToolExecutionView {
-                            title: end.title,
-                            summary: end.summary,
-                            output_text: end.output_text,
-                            metadata: end.metadata.into_iter().collect(),
-                            attachments: end.attachments,
-                        };
-                        let output = ToolOutput::from_json_payload(end.payload.as_ref())
-                            .map_err(ToolError::invalid_input)?;
-                        let execution = ToolInvocationExecution {
-                            output: output.clone(),
-                            view,
-                            apply_patch: apply_patch_execution_from_tool_output(&output),
-                        };
-                        executor
-                            .finalize_execution_async(
-                                &invocation,
-                                session_id,
-                                model_tool_name.as_str(),
-                                call_id,
-                                execution,
-                            )
-                            .await
-                    }
-                    Ok(Err(err)) => Err(ToolError::from_plugin_error(err)),
-                    Err(error) => Err(ToolError::plugin(
-                        agena_failure::diagnostic::format_error_chain_with_context(
-                            "stream ended without a terminal frame",
-                            &error,
-                        ),
-                    )),
-                }
-            };
-            tokio::pin!(lifecycle);
-            let result = match cancellation.as_ref() {
-                Some(cancellation) => tokio::select! {
-                    biased;
-                    _ = end_tx.closed() => return,
-                    _ = cancellation.cancelled() => Err(ToolError::Cancelled),
-                    result = &mut lifecycle => result,
-                },
-                None => tokio::select! {
-                    biased;
-                    _ = end_tx.closed() => return,
-                    result = &mut lifecycle => result,
-                },
-            };
-            if end_tx.send(result).is_err() {
-                tracing::debug!(
-                    stream_id = %stream_id_for_task,
-                    "runtime tool stream terminal-result receiver was dropped"
-                );
-            }
-        });
-        Ok(Some(StreamingToolExecution {
-            stream_id,
-            chunks,
-            end: end_rx,
-            output_mode: agena_domain::DeltaMode::Append,
-        }))
+        )
+        .then_some(agena_domain::ContentKind::Document))
     }
 
     pub async fn execute_invocation_detailed_with_prepared_shell(
@@ -503,6 +279,66 @@ impl ToolExecutor {
         prepared_shell_command: Option<PreparedShellCommand>,
         launch_provenance: Option<agena_scheduler::ScheduledJobLaunchProvenance>,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        self.execute_invocation(
+            invocation,
+            crate::tool::ToolRuntimeContext {
+                session_id: (session_id > 0).then_some(session_id),
+                call_id: (call_id >= 0).then_some(call_id),
+                prepared_shell_command,
+                launch_provenance,
+                output: None,
+            },
+        )
+        .await
+    }
+
+    /// One execution lifecycle. A tool may emit zero or many intermediate
+    /// events; both cases return one final outcome through this future.
+    pub async fn execute_invocation(
+        &self,
+        invocation: &ToolInvocation,
+        context: crate::tool::ToolRuntimeContext,
+    ) -> Result<ToolInvocationExecution, ToolError> {
+        let writer = context.output.clone();
+        let mut result = self.execute_invocation_inner(invocation, context).await;
+        if let Some(writer) = writer.filter(|writer| !writer.lifecycle_is_delegated()) {
+            let final_state = if matches!(result, Err(ToolError::Cancelled)) {
+                agena_domain::ContentState::Interrupted
+            } else {
+                agena_domain::ContentState::Complete
+            };
+            let capture_error = match writer.finalize(final_state).await {
+                Ok(resource) => resource.capture_error,
+                Err(error) => {
+                    tracing::error!(%error, "tool content capture did not commit its final descriptor");
+                    writer
+                        .resource()
+                        .capture_error
+                        .or_else(|| Some(error.to_string()))
+                }
+            };
+            if let (Some(error), Ok(execution)) = (capture_error, &mut result) {
+                execution
+                    .view
+                    .metadata
+                    .insert("output_capture_error".into(), error);
+                execution
+                    .view
+                    .metadata
+                    .insert("output_capture_state".into(), "interrupted".into());
+            }
+        }
+        result
+    }
+
+    async fn execute_invocation_inner(
+        &self,
+        invocation: &ToolInvocation,
+        context: crate::tool::ToolRuntimeContext,
+    ) -> Result<ToolInvocationExecution, ToolError> {
+        let session_id = context.session_id.unwrap_or(-1);
+        let call_id = context.call_id.unwrap_or(-1);
+        let output = context.output.clone();
         self.ensure_not_cancelled()?;
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         let tool_name = plugin_invocation_name(&plugin_invocation);
@@ -513,17 +349,27 @@ impl ToolExecutor {
 
         self.check_cloud_tool_adapter(&resolution.canonical_name())?;
 
+        if resolution.namespace() == "agena"
+            && resolution.plugin_name() == "content"
+            && resolution.tool_name() == "read"
+        {
+            let execution = crate::tool::content::execute(self, invocation, session_id).await?;
+            self.ensure_not_cancelled()?;
+            return self
+                .finalize_execution_async(
+                    invocation,
+                    session_id,
+                    resolution.canonical_name().as_str(),
+                    call_id,
+                    execution,
+                )
+                .await;
+        }
+
         if let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
         {
             let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
-            let context = crate::tool::ToolRuntimeContext {
-                session_id: (session_id >= 0).then_some(session_id),
-                call_id: (call_id >= 0).then_some(call_id),
-                prepared_shell_command,
-                launch_provenance,
-                live_output: None,
-            };
             // Each built-in branch can carry a large async state machine. Keep
             // that state on the heap so an ordinary plugin call does not poll
             // through the combined stack frame of every built-in tool.
@@ -612,6 +458,82 @@ impl ToolExecutor {
                 .await;
         }
 
+        if matches!(
+            self.invocation_streaming_mode(invocation),
+            Some(SdkToolStreamingMode::Streaming)
+        ) {
+            let invoke = self.plugins.invoke_tool_stream(
+                &resolution,
+                PluginToolInvokeInput {
+                    tool_name: resolution.tool_name().to_string(),
+                    session_id,
+                    call_id,
+                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                    input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
+                },
+            );
+            let mut stream = match self.cancellation_token.as_ref() {
+                Some(token) => tokio::select! {
+                    biased;
+                    _ = token.cancelled() => return Err(ToolError::Cancelled),
+                    result = invoke => result,
+                },
+                None => invoke.await,
+            }
+            .map_err(|error| self.plugin_error_or_cancelled(error))?;
+            let mut open = true;
+            let end = loop {
+                tokio::select! {
+                    biased;
+                    _ = async {
+                        match self.cancellation_token.as_ref() {
+                            Some(token) => token.cancelled().await,
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => return Err(ToolError::Cancelled),
+                    end = &mut stream.end => break end,
+                    chunk = stream.chunks.recv(), if open => {
+                        match chunk {
+                            Some(chunk) => Self::capture_tool_chunk(output.as_ref(), chunk).await?,
+                            None => open = false,
+                        }
+                    },
+                }
+            };
+            // The end channel can win while earlier records are queued. The
+            // host serializes delivery before end, so drain before sealing.
+            stream.chunks.close();
+            while let Ok(chunk) = stream.chunks.try_recv() {
+                Self::capture_tool_chunk(output.as_ref(), chunk).await?;
+            }
+            let end = end
+                .map_err(|error| {
+                    ToolError::plugin(format!("tool stream lost its terminal result: {error}"))
+                })?
+                .map_err(|error| self.plugin_error_or_cancelled(error))?;
+            let output = ToolOutput::from_json_payload(end.payload.as_ref())
+                .map_err(ToolError::invalid_input)?;
+            return self
+                .finalize_execution_async(
+                    invocation,
+                    session_id,
+                    resolution.canonical_name().as_str(),
+                    call_id,
+                    ToolInvocationExecution {
+                        apply_patch: apply_patch_execution_from_tool_output(&output),
+                        output,
+                        view: ToolExecutionView {
+                            title: end.title,
+                            summary: end.summary,
+                            output_text: end.output_text,
+                            metadata: end.metadata.into_iter().collect(),
+                            attachments: end.attachments,
+                        },
+                    },
+                )
+                .await;
+        }
+
         let response = Box::pin(self.plugins.invoke_tool(
             &resolution,
             PluginToolInvokeInput {
@@ -651,6 +573,19 @@ impl ToolExecutor {
         .await
     }
 
+    async fn capture_tool_chunk(
+        output: Option<&agena_storage::content::ContentWriter>,
+        chunk: agena_plugin_host::sdk::ToolStreamChunk,
+    ) -> Result<(), ToolError> {
+        if let Some(output) = output {
+            let bytes = chunk.payload.byte_len();
+            if let Err(error) = output.append(chunk.payload).await {
+                output.record_loss(bytes, &error);
+            }
+        }
+        Ok(())
+    }
+
     pub async fn execute_invocation_detailed(
         &self,
         invocation: &ToolInvocation,
@@ -668,8 +603,8 @@ use agena_domain::{
 
 use super::{
     PluginToolBeforeInput, PluginToolInvokeInput, PreparedShellCommand, PreparedToolInvocation,
-    SdkToolStreamingMode, StreamingToolExecution, ToolError, ToolExecutionView, ToolExecutor,
-    ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPayloadInput, ToolPermissionCheck,
+    SdkToolStreamingMode, ToolError, ToolExecutionView, ToolExecutor, ToolInvocation,
+    ToolInvocationExecution, ToolOutput, ToolPayloadInput, ToolPermissionCheck,
     apply_patch_execution_from_tool_output, bash, invocation_effective_tags, invocation_input_json,
     invocation_name, parse_invocation_from_json, plugin_invocation_name,
     resolved_plugin_invocation_input_value, shell_command_from_invocation,

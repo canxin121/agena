@@ -521,12 +521,7 @@ pub fn expand_input_dispatch_fn(
 fn streamify_invoke_output(call_expr: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     quote! {{
         let result = #call_expr?;
-        sink.chunk(::agena_plugin_sdk::ToolStreamChunk {
-            stream_id: sink.stream_id().to_string(),
-            text_delta: Some(result.output_text.clone()),
-                        metadata: result.metadata.clone(),
-        })
-        .await;
+
         Ok(::agena_plugin_sdk::ToolStreamEnd {
             stream_id: sink.stream_id().to_string(),
             title: result.title,

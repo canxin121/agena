@@ -34,24 +34,28 @@ const { useChatAttachments } = (await vite.ssrLoadModule(
   '/src/pages/chat/useChatAttachments.ts',
 )) as typeof import('../src/pages/chat/useChatAttachments')
 
-test('Markdown worker serializes parses, drops cancelled queued bodies, and recovers after a worker failure', async () => {
+test('Markdown worker serializes parses, cancels queued bodies, and recovers after failure or an over-budget parse', async () => {
   const original = globalThis.Worker
   const workers: Array<{
     onmessage?: (event: unknown) => void
     onerror?: () => void
     sent: Array<{ id: number; content: string }>
+    terminated: boolean
   }> = []
   globalThis.Worker = class {
     onmessage?: (event: unknown) => void
     onerror?: () => void
     sent: Array<{ id: number; content: string }> = []
+    terminated = false
     constructor() {
       workers.push(this)
     }
     postMessage(value: { id: number; content: string }) {
       this.sent.push(value)
     }
-    terminate() {}
+    terminate() {
+      this.terminated = true
+    }
   } as unknown as typeof Worker
   try {
     const signal = new AbortController()
@@ -67,24 +71,35 @@ test('Markdown worker serializes parses, drops cancelled queued bodies, and reco
       worker.sent.map((work) => work.content),
       ['first'],
     )
-    worker.onmessage?.({ data: { id: worker.sent[0]!.id, html: '<p>first</p>' } })
-    assert.equal(await first, '<p>first</p>')
+    worker.onmessage?.({ data: { id: worker.sent[0]!.id, parts: ['<p>first</p>'] } })
+    assert.deepEqual(await first, ['<p>first</p>'])
     assert.deepEqual(
       worker.sent.map((work) => work.content),
       ['first', 'last'],
     )
-    worker.onmessage?.({ data: { id: worker.sent[1]!.id, html: '<p>last</p>' } })
-    assert.equal(await last, '<p>last</p>')
+    worker.onmessage?.({ data: { id: worker.sent[1]!.id, parts: ['<p>last</p>'] } })
+    assert.deepEqual(await last, ['<p>last</p>'])
     const failure = renderMarkdownAsync('failure', {}, signal.signal)
     const failed = assert.rejects(failure, /worker failed/)
     worker.onerror?.()
     await failed
     const retry = renderMarkdownAsync('retry', {}, signal.signal)
     const replacement = workers[1]!
-    replacement.onmessage?.({ data: { id: replacement.sent[0]!.id, html: '<p>retry</p>' } })
-    assert.equal(await retry, '<p>retry</p>')
-    // Leave no fake worker in the shared renderer after this test.
+    replacement.onmessage?.({ data: { id: replacement.sent[0]!.id, parts: ['<p>retry</p>'] } })
+    assert.deepEqual(await retry, ['<p>retry</p>'])
+    const slow = renderMarkdownAsync('  exact <source>\n\n', {}, signal.signal)
+    const nextPart = renderMarkdownAsync('another Part', {}, signal.signal)
+    assert.match((await slow).join(''), /  exact &lt;source&gt;\n\n/)
+    assert.equal(replacement.terminated, true)
+    const fresh = workers[2]!
+    // A late result/error from the retired worker cannot touch its successor.
+    replacement.onmessage?.({ data: { id: fresh.sent[0]!.id, parts: ['stale'] } })
     replacement.onerror?.()
+    assert.equal(fresh.terminated, false)
+    fresh.onmessage?.({ data: { id: fresh.sent[0]!.id, parts: ['<p>another Part</p>'] } })
+    assert.deepEqual(await nextPart, ['<p>another Part</p>'])
+    // Leave no fake worker in the shared renderer after this test.
+    fresh.onerror?.()
   } finally {
     globalThis.Worker = original
   }

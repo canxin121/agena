@@ -45,10 +45,9 @@ impl ToolExecutor {
     pub(crate) async fn execute_shell_command_with_live(
         &self,
         request: &ShellRequest,
-        live: Option<crate::tool::shell::ShellOutputSink>,
-        archive: Option<crate::process_output_archive::OutputArchive>,
+        live: Option<agena_storage::content::ContentWriter>,
     ) -> Result<ShellOutput, ToolError> {
-        match shell::execute_with_archive(request, self.cancellation_token(), live, archive).await {
+        match shell::execute_with_sink(request, self.cancellation_token(), live).await {
             Err(agena_tool::ShellError::Cancelled) => Err(ToolError::Cancelled),
             result => result.map_err(ToolError::from),
         }

@@ -174,10 +174,12 @@ async fn retry_transcript_case(fail: bool) {
             part.part_id == run_id && part.kind == "run" && part.state == PartState::Failed
         }));
     } else {
+        let texts = super::resource_part_texts(&manager, saved.parts()).await;
         assert!(saved.parts().iter().any(|part| {
             part.role == PartRole::Assistant
-                && part.kind == "text"
-                && part.content.to_string().contains("Recovered successfully")
+                && texts
+                    .get(&part.part_id)
+                    .is_some_and(|text| text.contains("Recovered successfully"))
         }));
     }
 }

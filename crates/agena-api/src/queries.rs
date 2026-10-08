@@ -15,6 +15,10 @@ use crate::resource::{
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 /// A validated read-only query sent to the runtime.
 pub enum Query {
+    ReadParts(ReadPartsParams),
+    ReadRuns(ReadRunsParams),
+    ReadContent(crate::content::ReadContentParams),
+    ReadContentText(crate::content::ReadContentTextParams),
     Health,
     Runtime,
     ListProviders,
@@ -38,6 +42,9 @@ pub enum Query {
 #[serde(tag = "result", content = "data", rename_all = "snake_case")]
 /// Result of a [`Query`].
 pub enum QueryResult {
+    Parts(crate::live::SessionPartsResource),
+    Content(agena_domain::ContentPage),
+    ContentText(agena_domain::ContentTextPage),
     Health(HealthResponse),
     Runtime(RuntimeStatusResponse),
     Providers(Vec<ProviderSummaryResource>),
@@ -56,6 +63,36 @@ pub enum QueryResult {
 }
 
 // ─── params ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ReadPartsParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub ids: Vec<i64>,
+    #[serde(default)]
+    pub run_ids: Vec<i64>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u64>,
+    #[serde(default)]
+    pub sections: Vec<crate::live::ToolDetailSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ReadRunsParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u64>,
+    #[serde(default)]
+    pub part_limit: Option<u64>,
+    #[serde(default)]
+    pub sections: Vec<crate::live::ToolDetailSection>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Parameters for listing models of a provider.

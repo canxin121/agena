@@ -47,18 +47,6 @@ impl ToolPermissionConfig {
             "agena.shell.signal" | "shell.signal" | "agena_shell_signal" => {
                 Some("agena.shell.signal")
             }
-            "agena.shell.run" | "shell.run" | "agena_shell_run" => Some("agena.shell.run"),
-            _ => None,
-        }
-    }
-
-    /// Retired launch aliases are compatibility inputs only, never executable
-    /// tool names. Preserve their policy on each explicit replacement mode.
-    pub fn retired_shell_launch_replacements(name: &str) -> Option<[&'static str; 3]> {
-        match Self::canonical_shell_tool_name(name) {
-            Some("agena.shell.run") => {
-                Some(["agena.shell.exec", "agena.shell.spawn", "agena.shell.open"])
-            }
             _ => None,
         }
     }
@@ -71,7 +59,7 @@ impl ToolPermissionConfig {
     }
 
     pub fn merge_from(&mut self, overlay: Self) {
-        let overlay = overlay.with_current_shell_names();
+        let overlay = overlay.with_canonical_tool_names();
         if overlay.default.is_some() {
             self.default = overlay.default;
         }
@@ -83,66 +71,11 @@ impl ToolPermissionConfig {
         self.rules.extend(overlay.rules);
     }
 
-    /// Preserve existing command policy when the retired multi-mode launch
-    /// tool is replaced. Explicit rules for a new tool win within one layer.
-    pub fn with_current_shell_names(mut self) -> Self {
+    /// Normalize the registered tool identity spellings without policy
+    /// inheritance between distinct operations.
+    pub fn with_canonical_tool_names(mut self) -> Self {
         normalize_shell_keys(&mut self.names);
         normalize_shell_keys(&mut self.rules);
-        // Command listeners moved into Shell. Preserve their previous policy
-        // while keeping the WebSocket tool's own name policy intact.
-        if let Some(mode) = self.names.get("agena.monitor.start").copied() {
-            self.names
-                .entry("agena.shell.watch".to_owned())
-                .or_insert(mode);
-        }
-        if let Some(rules) = self.rules.get("agena.monitor.start").cloned() {
-            self.rules
-                .entry("agena.shell.watch".to_owned())
-                .or_insert(rules);
-        }
-        for old in ["agena.shell.run"] {
-            let targets =
-                Self::retired_shell_launch_replacements(old).expect("retired shell launch");
-            if let Some(mode) = self.names.remove(old) {
-                for target in targets {
-                    self.names.entry(target.to_owned()).or_insert(mode);
-                }
-            }
-            if let Some(rules) = self.rules.remove(old) {
-                // These command denials were global before launch modes were
-                // split. Preserve them on terminal input and command monitors,
-                // without extending launch approvals to either operation.
-                if let ToolPermissionRules::Ordered(entries) = &rules {
-                    let denied = entries
-                        .iter()
-                        .filter(|(pattern, mode)| {
-                            **mode == PermissionMode::Deny && pattern.trim() != "*"
-                        })
-                        .map(|(pattern, mode)| (pattern.clone(), *mode))
-                        .collect::<indexmap::IndexMap<_, _>>();
-                    if !denied.is_empty() {
-                        for target in [
-                            "agena.shell.write",
-                            "agena.shell.watch",
-                            "agena.monitor.start",
-                        ] {
-                            if !self.names.contains_key(target) && !self.rules.contains_key(target)
-                            {
-                                self.rules.insert(
-                                    target.to_owned(),
-                                    ToolPermissionRules::Ordered(denied.clone()),
-                                );
-                            }
-                        }
-                    }
-                }
-                for target in targets {
-                    self.rules
-                        .entry(target.to_owned())
-                        .or_insert_with(|| rules.clone());
-                }
-            }
-        }
         self
     }
 }

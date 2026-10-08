@@ -1,6 +1,7 @@
 mod cloud_media;
 pub mod code;
 pub mod commands;
+pub mod content;
 pub mod cron;
 pub mod fs;
 pub mod interaction;

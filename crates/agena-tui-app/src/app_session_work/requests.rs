@@ -150,10 +150,6 @@ impl App {
         channel: u8,
         result: crate::UiResult<WorkResult>,
     ) {
-        if channel == 3 {
-            self.handle_inline_activity_logs_loaded(id, request_id, result);
-            return;
-        }
         let Some(state) = self.session_work.get_mut(&id) else {
             return;
         };
@@ -165,7 +161,11 @@ impl App {
         if request_id != expected || expected == 0 {
             return;
         }
-        let control_observation = if channel == 2 { state.control_observation.take() } else { None };
+        let control_observation = if channel == 2 {
+            state.control_observation.take()
+        } else {
+            None
+        };
         match channel {
             0 => {
                 state.file_task = None;
@@ -204,18 +204,27 @@ impl App {
             }
             Ok(WorkResult::Control(activity)) => {
                 if let Some((task, action, observed)) = control_observation
-                    && task == activity.id && observed == state.activity_times.get(&task).copied()
+                    && task == activity.id
+                    && observed == state.activity_times.get(&task).copied()
                     && self.transcript.session_id == Some(id)
-                    && let Some(execution) = self.transcript.execution.as_mut() {
+                    && let Some(execution) = self.transcript.execution.as_mut()
+                {
                     if matches!(action.as_str(), "dismiss" | "delete") {
                         execution.background_activities.retain(|row| row.id != task);
-                    } else if let Some(row) = execution.background_activities.iter_mut().find(|row| row.id == task) {
-                        if row != activity.as_ref() { *row = *activity; }
+                    } else if let Some(row) = execution
+                        .background_activities
+                        .iter_mut()
+                        .find(|row| row.id == task)
+                    {
+                        if row != activity.as_ref() {
+                            *row = *activity;
+                        }
                     } else {
                         execution.background_activities.insert(0, *activity);
                     }
-                    if matches!(&state.detail, Some(Detail::Task(selected)) if selected == &task) { state.detail_dirty = true; }
-                    if let Some(logs) = state.inline_logs.get_mut(&task) { logs.dirty = true; }
+                    if matches!(&state.detail, Some(Detail::Task(selected)) if selected == &task) {
+                        state.detail_dirty = true;
+                    }
                 }
             }
             Err(error) => {
@@ -261,7 +270,11 @@ impl App {
         self.next_usage_request_id += 1;
         let request_id = self.next_usage_request_id;
         state.control_request = request_id;
-        state.control_observation = Some((task.clone(), action.clone(), state.activity_times.get(&task).copied()));
+        state.control_observation = Some((
+            task.clone(),
+            action.clone(),
+            state.activity_times.get(&task).copied(),
+        ));
         let application = self.application.clone();
         let tx = self.tx.clone();
         // Mutations retain their original activity/session even after navigation.

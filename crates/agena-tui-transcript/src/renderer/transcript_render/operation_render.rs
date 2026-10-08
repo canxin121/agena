@@ -416,6 +416,10 @@ fn render_tool_presentation_body(
         true,
         failure_text,
         &tool_diff_paths(tool),
+        ContentObservation {
+            frames: &tool.contents,
+            errors: &tool.content_errors,
+        },
     );
 }
 
@@ -463,6 +467,48 @@ fn tool_presentation_copy_text(
                 })
             })
             .map(|block| match block {
+                ViewBlock::Content { resource, .. } => tool
+                    .contents
+                    .get(&resource.resource_id)
+                    .map(|frame| {
+                        let mut text = String::new();
+                        if let Some(document) = &frame.document {
+                            text.push_str(
+                                &document
+                                    .blocks
+                                    .iter()
+                                    .map(|block| operation_block_copy_text(block, i18n))
+                                    .filter(|text| !text.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join("\n\n"),
+                            );
+                            if !text.is_empty()
+                                && (!frame.lines.is_empty() || !frame.text.is_empty())
+                            {
+                                text.push_str("\n\n");
+                            }
+                        }
+                        if frame.resource.kind == agena_domain::ContentKind::Text {
+                            text.push_str(&frame.text);
+                        }
+                        for (index, line) in frame.lines.iter().enumerate() {
+                            if index > 0 && !frame.wrapped.get(index - 1).copied().unwrap_or(false)
+                            {
+                                text.push('\n');
+                            }
+                            for span in &line.spans {
+                                text.push_str(&span.content);
+                            }
+                        }
+                        if frame.gap {
+                            text.insert_str(0, &format!("[{}]\n", i18n.text("content-gap")));
+                        }
+                        if frame.windowed {
+                            text.insert_str(0, &format!("[{}]\n", i18n.text("content-window")));
+                        }
+                        text
+                    })
+                    .unwrap_or_default(),
                 ViewBlock::FileChanges { changes, .. } => operation_block_copy_text(
                     &ViewBlock::FileChanges {
                         id: None,
@@ -545,6 +591,14 @@ fn render_interaction_notification(
     );
 }
 
+pub(crate) struct ContentObservation<'a> {
+    pub frames: &'a std::collections::BTreeMap<
+        agena_domain::ContentId,
+        std::sync::Arc<crate::content::ContentFrame>,
+    >,
+    pub errors: &'a std::collections::BTreeMap<agena_domain::ContentId, String>,
+}
+
 pub(crate) fn render_operation_blocks<'a>(
     blocks: impl IntoIterator<Item = &'a ViewBlock>,
     out: &mut Vec<RenderedLine>,
@@ -553,9 +607,56 @@ pub(crate) fn render_operation_blocks<'a>(
     expanded: bool,
     skipped_text: Option<&str>,
     diff_paths: &std::collections::BTreeSet<String>,
+    observation: ContentObservation<'_>,
 ) {
+    let ContentObservation {
+        frames: contents,
+        errors: content_errors,
+    } = observation;
     for block in blocks {
         match block {
+            ViewBlock::Progress {
+                completed, total, ..
+            } => {
+                let label = operation_block_copy_text(block, i18n);
+                push_single_line(
+                    out,
+                    "    ",
+                    &label,
+                    Style::default().fg(agena_tui_components::theme::accent_color()),
+                    width,
+                );
+                if let Some(total) = total.filter(|total| *total > 0) {
+                    let columns = usize::from(width.saturating_sub(8)).min(36);
+                    let filled = (u128::from(*completed).saturating_mul(columns as u128)
+                        / u128::from(total)) as usize;
+                    push_single_line(
+                        out,
+                        "    ",
+                        &format!(
+                            "[{}{}]",
+                            "━".repeat(filled.min(columns)),
+                            "─".repeat(columns.saturating_sub(filled))
+                        ),
+                        Style::default().fg(agena_tui_components::theme::accent_color()),
+                        width,
+                    );
+                }
+            }
+            ViewBlock::Content {
+                resource, format, ..
+            } => crate::content::render_content(
+                contents
+                    .get(&resource.resource_id)
+                    .map(std::sync::Arc::as_ref),
+                out,
+                width,
+                i18n,
+                content_errors
+                    .get(&resource.resource_id)
+                    .map(String::as_str),
+                *format,
+            ),
             ViewBlock::Text { text, .. } => {
                 if skipped_text.is_some_and(|candidate| text.trim() == candidate) {
                     continue;
@@ -832,7 +933,7 @@ mod tests {
                 RawOutput::default(),
                 TimeRange::default(),
             ),
-            Some(agena_api::live::HumanPresentationResource {
+            Some(agena_domain::PartDocument {
                 title: "Applied patch".into(),
                 summary: String::new(),
                 blocks: vec![

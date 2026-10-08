@@ -204,7 +204,7 @@ impl OutputMatcher {
                 // Bound pattern scanning without dropping the raw captured
                 // chunk. The notification explicitly identifies the cut.
                 let line = format!(
-                    "{}\n[watch record split after {} bytes; full raw text is in shell.read/output_archive]",
+                    "{}\n[watch record split after {} bytes; full raw text is in shell.read/output_resource]",
                     self.pending,
                     self.pending.len()
                 );
@@ -374,19 +374,6 @@ pub(super) async fn wait_for_quiet(state: &MonitorState) -> u64 {
         let last = (*state.last_activity.lock().unwrap()).max(configured);
         let remaining = period.saturating_sub(last.elapsed());
         if remaining.is_zero() {
-            if state
-                .output_archive
-                .as_ref()
-                .is_some_and(|archive| archive.capture_busy())
-            {
-                // Archive pressure is not silence. Allow readers to release
-                // staged output and observe pending pipe activity first.
-                tokio::select! {
-                    _ = changed => {},
-                    _ = tokio::time::sleep(Duration::from_millis(25)) => {},
-                }
-                continue;
-            }
             return revision;
         }
         tokio::select! {

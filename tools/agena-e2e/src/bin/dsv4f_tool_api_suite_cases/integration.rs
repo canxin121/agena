@@ -58,12 +58,15 @@ pub(crate) async fn run_task_case(
                 .await
                 .is_none()
             {
-                let messages = harness
-                    .session_queries
-                    .list_projected_runs(child_id)
-                    .await
-                    .context("load completed tasks.run child transcript")?;
-                return Ok::<_, anyhow::Error>(messages);
+                let parts =
+                    super::super::part_observation::parts(harness.session_store.as_ref(), child_id)
+                        .await?;
+                return super::super::part_observation::text(
+                    harness.session_store.as_ref(),
+                    &parts,
+                )
+                .await
+                .map(|values| values.into_values().collect::<Vec<_>>().join("\n"));
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
@@ -71,39 +74,12 @@ pub(crate) async fn run_task_case(
     .await
     .context("tasks.run child session did not complete")??;
     ensure!(
-        projected_transcript_text(&child_messages).contains("SUBTASK_OK"),
+        child_messages.contains("SUBTASK_OK"),
         "tasks.run child transcript did not contain SUBTASK_OK: {}",
-        projected_transcript_text(&child_messages)
+        child_messages
     );
     report.pass("tasks.run");
     Ok(())
-}
-
-fn projected_transcript_text(messages: &[agena_runtime::SessionProjectedRun]) -> String {
-    messages
-        .iter()
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| match part.detail.as_ref() {
-            Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {
-                Some(text.as_str())
-            }
-            Some(agena_runtime::SessionProjectedPartDetail::ToolCall(operation)) => {
-                operation.output.as_ref().and_then(|output| {
-                    if !output.text_content().is_empty() {
-                        Some(output.text_content())
-                    } else {
-                        output.payload.as_ref().and_then(|payload| {
-                            payload
-                                .as_str()
-                                .or_else(|| payload.get("text").and_then(Value::as_str))
-                        })
-                    }
-                })
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 pub(crate) async fn run_web_cases(

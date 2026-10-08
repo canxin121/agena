@@ -538,7 +538,9 @@ function finalAnswerPartId(role: string, parts: MessagePartLike[]): string | nul
     const candidate = parts[index]
     // Once an operation is encountered, no preceding text can be the answer.
     if (candidate && durablePartKind(candidate) === 'tool_call') return null
-    if (!candidate || durablePartKind(candidate) !== 'text' || !transcriptPartText(candidate).trim()) continue
+    if (!candidate || durablePartKind(candidate) !== 'text') continue
+    const resources = durablePartContent(candidate).resources
+    if (!transcriptPartText(candidate).trim() && !(Array.isArray(resources) && resources.length)) continue
     return String(candidate.id || '') || null
   }
   return null

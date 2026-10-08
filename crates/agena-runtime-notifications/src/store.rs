@@ -351,7 +351,7 @@ impl NotificationService for InMemoryNotificationStore {
                         .get(&id)
                         .and_then(|&pos| inner.notifications.get(pos))
                         .cloned()
-                        .ok_or_else(|| NotificationError::NotFound(id))?
+                        .ok_or(NotificationError::NotFound(id))?
                 };
                 resolve_action_target(&notification, &action_id)
             })

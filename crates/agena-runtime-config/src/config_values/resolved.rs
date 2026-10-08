@@ -241,7 +241,6 @@ pub struct ResolvedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TuiUiConfig;
     fn minimal_config() -> ResolvedConfig {
         ResolvedConfig {
             default_selection: ExecutionSelection::default(),
@@ -252,7 +251,7 @@ mod tests {
             },
             ui: UiConfig {
                 locale: None,
-                tui: TuiUiConfig::default(),
+                preferences: Default::default(),
             },
             runtime: RuntimeConfig::default(),
             session: SessionConfig::default(),

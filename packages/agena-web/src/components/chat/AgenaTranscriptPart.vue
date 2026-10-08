@@ -5,6 +5,8 @@ import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
 import AgenaOperationPart from '@/components/chat/AgenaOperationPart.vue'
+import AgenaContentText from '@/components/chat/AgenaContentText.vue'
+import type { ContentRef } from '@/lib/content'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { durablePartContent, transcriptPartText } from '@/pages/chat/transcriptProjection'
 import {
@@ -36,6 +38,8 @@ const ui = useUiStore()
 const status = computed(() => partStatusPresentation(props.part.status))
 const body = computed(() => transcriptPartText(props.part.source))
 const content = computed(() => durablePartContent(props.part.source))
+const resources = computed(() => Array.isArray(content.value.resources)
+  ? content.value.resources as unknown as ContentRef[] : [])
 const attachments = computed(() => attachmentPresentations(props.part))
 const commands = computed(() => commandPresentations(props.part))
 const failure = computed(() => errorPresentation(props.part))
@@ -128,7 +132,12 @@ function openAttachment(path: string, url: string) {
 
     <div v-if="expanded" class="ml-5 min-w-0 rounded-r-md border-l border-border/60 bg-muted/[0.08] pb-1 pl-4 pr-1">
       <div v-if="part.kind === 'answer' || part.kind === 'text_segment'" class="py-1 text-sm leading-relaxed">
+        <template v-if="resources.length && sessionId">
+          <AgenaContentText v-for="resource in resources" :key="resource.resource_id"
+            :resource="resource" :session-id="sessionId" :source-path="sourcePath" />
+        </template>
         <MarkdownRenderer
+          v-if="body || !resources.length"
           :content="body"
           mode="markdown"
           :stream="Boolean(streaming)"
@@ -136,6 +145,10 @@ function openAttachment(path: string, url: string) {
         />
       </div>
 
+      <div v-else-if="part.kind === 'reasoning' && resources.length && sessionId" class="py-1">
+        <AgenaContentText v-for="resource in resources" :key="resource.resource_id"
+          :resource="resource" :session-id="sessionId" plain />
+      </div>
       <pre
         v-else-if="part.kind === 'reasoning'"
         class="overflow-x-auto whitespace-pre-wrap break-words py-1 font-mono text-xs leading-relaxed text-muted-foreground"

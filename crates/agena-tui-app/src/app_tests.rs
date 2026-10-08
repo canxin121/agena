@@ -22,10 +22,10 @@ mod ui;
 #[cfg(test)]
 mod parts_fixtures {
     use agena_api::part::ErrorPartResource;
-    use agena_api::resource::SessionTranscriptPart;
+    use agena_api::part::PartResource;
 
-    pub(super) fn run(part_id: i64, role: &str, state: &str) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    pub(super) fn run(part_id: i64, role: &str, state: &str) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -38,11 +38,12 @@ mod parts_fixtures {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: None,
+            ..Default::default()
         }
     }
 
-    pub(super) fn text(run_id: i64, part_id: i64, role: &str, text: &str) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    pub(super) fn text(run_id: i64, part_id: i64, role: &str, text: &str) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -55,6 +56,7 @@ mod parts_fixtures {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         }
     }
 
@@ -63,8 +65,8 @@ mod parts_fixtures {
         part_id: i64,
         role: &str,
         problem: agena_failure::UserProblem,
-    ) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    ) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -78,6 +80,7 @@ mod parts_fixtures {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         }
     }
 
@@ -86,8 +89,8 @@ mod parts_fixtures {
         part_id: i64,
         role: &str,
         summary: Vec<String>,
-    ) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    ) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -100,6 +103,7 @@ mod parts_fixtures {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         }
     }
 
@@ -109,8 +113,8 @@ mod parts_fixtures {
         role: &str,
         summary: &str,
         detail: &str,
-    ) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    ) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -127,16 +131,12 @@ mod parts_fixtures {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         }
     }
 
-    pub(super) fn paste(
-        run_id: i64,
-        part_id: i64,
-        role: &str,
-        text: &str,
-    ) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    pub(super) fn paste(run_id: i64, part_id: i64, role: &str, text: &str) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -149,16 +149,12 @@ mod parts_fixtures {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         }
     }
 
-    pub(super) fn file_ref(
-        run_id: i64,
-        part_id: i64,
-        role: &str,
-        path: &str,
-    ) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    pub(super) fn file_ref(run_id: i64, part_id: i64, role: &str, path: &str) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
@@ -171,6 +167,7 @@ mod parts_fixtures {
             created_at_ms: part_id * 10,
             parent_part_id: None,
             run_id: Some(run_id),
+            ..Default::default()
         }
     }
 }
@@ -583,11 +580,11 @@ macro_rules! api_message_part {
 /// and the reply handler's cleanup.
 #[cfg(test)]
 mod interaction_part_routing_tests {
+    use agena_api::part::PartResource;
     use agena_api::resource::{
         PendingInteractiveRequest, PendingInteractiveRequestResource,
         SessionExecutionContextResource, SessionExecutionResource, SessionLifecycleState,
-        SessionRelationKind, SessionResource, SessionState, SessionTranscriptPart,
-        SessionUsageResource,
+        SessionRelationKind, SessionResource, SessionState, SessionUsageResource,
     };
     use agena_domain::{UserInputKind, UserInputQuestion, UserInputSource};
     use chrono::Utc;
@@ -678,8 +675,8 @@ mod interaction_part_routing_tests {
         }
     }
 
-    fn run_marker() -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    fn run_marker() -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id: 3,
@@ -692,6 +689,7 @@ mod interaction_part_routing_tests {
             created_at_ms: 30,
             parent_part_id: None,
             run_id: None,
+            ..Default::default()
         }
     }
 
@@ -700,9 +698,9 @@ mod interaction_part_routing_tests {
     /// is no separate durable interaction part).
     fn operation_tool_call_part_with_request(
         request: agena_domain::UserInputRequest,
-    ) -> SessionTranscriptPart {
+    ) -> PartResource {
         let request = serde_json::to_value(request).expect("request serializes");
-        SessionTranscriptPart {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id: 5,
@@ -729,14 +727,15 @@ mod interaction_part_routing_tests {
             created_at_ms: 50,
             parent_part_id: None,
             run_id: Some(3),
+            ..Default::default()
         }
     }
 
-    fn operation_tool_call_part() -> SessionTranscriptPart {
+    fn operation_tool_call_part() -> PartResource {
         operation_tool_call_part_with_request(domain_request())
     }
 
-    fn parts() -> Vec<SessionTranscriptPart> {
+    fn parts() -> Vec<PartResource> {
         vec![run_marker(), operation_tool_call_part()]
     }
 
@@ -776,7 +775,7 @@ mod interaction_part_routing_tests {
 
     fn execution_with(
         pending: Vec<PendingInteractiveRequestResource>,
-        parts: Vec<SessionTranscriptPart>,
+        parts: Vec<PartResource>,
     ) -> SessionExecutionResource {
         let state = if pending.is_empty() {
             SessionState::Ready { last_failure: None }
@@ -788,6 +787,8 @@ mod interaction_part_routing_tests {
             }
         };
         SessionExecutionResource {
+            receipt: None,
+            part_page: None,
             session: SessionResource {
                 state,
                 ..session_resource()
@@ -2129,6 +2130,7 @@ mod interaction_part_routing_tests {
 
 #[cfg(test)]
 mod session_activity_state_machine_tests {
+    use agena_api::part::PartResource;
     use chrono::Utc;
     use ratatui::layout::Rect;
 
@@ -2138,7 +2140,7 @@ mod session_activity_state_machine_tests {
         PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionActionResource,
         PermissionRequest, SessionExecutionContextResource, SessionExecutionResource,
         SessionLifecycleState, SessionRelationKind, SessionResource, SessionState,
-        SessionTranscriptPart, SessionUsageResource,
+        SessionUsageResource,
     };
 
     const SESSION_ID: i64 = 7;
@@ -2158,11 +2160,10 @@ mod session_activity_state_machine_tests {
         app
     }
 
-    fn execution_with(
-        state: SessionState,
-        parts: Vec<SessionTranscriptPart>,
-    ) -> SessionExecutionResource {
+    fn execution_with(state: SessionState, parts: Vec<PartResource>) -> SessionExecutionResource {
         SessionExecutionResource {
+            receipt: None,
+            part_page: None,
             session: SessionResource {
                 id: SESSION_ID,
                 parent_id: None,
@@ -2318,19 +2319,19 @@ mod session_activity_state_machine_tests {
 #[cfg(test)]
 mod transcript_character_cursor_tests {
     use super::super::{
-        ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptFixture,
-        TranscriptMoveDirection, TranscriptState, TranscriptTextPosition, Utc,
+        ExecutionStatus, RunRole, RunStatus, TranscriptFixture, TranscriptMoveDirection,
+        TranscriptRun, TranscriptState, TranscriptTextPosition, Utc,
     };
     use super::parts_fixtures;
     use unicode_width::UnicodeWidthStr;
 
-    fn message(id: i64, text: &str) -> RunResource {
+    fn message(id: i64, text: &str) -> TranscriptRun {
         message_with_role(id, RunRole::Assistant, text)
     }
 
-    fn message_with_role(id: i64, role: RunRole, text: &str) -> RunResource {
+    fn message_with_role(id: i64, role: RunRole, text: &str) -> TranscriptRun {
         let now = Utc::now();
-        RunResource {
+        TranscriptRun {
             id,
             session_id: 7,
             role,
@@ -2659,7 +2660,7 @@ mod transcript_character_cursor_tests {
             session_id: Some(7),
             messages: vec![
                 message_with_role(1, RunRole::User, "user request"),
-                RunResource {
+                TranscriptRun {
                     id: 2,
                     session_id: 7,
                     role: RunRole::Assistant,
@@ -3434,8 +3435,8 @@ mod transcript_mouse_scroll_tests {
     }
 
     use super::super::{
-        PendingUserMessage, RunResource, RunRole, RunStatus, TranscriptMoveDirection,
-        TranscriptNodeKey, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
+        PendingUserMessage, RunRole, RunStatus, TranscriptMoveDirection, TranscriptNodeKey,
+        TranscriptRun, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
     };
 
     #[test]
@@ -3581,7 +3582,7 @@ mod transcript_mouse_scroll_tests {
     #[test]
     fn scrollbar_relocation_collapses_a_block_and_selects_the_directional_edge() {
         let now = Utc::now();
-        let message = |id: i64, text: String| RunResource {
+        let message = |id: i64, text: String| TranscriptRun {
             id,
             session_id: 7,
             role: RunRole::Assistant,
@@ -3655,7 +3656,7 @@ mod transcript_mouse_scroll_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 1,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -3784,7 +3785,7 @@ mod transcript_mouse_scroll_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 1,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -3839,7 +3840,7 @@ mod transcript_paging_tests {
     use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus, ReasoningPart};
 
     use super::super::{
-        PendingUserMessage, RunResource, RunRole, RunStatus, TranscriptNodeKey, TranscriptState,
+        PendingUserMessage, RunRole, RunStatus, TranscriptNodeKey, TranscriptRun, TranscriptState,
         TranscriptTextPosition, Utc,
     };
 
@@ -4011,7 +4012,7 @@ mod transcript_paging_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 18,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -4141,11 +4142,14 @@ mod transcript_paging_tests {
 #[cfg(test)]
 mod transcript_activity_copy_tests {
     use super::super::{
-        ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptNodeKey, TranscriptState,
+        ExecutionStatus, RunRole, RunStatus, TranscriptNodeKey, TranscriptRun, TranscriptState,
         TranscriptTextPosition, TranscriptVisualSelectionMode, Utc,
     };
 
-    fn reasoning_activity(message_id: i64, part_id: i64) -> agena_api::part::PartResource {
+    fn reasoning_activity(
+        message_id: i64,
+        part_id: i64,
+    ) -> agena_tui_transcript::display_types::TranscriptPart {
         crate::TranscriptFixture::reasoning_part(
             part_id,
             message_id,
@@ -4159,14 +4163,16 @@ mod transcript_activity_copy_tests {
         )
     }
 
-    fn folded_run_parts() -> Vec<agena_api::part::PartResource> {
+    fn folded_run_parts() -> Vec<agena_tui_transcript::display_types::TranscriptPart> {
         (51..59).map(|part| reasoning_activity(19, part)).collect()
     }
 
-    fn folded_run_transcript(parts: Vec<agena_api::part::PartResource>) -> TranscriptState {
+    fn folded_run_transcript(
+        parts: Vec<agena_tui_transcript::display_types::TranscriptPart>,
+    ) -> TranscriptState {
         TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 19,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -4299,8 +4305,8 @@ mod transcript_expansion_tests {
     use agena_domain::{ExecutionStatus, ReasoningPart};
 
     use super::super::{
-        RunResource, RunRole, RunStatus, TranscriptMoveDirection, TranscriptNodeKey,
-        TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
+        RunRole, RunStatus, TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind,
+        TranscriptRun, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
         transcript_text_selection_text,
     };
     use super::parts_fixtures;
@@ -4518,7 +4524,7 @@ mod transcript_expansion_tests {
             parts: std::iter::once(parts_fixtures::run(3, "assistant", "completed"))
                 .chain(initial_visible)
                 .collect(),
-            transcript_folds: vec![agena_api::live::SessionTranscriptFoldResource {
+            transcript_folds: vec![agena_tui_transcript::TranscriptFold {
                 run_id: 3,
                 run_ids: vec![3],
                 anchor_part_id: 7,
@@ -4588,7 +4594,7 @@ mod transcript_expansion_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: message_id,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -4664,7 +4670,7 @@ mod transcript_expansion_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: message_id,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -4749,7 +4755,7 @@ mod transcript_expansion_tests {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             messages: vec![
-                RunResource {
+                TranscriptRun {
                     id: 17,
                     session_id: 7,
                     role: RunRole::User,
@@ -4761,7 +4767,7 @@ mod transcript_expansion_tests {
                     part_count: 1,
                     parts: Some(vec![preceding_part]),
                 },
-                RunResource {
+                TranscriptRun {
                     id: 18,
                     session_id: 7,
                     role: RunRole::Assistant,
@@ -4811,7 +4817,7 @@ mod transcript_expansion_tests {
     #[test]
     fn vertical_navigation_stops_on_messages_and_blocks_before_entering_text() {
         let now = Utc::now();
-        let message = |id: i64, role: RunRole, text: &str| RunResource {
+        let message = |id: i64, role: RunRole, text: &str| TranscriptRun {
             id,
             session_id: 7,
             role,
@@ -4929,7 +4935,7 @@ mod transcript_expansion_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 10,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -5069,7 +5075,7 @@ mod transcript_expansion_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 10,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -5182,7 +5188,7 @@ mod transcript_expansion_tests {
     #[test]
     fn single_formulas_remain_atomic_while_inline_formula_canvases_form_one_semantic_line() {
         let now = Utc::now();
-        let message = |id, text: &str| RunResource {
+        let message = |id, text: &str| TranscriptRun {
             id,
             session_id: 7,
             role: RunRole::Assistant,
@@ -5295,7 +5301,7 @@ mod transcript_expansion_tests {
         );
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 12,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -5375,7 +5381,7 @@ mod transcript_expansion_tests {
         );
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 13,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -5453,7 +5459,7 @@ mod transcript_expansion_tests {
         let context = agena_tui_media::test_support::test_math_render_context(config);
         let mut native_transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 14,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -5503,7 +5509,7 @@ mod transcript_expansion_tests {
 
         let mut formula_only = TranscriptState {
             session_id: Some(7),
-            messages: vec![RunResource {
+            messages: vec![TranscriptRun {
                 id: 15,
                 session_id: 7,
                 role: RunRole::Assistant,
@@ -5640,14 +5646,14 @@ mod transcript_expansion_tests {
 mod live_transcript_tests {
     use super::super::{PendingUserMessage, TranscriptState};
     use super::parts_fixtures;
-    use agena_api::resource::SessionTranscriptPart;
+    use agena_api::part::PartResource;
     use agena_domain::{ComposerDocument, ComposerNode};
 
     /// A completed assistant run carrying a tall multi-line body, used to
     /// exercise viewport follow/recovery across full parts refreshes. Each
     /// line is its own markdown paragraph so the transcript renderer keeps them as
     /// separate focusable rows instead of folding them into soft breaks.
-    fn tall_assistant(prefix: &str, run_id: i64, text_id: i64) -> Vec<SessionTranscriptPart> {
+    fn tall_assistant(prefix: &str, run_id: i64, text_id: i64) -> Vec<PartResource> {
         let body = (0..40)
             .map(|line| format!("{prefix} line {line}"))
             .collect::<Vec<_>>()

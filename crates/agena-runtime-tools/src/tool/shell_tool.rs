@@ -275,7 +275,7 @@ fn normalize_foreground_execution(
         apply_patch: _,
     } = execution;
 
-    let (status, description, exit_code, output_text, completion_reason, output_archive) =
+    let (status, description, exit_code, output_text, completion_reason, output_resource) =
         match output {
             ToolPayloadOutput::Shell {
                 status,
@@ -283,7 +283,7 @@ fn normalize_foreground_execution(
                 exit_code,
                 output,
                 completion_reason,
-                output_archive,
+                output_resource,
                 ..
             } => (
                 status.unwrap_or(ProcessStatus::Exited),
@@ -291,7 +291,7 @@ fn normalize_foreground_execution(
                 exit_code,
                 output.unwrap_or_else(|| view.output_text.clone()),
                 completion_reason,
-                output_archive,
+                output_resource,
             ),
             other => {
                 return Err(ToolError::invalid_input(format!(
@@ -307,7 +307,7 @@ fn normalize_foreground_execution(
         .insert("status".to_string(), status.to_string());
 
     let output = ToolPayloadOutput::Shell {
-        output_archive,
+        output_resource,
         terminal: None,
         dropped_bytes: 0,
         action: "exec".to_string(),
@@ -346,7 +346,7 @@ async fn execute_managed_launch_async(
         call_id,
         prepared_shell_command,
         launch_provenance: _,
-        live_output: _,
+        output,
     } = context;
     let reserved_process_id = session_id
         .zip(call_id)
@@ -403,6 +403,7 @@ async fn execute_managed_launch_async(
                 launch.as_ref(),
                 reserved_process_id,
                 process_owner,
+                output,
                 cancel,
             );
         }
@@ -420,12 +421,21 @@ async fn execute_managed_launch_async(
                 env,
                 launch,
             },
-            reserved_process_id,
-            process_owner,
+            SpawnDestination {
+                reserved_process_id,
+                owner: process_owner,
+                output,
+            },
             &cancel,
         )
     })
     .await
+}
+
+struct SpawnDestination {
+    reserved_process_id: Option<String>,
+    owner: crate::TerminalOwner,
+    output: Option<agena_storage::content::ContentWriter>,
 }
 
 fn execute_spawn_prepared(
@@ -434,10 +444,14 @@ fn execute_spawn_prepared(
     command: &crate::part::ShellCommandInput,
     watch: Option<&ShellWatchPolicy>,
     prepared: PreparedShellCommand,
-    reserved_process_id: Option<String>,
-    owner: crate::TerminalOwner,
+    destination: SpawnDestination,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let SpawnDestination {
+        reserved_process_id,
+        owner,
+        output,
+    } = destination;
     let PreparedShellCommand {
         command: final_command,
         cwd: final_cwd,
@@ -460,6 +474,7 @@ fn execute_spawn_prepared(
     let started = registry
         .start_confirmed(
             StartParams {
+                output,
                 owner: Some(owner),
                 argv: Some(argv),
                 process_id: reserved_process_id,
@@ -550,7 +565,7 @@ fn render_watch_update(summary: ProcessSummary, enabled: bool) -> ToolPayloadExe
             "watch_remove"
         }
         .into(),
-        output_archive: summary.output_archive.clone(),
+        output_resource: summary.output_resource.clone(),
         terminal: None,
         dropped_bytes: 0,
         shell: None,
@@ -659,7 +674,7 @@ fn render_spawn(
         terminal: None,
         dropped_bytes: 0,
         action: action.to_string(),
-        output_archive: summary.output_archive.clone(),
+        output_resource: summary.output_resource.clone(),
         shell: Some(shell),
         background: true,
         ready: summary.ready,
@@ -722,7 +737,7 @@ fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
         terminal: None,
         dropped_bytes: 0,
         action: "list".to_string(),
-        output_archive: None,
+        output_resource: None,
         shell: None,
         background: true,
         ready: false,
@@ -758,9 +773,8 @@ fn render_logs(read: MonitorRead, action: &str) -> ToolPayloadExecution {
         read.exit_code,
         read.completion_reason.as_deref(),
     );
-    if let Some(archive) = &read.output_archive {
-        body.push('\n');
-        body.push_str(&crate::process_output_archive::archive_hint(archive));
+    if let Some(resource) = &read.output_resource {
+        body.push_str(&format!("\nOutput resource: {}", resource.resource_id));
     }
     if read.next_event_offset != 0 {
         body.push_str(&format!("\n[partial event: continue with since_seq={} and event_offset={} (next_event_offset); no remaining text was discarded]", read.last_seq, read.next_event_offset));
@@ -796,7 +810,7 @@ fn render_logs(read: MonitorRead, action: &str) -> ToolPayloadExecution {
         terminal: None,
         dropped_bytes: 0,
         action: action.to_string(),
-        output_archive: read.output_archive.clone(),
+        output_resource: read.output_resource.clone(),
         shell: None,
         background: true,
         ready: read.ready,
@@ -844,7 +858,7 @@ fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
         terminal: None,
         dropped_bytes: 0,
         action: "stop".to_string(),
-        output_archive: summary.output_archive.clone(),
+        output_resource: summary.output_resource.clone(),
         shell: None,
         background: true,
         ready: summary.ready,

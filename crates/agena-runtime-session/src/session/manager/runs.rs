@@ -35,17 +35,7 @@ fn visible_run_text<'a>(parts: impl Iterator<Item = &'a Part>) -> String {
                     Some(command_reference_from_command_ref(&command).summary())
                 }
                 Ok(TypedContent::ToolCall(tool)) => {
-                    // A foreground command inside a delegated task is still
-                    // running. Project its independent display tail so the
-                    // task log's existing run cursor can update in place.
-                    (part.state == PartState::InProgress)
-                        .then(|| {
-                            tool.live_output()
-                                .filter(|text| !text.trim().is_empty())
-                                .map(str::to_owned)
-                        })
-                        .flatten()
-                        .or_else(|| tool_visible_text_lossy(&operation_from_tool_call(&tool)))
+                    tool_visible_text_lossy(&operation_from_tool_call(&tool))
                 }
                 Ok(TypedContent::Think(_)) => None,
                 _ => part.summary.clone(),
@@ -73,40 +63,29 @@ fn bounded_run_text(parts: &[&Part], max_bytes: usize) -> String {
                 .content
                 .as_str()
                 .or_else(|| part.content.get("text").and_then(serde_json::Value::as_str)),
-            "tool_call" => {
-                let live = (part.state == PartState::InProgress)
-                    .then(|| {
-                        part.content
-                            .pointer("/metadata/live_output")
-                            .and_then(serde_json::Value::as_str)
-                    })
-                    .flatten();
-                live.filter(|text| !text.trim().is_empty())
-                    .or_else(|| {
-                        part.content
-                            .pointer("/output/payload/text")
-                            .and_then(serde_json::Value::as_str)
-                    })
-                    .or_else(|| {
-                        part.content
-                            .pointer("/output/payload")
-                            .and_then(serde_json::Value::as_str)
-                    })
-                    .filter(|text| !text.trim().is_empty())
-                    .or_else(|| {
-                        part.content
-                            .pointer("/error/failure/user/fallback")
-                            .and_then(serde_json::Value::as_str)
-                            .filter(|text| !text.trim().is_empty())
-                    })
-                    .or_else(|| {
-                        part.content
-                            .get("name")
-                            .and_then(serde_json::Value::as_str)
-                            .filter(|text| !text.trim().is_empty())
-                    })
-                    .or(part.summary.as_deref())
-            }
+            "tool_call" => part
+                .content
+                .pointer("/output/payload/text")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    part.content
+                        .pointer("/output/payload")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| {
+                    part.content
+                        .pointer("/error/failure/user/fallback")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                })
+                .or_else(|| {
+                    part.content
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                })
+                .or(part.summary.as_deref()),
             _ => part.summary.as_deref(),
         };
         let command;
@@ -218,13 +197,13 @@ mod bounded_log_tests {
     }
 
     #[test]
-    fn tool_logs_keep_live_output_and_terminal_error_and_title_fallbacks() {
+    fn tool_logs_use_final_output_error_and_title_fallbacks() {
         let mut tool = part(
             "tool_call",
-            json!({"name": "shell", "output": {"payload": {"text": "completed"}}, "metadata": {"live_output": "still running"}, "error": {"failure": {"user": {"fallback": "failed"}}}}),
+            json!({"name": "shell", "output": {"payload": {"text": "completed"}}, "error": {"failure": {"user": {"fallback": "failed"}}}}),
         );
         tool.state = PartState::InProgress;
-        assert_eq!(bounded_run_text(&[&tool], 100), "still running");
+        assert_eq!(bounded_run_text(&[&tool], 100), "completed");
         tool.state = PartState::Completed;
         assert_eq!(bounded_run_text(&[&tool], 100), "completed");
         tool.content["output"] = json!({"payload": "plain output"});
@@ -1430,6 +1409,11 @@ impl SessionManager {
             }
         }
 
+        let resolved_for_result = crate::session::prompt_window::resolve_content_for_model(
+            &session,
+            self.store.facade.contents(),
+        )
+        .await?;
         Ok(SessionSubtaskResponse {
             task_id,
             parent_session_id: parent.id,
@@ -1438,7 +1422,7 @@ impl SessionManager {
             // Assistant text produced after the subtask's baseline: the
             // aggregate holds only parts created since the baseline marker, so
             // the last assistant text is the child's freshest reply.
-            final_text: session
+            final_text: resolved_for_result
                 .parts()
                 .iter()
                 .rev()

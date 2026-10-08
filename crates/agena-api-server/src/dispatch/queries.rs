@@ -20,6 +20,26 @@ pub async fn dispatch_query(
     query: Query,
 ) -> Result<QueryResult, ApplicationError> {
     match query {
+        Query::ReadContentText(params) => Ok(QueryResult::ContentText(
+            state.application().read_content_text(params).await?,
+        )),
+        Query::ReadParts(params) => Ok(QueryResult::Parts(
+            state.application().read_parts(params).await?,
+        )),
+        Query::ReadRuns(params) => Ok(QueryResult::Parts(
+            state.application().read_runs(params).await?,
+        )),
+        Query::ReadContent(params) => Ok(QueryResult::Content(
+            state
+                .application()
+                .read_content(
+                    params.session_id,
+                    params.resource_id,
+                    params.after,
+                    params.max_bytes,
+                )
+                .await?,
+        )),
         Query::ListWorkspaces(ListWorkspacesParams {
             cursor,
             limit,

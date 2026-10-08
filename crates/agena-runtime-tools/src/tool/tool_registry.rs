@@ -344,19 +344,9 @@ pub struct ToolRuntimeContext {
     /// Exact assistant tool receipt for durable child work created by this
     /// invocation. Application/host calls leave this empty.
     pub launch_provenance: Option<agena_scheduler::ScheduledJobLaunchProvenance>,
-    /// Live output of a foreground process, forwarded while it still runs.
-    /// Only a streaming invocation attaches one; every other call leaves it
-    /// empty and keeps the collect-at-exit behaviour.
-    pub live_output: Option<crate::tool::shell::ShellOutputSink>,
-}
-
-/// Handle to a streaming tool execution.
-pub struct StreamingToolExecution {
-    pub stream_id: String,
-    pub chunks: tokio::sync::mpsc::Receiver<agena_plugin_host::sdk::ToolStreamChunk>,
-    pub end: tokio::sync::oneshot::Receiver<Result<ToolInvocationExecution, ToolError>>,
-    /// Native process snapshots replace the tail; plugin text deltas append.
-    pub output_mode: agena_domain::DeltaMode,
+    /// Generic source owned by this invocation. A background launch transfers
+    /// the writer to its process; foreground execution seals it before receipt.
+    pub output: Option<agena_storage::content::ContentWriter>,
 }
 
 /// Internal-only diagnostic carried to the failure projection boundary.
@@ -624,6 +614,7 @@ pub(super) struct CloudToolAdapterGate {
 #[derive(Clone)]
 /// Executor that runs tools with permissions.
 pub struct ToolExecutor {
+    pub(super) content_store: Option<Arc<dyn agena_storage::store::SessionStore>>,
     pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
     pub(super) principal: ExecutionPrincipal,
@@ -663,7 +654,7 @@ pub trait ExecutionPermissionInspector: Send + Sync {
 
 use super::{
     Arc, AskUserToolInput, Error, ExecutionPrincipal, MonitorService, PathBuf, PluginHost,
-    RegisteredTool, ShellError, ToolInvocationExecution,
+    RegisteredTool, ShellError,
 };
 use agena_domain::ToolApiFunction;
 use agena_tool::PreparedShellCommand;

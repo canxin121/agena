@@ -429,16 +429,16 @@ test.each([0, 1500])(
               },
             ],
           })
-        if (url.pathname === '/api/v1/sessions/99904/transcript')
+        if (url.pathname === '/api/v1/sessions/99904/runs')
           return new Promise<Response>((resolve) =>
             setTimeout(
               () =>
                 resolve(
-                  reply('session:99904:transcript', {
+                  reply('session:99904:parts', {
                     session_id: 99904,
                     version: 1,
                     parts: [],
-                    user_message_count: 0,
+                    runs: [], user_message_count: 0,
                     page: { has_more: false },
                   }),
                 ),
@@ -554,7 +554,7 @@ test('metadata, deletion and execution writes reconcile mounted lists without SS
           : `workspace:${previous.workspace_id}:sessions:roots`,
         `workspace:${previous.workspace_id}:stats`,
         `session:${previous.id}:state`,
-        `session:${previous.id}:transcript`,
+        `session:${previous.id}:parts`,
       ])
         bump(key)
       for (const bucket of ['pinned', 'favorite', 'running', 'attention', 'recent']) {
@@ -575,7 +575,7 @@ test('metadata, deletion and execution writes reconcile mounted lists without SS
         `sessions:bucket:${kind}:count`,
       ]),
       ...workspaces.flatMap((id) => [`workspace:${id}:sessions:roots`, `workspace:${id}:stats`]),
-      ...rows.flatMap((row) => [`session:${row.id}:state`, `session:${row.id}:transcript`]),
+      ...rows.flatMap((row) => [`session:${row.id}:state`, `session:${row.id}:parts`]),
     ])
       bump(key)
     setFetch((url, init) => {
@@ -642,12 +642,12 @@ test('metadata, deletion and execution writes reconcile mounted lists without SS
       }
       if (url.pathname === `/api/v1/sessions/${sid}/state`)
         return reply(`session:${sid}:state`, { session: own, parts: [], background_activities: [] })
-      if (url.pathname === `/api/v1/sessions/${sid}/transcript`)
-        return reply(`session:${sid}:transcript`, {
+      if (url.pathname === `/api/v1/sessions/${sid}/runs`)
+        return reply(`session:${sid}:parts`, {
           session_id: own.id,
           version: own.version,
           parts: [],
-          user_message_count: 0,
+          runs: [], user_message_count: 0,
           page: { has_more: false },
         })
       if (init?.method === 'POST' && (url.pathname.endsWith('/fork') || url.pathname.endsWith('/rewind'))) {
@@ -951,12 +951,12 @@ test('unchanged mounted conversations and activity list recover with revisions a
     let activityRows: Array<{ id: string; kind: string; status: string; session_id: number }> = []
     setFetch((url) => {
       const sid = Number(url.pathname.match(/sessions\/(\d+)/)?.[1])
-      if (url.pathname.endsWith('/transcript'))
-        return reply(`session:${sid}:transcript`, {
+      if (url.pathname.endsWith('/runs'))
+        return reply(`session:${sid}:parts`, {
           session_id: sid,
           version: 1,
           parts: [],
-          user_message_count: 0,
+          runs: [], user_message_count: 0,
           page: { has_more: false },
         })
       if (url.pathname.endsWith('/state'))
@@ -985,11 +985,11 @@ test('unchanged mounted conversations and activity list recover with revisions a
       expect(calls.length).toBeGreaterThan(0)
       expect(calls.every((url) => url.pathname === '/api/v1/changes/revisions')).toBe(true)
       calls.length = 0
-      tokens.set('session:9961:transcript', 'granularity-http:31')
+      tokens.set('session:9961:parts', 'granularity-http:31')
       chat.reconcileLiveState()
       await advance(3000)
-      expect(calls.filter((url) => url.pathname.endsWith('/transcript')).map((url) => url.pathname)).toEqual([
-        '/api/v1/sessions/9961/transcript',
+      expect(calls.filter((url) => url.pathname.endsWith('/runs')).map((url) => url.pathname)).toEqual([
+        '/api/v1/sessions/9961/runs',
       ])
       expect(calls.some((url) => url.pathname.includes('/9962/') || url.pathname.endsWith('/state'))).toBe(false)
       calls.length = 0

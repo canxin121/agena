@@ -237,6 +237,21 @@ async fn an_unguarded_path_class_is_not_promised_to_the_approval_model() {
             },
         );
     }
+    // The test isolates the two classes even when managed state is redirected
+    // into a temporary directory by the test runner.
+    let managed = agena_runtime_tools::agena_home_dir()
+        .join("projects")
+        .to_string_lossy()
+        .into_owned();
+    for pattern in [managed.clone(), format!("{managed}/**")] {
+        path.rules.insert(
+            pattern,
+            agena_domain::PathAccessModes {
+                read: None,
+                write: Some(agena_domain::PermissionMode::Allow),
+            },
+        );
+    }
     let (_, requests, _, _) = classify_with_permission_config(
         vec![ApprovalReply::Verdict {
             name: "approve_action",

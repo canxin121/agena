@@ -126,7 +126,7 @@ impl App {
                 result,
             } => {
                 if self.transcript.refresh_in_flight_since == Some(requested_at) {
-                    self.handle_session_refreshed(session_id, result);
+                    self.handle_session_refreshed(session_id, *result);
                 }
             }
             AppMessage::SessionMessageSubmitted {
@@ -242,7 +242,7 @@ impl App {
                 live,
             } => {
                 if generation == self.subscription_generation {
-                    self.handle_session_event_arrived(session_id, live);
+                    self.handle_session_event_arrived(session_id, *live);
                 }
             }
             AppMessage::RunCancelled { session_id, result } => {
@@ -609,7 +609,9 @@ impl App {
             return;
         }
         let key = (part_id, section);
-        self.transcript.tool_detail_allowed_at.insert(key, Instant::now() + std::time::Duration::from_millis(750));
+        self.transcript
+            .tool_detail_allowed_at
+            .insert(key, Instant::now() + std::time::Duration::from_millis(750));
         match result {
             Ok(resource) => {
                 if resource.part_id != part_id || resource.section != section {
@@ -628,7 +630,10 @@ impl App {
                 let failures = self.transcript.tool_detail_failures.entry(key).or_default();
                 *failures = failures.saturating_add(1).min(6);
                 let delay = (5000_u64 * 2_u64.pow(*failures - 1)).min(60_000);
-                self.transcript.tool_detail_allowed_at.insert(key, Instant::now() + std::time::Duration::from_millis(delay));
+                self.transcript.tool_detail_allowed_at.insert(
+                    key,
+                    Instant::now() + std::time::Duration::from_millis(delay),
+                );
                 self.transcript.tool_detail_pending.insert(key);
                 self.flash_error(error);
             }

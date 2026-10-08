@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(super) fn params(script: &str) -> TerminalStartParams {
     let workdir = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     TerminalStartParams {
+        output: None,
         process_id: None,
         owner: TerminalOwner {
             workspace: workdir.clone(),

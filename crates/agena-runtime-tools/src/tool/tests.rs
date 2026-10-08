@@ -16,6 +16,7 @@ use agena_plugin_host::{
     ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
 };
 
+mod content_reads;
 mod cron_persistence;
 #[cfg(unix)]
 mod terminal;

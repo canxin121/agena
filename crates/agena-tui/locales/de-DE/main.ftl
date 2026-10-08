@@ -1733,3 +1733,13 @@ overlay-provider-delete-adapter-last-body = Dies ist der letzte konfigurierte Ad
 overlay-provider-delete-model-body = Konfiguriertes Modell {$provider}/{$adapter}/{$model} löschen?
 
 permission-studio-page-tool-defaults = Werkzeugzugriff / Standardwerte
+
+# Generic inline content resources
+content-loading = Ausgabe wird geladen…
+content-active = Live-Ausgabe
+content-complete = Ausgabe abgeschlossen
+content-interrupted = Ausgabe unterbrochen
+content-gap = Ein Teil der ursprünglichen Ausgabe ist nicht mehr gespeichert.
+content-reconnecting = Ausgabe wird erneut verbunden…
+
+content-window = Ein Teil der Ausgabe liegt außerhalb des Anzeigefensters.

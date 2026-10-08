@@ -59,7 +59,7 @@ fn valid_key(key: &str) -> bool {
         .is_some_and(|id| id > 0);
     id && match fields.as_slice() {
         ["workspace", _, "sessions" | "stats"]
-        | ["session", _, "state" | "files" | "plan" | "transcript"]
+        | ["session", _, "state" | "files" | "plan" | "parts"]
         | ["part", _] => true,
         ["part", _, "input" | "metadata" | "output"] => true,
         ["workspace", _, "sessions", "roots"] => true,

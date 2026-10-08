@@ -32,7 +32,7 @@ use agena_storage::store::{
 use async_trait::async_trait;
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, DbErr, Statement,
-    Value,
+    TransactionTrait, Value,
 };
 
 use crate::{acquire_write_permit, is_sqlite_busy, transaction::begin_with_write_lock};
@@ -1117,6 +1117,144 @@ fn user_send_marker_content(execution_id: Option<&str>) -> serde_json::Value {
 
 #[async_trait]
 impl PersistenceEngine for SqliteEngine {
+    async fn referenced_content_ids(
+        &self,
+    ) -> Result<std::collections::HashSet<agena_domain::ContentId>, StoreError> {
+        let rows = self
+            .db()
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT DISTINCT json_extract(r.value, '$.resource_id') AS resource_id \
+             FROM agena_parts p, json_each(p.content, '$.resources') r \
+             WHERE EXISTS (SELECT 1 FROM agena_session_parts sp WHERE sp.part_id = p.part_id)"
+                    .to_owned(),
+            ))
+            .await
+            .map_err(map_db_err)?;
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.try_get("", "resource_id").map_err(map_db_err)?;
+                serde_json::from_value(serde_json::Value::String(id)).map_err(|error| {
+                    StoreError::Serialization(format!("Part resource identity: {error}"))
+                })
+            })
+            .collect()
+    }
+
+    async fn load_run_window(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        run_limit: usize,
+        part_limit: usize,
+    ) -> Result<agena_storage::store::SessionRunPage, StoreError> {
+        use agena_storage::store::{RunPartSummary, SessionRunPage};
+        let run_limit = run_limit.clamp(1, 32);
+        let part_limit = part_limit.clamp(1, 128);
+        // Metadata, counts and child windows share one SQLite read snapshot.
+        let txn = self.db().begin().await.map_err(map_db_err)?;
+        let meta = session_meta_tx(&txn, session_id).await?;
+        let mut values = vec![session_id.into()];
+        let position = if let Some(before) = before {
+            values.extend([
+                before.created_at_ms.into(),
+                before.created_at_ms.into(),
+                before.part_id.into(),
+            ]);
+            " AND (p.created_at_ms < ? OR (p.created_at_ms = ? AND p.part_id < ?))"
+        } else {
+            ""
+        };
+        let rows = txn.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.kind = 'run' AND p.visibility IN ('both','user'){position} ORDER BY p.created_at_ms DESC, p.part_id DESC LIMIT {}", run_limit + 1), values)).await.map_err(map_db_err)?;
+        let mut markers = decode_part_rows(rows).await?;
+        let has_more = markers.len() > run_limit;
+        markers.truncate(run_limit);
+        let next_cursor = markers.last().map(|p| PartCursor {
+            created_at_ms: p.created_at_ms,
+            part_id: p.part_id,
+        });
+        let mut parts = Vec::new();
+        let mut runs = Vec::new();
+        for marker in markers {
+            let count = txn.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS part_count FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.run_id = ? AND p.visibility IN ('both','user')",
+                [session_id.into(), marker.part_id.into()])).await.map_err(map_db_err)?.expect("aggregate row");
+            let count: i64 = count.try_get("", "part_count").map_err(map_db_err)?;
+            let rows = txn.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+                format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.run_id = ? AND p.visibility IN ('both','user') ORDER BY p.created_at_ms DESC, p.part_id DESC LIMIT {part_limit}"),
+                [session_id.into(), marker.part_id.into()])).await.map_err(map_db_err)?;
+            let children = decode_part_rows(rows).await?;
+            runs.push(RunPartSummary {
+                run_id: marker.part_id,
+                part_count: count as u64,
+                loaded_count: children.len() as u64,
+                next_cursor: if count as usize > children.len() {
+                    children.last().map(|p| PartCursor {
+                        created_at_ms: p.created_at_ms,
+                        part_id: p.part_id,
+                    })
+                } else {
+                    None
+                },
+            });
+            parts.push(marker);
+            parts.extend(children);
+        }
+        txn.commit().await.map_err(map_db_err)?;
+        parts.sort_unstable_by_key(|p| (p.created_at_ms, p.part_id));
+        Ok(SessionRunPage {
+            meta,
+            parts,
+            runs,
+            next_cursor,
+            has_more,
+        })
+    }
+
+    async fn load_visible_part_window(
+        &self,
+        session_id: i64,
+        run_ids: &[i64],
+        before: Option<PartCursor>,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError> {
+        if run_ids.len() > 32 {
+            return Err(StoreError::Conflict("too many run ids".to_owned()));
+        }
+        let limit = limit.clamp(1, 256);
+        let txn = self.db().begin().await.map_err(map_db_err)?;
+        let meta = session_meta_tx(&txn, session_id).await?;
+        let mut values = vec![session_id.into()];
+        let run_clause = if run_ids.is_empty() {
+            String::new()
+        } else {
+            values.extend(run_ids.iter().map(|id| Value::from(*id)));
+            format!(" AND p.run_id IN ({})", vec!["?"; run_ids.len()].join(","))
+        };
+        let position = if let Some(before) = before {
+            values.extend([
+                before.created_at_ms.into(),
+                before.created_at_ms.into(),
+                before.part_id.into(),
+            ]);
+            " AND (p.created_at_ms < ? OR (p.created_at_ms = ? AND p.part_id < ?))"
+        } else {
+            ""
+        };
+        let rows = txn.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.visibility IN ('both','user'){run_clause}{position} ORDER BY p.created_at_ms DESC, p.part_id DESC LIMIT {}", limit + 1), values)).await.map_err(map_db_err)?;
+        let mut parts = decode_part_rows(rows).await?;
+        let has_more = parts.len() > limit;
+        parts.truncate(limit);
+        txn.commit().await.map_err(map_db_err)?;
+        Ok(SessionPartPage {
+            meta,
+            parts,
+            has_more,
+        })
+    }
+
     async fn create_session(&self, new_session: NewSession) -> Result<SessionMeta, StoreError> {
         let db = self.db();
         run_write(db, move |txn| {
@@ -3485,24 +3623,18 @@ impl PersistenceEngine for SqliteEngine {
         workspace_id: i64,
         bundle: &str,
         now_ms: i64,
+        contents: &agena_storage::content::ContentHub,
     ) -> Result<i64, StoreError> {
         let bundle = bundle.to_owned();
-        let (parsed, parts) = PART_MUTATION_CODECS
-            .run(move || {
-                let mut parsed = agena_storage::store::parse(&bundle)?;
-                let parts = std::mem::take(&mut parsed.parts)
-                    .into_iter()
-                    .map(|part| {
-                        let (content, provider_state) = encode_part_payload(&part)?;
-                        Ok::<_, StoreError>((part, content, provider_state))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok::<_, StoreError>((parsed, parts))
-            })
+        let mut parsed = PART_MUTATION_CODECS
+            .run(move || agena_storage::store::parse(&bundle))
             .await
             .map_err(|error| StoreError::Database(format!("import worker failed: {error}")))??;
         let db = self.db();
-        run_write(db, move |txn| {
+        let resources = contents.clone();
+        let staged = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let created = staged.clone();
+        let outcome = run_write(db, move |txn| {
             Box::pin(async move {
                 let session_id = create_root_session_tx(
                     txn,
@@ -3517,12 +3649,46 @@ impl PersistenceEngine for SqliteEngine {
                 // Remap part ids so run_id/parent_part_id references stay
                 // valid even if the exported ids collide with existing parts.
                 let mut id_map: std::collections::HashMap<i64, i64> = Default::default();
-                let first_id = reserve_part_ids_tx(txn, parts.len())
+                let first_id = reserve_part_ids_tx(txn, parsed.parts.len())
                     .await
                     .map_err(map_db_err)?;
-                for (offset, (part, _, _)) in parts.iter().enumerate() {
-                    id_map.insert(part.part_id, first_id + offset as i64);
+                for (offset, part) in parsed.parts.iter().enumerate() {
+                    if part.part_id <= 0
+                        || id_map
+                            .insert(part.part_id, first_id + offset as i64)
+                            .is_some()
+                    {
+                        return Err(StoreError::Constraint(
+                            "imported Part ids must be positive and unique".into(),
+                        ));
+                    }
                 }
+                let archives = agena_storage::store::prepare_resource_import(
+                    &mut parsed.parts,
+                    parsed.resources,
+                    session_id,
+                    &id_map,
+                )?;
+                for archive in &archives {
+                    resources.restore(archive).await?;
+                    created
+                        .lock()
+                        .expect("staged resources lock")
+                        .push(archive.resource.resource_id);
+                }
+                let parts = TRANSACTION_CODECS
+                    .run(move || {
+                        parsed
+                            .parts
+                            .into_iter()
+                            .map(|part| {
+                                let (content, provider_state) = encode_part_payload(&part)?;
+                                Ok::<_, StoreError>((part, content, provider_state))
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .await
+                    .map_err(|error| StoreError::Serialization(error.to_string()))??;
                 let had_parts = !parts.is_empty();
                 for (mut remapped, content, provider_state) in parts {
                     let new_id = id_map[&remapped.part_id];
@@ -3543,7 +3709,16 @@ impl PersistenceEngine for SqliteEngine {
                 Ok(session_id)
             })
         })
-        .await
+        .await;
+        if outcome.is_err() {
+            let ids = std::mem::take(&mut *staged.lock().expect("staged resources lock"));
+            for id in ids {
+                if let Err(error) = contents.delete(id).await {
+                    tracing::warn!(%id, %error, "failed import resource cleanup deferred to maintenance");
+                }
+            }
+        }
+        outcome
     }
 }
 

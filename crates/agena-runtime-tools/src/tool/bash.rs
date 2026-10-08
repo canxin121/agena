@@ -165,18 +165,9 @@ pub(super) async fn execute_async(
     (request.command, request.env) =
         crate::shell_sandbox::protect_async(executor, request.command, input, request.env).await?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
-    let archive = crate::process_output_archive::OutputArchive::new(
-        executor.workspace_root(),
-        context.session_id,
-    );
     let execution = executor
-        .execute_shell_command_with_live(
-            &request,
-            context.live_output.clone(),
-            Some(archive.clone()),
-        )
+        .execute_shell_command_with_live(&request, context.output.clone())
         .await?;
-    archive.finish_async().await;
     executor.ensure_not_cancelled()?;
 
     let hook_input = CommandAfterInput {
@@ -205,17 +196,10 @@ pub(super) async fn execute_async(
             execution.aggregated_output.clone()
         }
     };
-    let output_archive = if archive
-        .discard_if_fully_visible(
-            &aggregated_for_display,
-            crate::process_output::text_budget(input.max_output_bytes, false),
-        )
-        .await
-    {
-        None
-    } else {
-        archive.snapshot()
-    };
+    let output_resource = context
+        .output
+        .as_ref()
+        .map(|writer| writer.resource().reference());
     render_execution(
         input,
         analysis,
@@ -226,7 +210,7 @@ pub(super) async fn execute_async(
         execution,
         aggregated_for_display,
         launch.as_ref(),
-        output_archive,
+        output_resource,
     )
 }
 
@@ -241,18 +225,14 @@ fn render_execution(
     execution: ShellOutput,
     aggregated_for_display: String,
     launch: Option<&agena_tool::shell::ShellLaunchSpec>,
-    output_archive: Option<agena_domain::ProcessOutputArchive>,
+    output_resource: Option<agena_domain::ContentRef>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let (mut trimmed_output, truncated) = truncate_shell_output_budget(
         &aggregated_for_display,
         crate::process_output::text_budget(input.max_output_bytes, false),
     );
-    if let Some(archive) = output_archive
-        .as_ref()
-        .filter(|archive| truncated || archive.truncated || archive.pending)
-    {
-        trimmed_output.push_str("\n\n");
-        trimmed_output.push_str(&crate::process_output_archive::archive_hint(archive));
+    if let Some(resource) = &output_resource {
+        trimmed_output.push_str(&format!("\n\nOutput resource: {}", resource.resource_id));
     }
     let exit_interpretation =
         interpret_exit_code(&analysis, execution.exit_code, execution.timed_out);
@@ -289,7 +269,7 @@ fn render_execution(
     };
 
     let output = ToolPayloadOutput::Shell {
-        output_archive,
+        output_resource,
         terminal: None,
         dropped_bytes: 0,
         action: "exec".to_string(),

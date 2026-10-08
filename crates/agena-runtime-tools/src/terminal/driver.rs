@@ -27,6 +27,7 @@ pub(super) fn run(
         }
     };
     state.mark_spawned();
+    state.publish_screen(true);
     let deadline = params
         .timeout_ms
         .and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms)));
@@ -72,6 +73,7 @@ pub(super) fn run(
             );
             return;
         }
+        state.publish_screen(false);
         let replies = match state.take_protocol_replies() {
             Ok(replies) => replies,
             Err(error) => {
@@ -186,13 +188,9 @@ fn drain(state: &State, process: &mut PtyProcess) -> io::Result<bool> {
     let mut bytes = [0; 4096];
     // A noisy process cannot starve input, cancellation or the exit check.
     for _ in 0..64 {
-        let permit = match state.archive.try_reserve() {
-            Ok(permit) => permit,
-            Err(()) => return Ok(false),
-        };
         match process.read(&mut bytes) {
             Ok(0) => return Ok(true),
-            Ok(n) => state.append_captured(&bytes[..n], permit),
+            Ok(n) => state.append(&bytes[..n]),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error),
@@ -299,22 +297,18 @@ fn cleanup(
 }
 
 fn final_drain(state: &State, process: &mut PtyProcess) {
-    // A burst near exit may be waiting behind bounded archive I/O. Give it a
+    // A final burst may still be queued in the PTY. Give it a
     // bounded drain window while keeping the whole stop within its 4 s budget.
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         match drain(state, process) {
             Ok(true) => break,
             Err(_) => {
-                state
-                    .archive
-                    .mark_partial("terminal output could not be fully drained during cleanup");
+                state.mark_partial("terminal output could not be fully drained during cleanup");
                 break;
             }
             Ok(false) if Instant::now() >= deadline => {
-                state
-                    .archive
-                    .mark_partial("terminal output drain exceeded the cleanup deadline");
+                state.mark_partial("terminal output drain exceeded the cleanup deadline");
                 break;
             }
             Ok(false) => std::thread::sleep(Duration::from_millis(5)),

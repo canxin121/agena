@@ -1274,62 +1274,18 @@ pub struct SessionUsageResource {
     pub model_max_output_tokens: Option<u32>,
 }
 
-/// One part in a session transcript projection.
-///
-/// The transcript is the session's ordered part list ("everything is a
-/// part). Each projected run contributes a `run`
-/// marker part followed by its content parts; `run_id` links content parts to
-/// their marker, and the marker's `state` mirrors the run/reply status.
-///
-/// This is a wire projection of the parts surfaced by the runtime
-/// `SessionQueryService`; `parent_part_id`/`run_id` are populated when the
-/// projection exposes them (both are `None` for fields the current projection
-/// does not carry). `kind`/`role`/`state` are stable strings.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SessionTranscriptPart {
-    pub revision: i64,
-    pub updated_at_ms: i64,
-    pub part_id: i64,
-    pub kind: String,
-    pub role: String,
-    pub state: String,
-    pub content: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presentation: Option<crate::live::HumanPresentationResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    pub created_at_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_part_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<i64>,
-}
-
-impl From<crate::live::PartResource> for SessionTranscriptPart {
-    fn from(value: crate::live::PartResource) -> Self {
-        Self {
-            part_id: value.part_id,
-            revision: value.revision,
-            updated_at_ms: value.updated_at_ms,
-            kind: value.kind,
-            role: value.role,
-            state: value.state,
-            content: value.content,
-            presentation: value.presentation,
-            summary: value.summary,
-            created_at_ms: value.created_at_ms,
-            parent_part_id: value.parent_part_id,
-            run_id: value.run_id,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Full execution view of a session.
 pub struct SessionExecutionResource {
+    /// Identity of this accepted command, independent of the returned Part window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<SessionExecutionReceiptResource>,
     pub session: SessionResource,
     /// The session's parts (ordered parts, including `run` markers).
-    pub parts: Vec<SessionTranscriptPart>,
+    pub parts: Vec<crate::part::PartResource>,
+    /// `None` means Parts were not requested. A bounded selection always
+    /// carries page metadata, including when its returned window is empty.
+    pub part_page: Option<crate::pagination::PageInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1341,6 +1297,13 @@ pub struct SessionExecutionResource {
     pub background_activities: Vec<BackgroundActivityResource>,
     pub execution: SessionExecutionContextResource,
     pub usage: SessionUsageResource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionExecutionReceiptResource {
+    pub execution_id: uuid::Uuid,
+    pub turn_id: uuid::Uuid,
+    pub reply_id: uuid::Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1545,23 +1508,6 @@ pub enum PartLoadMode {
     #[default]
     Summary,
     Full,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A message in a session transcript.
-pub struct RunResource {
-    pub id: i64,
-    pub session_id: i64,
-    pub role: RunRole,
-    pub state: RunStatus,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub metadata: RunMetadata,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<RunUsage>,
-    pub part_count: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parts: Option<Vec<crate::part::PartResource>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

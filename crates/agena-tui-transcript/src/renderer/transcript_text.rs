@@ -26,6 +26,22 @@ pub(crate) fn transcript_part_content<'a>(
 
 pub(crate) fn operation_block_copy_text(block: &ViewBlock, i18n: &I18n) -> String {
     match block {
+        ViewBlock::Content { .. } => String::new(),
+        ViewBlock::Progress {
+            phase,
+            completed,
+            total,
+            unit,
+            ..
+        } => format!(
+            "{}: {}{}{}",
+            phase,
+            completed,
+            total.map(|total| format!("/{total}")).unwrap_or_default(),
+            unit.as_ref()
+                .map(|unit| format!(" {unit}"))
+                .unwrap_or_default()
+        ),
         ViewBlock::Text { text, .. }
         | ViewBlock::Markdown { text, .. }
         | ViewBlock::Diff { diff: text, .. } => text.clone(),

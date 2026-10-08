@@ -27,6 +27,7 @@ use crate::error::ClientError;
 pub enum SubscriptionEvent {
     SessionChanged(SessionChangeResource),
     RuntimeSignal(RuntimeSignalResource),
+    Content(agena_domain::ContentPage),
     Lagged(u64),
 }
 
@@ -203,7 +204,12 @@ impl WsClient {
                     }
                     _ => {}
                 }
-                if let ServerMessage::Notification(notification) = server_msg {
+                if let ServerMessage::Content { subscription, page } = server_msg {
+                    let guard = subs_for_reader.lock().expect("subscription lock");
+                    if let Some(subscriber) = guard.inner.get(&subscription) {
+                        let _ = subscriber.events.send(SubscriptionEvent::Content(page));
+                    }
+                } else if let ServerMessage::Notification(notification) = server_msg {
                     let (id, item) = match notification {
                         Notification::SessionChanged {
                             subscription,
@@ -247,8 +253,25 @@ impl WsClient {
     }
 
     pub async fn subscribe(&self, request: SubscribeRequest) -> Result<Subscription, ClientError> {
+        self.open_subscription(|id| ClientMessage::Subscribe { id, request }, 256)
+            .await
+    }
+
+    pub async fn watch_content(
+        &self,
+        request: agena_api::content::ReadContentParams,
+    ) -> Result<Subscription, ClientError> {
+        self.open_subscription(|id| ClientMessage::WatchContent { id, request }, 8)
+            .await
+    }
+
+    async fn open_subscription(
+        &self,
+        message: impl FnOnce(SubscriptionId) -> ClientMessage,
+        capacity: usize,
+    ) -> Result<Subscription, ClientError> {
         let id: SubscriptionId = uuid::Uuid::new_v4().simple().to_string().into();
-        let (events, rx) = broadcast::channel(256);
+        let (events, rx) = broadcast::channel(capacity);
         let (ready, acknowledgement) = oneshot::channel();
         {
             let mut guard = self.subscribers.lock().expect("subscription lock");
@@ -271,7 +294,7 @@ impl WsClient {
         };
         let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             self.out_tx
-                .send(ClientMessage::Subscribe { id, request })
+                .send(message(id))
                 .await
                 .map_err(|_| ClientError::Transport("ws writer dropped".into()))?;
             acknowledgement

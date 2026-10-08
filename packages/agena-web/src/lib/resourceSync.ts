@@ -329,7 +329,7 @@ export function applyResourceEvent(event: SseEvent) {
   const sid = String(props.session_id ?? '')
   const keys: string[] = []
   if (event.type === 'session_changed') {
-    if (sid) keys.push(`session:${sid}:transcript`)
+    if (sid) keys.push(`session:${sid}:parts`)
     const part = props.part && typeof props.part === 'object' && !Array.isArray(props.part) ? props.part : null
     if (part) {
       keys.push(`part:${String(part.part_id)}`)

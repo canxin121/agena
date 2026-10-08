@@ -97,6 +97,8 @@ impl TryFrom<&Value> for RunContent {
 pub struct TextContent {
     #[serde(default)]
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<agena_domain::ContentRef>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub synthetic: bool,
     #[serde(flatten)]
@@ -125,6 +127,8 @@ impl TryFrom<&Value> for TextContent {
 /// fragments; `encrypted_content` preserves provider-specific encrypted data.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ThinkContent {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<agena_domain::ContentRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub summary: Vec<String>,
     #[serde(default, rename = "raw", skip_serializing_if = "Vec::is_empty")]
@@ -188,6 +192,8 @@ pub struct ToolCallContent {
     pub user_input: OperationUserInput,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<RawOutput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<agena_domain::ContentRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<OperationError>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -200,28 +206,8 @@ impl ToolCallContent {
         "tool_call"
     }
 
-    /// Metadata key carrying the output a still-running tool has produced so
-    /// far. It is display state only: the terminal payload replaces it once the
-    /// tool returns, so it never becomes part of the durable result.
-    pub const LIVE_OUTPUT_METADATA_KEY: &'static str = "live_output";
-
     pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("tool call content is always JSON serializable")
-    }
-
-    /// Record what a still-running process has produced so a reader can watch it
-    /// before the tool returns. The caller bounds the text.
-    pub fn set_live_output(&mut self, text: impl Into<String>) {
-        self.metadata.insert(
-            Self::LIVE_OUTPUT_METADATA_KEY.to_owned(),
-            Value::String(text.into()),
-        );
-    }
-
-    pub fn live_output(&self) -> Option<&str> {
-        self.metadata
-            .get(Self::LIVE_OUTPUT_METADATA_KEY)
-            .and_then(|value| value.as_str())
     }
 }
 
@@ -656,6 +642,7 @@ pub fn operation_from_tool_call(part: &ToolCallContent) -> OperationPart {
         authorization: part.authorization.clone(),
         user_input: part.user_input.clone(),
         output: part.output.clone(),
+        resources: part.resources.clone(),
         state: part.state,
         error: part.error.clone(),
         metadata: part.metadata.clone(),
@@ -677,6 +664,7 @@ pub fn tool_call_from_operation(operation: &OperationPart) -> ToolCallContent {
         authorization: operation.authorization.clone(),
         user_input: operation.user_input.clone(),
         output: operation.output.clone(),
+        resources: operation.resources.clone(),
         error: operation.error.clone(),
         metadata: operation.metadata.clone(),
         lifecycle: operation.lifecycle.clone(),
@@ -893,6 +881,7 @@ mod tests {
     #[test]
     fn text_round_trips_and_preserves_unknown_keys() {
         let content = TextContent {
+            resources: Vec::new(),
             text: "hello".to_owned(),
             synthetic: true,
             extra: BTreeMap::from([("marker".to_owned(), json!("x"))]),
@@ -932,6 +921,7 @@ mod tests {
     #[test]
     fn think_stores_identical_raw_and_summary_text_once() {
         let content = ThinkContent {
+            resources: Vec::new(),
             summary: vec!["single ".to_owned(), "reasoning body".to_owned()],
             raw: vec!["single reasoning body".to_owned()],
             ..Default::default()
@@ -946,6 +936,7 @@ mod tests {
     #[test]
     fn think_round_trips_summary_raw_and_encrypted() {
         let content = ThinkContent {
+            resources: Vec::new(),
             summary: vec!["step 1".to_owned(), "step 2".to_owned()],
             raw: vec!["raw reasoning".to_owned()],
             encrypted_content: Some("opaque".to_owned()),
@@ -965,6 +956,7 @@ mod tests {
     #[test]
     fn tool_call_round_trips_only_single_source_fields_and_rejects_removed_keys() {
         let content = ToolCallContent {
+            resources: Vec::new(),
             name: "fs.read".to_owned(),
             plugin: Some("builtin".to_owned()),
             input: json!({"file_path": "/tmp/x.txt", "offset": 3}),

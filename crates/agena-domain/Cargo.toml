@@ -18,6 +18,7 @@ strum = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 uuid.workspace = true
 url = { workspace = true, features = ["serde"] }
+unicode-width.workspace = true
 
 [lints]
 workspace = true

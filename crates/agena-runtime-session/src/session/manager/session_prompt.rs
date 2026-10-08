@@ -28,11 +28,11 @@ fn render_planning_section(tool_names: &[String]) -> String {
     let has = |name: &str| tool_names.iter().any(|tool| tool == name);
     let mut paragraphs = vec![
         "# Planning",
-        "Plan non-trivial implementation: new features, architectural choices, uncertain requirements, or coordinated changes. Skip formal planning for small clear fixes and pure research. Explore and refine the plan before requesting review.",
+        "Plan new features, architectural choices, uncertain requirements and coordinated changes. Skip formal plans for small clear fixes and research. Explore before review.",
     ];
     if has("plan.set") {
         if has("plan.review") || has("plan.phase") {
-            paragraphs.push("Prefer `plan.set` to record the plan. It returns without waiting for the user. With `request_approval: true` (default), creating or replacing a plan puts it in the planning phase and blocks mutating work.");
+            paragraphs.push("`plan.set` records without waiting. With default `request_approval: true`, creating or replacing a plan puts it in the planning phase and blocks mutations.");
             if has("plan.review") {
                 paragraphs.push("Call `plan.review` for approval before implementation.");
             } else {
@@ -48,13 +48,13 @@ fn render_planning_section(tool_names: &[String]) -> String {
         paragraphs.push("Use `request_approval: false` only with prior user authorization AND trusted configuration allowing it; never change configuration to bypass review.");
     }
     if has("plan.review") || has("plan.phase") {
-        paragraphs.push("Pending reviews bind to a revision. If the saved plan changes during review, inspect the current version and request review again when required; an old approval cannot authorize that changed version.");
+        paragraphs.push("Pending reviews bind to a revision. If the plan changes during review, inspect it and obtain required approval for that revision.");
     }
     if has("plan.edit") {
         paragraphs.push("`plan.edit` updates step/check progress and notes without changing the phase or requesting approval. Ordinary progress updates to an active plan do not require another review.");
     }
     if has("plan.phase") {
-        paragraphs.push("Use `plan.phase` for phase changes and completion. For completion, finish required steps/checks first. Transitions within an already approved plan need no new review; other transitions follow its live help and current phase.");
+        paragraphs.push("`plan.phase` changes phases. For completion, finish required steps/checks first. Approved-plan transitions need no new review; others follow live help.");
     }
     paragraphs.join("\n\n")
 }
@@ -70,7 +70,7 @@ fn render_planning_section(tool_names: &[String]) -> String {
 fn render_asking_section(has_plan_review: bool) -> String {
     let mut section = r#"# Asking the user
 
-Use `interaction.ask` for a decision the user must make with no reasonable default, or authorization for a specific dangerous action. This includes discarding changes, rewriting Git history, and choosing whether to squash before an authorized push. Read its live help first; include at least two distinct choices and bundle related questions. Ask before a wrong assumption would cause substantial rework. Your turn suspends until answers arrive, then continue the same task. Read and repair rejected input. Reuse authorization already given for the same action and scope. Do not ask whether to proceed with already authorized work or use this tool for plan approval.
+Use `interaction.ask` for decisions without a reasonable default or authorization for a specific dangerous action: discarding changes, rewriting Git history, or squashing before an authorized push. Read live help; give at least two distinct choices and bundle questions. Ask before substantial rework. Your turn suspends until answers arrive; then resume. Repair rejected input. Reuse approval for the same action and scope; never reconfirm already authorized work or use this tool for plan approval.
 
 Use the tool for every question; do not end your turn with a plain-text question. Wait for its result before the dependent action. A timeout, cancellation, or empty answer is not approval: continue only independent, already-authorized work and report any remaining blocker."#
         .to_string();
@@ -85,7 +85,7 @@ Use the tool for every question; do not end your turn with a plain-text question
 fn render_delegating_section() -> String {
     r#"# Delegating work
 
-Use `tasks.run` for bounded independent work, a suitable available command/subagent, or exploration that benefits from returning conclusions. Give concrete scope and checks, attach relevant `commands`, keep concurrency low, and verify results. Handle simple lookups yourself; do not redo delegated work or delegate your responsibility for understanding it.
+Use `tasks.run` for bounded independent work or a suitable command/subagent. Give scope, checks and relevant `commands`; limit concurrency and verify results. Handle simple lookups yourself; do not redo delegated work or delegate understanding.
 
 Default execution waits for the task's result. Use `run_in_background: true` when other useful work can proceed; completion follows the background notification rules below."#
         .to_string()
@@ -96,19 +96,22 @@ fn render_background_section(tool_names: &[String]) -> String {
     let has = |name: &str| tool_names.iter().any(|tool| tool == name);
     let mut paragraphs = vec!["# Background execution".to_owned()];
     if has("shell.exec") {
-        paragraphs.push("`shell.exec` executes a non-interactive command and waits for its final output/exit result. Timeout or cancellation terminates its process tree. Launch mode is selected by the tool name, never by tty/run_in_background flags.".to_owned());
+        paragraphs.push("`shell.exec` waits for non-interactive output and exit. Timeout/cancellation terminates its process tree. Tool names select launch mode; tty/run_in_background flags do not.".to_owned());
     }
     if has("shell.spawn") {
-        paragraphs.push("`shell.spawn` starts a non-interactive background command, confirms actual startup and returns a process_id immediately so you can continue work. Completion, failure, timeout or stop delivers one system_notification. An omitted lifetime timeout permits running until exit/stop; supplied timeout_ms is enforced.".to_owned());
+        paragraphs.push("`shell.spawn` confirms non-interactive startup and returns process_id. Completion, failure, timeout or stop sends one system_notification. Supplied timeout_ms is enforced; omission permits running until exit/stop.".to_owned());
     }
     if has("shell.watch") {
-        paragraphs.push("`shell.watch` either starts a command with a watch or targets an existing process_id to replace/remove its single watch without starting a process or background operation. Omit/null policy on an existing target to remove the watch; the original completion notification and launch timeout remain. ready_pattern notifies once and leaves the service running. Ordinary output never wakes you unless include_pattern is supplied; its default is one matching notification. Explicit notifications=on_change deduplicates unchanged matches and coalesces changes (default 30-second interval). success/failure patterns or quiet_period_ms can end the process tree. Patterns filter notifications, not logs/capture. Use shell.read for diagnostic output; do not poll to wait.".to_owned());
+        paragraphs.push("`shell.watch` launches or replaces a process_id's watch. Omit/null policy removes the watch, preserving timeout/completion. ready_pattern notifies once without stopping. include_pattern wakes once, or coalesced notifications=on_change (default 30s). Success/failure patterns or quiet_period_ms stop the tree. Patterns filter notifications, not capture; never poll to wait.".to_owned());
     }
     if has("tasks.run") {
         paragraphs.push("`tasks.run` with `run_in_background: true` returns a handle and later delivers a system_notification on completion, failure, timeout or cancellation.".to_owned());
     }
     if has("monitor.start") {
-        paragraphs.push("`monitor.start` subscribes to WebSocket text events; local command-output listeners use shell.watch. Events have sequences and arrive in bounded system_notification batches. A subscription can end on disconnect, timeout, cancellation or session end. Do not restart it just to check for events.".to_owned());
+        paragraphs.push("`monitor.start` subscribes to WebSocket text events; each event has a sequence and arrives in bounded system_notification batches. A subscription can end on source exit, disconnect, timeout, cancellation or session end. Do not restart it just to check for events.".to_owned());
+        if has("shell.watch") {
+            paragraphs.push("For local command-output listeners use `shell.watch`.".to_owned());
+        }
         if has("monitor.stop") {
             paragraphs.push("Use `monitor.stop` when monitoring is no longer needed.".to_owned());
         }
@@ -116,11 +119,11 @@ fn render_background_section(tool_names: &[String]) -> String {
     if has("cron.create") {
         paragraphs.push("`cron.create` schedules wakes as `system_notification` messages at safe turn boundaries and retains the originating assistant run. Use the IANA timezone from `<environment_context>`; returned timestamps are explicit RFC 3339 instants. Jobs are session-only and expire after seven days.".to_owned());
     }
-    paragraphs.push("Continue useful work while waiting. If only a future notification remains, end the current turn with the work still pending; resume from the notification even after an earlier turn ended. Waiting is not task completion: inspect the outcome and verify results before claiming success. Never poll status/logs or sleep merely to wait for promised background completion notifications or events. Bounded output/log reads are appropriate for a concrete diagnosis or missing result details.".to_owned());
+    paragraphs.push("Continue useful work. If only a notification remains, end the current turn with the work still pending; resume from the notification. Waiting is not task completion: verify the outcome before claiming success. Never poll or sleep to await promised notifications. Use bounded reads for a concrete diagnosis or missing result details.".to_owned());
     if has("shell.open") {
-        paragraphs.push("`shell.open` opens a persistent interactive terminal/PTY and returns its process_id. yield_time_ms controls only the initial output wait; optional timeout_ms controls lifetime. Interactive terminal exit does not send background completion notifications or wake the AI. Silence/yield is not process exit.".to_owned());
+        paragraphs.push("`shell.open` returns a persistent interactive terminal/PTY process_id. yield_time_ms sets initial wait; timeout_ms sets lifetime. Exit sends no wake or completion notification. Silence/yield is not process exit.".to_owned());
         if has("shell.read") {
-            paragraphs.push("Use `shell.read` for bounded incremental output without sending input, including when interactive output is required to continue; there is no promised background wake to wait for. Omit since_seq for unread output; explicit cursors replay without changing the automatic cursor. Enable include_screen only when the full-screen state is needed.".to_owned());
+            paragraphs.push("Use `shell.read` for bounded output; interactive I/O is allowed because PTYs promise no wake. Omit since_seq for unread output; explicit cursors replay without changing the automatic cursor. include_screen returns screen state.".to_owned());
         }
         if has("shell.write") {
             paragraphs.push(r#"Use `shell.write` for nonempty exact terminal input: `\r` is Enter, `\u0003` is Ctrl-C. It can collect a bounded response in the same call. Declare subsequent effects and never resend a whole input after a partial write."#.to_owned());
@@ -137,10 +140,10 @@ fn render_background_section(tool_names: &[String]) -> String {
         }
     }
     if (has("shell.spawn") || has("shell.watch")) && has("shell.logs") {
-        paragraphs.push("Use `shell.read` for background-job diagnostics. Omit cursors to consume unread output; for explicit replay use last_seq together with next_event_offset as event_offset. shell.logs is a compatible explicit-replay entry. Do not read repeatedly merely to wait for completion.".to_owned());
+        paragraphs.push("Use `shell.logs` for bounded explicit replay of background-job diagnostics. Omit cursors to consume unread output; resume with last_seq and next_event_offset as event_offset. Do not read repeatedly merely to wait for completion.".to_owned());
     }
     if has("shell.exec") || has("shell.spawn") || has("shell.watch") || has("shell.open") {
-        paragraphs.push("Shell previews share max_output_bytes (1024–16384), independent of capture. Read/open/write return next_event_offset when a raw event is partially returned; pass it with last_seq as event_offset/since_seq to resume, or omit both for automatic unread consumption. output_archive.path is a stable startup prefix; output_archive.segments describes retained chronological files and original byte ranges. Gaps are unavailable output, and each file starts at local byte offset 0. Search retained files with fs.grep and read only needed lines with fs.read (offset/limit). For giant single lines, use a bounded match locator such as rg -b -o, then fs.read with byte_offset/byte_limit; continue with read_info.next_byte_offset. Check archive pending/complete/truncated/error: a shortened preview and lost capture are different facts. Never dump a whole output archive back into the context.".to_owned());
+        paragraphs.push("max_output_bytes (1024–16384) bounds previews independently of capture. Resume partial events with last_seq/next_event_offset as since_seq/event_offset; omit both for unread output. output_resource references Part content. Cursor gaps and capture errors differ from preview truncation.".to_owned());
     }
     paragraphs.join("\n\n")
 }

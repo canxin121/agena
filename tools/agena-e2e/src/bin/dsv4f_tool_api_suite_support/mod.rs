@@ -28,7 +28,8 @@ use super::{
 #[derive(Debug, Clone)]
 pub(super) struct SuiteTranscript {
     pub(super) workflow_state: agena_domain::WorkflowState,
-    pub(super) messages: Vec<agena_runtime::SessionProjectedRun>,
+    pub(super) parts: Vec<agena_storage::store::Part>,
+    pub(super) text_by_part: BTreeMap<i64, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -180,9 +181,10 @@ impl Harness {
         };
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
             let start_message_count = self
-                .session_queries
-                .list_projected_runs(session_id)
+                .session_store
+                .load_run_markers(session_id)
                 .await?
+                .parts
                 .len();
             let retry_notice = (attempt > 1).then_some(
                 "A prior attempt omitted the exact required input and did not execute it. Correct that now; do not reuse an empty or partial object.",
@@ -236,9 +238,10 @@ impl Harness {
         let input_text = serde_json::to_string(&input)?;
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
             let start_message_count = self
-                .session_queries
-                .list_projected_runs(session_id)
+                .session_store
+                .load_run_markers(session_id)
                 .await?
+                .parts
                 .len();
             let retry_notice = (attempt > 1).then_some(
                 "A prior attempt did not execute the exact supplied JSON. Correct that now and do not use defaults or partial arguments.",
@@ -419,14 +422,13 @@ impl Harness {
             .session_presentation(session_id)
             .await
             .context("load completed model session")?;
-        let messages = self
-            .session_queries
-            .list_projected_runs(session_id)
-            .await
-            .context("load completed model transcript")?;
+        let parts = super::part_observation::parts(self.session_store.as_ref(), session_id).await?;
+        let text_by_part =
+            super::part_observation::text(self.session_store.as_ref(), &parts).await?;
         Ok(SuiteTranscript {
             workflow_state: presentation.workflow_state,
-            messages,
+            parts,
+            text_by_part,
         })
     }
 }
@@ -470,53 +472,54 @@ pub(super) fn marker_for(case: &str) -> String {
         .collect()
 }
 
+fn parts_since(
+    session: &SuiteTranscript,
+    count: usize,
+) -> impl Iterator<Item = &agena_storage::store::Part> {
+    let runs = session
+        .parts
+        .iter()
+        .filter(|p| p.is_run_marker())
+        .skip(count)
+        .map(|p| p.part_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    session
+        .parts
+        .iter()
+        .filter(move |p| p.run_id.is_some_and(|id| runs.contains(&id)))
+}
+
 pub(super) fn operations_since(
     session: &SuiteTranscript,
     start_message_count: usize,
 ) -> Vec<SuiteOperation> {
-    session
-        .messages
-        .iter()
-        .skip(start_message_count)
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| match part.detail.as_ref() {
-            Some(agena_runtime::SessionProjectedPartDetail::ToolCall(operation)) => {
-                Some(SuiteOperation {
-                    operation_id: part.operation_id.clone(),
-                    status: part.status,
-                    value: operation.as_ref().clone(),
-                })
-            }
-            _ => None,
+    parts_since(session, start_message_count)
+        .filter(|p| p.kind == "tool_call")
+        .filter_map(|part| {
+            let value =
+                agena_runtime_contracts::part_content::ToolCallContent::try_from(&part.content)
+                    .ok()?;
+            Some(SuiteOperation {
+                operation_id: value
+                    .metadata
+                    .get("agena.operation_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                status: match part.state {
+                    PartState::Pending | PartState::InProgress => ExecutionStatus::Pending,
+                    PartState::Completed => ExecutionStatus::Completed,
+                    PartState::Failed | PartState::Cancelled => ExecutionStatus::Failed,
+                },
+                value,
+            })
         })
         .collect()
 }
 
 pub(super) fn transcript_since(session: &SuiteTranscript, start_message_count: usize) -> String {
-    session
-        .messages
-        .iter()
-        .skip(start_message_count)
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| match part.detail.as_ref() {
-            Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {
-                Some(text.as_str())
-            }
-            Some(agena_runtime::SessionProjectedPartDetail::ToolCall(value)) => {
-                value.output.as_ref().and_then(|output| {
-                    if !output.text_content().is_empty() {
-                        Some(output.text_content())
-                    } else {
-                        output.payload.as_ref().and_then(|payload| {
-                            payload
-                                .as_str()
-                                .or_else(|| payload.get("text").and_then(Value::as_str))
-                        })
-                    }
-                })
-            }
-            _ => None,
-        })
+    parts_since(session, start_message_count)
+        .filter_map(|part| session.text_by_part.get(&part.part_id))
+        .cloned()
         .collect::<Vec<_>>()
         .join("\n")
 }

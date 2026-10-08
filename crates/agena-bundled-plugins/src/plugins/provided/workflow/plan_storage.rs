@@ -132,14 +132,21 @@ impl WorkflowPlugin {
     }
 
     async fn publish_plan_revision(&self, revision: Option<&str>) {
-        let Ok(host) = self.host() else { return; };
-        let Ok(session) = host.get_session(HostGetSessionRequest::default()).await else { return; };
-        if let Err(error) = host.publish_event(agena_plugin_host::sdk::EventEnvelope {
-            kind: "plan.changed".into(),
-            timestamp_ms: chrono::Utc::now().timestamp_millis(),
-            session_id: Some(session.session.id),
-            payload: serde_json::json!({ "revision": revision }),
-        }).await {
+        let Ok(host) = self.host() else {
+            return;
+        };
+        let Ok(session) = host.get_session(HostGetSessionRequest::default()).await else {
+            return;
+        };
+        if let Err(error) = host
+            .publish_event(agena_plugin_host::sdk::EventEnvelope {
+                kind: "plan.changed".into(),
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                session_id: Some(session.session.id),
+                payload: serde_json::json!({ "revision": revision }),
+            })
+            .await
+        {
             tracing::warn!(%error, "could not publish plan revision invalidation");
         }
     }

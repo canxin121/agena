@@ -101,6 +101,19 @@ pub enum ViewBlock {
         id: Option<String>,
         artifact: ArtifactRef,
     },
+    Content {
+        id: String,
+        resource: crate::ContentRef,
+        #[serde(default)]
+        format: crate::ContentFormat,
+    },
+    Progress {
+        id: String,
+        phase: String,
+        completed: u64,
+        total: Option<u64>,
+        unit: Option<String>,
+    },
     Custom {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
@@ -127,6 +140,7 @@ impl ViewBlock {
             | Self::SearchResults { id, .. }
             | Self::Media { id, .. }
             | Self::Custom { id, .. } => id.as_deref(),
+            Self::Content { id, .. } | Self::Progress { id, .. } => Some(id),
         }
     }
 
@@ -208,6 +222,8 @@ pub struct RawOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<crate::ContentField>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<crate::AttachmentItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub managed_outputs: Vec<crate::ToolManagedOutput>,
@@ -237,6 +253,7 @@ impl RawOutput {
 
     pub fn is_empty(&self) -> bool {
         self.payload.is_none()
+            && self.fields.is_empty()
             && self.attachments.is_empty()
             && self.managed_outputs.is_empty()
             && !self.truncated
@@ -254,6 +271,7 @@ impl RawOutput {
         let payload = payload.or_else(|| Self::text(text).payload);
         Self {
             payload,
+            fields: Vec::new(),
             attachments,
             managed_outputs,
             truncated,
@@ -466,4 +484,14 @@ mod tests {
         assert!(RawOutput::default().is_empty());
         assert!(!RawOutput::text("x").is_empty());
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Human presentation of one part's durable facts. It is kind-agnostic:
+/// every part kind may carry one, and clients read it through the part-level
+/// `presentation` field instead of probing `content`.
+pub struct PartDocument {
+    pub title: String,
+    pub summary: String,
+    pub blocks: Vec<ViewBlock>,
 }

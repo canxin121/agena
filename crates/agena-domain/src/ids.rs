@@ -85,6 +85,7 @@ uuid_id!(TurnId);
 uuid_id!(AssistantReplyId);
 uuid_id!(TextSegmentId);
 uuid_id!(ActivityId);
+uuid_id!(ContentId);
 
 impl ActivityId {
     /// Deterministic stable activity id for a reply's error presentation.

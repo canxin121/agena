@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn direct_workspace_tools_remain_exposed() {
         for candidate in [
-            tool("shell.run", "agena.shell", false, false),
+            tool("shell.exec", "agena.shell", false, false),
             tool("shell.write", "agena.shell", false, false),
             tool("shell.resize", "agena.shell", false, false),
             tool("shell.signal", "agena.shell", false, false),

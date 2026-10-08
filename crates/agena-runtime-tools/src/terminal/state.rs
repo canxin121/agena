@@ -32,7 +32,7 @@ pub(super) struct State {
     pub started_at_ms: i64,
     pub interaction: Mutex<()>,
     pub stopping: AtomicU8,
-    pub archive: crate::process_output_archive::OutputArchive,
+    output: Option<agena_storage::content::ContentWriter>,
     inner: Mutex<Inner>,
     changed: Condvar,
     controls: mpsc::SyncSender<Request>,
@@ -54,6 +54,12 @@ struct Inner {
     utf8: Vec<u8>,
     parser: vt100::Parser<super::protocol::Protocol>,
     osc_guard: super::osc_guard::OscGuard,
+    screen_dirty: bool,
+    last_screen_at: Instant,
+    emitted_screen: Option<(agena_domain::ContentCursor, agena_domain::TerminalSnapshot)>,
+    last_snapshot_at: Instant,
+    bytes_since_snapshot: usize,
+    patches_since_snapshot: u32,
 }
 
 impl State {
@@ -64,10 +70,10 @@ impl State {
         listener: Option<Arc<dyn MonitorListener>>,
     ) -> Self {
         Self {
-            archive: crate::process_output_archive::OutputArchive::new(
-                &params.owner.workspace,
-                params.owner.session_id,
-            ),
+            output: params
+                .output
+                .as_ref()
+                .map(agena_storage::content::ContentWriter::delegate_lifecycle),
             id,
             owner: params.owner.clone(),
             command: params.display_command.clone(),
@@ -99,7 +105,19 @@ impl State {
                     super::protocol::Protocol::default(),
                 ),
                 osc_guard: super::osc_guard::OscGuard::default(),
+                screen_dirty: true,
+                last_screen_at: Instant::now(),
+                emitted_screen: None,
+                last_snapshot_at: Instant::now(),
+                bytes_since_snapshot: 0,
+                patches_since_snapshot: 0,
             }),
+        }
+    }
+
+    pub fn mark_partial(&self, reason: &str) {
+        if let Some(writer) = &self.output {
+            writer.record_loss(0, &reason);
         }
     }
 
@@ -158,7 +176,10 @@ impl State {
         ProcessSummary {
             websocket: false,
             process_id: self.id.clone(),
-            output_archive: self.archive.snapshot(),
+            output_resource: self
+                .output
+                .as_ref()
+                .map(|writer| writer.resource().reference()),
             tty: true,
             command: self.command.clone(),
             description: self.description.clone(),
@@ -178,18 +199,11 @@ impl State {
     }
 
     pub fn append(&self, bytes: &[u8]) {
-        self.append_captured(bytes, None);
-    }
-
-    pub fn append_captured(
-        &self,
-        bytes: &[u8],
-        permit: Option<crate::process_output_archive::ArchivePermit>,
-    ) {
         let event = {
             let mut inner = lock(&self.inner);
             let screen_bytes = inner.osc_guard.filter(bytes);
             inner.parser.process(&screen_bytes);
+            inner.screen_dirty = true;
             inner.utf8.extend_from_slice(bytes);
             // Decode invalid bytes lossily, but retain any incomplete trailing
             // code point even when an invalid byte preceded it in this chunk.
@@ -223,10 +237,13 @@ impl State {
             }
             Self::push(&mut inner, text)
         };
-        if let Some(permit) = permit {
-            self.archive.record(Some(permit), &event.line);
-        } else {
-            self.archive.record_fragment(&event.line);
+        if let Some(writer) = &self.output
+            && let Err(error) = writer.capture(agena_domain::ContentInput::Log {
+                stream: agena_domain::CommandOutputStream::Stdout,
+                text: event.line.clone(),
+            })
+        {
+            writer.record_loss(event.line.len(), &error);
         }
         self.changed.notify_all();
         if let Some(listener) = &self.listener {
@@ -258,33 +275,145 @@ impl State {
         event
     }
 
+    /// The PTY driver publishes at most one changed screen per frame, after
+    /// draining a burst. Raw capture and process control keep their own pace.
+    pub fn publish_screen(&self, force: bool) {
+        let Some(writer) = &self.output else {
+            return;
+        };
+        let (snapshot, payload, is_snapshot, patch_bytes) = {
+            let mut inner = lock(&self.inner);
+            if (!inner.screen_dirty && !force)
+                || (!force && inner.last_screen_at.elapsed() < Duration::from_millis(50))
+            {
+                return;
+            }
+            let snapshot = super::screen::snapshot(inner.parser.screen());
+            inner.screen_dirty = false;
+            inner.last_screen_at = Instant::now();
+            if inner
+                .emitted_screen
+                .as_ref()
+                .is_some_and(|(_, previous)| previous == &snapshot)
+                && !force
+            {
+                return;
+            }
+            let mut is_snapshot = force
+                || inner.last_snapshot_at.elapsed() >= Duration::from_secs(1)
+                || inner.patches_since_snapshot >= 31
+                || inner.emitted_screen.as_ref().is_none_or(|(_, previous)| {
+                    (previous.rows, previous.cols, previous.alternate_screen)
+                        != (snapshot.rows, snapshot.cols, snapshot.alternate_screen)
+                });
+            let mut payload = if is_snapshot {
+                agena_domain::ContentInput::Terminal {
+                    screen: snapshot.clone(),
+                }
+            } else {
+                let (base_cursor, previous) = inner
+                    .emitted_screen
+                    .as_ref()
+                    .expect("initial terminal snapshot");
+                let mut previous_rows =
+                    std::collections::BTreeMap::<u16, Vec<&agena_domain::TerminalCellRun>>::new();
+                let mut next_rows =
+                    std::collections::BTreeMap::<u16, Vec<&agena_domain::TerminalCellRun>>::new();
+                for run in &previous.cells {
+                    previous_rows.entry(run.row).or_default().push(run);
+                }
+                for run in &snapshot.cells {
+                    next_rows.entry(run.row).or_default().push(run);
+                }
+                let rows_changed = (0..snapshot.rows)
+                    .filter(|row| previous_rows.get(row) != next_rows.get(row))
+                    .collect::<Vec<_>>();
+                let mut patch = snapshot.clone();
+                patch.cells.retain(|run| rows_changed.contains(&run.row));
+                agena_domain::ContentInput::TerminalPatch {
+                    base_cursor: *base_cursor,
+                    screen: patch,
+                    rows_changed,
+                }
+            };
+            let patch_bytes = payload.byte_len();
+            if !is_snapshot && inner.bytes_since_snapshot.saturating_add(patch_bytes) >= 64 * 1024 {
+                is_snapshot = true;
+                payload = agena_domain::ContentInput::Terminal {
+                    screen: snapshot.clone(),
+                };
+            }
+            (snapshot, payload, is_snapshot, patch_bytes)
+        };
+        match writer.capture(payload) {
+            Ok(cursor) => {
+                let mut inner = lock(&self.inner);
+                inner.emitted_screen = Some((cursor, snapshot));
+                if is_snapshot {
+                    inner.last_snapshot_at = Instant::now();
+                    inner.bytes_since_snapshot = 0;
+                    inner.patches_since_snapshot = 0;
+                } else {
+                    inner.bytes_since_snapshot += patch_bytes;
+                    inner.patches_since_snapshot += 1;
+                }
+            }
+            Err(error) => {
+                lock(&self.inner).emitted_screen = None;
+                writer.record_loss(0, &error);
+            }
+        }
+    }
+
     pub fn take_protocol_replies(&self) -> Result<Vec<u8>, &'static str> {
         lock(&self.inner).parser.callbacks_mut().take()
     }
 
     pub fn resize_screen(&self, rows: u16, cols: u16) {
-        lock(&self.inner).parser.screen_mut().set_size(rows, cols);
+        {
+            let mut inner = lock(&self.inner);
+            inner.parser.screen_mut().set_size(rows, cols);
+            inner.screen_dirty = true;
+        }
+        self.publish_screen(true);
         self.changed.notify_all();
     }
 
     pub fn finish(&self, status: ProcessStatus, exit_code: Option<i32>, reason: &str) {
-        {
+        let final_text = {
             let mut inner = lock(&self.inner);
             if inner.status != ProcessStatus::Running {
                 return;
             }
-            if !inner.utf8.is_empty() {
+            let final_text = if !inner.utf8.is_empty() {
                 let final_text = String::from_utf8_lossy(&inner.utf8).into_owned();
-                self.archive.record_fragment(&final_text);
                 inner.utf8.clear();
-                Self::push(&mut inner, final_text);
-            }
+                Self::push(&mut inner, final_text.clone());
+                Some(final_text)
+            } else {
+                None
+            };
             inner.status = status;
             inner.exit_code = exit_code;
             inner.reason = Some(reason.to_owned());
             inner.ended_at_ms = Some(Utc::now().timestamp_millis());
+            final_text
+        };
+        if let Some(writer) = &self.output {
+            if let Some(text) = final_text {
+                let bytes = text.len();
+                if let Err(error) = writer.capture(agena_domain::ContentInput::Log {
+                    stream: agena_domain::CommandOutputStream::Stdout,
+                    text,
+                }) {
+                    writer.record_loss(bytes, &error);
+                }
+            }
+            self.publish_screen(true);
+            if let Err(error) = writer.finalize_blocking(agena_domain::ContentState::Complete) {
+                tracing::error!(%error, "terminal content seal failed");
+            }
         }
-        self.archive.finish();
         self.changed.notify_all();
         if let Some(listener) = &self.listener {
             let summary = self.summary();
@@ -349,7 +478,7 @@ impl State {
                 .iter()
                 .find(|event| event.seq == seq.saturating_add(1))
                 .ok_or_else(|| {
-                    invalid("partially read event was evicted; inspect output_archive")
+                    invalid("partially read event was evicted; inspect output_resource")
                 })?;
             let offset = options.event_offset as usize;
             if offset > event.line.len() || !event.line.is_char_boundary(offset) {

@@ -15,6 +15,4 @@ pub use edit::{
 };
 pub use loader::{ConfigLoader, ProcessEnvironment};
 pub use overrides::apply_config_override;
-pub use raw::{
-    RawConfig, RawConfigFile, RawTracingConfig, RawTuiUiConfig, RawUiConfig, validate_config_text,
-};
+pub use raw::{RawConfig, RawConfigFile, RawTracingConfig, RawUiConfig, validate_config_text};

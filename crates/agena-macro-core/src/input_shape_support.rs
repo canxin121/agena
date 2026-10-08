@@ -26,8 +26,23 @@ where
     fields
         .into_iter()
         .map(|(field, binding)| {
-            if field_is_flatten(field)? {
-                Ok(quote! {
+            let mut skip = None;
+            for attribute in field.attrs.iter().filter(|attribute| attribute.path().is_ident("serde")) {
+                for meta in attribute.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
+                    match meta {
+                        Meta::Path(path) if path.is_ident("skip") || path.is_ident("skip_serializing") => {
+                            return Ok(quote! {});
+                        }
+                        Meta::NameValue(value) if value.path.is_ident("skip_serializing_if") => {
+                            let path = crate::expr_lit_str(&value.value, "skip_serializing_if")?;
+                            skip = Some(path.parse::<syn::Path>()?);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let insert = if field_is_flatten(field)? {
+                quote! {
                     match serde_json::to_value(#binding)
                         .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))? {
                         serde_json::Value::Object(flattened) => {
@@ -39,7 +54,7 @@ where
                             ));
                         }
                     }
-                })
+                }
             } else {
                 let Some(name) = field_schema_property_name_with_rule(field, rename_rule)? else {
                     return Err(syn::Error::new_spanned(
@@ -48,13 +63,17 @@ where
                     ));
                 };
                 let name = LitStr::new(&name, field.span());
-                Ok(quote! {
+                quote! {
                     object.insert(
                         #name.to_string(),
                         serde_json::to_value(#binding).map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params_error(&err))?,
                     );
-                })
-            }
+                }
+            };
+            Ok(match skip {
+                Some(predicate) => quote! { if !#predicate(#binding) { #insert } },
+                None => insert,
+            })
         })
         .collect()
 }

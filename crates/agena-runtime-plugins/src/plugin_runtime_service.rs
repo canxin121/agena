@@ -53,6 +53,10 @@ pub trait PluginRuntimeService: Send + Sync {
 
     fn tool_registry_generation(&self) -> u64;
 
+    /// Atomic projection identity across configuration reloads and dynamic
+    /// tool registrations. A new runtime may restart its registry counter.
+    fn projection_generation(&self) -> (u64, u64);
+
     fn tool_registry_events_since(
         &self,
         after_generation: Option<u64>,

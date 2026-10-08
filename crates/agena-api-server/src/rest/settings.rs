@@ -1,3 +1,11 @@
+use super::{
+    AppState, AxumQuery, ConfigSettingsDeleteInput, ConfigSettingsGetInput, ConfigSettingsLayer,
+    ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
+    ConfigSettingsReadResponse, ConfigSettingsSetInput, ConfigSettingsSource,
+    ConfigSettingsValidateInput, IntoResponse, Json, Path, ServerError, State, get_json_path,
+    json_http, list_json_path, reload_settings_if_needed, settings_error,
+};
+
 static SETTINGS_WORK: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 #[derive(serde::Deserialize)]
@@ -341,10 +349,3 @@ mod blocking_tests {
         read.await.unwrap().unwrap();
     }
 }
-use super::{
-    AppState, AxumQuery, ConfigSettingsDeleteInput, ConfigSettingsGetInput, ConfigSettingsLayer,
-    ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
-    ConfigSettingsReadResponse, ConfigSettingsSetInput, ConfigSettingsSource,
-    ConfigSettingsValidateInput, IntoResponse, Json, Path, ServerError, State, get_json_path,
-    json_http, list_json_path, reload_settings_if_needed, settings_error,
-};

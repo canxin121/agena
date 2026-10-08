@@ -599,13 +599,17 @@ async fn wait_for_execution(
     }
 }
 
-fn execution_text(execution: &SessionExecutionResource) -> String {
-    execution
-        .parts
-        .iter()
-        .filter_map(|part| part.content.get("text").and_then(serde_json::Value::as_str))
-        .collect::<Vec<_>>()
-        .join("")
+async fn execution_text(client: &AgenaClient, execution: &SessionExecutionResource) -> String {
+    let mut text = String::new();
+    for part in &execution.parts {
+        text.push_str(
+            &client
+                .part_text(execution.session.id, part, 1024 * 1024)
+                .await
+                .expect("read canonical process-test text resources"),
+        );
+    }
+    text
 }
 
 fn unused_loopback_port() -> u16 {
@@ -765,9 +769,13 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
     let completed = wait_for_execution(&client_b, session.id, |execution| {
         matches!(execution.session.state, SessionState::Ready { .. })
             && execution.session.state.active_execution().is_none()
-            && execution_text(execution).contains("recovered after server restart")
     })
     .await;
+    assert!(
+        execution_text(&client_b, &completed)
+            .await
+            .contains("recovered after server restart")
+    );
     assert!(
         completed
             .session

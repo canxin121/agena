@@ -1,8 +1,9 @@
 use super::parts_fixtures;
 use crate::app_backend::{SessionStateWithTranscriptPage, SessionTranscriptPage};
 use crate::{App, I18n, LaunchOptions, TranscriptNodeKey, TranscriptState, TuiBackend};
-use agena_api::live::SessionTranscriptFoldResource;
-use agena_api::resource::{SessionExecutionResource, SessionTranscriptPart};
+use agena_api::part::PartResource;
+use agena_api::resource::SessionExecutionResource;
+use agena_tui_transcript::TranscriptFold;
 use agena_tui_transcript::{TranscriptContentId, TranscriptEntryId};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
@@ -16,7 +17,7 @@ const SESSION_ID: i64 = 7;
 const WIDTH: u16 = 120;
 const HEIGHT: u16 = 24;
 
-fn execution(parts: Vec<SessionTranscriptPart>, version: i64) -> SessionExecutionResource {
+fn execution(parts: Vec<PartResource>, version: i64) -> SessionExecutionResource {
     serde_json::from_value(json!({
         "session": {
             "id": SESSION_ID, "depth": 0, "root_id": SESSION_ID,
@@ -25,13 +26,13 @@ fn execution(parts: Vec<SessionTranscriptPart>, version: i64) -> SessionExecutio
             "created_at": "2026-10-03T00:00:00Z", "updated_at": "2026-10-03T00:00:00Z",
             "message_count": 1, "child_session_count": 0
         },
-        "parts": parts, "latest_event_seq": version,
+        "parts": parts, "part_page": null, "latest_event_seq": version,
         "execution": {"agent_id": "test"}, "usage": {"current_tokens": 0}
     }))
     .expect("session execution fixture")
 }
 
-fn activities(range: std::ops::Range<i64>) -> Vec<SessionTranscriptPart> {
+fn activities(range: std::ops::Range<i64>) -> Vec<PartResource> {
     range
         .map(|part_id| {
             parts_fixtures::hook(
@@ -53,7 +54,7 @@ fn snapshot(anchor: i64, end: i64, version: i64) -> SessionStateWithTranscriptPa
         execution: execution(parts.clone(), version),
         page: SessionTranscriptPage {
             parts,
-            folds: vec![SessionTranscriptFoldResource {
+            folds: vec![TranscriptFold {
                 run_id: 3,
                 run_ids: vec![3],
                 anchor_part_id: anchor,
@@ -114,8 +115,8 @@ fn assert_parts_visible(transcript: &mut TranscriptState, range: std::ops::Range
 }
 
 fn wire_page(
-    parts: &[SessionTranscriptPart],
-    folds: &[SessionTranscriptFoldResource],
+    parts: &[PartResource],
+    folds: &[TranscriptFold],
     has_more: bool,
     cursor: Option<&str>,
 ) -> serde_json::Value {
@@ -135,8 +136,13 @@ fn wire_page(
             value
         })
         .collect::<Vec<_>>();
+    let runs = folds.iter().map(|fold| {
+        let count = parts.iter().filter(|part| part.run_id == Some(fold.run_id)).count();
+        json!({"run_id": fold.run_id, "part_count": fold.hidden_count + count as u64,
+            "page": {"has_more": fold.hidden_count > 0, "next_cursor": fold.next_cursor, "returned": count}})
+    }).collect::<Vec<_>>();
     json!({
-        "session_id": SESSION_ID, "version": 2, "parts": wire_parts, "folds": folds,
+        "session_id": SESSION_ID, "version": 2, "parts": wire_parts, "runs": runs,
         "page": {"has_more": has_more, "next_cursor": cursor, "returned": wire_parts.len()}
     })
 }
@@ -172,21 +178,21 @@ async fn refresh_preserves_the_remote_part_loading_control_through_http() {
             let path = request.split_whitespace().nth(1).unwrap();
             let body = if path.ends_with("/state") {
                 serde_json::to_string(&shell).unwrap()
-            } else if path.contains("/transcript/folds?") {
+            } else if path.contains("/parts?") {
                 match path {
-                    "/api/v1/sessions/7/transcript/folds?limit=5&cursor=before-64" => {
+                    "/api/v1/sessions/7/parts?limit=5&run_ids=3&cursor=before-64" => {
                         first_page.to_string()
                     }
-                    "/api/v1/sessions/7/transcript/folds?limit=50&cursor=before-59" => {
+                    "/api/v1/sessions/7/parts?limit=50&run_ids=3&cursor=before-59" => {
                         all_page.to_string()
                     }
-                    "/api/v1/sessions/7/transcript/folds?limit=50&cursor=before-9" => {
+                    "/api/v1/sessions/7/parts?limit=50&run_ids=3&cursor=before-9" => {
                         last_page.to_string()
                     }
                     _ => panic!("unexpected fold request: {path}"),
                 }
             } else {
-                assert_eq!(path, "/api/v1/sessions/7/transcript?limit=2");
+                assert_eq!(path, "/api/v1/sessions/7/runs?limit=2&part_limit=32");
                 transcript.to_string()
             };
             paths.push(path.to_owned());
@@ -199,10 +205,7 @@ async fn refresh_preserves_the_remote_part_loading_control_through_http() {
             2
         );
         assert_eq!(
-            paths
-                .iter()
-                .filter(|path| path.contains("/transcript/folds?"))
-                .count(),
+            paths.iter().filter(|path| path.contains("/parts?")).count(),
             3
         );
     });
@@ -329,7 +332,7 @@ async fn multi_round_reply_expansion_keeps_its_cursor_across_run_boundaries() {
         execution: execution(parts.clone(), version),
         page: SessionTranscriptPage {
             parts: parts.clone(),
-            folds: vec![SessionTranscriptFoldResource {
+            folds: vec![TranscriptFold {
                 run_id: 13,
                 run_ids: vec![3, 8, 13],
                 anchor_part_id: 19,
@@ -822,7 +825,7 @@ async fn prepend_includes_fold_controls_when_preserving_the_reading_position() {
         .collect();
     app.transcript.prepend_transcript_parts(
         older,
-        vec![SessionTranscriptFoldResource {
+        vec![TranscriptFold {
             run_id: 3,
             run_ids: vec![3],
             anchor_part_id: 90,
@@ -855,13 +858,13 @@ async fn obsolete_state_refresh_and_subscription_tokens_cannot_change_a_reopened
     app.handle_message(crate::AppMessage::SessionRefreshed {
         session_id: SESSION_ID,
         requested_at: old,
-        result: Ok(crate::app_backend::SessionRefresh {
+        result: Box::new(Ok(crate::app_backend::SessionRefresh {
             execution_only: None,
             snapshot: Some(snapshot(10, 12, 2)),
             reconciled_parts: None,
             latest_event_seq: Some(2),
             event_count: 0,
-        }),
+        })),
     });
     assert_eq!(app.transcript.state_load_in_flight_since, Some(current));
     assert_eq!(app.transcript.refresh_in_flight_since, Some(current));
@@ -889,13 +892,13 @@ async fn obsolete_state_refresh_and_subscription_tokens_cannot_change_a_reopened
     app.handle_message(crate::AppMessage::SessionEventArrived {
         session_id: SESSION_ID,
         generation: 1,
-        live: crate::LiveEvent {
+        live: Box::new(crate::LiveEvent {
             part_update: None,
             session_deleted: true,
             snapshot: None,
             force_refresh: false,
             ..crate::LiveEvent::default()
-        },
+        }),
     });
     assert_eq!(app.transcript.session_id, Some(SESSION_ID));
     app.handle_session_refreshed(

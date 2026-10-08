@@ -333,7 +333,7 @@ impl App {
 
     pub(crate) fn request_transcript_fold_parts(
         &mut self,
-        fold: agena_api::live::SessionTranscriptFoldResource,
+        fold: agena_tui_transcript::TranscriptFold,
         expand_all: bool,
         reveal_count: usize,
     ) {
@@ -361,8 +361,18 @@ impl App {
         let tx = self.tx.clone();
         let reveal_count = reveal_count.clamp(1, 50) as u64;
         tokio::spawn(async move {
+            let run_ids = if fold.run_ids.is_empty() {
+                vec![fold.run_id]
+            } else {
+                fold.run_ids.clone()
+            };
             let result = application
-                .list_session_transcript_fold_page(session_id, reveal_count, cursor.as_str())
+                .list_session_transcript_fold_page(
+                    session_id,
+                    &run_ids,
+                    reveal_count,
+                    cursor.as_str(),
+                )
                 .await
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx
@@ -387,15 +397,29 @@ impl App {
             return;
         };
         let key = (part_id, section);
-        if self.transcript.tool_detail_is_current(part_id, section) { return; }
+        if self.transcript.tool_detail_is_current(part_id, section) {
+            return;
+        }
         if let Some((_, stamp)) = self.transcript.tool_detail_loads.get(&key) {
-            if self.transcript.parts.iter().find(|part| part.part_id == part_id)
-                .is_some_and(|part| stamp != &(part.state.clone(), part.revision, part.updated_at_ms)) {
+            if self
+                .transcript
+                .parts
+                .iter()
+                .find(|part| part.part_id == part_id)
+                .is_some_and(|part| {
+                    stamp != &(part.state.clone(), part.revision, part.updated_at_ms)
+                })
+            {
                 self.transcript.tool_detail_pending.insert(key);
             }
             return;
         }
-        if self.transcript.tool_detail_allowed_at.get(&key).is_some_and(|at| *at > Instant::now()) {
+        if self
+            .transcript
+            .tool_detail_allowed_at
+            .get(&key)
+            .is_some_and(|at| *at > Instant::now())
+        {
             self.transcript.tool_detail_pending.insert(key);
             return;
         }
@@ -428,7 +452,9 @@ impl App {
                 })
                 .await;
         });
-        self.transcript.tool_detail_tasks.insert(key, task.abort_handle());
+        self.transcript
+            .tool_detail_tasks
+            .insert(key, task.abort_handle());
     }
 
     /// Park a forced refresh for the periodic tick to consume. `on_tick`
@@ -490,9 +516,7 @@ impl App {
                                 .client()
                                 .session_parts_by_ids(session_id, ids)
                                 .await?
-                                .parts
-                                .into_iter()
-                                .map(agena_api::resource::SessionTranscriptPart::from),
+                                .parts,
                         );
                     }
                     refresh.reconciled_parts = Some((known_ids, parts));
@@ -505,7 +529,7 @@ impl App {
                 .send(AppMessage::SessionRefreshed {
                     session_id,
                     requested_at,
-                    result,
+                    result: Box::new(result),
                 })
                 .await;
         });
@@ -808,7 +832,7 @@ async fn load_rewind_targets(
 /// One target per completed user run marker. Text is selected by run_id,
 /// which also handles interleaved runs and preserves multiline input.
 fn rewind_targets_from_parts(
-    parts: &[agena_api::resource::SessionTranscriptPart],
+    parts: &[agena_api::part::PartResource],
 ) -> anyhow::Result<Vec<crate::RewindTarget>> {
     let mut inputs_by_run = std::collections::HashMap::<i64, Vec<_>>::new();
     for part in parts {
@@ -842,7 +866,7 @@ fn rewind_targets_from_parts(
 /// Rebuild ordered composer input from the canonical user payloads. A rewind
 /// must retain resources and command references, as well as multiline text.
 fn rewind_composer_node(
-    part: &agena_api::resource::SessionTranscriptPart,
+    part: &agena_api::part::PartResource,
 ) -> anyhow::Result<agena_domain::ComposerNode> {
     use agena_domain::{
         ActivityId, ActivityPayload, ActivityProvenance, ComposerActivity, ComposerNode,
@@ -968,7 +992,7 @@ fn rewind_composer_node(
 #[cfg(test)]
 mod rewind_tests {
     use super::rewind_targets_from_parts;
-    use agena_api::resource::SessionTranscriptPart;
+    use agena_api::part::PartResource;
     use agena_domain::{ActivityPayload, ComposerNode, ResourceDelivery, ResourceReference};
     use serde_json::json;
 
@@ -979,8 +1003,8 @@ mod rewind_tests {
         state: &str,
         run_id: Option<i64>,
         content: serde_json::Value,
-    ) -> SessionTranscriptPart {
-        SessionTranscriptPart {
+    ) -> PartResource {
+        PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id: id,
@@ -993,6 +1017,7 @@ mod rewind_tests {
             created_at_ms: id,
             parent_part_id: None,
             run_id,
+            ..Default::default()
         }
     }
 

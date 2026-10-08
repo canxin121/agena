@@ -57,6 +57,7 @@ const sectionControllers = new Map<ToolDetailSection, AbortController>()
 const queuedSections = new Set<ToolDetailSection>()
 const sectionSubscriptions = new Map<string, () => void>()
 const sectionObservations = new Map<ToolDetailSection, ReturnType<typeof captureResourceObservation>>()
+const sectionRevisions = new Map<ToolDetailSection, number>()
 let loadedOutputState: string | undefined
 function cancelSectionRequests() {
   clearTimeout(liveRefreshTimer)
@@ -85,7 +86,8 @@ const linkedActivity = computed(() =>
 )
 
 function sectionLoaded(section: ToolDetailSection): boolean {
-  return Object.prototype.hasOwnProperty.call(sectionValues.value, section)
+  return Object.prototype.hasOwnProperty.call(sectionValues.value, section) &&
+    sectionRevisions.get(section) === (props.part.source.revision ?? 0)
 }
 
 function sectionLoading(section: ToolDetailSection): boolean {
@@ -168,10 +170,12 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
     if (resource.part_id !== Number(partId) || resource.section !== section) {
       throw new Error('The server returned a mismatched tool detail section')
     }
+    if (resource.revision < (sectionRevisions.get(section) ?? -1)) return
     const revision = props.part.source.revision ?? 0
     const updatedAt = props.part.source.updatedAt ?? 0
     const olderEnvelope =
       resource.revision < revision || (resource.revision === revision && resource.updated_at_ms < updatedAt)
+    if (olderEnvelope && section !== 'output') scheduleLiveSectionRefresh([section])
     const staleOutput = resource.part_state
       ? resource.part_state !== props.part.source.partState && (status.value.terminal || olderEnvelope)
       : olderEnvelope
@@ -187,6 +191,7 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
     }
     if (!sectionLoaded(section) || sectionValues.value[section] !== resource.value)
       sectionValues.value = { ...sectionValues.value, [section]: resource.value }
+    sectionRevisions.set(section, resource.revision)
     if (resource.observation) sectionObservations.set(section, resource.observation)
     else sectionObservations.delete(section)
     if (section === 'output') loadedOutputState = resource.part_state ?? sourceState
@@ -263,6 +268,7 @@ watch(
       loadingSections.value = new Set()
       sectionErrors.value = {}
       sectionObservations.clear()
+      sectionRevisions.clear()
       loadedOutputState = undefined
     }
     loadedPartKey.value = key
@@ -270,6 +276,22 @@ watch(
     sectionFailures.clear()
     sectionAllowedAt.clear()
     resetSectionState()
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [props.part.source.agenaSections, props.part.source.agenaContent, props.part.source.agenaPresentation] as const,
+  () => {
+    const content = props.part.source.agenaContent
+    const fields = content && typeof content === 'object' && !Array.isArray(content) ? content : {}
+    for (const loaded of props.part.source.agenaSections || []) {
+      if ((sectionRevisions.get(loaded.section) ?? -1) > loaded.revision) continue
+      const value = loaded.section === 'presentation'
+        ? props.part.source.agenaPresentation ?? null : fields[loaded.section] ?? null
+      sectionValues.value = { ...sectionValues.value, [loaded.section]: value }
+      sectionRevisions.set(loaded.section, loaded.revision)
+    }
   },
   { immediate: true },
 )
@@ -528,6 +550,7 @@ function toggleOuter() {
           v-for="(block, index) in operation.presentationBlocks"
           :key="String(block.id || `${block.type || block.kind || 'block'}:${index}`)"
           :block="block"
+          :session-id="sessionId"
         />
       </div>
 

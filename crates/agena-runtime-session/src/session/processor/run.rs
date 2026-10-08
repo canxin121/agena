@@ -163,21 +163,16 @@ impl SessionProcessor {
         }
     }
 
-    /// Execute one provider model turn as a **parts-native** run (R2).
+    /// Execute one provider model turn through canonical Parts and resources.
     ///
     /// The caller has already started the run marker (via
     /// [`StoreAdapter::start_run`]) and passes its id as `run.next_message_id`.
-    /// This turn's durable state is written exclusively through parts: the
-    /// active text/think parts are appended under the marker
-    /// (`append_parts`), stream deltas are pushed as `content_text_delta`
-    /// (`update_part`, amortized by the facade per D10), think deltas replace
-    /// the full content document (D10 asymmetry — the thinking content is an
-    /// array shape, so `content_text_delta` cannot be applied), and the run is
-    /// terminalized with `complete_run`/`cancel_run`. In-flight tool-call
+    /// Text/reasoning Parts are created under the marker with stable resource
+    /// references. Tokens advance their ContentWriters without mutating Part
+    /// rows. Content is sealed before terminal Part and run facts are committed
+    /// through `complete_run`/`cancel_run`. In-flight tool-call
     /// placeholders are deferred and appended only on the success path. The
-    /// result carries the persisted parts — never a v1 [`Message`] — so the
-    /// caller must not re-persist this turn (parts are the only durable write
-    /// source; no double write).
+    /// result carries the persisted Parts; the caller must not re-persist them.
     pub(crate) async fn run_turn(
         &self,
         mut run: SessionRunRequest,
@@ -252,8 +247,8 @@ impl SessionProcessor {
         let mut usage = None;
         let mut finish_reason_enum = FinishReason::Stop;
         let mut provider_metadata = None;
-        let mut visible_text = String::new();
-        let mut reasoning_text = String::new();
+        let mut has_visible_text = false;
+
         let mut saw_tool_call = false;
         let mut saw_provider_native_tool_call = false;
         let mut follow_up_requested = false;
@@ -276,7 +271,7 @@ impl SessionProcessor {
             }
             match item {
                 Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
-                    visible_text.push_str(delta.as_str());
+                    has_visible_text |= !delta.trim().is_empty();
                     if let Some(part_id) = active_reasoning_part.take() {
                         // A thinking segment is complete the moment the model
                         // starts producing text. Terminalize it immediately —
@@ -526,7 +521,6 @@ impl SessionProcessor {
                     );
                 }
                 Ok(CompletionStreamEvent::ThinkingDelta { delta, .. }) => {
-                    reasoning_text.push_str(delta.as_str());
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut parts, part_id)?;
                         self.persist_part_state(&run, &mut parts, part_id).await?;
@@ -574,11 +568,11 @@ impl SessionProcessor {
             provider_err = Some(AppError::Cancelled);
         }
 
-        if provider_err.is_some() {
+        if let Some(error) = provider_err.as_ref() {
             if cancelled {
-                terminalize_nonterminal_parts(&mut parts, PartState::Cancelled)?;
+                terminalize_nonterminal_parts(&mut parts, PartState::Cancelled, &error.failure())?;
             } else {
-                terminalize_nonterminal_parts(&mut parts, PartState::Failed)?;
+                terminalize_nonterminal_parts(&mut parts, PartState::Failed, &error.failure())?;
             }
         } else {
             if let Some(part_id) = active_text_part.take() {
@@ -591,20 +585,88 @@ impl SessionProcessor {
             }
         }
 
+        let mut reasoning_sources = parts
+            .iter()
+            .filter(|part| part.kind == "think")
+            .cloned()
+            .collect::<Vec<_>>();
+        for part in &mut reasoning_sources {
+            let references = part
+                .content
+                .get("resources")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|value| {
+                    serde_json::from_value::<agena_domain::ContentRef>(value.clone()).ok()
+                })
+                .collect::<Vec<_>>();
+            let mut text = String::new();
+            for reference in references {
+                let body = run
+                    .store
+                    .facade
+                    .contents()
+                    .read_text(reference.resource_id, 8 * 1024 * 1024)
+                    .await
+                    .map_err(|error| {
+                        AppError::Internal(format!("resolve reasoning replay source: {error}"))
+                    })?;
+                if body.gap || body.truncated {
+                    return Err(AppError::Internal(
+                        "reasoning replay source is incomplete".into(),
+                    ));
+                }
+                text.push_str(&body.text);
+            }
+            if !text.is_empty() {
+                part.content["summary"] = serde_json::json!([text]);
+            }
+        }
+        let has_substantive_reasoning = reasoning_sources.iter().any(|part| {
+            part.content
+                .get("summary")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .any(|text| !text.trim().is_empty() && text.trim() != REASONING_PLACEHOLDER)
+        });
+
         if provider_err.is_none()
-            && visible_text.trim().is_empty()
+            && !has_visible_text
             && !saw_tool_call
             && !saw_provider_native_tool_call
-            && !reasoning_text.trim().is_empty()
-            && reasoning_text.trim() != REASONING_PLACEHOLDER
+            && has_substantive_reasoning
         {
-            let part_id = self
-                .start_text_part(&run, assistant_message_id, &mut parts)
+            let resources = parts
+                .iter()
+                .filter(|part| part.kind == "think")
+                .filter_map(|part| {
+                    part.content
+                        .get("resources")
+                        .and_then(serde_json::Value::as_array)
+                })
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>();
+            let created = run
+                .store
+                .append_parts(
+                    run.session_id,
+                    assistant_message_id,
+                    vec![agena_storage::store::NewPart {
+                        kind: "text".into(),
+                        role: agena_storage::store::PartRole::Assistant,
+                        content: serde_json::json!({"text": "", "resources": resources}),
+                        summary: None,
+                        visibility: agena_storage::store::PartVisibility::Both,
+                        parent_part_id: None,
+                        state: PartState::Completed,
+                    }],
+                )
                 .await?;
-            self.append_text_delta(&run, &mut parts, part_id, reasoning_text.as_str())
-                .await?;
-            complete_part_status(&mut parts, part_id)?;
-            self.persist_part_state(&run, &mut parts, part_id).await?;
+            parts.extend(created);
         }
 
         // A successful stream that produced no visible text, no tool call,
@@ -614,10 +676,10 @@ impl SessionProcessor {
         // reasoning-copy block above deliberately skips the placeholder, so
         // the user would otherwise see nothing.
         if provider_err.is_none()
-            && visible_text.trim().is_empty()
+            && !has_visible_text
             && !saw_tool_call
             && !saw_provider_native_tool_call
-            && (reasoning_text.trim().is_empty() || reasoning_text.trim() == REASONING_PLACEHOLDER)
+            && !has_substantive_reasoning
         {
             provider_err = Some(AppError::EmptyResponse);
         }
@@ -663,6 +725,19 @@ impl SessionProcessor {
             // persisting its negative placeholder id would corrupt the run.
             // Text and reasoning parts are real content and are retained.
             parts.retain(|part| part.part_id >= 0);
+
+            // Protocol validation can fail after the stream's first
+            // terminalization pass (for example an unfinished hosted call).
+            // Every operation with a durable identity must then be sealed too.
+            terminalize_nonterminal_parts(
+                &mut parts,
+                if cancelled {
+                    PartState::Cancelled
+                } else {
+                    PartState::Failed
+                },
+                &err.failure(),
+            )?;
 
             // Persist the terminalization of every durable content part
             // (text/think rows appended above), then terminalize the marker.
@@ -755,11 +830,13 @@ impl SessionProcessor {
         // including its exact notification inputs. Recording terminal text
         // rounds as well as tool-calling rounds makes the transcript itself
         // the crash-safe delivery acknowledgment.
-        let round_record = round_record_from_parts(
-            &parts,
+        let mut round_record = round_record_from_parts(
+            &reasoning_sources,
             provider_state.as_ref(),
             &run.input_notification_part_ids,
         );
+        round_record["part_ids"] =
+            serde_json::json!(parts.iter().map(|part| part.part_id).collect::<Vec<_>>());
         let merged_content = merge_round_record(&run.marker_content, round_record)?;
         let run_marker = if all_parts_terminal {
             run.store

@@ -41,7 +41,6 @@ use agena_api::{
         ModelRef as WireModelRef, PermissionMode as WirePermissionMode, PermissionReply,
         PermissionReplyKind as WirePermissionReplyKind, PermissionScope as WirePermissionScope,
         ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
-        SessionTranscriptPart,
     },
 };
 use agena_application::dto::{
@@ -51,6 +50,9 @@ use agena_application::dto::{
 };
 use agena_client::{AgenaClient, ClientError};
 use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
+
+#[cfg(test)]
+use agena_api::part::PartResource;
 
 struct ServerSessionClient {
     client: AgenaClient,
@@ -1258,8 +1260,28 @@ impl AgenaCli {
     ) -> Result<String, AppError> {
         let server = ServerSessionClient::connect(self, None).await?;
         let execution = server.execution(args.session_id).await?;
-        let runs = execution
-            .parts
+        let parts = server
+            .client
+            .session_all_parts(args.session_id)
+            .await
+            .map_err(|error| client_error("failed to read session content", error))?;
+        let mut text_by_run = std::collections::BTreeMap::<i64, String>::new();
+        for part in parts.iter().filter(|p| p.kind == "text") {
+            let Some(run_id) = part.run_id else {
+                continue;
+            };
+            let text = server
+                .client
+                .part_text(args.session_id, part, 1024 * 1024)
+                .await
+                .map_err(|error| client_error("failed to read session content", error))?;
+            let body = text_by_run.entry(run_id).or_default();
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(&text);
+        }
+        let runs = parts
             .iter()
             .filter(|part| part.kind == "run")
             .map(|run| {
@@ -1277,7 +1299,7 @@ impl AgenaCli {
                             run.state
                         ))
                     })?,
-                    text: run_visible_text(execution.parts.as_slice(), run.part_id),
+                    text: text_by_run.get(&run.part_id).cloned().unwrap_or_default(),
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
@@ -1754,7 +1776,27 @@ impl AgenaCli {
                 "command requires session interaction or recovery".to_owned(),
             ));
         }
-        let text = last_assistant_text(execution.parts.as_slice()).unwrap_or_default();
+        let run_id = execution
+            .parts
+            .iter()
+            .rev()
+            .find(|part| part.kind == "run" && part.role == "assistant")
+            .map(|part| part.part_id);
+        let mut bodies = Vec::new();
+        for part in execution
+            .parts
+            .iter()
+            .filter(|part| part.kind == "text" && part.role == "assistant" && part.run_id == run_id)
+        {
+            bodies.push(
+                server
+                    .client
+                    .part_text(session.id, part, 1024 * 1024)
+                    .await
+                    .map_err(|error| client_error("failed to read assistant content", error))?,
+            );
+        }
+        let text = bodies.join("\n");
         if json {
             render_serialized(
                 OutputFormat::Json,
@@ -2379,7 +2421,8 @@ fn expect_execution(
     Ok(execution)
 }
 
-fn last_assistant_text(parts: &[SessionTranscriptPart]) -> Option<String> {
+#[cfg(test)]
+fn last_assistant_text(parts: &[PartResource]) -> Option<String> {
     let run_id = parts
         .iter()
         .rev()
@@ -2389,7 +2432,8 @@ fn last_assistant_text(parts: &[SessionTranscriptPart]) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-fn run_visible_text(parts: &[SessionTranscriptPart], run_id: i64) -> String {
+#[cfg(test)]
+fn run_visible_text(parts: &[PartResource], run_id: i64) -> String {
     parts
         .iter()
         .filter(|part| part.part_id != run_id && part.run_id == Some(run_id))
@@ -2689,23 +2733,23 @@ mod tests {
 
     #[test]
     fn cli_text_projection_uses_the_latest_assistant_run() {
-        let part =
-            |part_id, kind: &str, role: &str, run_id, text: Option<&str>| SessionTranscriptPart {
-                revision: 0,
-                updated_at_ms: 0,
-                part_id,
-                kind: kind.to_owned(),
-                role: role.to_owned(),
-                state: "completed".to_owned(),
-                content: text
-                    .map(|text| serde_json::json!({ "text": text }))
-                    .unwrap_or_else(|| serde_json::json!({})),
-                presentation: None,
-                summary: None,
-                created_at_ms: part_id,
-                parent_part_id: None,
-                run_id,
-            };
+        let part = |part_id, kind: &str, role: &str, run_id, text: Option<&str>| PartResource {
+            revision: 0,
+            updated_at_ms: 0,
+            part_id,
+            kind: kind.to_owned(),
+            role: role.to_owned(),
+            state: "completed".to_owned(),
+            content: text
+                .map(|text| serde_json::json!({ "text": text }))
+                .unwrap_or_else(|| serde_json::json!({})),
+            presentation: None,
+            summary: None,
+            created_at_ms: part_id,
+            parent_part_id: None,
+            run_id,
+            ..Default::default()
+        };
         let parts = vec![
             part(1, "run", "assistant", Some(1), None),
             part(2, "text", "assistant", Some(1), Some("old")),

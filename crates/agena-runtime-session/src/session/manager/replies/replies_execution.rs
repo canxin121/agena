@@ -2,16 +2,16 @@ use super::{
     AggregatedPermissionOutcome, AggregatedPermissionRequest, AppError, Arc, ExecutionControl,
     OperationPart, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
     ProviderPromptAnchor, ResolvedPendingTool, SessionManager, SessionManagerState,
-    SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionRunTermination,
-    StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
-    assistant_message_id, background_operation_from_execution, background_operation_id,
-    completed_lifecycle, execution_control_to_app_error, inherit_operation_context,
-    operation_authorization, operation_content_value, operation_from_part,
-    operation_permission_approved_actions, pending_operation_for_resolved,
-    pending_tool_part_not_found_error, permission_action_key, permission_request_id,
-    plugin_user_input_request_id, push_unique_permission_action, requested_background_kind,
-    reserve_background_external_id, resolve_pending_tool, responses_api_request_metadata,
-    run_abort_reason, should_execute_pending_tools_concurrently, update_resolved_tool_message,
+    SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionRunTermination, ToolError,
+    ToolInvocationExecution, ToolPermissionCheck, Utc, assistant_message_id,
+    background_operation_from_execution, background_operation_id, completed_lifecycle,
+    execution_control_to_app_error, inherit_operation_context, operation_authorization,
+    operation_content_value, operation_from_part, operation_permission_approved_actions,
+    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
+    permission_request_id, plugin_user_input_request_id, push_unique_permission_action,
+    requested_background_kind, reserve_background_external_id, resolve_pending_tool,
+    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
+    update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -609,7 +609,12 @@ impl SessionManager {
                 if waiting {
                     return Ok(session);
                 }
-                let last_assistant_text = crate::session::store::parts_into_runs(session.parts())
+                let resolved_for_stop = prompt_window::resolve_content_for_model(
+                    &session,
+                    self.store.facade.contents(),
+                )
+                .await?;
+                let last_assistant_text = crate::session::store::parts_into_runs(resolved_for_stop.parts())
                     .into_iter()
                     .rev()
                     // Only real assistant-authored runs count as the last
@@ -1168,8 +1173,7 @@ impl SessionManager {
     /// nor fabricates a user turn. A completed reply marker cannot accept
     /// `append_parts` (the in-flight guard, design 17.3) and the state
     /// machine forbids reopening it, so the text is committed directly via
-    /// `update_part` (whole-content replacement: a `content_text_delta`
-    /// alone would sit in the streaming buffer with no flush trigger).
+    /// `update_part` as a semantic continuation, keeping source references.
     ///
     /// Returns the run marker id to keep for the next model turn: the
     /// freshly-opened `continue` marker when the last real assistant reply
@@ -1442,20 +1446,19 @@ impl SessionManager {
                 continuation_supported,
                 native_compaction_enabled,
             };
+            let request_session =
+                prompt_window::resolve_content_for_model(&session, self.store.facade.contents())
+                    .await?;
             let mut prepared =
-                prompt_window::build_prepared_prompt(&session, prompt_request_options);
+                prompt_window::build_prepared_prompt(&request_session, prompt_request_options);
             prompt_window::render_session_tool_results_for_model(
                 &mut prepared.turns,
-                &session,
+                &request_session,
                 &state.tool_executor,
             )
             .await;
-            prepared.turns = crate::session::prompt::bound_model_tool_outputs_async(
-                prepared.turns,
-                Some(state.tool_executor.workspace_root().to_path_buf()),
-                session.id,
-            )
-            .await?;
+            prepared.turns =
+                crate::session::prompt::bound_model_tool_outputs_async(prepared.turns).await?;
             let (replayed_tool_calls, replayed_tool_results, unanswered_tool_call) =
                 prompt_window::prompt_tool_call_status(&prepared.turns);
             if unanswered_tool_call {
@@ -1465,7 +1468,7 @@ impl SessionManager {
                 )));
             }
             let estimated_full_tokens = prompt_window::approximate_session_request_tokens(
-                &session,
+                &request_session,
                 Some(options.model.provider_id.as_ref()),
                 options.model.adapter_id.as_ref().map(AsRef::as_ref),
                 Some(options.model.model_id.as_ref()),
@@ -1572,6 +1575,7 @@ impl SessionManager {
             // its parts under the same marker, so a tool-calling reply persists
             // as exactly one assistant run holding all its parts.
             let run = SessionRunRequest {
+                content_writers: Default::default(),
                 retry_registry: self.retry_registry.clone(),
                 session_id: session.id,
                 model: options.model.clone(),
@@ -1924,10 +1928,8 @@ impl SessionManager {
             .await?;
         }
 
-        // The parallel worker path intentionally handles only detailed,
-        // non-streaming executions. Keep a singleton on the sequential path
-        // so streaming tool output continues to checkpoint through its normal
-        // lifecycle; a batch needs at least two ready members to fan out.
+        // A singleton uses the same lifecycle; larger batches share one
+        // durable start boundary before their independent content writers run.
         if ready_tools.len() == 1 {
             sequential_tools.push(
                 ready_tools
@@ -1941,7 +1943,9 @@ impl SessionManager {
             // parallel execution instead of pending placeholders. Each changed
             // part id is one `update_part` in the batch transition checkpoint.
             let mut changed_part_ids = Vec::new();
-            for resolved in &ready_tools {
+            for resolved in &mut ready_tools {
+                self.prepare_tool_content(&mut session, resolved, &batch_executor)
+                    .await?;
                 let Some(part) = session.part_mut(&resolved.pending.part) else {
                     continue;
                 };
@@ -1999,6 +2003,40 @@ impl SessionManager {
         }
 
         Ok(session)
+    }
+
+    pub(in crate::session::manager) async fn prepare_tool_content(
+        &self,
+        session: &mut Session,
+        resolved: &mut ResolvedPendingTool,
+        executor: &ToolExecutor,
+    ) -> Result<(), AppError> {
+        if resolved.content_writer.is_some() {
+            return Ok(());
+        }
+        let Some(kind) = executor
+            .streaming_content_kind(&resolved.invocation)
+            .map_err(crate::session::manager::tool_error_to_app_error)?
+        else {
+            return Ok(());
+        };
+        let writer = self
+            .store
+            .facade
+            .contents()
+            .open(session.id, resolved.pending.part.part_id, kind)
+            .await
+            .map_err(|error| AppError::Internal(format!("open tool content: {error}")))?;
+        let reference = writer.resource().reference();
+        update_resolved_tool_message(session, resolved, |part| {
+            let mut operation = operation_from_part(part)
+                .ok_or_else(|| AppError::Internal("tool content is malformed".into()))?;
+            operation.resources.push(reference);
+            part.content = operation_content_value(&operation)?;
+            Ok(())
+        })?;
+        resolved.content_writer = Some(writer);
+        Ok(())
     }
 
     pub(super) fn cloud_tool_adapter(
@@ -2170,12 +2208,9 @@ impl SessionManager {
             AggregatedPermissionOutcome::Allow => {}
         }
 
-        // The concurrent executor uses the buffered entry point. Background
-        // launches need the durable handoff, and declared plugin streams need
-        // their stream consumer; keep both on the canonical sequential path.
-        if requested_background_kind(&resolved.invocation).is_some()
-            || scoped_executor.invocation_requires_streaming(&resolved.invocation)
-        {
+        // Background launches retain their durable handoff. Foreground tools
+        // all use the same execution and content lifecycle in parallel.
+        if requested_background_kind(&resolved.invocation).is_some() {
             *session = before_prepare;
             return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
         }
@@ -2237,12 +2272,17 @@ impl SessionManager {
                         pending_tool.advertised_tool_identity.as_deref(),
                     )?;
                     scoped_executor
-                        .execute_invocation_detailed_with_launch_provenance(
+                        .execute_invocation(
                             &pending_tool.invocation,
-                            session_id,
-                            pending_tool.call_id,
-                            pending_tool.prepared_shell_command.clone(),
-                            Some(pending_tool.scheduled_job_launch_provenance(session_id)),
+                            crate::tool::ToolRuntimeContext {
+                                session_id: Some(session_id),
+                                call_id: Some(pending_tool.call_id),
+                                prepared_shell_command: pending_tool.prepared_shell_command.clone(),
+                                launch_provenance: Some(
+                                    pending_tool.scheduled_job_launch_provenance(session_id),
+                                ),
+                                output: pending_tool.content_writer.clone(),
+                            },
                         )
                         .await
                 };
@@ -2598,44 +2638,17 @@ impl SessionManager {
             None
         };
 
-        // A background launch must return through the durable receipt/handoff
-        // path below. Do not even probe streaming execution: obtaining a stream
-        // can already spawn the process, before the receipt is validated.
-        let streaming_tool = if background_intent.is_some() {
-            None
-        } else {
-            match scoped_executor
-                .execute_invocation_streaming_with_prepared_shell(
-                    &resolved.invocation,
-                    session.id,
-                    resolved.call_id,
-                    resolved.prepared_shell_command.clone(),
+        self.prepare_tool_content(&mut session, &mut resolved, &scoped_executor)
+            .await?;
+        if resolved.content_writer.is_some() {
+            session = self
+                .persist_session_changes(
+                    session,
+                    vec![resolved.pending.part.part_id],
+                    None,
+                    state.clone(),
                 )
-                .await
-            {
-                Ok(stream) => stream,
-                Err(error) => {
-                    return Box::pin(self.apply_pending_tool_start_error(
-                        session,
-                        &resolved.pending,
-                        error,
-                        state,
-                        true,
-                    ))
-                    .await;
-                }
-            }
-        };
-
-        if let Some(stream) = streaming_tool {
-            return Box::pin(self.apply_streaming_tool_execution(
-                session,
-                &resolved.pending,
-                stream,
-                state,
-                cancellation,
-            ))
-            .await;
+                .await?;
         }
 
         let manager = self.background_handle();
@@ -2643,15 +2656,18 @@ impl SessionManager {
         let execution_session_id = session.id;
         let _host_user_input_sequence = manager
             .host_user_input_sequence_guard(execution_session_id, execution_resolved.call_id);
-        let execution = Box::pin(
-            scoped_executor.execute_invocation_detailed_with_launch_provenance(
-                &execution_resolved.invocation,
-                execution_session_id,
-                execution_resolved.call_id,
-                execution_resolved.prepared_shell_command.clone(),
-                Some(execution_resolved.scheduled_job_launch_provenance(execution_session_id)),
-            ),
-        )
+        let execution = Box::pin(scoped_executor.execute_invocation(
+            &execution_resolved.invocation,
+            crate::tool::ToolRuntimeContext {
+                session_id: Some(execution_session_id),
+                call_id: Some(execution_resolved.call_id),
+                prepared_shell_command: execution_resolved.prepared_shell_command.clone(),
+                launch_provenance: Some(
+                    execution_resolved.scheduled_job_launch_provenance(execution_session_id),
+                ),
+                output: execution_resolved.content_writer.clone(),
+            },
+        ))
         .await;
 
         if let Some(operation) = background_intent {
@@ -3120,100 +3136,6 @@ impl SessionManager {
         .await
     }
 
-    pub(in crate::session::manager) async fn apply_streaming_tool_execution(
-        &self,
-        mut session: Session,
-        pending_tool: &SessionPendingTool,
-        mut stream: StreamingToolExecution,
-        state: Arc<SessionManagerState>,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<Session, AppError> {
-        let stream_id = stream.stream_id.clone();
-        // Keep a bounded display tail, not a second cumulative result. The
-        // facade overlays InProgress updates in memory and coalesces trailing
-        // live notifications at 100 ms; terminal facts are committed once.
-        // Publishing only on a two-second heartbeat loses the last chunk when
-        // a command pauses, and makes short commands appear non-streaming.
-        let mut streamed_output = String::new();
-        let mut chunks_open = true;
-        let stream_end = loop {
-            tokio::select! {
-                biased;
-                _ = async {
-                    match cancellation.as_ref() {
-                        Some(token) => token.cancelled().await,
-                        None => std::future::pending::<()>().await,
-                    }
-                } => {
-                    let session = self.load_session_with_workspace_root(session.id).await?;
-                    return self.apply_tool_cancellation(session, pending_tool, state).await;
-                },
-                // The terminal payload contains the complete result. A
-                // retained chunk sender must never hold a finished reply open.
-                result = &mut stream.end => break result,
-                chunk = stream.chunks.recv(), if chunks_open => {
-                    let Some(chunk) = chunk else {
-                        chunks_open = false;
-                        continue;
-                    };
-                    let Some(delta) = chunk.text_delta.as_deref() else {
-                        continue;
-                    };
-                    if delta.is_empty() {
-                        continue;
-                    }
-                    if stream.output_mode == agena_domain::DeltaMode::Replace {
-                        streamed_output.clear();
-                    }
-                    // Bound the incoming delta before allocating a copy too.
-                    streamed_output.push_str(Self::bounded_live_output(delta));
-                    let retained = Self::bounded_live_output(&streamed_output);
-                    let discarded = streamed_output.len() - retained.len();
-                    streamed_output.drain(..discarded);
-                    session = self
-                        .refresh_streaming_title(
-                            session.id,
-                            pending_tool,
-                            Some(&streamed_output),
-                            state.clone(),
-                        )
-                        .await?;
-                },
-            }
-        };
-        let execution = match stream_end {
-            Ok(Ok(execution)) => execution,
-            Ok(Err(err)) => {
-                let session = self.load_session_with_workspace_root(session.id).await?;
-                return self
-                    .route_tool_error(session, pending_tool, err, state)
-                    .await;
-            }
-            Err(error) => {
-                let session = self.load_session_with_workspace_root(session.id).await?;
-                return self
-                    .route_tool_error(
-                        session,
-                        pending_tool,
-                        ToolError::plugin(
-                            agena_failure::diagnostic::format_error_chain_with_context(
-                                format!(
-                                    "tool stream `{stream_id}` ended without a terminal result"
-                                ),
-                                &error,
-                            ),
-                        ),
-                        state,
-                    )
-                    .await;
-            }
-        };
-
-        let session = self.load_session_with_workspace_root(session.id).await?;
-        self.apply_tool_success_with_rules(session, pending_tool, execution, Vec::new(), state)
-            .await
-    }
-
     pub(in crate::session::manager) async fn apply_tool_cancellation(
         &self,
         mut session: Session,
@@ -3240,67 +3162,6 @@ impl SessionManager {
             .await
     }
 
-    /// A running process can produce more output than any reader needs, so the
-    /// checkpoint only carries the tail and stays small.
-    fn bounded_live_output(text: &str) -> &str {
-        const MAX_LIVE_OUTPUT_BYTES: usize = 8 * 1024;
-        if text.len() <= MAX_LIVE_OUTPUT_BYTES {
-            return text;
-        }
-        let mut start = text.len() - MAX_LIVE_OUTPUT_BYTES;
-        while start < text.len() && !text.is_char_boundary(start) {
-            start += 1;
-        }
-        &text[start..]
-    }
-
-    /// Update the bounded live tail through the shared facade overlay. Its
-    /// trailing notification publishes even if no further chunks arrive.
-    /// Reconnect reads observe the same overlay; lifecycle completion flushes
-    /// the terminal result, rather than persisting each display increment.
-    pub(in crate::session::manager) async fn refresh_streaming_title(
-        &self,
-        session_id: i64,
-        pending_tool: &SessionPendingTool,
-        live_output: Option<&str>,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let mut session = self.load_session_with_workspace_root(session_id).await?;
-        let tool_part_ref = session
-            .resolve_part_ref(&pending_tool.part)
-            .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-        {
-            let tool_part = session
-                .part_mut(&tool_part_ref)
-                .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-            if matches!(tool_part.state, PartState::Pending | PartState::InProgress) {
-                tool_part.state = PartState::InProgress;
-            }
-            if let Some(live) = live_output
-                && let Some(object) = tool_part.content.as_object_mut()
-            {
-                // Bounded display state: the terminal payload replaces it, so
-                // the checkpoint stays small however long the stream runs.
-                let metadata = object
-                    .entry("metadata".to_owned())
-                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-                if let Some(metadata) = metadata.as_object_mut() {
-                    metadata.insert(
-                        agena_runtime_contracts::part_content::ToolCallContent::LIVE_OUTPUT_METADATA_KEY
-                            .to_owned(),
-                        serde_json::Value::String(live.to_owned()),
-                    );
-                }
-            }
-        };
-        // Persist the refreshed title as a part delta checkpoint (D10):
-        // the in-memory title change is written through the facade, which is
-        // the single write path for streamed content. There is no separate
-        // content-node title column to target.
-        self.persist_session_changes(session, vec![pending_tool.part.part_id], None, state)
-            .await
-    }
-
     pub(in crate::session::manager) async fn apply_tool_success_with_rules(
         &self,
         mut session: Session,
@@ -3311,17 +3172,20 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let authorization = operation_authorization(&session, &resolved);
-        let mut tool_output = execution.output.clone();
+        let mut tool_output = std::mem::take(&mut execution.output);
         // The executor compacts the model-visible payload when it exceeds the
         // model boundary, but the user-facing Operation must keep the complete
         // result. apply_patch carries the full diff outside the compacted
         // payload; restore it so the terminal renders the real diff instead of
         // the truncated one.
-        if let Some(apply_patch) = execution.apply_patch.as_ref()
+        if let Some(apply_patch) = execution.apply_patch.take()
             && let Some(mut payload) = tool_output.to_json_payload()
             && let Some(object) = payload.as_object_mut()
         {
-            object.insert("diff".to_owned(), serde_json::json!(apply_patch.diff));
+            object.insert(
+                "diff".to_owned(),
+                serde_json::Value::String(apply_patch.diff),
+            );
             object.insert(
                 "progress".to_owned(),
                 serde_json::json!(apply_patch.progress),
@@ -3353,7 +3217,32 @@ impl SessionManager {
         // previously required a fake guard result and made control metadata
         // vulnerable to the streaming buffer.
         let background = background_operation_from_execution(&resolved.invocation, &tool_output);
-        let output = execution.view.raw_output(&tool_output);
+        let mut output = execution.view.raw_output(&tool_output);
+        if session
+            .part(&resolved.pending.part)
+            .and_then(operation_from_part)
+            .is_some_and(|operation| {
+                operation
+                    .resources
+                    .iter()
+                    .any(|resource| resource.kind == agena_domain::ContentKind::Log)
+            })
+            && let Some(payload) = output
+                .payload
+                .as_mut()
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            for key in ["text", "output", "stdout", "stderr", "events"] {
+                payload.remove(key);
+            }
+        }
+        let output = crate::session::content_result::externalize_result(
+            self.store.facade.contents(),
+            session.id,
+            resolved.pending.part.part_id,
+            output,
+        )
+        .await?;
         update_resolved_tool_message(&mut session, &resolved, |tool_part| {
             let mut operation = OperationPart::completed(
                 resolved.call_id,
@@ -3369,6 +3258,11 @@ impl SessionManager {
             // correlation metadata and answered asks belong to its identity.
             if let Some(existing) = operation_from_part(tool_part) {
                 inherit_operation_context(&mut operation, existing);
+            }
+            if let Some(output) = &operation.output {
+                operation
+                    .resources
+                    .extend(output.fields.iter().map(|field| field.resource.clone()));
             }
             tool_part.content = operation_content_value(&operation)?;
             tool_part.summary = None;

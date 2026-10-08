@@ -94,7 +94,7 @@ pub(crate) fn select_events<'a>(
     if events.peek().is_none() {
         if cursor.offset != 0 && explicit {
             return Err(MonitorError::Invalid(
-                "partially read event was evicted; inspect output_archive when available".into(),
+                "partially read event was evicted; inspect output_resource when available".into(),
             ));
         }
         cursor = OutputCursor {
@@ -106,7 +106,7 @@ pub(crate) fn select_events<'a>(
         let mut start = cursor.offset as usize;
         if start != 0 && event.seq != cursor.seq.saturating_add(1) {
             if explicit {
-                return Err(MonitorError::Invalid("partially read event was evicted; use output_archive segments to recover older output".into()));
+                return Err(MonitorError::Invalid("partially read event was evicted; use output_resource segments to recover older output".into()));
             }
             start = 0; // automatic cursor recovers to the oldest retained event
         }

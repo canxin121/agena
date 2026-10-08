@@ -447,7 +447,7 @@ pub enum ToolPayloadOutput {
     Shell {
         action: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        output_archive: Option<agena_domain::ProcessOutputArchive>,
+        output_resource: Option<agena_domain::ContentRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         terminal: Option<agena_domain::TerminalScreen>,
         #[serde(default)]
@@ -522,21 +522,6 @@ pub enum ToolPayloadOutput {
         backend: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<WebSearchResult>,
-    },
-    /// Read-only compatibility for persisted parts from the retired snapshot
-    /// plugin. There is no corresponding executable input or workspace effect.
-    EnterSnapshot {
-        path: String,
-        branch: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        backend: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        note: Option<String>,
-    },
-    /// Read-only compatibility for persisted snapshot exit results.
-    ExitSnapshot {
-        action: String,
-        path: String,
     },
     CronCreate {
         id: String,
@@ -701,19 +686,6 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena.web.search",
         "agena_web__search",
     ),
-    // Retired snapshot names remain recognizable when rendering old history.
-    (
-        "enter_snapshot",
-        "snapshot.enter",
-        "agena.snapshot.enter",
-        "agena_snapshot_enter",
-    ),
-    (
-        "exit_snapshot",
-        "snapshot.exit",
-        "agena.snapshot.exit",
-        "agena_snapshot_exit",
-    ),
     (
         "cron_create",
         "cron.create",
@@ -863,11 +835,9 @@ fn payload_name_for_invocation(
             "action".to_owned(),
             serde_json::Value::String(action.to_owned()),
         );
-        normalize_historical_shell_input(input);
         return Some("shell".to_owned());
     }
     if invocation_name == "shell" {
-        normalize_historical_shell_input(input);
         return Some("shell".to_owned());
     }
     match invocation_name {
@@ -907,12 +877,11 @@ fn payload_name_for_invocation(
     payload_name_for_output_tool(invocation_name)
 }
 
-/// Current aliases plus the retired launch name for read-only history decoding.
-/// The retired name is deliberately absent from native dispatch and the registry.
+/// Registered shell identities in their current protocol spellings.
 fn shell_action_for_name(name: &str) -> Option<&'static str> {
     [
         "exec", "spawn", "watch", "open", "list", "logs", "read", "write", "stop", "resize",
-        "signal", "run",
+        "signal",
     ]
     .into_iter()
     .find(|action| {
@@ -920,58 +889,6 @@ fn shell_action_for_name(name: &str) -> Option<&'static str> {
             || name == format!("agena.shell.{action}")
             || name == format!("agena_shell_{action}")
     })
-}
-
-fn normalize_historical_shell_input(input: &mut serde_json::Map<String, serde_json::Value>) {
-    if input.get("action").and_then(serde_json::Value::as_str) == Some("run") {
-        let tty = input
-            .remove("tty")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
-        let background = input
-            .remove("run_in_background")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
-        let monitored = input
-            .remove("monitor")
-            .is_some_and(|value| !value.is_null());
-        let action = if tty {
-            "open"
-        } else if background || monitored {
-            "spawn"
-        } else {
-            "exec"
-        };
-        input.insert(
-            "action".to_owned(),
-            serde_json::Value::String(action.to_owned()),
-        );
-        if tty {
-            input
-                .entry("include_screen")
-                .or_insert(serde_json::Value::Bool(true));
-        } else {
-            for field in ["yield_time_ms", "rows", "cols"] {
-                input.remove(field);
-            }
-        }
-    }
-    // Old shell.write used empty input for reading. Only history projection
-    // translates it; the live write contract requires nonempty input.
-    if input.get("action").and_then(serde_json::Value::as_str) == Some("write")
-        && input
-            .get("chars")
-            .and_then(serde_json::Value::as_str)
-            .is_none_or(str::is_empty)
-    {
-        input.insert(
-            "action".to_owned(),
-            serde_json::Value::String("read".to_owned()),
-        );
-        for field in ["chars", "reads", "writes", "network"] {
-            input.remove(field);
-        }
-    }
 }
 
 fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
@@ -1120,22 +1037,21 @@ mod tests {
     }
 
     #[test]
-    fn compact_shell_run_invocations_decode_in_both_directions() {
-        // The provider emits the compact name `shell.run`; the payload layer
+    fn compact_shell_exec_invocations_decode_in_both_directions() {
+        // The provider emits the compact name `shell.exec`; the payload layer
         // must reconstruct the `shell` discriminant from it exactly like it
-        // does for the canonical `agena.shell.run` form.
+        // does for the canonical `agena.shell.exec` form.
         let invocation = ToolInvocation::new(
-            "shell.run",
+            "shell.exec",
             StructuredObject::try_from(serde_json::json!({
                 "command": "cargo test",
-                "run_in_background": false,
                 "reads": [],
                 "writes": [],
                 "network": [],
             }))
-            .expect("structured shell.run input"),
+            .expect("structured shell.exec input"),
         );
-        let input = ToolPayloadInput::from_invocation(&invocation).expect("shell.run input");
+        let input = ToolPayloadInput::from_invocation(&invocation).expect("shell.exec input");
         assert!(matches!(
             input,
             ToolPayloadInput::Shell(ShellToolInput::Exec { .. })
@@ -1143,22 +1059,22 @@ mod tests {
 
         let details = ToolOutput {
             payload: StructuredObject::try_from(serde_json::json!({
-                "action": "run",
+                "action": "exec",
                 "shell": "bash",
                 "background": false,
                 "status": "exited",
                 "exit_code": 0,
                 "output": "test result: ok",
             }))
-            .expect("shell.run output"),
+            .expect("shell.exec output"),
             managed_outputs: Vec::new(),
             truncated: false,
         };
         let output =
-            ToolPayloadOutput::from_tool_output("shell.run", &details).expect("shell.run output");
+            ToolPayloadOutput::from_tool_output("shell.exec", &details).expect("shell.exec output");
         assert!(matches!(
             output,
-            ToolPayloadOutput::Shell { action, .. } if action == "run"
+            ToolPayloadOutput::Shell { action, .. } if action == "exec"
         ));
     }
 
@@ -1184,12 +1100,12 @@ mod tests {
             ("agena_fs_apply_patch", "apply_patch"),
             // shell family
             ("shell", "shell"),
-            ("shell.run", "shell"),
+            ("shell.exec", "shell"),
             ("shell.list", "shell"),
             ("shell.logs", "shell"),
             ("shell.stop", "shell"),
-            ("agena.shell.run", "shell"),
-            ("agena_shell_run", "shell"),
+            ("agena.shell.exec", "shell"),
+            ("agena_shell_exec", "shell"),
             // monitor family
             ("monitor", "monitor"),
             ("monitor.start", "monitor"),
@@ -1216,12 +1132,6 @@ mod tests {
             ("agena.web.search", "web_search"),
             ("agena_web__search", "web_search"),
             // snapshot family
-            ("snapshot.enter", "enter_snapshot"),
-            ("agena.snapshot.enter", "enter_snapshot"),
-            ("agena_snapshot_enter", "enter_snapshot"),
-            ("snapshot.exit", "exit_snapshot"),
-            ("agena.snapshot.exit", "exit_snapshot"),
-            ("agena_snapshot_exit", "exit_snapshot"),
             // cron family
             ("cron.create", "cron_create"),
             ("agena.cron.create", "cron_create"),
@@ -1265,13 +1175,11 @@ mod tests {
             ("tasks.run", "task"),
             ("tools.search", "tool_search"),
             ("interaction.ask", "ask_user"),
-            ("snapshot.enter", "enter_snapshot"),
-            ("snapshot.exit", "exit_snapshot"),
             ("cron.create", "cron_create"),
             ("cron.list", "cron_list"),
             ("lsp.definition", "lsp_definition"),
             ("lsp.diagnostics", "lsp_diagnostics"),
-            ("shell.run", "shell"),
+            ("shell.exec", "shell"),
             ("shell.list", "shell"),
             ("shell.logs", "shell"),
             ("shell.stop", "shell"),
@@ -1288,7 +1196,7 @@ mod tests {
         // Shell invocations also carry the concrete subcommand in `action`.
         let mut run_input = serde_json::Map::new();
         assert_eq!(
-            payload_name_for_invocation("shell.run", &mut run_input),
+            payload_name_for_invocation("shell.exec", &mut run_input),
             Some("shell".to_string())
         );
         assert_eq!(

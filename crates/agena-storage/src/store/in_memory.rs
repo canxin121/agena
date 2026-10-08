@@ -406,6 +406,138 @@ fn user_send_marker_content(execution_id: Option<&str>) -> Value {
 
 #[async_trait]
 impl PersistenceEngine for InMemoryEngine {
+    async fn referenced_content_ids(
+        &self,
+    ) -> Result<std::collections::HashSet<agena_domain::ContentId>, StoreError> {
+        let membership = self.membership.read().expect("membership lock");
+        let parts = self.parts.read().expect("parts lock");
+        let members = membership
+            .values()
+            .flat_map(|ids| ids.iter())
+            .collect::<std::collections::HashSet<_>>();
+        let mut ids = std::collections::HashSet::new();
+        for id in members {
+            if let Some(part) = parts.get(id) {
+                ids.extend(
+                    part.resources()?
+                        .into_iter()
+                        .map(|resource| resource.resource_id),
+                );
+            }
+        }
+        Ok(ids)
+    }
+
+    async fn load_run_window(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        run_limit: usize,
+        part_limit: usize,
+    ) -> Result<super::SessionRunPage, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let run_limit = run_limit.clamp(1, 32);
+        let part_limit = part_limit.clamp(1, 128);
+        let membership = self.membership.read().expect("membership lock");
+        let all_parts = self.parts.read().expect("parts lock");
+        let members = membership
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter().filter_map(|id| all_parts.get(id)))
+            .filter(|p| p.visibility.visible_to_user())
+            .collect::<Vec<_>>();
+        let mut markers = members
+            .iter()
+            .copied()
+            .filter(|p| {
+                p.is_run_marker()
+                    && before.is_none_or(|before| {
+                        (p.created_at_ms, p.part_id) < (before.created_at_ms, before.part_id)
+                    })
+            })
+            .collect::<Vec<_>>();
+        markers.sort_unstable_by_key(|p| std::cmp::Reverse((p.created_at_ms, p.part_id)));
+        let has_more = markers.len() > run_limit;
+        markers.truncate(run_limit);
+        let next_cursor = markers.last().map(|p| PartCursor {
+            created_at_ms: p.created_at_ms,
+            part_id: p.part_id,
+        });
+        let mut parts = Vec::new();
+        let mut runs = Vec::new();
+        for marker in markers {
+            let mut children = members
+                .iter()
+                .copied()
+                .filter(|p| p.run_id == Some(marker.part_id))
+                .collect::<Vec<_>>();
+            let count = children.len();
+            children.sort_unstable_by_key(|p| std::cmp::Reverse((p.created_at_ms, p.part_id)));
+            children.truncate(part_limit);
+            runs.push(super::RunPartSummary {
+                run_id: marker.part_id,
+                part_count: count as u64,
+                loaded_count: children.len() as u64,
+                next_cursor: if count > children.len() {
+                    children.last().map(|p| PartCursor {
+                        created_at_ms: p.created_at_ms,
+                        part_id: p.part_id,
+                    })
+                } else {
+                    None
+                },
+            });
+            parts.push(marker.clone());
+            parts.extend(children.into_iter().cloned());
+        }
+        parts.sort_unstable_by_key(|p| (p.created_at_ms, p.part_id));
+        Ok(super::SessionRunPage {
+            meta,
+            parts,
+            runs,
+            next_cursor,
+            has_more,
+        })
+    }
+
+    async fn load_visible_part_window(
+        &self,
+        session_id: i64,
+        run_ids: &[i64],
+        before: Option<PartCursor>,
+        limit: usize,
+    ) -> Result<SessionPartPage, StoreError> {
+        if run_ids.len() > 32 {
+            return Err(StoreError::Conflict("too many run ids".to_owned()));
+        }
+        let meta = self.session_meta(session_id).await?;
+        let limit = limit.clamp(1, 256);
+        let membership = self.membership.read().expect("membership lock");
+        let all_parts = self.parts.read().expect("parts lock");
+        let mut candidates = membership
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter().filter_map(|id| all_parts.get(id)))
+            .filter(|p| {
+                p.visibility.visible_to_user()
+                    && (run_ids.is_empty() || p.run_id.is_some_and(|id| run_ids.contains(&id)))
+            })
+            .filter(|p| {
+                before.is_none_or(|before| {
+                    (p.created_at_ms, p.part_id) < (before.created_at_ms, before.part_id)
+                })
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable_by_key(|p| std::cmp::Reverse((p.created_at_ms, p.part_id)));
+        let has_more = candidates.len() > limit;
+        candidates.truncate(limit);
+        Ok(SessionPartPage {
+            meta,
+            parts: candidates.into_iter().cloned().collect(),
+            has_more,
+        })
+    }
+
     async fn create_session(&self, new_session: NewSession) -> Result<SessionMeta, StoreError> {
         let NewSession {
             workspace_id,
@@ -632,12 +764,11 @@ impl PersistenceEngine for InMemoryEngine {
             })
             .cloned()
             .collect::<Vec<_>>();
-        parts.sort_unstable_by_key(|part| (part.created_at_ms, part.part_id));
+        parts.sort_unstable_by_key(|part| std::cmp::Reverse((part.created_at_ms, part.part_id)));
         let has_more = parts.len() > usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
         if has_more {
             parts.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
         }
-        parts.reverse();
         if parts.len() > take.saturating_sub(1) {
             parts.truncate(take.saturating_sub(1));
         }
@@ -2389,29 +2520,62 @@ impl PersistenceEngine for InMemoryEngine {
         &self,
         workspace_id: i64,
         bundle: &str,
-        _now_ms: i64,
+        now_ms: i64,
+        contents: &crate::content::ContentHub,
     ) -> Result<i64, StoreError> {
-        let parsed = jsonl::parse(bundle)?;
-        let meta = self
-            .create_session(NewSession {
-                workspace_id,
-                parent_id: None,
-                relation_kind: SessionRelationKind::Root,
-                cutoff_part_id: None,
-                title: parsed.title.clone(),
-                task_id: parsed.task_id.clone(),
-                config_json: parsed.config_json.clone(),
-                provider_anchors_json: parsed.provider_anchors_json.clone(),
-            })
-            .await?;
-        let session_id = meta.id;
+        let mut parsed = jsonl::parse(bundle)?;
+        let session_id = self.next_session_id();
 
         // Remap part ids so run_id/parent_part_id references stay valid even
         // if the exported ids collide with existing parts.
         let mut id_map: HashMap<i64, i64> = HashMap::new();
         for part in &parsed.parts {
-            id_map.insert(part.part_id, self.next_part_id());
+            if part.part_id <= 0 || id_map.insert(part.part_id, self.next_part_id()).is_some() {
+                return Err(StoreError::Constraint(
+                    "imported Part ids must be positive and unique".into(),
+                ));
+            }
         }
+        let archives = jsonl::prepare_resource_import(
+            &mut parsed.parts,
+            parsed.resources,
+            session_id,
+            &id_map,
+        )?;
+        let mut staged = Vec::new();
+        for archive in &archives {
+            if let Err(error) = contents.restore(archive).await {
+                for id in staged {
+                    let _ = contents.delete(id).await;
+                }
+                return Err(error);
+            }
+            staged.push(archive.resource.resource_id);
+        }
+        let meta = SessionMeta {
+            id: session_id,
+            parent_id: None,
+            depth: 0,
+            root_id: session_id,
+            workspace_id,
+            relation_kind: SessionRelationKind::Root,
+            cutoff_part_id: None,
+            title: parsed.title,
+            favorite: false,
+            pinned: false,
+            version: if parsed.parts.is_empty() { 1 } else { 2 },
+            lifecycle_state: SessionLifecycleState::Ready,
+            creation_failure: None,
+            task_id: parsed.task_id,
+            subtask_status: None,
+            subtask_started_at_ms: None,
+            subtask_finished_at_ms: None,
+            subtask_failure: None,
+            config_json: parsed.config_json,
+            provider_anchors_json: parsed.provider_anchors_json,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        };
         {
             let mut membership = self.membership.write().expect("membership lock");
             let mut parts = self.parts.write().expect("parts lock");
@@ -2427,9 +2591,10 @@ impl PersistenceEngine for InMemoryEngine {
                 set.insert(new_id);
             }
         }
-        if !parsed.parts.is_empty() {
-            self.bump_session_version(session_id, None)?;
-        }
+        self.sessions
+            .write()
+            .expect("sessions lock")
+            .insert(session_id, meta);
         Ok(session_id)
     }
 }
@@ -3034,7 +3199,7 @@ mod tests {
                 streamed_id,
                 PartDelta {
                     state: Some(PartState::Completed),
-                    content_text_delta: Some(" complete".to_owned()),
+                    content: Some(json!({"text": "partial complete"})),
                     ..Default::default()
                 },
                 engine.now_ms(),
@@ -3467,7 +3632,12 @@ mod tests {
         assert_eq!(bundle.lines().count(), 3); // meta + marker + text
 
         let imported_id = engine
-            .import_session_jsonl(1, &bundle, engine.now_ms())
+            .import_session_jsonl(
+                1,
+                &bundle,
+                engine.now_ms(),
+                &crate::content::ContentHub::in_memory(),
+            )
             .await
             .expect("import");
         let imported = engine.load_session(imported_id).await.expect("load");
@@ -3637,7 +3807,12 @@ mod tests {
             .await
             .expect("export");
         let imported_id = engine
-            .import_session_jsonl(1, &bundle, engine.now_ms())
+            .import_session_jsonl(
+                1,
+                &bundle,
+                engine.now_ms(),
+                &crate::content::ContentHub::in_memory(),
+            )
             .await
             .expect("import");
         assert_eq!(

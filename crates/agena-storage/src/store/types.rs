@@ -428,6 +428,30 @@ pub struct Part {
 }
 
 impl Part {
+    /// Membership callers select the audience separately. Resource identity,
+    /// kind and origin ownership have one factual validation rule.
+    pub fn references_content(&self, resource: &agena_domain::ContentResource) -> bool {
+        self.part_id == resource.part_id
+            && self.origin_session_id == resource.owner_session_id
+            && self.resources().is_ok_and(|references| {
+                references.iter().any(|reference| {
+                    reference.resource_id == resource.resource_id && reference.kind == resource.kind
+                })
+            })
+    }
+
+    /// Only the canonical Part resource section establishes ownership.
+    pub fn resources(&self) -> Result<Vec<agena_domain::ContentRef>, super::StoreError> {
+        self.content.get("resources").map_or_else(
+            || Ok(Vec::new()),
+            |value| {
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    super::StoreError::Serialization(format!("Part resource references: {error}"))
+                })
+            },
+        )
+    }
+
     pub fn is_run_marker(&self) -> bool {
         self.kind == "run"
     }
@@ -491,7 +515,7 @@ impl NewPart {
     }
 }
 
-/// A streaming update applied to an existing part. Every field is optional;
+/// A semantic update applied to an existing part. Every field is optional;
 /// `Some` fields are applied, `None` fields are left unchanged. The engine
 /// bumps `revision` and `updated_at_ms` only when the resulting facts change.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -499,20 +523,10 @@ pub struct PartDelta {
     pub state: Option<PartState>,
     /// Replace the whole content JSON document.
     pub content: Option<Value>,
-    /// Append a string delta to a text-shaped content value (streaming).
-    pub content_text_delta: Option<String>,
     pub summary: Option<String>,
     pub provider_state: Option<Value>,
     /// Explicit terminal timestamp (used on completion); defaults to "now".
     pub finished_at_ms: Option<i64>,
-}
-
-/// Lightweight acknowledgement for a live text append. The runtime already
-/// owns the preceding text and does not need a full snapshot for every token.
-#[derive(Debug, Clone, Copy)]
-pub struct PartCheckpoint {
-    pub revision: i64,
-    pub updated_at_ms: i64,
 }
 
 /// Outcome of [`crate::store::PersistenceEngine::complete_run`] — how a run marker ends.
@@ -634,6 +648,25 @@ pub struct SessionPartPage {
     pub meta: SessionMeta,
     pub parts: Vec<Part>,
     pub has_more: bool,
+}
+
+/// A bounded run window. Counts describe factual membership; no display
+/// grouping, folding, observer dimensions or client preferences are involved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRunPage {
+    pub meta: SessionMeta,
+    pub parts: Vec<Part>,
+    pub runs: Vec<RunPartSummary>,
+    pub next_cursor: Option<PartCursor>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunPartSummary {
+    pub run_id: i64,
+    pub part_count: u64,
+    pub loaded_count: u64,
+    pub next_cursor: Option<PartCursor>,
 }
 
 /// Input for creating a new session row.

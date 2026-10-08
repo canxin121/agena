@@ -27,6 +27,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use agena_api::resource::RunStatus;
 use agena_api::{
     commands::UpsertPermissionRuleParams,
     pagination::PaginatedResponse,
@@ -37,14 +39,8 @@ use agena_api::{
         SessionExecutionResource, SessionResource,
     },
 };
-#[cfg(test)]
-use agena_api::{
-    part::PartResource,
-    resource::{RunResource, RunStatus},
-};
-use agena_application::dto::{
-    ConfigJsonSources, TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
-};
+use agena_application::dto::ConfigJsonSources;
+mod preferences;
 #[cfg(test)]
 use agena_domain::ExecutionStatus;
 use agena_domain::Model as ProviderModel;
@@ -71,6 +67,7 @@ use agena_tui_settings::{
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
+pub use preferences::{TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -108,7 +105,7 @@ impl TranscriptFixture {
         created_at: DateTime<Utc>,
         status: ExecutionStatus,
         text: impl Into<String>,
-    ) -> PartResource {
+    ) -> TranscriptPart {
         Self::text_part_with_flags(id, message_id, created_at, status, text, false)
     }
 
@@ -119,13 +116,13 @@ impl TranscriptFixture {
         status: ExecutionStatus,
         text: impl Into<String>,
         synthetic: bool,
-    ) -> PartResource {
-        PartResource {
+    ) -> TranscriptPart {
+        TranscriptPart {
             id,
             message_id,
             part_index: 0,
             status: fixture_part_status(status),
-            kind: agena_api::part::PartKindResource::Text,
+            kind: agena_tui_transcript::display_types::TranscriptPartKind::Text,
             name: None,
             summary: None,
             has_detail: true,
@@ -149,13 +146,13 @@ impl TranscriptFixture {
         created_at: DateTime<Utc>,
         status: ExecutionStatus,
         reasoning: agena_domain::ReasoningPart,
-    ) -> PartResource {
-        PartResource {
+    ) -> TranscriptPart {
+        TranscriptPart {
             id,
             message_id,
             part_index: 0,
             status: fixture_part_status(status),
-            kind: agena_api::part::PartKindResource::Activity,
+            kind: agena_tui_transcript::display_types::TranscriptPartKind::Activity,
             name: None,
             summary: None,
             has_detail: true,
@@ -343,9 +340,7 @@ pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 #[cfg(test)]
 mod tui_config_tests {
     use super::tui_config_from_preferences;
-    use agena_application::dto::{
-        TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
-    };
+    use crate::{TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource};
     use agena_tui::presentation_config::ColorSchemePreference;
     use agena_tui::terminal_graphics::GraphicsMode;
 
@@ -374,3 +369,6 @@ mod tui_config_tests {
         );
     }
 }
+
+#[cfg(test)]
+use agena_tui_transcript::display_types::{TranscriptPart, TranscriptRun};

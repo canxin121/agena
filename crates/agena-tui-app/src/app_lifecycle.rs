@@ -331,7 +331,9 @@ impl App {
         }
 
         self.rx.close();
-        for task in self.transcript.tool_detail_tasks.values() { task.abort(); }
+        for task in self.transcript.tool_detail_tasks.values() {
+            task.abort();
+        }
         self.transcript.tool_detail_tasks.clear();
         self.transcript.tool_detail_loads.clear();
         self.transcript.tool_detail_pending.clear();
@@ -382,8 +384,8 @@ impl App {
         self.refresh_hub_if_due();
         self.heal_plan_display_refresh();
         self.heal_session_work();
-        self.heal_inline_activity_logs();
         self.heal_tool_detail_reads();
+        self.heal_content_reads();
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);
         }

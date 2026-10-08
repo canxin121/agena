@@ -24,7 +24,7 @@ use agena_runtime::{
     RuntimeBackgroundTaskControlError, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
     RuntimeBackgroundTaskOutcome, RuntimeBackgroundTaskSpec, RuntimeBackgroundTaskStart,
     RuntimeCompositionConfig, RuntimeControlState, RuntimeReloadCause, RuntimeReloadReport,
-    TaskControl, TuiColorSchemeConfig, TuiGraphicsModeConfig,
+    TaskControl,
 };
 
 use super::{RuntimeSnapshot, reload};
@@ -1291,6 +1291,14 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
             .tool_registry_generation()
     }
 
+    fn projection_generation(&self) -> (u64, u64) {
+        let snapshot = self.current_snapshot();
+        (
+            snapshot.generation(),
+            snapshot.plugin_manager().tool_registry_generation(),
+        )
+    }
+
     fn tool_registry_events_since(
         &self,
         after_generation: Option<u64>,
@@ -1845,33 +1853,6 @@ impl agena_runtime::RuntimeConfigurationService for AgenaRuntime {
             project_config_path: snapshot.project_config_path().to_path_buf(),
             project_config_found: snapshot.project_config_found(),
             applied_layers: snapshot.applied_layer_descriptions(),
-            ui: agena_runtime::RuntimeUiConfiguration {
-                locale: snapshot.ui_config().locale,
-                theme: snapshot.ui_config().tui.theme,
-                color_scheme: match snapshot.ui_config().tui.color_scheme {
-                    TuiColorSchemeConfig::Auto => agena_runtime::RuntimeTuiColorScheme::Auto,
-                    TuiColorSchemeConfig::Dark => agena_runtime::RuntimeTuiColorScheme::Dark,
-                    TuiColorSchemeConfig::Light => agena_runtime::RuntimeTuiColorScheme::Light,
-                },
-                graphics: match snapshot.ui_config().tui.graphics {
-                    TuiGraphicsModeConfig::Auto => agena_runtime::RuntimeTuiGraphicsMode::Auto,
-                    TuiGraphicsModeConfig::Native => agena_runtime::RuntimeTuiGraphicsMode::Native,
-                    TuiGraphicsModeConfig::Unicode => {
-                        agena_runtime::RuntimeTuiGraphicsMode::Unicode
-                    }
-                },
-                transcript_activity_default_expanded: snapshot
-                    .ui_config()
-                    .tui
-                    .transcript
-                    .activity_default_expanded,
-                transcript_activity_kinds: snapshot
-                    .ui_config()
-                    .tui
-                    .transcript
-                    .activity_kinds
-                    .clone(),
-            },
             effective_config,
             configuration_document,
         })

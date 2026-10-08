@@ -181,14 +181,14 @@ mod tests {
             ..ToolActivityResult::raw(RawOutput::text("ok"))
         };
         assert_eq!(
-            result.durable_title("shell.run", "cargo test"),
-            "shell.run · cargo test"
+            result.durable_title("shell.exec", "cargo test"),
+            "shell.exec · cargo test"
         );
 
         let no_title = ToolActivityResult::raw(RawOutput::text("ok"));
         assert_eq!(
-            no_title.durable_title("shell.run", "cargo test"),
-            "shell.run · cargo test"
+            no_title.durable_title("shell.exec", "cargo test"),
+            "shell.exec · cargo test"
         );
     }
 

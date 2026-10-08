@@ -1,14 +1,7 @@
 use super::{ExecutionControl, ExecutionControlError, execution_control_to_app_error};
 use crate::{
     AppError,
-    session::{
-        Session, SessionManager,
-        store::{
-            OPERATION_ID_METADATA_KEY, execution_status_from_part_state, parts_into_runs,
-            role_from_part_role, timestamp_millis_to_utc, typed_content_from_value,
-            typed_content_to_value,
-        },
-    },
+    session::{Session, SessionManager, store::execution_status_from_part_state},
 };
 use agena_domain::{
     CancellationOutcome, CancellationResult, ComposerDocument, ExecutionStatus, SessionSummary,
@@ -16,10 +9,7 @@ use agena_domain::{
 };
 use agena_plugin_host::AgentCancelInput;
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
-use agena_runtime_contracts::part_content::{
-    TypedContent, attachment_from_file_ref, command_reference_from_command_ref,
-    operation_from_tool_call, user_problem_from_error,
-};
+use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{Part, PartRole};
 
 impl SessionManager {
@@ -702,18 +692,18 @@ impl agena_runtime::SessionQueryService for SessionManager {
         })
     }
 
-    async fn list_projected_runs(
+    async fn read_part_window(
         &self,
         session_id: i64,
-    ) -> Result<Vec<agena_runtime::SessionProjectedRun>, agena_runtime::SessionQueryError> {
-        // Parts-native: `SessionManager::list_projected_runs` already
-        // builds the stable `SessionProjectedRun` values directly from the
-        // session's parts; only the error type needs adapting here.
-        SessionManager::list_projected_runs(self, session_id)
+        before: Option<agena_storage::store::PartCursor>,
+        limit: i64,
+    ) -> Result<agena_storage::store::SessionPartPage, agena_runtime::SessionQueryError> {
+        self.store
+            .facade
+            .load_page(session_id, before, limit.clamp(1, 256))
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal_error(&error))
     }
-
     async fn list_session_tree(
         &self,
         root_id: i64,
@@ -911,234 +901,6 @@ impl agena_runtime::SessionQueryService for SessionManager {
             cursor = parents.get(&session_id).copied().flatten();
         }
         Ok(false)
-    }
-}
-
-/// Project a session's parts into the stable transcript values, one per run.
-///
-/// Each run marker becomes a `SessionProjectedRun` whose parts are the
-/// run's content parts, decoded from the canonical store payload. This is the
-/// preserving the wire shape consumed by `agena-application` and `agena-cli`.
-pub(crate) fn projected_runs_from_parts(
-    parts: &[Part],
-) -> Result<Vec<crate::session_query_service::SessionProjectedRun>, AppError> {
-    let mut projected = Vec::new();
-    for run in parts_into_runs(parts) {
-        let marker = run.first().expect("run group has a marker");
-        let mut projected_parts = Vec::with_capacity(run.len().saturating_sub(1));
-        for (index, part) in run.iter().enumerate().skip(1) {
-            if part.visibility.visible_to_user() {
-                projected_parts.push(project_storage_part(part, marker.part_id, index as i32)?);
-            }
-        }
-        if marker.visibility.visible_to_user() || !projected_parts.is_empty() {
-            projected.push(crate::session_query_service::SessionProjectedRun {
-                revision: marker.revision,
-                updated_at_ms: marker.updated_at_ms,
-                id: marker.part_id,
-                role: role_from_part_role(marker.role),
-                state: execution_status_from_part_state(marker.state),
-                created_at: timestamp_millis_to_utc(marker.created_at_ms)?,
-                // The run marker's content is the durable header payload and
-                // is exposed directly as the projected run metadata.
-                metadata: marker.content.clone(),
-                usage: None,
-                parts: projected_parts,
-            });
-        }
-    }
-    Ok(projected)
-}
-
-/// A decoded content part: the projection of one storage [`Part`] into the
-/// fields the transcript and query surfaces need.
-struct DecodedPart {
-    id: i64,
-    part_index: i32,
-    status: ExecutionStatus,
-    kind: String,
-    name: Option<String>,
-    summary: Option<String>,
-    has_detail: bool,
-    activity_id: Option<agena_domain::ActivityId>,
-    segment_id: Option<agena_domain::TextSegmentId>,
-    operation_id: Option<String>,
-    created_at: chrono::DateTime<chrono::Utc>,
-    content: Option<TypedContent>,
-}
-
-/// Decode one persisted content part (its `kind` column plus canonical JSON
-/// payload) into the [`DecodedPart`] view used by transcript and query
-/// projections.
-fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
-    let content = typed_content_from_value(&part.kind, &part.content)?;
-    // The coarse state column carries the lifecycle; the fine-grained status
-    // (including denial outcomes) is reconstructed from the rich content.
-    let status = match &content {
-        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call).status(),
-        _ => execution_status_from_part_state(part.state),
-    };
-    // Recover the provider operation id stashed by the tool-call serialization
-    // so pending-tool correlation and prompt assembly survive a reload.
-    let operation_id = match &content {
-        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call)
-            .metadata
-            .get(OPERATION_ID_METADATA_KEY)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        _ => None,
-    };
-    let activity_kind = matches!(
-        &content,
-        TypedContent::Think(_)
-            | TypedContent::ToolCall(_)
-            | TypedContent::FileRef(_)
-            | TypedContent::CommandRef(_)
-            | TypedContent::Notice(_)
-            | TypedContent::Hook(_)
-            | TypedContent::Error(_)
-    );
-    Ok(DecodedPart {
-        id: part.part_id,
-        part_index,
-        status,
-        // Carry the precise storage kind through to the transcript surfaces so
-        // each typed part has its own rendering dispatch.
-        kind: part.kind.clone(),
-        name: part_name_from_content(&content),
-        summary: part.summary.clone(),
-        has_detail: part.content.is_object(),
-        activity_id: activity_kind.then(agena_domain::ActivityId::new),
-        segment_id: matches!(&content, TypedContent::Text(_))
-            .then(agena_domain::TextSegmentId::new),
-        operation_id,
-        created_at: timestamp_millis_to_utc(part.created_at_ms)?,
-        content: Some(content),
-    })
-}
-
-/// Derive the projected part name: text/reasoning use plain labels, tool calls
-/// use their invocation name, and failures use their problem code.
-fn part_name_from_content(content: &TypedContent) -> Option<String> {
-    match content {
-        TypedContent::Text(_) => Some("text".to_string()),
-        TypedContent::Think(_) => Some("reasoning".to_string()),
-        TypedContent::ToolCall(tool_call) => {
-            let operation = operation_from_tool_call(tool_call);
-            Some(operation.invocation.name)
-        }
-        TypedContent::CommandRef(_) => Some("skill_reference".to_string()),
-        TypedContent::Error(error) => Some(user_problem_from_error(error).code.to_string()),
-        TypedContent::FileRef(_) => Some("resource".to_string()),
-        TypedContent::Hook(hook) => Some(format!("hook:{}", hook.hook)),
-        TypedContent::Notice(_) => Some("notice".to_string()),
-        TypedContent::SystemNotification(notification) => Some(format!(
-            "{}:{}:{}",
-            notification.operation_kind, notification.operation_id, notification.status
-        )),
-        TypedContent::Run(_) | TypedContent::PasteRef(_) | TypedContent::Compaction(_) => None,
-    }
-}
-
-/// Project one persisted content part into the stable transcript part value.
-fn project_storage_part(
-    part: &Part,
-    run_id: i64,
-    part_index: i32,
-) -> Result<agena_runtime::SessionProjectedPart, AppError> {
-    let decoded = decode_part(part, part_index)?;
-    Ok(agena_runtime::SessionProjectedPart {
-        revision: part.revision,
-        updated_at_ms: part.updated_at_ms,
-        id: decoded.id,
-        run_id,
-        part_index: decoded.part_index,
-        status: decoded.status,
-        kind: decoded.kind,
-        name: decoded.name,
-        summary: decoded.summary,
-        has_detail: decoded.has_detail,
-        activity_id: decoded.activity_id,
-        segment_id: decoded.segment_id,
-        operation_id: decoded.operation_id,
-        created_at: decoded.created_at,
-        detail: decoded.content.as_ref().map(project_part_detail),
-        content: decoded
-            .content
-            .as_ref()
-            .map(|content| {
-                typed_content_to_value(content)
-                    .map_err(|error| AppError::Internal(format!("serialize part content: {error}")))
-            })
-            .transpose()?,
-    })
-}
-
-fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjectedPartDetail {
-    match content {
-        TypedContent::Text(value) => agena_runtime::SessionProjectedPartDetail::Text {
-            text: value.text.clone(),
-            synthetic: value.synthetic,
-        },
-        TypedContent::Think(value) => agena_runtime::SessionProjectedPartDetail::Reasoning {
-            summary: value.summary.clone(),
-            raw_content: value.raw.clone(),
-            encrypted_content: value.encrypted_content.clone(),
-        },
-        TypedContent::Error(value) => agena_runtime::SessionProjectedPartDetail::Error {
-            problem: user_problem_from_error(value),
-        },
-        TypedContent::FileRef(value) => {
-            agena_runtime::SessionProjectedPartDetail::Attachment(attachment_from_file_ref(value))
-        }
-        TypedContent::CommandRef(value) => {
-            agena_runtime::SessionProjectedPartDetail::CommandReference(
-                command_reference_from_command_ref(value),
-            )
-        }
-        TypedContent::ToolCall(value) => {
-            agena_runtime::SessionProjectedPartDetail::ToolCall(Box::new((**value).clone()))
-        }
-        TypedContent::Hook(value) => agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
-            agena_runtime::SessionProjectedHookPart {
-                hook: value.hook.clone(),
-                plugin_id: value.plugin_id.clone(),
-                summary: value.summary.clone(),
-                detail: value.detail.clone(),
-                message: value.message.clone(),
-            },
-        )),
-        TypedContent::Notice(value) => agena_runtime::SessionProjectedPartDetail::Notice {
-            summary: value.summary.clone(),
-            detail: value.detail.clone(),
-        },
-        TypedContent::SystemNotification(value) => {
-            agena_runtime::SessionProjectedPartDetail::SystemNotification {
-                operation_id: value.operation_id.clone(),
-                operation_kind: value.operation_kind.clone(),
-                status: value.status.clone(),
-                summary: value.summary.clone(),
-                detail: value.detail.clone(),
-                body: value.body.clone(),
-                event_seq: value.event_seq,
-            }
-        }
-        // These kinds have no dedicated transcript detail: run markers render
-        // as empty text, while paste and compaction expose their text.
-        TypedContent::Run(_) => agena_runtime::SessionProjectedPartDetail::Text {
-            text: String::new(),
-            synthetic: false,
-        },
-        TypedContent::PasteRef(value) => agena_runtime::SessionProjectedPartDetail::Text {
-            text: value.text.clone(),
-            synthetic: false,
-        },
-        TypedContent::Compaction(value) => agena_runtime::SessionProjectedPartDetail::Text {
-            text: value.summary.clone().unwrap_or_default(),
-            synthetic: false,
-        },
     }
 }
 

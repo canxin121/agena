@@ -59,6 +59,19 @@ fn sample_payload(tool: &str) -> Value {
     });
 
     match tool {
+        "content.read" => {
+            let cursor = json!({"epoch":"00000000-0000-0000-0000-000000000001", "sequence":1});
+            json!({
+                "resource": {
+                    "resource_id":"00000000-0000-0000-0000-000000000002",
+                    "owner_session_id":1, "part_id":2, "kind":"text", "state":"complete",
+                    "cursor":cursor, "committed_cursor":cursor,
+                    "total_bytes":16, "dropped_bytes":0, "retained_ranges":[{"first":1,"last":1}]
+                },
+                "slices":[{"cursor":cursor,"captured_at_ms":1,"offset":0,"stream":null,"text":"  source page\n\n"}],
+                "next_position":{"after":cursor,"offset":0}, "has_more":false,"gap":false
+            })
+        }
         "fs.read" => json!({
             "preview": "fn main() {}",
             "loaded_paths": ["src/main.rs"],
@@ -297,8 +310,19 @@ fn sample_payload(tool: &str) -> Value {
             json!({"path": "providers.openai.model", "deleted": true, "changed": true})
         }
         "shell.exec" => json!({
-            "action": "run", "shell": "bash", "background": false, "status": "exited",
+            "action": "exec", "shell": "bash", "background": false, "status": "exited",
             "output": "all tests passed", "exit_code": 0, "process_id": "p-1"
+        }),
+        "shell.spawn" | "shell.watch" => json!({
+            "action": tool.split('.').next_back().unwrap(), "shell":"bash", "background":true,
+            "status":"running", "process_id":"p-1", "ready":tool=="shell.watch", "output":"ready\n"
+        }),
+        "shell.open" | "shell.read" => json!({
+            "action": tool.split('.').next_back().unwrap(), "background":true,
+            "status":"running", "process_id":"p-1", "output":"PROMPT> ",
+            "terminal":{"rows":24,"cols":80,"cursor_row":0,"cursor_col":8,
+                "cursor_visible":true,"alternate_screen":false,"bracketed_paste":false,
+                "application_cursor":false,"text":"PROMPT> ","truncated":false}
         }),
         "shell.write" | "shell.resize" | "shell.signal" => json!({
             "action": tool.split('.').next_back().unwrap(), "background": true,
@@ -408,6 +432,7 @@ fn sample_payload(tool: &str) -> Value {
 
 fn sample_input(tool: &str) -> Value {
     match tool {
+        "content.read" => json!({"resource_id":"00000000-0000-0000-0000-000000000002"}),
         "fs.read" => json!({"file_path": "src/main.rs"}),
         "fs.read_many" => json!({"paths": ["src/lib.rs", "src/main.rs"]}),
         "fs.write" | "fs.replace" | "fs.stat" => {
@@ -424,7 +449,8 @@ fn sample_input(tool: &str) -> Value {
         "code.search_ast" => json!({"pattern": "fn $NAME()", "path": "src", "language": "rust"}),
         "code.syntax_tree" => json!({"path": "src/lib.rs", "language": "rust"}),
         "shell.exec" | "shell.spawn" | "shell.watch" => json!({"command": "cargo build"}),
-        "shell.logs" | "shell.stop" => json!({"process_id": "p-1"}),
+        "shell.open" => json!({"command":"sh"}),
+        "shell.logs" | "shell.stop" | "shell.read" => json!({"process_id": "p-1"}),
         "shell.write" => {
             json!({"process_id": "p-1", "chars": "hello\r", "reads": [], "writes": [], "network": []})
         }

@@ -235,7 +235,7 @@ async fn handle_client_message(
             }
         },
         ClientMessage::Subscribe { id, request } => {
-            let subscription = match live::subscribe(&state) {
+            let subscription = match live::subscribe(&state, request.scope.clone()) {
                 Ok(subscription) => subscription,
                 Err(err) => {
                     queue_server_message(
@@ -250,22 +250,27 @@ async fn handle_client_message(
                     return;
                 }
             };
-            let store = match state.session_store() {
-                Ok(store) => store,
-                Err(err) => {
+            spawn_subscription(id, subscription, tx, registry).await;
+        }
+        ClientMessage::WatchContent { id, request } => {
+            match live::spawn_content_delivery(&state, id.clone(), request, tx.clone()).await {
+                Ok(handle) => {
+                    if let Some(previous) = registry.lock().await.0.insert(id, handle) {
+                        previous.abort();
+                    }
+                }
+                Err(error) => {
                     queue_server_message(
                         &tx,
                         ServerMessage::Error {
                             id: Some(id),
-                            error: err.into_api(),
+                            error: error.into_api(),
                         },
-                        "deliver a subscription storage failure",
+                        "deliver a content subscription failure",
                     )
                     .await;
-                    return;
                 }
-            };
-            spawn_subscription(id, request.scope, subscription, store, tx, registry).await;
+            }
         }
         ClientMessage::Unsubscribe { id } => {
             let mut guard = registry.lock().await;
@@ -293,9 +298,7 @@ async fn handle_client_message(
 
 async fn spawn_subscription(
     id: SubscriptionId,
-    scope: agena_api::Scope,
     mut subscription: live::LiveSubscription,
-    store: Arc<dyn agena_storage::store::SessionStore>,
     tx: mpsc::Sender<ServerMessage>,
     registry: Arc<Mutex<SubscriptionRegistry>>,
 ) {
@@ -306,9 +309,6 @@ async fn spawn_subscription(
             _ = tx_clone.closed() => None,
             item = subscription.recv() => item,
         } {
-            if !live::matches_scope(&item, &scope, store.as_ref()).await {
-                continue;
-            }
             let revisions = subscription.revisions_for(&item);
             let notification = match item {
                 LiveItem::SessionChanged(change) => Notification::SessionChanged {

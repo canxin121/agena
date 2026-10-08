@@ -316,7 +316,7 @@ mod transcript_navigation_tests {
             key,
             start_line,
             end_line,
-            copy_text: String::new(),
+            copy_text: "".into(),
             atomic: false,
             toggleable: false,
             expanded: true,

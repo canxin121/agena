@@ -17,7 +17,8 @@ pub(crate) async fn run_shell_cases(
         .create_session(
             "dsv4f shell chain",
             &[
-                "agena.shell.run",
+                "agena.shell.exec",
+                "agena.shell.spawn",
                 "agena.shell.list",
                 "agena.shell.logs",
                 "agena.shell.stop",
@@ -28,8 +29,8 @@ pub(crate) async fn run_shell_cases(
     let foreground = harness
         .run_execution_tool(
             session,
-            "shell.run.foreground",
-            "shell.run",
+            "shell.exec.foreground",
+            "shell.exec",
             json!({
                 "shell": "bash",
                 "command": "printf PROCESS_FG_OK",
@@ -37,20 +38,19 @@ pub(crate) async fn run_shell_cases(
                 "timeout_ms": 5000,
                 "reads": [],
                 "writes": [],
-                "network": [],
-                "background": false
+                "network": []
             }),
             PendingReply::None,
             true,
         )
         .await?;
     assert_contains(&foreground, "PROCESS_FG_OK")?;
-    report.pass("shell.run");
+    report.pass("shell.exec");
     let background = harness
         .run_execution_tool(
             session,
-            "shell.run.background",
-            "shell.run",
+            "shell.spawn.background",
+            "shell.spawn",
             json!({
                 "shell": "bash",
                 "command": "printf 'PROCESS_BG_OK\\n'; sleep 300",
@@ -58,8 +58,7 @@ pub(crate) async fn run_shell_cases(
                 "timeout_ms": 310000,
                 "reads": [],
                 "writes": [],
-                "network": [],
-                "background": true
+                "network": []
             }),
             PendingReply::None,
             true,

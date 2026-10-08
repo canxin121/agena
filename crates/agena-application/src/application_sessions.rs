@@ -332,6 +332,22 @@ impl Application {
         self.session_execution_resource(session_id).await
     }
 
+    async fn session_command_resource(
+        &self,
+        outcome: agena_runtime::SessionExecutionCommandOutcome,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let mut resource = self.session_execution_resource(outcome.session_id).await?;
+        resource.receipt =
+            outcome.receipt.map(
+                |receipt| agena_api::resource::SessionExecutionReceiptResource {
+                    execution_id: receipt.execution_id.0,
+                    turn_id: receipt.turn_id.0,
+                    reply_id: receipt.reply_id.0,
+                },
+            );
+        Ok(resource)
+    }
+
     pub async fn rewind_session_to_message(
         &self,
         session_id: i64,
@@ -352,7 +368,7 @@ impl Application {
             })
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     // ── Unified session command family ────────────────────────────────────
@@ -378,7 +394,7 @@ impl Application {
             .submit_user_run(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     /// Continue an existing session with the given run options.
@@ -394,7 +410,7 @@ impl Application {
             .continue_session(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     /// Compact an existing session with the given run options.
@@ -410,7 +426,7 @@ impl Application {
             .compact_session(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     /// Reply to a pending permission request.
@@ -431,7 +447,7 @@ impl Application {
             .reply_permission(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     /// Reply to a pending interactive user-input request.
@@ -450,7 +466,7 @@ impl Application {
             .reply_user_input(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     /// Clone a session's full history into a new child session.
@@ -479,7 +495,7 @@ impl Application {
             })
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     /// Cancel the active run of `session_id`.
@@ -514,7 +530,7 @@ impl Application {
             .mark_interactive_request_presented(session_id, request_id)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     /// Update the session's selected model/options without starting a run.
@@ -531,7 +547,7 @@ impl Application {
             .update_session_selection(session_id, options)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_execution_resource(outcome.session_id).await
+        self.session_command_resource(outcome).await
     }
 
     pub async fn list_workspace_sessions(

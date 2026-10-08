@@ -51,8 +51,6 @@ pub fn prepare_part_update(
     }
     if let Some(content) = delta.content {
         part.content = content;
-    } else if let Some(delta_text) = delta.content_text_delta {
-        append_text_delta(&mut part.content, &delta_text)?;
     }
     if let Some(summary) = delta.summary {
         part.summary = Some(summary);
@@ -153,93 +151,4 @@ fn finish_update(previous: &Part, mut part: Part, now_ms: i64) -> Result<Part, S
     // millisecond don't make the next valid write look like time travel.
     part.updated_at_ms = now_ms;
     Ok(part)
-}
-
-/// Fast path for a pure text append to a live, non-run streaming checkpoint.
-/// Validate before mutation, preserving the general updater's error atomicity.
-/// The durable revision is intentionally unchanged until the coalesced flush.
-pub(super) fn append_buffered_text(
-    part: &mut Part,
-    text: &str,
-    now_ms: i64,
-) -> Result<(), StoreError> {
-    let now_ms = now_ms.max(part.updated_at_ms);
-    if part.started_at_ms < 0 || part.created_at_ms < 0 || now_ms < part.created_at_ms {
-        return Err(StoreError::InvalidState(
-            "invalid part lifecycle timestamps".to_owned(),
-        ));
-    }
-    if !text.is_empty() && part.revision.checked_add(1).is_none() {
-        return Err(StoreError::InvalidState(
-            "part revision is exhausted".to_owned(),
-        ));
-    }
-    append_text_delta(&mut part.content, text)?;
-    if !text.is_empty() {
-        part.updated_at_ms = now_ms.max(part.updated_at_ms.saturating_add(1));
-    }
-    Ok(())
-}
-
-pub(super) fn append_reasoning_summary(
-    content: &mut Value,
-    text: String,
-) -> Result<(), StoreError> {
-    let summary = content
-        .get_mut("summary")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| {
-            StoreError::InvalidState(
-                "reasoning summary requires an array-shaped content".to_owned(),
-            )
-        })?;
-    summary.push(Value::String(text));
-    Ok(())
-}
-
-pub(super) fn append_buffered_reasoning(
-    part: &mut Part,
-    text: String,
-    now_ms: i64,
-) -> Result<(), StoreError> {
-    let now_ms = now_ms.max(part.updated_at_ms);
-    if part.kind != "think" || part.state != PartState::InProgress || part.finished_at_ms.is_some()
-    {
-        return Err(StoreError::InvalidState(
-            "reasoning append requires an in-progress think part".to_owned(),
-        ));
-    }
-    if part.started_at_ms < 0 || part.created_at_ms < 0 || now_ms < part.created_at_ms {
-        return Err(StoreError::InvalidState(
-            "invalid part lifecycle timestamps".to_owned(),
-        ));
-    }
-    if part.revision.checked_add(1).is_none() {
-        return Err(StoreError::InvalidState(
-            "part revision is exhausted".to_owned(),
-        ));
-    }
-    append_reasoning_summary(&mut part.content, text)?;
-    part.updated_at_ms = now_ms.max(part.updated_at_ms.saturating_add(1));
-    Ok(())
-}
-
-fn append_text_delta(content: &mut Value, delta: &str) -> Result<(), StoreError> {
-    match content {
-        Value::String(text) => text.push_str(delta),
-        Value::Object(map) => match map.get_mut("text") {
-            Some(Value::String(text)) => text.push_str(delta),
-            _ => {
-                return Err(StoreError::InvalidState(
-                    "content_text_delta requires a text-shaped content".to_owned(),
-                ));
-            }
-        },
-        _ => {
-            return Err(StoreError::InvalidState(
-                "content_text_delta requires a text-shaped content".to_owned(),
-            ));
-        }
-    }
-    Ok(())
 }

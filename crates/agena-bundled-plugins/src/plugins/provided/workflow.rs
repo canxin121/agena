@@ -580,7 +580,7 @@ mod tests {
     fn unknown_tool_requires_search_and_help_instead_of_suggestion_guessing() {
         let tools = vec![
             ToolDescriptor {
-                name: "shell.run".to_string(),
+                name: "shell.exec".to_string(),
                 plugin_id: None,
                 summary: Some("Run one shell process.".to_string()),
                 help: None,

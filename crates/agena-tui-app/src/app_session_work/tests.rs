@@ -370,7 +370,7 @@ async fn work_panel_stays_above_the_composer_when_chat_scrolls_and_other_section
     let mut app = app();
     let now = chrono::Utc::now();
     app.transcript.messages = (1..=60)
-        .map(|id| agena_api::resource::RunResource {
+        .map(|id| agena_tui_transcript::display_types::TranscriptRun {
             id,
             session_id: 7,
             role: agena_api::resource::RunRole::Assistant,

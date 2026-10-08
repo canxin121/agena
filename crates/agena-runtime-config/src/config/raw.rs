@@ -21,8 +21,7 @@ use crate::{
     ConfigEnvironment, ConfigError, HarnessViewportConfig, HarnessesConfig,
     HttpProviderAdapterConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig, SessionConfig,
-    TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, TuiUiTranscriptConfig, UiConfig,
+    RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig, SessionConfig, UiConfig,
 };
 
 pub use crate::merge_optional_config as merge_option;
@@ -255,36 +254,9 @@ impl RawConfig {
         };
 
         let locale = env.var("AGENA_LOCALE");
-        let tui_color_scheme = env
-            .var("AGENA_TUI_COLOR_SCHEME")
-            .map(|value| {
-                value
-                    .parse::<TuiColorSchemeConfig>()
-                    .map_err(ConfigError::Validation)
-            })
-            .transpose()?;
-        let tui_theme = env.var("AGENA_TUI_THEME");
-        let tui_graphics = env
-            .var("AGENA_TUI_GRAPHICS")
-            .map(|value| {
-                value
-                    .parse::<TuiGraphicsModeConfig>()
-                    .map_err(ConfigError::Validation)
-            })
-            .transpose()?;
-        let ui = (locale.is_some()
-            || tui_color_scheme.is_some()
-            || tui_graphics.is_some()
-            || tui_theme.is_some())
-        .then_some(RawUiConfig {
-            locale,
-            tui: (tui_color_scheme.is_some() || tui_graphics.is_some() || tui_theme.is_some())
-                .then_some(RawTuiUiConfig {
-                    color_scheme: tui_color_scheme,
-                    graphics: tui_graphics,
-                    theme: tui_theme,
-                    transcript: None,
-                }),
+        let ui = locale.map(|locale| RawUiConfig {
+            locale: Some(locale),
+            ..Default::default()
         });
 
         let codex = env.var("AGENA_CODEX_CLIENT_VERSION");
@@ -356,32 +328,12 @@ impl RawConfig {
             adapter,
         };
         let raw_ui = self.ui.unwrap_or_default();
-        let raw_tui = raw_ui.tui.unwrap_or_default();
         let ui = UiConfig {
             locale: raw_ui
                 .locale
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
-            tui: TuiUiConfig {
-                color_scheme: raw_tui.color_scheme.unwrap_or_default(),
-                graphics: raw_tui.graphics.unwrap_or_default(),
-                theme: raw_tui
-                    .theme
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty()),
-                transcript: TuiUiTranscriptConfig {
-                    activity_default_expanded: raw_tui
-                        .transcript
-                        .as_ref()
-                        .and_then(|transcript| transcript.activity_default_expanded)
-                        .unwrap_or_default(),
-                    activity_kinds: raw_tui
-                        .transcript
-                        .as_ref()
-                        .and_then(|transcript| transcript.activity_kinds.clone())
-                        .unwrap_or_else(|| TuiUiTranscriptConfig::default().activity_kinds),
-                },
-            },
+            preferences: raw_ui.preferences,
         };
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let session = SessionConfig::from_raw(self.session.unwrap_or_default());
@@ -614,38 +566,42 @@ fn validate_tracing_level(field: &str, value: &str) -> Result<(), ConfigError> {
     }
 }
 
+/// Opaque client preference entries with generic recursive overlay semantics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-/// Raw UI configuration.
+#[serde(default)]
 pub struct RawUiConfig {
     #[merge(strategy = option_override)]
     pub locale: Option<String>,
-    #[merge(strategy = option_struct_merge)]
-    pub tui: Option<RawTuiUiConfig>,
+    #[serde(flatten)]
+    #[merge(strategy = preference_map_merge)]
+    pub preferences: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-/// Raw TUI configuration.
-pub struct RawTuiUiConfig {
-    #[merge(strategy = option_override)]
-    pub color_scheme: Option<TuiColorSchemeConfig>,
-    #[merge(strategy = option_override)]
-    pub graphics: Option<TuiGraphicsModeConfig>,
-    #[merge(strategy = option_override)]
-    pub theme: Option<String>,
-    #[merge(strategy = option_struct_merge)]
-    pub transcript: Option<RawTuiUiTranscriptConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-/// Raw transcript configuration of the TUI.
-pub struct RawTuiUiTranscriptConfig {
-    #[merge(strategy = option_override)]
-    pub activity_default_expanded: Option<bool>,
-    #[merge(strategy = option_map_extend)]
-    pub activity_kinds: Option<BTreeMap<String, bool>>,
+fn preference_map_merge(
+    base: &mut BTreeMap<String, serde_json::Value>,
+    overlay: BTreeMap<String, serde_json::Value>,
+) {
+    fn merge_value(base: &mut serde_json::Value, overlay: serde_json::Value) {
+        match (base, overlay) {
+            (serde_json::Value::Object(base), serde_json::Value::Object(overlay)) => {
+                for (key, value) in overlay {
+                    if let Some(existing) = base.get_mut(&key) {
+                        merge_value(existing, value);
+                    } else {
+                        base.insert(key, value);
+                    }
+                }
+            }
+            (base, overlay) => *base = overlay,
+        }
+    }
+    for (key, value) in overlay {
+        if let Some(existing) = base.get_mut(&key) {
+            merge_value(existing, value);
+        } else {
+            base.insert(key, value);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -838,8 +794,6 @@ macro_rules! impl_local_merge_via_crate {
 impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
-    RawTuiUiConfig,
-    RawTuiUiTranscriptConfig,
     RawRuntimeConfig,
     RawRuntimeProvidersConfig,
     RawProviderClientVersionSettings,

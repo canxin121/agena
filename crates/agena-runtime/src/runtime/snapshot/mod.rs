@@ -24,7 +24,7 @@ use agena_domain::ModelRef;
 use agena_plugin_host::PluginHost;
 use agena_provider::{ModelCatalogResponse, decorate_provider_models};
 use agena_runtime::{
-    ConfigResolutionMeta, ModelCatalogService, ResolvedConfig, ResolvedProviderConfig, UiConfig,
+    ConfigResolutionMeta, ModelCatalogService, ResolvedConfig, ResolvedProviderConfig,
 };
 
 pub(super) type RuntimeServices = agena_runtime::RuntimeServiceBundle<
@@ -362,10 +362,6 @@ impl RuntimeSnapshot {
 
     pub(crate) fn default_selection(&self) -> agena_domain::ExecutionSelection {
         self.state.resolution().default_selection.clone()
-    }
-
-    pub(crate) fn ui_config(&self) -> UiConfig {
-        self.state.resolution().ui.clone()
     }
 
     pub(crate) fn config_path(&self) -> &Path {

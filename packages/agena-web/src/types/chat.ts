@@ -254,6 +254,7 @@ export type MessagePart = {
   agenaRole?: string
   agenaSummary?: string | null
   agenaContent?: JsonLike
+  agenaSections?: Array<{ section: 'metadata' | 'input' | 'output' | 'presentation'; revision: number }>
   agenaPresentation?: JsonLike
   runId?: number | null
   parentPartId?: number | null

@@ -5,6 +5,9 @@
 //! for an inner-tool permission request, replies from the same runtime, and
 //! then verifies the original model run completes.
 
+#[path = "../part_observation.rs"]
+mod part_observation;
+
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 
 use agena_domain::{
@@ -13,7 +16,7 @@ use agena_domain::{
 };
 use agena_runtime::{
     RuntimeBootstrapRequest, SessionCreateRequest, SessionPermissionReplyRequest,
-    SessionProjectedPartDetail, SessionQueryService, SessionRunOptions, SessionUserRunRequest,
+    SessionQueryService, SessionRunOptions, SessionUserRunRequest,
 };
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -64,6 +67,10 @@ async fn async_main() -> anyhow::Result<()> {
     .await
     .context("start isolated probe runtime")?;
     let services = runtime.application_services();
+    let session_store = services
+        .session_store
+        .clone()
+        .context("runtime has no session store")?;
     let commands = services
         .execution_commands
         .context("runtime does not provide session commands")?;
@@ -180,18 +187,11 @@ async fn async_main() -> anyhow::Result<()> {
     ) {
         bail!("session remained blocked after AllowOnce");
     }
-    let messages = queries
-        .list_projected_runs(session.session_id)
-        .await
-        .context("load completed probe transcript")?;
-    assert_tool_api_trace(&messages, "web.fetch")?;
-    let transcript = messages
-        .iter()
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| match part.detail.as_ref() {
-            Some(SessionProjectedPartDetail::Text { text, .. }) => Some(text.as_str()),
-            _ => None,
-        })
+    let parts = part_observation::parts(session_store.as_ref(), session.session_id).await?;
+    assert_tool_api_trace(&parts, "web.fetch")?;
+    let transcript = part_observation::text(session_store.as_ref(), &parts)
+        .await?
+        .into_values()
         .collect::<Vec<_>>()
         .join("\n");
     if !transcript.contains("WEB_FETCH_PERMISSION_OK") {
@@ -207,29 +207,29 @@ async fn async_main() -> anyhow::Result<()> {
 }
 
 fn assert_tool_api_trace(
-    messages: &[agena_runtime::SessionProjectedRun],
+    parts: &[agena_storage::store::Part],
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    let operations = messages
+    let operations = parts
         .iter()
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| match part.detail.as_ref() {
-            Some(SessionProjectedPartDetail::ToolCall(operation)) => {
-                Some((operation.name.as_str(), Some(operation.input.clone())))
-            }
-            _ => None,
+        .filter(|p| p.kind == "tool_call")
+        .map(|p| {
+            let value =
+                agena_runtime_contracts::part_content::ToolCallContent::try_from(&p.content)
+                    .map_err(anyhow::Error::msg)?;
+            Ok((value.name, Some(value.input)))
         })
-        .collect::<Vec<_>>();
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let help_count = operations
         .iter()
-        .filter(|(name, _)| *name == "agena.tools.help")
+        .filter(|(name, _)| name == "agena.tools.help")
         .count();
     if help_count != 1 {
         bail!("expected exactly one agena.tools.help operation, found {help_count}");
     }
     let call_inputs = operations
         .iter()
-        .filter(|(name, _)| *name == "agena.tools.call")
+        .filter(|(name, _)| name == "agena.tools.call")
         .filter_map(|(_, input)| input.as_ref())
         .collect::<Vec<_>>();
     if call_inputs.len() != 1 {

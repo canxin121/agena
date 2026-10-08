@@ -1707,7 +1707,7 @@ mod tests {
         let mut invocation = ToolInvocation::new(
             ToolApiFunction::Call.function_name(),
             StructuredObject::try_from(serde_json::json!({
-                "tool": "shell.run",
+                "tool": "shell.exec",
                 "input": {"command": "rm -rf /var"}
             }))
             .expect("structured Tool API payload"),
@@ -1716,7 +1716,7 @@ mod tests {
             function: ToolApiFunction::Call,
             arguments: invocation.input.clone(),
         });
-        invocation.name = "shell.run".to_owned();
+        invocation.name = "shell.exec".to_owned();
         invocation.plugin_name = Some("builtin".to_owned());
         let marker = run_marker(PartRole::Assistant, None);
         let operation = assistant_operation(invocation);
@@ -1733,11 +1733,11 @@ mod tests {
             "assistant text must be role-labelled: {rendered}"
         );
         assert!(
-            rendered.contains("tool shell.run call:"),
+            rendered.contains("tool shell.exec call:"),
             "the tool name and its arguments must be visible: {rendered}"
         );
         assert!(
-            rendered.contains("tool shell.run result (completed):"),
+            rendered.contains("tool shell.exec result (completed):"),
             "the tool output must be visible, with its status: {rendered}"
         );
         assert!(

@@ -24,34 +24,75 @@ impl App {
         if !self.transcript.tool_detail_tasks.is_empty() {
             let expanded = if main {
                 let width = self.layout.transcript_body.width;
-                self.transcript.rendered(width).nodes.iter().filter(|node| node.expanded)
+                self.transcript
+                    .rendered(width)
+                    .nodes
+                    .iter()
+                    .filter(|node| node.expanded)
                     .filter_map(|node| match node.key {
                         agena_tui_transcript::TranscriptNodeKey::ActivitySection {
-                            content_id: agena_tui_transcript::TranscriptContentId::StoredPart(id), section, ..
+                            content_id: agena_tui_transcript::TranscriptContentId::StoredPart(id),
+                            section,
+                            ..
                         } => tool_detail_api_section(section).map(|section| (id, section)),
                         _ => None,
-                    }).collect::<std::collections::BTreeSet<_>>()
-            } else { std::collections::BTreeSet::new() };
-            let cancelled = self.transcript.tool_detail_tasks.keys()
-                .filter(|key| !expanded.contains(key) || !self.transcript.tool_detail_loads.contains_key(key))
-                .copied().collect::<Vec<_>>();
+                    })
+                    .collect::<std::collections::BTreeSet<_>>()
+            } else {
+                std::collections::BTreeSet::new()
+            };
+            let cancelled = self
+                .transcript
+                .tool_detail_tasks
+                .keys()
+                .filter(|key| {
+                    !expanded.contains(key) || !self.transcript.tool_detail_loads.contains_key(key)
+                })
+                .copied()
+                .collect::<Vec<_>>();
             for key in cancelled {
-                if let Some(task) = self.transcript.tool_detail_tasks.remove(&key) { task.abort(); }
+                if let Some(task) = self.transcript.tool_detail_tasks.remove(&key) {
+                    task.abort();
+                }
                 self.transcript.tool_detail_loads.remove(&key);
-                if !main { self.transcript.tool_detail_pending.insert(key); }
-                else { self.transcript.tool_detail_pending.remove(&key); }
+                if !main {
+                    self.transcript.tool_detail_pending.insert(key);
+                } else {
+                    self.transcript.tool_detail_pending.remove(&key);
+                }
             }
         }
-        if self.transcript.tool_detail_pending.is_empty() || !main { return; }
+        if self.transcript.tool_detail_pending.is_empty() || !main {
+            return;
+        }
         let now = std::time::Instant::now();
-        let ready = self.transcript.tool_detail_pending.iter().filter(|key|
-            !self.transcript.tool_detail_loads.contains_key(key)
-                && self.transcript.tool_detail_allowed_at.get(key).is_none_or(|at| *at <= now))
-            .copied().collect::<Vec<_>>();
-        if ready.is_empty() { return; }
+        let ready = self
+            .transcript
+            .tool_detail_pending
+            .iter()
+            .filter(|key| {
+                !self.transcript.tool_detail_loads.contains_key(key)
+                    && self
+                        .transcript
+                        .tool_detail_allowed_at
+                        .get(key)
+                        .is_none_or(|at| *at <= now)
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            return;
+        }
         for key in &ready {
             self.transcript.tool_detail_pending.remove(key);
-            self.transcript.tool_detail_versions.remove(key);
+            if let Some(part) = self
+                .transcript
+                .parts
+                .iter_mut()
+                .find(|part| part.part_id == key.0)
+            {
+                part.sections.retain(|loaded| loaded.section != key.1);
+            }
         }
         let ids = ready.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
         // Closed disclosures consume no requests and no recurring work.
@@ -235,7 +276,7 @@ impl App {
             "flash-transcript-node-copied",
             &agena_tui::fl_args!("kind" => transcript_node_kind_label(&self.i18n, node.kind)),
         );
-        self.request_clipboard_copy(node.copy_text, success);
+        self.request_clipboard_copy(node.copy_text.to_string(), success);
     }
 
     pub(crate) fn handle_composer_key(&mut self, key: KeyEvent) {

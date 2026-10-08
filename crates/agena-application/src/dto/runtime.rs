@@ -61,62 +61,6 @@ impl From<agena_runtime::RuntimeMetricsSnapshot> for RuntimeMetricsResource {
     }
 }
 
-/// Application-facing terminal preferences projection.
-///
-/// Runtime continues to resolve persisted configuration. This value prevents
-/// terminal startup and palette reload from carrying the Runtime configuration
-/// record or its presentation enums across the Application boundary.
-#[derive(Debug, Clone, Default)]
-pub struct TuiPreferencesResource {
-    pub locale: Option<String>,
-    pub theme: Option<String>,
-    pub color_scheme: TuiColorSchemeResource,
-    pub graphics: TuiGraphicsModeResource,
-    /// Default transcript expansion for activities without a kind override.
-    pub transcript_activity_default_expanded: bool,
-    /// Per-kind transcript expansion overrides keyed by activity kind id.
-    pub transcript_activity_kinds: std::collections::BTreeMap<String, bool>,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-/// Color scheme preference for the TUI.
-pub enum TuiColorSchemeResource {
-    #[default]
-    Auto,
-    Dark,
-    Light,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-/// Graphics mode preference for the TUI.
-pub enum TuiGraphicsModeResource {
-    #[default]
-    Auto,
-    Native,
-    Unicode,
-}
-
-impl From<agena_runtime::RuntimeUiConfiguration> for TuiPreferencesResource {
-    fn from(value: agena_runtime::RuntimeUiConfiguration) -> Self {
-        Self {
-            locale: value.locale,
-            theme: value.theme,
-            color_scheme: match value.color_scheme {
-                agena_runtime::RuntimeTuiColorScheme::Auto => TuiColorSchemeResource::Auto,
-                agena_runtime::RuntimeTuiColorScheme::Dark => TuiColorSchemeResource::Dark,
-                agena_runtime::RuntimeTuiColorScheme::Light => TuiColorSchemeResource::Light,
-            },
-            graphics: match value.graphics {
-                agena_runtime::RuntimeTuiGraphicsMode::Auto => TuiGraphicsModeResource::Auto,
-                agena_runtime::RuntimeTuiGraphicsMode::Native => TuiGraphicsModeResource::Native,
-                agena_runtime::RuntimeTuiGraphicsMode::Unicode => TuiGraphicsModeResource::Unicode,
-            },
-            transcript_activity_default_expanded: value.transcript_activity_default_expanded,
-            transcript_activity_kinds: value.transcript_activity_kinds,
-        }
-    }
-}
-
 pub fn runtime_background_task_resource(
     value: agena_runtime::RuntimeBackgroundTask,
 ) -> agena_api::resource::RuntimeBackgroundTaskResource {

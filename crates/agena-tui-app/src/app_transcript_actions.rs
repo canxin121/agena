@@ -234,7 +234,7 @@ impl App {
                     && node.start_line < end
                     && node.end_line > start
             })
-            .map(|node| node.copy_text.clone())
+            .map(|node| node.copy_text.to_string())
             .collect::<Vec<_>>()
             .join("\n\n")
     }
@@ -246,7 +246,7 @@ impl App {
             .nodes
             .iter()
             .filter(|node| node.key.is_entry_container() && !node.copy_text.trim().is_empty())
-            .map(|node| node.copy_text.clone())
+            .map(|node| node.copy_text.to_string())
             .collect::<Vec<_>>()
             .join("\n\n")
     }

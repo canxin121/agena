@@ -162,7 +162,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
             kind: TranscriptNodeKind::Message,
             start_line: body_start,
             end_line: lines.len(),
-            copy_text: String::new(),
+            copy_text: "".into(),
             atomic: true,
             toggleable: false,
             expanded: true,
@@ -228,7 +228,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
                         // The folded run is a UI marker, never real content:
                         // copying the collapsed block must copy the visible
                         // marker line, never the hidden activities' full text.
-                        copy_text: summary.clone(),
+                        copy_text: summary.clone().into(),
                         atomic: true,
                         toggleable: true,
                         expanded: false,
@@ -312,7 +312,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
                             kind: block.kind,
                             start_line,
                             end_line: lines.len(),
-                            copy_text: block.copy_text.clone(),
+                            copy_text: block.copy_text.clone().into(),
                             atomic,
                             toggleable: false,
                             expanded: true,
@@ -357,7 +357,7 @@ mod tests {
         PartExecutionStatusResource, ToolCallView, TranscriptActivityContent, TranscriptContentId,
         TranscriptEntryId, TranscriptEntryPart, TranscriptFixture, TranscriptPartContent,
     };
-    use agena_api::live::HumanPresentationResource;
+    use agena_domain::PartDocument;
     use agena_domain::{
         AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, OperationError,
         RawOutput, StructuredObject, TimeRange, ToolInvocation, ToolResultState, ViewBlock,
@@ -394,6 +394,7 @@ mod tests {
     fn fixture_operation(call_id: i64, name: &str, title: &str) -> ToolCallView {
         ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id,
                 invocation: ToolInvocation::new(name, StructuredObject::default()),
                 authorization: Default::default(),
@@ -404,7 +405,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: title.to_owned(),
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -580,7 +581,7 @@ mod tests {
         assert_eq!(block_nodes.len(), 3);
         assert_eq!(block_nodes[0].kind, TranscriptNodeKind::MarkdownParagraph);
         assert_eq!(block_nodes[1].kind, TranscriptNodeKind::MarkdownCode);
-        assert_eq!(block_nodes[1].copy_text, "let answer = 42;");
+        assert_eq!(block_nodes[1].copy_text.as_ref(), "let answer = 42;");
         assert_eq!(block_nodes[2].kind, TranscriptNodeKind::MarkdownList);
         assert!(
             block_nodes
@@ -1396,6 +1397,7 @@ mod tests {
     fn interaction_notifications_render_as_markdown_cards() {
         let operation = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: ToolInvocation::new(
                     "agena.interaction.notify",
@@ -1418,7 +1420,7 @@ mod tests {
                 )]),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "Production ready".to_owned(),
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -1461,6 +1463,7 @@ mod tests {
             .join("\n");
         let operation = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: ToolInvocation::new("agena.test", StructuredObject::default()),
                 authorization: Default::default(),
@@ -1471,7 +1474,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "agena.test".to_owned(),
                 summary: String::new(),
                 blocks: vec![ViewBlock::Text {
@@ -1512,6 +1515,7 @@ mod tests {
     fn expanded_tool_input_renders_as_nested_markdown_bullets() {
         let operation = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: ToolInvocation::new(
                     "agena.fs.read",
@@ -1530,7 +1534,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "fs.read · Read README.md".to_owned(),
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -1619,9 +1623,10 @@ mod tests {
         let now = Utc::now();
         let operation = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: ToolInvocation::new(
-                    "agena.shell.run",
+                    "agena.shell.exec",
                     StructuredObject::try_from(serde_json::json!({
                         "script": "private input sentinel",
                     }))
@@ -1635,8 +1640,8 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
-                title: "shell.run · Execute command".to_owned(),
+            Some(PartDocument {
+                title: "shell.exec · Execute command".to_owned(),
                 summary: String::new(),
                 blocks: vec![ViewBlock::Command {
                     id: None,
@@ -1865,6 +1870,7 @@ mod tests {
     fn tools_call_input_unwraps_to_the_inner_tool_arguments() {
         let operation = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: ToolInvocation::new(
                     "tools_call",
@@ -1882,7 +1888,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "tools.call · web.search".to_owned(),
                 summary: String::new(),
                 blocks: Vec::new(),
@@ -1920,6 +1926,7 @@ mod tests {
     fn json_table_log_and_custom_blocks_render_richly() {
         let operation = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: ToolInvocation::new("agena.test", StructuredObject::default()),
                 authorization: Default::default(),
@@ -1930,7 +1937,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "agena.test".to_owned(),
                 summary: String::new(),
                 blocks: vec![
@@ -2027,6 +2034,7 @@ mod tests {
         };
         let operation = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: ToolInvocation::new("agena.image", StructuredObject::default()),
                 authorization: Default::default(),
@@ -2043,7 +2051,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "Image".to_owned(),
                 summary: "Created an image".to_owned(),
                 blocks: vec![ViewBlock::Markdown {
@@ -2103,6 +2111,7 @@ mod tests {
         };
         let operation = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 7,
                 invocation: ToolInvocation::new("agena.image", StructuredObject::default()),
                 authorization: Default::default(),
@@ -2198,6 +2207,7 @@ mod tests {
     fn folded_operation_headline_uses_the_composed_operation_title() {
         let tool = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 0,
                 invocation: ToolInvocation::new(
                     "fs.apply_patch",
@@ -2217,7 +2227,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "Apply patch".to_owned(),
                 summary: "1 file changed · +1 −1".to_owned(),
                 blocks: Vec::new(),
@@ -2258,6 +2268,7 @@ mod tests {
     fn folded_tool_headline_shows_the_composed_operation_title_and_reports_result_count() {
         let tool = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 0,
                 invocation: ToolInvocation::new(
                     "fs.grep",
@@ -2282,7 +2293,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "Grep TODO".to_owned(),
                 summary: "36 matches in crates".to_owned(),
                 blocks: Vec::new(),
@@ -2299,6 +2310,7 @@ mod tests {
     fn folded_tool_keeps_failure_reason_on_the_same_line() {
         let tool = ToolCallView::from_operation(
             OperationPart {
+                resources: Vec::new(),
                 call_id: 0,
                 invocation: ToolInvocation::new(
                     "agena.fs.read",
@@ -2328,7 +2340,7 @@ mod tests {
                 metadata: Default::default(),
                 lifecycle: TimeRange::default(),
             },
-            Some(HumanPresentationResource {
+            Some(PartDocument {
                 title: "Read secrets.env".to_owned(),
                 summary: "permission denied by workspace policy".to_owned(),
                 blocks: Vec::new(),

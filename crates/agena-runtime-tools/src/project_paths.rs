@@ -9,7 +9,6 @@ use sha2::{Digest, Sha256};
 
 const MAX_WORKSPACE_KEY_LEN: usize = 80;
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
-const TOOL_OUTPUT_SPILL_DIR: &str = "tool_output";
 pub const MAX_GENERATED_IMAGE_BYTES: usize = 50 * 1024 * 1024;
 static GENERATED_IMAGE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
@@ -38,56 +37,6 @@ pub fn project_state_dir(workspace_root: &Path) -> PathBuf {
     agena_home_dir()
         .join("projects")
         .join(workspace_key(workspace_root))
-}
-
-/// Per-workspace directory holding the spilled full text of oversized
-/// model-facing tool results. The session layer truncates a result that
-/// exceeds its budget, writes the whole text here, and hands the model the
-/// path so it can read the remainder with ordinary file tools. The name is
-/// content-addressed, so replaying the same result in a later round reuses
-/// the same file instead of growing the directory.
-pub fn tool_output_spill_dir(workspace_root: &Path) -> PathBuf {
-    project_state_dir(workspace_root).join(TOOL_OUTPUT_SPILL_DIR)
-}
-
-/// Stable spill path for one tool-result payload.
-pub fn tool_output_spill_path(workspace_root: &Path, session_id: i64, text: &str) -> PathBuf {
-    let digest = hex::encode(Sha256::digest(text.as_bytes()));
-    tool_output_spill_dir(workspace_root)
-        .join(session_id.to_string())
-        .join(format!("{digest}.txt"))
-}
-
-/// Drop the spilled tool output of a session that no longer exists.
-pub fn prune_tool_output(workspace_root: &Path, live_session_ids: &[i64]) -> Vec<PathBuf> {
-    prune_session_dirs(
-        tool_output_spill_dir(workspace_root).as_path(),
-        live_session_ids,
-    )
-}
-
-/// Every child directory of `base` is named after the session that owns it.
-/// A directory whose name is not a live session id is orphaned state.
-fn prune_session_dirs(base: &Path, live_session_ids: &[i64]) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(base) else {
-        return Vec::new();
-    };
-    let mut removed = Vec::new();
-    for dirent in entries.flatten() {
-        let path = dirent.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let live = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.parse::<i64>().ok())
-            .is_some_and(|session_id| session_id == 0 || live_session_ids.contains(&session_id));
-        if !live && std::fs::remove_dir_all(&path).is_ok() {
-            removed.push(path);
-        }
-    }
-    removed
 }
 
 /// Stable location for a generated image that belongs to one tool call.
@@ -239,6 +188,9 @@ pub fn generated_media_extension(filename_hint: Option<&str>, mime_type: &str) -
 
 /// Root directory for Agena's process-managed local state.
 pub fn agena_home_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("AGENA_STATE_DIR").filter(|path| !path.is_empty()) {
+        return PathBuf::from(path);
+    }
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());

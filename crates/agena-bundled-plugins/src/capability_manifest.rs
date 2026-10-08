@@ -120,6 +120,7 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_commands_plugin());
 
     add!(crate::tool::new_code_plugin());
+    add!(crate::tool::new_content_plugin());
     add!(crate::tool::new_cron_plugin());
     add!(crate::tool::new_fs_plugin());
     add!(crate::tool::new_interaction_plugin());
@@ -361,7 +362,7 @@ mod boundary_audit {
                 }
             }
         }
-        assert_eq!(count, 138);
+        assert_eq!(count, super::bundled_capability_manifest().counts.tools);
         assert!(
             failures.is_empty(),
             "Malformed arguments escaped validation:\n{}",

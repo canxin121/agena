@@ -86,7 +86,7 @@ async fn bounded_reconciliation_filters_memberships_visibility_and_validates_ids
         );
     }
     store.delete(source.id).await.unwrap();
-    for endpoint in ["parts?ids=1", "parts", "transcript", "state"] {
+    for endpoint in ["parts?ids=1", "parts", "runs", "state"] {
         let response = reqwest::get(format!(
             "{}/api/v1/sessions/{}/{endpoint}",
             server.url, source.id
@@ -102,7 +102,7 @@ async fn bounded_reconciliation_filters_memberships_visibility_and_validates_ids
 }
 
 #[tokio::test]
-async fn real_stream_delivers_buffered_text_and_empty_session_deletion_in_workspace_scope() {
+async fn resource_stream_delivers_live_text_without_part_writes_and_workspace_deletion() {
     let server = start_test_server("http://127.0.0.1:9").await;
     let client = AgenaClient::new(&server.url).unwrap();
     let source = client
@@ -128,6 +128,24 @@ async fn real_stream_delivers_buffered_text_and_empty_session_deletion_in_worksp
         .await
         .unwrap();
     let part = run.parts.iter().find(|part| part.kind == "text").unwrap();
+    let writer = store
+        .contents()
+        .open(source.id, part.part_id, agena_domain::ContentKind::Text)
+        .await
+        .unwrap();
+    let part = store
+        .update_part(
+            source.id,
+            part.part_id,
+            PartDelta {
+                content: Some(
+                    serde_json::json!({"text": "", "resources": [writer.resource().reference()]}),
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     let before = store
         .load_part_ids(source.id, &[])
         .await
@@ -140,46 +158,48 @@ async fn real_stream_delivers_buffered_text_and_empty_session_deletion_in_worksp
         })
         .await
         .unwrap();
+    let mut content = client
+        .stream_content(
+            source.id,
+            writer.resource().resource_id,
+            Some(agena_domain::ContentCursor {
+                sequence: 0,
+                ..writer.resource().cursor
+            }),
+            64 * 1024,
+        )
+        .await
+        .unwrap();
     for _ in 0..10 {
-        store
-            .update_part(
-                source.id,
-                part.part_id,
-                PartDelta {
-                    content_text_delta: Some("x".into()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
+        writer.append_text("x").await.unwrap();
     }
-    let observed = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Some(Ok(SubscriptionEvent::SessionChanged(SessionChangeResource::PartUpdated {
-                part: updated,
-                ..
-            }))) = stream.recv().await
-                && updated.part_id == part.part_id
-                && updated.content["text"] == "xxxxxxxxxx"
-            {
-                break updated;
+    let text = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut text = String::new();
+        while let Some(Ok(page)) = content.recv().await {
+            for chunk in page.chunks {
+                if let agena_domain::ContentPayload::Text { text: chunk } = chunk.payload {
+                    text.push_str(&chunk);
+                }
+            }
+            if page.next_cursor.sequence == 10 {
+                return text;
             }
         }
+        panic!("content stream closed before live cursor 10")
     })
     .await
-    .expect("buffered text must arrive before completion");
-    assert_eq!(observed.revision, part.revision);
-    assert!(observed.updated_at_ms > part.updated_at_ms);
+    .expect("resource bytes arrive while Part is running");
+    assert_eq!(text, "xxxxxxxxxx");
+    let unchanged = store
+        .load_part_ids(source.id, &[part.part_id])
+        .await
+        .unwrap();
+    assert_eq!(unchanged.meta.version, before);
     assert_eq!(
-        store
-            .load_part_ids(source.id, &[])
-            .await
-            .unwrap()
-            .meta
-            .version,
-        before,
-        "no per-token durable writes"
+        unchanged.parts[0], part,
+        "streaming never mutates Part facts"
     );
+    writer.finish().await.unwrap();
     store.delete(empty.id).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

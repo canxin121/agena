@@ -56,13 +56,14 @@ export type AgenaSession = {
   [k: string]: JsonValue
 }
 
-/** PartResource / SessionTranscriptPart — the shared part wire shape. */
+/** One public Part envelope for windows, details and live changes. */
 export type AgenaPart = {
   part_id: number
   kind: string
   role: string
   state: string
   content: JsonValue
+  sections: Array<{ section: ToolDetailSection; revision: number }>
   presentation?: JsonValue | null
   summary?: string | null
   created_at_ms?: number
@@ -92,12 +93,10 @@ export type AgenaSessionParts = {
   version: number
   parts: AgenaPart[]
   user_message_count?: number | null
-  folds?: Array<{
+  runs: Array<{
     run_id: number
-    run_ids?: number[]
-    anchor_part_id: number
-    hidden_count: number
-    next_cursor?: string | null
+    part_count: number
+    page: { returned: number; has_more: boolean; next_cursor?: string | null }
   }>
   page?: {
     returned?: number
@@ -110,6 +109,7 @@ export type AgenaSessionParts = {
 export type AgenaExecutionState = {
   session: AgenaSession
   parts: AgenaPart[]
+  part_page: { returned: number; has_more: boolean; next_cursor?: string | null } | null
   latest_event_seq?: number | null
   /// Server-projected background activities for this session. This is the
   /// single session-scoped projection shared with composer footers; the web
@@ -180,23 +180,13 @@ export type TranscriptMessageListResponse = MessageListResponse & {
   observation?: Awaited<ReturnType<typeof conditionalJsonObserved>>['observation']
 }
 
-function messageFoldsFromWire(folds: AgenaSessionParts['folds']): MessageFold[] {
-  if (!Array.isArray(folds)) return []
-  return folds
-    .filter(
-      (fold) =>
-        Number.isFinite(fold?.run_id) && Number.isFinite(fold?.anchor_part_id) && Number.isFinite(fold?.hidden_count),
-    )
-    .map((fold) => ({
-      runId: Number(fold.run_id),
-      runIds:
-        Array.isArray(fold.run_ids) && fold.run_ids.length
-          ? fold.run_ids.map((runId) => Number(runId)).filter(Number.isFinite)
-          : [Number(fold.run_id)],
-      anchorPartId: String(fold.anchor_part_id),
-      hiddenCount: Math.max(0, Math.floor(Number(fold.hidden_count))),
-      nextCursor: typeof fold.next_cursor === 'string' ? fold.next_cursor : null,
-    }))
+function messageFoldsFromWindow(page: AgenaSessionParts): MessageFold[] {
+  return page.runs.flatMap((run) => {
+    const hiddenCount = Math.max(0, run.part_count - run.page.returned)
+    const anchor = page.parts.find((part) => part.run_id === run.run_id)
+    if (!hiddenCount || !anchor) return []
+    return [{ runId: run.run_id, runIds: [run.run_id], anchorPartId: String(anchor.part_id), hiddenCount, nextCursor: run.page.next_cursor ?? null }]
+  })
 }
 
 export type SessionExecutionStatus = {
@@ -495,6 +485,7 @@ export function normalizeAgenaPart(
     agenaRole: str(part.role) || 'assistant',
     agenaSummary,
     agenaContent: content,
+    agenaSections: Array.isArray(part.sections) ? part.sections : [],
     agenaPresentation,
     runId,
     parentPartId,
@@ -977,8 +968,8 @@ export async function getToolPartDetail(
 
 /**
  * Load a session's collapsed transcript as MessageEntry[].
- * The server walks raw `/parts` pages internally and returns only visible
- * tails plus fold cursors; hidden activity never crosses the HTTP boundary.
+ * The server returns bounded factual run windows. Grouping and disclosure
+ * state are derived locally from membership counts and cursors.
  */
 export async function listMessages(
   sessionId: string,
@@ -992,16 +983,16 @@ export async function listMessages(
   const params = new URLSearchParams()
   params.set('limit', String(Math.max(1, Math.min(12, Math.floor(limit || 8)))))
   if (typeof activityLimit === 'number' && Number.isFinite(activityLimit)) {
-    params.set('activity_limit', String(Math.max(1, Math.min(50, Math.floor(activityLimit)))))
+    params.set('part_limit', String(Math.max(16, Math.min(128, Math.floor(activityLimit) + 1))))
   }
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const { value: parts, observation } = await conditionalJsonObserved<AgenaSessionParts>(
-    `session:${sid}:transcript`,
-    `/api/v1/sessions/${encodeURIComponent(sid)}/transcript?${params.toString()}`,
+    `session:${sid}:parts`,
+    `/api/v1/sessions/${encodeURIComponent(sid)}/runs?${params.toString()}`,
     { signal: AbortSignal.timeout(30_000) },
     force,
   )
-  const folds = messageFoldsFromWire(parts.folds)
+  const folds = messageFoldsFromWindow(parts)
   if (typeof parts.user_message_count !== 'number' || !Number.isFinite(parts.user_message_count)) {
     throw new Error('Transcript response is missing user_message_count')
   }
@@ -1069,7 +1060,7 @@ export async function listTranscriptRunParts(
   params.set('limit', String(Math.max(1, Math.min(50, Math.floor(limit || 5)))))
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
-    `/api/v1/sessions/${encodeURIComponent(sid)}/transcript/runs/${encodeURIComponent(String(runId))}?${params.toString()}`,
+    `/api/v1/sessions/${encodeURIComponent(sid)}/parts?run_ids=${encodeURIComponent(String(runId))}&${params.toString()}`,
     { signal: AbortSignal.timeout(30_000) },
   )
   return {
@@ -1093,7 +1084,7 @@ export async function listTranscriptFoldParts(
   params.set('limit', String(Math.max(1, Math.min(50, Math.floor(limit || 5)))))
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
-    `/api/v1/sessions/${encodeURIComponent(sid)}/transcript/folds?${params.toString()}`,
+    `/api/v1/sessions/${encodeURIComponent(sid)}/parts?run_ids=${encodeURIComponent(ids.join(','))}&${params.toString()}`,
     { signal: AbortSignal.timeout(30_000) },
   )
   return {

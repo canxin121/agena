@@ -696,7 +696,7 @@ pub(super) enum AppMessage {
     SessionRefreshed {
         session_id: i64,
         requested_at: Instant,
-        result: UiResult<SessionRefresh>,
+        result: Box<UiResult<SessionRefresh>>,
     },
     SessionMessageSubmitted {
         session_id: i64,
@@ -810,7 +810,7 @@ pub(super) enum AppMessage {
     SessionEventArrived {
         session_id: i64,
         generation: u64,
-        live: LiveEvent,
+        live: Box<LiveEvent>,
     },
     /// Result of a `request_cancel_run` call. We always treat the in-flight
     /// run as gone when this lands, regardless of success — the user has

@@ -17,6 +17,7 @@ agena-plugin-sdk = { workspace = true }
 agena-process = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime-contracts = { workspace = true }
+agena-storage = { workspace = true }
 agena-scheduler = { workspace = true }
 agena-lsp = { workspace = true }
 agena-tool = { workspace = true }
@@ -60,4 +61,5 @@ url = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+async-trait = { workspace = true }
 sea-orm = { workspace = true }

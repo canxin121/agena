@@ -61,14 +61,14 @@ while True:
     if method == "hooks/tool.invoke.stream":
         if "early_chunks" in params["input"]:
             for index in range(params["input"]["early_chunks"]):
-                send({"jsonrpc": "2.0", "method": "tool.stream.chunk", "params": {"stream_id": "early", "text_delta": str(index)}})
+                send({"jsonrpc": "2.0", "method": "tool.stream.chunk", "params": {"stream_id": "early", "payload": {"type": "text", "text": str(index)}}})
             send({"jsonrpc": "2.0", "method": "tool.stream.end", "params": {"stream_id": "early", "title": "", "summary": "done", "output_text": "done"}})
             send({"jsonrpc": "2.0", "id": request["id"], "result": {"stream_id": "early"}})
             continue
-        send({"jsonrpc": "2.0", "method": "tool.stream.chunk", "params": {"stream_id": "reused", "text_delta": "first"}})
+        send({"jsonrpc": "2.0", "method": "tool.stream.chunk", "params": {"stream_id": "reused", "payload": {"type": "text", "text": "first"}}})
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"stream_id": "reused"}})
         if params["input"]["complete"]:
-            send({"jsonrpc": "2.0", "method": "tool.stream.chunk", "params": {"stream_id": "reused", "text_delta": "second"}})
+            send({"jsonrpc": "2.0", "method": "tool.stream.chunk", "params": {"stream_id": "reused", "payload": {"type": "text", "text": "second"}}})
             send({"jsonrpc": "2.0", "method": "tool.stream.end", "params": {"stream_id": "reused", "title": "", "summary": "done", "output_text": "done"}})
         continue
     if method == "test/end_stream":

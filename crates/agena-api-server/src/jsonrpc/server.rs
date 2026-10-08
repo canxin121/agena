@@ -1,25 +1,16 @@
 use std::sync::Arc;
 
+use agena_api::{content::ReadContentParams, live::SessionPartsResource, queries::ReadPartsParams};
 use async_trait::async_trait;
-use axum::{
-    Router,
-    extract::{State, WebSocketUpgrade, ws::Message},
-    response::IntoResponse,
-    routing::get,
-};
-use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    sync::broadcast,
-};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::protocol::{
-    self, AppServerNotification, CancelRunParams, CancelRunResult, CreateSessionParams,
-    CreateSessionResult, InboundMessage, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
-    ListSessionsParams, ListSessionsResult, PermissionReplyParams, PermissionReplyResult,
-    ReadPartsParams, ReadPartsResult, SubmitRunParams, SubmitRunResult,
+    self, CancelRunParams, CancelRunResult, CreateSessionParams, CreateSessionResult,
+    InboundMessage, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListSessionsParams,
+    ListSessionsResult, PermissionReplyParams, PermissionReplyResult, SubmitRunParams,
+    SubmitRunResult,
 };
 
 static RPC_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
@@ -61,41 +52,25 @@ pub trait AppServerBackend: Send + Sync + 'static {
         &self,
         params: ListSessionsParams,
     ) -> Result<ListSessionsResult, AppServerError>;
-    async fn read_messages(
+    async fn read_parts(
         &self,
         params: ReadPartsParams,
-    ) -> Result<ReadPartsResult, AppServerError>;
+    ) -> Result<SessionPartsResource, AppServerError>;
+    async fn read_content(
+        &self,
+        params: ReadContentParams,
+    ) -> Result<agena_domain::ContentPage, AppServerError>;
+    async fn read_content_text(
+        &self,
+        params: agena_api::content::ReadContentTextParams,
+    ) -> Result<agena_domain::ContentTextPage, AppServerError>;
     async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError>;
-}
-
-#[derive(Clone)]
-/// Broadcaster of server notifications to subscribers.
-pub struct EventBroadcaster {
-    sender: broadcast::Sender<Arc<AppServerNotification>>,
-}
-
-impl EventBroadcaster {
-    pub fn new(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<Arc<AppServerNotification>> {
-        self.sender.subscribe()
-    }
-
-    pub fn publish(&self, notification: AppServerNotification) {
-        if self.sender.send(Arc::new(notification)).is_err() {
-            tracing::debug!("JSON-RPC notification had no active subscribers");
-        }
-    }
 }
 
 #[derive(Clone)]
 /// JSON-RPC application server.
 pub struct AppServer<B> {
     backend: Arc<B>,
-    events: EventBroadcaster,
 }
 
 impl<B> AppServer<B>
@@ -105,12 +80,7 @@ where
     pub fn new(backend: B) -> Self {
         Self {
             backend: Arc::new(backend),
-            events: EventBroadcaster::new(1024),
         }
-    }
-
-    pub fn events(&self) -> EventBroadcaster {
-        self.events.clone()
     }
 
     pub async fn serve_stdio<R, W>(&self, reader: R, writer: W) -> Result<(), AppServerError>
@@ -192,33 +162,7 @@ where
             protocol::method::MESSAGE_SUBMIT => {
                 self.dispatch::<SubmitRunParams, SubmitRunResult, _>(
                     request.params,
-                    |params| async move {
-                        let result = self.backend.submit_message(params).await?;
-                        let events = self.events.clone();
-                        Ok(RPC_CODECS
-                            .run(move || {
-                                events.publish(AppServerNotification::SessionStateChanged {
-                                    session_id: result.session_id,
-                                    // The run marker (first part of the returned
-                                    // run) mirrors the run/reply status.
-                                    status: result
-                                        .parts
-                                        .first()
-                                        .map(|part| part.state.clone())
-                                        .unwrap_or_else(|| "submitted".to_owned()),
-                                });
-                                // Deliver the accepted parts as part patches so live
-                                // clients can reconcile without re-reading the session.
-                                for part in &result.parts {
-                                    events.publish(AppServerNotification::PartAdded {
-                                        session_id: result.session_id,
-                                        part: Box::new(part.clone()),
-                                    });
-                                }
-                                result
-                            })
-                            .await?)
-                    },
+                    |params| async move { self.backend.submit_message(params).await },
                 )
                 .await
             }
@@ -236,12 +180,23 @@ where
                 )
                 .await
             }
-            protocol::method::MESSAGES_LIST => {
-                self.dispatch::<ReadPartsParams, ReadPartsResult, _>(
+            protocol::method::PARTS_READ => {
+                self.dispatch::<ReadPartsParams, SessionPartsResource, _>(
                     request.params,
-                    |params| async move { self.backend.read_messages(params).await },
+                    |params| async move { self.backend.read_parts(params).await },
                 )
                 .await
+            }
+            protocol::method::CONTENT_READ => {
+                self.dispatch::<ReadContentParams, agena_domain::ContentPage, _>(
+                    request.params,
+                    |params| async move { self.backend.read_content(params).await },
+                )
+                .await
+            }
+            protocol::method::CONTENT_TEXT_READ => {
+                self.dispatch::<agena_api::content::ReadContentTextParams, agena_domain::ContentTextPage, _>(request.params,
+                    |params| async move { self.backend.read_content_text(params).await }).await
             }
             protocol::method::RUN_CANCEL => {
                 self.dispatch::<CancelRunParams, CancelRunResult, _>(
@@ -301,51 +256,6 @@ where
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let stdout = tokio::io::stdout();
     AppServer::new(backend).serve_stdio(stdin, stdout).await
-}
-
-pub fn websocket_router(events: EventBroadcaster) -> Router {
-    Router::new()
-        .route("/events", get(websocket_events))
-        .with_state(events)
-}
-
-async fn websocket_events(
-    State(events): State<EventBroadcaster>,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| async move {
-        let (mut sender, mut reader) = socket.split();
-        let mut rx = events.subscribe();
-        loop {
-            tokio::task::consume_budget().await;
-            let notification = tokio::select! {
-                incoming = reader.next() => {
-                    if matches!(incoming, None | Some(Err(_)) | Some(Ok(Message::Close(_)))) { break; }
-                    continue;
-                }
-                next = rx.recv() => {
-                    match next { Ok(notification) => notification, Err(_) => break }
-                }
-            };
-            let text = match RPC_CODECS.run(move || serde_json::to_string(notification.as_ref())).await {
-                Ok(result) => result,
-                Err(error) => { tracing::error!(%error, "JSON-RPC notification worker failed"); break; }
-            };
-            let text = match text {
-                Ok(text) => text,
-                Err(error) => {
-                    tracing::error!(
-                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                        "failed to serialize JSON-RPC event notification"
-                    );
-                    continue;
-                }
-            };
-            if sender.send(Message::Text(text.into())).await.is_err() {
-                break;
-            }
-        }
-    })
 }
 
 fn decode_params<T>(params: Option<Value>) -> Result<T, JsonRpcError>

@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **21 plugins and 142 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 143 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
@@ -18,6 +18,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.claude`](#agenaclaude) — Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback. (9 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
+- [`agena.content`](#agenacontent) — Read canonical resource-backed text and tool output with resumable byte-bounded pages. (1 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (9 tools)
 - [`agena.gemini`](#agenagemini) — Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (12 tools)
@@ -2336,6 +2337,87 @@ Declare the built-in commands every Agena client renders locally, and project sk
   },
   "required": [
     "name"
+  ],
+  "type": "object"
+}
+```
+
+## agena.content
+
+**Version** `0.1.0` · **Tools** 1
+
+Read canonical resource-backed text and tool output with resumable byte-bounded pages.
+
+### read
+
+`agena.content.read` · **Summary**: Read retained source text from a content resource in this session.
+
+**Tags**: `query` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use resource_id from a Part or tool result field. The first read omits epoch/after/offset. Continue with next_position.after.epoch as epoch, next_position.after.sequence as after and next_position.offset as offset; offsets safely resume inside a single large UTF-8 record. max_bytes defaults to 4096 (4–4096 raw text bytes); slices preserve whitespace and stdout/stderr. has_more means more retained records, gap signals retention loss, and capture state is independent of process success. Non-text document/terminal records advance the position without fabricated text. This is a diagnostic read, not a wait or polling mechanism.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `after` | `integer` | — | `0` | Last fully consumed record sequence from next_position.after. |
+| `epoch` | `string / null` | — | — | Epoch returned with next_position. Omit only for the first read. |
+| `max_bytes` | `integer / null` | — | — | Raw text byte budget; default/max 4096. Cursor and JSON escaping are additional. |
+| `offset` | `integer` | — | `0` | UTF-8 bytes consumed in the next record from next_position.offset. |
+| `resource_id` | `string` | ✓ | — | Canonical opaque resource id from a Part or tool result. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "after": {
+      "default": 0,
+      "description": "Last fully consumed record sequence from next_position.after.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000002"
+    },
+    "epoch": {
+      "description": "Epoch returned with next_position. Omit only for the first read.",
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "max_bytes": {
+      "description": "Raw text byte budget; default/max 4096. Cursor and JSON escaping are additional.",
+      "format": "uint",
+      "maximum": 4096,
+      "minimum": 4,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "offset": {
+      "default": 0,
+      "description": "UTF-8 bytes consumed in the next record from next_position.offset.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000003"
+    },
+    "resource_id": {
+      "description": "Canonical opaque resource id from a Part or tool result.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "resource_id"
   ],
   "type": "object"
 }
@@ -6875,7 +6957,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Run a command to completion. Declare actual reads/writes paths and network targets; use empty arrays when none. timeout_ms limits lifetime (default 120000); timeout/cancellation cleans up the owned process tree. max_output_bytes sets the output budget (1024–16384, default 16384), accounting for escaping and reserving lifecycle metadata; previews keep beginning/end and at most 200 lines. Capture is independent of preview: output_archive.path is the stable startup prefix, and output_archive.segments lists all retained files with original captured byte ranges. Search each needed file with fs.grep or read selected lines/byte ranges with fs.read. Segment-local byte offsets start at 0; gaps are unavailable output. Retention is 16 MiB per process (4 MiB startup plus up to 12 MiB recent output), 256 MiB per workspace. Check pending/complete/truncated/error. Use shell.spawn for background work, shell.watch for readiness/selected notifications, and shell.open for interactive input.
+> Run a command to completion. Declare actual reads/writes paths and network targets; use empty arrays when none. timeout_ms limits lifetime (default 120000); timeout/cancellation cleans up the owned process tree. max_output_bytes sets the output budget (1024–16384, default 16384), accounting for escaping and reserving lifecycle metadata; previews keep beginning/end and at most 200 lines. Capture is independent of preview: output_resource refers to the same cursor-based content resource used by all Parts. Capture status and retained ranges are independent of process exit and preview limits. Use shell.spawn for background work, shell.watch for readiness/selected notifications, and shell.open for interactive input.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7026,7 +7108,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Compatibility replay entry for shell process output. since_seq defaults to 0; continue with last_seq AND next_event_offset as event_offset whenever nonzero. last_seq refers to fully consumed events; partially returned event text is resumable without loss. max_output_bytes (1024–16384, default 16384) includes escaping and event structure, with room reserved for lifecycle/cursor metadata. limit caps event count; wait_ms is a diagnostic wait (max 30000). has_more describes buffered output, not archive completeness. output_archive.path is the startup prefix; segments identify retained recent files and original byte ranges. Use fs.grep/fs.read selected ranges in those files; file-local byte offsets start at 0. Use shell.read without since_seq for new unread output. Background jobs notify when they finish; do not poll to wait.
+> Explicit replay of shell process output. since_seq defaults to 0; continue with last_seq AND next_event_offset as event_offset whenever nonzero. last_seq refers to fully consumed events; partially returned event text is resumable without loss. max_output_bytes (1024–16384, default 16384) includes escaping and event structure, with room reserved for lifecycle/cursor metadata. limit caps event count; wait_ms is a diagnostic wait (max 30000). has_more describes buffered output. output_resource identifies the canonical retained content; capture completeness is separate from the preview. Use shell.read without since_seq for new unread output. Background jobs notify when they finish; do not poll to wait.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7277,7 +7359,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Works with process_id from shell.spawn, shell.watch or shell.open. Omit since_seq and event_offset to consume unread output; explicit since_seq replays without changing the automatic cursor. A partial event returns last_seq for fully consumed events and next_event_offset for the next event; pass both as since_seq/event_offset to resume. A nonzero event_offset requires since_seq and must preserve UTF-8 boundaries. Reads/writes on one process serialize automatic consumption; cancellation leaves it alive. wait_ms defaults to 250 (max 30000) and is a bounded output wait, not completion. max_output_bytes is 1024–16384 (default 16384), counting escaping/event structure and reserving metadata. include_screen is for PTYs only; enabling it splits the content budget with a bounded screen. ready is independent of terminal status. has_more describes the rolling buffer. For evicted text inspect output_archive.segments and use fs.grep/fs.read on only needed files/ranges; original byte ranges may have gaps and file-local offsets start at 0. Background completion is notified once, so do not poll merely to wait.
+> Works with process_id from shell.spawn, shell.watch or shell.open. Omit since_seq and event_offset to consume unread output; explicit since_seq replays without changing the automatic cursor. A partial event returns last_seq for fully consumed events and next_event_offset for the next event; pass both as since_seq/event_offset to resume. A nonzero event_offset requires since_seq and must preserve UTF-8 boundaries. Reads/writes on one process serialize automatic consumption; cancellation leaves it alive. wait_ms defaults to 250 (max 30000) and is a bounded output wait, not completion. max_output_bytes is 1024–16384 (default 16384), counting escaping/event structure and reserving metadata. include_screen is for PTYs only; enabling it splits the content budget with a bounded screen. ready is independent of terminal status. has_more describes the rolling buffer. output_resource identifies retained content outside the rolling preview. Background completion is notified once, so do not poll merely to wait.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7633,7 +7715,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Provide either command with shell/effects (new launch) or process_id (existing noninteractive process); never both. Launch binds the watch before the process can output. A process target replaces its single policy and keeps the original launch/completion operation. Omit or pass null policy on a process target to remove the watch without stopping the process; an empty policy disables ordinary notifications. Attach observes future output by default; since_seq optionally scans retained raw logs once. Identical policy updates are idempotent. ready_pattern notifies once and leaves the service running. include_pattern is opt-in; omission sends no ordinary output notifications. notifications defaults to once; on_change deduplicates unchanged matches and coalesces changed matches to the latest, using notification_interval_ms (default 30000, min 1000). Readiness/completion bypass that throttle. success_pattern/failure_pattern stop the process tree; failure wins. pattern_kind applies to all patterns (regex default, literal available); preserve whitespace. quiet_period_ms stops successfully after no raw stdout/stderr activity. timeout_ms belongs only to the launch and remains enforced after watch changes/removal. Logs/archives always retain excluded output. Read with shell.read and stop with shell.stop; do not poll merely to wait. PTYs and WebSocket subscriptions cannot receive this watch.
+> Provide either command with shell/effects (new launch) or process_id (existing noninteractive process); never both. Launch binds the watch before the process can output. A process target replaces its single policy and keeps the original launch/completion operation. Omit or pass null policy on a process target to remove the watch without stopping the process; an empty policy disables ordinary notifications. Attach observes future output by default; since_seq optionally scans retained raw logs once. Identical policy updates are idempotent. ready_pattern notifies once and leaves the service running. include_pattern is opt-in; omission sends no ordinary output notifications. notifications defaults to once; on_change deduplicates unchanged matches and coalesces changed matches to the latest, using notification_interval_ms (default 30000, min 1000). Readiness/completion bypass that throttle. success_pattern/failure_pattern stop the process tree; failure wins. pattern_kind applies to all patterns (regex default, literal available); preserve whitespace. quiet_period_ms stops successfully after no raw stdout/stderr activity. timeout_ms belongs only to the launch and remains enforced after watch changes/removal. Notification filters do not filter raw content capture. Read with shell.read and stop with shell.stop; do not poll merely to wait. PTYs and WebSocket subscriptions cannot receive this watch.
 
 **Input schema**:
 ```json

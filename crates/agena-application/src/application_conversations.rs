@@ -23,6 +23,7 @@ static BTW_CAPACITY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(
 #[derive(Default)]
 struct AnswerProjection {
     parts: BTreeMap<(i64, i64), String>,
+    resources: BTreeMap<(i64, i64), Vec<agena_domain::ContentId>>,
     bytes: usize,
     oversized: bool,
 }
@@ -37,6 +38,19 @@ impl AnswerProjection {
                     && part.visibility.visible_to_user() =>
             {
                 let key = (part.created_at_ms, part.part_id);
+                let resources = part
+                    .content
+                    .get("resources")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| {
+                        serde_json::from_value::<agena_domain::ContentRef>(value.clone()).ok()
+                    })
+                    .filter(|reference| reference.kind == agena_domain::ContentKind::Text)
+                    .map(|reference| reference.resource_id)
+                    .collect();
+                self.resources.insert(key, resources);
                 let text = part
                     .content
                     .get("text")
@@ -56,17 +70,32 @@ impl AnswerProjection {
             }
             SessionChange::PartRemoved { part_id, .. } => {
                 self.parts.retain(|(_, id), _| *id != part_id);
+                self.resources.retain(|(_, id), _| *id != part_id);
                 self.bytes = self.parts.values().map(String::len).sum();
             }
             _ => {}
         }
     }
 
-    fn text(&self) -> String {
+    fn text(
+        &self,
+        sources: &BTreeMap<agena_domain::ContentId, (agena_domain::ContentCursor, String, bool)>,
+    ) -> String {
         self.parts
-            .values()
+            .iter()
+            .map(|(key, text)| {
+                let mut body = self
+                    .resources
+                    .get(key)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| sources.get(id))
+                    .map(|(_, body, _)| body.as_str())
+                    .collect::<String>();
+                body.push_str(text);
+                body
+            })
             .filter(|text| !text.is_empty())
-            .cloned()
             .collect::<Vec<_>>()
             .join("\n\n")
     }
@@ -182,6 +211,8 @@ impl Application {
         let timeout = tokio::time::sleep(Duration::from_secs(600));
         tokio::pin!(timeout);
         let mut last_text = String::new();
+        let mut sources =
+            BTreeMap::<agena_domain::ContentId, (agena_domain::ContentCursor, String, bool)>::new();
         loop {
             tokio::select! {
                 _ = tx.closed() => return Ok(()),
@@ -192,9 +223,77 @@ impl Application {
                 .execution_control
                 .active_execution(session_id)
                 .await;
+            let ids = projection
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .resources
+                .values()
+                .flatten()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut source_bytes = sources
+                .values()
+                .map(|(_, text, _)| text.len())
+                .sum::<usize>();
+            let mut source_oversized = false;
+            for id in ids {
+                if sources.get(&id).is_some_and(|(_, _, complete)| *complete) {
+                    continue;
+                }
+                if let std::collections::btree_map::Entry::Vacant(entry) = sources.entry(id) {
+                    let descriptor = store
+                        .contents()
+                        .describe(id)
+                        .await
+                        .map_err(|error| ApplicationError::internal_error(&error))?;
+                    entry.insert((
+                        agena_domain::ContentCursor {
+                            sequence: 0,
+                            ..descriptor.cursor
+                        },
+                        String::new(),
+                        false,
+                    ));
+                }
+                let source = sources.get_mut(&id).expect("registered answer source");
+                loop {
+                    let page = store
+                        .contents()
+                        .read(id, Some(source.0), 64 * 1024)
+                        .await
+                        .map_err(|error| ApplicationError::internal_error(&error))?;
+                    if page.gap {
+                        return Err(ApplicationError::internal(
+                            "The BTW answer content was not retained.",
+                        ));
+                    }
+                    for chunk in page.chunks {
+                        if let agena_domain::ContentPayload::Text { text } = chunk.payload {
+                            source_bytes = source_bytes.saturating_add(text.len());
+                            if source_bytes > MAX_ANSWER_BYTES {
+                                source_oversized = true;
+                                break;
+                            }
+                            source.1.push_str(&text);
+                        }
+                    }
+                    source.0 = page.next_cursor;
+                    source.2 =
+                        page.resource.state != agena_domain::ContentState::Active && !page.has_more;
+                    if !page.has_more || source_oversized {
+                        break;
+                    }
+                }
+                if source_oversized {
+                    break;
+                }
+            }
             let (text, oversized) = {
                 let projection = projection.lock().unwrap_or_else(|error| error.into_inner());
-                (projection.text(), projection.oversized)
+                let text = projection.text(&sources);
+                let oversized =
+                    projection.oversized || source_oversized || text.len() > MAX_ANSWER_BYTES;
+                (text, oversized)
             };
             let (done, error) = if oversized {
                 (

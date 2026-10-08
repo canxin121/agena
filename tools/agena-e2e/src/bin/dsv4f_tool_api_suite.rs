@@ -6,6 +6,9 @@
 //! Tool API meta-suite proves that help is optional. The suite never bypasses
 //! `tools_call` by calling plugin implementations directly.
 
+#[path = "../part_observation.rs"]
+mod part_observation;
+
 use std::{
     collections::BTreeMap,
     env as std_env, fs,

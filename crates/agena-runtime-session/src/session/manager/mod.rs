@@ -16,7 +16,7 @@ use crate::AppError;
 use crate::context_governor::ContextGovernor;
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource, OperationPart};
 use crate::provider::ProviderRegistry;
-use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
+use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::{
@@ -269,6 +269,7 @@ enum ExecutionConversationTarget {
 
 #[derive(Debug, Clone)]
 struct ResolvedPendingTool {
+    content_writer: Option<agena_storage::content::ContentWriter>,
     pending: SessionPendingTool,
     operation_id: String,
     call_id: i64,
@@ -890,6 +891,7 @@ fn part_contents_from_composer_document(
         .into_iter()
         .map(|node| match node {
             ComposerNode::Text { text } => Ok(TypedContent::Text(TextContent {
+                resources: Vec::new(),
                 text,
                 synthetic: false,
                 extra: Default::default(),
@@ -961,6 +963,7 @@ fn part_contents_from_composer_document(
                     }),
                 )),
                 ActivityPayload::TextArtifact(artifact) => Ok(TypedContent::Text(TextContent {
+                    resources: Vec::new(),
                     text: artifact.text,
                     synthetic: false,
                     extra: Default::default(),
@@ -1452,10 +1455,19 @@ impl SessionManager {
         // manager talks to it exclusively through `StoreAdapter` (14.2, 15.6).
         // This process is the only writer for the data directory, so no write
         // carries an ownership handshake.
-        let facade: Arc<dyn agena_storage::store::SessionStore> =
-            Arc::new(agena_storage::store::SessionFacade::<
-                agena_storage_sqlite::SqliteEngine,
-            >::new(engine, config.max_cached_sessions));
+        let contents = agena_storage::content::ContentHub::new(
+            Arc::new(agena_storage_sqlite::DatabaseContentBackend::new(
+                Arc::clone(&db_arc),
+            )),
+            Default::default(),
+        );
+        let facade: Arc<dyn agena_storage::store::SessionStore> = Arc::new(
+            agena_storage::store::SessionFacade::<agena_storage_sqlite::SqliteEngine>::new(
+                engine,
+                config.max_cached_sessions,
+            )
+            .with_contents(contents),
+        );
         let store = Arc::new(StoreAdapter::new(
             facade,
             Arc::new(|| Utc::now().timestamp_millis()),
@@ -1478,7 +1490,7 @@ impl SessionManager {
             provider_registry,
             context_governor,
             processor,
-            tool_executor,
+            tool_executor.with_content_store(store.facade.clone()),
             config,
         );
         Self {
@@ -1684,53 +1696,34 @@ impl SessionManager {
             .prepare_shell_invocation(&prepared.invocation, session_id, call_id)
             .await
             .map_err(tool_error_to_app_error)?;
-        // Host/application callbacks are not model tool invocations and do
-        // not participate in the model permission state machine.
-        if let Some(mut stream) = scoped_executor
-            .execute_invocation_streaming_with_prepared_shell(
-                &invocation,
-                session_id,
-                call_id,
-                prepared_shell_command.clone(),
-            )
-            .await
-            .map_err(tool_error_to_app_error)?
-        {
-            let stream_id = stream.stream_id.clone();
-            let mut chunks_open = true;
-            let end = loop {
-                tokio::select! {
-                    biased;
-                    _ = async {
-                        match cancellation.as_ref() {
-                            Some(token) => token.cancelled().await,
-                            None => std::future::pending::<()>().await,
-                        }
-                    } => return Err(AppError::Cancelled),
-                    end = &mut stream.end => break end,
-                    // Host callers consume the complete terminal payload.
-                    // Drain display deltas without keeping an unused copy.
-                    chunk = stream.chunks.recv(), if chunks_open => {
-                        chunks_open = chunk.is_some();
-                    },
-                }
-            };
-            return end
-                .map_err(|_| {
-                    AppError::Internal(format!(
-                        "host-invoked tool stream ended without a terminal result: {stream_id}"
-                    ))
-                })?
-                .map_err(tool_error_to_app_error);
-        }
-
+        let mut session = session;
+        let output = if let Some(mut pending) = resolved_outer_pending {
+            pending.invocation = invocation.clone();
+            self.prepare_tool_content(&mut session, &mut pending, &scoped_executor)
+                .await?;
+            if pending.content_writer.is_some() {
+                self.persist_session_changes(
+                    session,
+                    vec![pending.pending.part.part_id],
+                    None,
+                    state,
+                )
+                .await?;
+            }
+            pending.content_writer
+        } else {
+            None
+        };
         scoped_executor
-            .execute_invocation_detailed_with_launch_provenance(
+            .execute_invocation(
                 &invocation,
-                session_id,
-                call_id,
-                prepared_shell_command,
-                launch_provenance,
+                crate::tool::ToolRuntimeContext {
+                    session_id: Some(session_id),
+                    call_id: Some(call_id),
+                    prepared_shell_command,
+                    launch_provenance,
+                    output,
+                },
             )
             .await
             .map_err(tool_error_to_app_error)
@@ -1900,7 +1893,7 @@ impl SessionManager {
                 provider_registry,
                 context_governor,
                 processor,
-                tool_executor,
+                tool_executor.with_content_store(self.store.facade.clone()),
                 config,
                 Arc::clone(&previous.shared_permission),
                 Arc::clone(&previous.shared_session_permissions),

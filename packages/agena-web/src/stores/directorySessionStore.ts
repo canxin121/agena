@@ -1418,7 +1418,16 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       } else if (command.type === 'setSessionExpanded') {
         const row = knownSidebarRowBySessionId()[command.sessionId]
         const directory = row && knownDirectoryForSession(row)
-        if (directory && !(await revalidateDirectorySessionPageFromApi(directory.id, { silent: true }))) return false
+        const footers = footerKinds.filter((kind) =>
+          footerViewForKind(kind).rows.some((row) => row.id === command.sessionId),
+        )
+        const results = await Promise.all([
+          ...(directory && directorySidebarById.value[directory.id]
+            ? [revalidateDirectorySessionPageFromApi(directory.id, { silent: true })]
+            : []),
+          ...footers.map((kind) => revalidateFooterFromApi(kind, { silent: true })),
+        ])
+        if (!results.every(Boolean)) return false
       } else if (command.type === 'setDirectoryCollapsed' || command.type === 'setDirectoryRootPage') {
         if (!(await revalidateDirectorySessionPageFromApi(command.directoryId, { silent: true }))) return false
       } else if (command.type === 'setDirectoriesPage') {
@@ -1699,6 +1708,9 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       key,
       subscribeResource(key, () => {
         dirtyDirectories.add(id)
+        for (const kind of footerKinds)
+          if (footerViewForKind(kind).rows.some((row) => row.isExpanded && key.endsWith(`:parent:${row.id}`)))
+            dirtyFooters.add(kind)
         sidebarSync.invalidate(180)
       }),
     )
@@ -1742,7 +1754,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       entries.flatMap((entry) => {
         const stats = `workspace:${entry.id}:stats`
         if (uiPrefs.value.collapsedDirectoryIds.includes(entry.id)) return [stats]
-        const children = (directorySidebarById.value[entry.id]?.recentRows ?? [])
+        const section = directorySidebarById.value[entry.id]
+        const children = [...(section?.recentRows ?? []), ...(section?.pinnedRows ?? [])]
           .filter((row) => row.isExpanded && row.isParent)
           .map((row) => chatApi.sessionListResourceKey({ workspaceId: entry.id, parentId: row.id }))
         return [
@@ -1755,6 +1768,12 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         ]
       }),
     )
+    for (const kind of footerKinds)
+      for (const row of footerViewForKind(kind).rows)
+        if (row.isExpanded && row.isParent && row.session?.workspace_id)
+          liveKeys.add(
+            chatApi.sessionListResourceKey({ workspaceId: Number(row.session.workspace_id), parentId: row.id }),
+          )
     for (const [key, release] of workspaceSubscriptions)
       if (!liveKeys.has(key)) {
         release()
@@ -1812,6 +1831,52 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     uiPrefs.value = normalizeUiPrefs(patchChatSidebarUiPrefs(uiPrefs.value, { pinnedSessionIds: [...pinnedIds] }))
   }
 
+  function footerViewForKind(kind: SidebarFooterKind): SidebarFooterView {
+    return kind === 'pinned'
+      ? pinnedFooterView.value
+      : kind === 'favorite'
+        ? favoriteFooterView.value
+        : kind === 'recent'
+          ? recentFooterView.value
+          : runningFooterView.value
+  }
+
+  async function loadSessionTree(
+    sessions: UnknownRecord[],
+    directory: DirectoryEntry | null,
+    pageSize: number,
+    signal?: AbortSignal,
+  ): Promise<SidebarSessionRow[]> {
+    const expanded = new Set(uiPrefs.value.expandedParentSessionIds)
+    const seen = new Set<string>()
+    return loadExpandedTree<UnknownRecord, SidebarSessionRow>(
+      sessions,
+      async (session, depth, root) => {
+        const workspaceId = Number(session.workspace_id)
+        const row = toSidebarRowFromAgenaSession(
+          session,
+          directory || directoriesById.value[String(workspaceId)] || null,
+          expanded,
+        )
+        if (!row || seen.has(row.id)) return null
+        seen.add(row.id)
+        row.depth = depth
+        row.rootId = agenaSessionId(root)
+        if (!row.isExpanded || !row.isParent) return { row }
+        const children = await loadDirectoryPage(
+          { workspaceId, parentId: row.id, signal },
+          childPageById.get(row.id) || 0,
+          pageSize,
+        )
+        row.isParent = children.total > 0
+        row.childPage = children.page
+        row.childPageCount = children.pageCount
+        return { row, children: children.sessions as unknown as UnknownRecord[] }
+      },
+      signal,
+    )
+  }
+
   async function loadDirectoryView(
     directory: DirectoryEntry,
     page: number,
@@ -1819,7 +1884,6 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     signal?: AbortSignal,
   ): Promise<DirectorySidebarView> {
     const stats = workspaceStats.get(directory.id)
-    const expanded = new Set(uiPrefs.value.expandedParentSessionIds)
     const collapsed = uiPrefs.value.collapsedDirectoryIds.includes(directory.id)
     const empty = { sessions: [], page: 0, pageCount: 1, total: 0 }
     const [roots, pins] = collapsed
@@ -1834,33 +1898,11 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
                 pageSize,
               ),
         ])
-    const parentById: Record<string, string | null> = {}
-    const seen = new Set<string>()
-    const recentRows = await loadExpandedTree<UnknownRecord, SidebarSessionRow>(
-      roots.sessions as unknown as UnknownRecord[],
-      async (session, depth, root) => {
-        const row = toSidebarRowFromAgenaSession(session, directory, expanded)
-        if (!row || seen.has(row.id)) return null
-        seen.add(row.id)
-        row.depth = depth
-        row.rootId = agenaSessionId(root)
-        parentById[row.id] = row.parentId
-        if (!row.isExpanded || !row.isParent) return { row }
-        const children = await loadDirectoryPage(
-          { workspaceId: directory.id, parentId: row.id, signal },
-          childPageById.get(row.id) || 0,
-          pageSize,
-        )
-        row.isParent = children.total > 0
-        row.childPage = children.page
-        row.childPageCount = children.pageCount
-        return { row, children: children.sessions as unknown as UnknownRecord[] }
-      },
-      signal,
-    )
-    const pinnedRows = pins.sessions
-      .map((session) => toSidebarRowFromAgenaSession(session as unknown as UnknownRecord, directory, expanded))
-      .filter((row): row is SidebarSessionRow => Boolean(row))
+    const [recentRows, pinnedRows] = await Promise.all([
+      loadSessionTree(roots.sessions as unknown as UnknownRecord[], directory, pageSize, signal),
+      loadSessionTree(pins.sessions as unknown as UnknownRecord[], directory, pageSize, signal),
+    ])
+    const parentById = Object.fromEntries(recentRows.map((row) => [row.id, row.parentId]))
     return {
       sessionCount: stats?.total ?? roots.total,
       rootPage: collapsed ? page : roots.page,
@@ -1885,14 +1927,11 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   ): Promise<SidebarFooterView> {
     const countOnly = !uiPrefs.value[`${kind}SessionsOpen`]
     const result = await loadSidebarSessionPage({ bucket: kind, countOnly, signal }, page, pageSize)
-    const expanded = new Set(uiPrefs.value.expandedParentSessionIds)
     return {
       total: result.total,
       page: result.page,
       pageCount: result.pageCount,
-      rows: result.sessions
-        .map((session) => toSidebarRowFromAgenaSession(session as unknown as UnknownRecord, null, expanded))
-        .filter((row): row is SidebarSessionRow => Boolean(row)),
+      rows: await loadSessionTree(result.sessions as unknown as UnknownRecord[], null, pageSize, signal),
     }
   }
 
@@ -2285,6 +2324,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       opts?.page ?? uiPrefs.value[`${kind}SessionsPage`],
       opts?.pageSize ?? SIDEBAR_FOOTER_PAGE_SIZE,
       uiPrefs.value[`${kind}SessionsOpen`],
+      uiPrefs.value.expandedParentSessionIds.map((id) => [id, childPageById.get(id) ?? 0]),
     ])}`
     const existing = sectionLoads.get(key)
     if (existing) return existing
@@ -2453,6 +2493,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         patch.runningSessionsPage = view.page
       }
       uiPrefs.value = normalizeUiPrefs(patchChatSidebarUiPrefs(uiPrefs.value, patch))
+      syncWorkspaceSubscriptions(directoryPageRows.value)
 
       return true
     } catch (err) {
@@ -2475,7 +2516,14 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     childPageById.delete(sessionId)
     childPageById.set(sessionId, Math.max(0, page))
     if (childPageById.size > 512) childPageById.delete(childPageById.keys().next().value!)
-    await revalidateDirectorySessionPageFromApi(directoryId, { silent: true })
+    const row = knownSidebarRowBySessionId()[sessionId]
+    const did = directoryId || (row && knownDirectoryForSession(row)?.id) || ''
+    await Promise.all([
+      ...(directorySidebarById.value[did] ? [revalidateDirectorySessionPageFromApi(did, { silent: true })] : []),
+      ...footerKinds
+        .filter((kind) => footerViewForKind(kind).rows.some((row) => row.id === sessionId))
+        .map((kind) => revalidateFooterFromApi(kind, { silent: true })),
+    ])
   }
   async function setDirectoryPinnedPage(directoryId: string, page: number) {
     sidebarStateRequestInFlight?.controller?.abort()

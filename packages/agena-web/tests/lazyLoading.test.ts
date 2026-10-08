@@ -234,6 +234,26 @@ test('sidebar retrieves exactly the requested filtered page and recovers an empt
   )
 })
 
+test('sidebar child pages include delegated sessions and preserve explicit filters', async () => {
+  const calls: Array<Parameters<typeof loadSidebarSessionPage>[0]> = []
+  const list = async (options: Parameters<typeof loadSidebarSessionPage>[0]) => {
+    calls.push(options)
+    return { sessions: [], total: 25, hasMore: false, nextCursor: null }
+  }
+  const result = await loadSidebarSessionPage({ workspaceId: '7', parentId: '42' }, 8, 10, list)
+  assert.equal(result.page, 2)
+  assert.deepEqual(
+    calls.map((call) => [call.parentId, call.excludeSubagents, call.offset]),
+    [
+      ['42', false, 80],
+      ['42', false, 20],
+    ],
+  )
+  calls.length = 0
+  await loadSidebarSessionPage({ workspaceId: '7', roots: true, excludeSubagents: false }, 0, 10, list)
+  assert.equal(calls[0]!.excludeSubagents, false)
+})
+
 test('request limiter bounds concurrency and never starts cancelled queued requests', async () => {
   const limit = createRequestLimiter(2)
   const pending = deferred<void>()
@@ -635,6 +655,8 @@ test('real sidebar refreshes only dirty directories and buckets, including after
   const titles = new Map(ids.map((id) => [id, `before-${id}`]))
   const totals = new Map(ids.map((id) => [id, 1]))
   let treeEnabled = false
+  let footerTreeEnabled = false
+  let taskChildCount = 1
   const childTitles = new Map([
     ['8201', 'child A'],
     ['8401', 'child B'],
@@ -699,7 +721,20 @@ test('real sidebar refreshes only dirty directories and buckets, including after
               version: 1,
             },
           ]
-        : []
+        : footerTreeEnabled && bucket === 'recent'
+          ? [
+              {
+                id: 8201,
+                workspace_id: 8101,
+                title: 'task parent',
+                state: { kind: 'ready' },
+                root_id: 8201,
+                parent_id: null,
+                child_session_count: taskChildCount,
+                version: 2,
+              },
+            ]
+          : []
       if (treeEnabled && id === '8101') {
         const roots = [8201, 8401].map((sid) => ({
           id: sid,
@@ -714,9 +749,10 @@ test('real sidebar refreshes only dirty directories and buckets, including after
         }))
         const parent = url.searchParams.get('parent_id')
         items = parent
-          ? [
-              {
-                id: Number(parent) + 300,
+          ? url.searchParams.get('exclude_subagents') === 'true'
+            ? []
+            : Array.from({ length: parent === '8201' ? taskChildCount : 1 }, (_, index) => ({
+                id: Number(parent) + 300 + index,
                 workspace_id: 8101,
                 root_id: Number(parent),
                 parent_id: Number(parent),
@@ -724,15 +760,20 @@ test('real sidebar refreshes only dirty directories and buckets, including after
                 state: { kind: 'ready' },
                 child_session_count: 0,
                 version: 3,
-              },
-            ]
+              }))
           : bucket
             ? [roots[0]!]
             : roots
       }
       return Response.json(
         {
-          items: url.searchParams.get('count_only') === 'true' ? [] : items,
+          items:
+            url.searchParams.get('count_only') === 'true'
+              ? []
+              : items.slice(
+                  Number(url.searchParams.get('offset') || 0),
+                  Number(url.searchParams.get('offset') || 0) + Number(url.searchParams.get('limit') || 10),
+                ),
           total: items.length,
           page: { has_more: false },
         },
@@ -942,6 +983,54 @@ test('real sidebar refreshes only dirty directories and buckets, including after
     await advance(11_000)
     assert.equal(calls.length, 1)
     assert.equal(calls[0]!.searchParams.get('count_only'), 'true', 'closed footer requests only a count')
+
+    footerTreeEnabled = true
+    taskChildCount = 23
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:10')
+    resourceSync.invalidateResources(['workspace:8101:sessions:parent:8201'])
+    const openFooter = store.commandSetFooterOpen('recent', true, { silent: true })
+    await advance(1000)
+    assert.equal(await openFooter, true)
+    assert.equal(store.recentFooterView.rows.length, 11, 'footer displays a parent and its first page of task children')
+    assert.equal(store.recentFooterView.rows[0]!.isParent, true)
+    assert.equal(store.recentFooterView.rows[0]!.childPageCount, 3)
+    assert.equal(store.recentFooterView.rows[1]!.depth, 1)
+
+    const collapse = store.commandSetSessionExpanded('8201', false, { silent: true })
+    await advance(1000)
+    assert.equal(await collapse, true)
+    assert.deepEqual(
+      store.recentFooterView.rows.map((row) => row.id),
+      ['8201'],
+    )
+    assert.equal(store.recentFooterView.rows[0]!.isParent, true, 'collapse retains the disclosure button')
+    const expand = store.commandSetSessionExpanded('8201', true, { silent: true })
+    await advance(1000)
+    assert.equal(await expand, true)
+    assert.equal(store.recentFooterView.rows.length, 11)
+    const childPage = store.setChildSessionPage('', '8201', 2)
+    await advance(1000)
+    await childPage
+    assert.deepEqual(
+      store.recentFooterView.rows.map((row) => row.id),
+      ['8201', '8521', '8522', '8523'],
+    )
+    assert.equal(store.recentFooterView.rows[0]!.childPage, 2)
+
+    childTitles.set('8201', 'live task title')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:11')
+    resourceSync.applyResourceEvent({
+      type: 'session_changed',
+      properties: {
+        resource_revisions: { 'workspace:8101:sessions:parent:8201': 'sidebar-granularity:11' },
+      },
+    })
+    await advance(11_000)
+    assert.equal(
+      store.recentFooterView.rows[1]!.session!.title,
+      'live task title',
+      'expanded footer children remain subscribed',
+    )
   } finally {
     for (const instance of (pinia as unknown as { _s: Map<string, { $dispose(): void }> })._s.values())
       instance.$dispose()

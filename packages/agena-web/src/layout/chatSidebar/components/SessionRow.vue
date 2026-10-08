@@ -24,6 +24,7 @@ import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMen
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import SidebarSessionActionMenu from '@/layout/chatSidebar/components/SidebarSessionActionMenu.vue'
+import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import { useNearViewport } from '@/composables/useNearViewport'
 
 type SessionLike = {
@@ -55,6 +56,8 @@ const props = withDefaults(
     indentPx?: number
     isParent?: boolean
     isExpanded?: boolean
+    childPage?: number
+    childPageCount?: number
     showThreadPlaceholder?: boolean
 
     statusLabel?: string
@@ -111,6 +114,7 @@ const emit = defineEmits<{
   (e: 'open'): void
   (e: 'toggle-select', event: MouseEvent): void
   (e: 'toggle-thread'): void
+  (e: 'child-page', page: number): void
   (e: 'open-actions'): void
   (e: 'open-action-menu', event: MouseEvent | PointerEvent): void
   (e: 'open-context-menu', event: MouseEvent): void
@@ -310,6 +314,7 @@ function handleRowDragStart(event: DragEvent) {
                 ),
               )
             "
+            :aria-expanded="isExpanded"
             @click.stop="emit('toggle-thread')"
           >
             <RiArrowDownSLine v-if="isExpanded" class="h-4 w-4" />
@@ -490,6 +495,15 @@ function handleRowDragStart(event: DragEvent) {
         </template>
       </template>
     </SidebarListItem>
+
+    <SidebarPager
+      v-if="isParent && isExpanded && (childPageCount || 1) > 1"
+      :page="childPage || 0"
+      :page-count="childPageCount || 1"
+      :prev-label="String(t('chat.sidebar.directoriesList.prevSessionsPage'))"
+      :next-label="String(t('chat.sidebar.directoriesList.nextSessionsPage'))"
+      @update:page="(page) => emit('child-page', page)"
+    />
 
     <SidebarSessionActionMenu
       v-if="shouldRenderSessionActionMenu"

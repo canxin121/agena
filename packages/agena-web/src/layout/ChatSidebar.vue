@@ -2581,6 +2581,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
               @update:page="(v) => void requestFavoriteSessionsPage(v)"
               @open-session="openFavoriteSession"
               @toggle-thread="toggleExpandedParent"
+              @child-page="(id, page) => directorySessions.setChildSessionPage('', id, page)"
             />
 
             <PinnedSessionsFooter
@@ -2621,6 +2622,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
               @update:page="(v) => void requestPinnedSessionsPage(v)"
               @open-session="openPinnedSession"
               @toggle-thread="toggleExpandedParent"
+              @child-page="(id, page) => directorySessions.setChildSessionPage('', id, page)"
             />
 
             <RecentSessionsFooter
@@ -2661,6 +2663,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
               @update:page="(v) => void requestRecentSessionsPage(v)"
               @open-session="openRecentSession"
               @toggle-thread="toggleExpandedParent"
+              @child-page="(id, page) => directorySessions.setChildSessionPage('', id, page)"
             />
 
             <RunningSessionsFooter
@@ -2701,6 +2704,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
               @update:open="(v) => void requestRunningSessionsOpen(v)"
               @update:page="(v) => void requestRunningSessionsPage(v)"
               @toggle-thread="toggleExpandedParent"
+              @child-page="(id, page) => directorySessions.setChildSessionPage('', id, page)"
             />
           </div>
         </div>

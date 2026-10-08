@@ -29,6 +29,8 @@ type RunningSessionRow = {
   depth: number
   isParent: boolean
   isExpanded: boolean
+  childPage?: number
+  childPageCount?: number
 }
 
 type SessionMenuTarget = { directory: DirectoryEntry; session: SessionLike }
@@ -82,6 +84,7 @@ const emit = defineEmits<{
   (e: 'update:page', v: number): void
   (e: 'open-session', sessionId: string): void
   (e: 'toggle-thread', sessionId: string): void
+  (e: 'child-page', sessionId: string, page: number): void
   (e: 'update:sessionActionMenuQuery', v: string): void
 }>()
 
@@ -149,6 +152,8 @@ function statusMeta(sessionId: string) {
           :indent-px="2 + item.depth * 10"
           :is-parent="item.isParent"
           :is-expanded="item.isExpanded"
+          :child-page="item.childPage"
+          :child-page-count="item.childPageCount"
           :show-thread-placeholder="true"
           :show-directory="true"
           :status-label="statusMeta(item.id).label"
@@ -175,6 +180,7 @@ function statusMeta(sessionId: string) {
               })
           "
           @toggle-thread="emit('toggle-thread', item.id)"
+          @child-page="(page) => emit('child-page', item.id, page)"
           @open-actions="item.session && item.directory ? openSessionActions(item.directory, item.session) : undefined"
           @open-context-menu="
             (event) =>

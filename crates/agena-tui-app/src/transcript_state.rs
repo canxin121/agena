@@ -514,6 +514,7 @@ impl TranscriptState {
             detail_expanded_by_default,
             node_expansions: BTreeMap::new(),
             activity_summary_visible_counts: BTreeMap::new(),
+            activity_summary_collapsed_entries: BTreeSet::new(),
             interaction_views: BTreeMap::new(),
             rendered: None,
             projected_entries: None,
@@ -573,6 +574,7 @@ impl TranscriptState {
         self.jump_history_index = 0;
         self.node_expansions.clear();
         self.activity_summary_visible_counts.clear();
+        self.activity_summary_collapsed_entries.clear();
         self.interaction_views.clear();
         self.invalidate_render();
     }
@@ -588,6 +590,7 @@ impl TranscriptState {
             transcript_revealed_part_ids: self.transcript_revealed_part_ids.clone(),
             node_expansions: self.node_expansions.clone(),
             activity_summary_visible_counts: self.activity_summary_visible_counts.clone(),
+            activity_summary_collapsed_entries: self.activity_summary_collapsed_entries.clone(),
         }
     }
 
@@ -622,6 +625,7 @@ impl TranscriptState {
         self.refresh_failures = 0;
         self.node_expansions = cache.node_expansions;
         self.activity_summary_visible_counts = cache.activity_summary_visible_counts;
+        self.activity_summary_collapsed_entries = cache.activity_summary_collapsed_entries;
         self.transcript_older_loading = false;
         self.transcript_older_error = None;
         self.transcript_older_in_flight_since = None;
@@ -1094,6 +1098,11 @@ impl TranscriptState {
         for entry in
             agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds)
         {
+            if self.activity_summary_collapsed_entries.contains(&entry.id) {
+                // An explicit collapse also applies to a late page response
+                // and subsequent snapshots. Keep loaded parts cached.
+                continue;
+            }
             if !entry.parts.iter().any(|part| matches!(part.id,
                 TranscriptContentId::StoredPart(id) if self.transcript_revealed_part_ids.contains(&id)
             )) {
@@ -3884,6 +3893,7 @@ impl TranscriptState {
             .unwrap_or(TranscriptMoveDirection::Down);
 
         if matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) {
+            self.allow_reply_part_reveal(node.key.entry_id());
             let reveal_count = reveal_count
                 .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT)
                 .clamp(1, 50);
@@ -3922,6 +3932,7 @@ impl TranscriptState {
                 ..
             }
         ) {
+            self.allow_reply_part_reveal(node.key.entry_id());
             self.node_expansions.remove(&node.key);
             return Some((node.kind, true));
         }
@@ -3958,6 +3969,9 @@ impl TranscriptState {
     /// state of any part's own detail body. Remote fold pages are fetched by
     /// the caller using the same show-all action.
     pub(crate) fn expand_all_transcript_parts(&mut self, width: u16, height: u16) {
+        let collapsed = std::mem::take(&mut self.activity_summary_collapsed_entries);
+        self.activity_summary_visible_counts
+            .retain(|key, _| !collapsed.contains(&key.entry_id()));
         let summary_keys = self
             .rendered(width)
             .nodes
@@ -3969,6 +3983,67 @@ impl TranscriptState {
             self.activity_summary_visible_counts.insert(key, usize::MAX);
         }
         self.invalidate_render();
+        self.ensure_visual_focus(width, height);
+    }
+
+    fn allow_reply_part_reveal(&mut self, entry_id: agena_tui_transcript::TranscriptEntryId) {
+        if self.activity_summary_collapsed_entries.remove(&entry_id) {
+            self.activity_summary_visible_counts
+                .retain(|key, _| key.entry_id() != entry_id);
+        }
+    }
+
+    /// Restore the recent-part budget for this reply (`zc`) or every reply
+    /// (`zC`). Individual detail choices and fetched content remain cached.
+    pub(crate) fn collapse_transcript_parts(&mut self, width: u16, height: u16, all: bool) {
+        let current = self.current_cursor_node_cloned(width);
+        let entry_id = current.as_ref().map(|node| node.key.entry_id());
+        let entries =
+            agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds);
+        for entry in entries {
+            if !all && Some(entry.id) != entry_id {
+                continue;
+            }
+            self.activity_summary_collapsed_entries.insert(entry.id);
+            self.activity_summary_visible_counts
+                .retain(|key, _| key.entry_id() != entry.id);
+            self.node_expansions.retain(|key, _| {
+                !matches!(key, TranscriptNodeKey::ActivitySummary { .. })
+                    || key.entry_id() != entry.id
+            });
+            if let Some(part) = entry.parts.iter().find(|part| matches!(&part.content,
+                agena_tui_transcript::TranscriptPartContent::Activity(content)
+                    if !matches!(content, agena_tui_transcript::TranscriptActivityContent::Fold { .. })
+            )) {
+                self.activity_summary_visible_counts.insert(
+                    TranscriptNodeKey::ActivitySummary { entry_id: entry.id, first_content_id: part.id },
+                    agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT,
+                );
+            }
+        }
+        self.invalidate_render();
+        if let Some(current) = current {
+            let rendered = self.rendered(width);
+            let destination = rendered
+                .nodes
+                .iter()
+                .find(|node| node.key == current.key)
+                .or_else(|| {
+                    rendered.nodes.iter().find(|node| {
+                        node.key.entry_id() == current.key.entry_id()
+                            && matches!(node.key, TranscriptNodeKey::ActivitySummary { .. })
+                    })
+                })
+                .map(|node| node.start_line);
+            if let Some(line) = destination {
+                self.set_cursor_line_with_reveal(
+                    width,
+                    height,
+                    line,
+                    TranscriptRevealPolicy::Minimal,
+                );
+            }
+        }
         self.ensure_visual_focus(width, height);
     }
 

@@ -289,14 +289,21 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         v-if="pendingInteractionFallback"
         :key="`pending-interaction:${pendingInteractionFallback.requestId}`"
         class="ml-7 min-w-0 rounded-r-md border-l-2 border-primary/45 py-1 pl-3"
-        data-transcript-node="interaction"
+        data-transcript-node="part"
+        :data-transcript-key="pendingInteractionPart!.key"
+        data-part-kind="operation"
         :data-interaction-request-id="pendingInteractionFallback.requestId"
+        tabindex="-1"
+        @pointerdown="$emit('nodeSelect', pendingInteractionPart!.key)"
+        @focus="$emit('nodeSelect', pendingInteractionPart!.key)"
       >
         <AgenaTranscriptPart
           :part="pendingInteractionPart!"
-          :expanded="true"
+          :expanded="isPartExpanded(pendingInteractionPart!)"
           :collapse-signal="activityCollapseSignal"
           :session-id="selectedSessionId"
+          @toggle="forwardPartToggle(pendingInteractionPart!, !isPartExpanded(pendingInteractionPart!))"
+          @select="$emit('nodeSelect', pendingInteractionPart!.key)"
         />
       </article>
 

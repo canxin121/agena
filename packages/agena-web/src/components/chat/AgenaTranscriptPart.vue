@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { RiArrowRightSLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
@@ -38,8 +39,9 @@ const ui = useUiStore()
 const status = computed(() => partStatusPresentation(props.part.status))
 const body = computed(() => transcriptPartText(props.part.source))
 const content = computed(() => durablePartContent(props.part.source))
-const resources = computed(() => Array.isArray(content.value.resources)
-  ? content.value.resources as unknown as ContentRef[] : [])
+const resources = computed(() =>
+  Array.isArray(content.value.resources) ? (content.value.resources as unknown as ContentRef[]) : [],
+)
 const attachments = computed(() => attachmentPresentations(props.part))
 const commands = computed(() => commandPresentations(props.part))
 const failure = computed(() => errorPresentation(props.part))
@@ -97,15 +99,18 @@ function openAttachment(path: string, url: string) {
   <div v-else class="min-w-0">
     <button
       type="button"
-      class="group/headline flex w-full min-w-0 items-baseline gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
+      class="group/headline flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
       :aria-expanded="expanded"
       data-transcript-vim-toggle="true"
       @click="toggle"
       @focus="$emit('select')"
     >
-      <span class="w-3 shrink-0 text-center font-mono text-xs text-muted-foreground" aria-hidden="true">{{
-        expanded ? '▾' : '▸'
-      }}</span>
+      <RiArrowRightSLine
+        class="h-5 w-5 shrink-0 text-muted-foreground"
+        :class="expanded ? 'rotate-90' : ''"
+        aria-hidden="true"
+        data-part-disclosure-icon
+      />
       <span
         class="w-3 shrink-0 text-center font-mono text-xs"
         :class="{
@@ -133,8 +138,13 @@ function openAttachment(path: string, url: string) {
     <div v-if="expanded" class="ml-5 min-w-0 rounded-r-md border-l border-border/60 bg-muted/[0.08] pb-1 pl-4 pr-1">
       <div v-if="part.kind === 'answer' || part.kind === 'text_segment'" class="py-1 text-sm leading-relaxed">
         <template v-if="resources.length && sessionId">
-          <AgenaContentText v-for="resource in resources" :key="resource.resource_id"
-            :resource="resource" :session-id="sessionId" :source-path="sourcePath" />
+          <AgenaContentText
+            v-for="resource in resources"
+            :key="resource.resource_id"
+            :resource="resource"
+            :session-id="sessionId"
+            :source-path="sourcePath"
+          />
         </template>
         <MarkdownRenderer
           v-if="body || !resources.length"
@@ -146,8 +156,13 @@ function openAttachment(path: string, url: string) {
       </div>
 
       <div v-else-if="part.kind === 'reasoning' && resources.length && sessionId" class="py-1">
-        <AgenaContentText v-for="resource in resources" :key="resource.resource_id"
-          :resource="resource" :session-id="sessionId" plain />
+        <AgenaContentText
+          v-for="resource in resources"
+          :key="resource.resource_id"
+          :resource="resource"
+          :session-id="sessionId"
+          plain
+        />
       </div>
       <pre
         v-else-if="part.kind === 'reasoning'"

@@ -328,10 +328,9 @@ test('technical details load only visible children, reject stale responses and s
     state!.toggleDetails()
     props.collapseSignal++
     await nextTick()
-    assert.equal(state!.detailsExpanded.value, false)
+    assert.equal(state!.detailsExpanded.value, true, 'an idle transition retains explicitly opened details')
 
     paneVisible.value = false
-    state!.toggleDetails()
     const hiddenOutput = state!.toggleSection('output')
     await flush()
     await clock.advance(2100)

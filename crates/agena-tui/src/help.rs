@@ -130,6 +130,7 @@ pub fn preset_specs(
                         ("i", "context-help-key-insert-mode"),
                         ("Enter", "context-help-key-toggle"),
                         ("Ctrl+Shift+Enter", "context-help-key-expand-all"),
+                        ("zc / zC", "context-help-key-collapse-parts"),
                         ("v / V / Ctrl+V", "context-help-key-visual-select"),
                         ("o / O", "context-help-key-visual-endpoints"),
                         ("gv", "context-help-key-visual-restore"),

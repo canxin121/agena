@@ -105,6 +105,36 @@ pub struct ToolCallView {
 }
 
 impl ToolCallView {
+    pub fn has_interaction(&self) -> bool {
+        !self.operation.user_input.requests.is_empty()
+            || !self.operation.authorization.permissions.is_empty()
+            || self
+                .operation
+                .resources
+                .iter()
+                .any(|resource| resource.kind == agena_domain::ContentKind::Terminal)
+            || self.presentation.blocks.iter().any(|block| {
+                matches!(block,
+                    agena_domain::ViewBlock::Content { resource, .. }
+                        if resource.kind == agena_domain::ContentKind::Terminal
+                )
+            })
+    }
+
+    pub fn has_pending_interaction(&self) -> bool {
+        self.operation
+            .user_input
+            .requests
+            .iter()
+            .any(|record| record.reply.is_none())
+            || self
+                .operation
+                .authorization
+                .permissions
+                .iter()
+                .any(|record| record.reply.is_none())
+    }
+
     pub fn from_operation(operation: OperationPart, presentation: Option<PartDocument>) -> Self {
         let presentation = presentation.unwrap_or_else(|| {
             let title = operation

@@ -310,6 +310,32 @@ export function partHasPendingInteraction(part: MessagePartLike): boolean {
   })
 }
 
+export function partPendingInteractionRequestIds(part: MessagePartLike): string[] {
+  if (durablePartKind(part) !== 'tool_call') return []
+  const operation = toolCallView(part)
+  const requests = record(operation.user_input).requests
+  const permissions = record(operation.authorization).permissions
+  return [...(Array.isArray(requests) ? requests : []), ...(Array.isArray(permissions) ? permissions : [])]
+    .map(record)
+    .filter((entry) => entry.reply === null || entry.reply === undefined)
+    .map((entry) => firstText(record(entry.request), ['request_id']))
+    .filter(Boolean)
+}
+
+export function partHasInteraction(part: MessagePartLike): boolean {
+  if (durablePartKind(part) !== 'tool_call') return false
+  const operation = toolCallView(part)
+  const requests = record(operation.user_input).requests
+  const permissions = record(operation.authorization).permissions
+  if (Array.isArray(requests) && requests.length) return true
+  if (Array.isArray(permissions) && permissions.length) return true
+  const content = durablePartContent(part)
+  const resources = Array.isArray(content.resources) ? content.resources : []
+  if (resources.some((resource) => record(resource).kind === 'terminal')) return true
+  const blocks = record(part.agenaPresentation).blocks
+  return Array.isArray(blocks) && blocks.some((block) => record(record(block).resource).kind === 'terminal')
+}
+
 function classifyPart(part: MessagePartLike, answerPartId: string | null, assistant: boolean): TranscriptPartKind {
   const kind = durablePartKind(part)
   if (kind === 'text') {
@@ -442,7 +468,7 @@ function projectPart(
     source: part,
     ...fields,
     toggleable,
-    defaultExpanded: kind === 'answer' || kind === 'text',
+    defaultExpanded: kind === 'answer' || kind === 'text' || partHasInteraction(part),
   }
   if (kind === 'operation') {
     const copy = computed(() => operationCopyText(part))

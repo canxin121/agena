@@ -240,6 +240,7 @@ context-help-key-count = Repeat the following Vim motion.
 context-help-key-insert-mode = Enter the composer in INSERT mode.
 context-help-key-toggle = Toggle the selected value or expandable block.
 context-help-key-expand-all = Load all transcript parts without changing part details.
+context-help-key-collapse-parts = Collapse this reply (zc) or all replies (zC) to the latest 5 parts and pending interactions; keep individual detail choices.
 context-help-key-copy = Copy a Visual range, a Vim motion, the current line, Markdown block, or complete message.
 context-help-key-search-transcript = Search and repeat transcript matches.
 context-help-key-word = Move by word, WORD, or to the start, first non-blank, or end of the current line.

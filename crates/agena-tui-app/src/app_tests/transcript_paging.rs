@@ -114,6 +114,134 @@ fn assert_parts_visible(transcript: &mut TranscriptState, range: std::ops::Range
     }
 }
 
+#[tokio::test]
+async fn collapse_shortcuts_restore_the_recent_budget_and_preserve_detail_choices() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.transcript.parts = std::iter::once(parts_fixtures::run(3, "assistant", "completed"))
+        .chain(activities(4..17))
+        .collect();
+    let old_key = TranscriptNodeKey::Activity {
+        entry_id: TranscriptEntryId::StoredMessage(3),
+        content_id: TranscriptContentId::StoredPart(4),
+    };
+    app.transcript.node_expansions.insert(old_key.clone(), true);
+    app.transcript.expand_all_transcript_parts(WIDTH, HEIGHT);
+    let line = app
+        .transcript
+        .rendered(WIDTH)
+        .nodes
+        .iter()
+        .find(|node| node.key == old_key)
+        .unwrap()
+        .start_line;
+    app.transcript.set_cursor_line(WIDTH, HEIGHT, line);
+    for character in ['z', 'c'] {
+        app.handle_transcript_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    let rendered = app.transcript.rendered(WIDTH);
+    assert!(!rendered.nodes.iter().any(|node| node.key == old_key));
+    let summary = rendered
+        .nodes
+        .iter()
+        .find(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        app.transcript
+            .current_cursor_node_cloned(WIDTH)
+            .unwrap()
+            .key,
+        summary.key,
+        "a cursor inside the hidden prefix moves to its loading control"
+    );
+    assert_parts_visible(&mut app.transcript, 12..17);
+    assert_eq!(app.transcript.node_expansions.get(&old_key), Some(&true));
+    app.transcript.expand_all_transcript_parts(WIDTH, HEIGHT);
+    assert_parts_visible(&mut app.transcript, 4..17);
+    for character in ['z', 'C'] {
+        app.handle_transcript_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    assert!(
+        !app.transcript
+            .rendered(WIDTH)
+            .nodes
+            .iter()
+            .any(|node| node.key == old_key)
+    );
+    assert_eq!(app.transcript.node_expansions.get(&old_key), Some(&true));
+}
+
+#[tokio::test]
+async fn a_collapsed_reply_stays_collapsed_after_a_late_page_and_snapshot_refresh() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 1)));
+    assert!(app.transcript.merge_fold_parts(
+        3,
+        12,
+        activities(9..12),
+        Some("before-9".into()),
+        true
+    ));
+    app.transcript.expand_all_transcript_parts(WIDTH, HEIGHT);
+    app.transcript
+        .collapse_transcript_parts(WIDTH, HEIGHT, true);
+    assert!(
+        app.transcript
+            .merge_fold_parts(3, 9, activities(4..9), None, false)
+    );
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 2)));
+    assert_parts_visible(&mut app.transcript, 12..17);
+    assert!(
+        !app.transcript
+            .rendered(WIDTH)
+            .nodes
+            .iter()
+            .any(|node| matches!(
+                node.key,
+                TranscriptNodeKey::Activity {
+                    content_id: TranscriptContentId::StoredPart(4..=11),
+                    ..
+                }
+            )),
+        "a delayed response must not reopen a list the user just collapsed"
+    );
+    assert!(
+        app.transcript.parts.iter().any(|part| part.part_id == 4),
+        "the fetched content stays cached"
+    );
+    let cache = app.transcript.cache_snapshot();
+    app.transcript.reset(99, "other".into());
+    app.transcript
+        .restore_cache(cache, SESSION_ID, "Paging test".into());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 3)));
+    assert!(
+        !app.transcript
+            .rendered(WIDTH)
+            .nodes
+            .iter()
+            .any(|node| matches!(
+                node.key,
+                TranscriptNodeKey::Activity {
+                    content_id: TranscriptContentId::StoredPart(4),
+                    ..
+                }
+            ))
+    );
+    let summary = app
+        .transcript
+        .rendered(WIDTH)
+        .nodes
+        .iter()
+        .find(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+        .unwrap()
+        .clone();
+    app.transcript
+        .set_cursor_line(WIDTH, HEIGHT, summary.start_line);
+    app.transcript
+        .toggle_cursor_node_expansion_by(WIDTH, HEIGHT, Some(50));
+    assert_parts_visible(&mut app.transcript, 4..17);
+}
+
 fn wire_page(
     parts: &[PartResource],
     folds: &[TranscriptFold],

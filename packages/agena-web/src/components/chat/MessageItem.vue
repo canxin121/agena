@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RiArrowGoBackLine, RiCheckLine, RiClipboardLine, RiGitBranchLine, RiLoader4Line } from '@remixicon/vue'
 
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
+import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
 import type { MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
 import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
@@ -16,6 +17,8 @@ import {
   type ActivityVisibility,
 } from '@/pages/chat/transcriptActivityFolding'
 import { transcriptPartNavigationText } from '@/pages/chat/transcriptNavigation'
+import { partHasPendingInteraction, partPendingInteractionRequestIds } from '@/pages/chat/transcriptProjection'
+import { focusTranscriptPartControl } from '@/pages/chat/transcriptControls'
 import { partStatusPresentation } from '@/pages/chat/transcriptPartPresentation'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, normalizeTranscriptPartPageSize } from '@/pages/chat/transcriptPartPaging'
 import { useI18n } from 'vue-i18n'
@@ -83,6 +86,7 @@ const localVisibility = reactive<ActivityVisibility>({ ids: [] })
 const visibility = computed(() => props.activityVisibility ?? localVisibility)
 const activityPageSize = computed(() => normalizeTranscriptPartPageSize(props.activityPageSize))
 const summaryKey = computed(() => transcriptActivityRunKey(messageId.value, [], 0))
+const requestedFoldKey = ref('')
 
 // Explicitly revealed rows remain visible when a live reply appends content.
 watch(
@@ -97,8 +101,44 @@ watch(
 watch(
   () => props.collapseSignal,
   () => {
-    visibility.value.count = undefined
+    if (!visibility.value.keepOpen) visibility.value.count = undefined
   },
+)
+
+function keepVisibleParts() {
+  const current = visibility.value.count ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
+  const visible = foldTranscriptReply(props.displayParts, [], current, (part) =>
+    partHasPendingInteraction(part.source),
+  ).visibleParts.filter((part) => part.kind !== 'lifecycle').length
+  visibility.value.count = Math.max(current, visible)
+  visibility.value.keepOpen = true
+}
+
+// Vim toggles go through the page's expansion map rather than togglePart.
+// Preserve the same visible suffix for either input path.
+watch(
+  () => props.displayParts.map((part) => [part.id, props.isPartExpanded(part)] as const),
+  (next, previous) => {
+    const before = new Map(previous)
+    if (next.some(([id, expanded]) => expanded && before.get(id) === false)) keepVisibleParts()
+  },
+  { flush: 'sync' },
+)
+
+const canCollapseParts = computed(
+  () => (visibility.value.count ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE) > DEFAULT_TRANSCRIPT_PART_PAGE_SIZE,
+)
+
+watch(
+  () => props.displayParts.map((part) => ({ part, ids: partPendingInteractionRequestIds(part.source) })),
+  (parts) => {
+    const seen = new Set(visibility.value.pendingRequestIds || [])
+    visibility.value.pendingRequestIds = parts.flatMap(({ ids }) => ids)
+    for (const { part, ids } of parts) {
+      if (ids.some((id) => !seen.has(id)) && !props.isPartExpanded(part)) emit('partToggle', part, true)
+    }
+  },
+  { immediate: true, flush: 'sync' },
 )
 
 type TranscriptRow =
@@ -115,18 +155,23 @@ const transcriptRows = computed<TranscriptRow[]>(() => {
   // is filtered out by the reasoning preference. Keep its control independent
   // of individual presentation rows.
   const visibleCount = visibility.value.count ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
-  const folded = foldTranscriptReply(props.displayParts, props.message.folds || [], visibleCount)
-  if (folded.hiddenCount) rows.push({ kind: 'summary', key, hiddenCount: folded.hiddenCount, fold: folded.fold })
+  const folded = foldTranscriptReply(props.displayParts, props.message.folds || [], visibleCount, (part) =>
+    partHasPendingInteraction(part.source),
+  )
+  if (folded.hiddenCount || canCollapseParts.value || foldLoading(folded.fold))
+    rows.push({ kind: 'summary', key, hiddenCount: folded.hiddenCount, fold: folded.fold })
   for (const part of folded.visibleParts) rows.push({ kind: 'part', key: part.key, part })
   return rows
 })
 
 function foldLoading(fold: MessageFold | null): boolean {
-  return Boolean(fold && props.foldLoadingByKey?.[transcriptFoldKey(props.sessionId || '', fold)])
+  const key = fold ? transcriptFoldKey(props.sessionId || '', fold) : requestedFoldKey.value
+  return Boolean(key && props.foldLoadingByKey?.[key])
 }
 
 function foldError(fold: MessageFold | null): string {
-  return fold ? props.foldErrorByKey?.[transcriptFoldKey(props.sessionId || '', fold)] || '' : ''
+  const key = fold ? transcriptFoldKey(props.sessionId || '', fold) : requestedFoldKey.value
+  return (key && props.foldErrorByKey?.[key]) || ''
 }
 
 function selected(key: string): boolean {
@@ -149,6 +194,8 @@ function selectMessageNode(event: PointerEvent) {
 }
 
 function togglePart(part: TranscriptDisplayPart) {
+  keepVisibleParts()
+  emit('revealParts')
   emit('nodeSelect', part.key)
   emit('partToggle', part, !props.isPartExpanded(part))
 }
@@ -160,13 +207,18 @@ function revealActivitySummary(
   pageSize?: number,
 ) {
   if (foldLoading(row.fold)) return
+  restoreSummaryControlFocusAfterUpdate()
   emit('revealParts')
+  visibility.value.keepOpen = true
   const current = visibility.value.count ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
   const step = Math.max(1, Math.min(pageSize ?? activityPageSize.value, row.hiddenCount))
   const next = all ? Number.MAX_SAFE_INTEGER : current + step
   visibility.value.count = next
   const cachedCount = props.displayParts.filter((part) => part.kind !== 'lifecycle').length
-  if (row.fold && requestRemote && (all || next > cachedCount)) emit('foldExpand', row.fold, all)
+  if (row.fold && requestRemote && (all || next > cachedCount)) {
+    requestedFoldKey.value = transcriptFoldKey(props.sessionId || '', row.fold)
+    emit('foldExpand', row.fold, all)
+  }
   emit('nodeSelect', row.key)
 }
 
@@ -190,7 +242,9 @@ function inlinePageSize(scope: Element | null): number | null {
 }
 
 function revealSummaryFromChip(event: Event, row: Extract<TranscriptRow, { kind: 'summary' }>) {
-  const size = inlinePageSize(event.currentTarget instanceof Element ? event.currentTarget : null)
+  const size = inlinePageSize(
+    event.currentTarget instanceof Element ? event.currentTarget.closest('[data-part-expand-next]') : null,
+  )
   if (size !== null) emit('setActivityPageSize', size)
   revealActivitySummary(row, false, true, size ?? activityPageSize.value)
 }
@@ -207,6 +261,62 @@ function revealSummaryFromPageSizeInput(event: Event, row: Extract<TranscriptRow
 
 function partNavigationText(part: TranscriptDisplayPart): string {
   return transcriptPartNavigationText(part, props.isPartExpanded(part))
+}
+
+function collapseParts() {
+  restoreSummaryControlFocusAfterUpdate()
+  emit('revealParts')
+  visibility.value.count = undefined
+  visibility.value.keepOpen = false
+  emit('nodeSelect', summaryKey.value)
+}
+
+function restoreSummaryControlFocusAfterUpdate() {
+  if (!articleRef.value) return
+  const focused = document.activeElement
+  if (
+    !(focused instanceof HTMLElement) ||
+    !articleRef.value?.contains(focused) ||
+    !focused.closest('[data-part-controls="true"]')
+  )
+    return
+  nextTick(() => {
+    if (focused.isConnected && !focused.matches(':disabled')) return
+    const row = articleRef.value?.querySelector<HTMLElement>('[data-part-controls="true"]')
+    if (row) focusTranscriptPartControl(row, 1)
+  })
+}
+
+function selectPartRow(row: TranscriptRow) {
+  // Interacting with an already open default-expanded part is deliberate
+  // viewing too; new siblings must not fold it away while it is being read.
+  if (row.kind === 'part' && props.isPartExpanded(row.part)) {
+    keepVisibleParts()
+    emit('revealParts')
+  }
+  emit('nodeSelect', row.key)
+}
+
+function handlePartControlsKeydown(event: KeyboardEvent) {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return
+  const root = event.currentTarget
+  if (!(root instanceof HTMLElement)) return
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    if (
+      focusTranscriptPartControl(
+        root,
+        event.key === 'ArrowRight' ? 1 : -1,
+        event.target instanceof Element ? event.target : null,
+      )
+    ) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+  } else if (event.key === 'Escape') {
+    root.closest<HTMLElement>('[data-transcript-node="part"]')?.focus({ preventScroll: true })
+    event.preventDefault()
+    event.stopPropagation()
+  }
 }
 </script>
 
@@ -341,42 +451,38 @@ function partNavigationText(part: TranscriptDisplayPart): string {
         :data-toggleable="row.kind === 'summary' || row.part.toggleable ? 'true' : 'false'"
         :data-copy-text="
           row.kind === 'summary'
-            ? t('chat.messages.activity.moreCount', { count: row.hiddenCount })
+            ? row.hiddenCount > 0
+              ? t('chat.messages.activity.moreCount', { count: row.hiddenCount })
+              : t('chat.messages.controls.collapseParts')
             : partNavigationText(row.part)
         "
         tabindex="-1"
-        @pointerdown="$emit('nodeSelect', row.key)"
+        @pointerdown="selectPartRow(row)"
         @focus="$emit('nodeSelect', row.key)"
       >
         <div
           v-if="row.kind === 'summary'"
           class="flex min-w-0 flex-wrap items-center gap-1 py-1"
           data-part-controls="true"
+          :aria-busy="foldLoading(row.fold)"
+          @keydown="handlePartControlsKeydown"
         >
-          <span class="inline-flex min-w-0 items-center" data-part-expand-next="true">
-            <ToolbarChipButton
-              v-if="foldLoading(row.fold)"
-              :tooltip="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
-              :title="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
-              :is-compact-touch="isCompactTouch"
-              disabled
-              data-transcript-toggle="true"
-              data-transcript-chrome="true"
-            >
-              <RiLoader4Line class="h-3 w-3 animate-spin" />
-              {{ t('common.loading') }}
-            </ToolbarChipButton>
+          <span v-if="row.hiddenCount > 0" class="inline-flex min-w-0 items-center" data-part-expand-next="true">
             <span
-              v-else
-              class="inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground transition-colors sm:h-8 sm:px-2"
-              :class="
-                row.hiddenCount <= 0 ? 'opacity-60' : 'cursor-pointer hover:bg-secondary/40 hover:text-foreground'
-              "
-              :title="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
-              data-transcript-toggle="true"
-              @click.stop="row.hiddenCount > 0 && revealSummaryFromChip($event, row)"
+              class="inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground sm:h-8 sm:px-2"
             >
-              <span class="min-w-0 truncate">{{ t('chat.messages.controls.expandNextLead') }}</span>
+              <button
+                type="button"
+                class="h-full min-w-0 rounded px-1 transition-colors outline-none hover:bg-secondary/40 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/50"
+                :aria-label="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
+                :title="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"
+                data-transcript-toggle="true"
+                data-part-control="true"
+                :disabled="foldLoading(row.fold)"
+                @click.stop="revealSummaryFromChip($event, row)"
+              >
+                {{ t('chat.messages.controls.expandNextLead') }}
+              </button>
               <input
                 :value="activityPageSize"
                 type="number"
@@ -387,6 +493,7 @@ function partNavigationText(part: TranscriptDisplayPart): string {
                 :aria-label="t('chat.messages.controls.pageSizeInputLabel')"
                 :title="t('chat.messages.controls.pageSizeInputLabel')"
                 data-part-page-size="true"
+                data-part-control="true"
                 @click.stop
                 @change="handleSummaryPageSizeInput"
                 @keydown.enter.prevent="revealSummaryFromPageSizeInput($event, row)"
@@ -395,16 +502,30 @@ function partNavigationText(part: TranscriptDisplayPart): string {
             </span>
           </span>
           <ToolbarChipButton
+            v-if="row.hiddenCount > 0"
             :tooltip="t('chat.messages.controls.collectAll')"
             :title="t('chat.messages.controls.collectAll')"
             :is-compact-touch="isCompactTouch"
             :disabled="row.hiddenCount <= 0 || foldLoading(row.fold)"
             data-part-collect-all="true"
+            data-part-control="true"
             @click.stop="revealSummary(row, true)"
           >
             {{ t('chat.messages.controls.collectAll') }}
           </ToolbarChipButton>
-          <span class="min-w-0 px-1 font-mono text-[11px] text-muted-foreground">
+          <ToolbarChipButton
+            v-if="canCollapseParts"
+            :tooltip="t('chat.messages.controls.collapsePartsHint')"
+            :is-compact-touch="isCompactTouch"
+            data-part-collapse="true"
+            data-part-control="true"
+            :data-transcript-toggle="row.hiddenCount === 0 ? 'true' : undefined"
+            @click.stop="collapseParts"
+          >
+            {{ t('chat.messages.controls.collapseParts') }}
+          </ToolbarChipButton>
+          <PartLoadingIndicator v-if="foldLoading(row.fold)" class="px-1" />
+          <span v-if="row.hiddenCount > 0" class="min-w-0 px-1 font-mono text-[11px] text-muted-foreground">
             {{ t('chat.messages.activity.moreCount', { count: row.hiddenCount }) }}
           </span>
           <span v-if="foldError(row.fold)" role="alert" class="basis-full text-xs text-destructive">

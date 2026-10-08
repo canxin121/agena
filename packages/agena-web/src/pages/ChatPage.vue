@@ -1009,11 +1009,7 @@ const {
 } = renderBlocksApi
 
 function transcriptPartExpanded(part: TranscriptDisplayPart): boolean {
-  if (Object.prototype.hasOwnProperty.call(activityExpandedByBlockKey.value, part.key)) {
-    return Boolean(activityExpandedByBlockKey.value[part.key])
-  }
-  if (part.defaultExpanded) return true
-  return activityInitiallyExpandedForPart(part)
+  return renderBlocksApi.transcriptPartExpanded(part, activityInitiallyExpandedForPart(part))
 }
 
 function setTranscriptPartExpanded(part: TranscriptDisplayPart, expanded: boolean) {

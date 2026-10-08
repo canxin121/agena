@@ -1,6 +1,6 @@
 import type { MessageFold } from '../../types/chat'
 
-export type ActivityVisibility = { count?: number; ids: string[] }
+export type ActivityVisibility = { count?: number; ids: string[]; keepOpen?: boolean; pendingRequestIds?: string[] }
 
 export type TranscriptActivityFold<T> = {
   hiddenCount: number
@@ -25,12 +25,13 @@ export function foldTranscriptReply<T extends { kind: string }>(
   parts: readonly T[],
   folds: readonly MessageFold[],
   visibleCount = 5,
+  keepVisible?: (part: T) => boolean,
 ): TranscriptActivityFold<T> & { fold: MessageFold | null } {
   const fold = folds.find((item) => item.hiddenCount > 0 && item.nextCursor) || null
-  const content = foldTranscriptActivityRun(
-    parts.filter((part) => part.kind !== 'lifecycle'),
-    visibleCount,
-  )
+  const contentParts = parts.filter((part) => part.kind !== 'lifecycle')
+  const requiredIndex = keepVisible ? contentParts.findIndex(keepVisible) : -1
+  const budget = requiredIndex < 0 ? visibleCount : Math.max(visibleCount, contentParts.length - requiredIndex)
+  const content = foldTranscriptActivityRun(contentParts, budget)
   return {
     fold,
     hiddenCount: (fold?.hiddenCount || 0) + content.hiddenCount,

@@ -257,6 +257,9 @@ pub(crate) struct TranscriptState {
     /// assistant run. The renderers keep the newest few visible by default;
     /// repeated expansion reveals another bounded chunk.
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
+    /// Explicit list collapses survive page responses and session snapshots.
+    pub(crate) activity_summary_collapsed_entries:
+        BTreeSet<agena_tui_transcript::TranscriptEntryId>,
     /// Live selection snapshots for pending user-input interaction parts,
     /// keyed by `request_id`. The App projects these from its
     /// `UserInputPresentation` state (selected option, custom draft, answer
@@ -287,6 +290,8 @@ pub(crate) struct TranscriptCache {
     pub(crate) transcript_revealed_part_ids: BTreeSet<i64>,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
+    pub(crate) activity_summary_collapsed_entries:
+        BTreeSet<agena_tui_transcript::TranscriptEntryId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

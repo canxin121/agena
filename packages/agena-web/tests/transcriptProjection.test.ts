@@ -274,7 +274,7 @@ describe('TUI-parity transcript projection', () => {
     expect(projected).toEqual([])
   })
 
-  test('keeps pending operation interactions visible without expanding them', () => {
+  test('expands pending operation interactions by default', () => {
     const blocks = projectTranscriptBlocks(
       [
         message(
@@ -299,6 +299,28 @@ describe('TUI-parity transcript projection', () => {
     )
     const projected = blocks[0]?.kind === 'message' ? blocks[0].displayParts[0] : null
     expect(projected?.kind).toBe('operation')
-    expect(projected?.defaultExpanded).toBe(false)
+    expect(projected?.defaultExpanded).toBe(true)
+  })
+
+  test('answered interactions, permissions and terminal parts also default to expanded', () => {
+    const sources = [
+      { user_input: { requests: [{ request: { request_id: 'answered' }, reply: { answers: {} } }] } },
+      { authorization: { permissions: [{ request: { request_id: 'approve' }, reply: null }] } },
+      { resources: [{ resource_id: 'terminal', kind: 'terminal' }] },
+      { resources: [{ resource_id: 'log', kind: 'log' }] },
+    ]
+    const blocks = projectTranscriptBlocks(
+      [
+        message(
+          '30',
+          'assistant',
+          sources.map((content, i) => part(String(31 + i), 'tool_call', content)),
+        ),
+      ],
+      { showReasoning: true },
+    )
+    expect(
+      blocks[0]?.displayParts.filter((part) => part.kind === 'operation').map((part) => part.defaultExpanded),
+    ).toEqual([true, true, true, false])
   })
 })

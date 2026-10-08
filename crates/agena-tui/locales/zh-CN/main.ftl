@@ -240,6 +240,7 @@ context-help-key-count = 重复执行后面的 Vim 移动。
 context-help-key-insert-mode = 进入输入框 INSERT 模式。
 context-help-key-toggle = 切换当前值或可展开内容块。
 context-help-key-expand-all = 加载全部 transcript part，不改变各 part 自己的详情展开状态。
+context-help-key-collapse-parts = zc 收起当前回复、zC 收起全部回复，保留最近 5 个 part、待处理交互和各 part 的详情展开状态。
 context-help-key-copy = 复制 Visual 范围、Vim motion、当前行、Markdown 块或完整消息。
 context-help-key-search-transcript = 搜索并重复跳转对话匹配项。
 context-help-key-word = 按单词、WORD 移动，或跳到当前行的行首、首个非空白字符或行尾。

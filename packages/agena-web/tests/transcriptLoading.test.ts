@@ -59,7 +59,10 @@ test('the rendered reply exposes left-aligned busy/retry controls even with a fi
   const busy = await render(true)
   assert.match(busy, /data-part-expand-next="true"/)
   assert.match(busy, /Loading/)
-  assert.doesNotMatch(busy, /data-part-page-size/)
+  assert.match(busy, /data-part-page-size/)
+  assert.match(busy, /aria-busy="true"/)
+  assert.match(busy, /role="status"/)
+  assert.match(busy, /animate-spin/)
   assert.equal((busy.match(/\sdisabled(?:="")?(?=\s|>)/g) || []).length, 2)
   assert.doesNotMatch(busy, /justify-end/)
   const retry = await render(false, 'Temporary failure')
@@ -93,7 +96,11 @@ const page = (ids: number[], cursor: string | null, folds: ReturnType<typeof fol
   parts: ids.map(part),
   runs: folds.map((fold) => {
     const returned = ids.filter((id) => id !== 3).length
-    return { run_id: 3, part_count: returned + fold.hidden_count, page: { returned, has_more: true, next_cursor: fold.next_cursor } }
+    return {
+      run_id: 3,
+      part_count: returned + fold.hidden_count,
+      page: { returned, has_more: true, next_cursor: fold.next_cursor },
+    }
   }),
   user_message_count: 10,
   page: { has_more: cursor !== null, next_cursor: cursor },

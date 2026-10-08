@@ -68,3 +68,12 @@ test('streaming appends preserve revealed rows and lifecycle chrome consumes no 
   assert.deepEqual(foldTranscriptReply(parts, [], visible).visibleParts, parts)
   assert.equal(preserveActivityVisibility(['0', ...before], before, 5), 5)
 })
+
+test('an unanswered interaction remains visible ahead of newer siblings', () => {
+  const parts = Array.from({ length: 12 }, (_, i) => ({ id: String(i), kind: 'operation', pending: i === 2 }))
+  const folded = foldTranscriptReply(parts, [], 5, (part) => part.pending)
+  assert.equal(folded.hiddenCount, 2)
+  assert.deepEqual(folded.visibleParts, parts.slice(2))
+  const answered = parts.map((part) => ({ ...part, pending: false }))
+  assert.equal(foldTranscriptReply(answered, [], 5, (part) => part.pending).hiddenCount, 7)
+})

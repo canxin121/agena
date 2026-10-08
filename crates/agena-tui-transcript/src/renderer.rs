@@ -191,7 +191,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
                 };
                 let foldable_count = activities.len();
                 let show_all = expansions.get(&key).copied().unwrap_or(false);
-                let visible_count = if show_all {
+                let mut visible_count = if show_all {
                     foldable_count
                 } else {
                     summary_visible_counts
@@ -199,6 +199,15 @@ pub fn render_entry_detailed_with_progressive_expansion(
                         .copied()
                         .unwrap_or(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
                 };
+                // A request awaiting user action must remain reachable even
+                // when later siblings exceed the ordinary recent-part budget.
+                if let Some(index) = activities.iter().position(|part| matches!(
+                    &part.content,
+                    TranscriptPartContent::Activity(crate::TranscriptActivityContent::Operation(tool))
+                        if tool.has_pending_interaction()
+                )) {
+                    visible_count = visible_count.max(foldable_count - index);
+                }
                 let collapsed_prefix_len = foldable_count.saturating_sub(visible_count);
                 let hidden_count = collapsed_prefix_len;
                 // Run folding is purely positional. Individual Activity
@@ -411,6 +420,164 @@ mod tests {
                 blocks: Vec::new(),
             }),
         )
+    }
+
+    fn pending_input_operation() -> ToolCallView {
+        let mut tool = fixture_operation(3, "interaction.ask", "Resume?");
+        tool.operation.user_input = serde_json::from_value(serde_json::json!({
+            "requests": [{ "request": {
+                "request_id": "ask", "session_id": 7, "title": "Resume?", "body_markdown": "",
+                "kind": "ask_user", "source": "host", "questions": [],
+                "created_at": "2026-10-08T00:00:00Z"
+            }, "reply": null }]
+        }))
+        .unwrap();
+        tool
+    }
+
+    #[test]
+    fn interactive_parts_default_open_even_when_tool_preferences_are_collapsed() {
+        let pending = pending_input_operation();
+        let mut answered = pending.clone();
+        answered.operation.user_input.requests[0].reply = Some(
+            serde_json::from_value(serde_json::json!({
+                "request_id": "ask", "kind": "submit", "answers": {}
+            }))
+            .unwrap(),
+        );
+        let mut permission = fixture_operation(4, "shell.exec", "Approval");
+        permission.operation.authorization = serde_json::from_value(serde_json::json!({
+            "permissions": [{ "request": {
+                "request_id": "approve", "session_id": 7, "action": { "kind": "tool", "tool_name": "shell.exec" },
+                "reason": "Run shell", "created_at": "2026-10-08T00:00:00Z"
+            }, "reply": null }]
+        })).unwrap();
+        let mut terminal = fixture_operation(5, "shell.open", "Terminal");
+        terminal.operation.resources.push(agena_domain::ContentRef {
+            resource_id: agena_domain::ContentId::new(),
+            kind: agena_domain::ContentKind::Terminal,
+        });
+        let parts = [pending, answered, permission, terminal]
+            .into_iter()
+            .enumerate()
+            .map(|(i, tool)| TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(i as i64 + 1),
+                status: PartExecutionStatusResource::InProgress,
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
+                    Box::new(tool),
+                )),
+            })
+            .collect();
+        let message = entry(
+            7,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::InProgress,
+            Utc::now(),
+            parts,
+        );
+        let defaults = TranscriptDetailDefaults {
+            activity_default_expanded: false,
+            kind_defaults: [
+                ("tool:interaction.ask".into(), false),
+                ("tool:shell.exec".into(), false),
+                ("tool:shell.open".into(), false),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let rendered = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &Default::default(),
+        );
+        assert_eq!(
+            rendered
+                .nodes
+                .iter()
+                .filter(
+                    |node| matches!(node.key, TranscriptNodeKey::Activity { .. }) && node.expanded
+                )
+                .count(),
+            4
+        );
+        let key = TranscriptNodeKey::Activity {
+            entry_id: message.id,
+            content_id: TranscriptContentId::StoredPart(1),
+        };
+        let rendered = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &[(key.clone(), false)].into_iter().collect(),
+        );
+        assert!(
+            !rendered
+                .nodes
+                .iter()
+                .find(|node| node.key == key)
+                .unwrap()
+                .expanded,
+            "an explicit user collapse still works"
+        );
+    }
+
+    #[test]
+    fn a_pending_interaction_is_never_hidden_by_newer_siblings() {
+        let parts = (0..12)
+            .map(|i| TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(i + 1),
+                status: PartExecutionStatusResource::InProgress,
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
+                    Box::new(if i == 2 {
+                        pending_input_operation()
+                    } else {
+                        fixture_operation(i + 1, "shell.exec", "Shell")
+                    }),
+                )),
+            })
+            .collect();
+        let message = entry(
+            7,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::InProgress,
+            Utc::now(),
+            parts,
+        );
+        let defaults = TranscriptDetailDefaults {
+            activity_default_expanded: false,
+            kind_defaults: Default::default(),
+        };
+        let rendered = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &Default::default(),
+        );
+        assert!(rendered.nodes.iter().any(|node| matches!(
+            node.key,
+            TranscriptNodeKey::Activity {
+                content_id: TranscriptContentId::StoredPart(3),
+                ..
+            }
+        ) && node.expanded));
+        assert_eq!(
+            rendered
+                .nodes
+                .iter()
+                .filter(|node| matches!(
+                    node.key,
+                    TranscriptNodeKey::Activity {
+                        content_id: TranscriptContentId::StoredPart(_),
+                        ..
+                    }
+                ))
+                .count(),
+            10
+        );
     }
 
     #[test]

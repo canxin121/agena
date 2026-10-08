@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RiArrowRightSLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
 import ActivityLogView from '@/components/chat/ActivityLogView.vue'
+import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
 import { useChatStore } from '@/stores/chat'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import {
@@ -54,7 +56,7 @@ let liveRefreshAllowedAt = -Infinity
 const sectionFailures = new Map<ToolDetailSection, number>()
 const sectionAllowedAt = new Map<ToolDetailSection, number>()
 const sectionControllers = new Map<ToolDetailSection, AbortController>()
-const queuedSections = new Set<ToolDetailSection>()
+const queuedSections = reactive(new Set<ToolDetailSection>())
 const sectionSubscriptions = new Map<string, () => void>()
 const sectionObservations = new Map<ToolDetailSection, ReturnType<typeof captureResourceObservation>>()
 const sectionRevisions = new Map<ToolDetailSection, number>()
@@ -86,8 +88,11 @@ const linkedActivity = computed(() =>
 )
 
 function sectionLoaded(section: ToolDetailSection): boolean {
-  return Object.prototype.hasOwnProperty.call(sectionValues.value, section) &&
-    sectionRevisions.get(section) === (props.part.source.revision ?? 0)
+  return sectionHasValue(section) && sectionRevisions.get(section) === (props.part.source.revision ?? 0)
+}
+
+function sectionHasValue(section: ToolDetailSection): boolean {
+  return Object.prototype.hasOwnProperty.call(sectionValues.value, section)
 }
 
 function sectionLoading(section: ToolDetailSection): boolean {
@@ -96,6 +101,10 @@ function sectionLoading(section: ToolDetailSection): boolean {
 
 function sectionError(section: ToolDetailSection): string {
   return sectionErrors.value[section] || ''
+}
+
+function sectionPending(section: ToolDetailSection): boolean {
+  return sectionLoading(section) || (queuedSections.has(section) && !sectionError(section))
 }
 
 function sectionExpanded(section: ToolDetailSection): boolean {
@@ -287,8 +296,10 @@ watch(
     const fields = content && typeof content === 'object' && !Array.isArray(content) ? content : {}
     for (const loaded of props.part.source.agenaSections || []) {
       if ((sectionRevisions.get(loaded.section) ?? -1) > loaded.revision) continue
-      const value = loaded.section === 'presentation'
-        ? props.part.source.agenaPresentation ?? null : fields[loaded.section] ?? null
+      const value =
+        loaded.section === 'presentation'
+          ? (props.part.source.agenaPresentation ?? null)
+          : (fields[loaded.section] ?? null)
       sectionValues.value = { ...sectionValues.value, [loaded.section]: value }
       sectionRevisions.set(loaded.section, loaded.revision)
     }
@@ -296,10 +307,8 @@ watch(
   { immediate: true },
 )
 
-watch(
-  () => props.collapseSignal,
-  () => resetSectionState(),
-)
+// These disclosures are opened explicitly by the reader. Idle transitions
+// must keep their state and the last rendered value, just like part details.
 
 watch([() => props.expanded, detailsExpanded], loadVisibleSections)
 watch(
@@ -462,15 +471,18 @@ function toggleOuter() {
   <div class="min-w-0">
     <button
       type="button"
-      class="group/headline flex w-full min-w-0 items-baseline gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
+      class="group/headline flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
       :aria-expanded="expanded"
       data-transcript-vim-toggle="true"
       @click="toggleOuter"
       @focus="$emit('select')"
     >
-      <span class="w-3 shrink-0 text-center font-mono text-xs text-muted-foreground" aria-hidden="true">{{
-        expanded ? '▾' : '▸'
-      }}</span>
+      <RiArrowRightSLine
+        class="h-5 w-5 shrink-0 text-muted-foreground"
+        :class="expanded ? 'rotate-90' : ''"
+        aria-hidden="true"
+        data-part-disclosure-icon
+      />
       <span
         class="w-3 shrink-0 text-center font-mono text-xs"
         :class="{
@@ -561,7 +573,7 @@ function toggleOuter() {
         data-tool-details-toggle
         @click="toggleDetails"
       >
-        <span class="w-3 text-center font-mono" aria-hidden="true">{{ detailsExpanded ? '▾' : '▸' }}</span>
+        <RiArrowRightSLine class="h-4 w-4 shrink-0" :class="detailsExpanded ? 'rotate-90' : ''" aria-hidden="true" />
         {{ t('chat.toolDetails.label') }}
       </button>
       <div v-if="detailsExpanded" class="ml-2 border-l border-border/40 pl-3" data-tool-details>
@@ -570,26 +582,36 @@ function toggleOuter() {
             type="button"
             class="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
             :aria-expanded="sectionExpanded(section)"
+            :aria-busy="sectionPending(section)"
             :data-tool-detail-section="section"
             @click="toggleSection(section)"
           >
-            <span class="w-3 text-center font-mono text-muted-foreground" aria-hidden="true">{{
-              sectionExpanded(section) ? '▾' : '▸'
-            }}</span>
+            <RiArrowRightSLine
+              class="h-4 w-4 shrink-0"
+              :class="sectionExpanded(section) ? 'rotate-90' : ''"
+              aria-hidden="true"
+            />
             {{ t(`chat.toolDetails.${section}`) }}
-            <span v-if="sectionLoading(section)" class="font-normal text-muted-foreground">{{
-              t('common.loading')
-            }}</span>
+            <PartLoadingIndicator v-if="sectionPending(section)" />
           </button>
 
-          <div v-if="sectionExpanded(section)" class="min-w-0 pl-5 pt-1">
+          <div v-if="sectionExpanded(section)" class="min-w-0 pl-5 pt-1" :aria-busy="sectionPending(section)">
             <div v-if="sectionError(section)" role="alert" class="py-1 text-xs text-rose-700 dark:text-rose-300">
               {{ sectionError(section) }}
               <button type="button" class="ml-2 underline" @click="loadSection(section)">
                 {{ t('common.retry') }}
               </button>
             </div>
-            <template v-else-if="sectionLoading(section) && !sectionLoaded(section)" />
+            <div
+              v-if="sectionPending(section) && !sectionHasValue(section)"
+              class="space-y-2 py-2"
+              aria-hidden="true"
+              data-part-loading-placeholder
+            >
+              <div class="h-3 w-3/4 animate-pulse rounded bg-muted" />
+              <div class="h-3 w-1/2 animate-pulse rounded bg-muted" />
+            </div>
+            <template v-else-if="sectionError(section) && !sectionHasValue(section)" />
             <template v-else-if="section === 'metadata'">
               <MarkdownRenderer
                 :content="structuredValueMarkdown(operation.metadata)"

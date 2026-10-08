@@ -1,7 +1,12 @@
 export default {
   content: {
-    live: '实时输出', complete: '输出已完成', interrupted: '输出已中断',
-    follow: '跟随输出', copy: '复制', label: '工具输出', waiting: '等待输出…',
+    live: '实时输出',
+    complete: '输出已完成',
+    interrupted: '输出已中断',
+    follow: '跟随输出',
+    copy: '复制',
+    label: '工具输出',
+    waiting: '等待输出…',
     gap: '部分源输出已不在保留范围内。',
     window: '当前仅显示部分输出；复制时会读取仍然保留的内容。',
     recovering: '正在重新连接输出…',
@@ -1522,6 +1527,8 @@ export default {
         expandNextLead: '再加载',
         expandNextTail: '个 part',
         collectAll: '加载全部 part',
+        collapseParts: '收起 part',
+        collapsePartsHint: '保留最近 5 个 part 和待处理的交互，收起较早的 part',
         pageSizeInputLabel: '本次要多加载的 part 数量（1–50）',
       },
       optimistic: {

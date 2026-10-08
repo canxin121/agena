@@ -406,7 +406,7 @@ describe('TUI-parity part presentation', () => {
     })
   })
 
-  test('keeps a pending interaction operation collapsed by default', () => {
+  test('keeps a pending interaction operation expanded by default', () => {
     const [block] = projectTranscriptBlocks(
       [
         {
@@ -431,7 +431,7 @@ describe('TUI-parity part presentation', () => {
       { showReasoning: true },
     )
     expect(block?.kind).toBe('message')
-    if (block?.kind === 'message') expect(block.displayParts[0]?.defaultExpanded).toBe(false)
+    if (block?.kind === 'message') expect(block.displayParts[0]?.defaultExpanded).toBe(true)
   })
 
   test('keeps the raw output and plugin-owned stdout logs independent', () => {

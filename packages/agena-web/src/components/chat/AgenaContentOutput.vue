@@ -15,6 +15,7 @@ import {
   type ContentRef,
 } from '@/lib/content'
 import AgenaContentText from './AgenaContentText.vue'
+import PartLoadingIndicator from './PartLoadingIndicator.vue'
 import OperationBlock from './AgenaOperationBlock.vue'
 import { observeContent } from '@/lib/contentSubscriptions'
 import { contentDocumentText, type ContentDocument } from '@/lib/contentDocument'
@@ -28,6 +29,7 @@ const surface = ref<HTMLDivElement>()
 const outputRoot = ref<HTMLDivElement>()
 const status = ref('active')
 const error = ref('')
+const loading = ref(true)
 const paused = ref(false)
 const selectionActive = ref(false)
 const unseen = ref(0)
@@ -284,6 +286,7 @@ function connect() {
     gap.value = buffer.gap
     windowed.value = buffer.windowed
     error.value = frame.error
+    loading.value = !buffer.resource && !frame.error
     needsReplay ||= frame.reset
     for (const { payload } of frame.appended) {
       if (payload.type === 'log') hasStderr.value ||= payload.stream === 'stderr'
@@ -381,18 +384,22 @@ watch(
     ref="outputRoot"
     class="my-2 overflow-hidden rounded-md border border-border/60 bg-background"
     data-content-output
+    :aria-busy="loading"
   >
     <div
       class="flex items-center justify-between border-b border-border/40 px-3 py-1.5 text-[11px] text-muted-foreground"
     >
       <div class="flex items-center gap-2">
-        <span
-          class="h-1.5 w-1.5 rounded-full"
-          :class="status === 'active' ? 'animate-pulse bg-primary' : 'bg-muted-foreground/50'"
-        />
-        <span>{{
-          t(status === 'active' ? 'content.live' : status === 'complete' ? 'content.complete' : 'content.interrupted')
-        }}</span>
+        <PartLoadingIndicator v-if="loading && resource.kind !== 'text'" />
+        <template v-else>
+          <span
+            class="h-1.5 w-1.5 rounded-full"
+            :class="status === 'active' ? 'animate-pulse bg-primary' : 'bg-muted-foreground/50'"
+          />
+          <span>{{
+            t(status === 'active' ? 'content.live' : status === 'complete' ? 'content.complete' : 'content.interrupted')
+          }}</span>
+        </template>
         <span v-if="hasStderr" class="rounded bg-amber-500/10 px-1.5 text-amber-600">stderr</span>
       </div>
       <div class="flex items-center gap-3">
@@ -427,7 +434,7 @@ watch(
       :aria-label="t('content.label')"
     />
     <div
-      v-if="!hasOutput && status === 'active'"
+      v-if="!loading && !hasOutput && status === 'active'"
       class="border-t border-border/40 px-3 py-1.5 text-xs text-muted-foreground"
     >
       {{ t('content.waiting') }}

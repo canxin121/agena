@@ -1,7 +1,12 @@
 export default {
   content: {
-    live: 'Live output', complete: 'Output complete', interrupted: 'Interrupted output',
-    follow: 'Follow output', copy: 'Copy', label: 'Tool output', waiting: 'Waiting for output…',
+    live: 'Live output',
+    complete: 'Output complete',
+    interrupted: 'Interrupted output',
+    follow: 'Follow output',
+    copy: 'Copy',
+    label: 'Tool output',
+    waiting: 'Waiting for output…',
     gap: 'Some source output is unavailable from the retained ranges.',
     window: 'Earlier output is outside this display window; retained content is available when copying.',
     recovering: 'Reconnecting to output…',
@@ -1531,6 +1536,8 @@ export default {
         expandNextLead: 'Load',
         expandNextTail: 'more parts',
         collectAll: 'Load all parts',
+        collapseParts: 'Collapse parts',
+        collapsePartsHint: 'Keep the latest 5 parts and pending interactions; hide older parts',
         pageSizeInputLabel: 'Older parts to load (1–50)',
       },
       optimistic: {

@@ -1239,11 +1239,12 @@ pub(crate) fn render_part_node(
                 content_id: part.id,
             };
             let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
-                operation_default_expanded(
-                    defaults,
-                    tool.operation.invocation.name.as_str(),
-                    tool.operation.invocation.plugin_name.as_deref(),
-                )
+                tool.has_interaction()
+                    || operation_default_expanded(
+                        defaults,
+                        tool.operation.invocation.name.as_str(),
+                        tool.operation.invocation.plugin_name.as_deref(),
+                    )
             });
             // Canonical single-activity shape: a tool operation carrying a
             // user-input record IS the interaction part. Render the pending

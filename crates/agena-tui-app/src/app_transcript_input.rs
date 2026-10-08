@@ -353,6 +353,16 @@ impl App {
         if self.transcript_viewport_pending {
             self.transcript_viewport_pending = false;
             self.transcript_motion_prefix = None;
+            if matches!(key.code, KeyCode::Char('c' | 'C'))
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+            {
+                self.transcript.collapse_transcript_parts(
+                    width,
+                    height,
+                    key.code == KeyCode::Char('C'),
+                );
+                return true;
+            }
             match action {
                 Some(KeyAction::ViewportPrefix) => self.transcript.place_cursor_in_viewport(
                     width,

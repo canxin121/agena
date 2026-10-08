@@ -1,6 +1,11 @@
 import { computed, ref, type ComputedRef } from 'vue'
 
-import type { MessageLike, MessagePartLike, RenderBlock } from '@/components/chat/messageList.types'
+import type {
+  MessageLike,
+  MessagePartLike,
+  RenderBlock,
+  TranscriptDisplayPart,
+} from '@/components/chat/messageList.types'
 import {
   durablePartKind,
   createTranscriptProjector,
@@ -59,12 +64,20 @@ export function useChatRenderBlocks(opts: {
   const activityCollapseSignal = ref(0)
 
   function collapseAllActivities() {
-    activityExpandedByBlockKey.value = {}
+    // This map contains only explicit user choices. Finishing a run may
+    // restore automatic list folding, but must not undo those choices.
     activityCollapseSignal.value += 1
   }
 
   function isActivityExpanded(partKey: string): boolean {
     return Boolean(activityExpandedByBlockKey.value[partKey])
+  }
+
+  function transcriptPartExpanded(part: TranscriptDisplayPart, initiallyExpanded = false): boolean {
+    // Read the key even before it exists so Vue observes the first explicit
+    // choice. Checking hasOwnProperty alone does not subscribe to an absent
+    // key, leaving default-open parts visibly open after the first collapse.
+    return activityExpandedByBlockKey.value[part.key] ?? (part.defaultExpanded || initiallyExpanded)
   }
 
   function setActivityExpanded(partKey: string, expanded: boolean) {
@@ -80,6 +93,7 @@ export function useChatRenderBlocks(opts: {
     activityCollapseSignal,
     collapseAllActivities,
     isActivityExpanded,
+    transcriptPartExpanded,
     setActivityExpanded,
   }
 }

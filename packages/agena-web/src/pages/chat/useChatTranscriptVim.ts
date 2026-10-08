@@ -54,6 +54,7 @@ import {
   type TranscriptTextProjection,
   type TranscriptVisualRow,
 } from './transcriptDomCursor'
+import { focusTranscriptPartControl, transcriptNativeControl } from './transcriptControls'
 
 type ToastsLike = { push: (kind: 'success' | 'error' | 'info', message: string, duration?: number) => void }
 
@@ -580,7 +581,10 @@ export function useChatTranscriptVim(opts: {
       opts.togglePart(part, !opts.isPartExpanded(part))
       return
     }
-    activeElement()?.querySelector<HTMLButtonElement>('[data-transcript-toggle="true"]')?.click()
+    const control =
+      activeElement()?.querySelector<HTMLButtonElement>('[data-transcript-toggle="true"]') ??
+      activeElement()?.querySelector<HTMLButtonElement>('[data-transcript-vim-toggle="true"]')
+    control?.click()
   }
 
   function visibleVisualRows(): TranscriptVisualRow[] {
@@ -1156,6 +1160,7 @@ export function useChatTranscriptVim(opts: {
   }
 
   function clearMouseSelection() {
+    suppressMouseClickUntil = 0
     mouseSelecting = false
     mouseSelectionPointerStart = null
     mouseSelectionMoved = false
@@ -1253,7 +1258,18 @@ export function useChatTranscriptVim(opts: {
     if (event.button !== 0 || !(event.target instanceof Element)) return
     const scroll = opts.scrollEl.value
     if (!scroll) return
-    if (event.target.closest('[data-transcript-chrome="true"]')) return
+    if (event.target.closest('[data-transcript-chrome="true"]')) {
+      suppressMouseClickUntil = 0
+      return
+    }
+    // Do not turn a button click or terminal selection into a transcript
+    // drag. Live output may move its text boundaries between down and up.
+    if (transcriptNativeControl(event.target)) {
+      // This is a fresh control gesture, not the release click of the
+      // previous text drag. Do not carry its suppression into this click.
+      suppressMouseClickUntil = 0
+      return
+    }
     const transcriptNode = event.target.closest<HTMLElement>(NODE_SELECTOR)
     const insideTranscript =
       Boolean(transcriptNode && opts.pageRef.value?.contains(transcriptNode)) || scroll.contains(event.target)
@@ -2116,6 +2132,17 @@ export function useChatTranscriptVim(opts: {
     if (isEditable(target)) return
     if (target instanceof Element && target.closest('[data-transcript-chrome="true"]')) return
     if (target instanceof Element) {
+      // A focused disclosure has native Enter/Space activation. The text
+      // cursor's active key may belong to a different row during a remount.
+      if (
+        target.closest('[data-transcript-vim-toggle="true"]') &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        (event.key === 'Enter' || event.key === ' ')
+      )
+        return
       const owningControl = target.closest('button, a, select, [role="button"], [role="menuitem"], [role="option"]')
       if (
         owningControl &&
@@ -2134,6 +2161,25 @@ export function useChatTranscriptVim(opts: {
 
     if (mode.value === 'INSERT') mode.value = 'NAVIGATE'
     ensureActive()
+
+    if (
+      !pendingFind.value &&
+      !pendingCommand.value &&
+      !mode.value.startsWith('VISUAL') &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      (event.key === 'ArrowLeft' || event.key === 'ArrowRight') &&
+      activeElement()?.dataset.partKind === 'activity_summary'
+    ) {
+      const row = activeElement()!
+      if (focusTranscriptPartControl(row, event.key === 'ArrowRight' ? 1 : -1)) {
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+    }
 
     if (pendingFind.value || pendingCommand.value) {
       const action = resolveTranscriptVimAction(event)

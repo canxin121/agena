@@ -35,7 +35,6 @@ test('chat opens with one recent page and delegates older loading to user scroll
   assert.match(messageItem, /DEFAULT_TRANSCRIPT_PART_PAGE_SIZE/)
   assert.match(messageItem, /transcriptActivityRunKey/)
   assert.doesNotMatch(messageItem, /<OptionMenu/)
-  assert.doesNotMatch(messageItem, /partHasPendingInteraction/)
   assert.doesNotMatch(messageList, /data-part-controls/)
   assert.doesNotMatch(messageList, /loadAllHistory/)
   assert.doesNotMatch(chatPage, /function expandAllTranscriptParts/)

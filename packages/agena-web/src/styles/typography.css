@@ -37,10 +37,10 @@
     padding-inline: calc(clamp(0.5rem, 2vw, 0.75rem) * var(--padding-scale, 1));
   }
 
-  /* Every top-level text or expanded part owns one rail at the row edge.
-     Keep the inset shared by durable messages and their live placeholders. */
+  /* Give every top-level text or expanded part the same inset rail.
+     Share its spacing with durable messages and their live placeholders. */
   .transcript-content {
-    @apply min-w-0 rounded-r-md border-l border-border/60 pl-2 pr-1;
+    @apply ml-2 min-w-0 rounded-r-md border-l border-border/60 pl-2 pr-1;
   }
 
   @media (min-width: 1280px) {

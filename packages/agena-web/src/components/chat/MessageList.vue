@@ -233,11 +233,10 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
     </div>
   </div>
 
-  <div
-    v-else-if="messagesError"
-    class="transcript-content mx-2 border-rose-500/60 py-2 text-sm text-rose-700 dark:text-rose-300"
-  >
-    {{ messagesError }}
+  <div v-else-if="messagesError" class="px-2">
+    <div class="transcript-content border-rose-500/60 py-2 text-sm text-rose-700 dark:text-rose-300">
+      {{ messagesError }}
+    </div>
   </div>
 
   <template v-else>

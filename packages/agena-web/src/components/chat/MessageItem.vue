@@ -541,11 +541,10 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
         />
       </div>
 
-      <div
-        v-if="fallbackError"
-        class="transcript-content mx-1 border-rose-400/60 py-1 text-sm text-rose-700 dark:text-rose-300"
-      >
-        {{ fallbackError }}
+      <div v-if="fallbackError" class="px-1">
+        <div class="transcript-content border-rose-400/60 py-1 text-sm text-rose-700 dark:text-rose-300">
+          {{ fallbackError }}
+        </div>
       </div>
     </div>
   </article>

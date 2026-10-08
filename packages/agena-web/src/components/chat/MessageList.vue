@@ -307,8 +307,8 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         />
       </article>
 
-      <article v-if="optimisticUser && showOptimisticUser" :key="optimisticUser.key" class="py-2">
-        <header class="flex min-h-6 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+      <article v-if="optimisticUser && showOptimisticUser" :key="optimisticUser.key" class="py-1">
+        <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
           <span class="font-semibold text-primary">user</span>
           <span v-if="showTimestamps">{{ formatTime(optimisticUser.createdAt) }}</span>
           <span class="inline-flex items-center gap-1 font-mono">
@@ -322,7 +322,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
             </template>
           </span>
         </header>
-        <div class="mt-0.5 border-l-2 border-primary/35 py-1 pl-7 text-sm leading-relaxed">
+        <div class="border-l-2 border-primary/35 py-0.5 pl-7 text-sm leading-snug">
           <AgenaTranscriptPart
             v-for="part in optimisticDisplayParts"
             :key="part.key"
@@ -334,8 +334,8 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         </div>
       </article>
 
-      <article v-if="showAssistantPlaceholder" key="assistant-placeholder" class="py-2">
-        <header class="flex min-h-6 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+      <article v-if="showAssistantPlaceholder" key="assistant-placeholder" class="py-1">
+        <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
           <span class="font-semibold text-emerald-700 dark:text-emerald-300">assistant</span>
           <RiLoader4Line class="h-3.5 w-3.5 animate-spin text-primary" />
         </header>
@@ -349,7 +349,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
     </div>
 
     <article v-if="sessionError" class="mt-3 py-2">
-      <header class="flex min-h-6 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+      <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
         <span class="font-semibold text-rose-700 dark:text-rose-300">system</span>
         <span v-if="sessionErrorAtLabel()" class="font-mono text-[10px]">{{ sessionErrorAtLabel() }}</span>
       </header>

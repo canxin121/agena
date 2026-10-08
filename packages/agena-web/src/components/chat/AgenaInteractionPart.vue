@@ -613,7 +613,7 @@ onMounted(focusPendingInteraction)
   <section
     v-if="interaction || permission"
     ref="rootEl"
-    class="min-w-0 border-y border-border/55 py-3 outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
+    class="min-w-0 border-y border-border/55 py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
     data-transcript-interaction-part="true"
     :data-interaction-request-id="requestId"
     data-transcript-chrome="true"
@@ -648,7 +648,7 @@ onMounted(focusPendingInteraction)
         <span class="font-semibold">{{ t('chat.attention.ui.replyReasonLabel') }}:</span>
         {{ permission.replyReason }}
       </div>
-      <div v-if="isPendingPermission" class="mt-3 flex flex-wrap items-center gap-2">
+      <div v-if="isPendingPermission" class="mt-1.5 flex flex-wrap items-center gap-2">
         <Button
           size="sm"
           variant="ghost"
@@ -706,13 +706,13 @@ onMounted(focusPendingInteraction)
       />
       <div
         v-if="hasBody && questions.length && (!isQuestionFlow || questionPage === 0)"
-        class="my-3 border-t border-border/60"
+        class="my-1.5 border-t border-border/60"
         aria-hidden="true"
       />
 
       <div
         v-if="isQuestionFlow"
-        class="mb-3 text-xs font-medium text-muted-foreground"
+        class="mb-1.5 text-xs font-medium text-muted-foreground"
         aria-live="polite"
         data-interaction-page
       >
@@ -723,7 +723,7 @@ onMounted(focusPendingInteraction)
         }}
       </div>
 
-      <div v-if="isReviewDecision" class="space-y-2">
+      <div v-if="isReviewDecision" class="space-y-1.5">
         <fieldset v-if="questions[0]" class="space-y-1">
           <legend v-if="questions[0].question && !hasBody" class="mb-2 text-xs font-medium">
             {{ questions[0].question }}
@@ -731,7 +731,7 @@ onMounted(focusPendingInteraction)
           <label
             v-for="option in visibleOptions(0)"
             :key="option.label"
-            class="flex cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-xs transition-colors hover:bg-muted/40"
+            class="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted/40"
             :class="isOptionChecked(0, option.label) ? 'bg-muted/55' : ''"
           >
             <input
@@ -757,7 +757,7 @@ onMounted(focusPendingInteraction)
           <button
             v-if="questions[0] && customAllowed(0) && (interaction.pending || customDrafts[0])"
             type="button"
-            class="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-xs transition-colors hover:bg-muted/40"
+            class="flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-muted/40"
             :class="customOpen[0] ? 'bg-muted/55' : ''"
             :disabled="!interaction.pending || busy"
             data-interaction-control="true"
@@ -783,7 +783,7 @@ onMounted(focusPendingInteraction)
           data-interaction-question-index="0"
           :tabindex="controlTabIndex(textareaControlKey(0))"
           @focus="markControlFocus"
-          class="w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-2 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          class="w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
           :placeholder="t('chat.attention.ui.typeYourOwnAnswer')"
         />
         <div v-if="!interaction.pending && answerFor(0).length" class="text-[11px] text-muted-foreground">
@@ -792,11 +792,11 @@ onMounted(focusPendingInteraction)
         </div>
       </div>
 
-      <div v-else-if="isSummaryPage" class="space-y-3" data-interaction-summary>
+      <div v-else-if="isSummaryPage" class="space-y-1.5" data-interaction-summary>
         <div
           v-for="(question, questionIndex) in questions"
           :key="question.questionId || questionIndex"
-          class="flex items-start justify-between gap-3 rounded-md border border-border/60 p-3"
+          class="flex items-start justify-between gap-3 rounded-md border border-border/60 p-2"
         >
           <div class="min-w-0 text-xs">
             <div class="font-medium break-words">{{ question.header || question.question }}</div>
@@ -823,14 +823,14 @@ onMounted(focusPendingInteraction)
         </div>
       </div>
 
-      <div v-else class="space-y-4">
+      <div v-else class="space-y-1.5">
         <div v-if="!questions.length" class="text-xs text-muted-foreground">
           {{ t('chat.attention.ui.noQuestionsAvailable') }}
         </div>
         <section
           v-for="{ question, questionIndex } in visibleQuestions"
           :key="question.questionId || questionIndex"
-          class="space-y-2"
+          class="space-y-1.5"
         >
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -847,7 +847,7 @@ onMounted(focusPendingInteraction)
             <label
               v-for="option in visibleOptions(questionIndex)"
               :key="option.label"
-              class="flex cursor-pointer items-start gap-2 px-2 py-2 text-xs transition-colors hover:bg-muted/40"
+              class="flex cursor-pointer items-start gap-2 px-2 py-1 text-xs transition-colors hover:bg-muted/40"
               :class="isOptionChecked(questionIndex, option.label) ? 'bg-muted/55' : ''"
             >
               <input
@@ -897,7 +897,7 @@ onMounted(focusPendingInteraction)
             :data-interaction-question-index="questionIndex"
             :tabindex="controlTabIndex(textareaControlKey(questionIndex))"
             @focus="markControlFocus"
-            class="w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-2 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            class="w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
             :placeholder="t('chat.attention.ui.typeYourOwnAnswer')"
           />
           <div v-if="!interaction.pending && answerFor(questionIndex).length" class="text-[11px] text-muted-foreground">
@@ -907,7 +907,10 @@ onMounted(focusPendingInteraction)
         </section>
       </div>
 
-      <div v-if="isQuestionFlow" class="mt-3 flex items-center justify-between gap-2 border-t border-border/55 pt-3">
+      <div
+        v-if="isQuestionFlow"
+        class="mt-1.5 flex items-center justify-between gap-2 border-t border-border/55 pt-1.5"
+      >
         <Button
           size="sm"
           variant="ghost"
@@ -943,7 +946,7 @@ onMounted(focusPendingInteraction)
       </div>
       <div
         v-if="interaction.pending && (isReviewDecision || isSummaryPage)"
-        class="mt-3 flex flex-wrap items-center gap-2 border-t border-border/55 pt-3"
+        class="mt-1.5 flex flex-wrap items-center gap-2 border-t border-border/55 pt-1.5"
       >
         <Button
           size="sm"
@@ -977,7 +980,7 @@ onMounted(focusPendingInteraction)
           {{ t('chat.attention.subtitle.answerAllToEnableSend') }}
         </span>
       </div>
-      <div v-else-if="!interaction.pending" class="mt-3 font-mono text-[10px] text-muted-foreground">
+      <div v-else-if="!interaction.pending" class="mt-1.5 font-mono text-[10px] text-muted-foreground">
         {{ interaction.reply ? t('chat.attention.ui.answered') : t('chat.attention.ui.awaitingUserInput') }}
       </div>
     </template>

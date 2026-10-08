@@ -86,7 +86,7 @@ onBeforeUnmount(() => {
     />
     <pre
       v-else
-      class="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground/90"
+      class="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-snug text-foreground/90"
       >{{ body }}</pre
     >
     <div v-if="gap" class="mt-1 text-xs text-amber-600">{{ t('content.gap') }}</div>

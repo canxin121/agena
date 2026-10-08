@@ -142,7 +142,6 @@ pub fn render_entry_detailed_with_progressive_expansion(
 ) -> RenderedMessageBlock {
     let mut lines = Vec::new();
     let mut nodes = Vec::new();
-    let header_start = lines.len();
     if message.role.is_some() {
         push_message_header(&mut lines, message, width, i18n);
     }
@@ -284,13 +283,6 @@ pub fn render_entry_detailed_with_progressive_expansion(
                     if should_suppress_markdown_block(blocks.as_slice(), block_index) {
                         continue;
                     }
-                    if block.leading_blank_line && lines.len() > header_start.saturating_add(1) {
-                        lines.push(
-                            RenderedLine::plain("  ".to_string(), Style::default())
-                                .with_copy_projection(String::new(), 2),
-                        );
-                    }
-
                     // Keep the message header outside Markdown selections.  A selected code
                     // block or list should be exactly that block, both visually and on copy.
                     let start_line = lines.len();
@@ -373,6 +365,62 @@ mod tests {
     };
     use agena_runtime_contracts::part::OperationPart;
     use chrono::{DateTime, Utc};
+
+    #[test]
+    fn compact_markdown_omits_layout_gaps_and_preserves_literal_code_blank_lines() {
+        let source =
+            "First paragraph.\n\nSecond paragraph.\n\n```text\n1\n\n3\n```\n\nLast paragraph.";
+        let lines = super::render_markdown_document(source, 80);
+        assert_eq!(
+            lines.len(),
+            8,
+            "three paragraph separators consume no terminal rows"
+        );
+        let copy = lines
+            .iter()
+            .map(|line| line.copy_text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            copy,
+            [
+                "First paragraph.",
+                "Second paragraph.",
+                "",
+                "1",
+                "",
+                "3",
+                "",
+                "Last paragraph."
+            ]
+        );
+        let code = markdown_blocks(source)
+            .into_iter()
+            .find(|block| block.kind == TranscriptNodeKind::MarkdownCode)
+            .unwrap();
+        assert_eq!(
+            code.copy_text, "1\n\n3",
+            "literal whitespace remains available for copy/navigation"
+        );
+    }
+
+    #[test]
+    fn compact_tables_share_a_header_rule_and_keep_each_data_row_navigable() {
+        let lines = super::render_markdown_document(
+            "| Name | Status |\n| --- | --- |\n| one | ready |\n| two | waiting |",
+            80,
+        );
+        assert_eq!(
+            lines.len(),
+            6,
+            "only the header needs an interior separator row"
+        );
+        let cells = lines
+            .iter()
+            .filter(|line| line.navigation_unit.is_some())
+            .map(|line| line.navigation_copy_text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(cells, ["Name\tStatus", "one\tready", "two\twaiting"]);
+    }
 
     fn tool_view<'a>(part: &'a crate::TranscriptEntryPart<'a>) -> &'a crate::ToolCallView {
         match &part.content {
@@ -2713,7 +2761,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_tables_render_a_compact_full_grid() {
+    fn markdown_tables_render_a_compact_grid_with_one_header_separator() {
         let block =
             markdown_blocks("| key | value |\n| --- | ---: |\n| first | 1 |\n| second | 2 |")
                 .pop()
@@ -2732,7 +2780,6 @@ mod tests {
                 "│ key    │ value │",
                 "├────────┼───────┤",
                 "│ first  │     1 │",
-                "├────────┼───────┤",
                 "│ second │     2 │",
                 "└────────┴───────┘",
             ]

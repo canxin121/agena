@@ -715,12 +715,6 @@ fn append_answer_markdown_blocks(
         if should_suppress_markdown_block(blocks.as_slice(), block_index) {
             continue;
         }
-        if block.leading_blank_line && !out.is_empty() {
-            out.push(
-                RenderedLine::plain("    ".to_owned(), Style::default())
-                    .with_copy_projection(String::new(), 4),
-            );
-        }
         let start_line = out.len();
         render_markdown_block(out, "    ", block, width);
         if out.len() > start_line {

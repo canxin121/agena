@@ -72,7 +72,7 @@ function openAttachment(path: string, url: string) {
     @select="$emit('select')"
   />
 
-  <div v-else-if="part.kind === 'text'" class="min-w-0 py-1 pl-7 text-sm leading-relaxed">
+  <div v-else-if="part.kind === 'text'" class="min-w-0 py-0.5 pl-7 text-sm leading-snug">
     <MarkdownRenderer :content="body" mode="markdown" :stream="Boolean(streaming)" :source-path="sourcePath || ''" />
   </div>
 
@@ -99,7 +99,7 @@ function openAttachment(path: string, url: string) {
   <div v-else class="min-w-0">
     <button
       type="button"
-      class="group/headline flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
+      class="group/headline flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-0.5 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
       :aria-expanded="expanded"
       data-transcript-vim-toggle="true"
       @click="toggle"
@@ -135,8 +135,8 @@ function openAttachment(path: string, url: string) {
       >
     </button>
 
-    <div v-if="expanded" class="ml-5 min-w-0 rounded-r-md border-l border-border/60 bg-muted/[0.08] pb-1 pl-4 pr-1">
-      <div v-if="part.kind === 'answer' || part.kind === 'text_segment'" class="py-1 text-sm leading-relaxed">
+    <div v-if="expanded" class="ml-5 min-w-0 rounded-r-md border-l border-border/60 bg-muted/[0.08] pl-3 pr-1">
+      <div v-if="part.kind === 'answer' || part.kind === 'text_segment'" class="py-0.5 text-sm leading-snug">
         <template v-if="resources.length && sessionId">
           <AgenaContentText
             v-for="resource in resources"
@@ -166,7 +166,7 @@ function openAttachment(path: string, url: string) {
       </div>
       <pre
         v-else-if="part.kind === 'reasoning'"
-        class="overflow-x-auto whitespace-pre-wrap break-words py-1 font-mono text-xs leading-relaxed text-muted-foreground"
+        class="overflow-x-auto whitespace-pre-wrap break-words py-0.5 font-mono text-xs leading-snug text-muted-foreground"
         >{{ body }}</pre
       >
 

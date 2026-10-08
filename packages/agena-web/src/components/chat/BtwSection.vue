@@ -57,7 +57,7 @@ function handleKeydown(event: KeyboardEvent) {
         <RiCloseLine class="h-3.5 w-3.5" />
       </IconButton>
     </template>
-    <div class="max-h-[min(45dvh,28rem)] space-y-3 overflow-auto overscroll-contain">
+    <div class="max-h-[min(45dvh,28rem)] space-y-1.5 overflow-auto overscroll-contain">
       <article v-for="entry in state.exchanges" :key="entry.id" class="min-w-0">
         <div class="flex items-start gap-2">
           <button
@@ -84,7 +84,7 @@ function handleKeydown(event: KeyboardEvent) {
             <RiFileCopyLine class="h-3.5 w-3.5" />
           </IconButton>
         </div>
-        <div v-if="entry.expanded" class="mt-2 min-w-0 border-l-2 border-border/60 pl-3">
+        <div v-if="entry.expanded" class="mt-1 min-w-0 border-l-2 border-border/60 pl-3">
           <MarkdownRenderer
             v-if="entry.markdown"
             :content="entry.markdown"
@@ -110,7 +110,7 @@ function handleKeydown(event: KeyboardEvent) {
           :aria-label="t('chat.btw.placeholder')"
           rows="2"
           maxlength="16000"
-          class="min-h-16 min-w-0 flex-1 resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          class="min-h-12 min-w-0 flex-1 resize-y rounded-md border border-input bg-background px-3 py-1 text-sm outline-none focus:ring-1 focus:ring-ring"
           @keydown="handleKeydown"
         />
         <Button v-if="loading" type="button" size="sm" variant="outline" @click="btw.stop(sessionId)">{{

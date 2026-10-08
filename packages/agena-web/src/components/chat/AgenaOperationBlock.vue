@@ -19,7 +19,12 @@ import type { JsonValue } from '@/types/json'
 
 const props = defineProps<{ block: JsonRecord; sessionId?: string | null }>()
 const contentResource = computed(() => jsonRecord(props.block.resource) as unknown as ContentRef)
-const contentFormat = computed(() => (['markdown', 'code', 'diff', 'json'].includes(stringValue(props.block.format)) ? stringValue(props.block.format) : 'plain') as ContentFormat)
+const contentFormat = computed(
+  () =>
+    (['markdown', 'code', 'diff', 'json'].includes(stringValue(props.block.format))
+      ? stringValue(props.block.format)
+      : 'plain') as ContentFormat,
+)
 
 const kind = computed(() => stringValue(props.block.type) || stringValue(props.block.kind) || 'unknown')
 const bodyText = computed(() => {
@@ -124,14 +129,20 @@ const checklistItems = computed(() =>
     }
   }),
 )
-const progressPercent = computed(() => typeof props.block.total === 'number' && props.block.total > 0 && typeof props.block.completed === 'number'
-  ? Math.max(0, Math.min(100, Math.floor(props.block.completed * 100 / props.block.total))) : null)
-const progressCount = computed(() => typeof props.block.completed === 'number'
-  ? `${props.block.completed}${typeof props.block.total === 'number' ? `/${props.block.total}` : ''}${stringValue(props.block.unit) ? ` ${stringValue(props.block.unit)}` : ''}` : '')
+const progressPercent = computed(() =>
+  typeof props.block.total === 'number' && props.block.total > 0 && typeof props.block.completed === 'number'
+    ? Math.max(0, Math.min(100, Math.floor((props.block.completed * 100) / props.block.total)))
+    : null,
+)
+const progressCount = computed(() =>
+  typeof props.block.completed === 'number'
+    ? `${props.block.completed}${typeof props.block.total === 'number' ? `/${props.block.total}` : ''}${stringValue(props.block.unit) ? ` ${stringValue(props.block.unit)}` : ''}`
+    : '',
+)
 </script>
 
 <template>
-  <div class="min-w-0 text-[13px] leading-relaxed">
+  <div class="min-w-0 text-[13px] leading-snug">
     <AgenaContentOutput
       v-if="kind === 'content' && sessionId"
       :key="contentResource.resource_id"
@@ -143,11 +154,11 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
 
     <pre
       v-else-if="kind === 'text' || kind === 'log'"
-      class="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground/90"
+      class="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-snug text-foreground/90"
       >{{ bodyText }}</pre
     >
 
-    <div v-else-if="kind === 'command'" class="space-y-2">
+    <div v-else-if="kind === 'command'" class="space-y-1">
       <div v-if="cwd" class="font-mono text-[10px] text-muted-foreground">{{ cwd }}</div>
       <MarkdownRenderer v-if="commandMarkdown" :content="commandMarkdown" mode="markdown" :stream="false" />
       <CodeBlock v-if="stdout" :code="stdout" lang="text" compact />
@@ -171,7 +182,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
             <th
               v-for="column in tableColumns"
               :key="column.key"
-              class="border-b border-border/60 px-2 py-1.5 font-medium"
+              class="border-b border-border/60 px-2 py-1 font-medium"
             >
               {{ column.label }}
             </th>
@@ -182,7 +193,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
             <td
               v-for="(column, columnIndex) in tableColumns"
               :key="column.key"
-              class="min-w-24 max-w-xl break-words px-2 py-1.5 align-top whitespace-pre-wrap"
+              class="min-w-24 max-w-xl break-words px-2 py-1 align-top whitespace-pre-wrap"
             >
               {{ tableCell(row, column.key, columnIndex) }}
             </td>
@@ -192,7 +203,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
     </div>
 
     <div v-else-if="kind === 'search_results'" class="divide-y divide-border/40 border-y border-border/60">
-      <div v-for="result in searchResults" :key="result.key" class="py-2 first:pt-1 last:pb-1">
+      <div v-for="result in searchResults" :key="result.key" class="py-1 first:pt-0.5 last:pb-0.5">
         <a
           v-if="result.uri"
           :href="result.uri"
@@ -213,7 +224,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
       v-else-if="kind === 'file_changes'"
       class="divide-y divide-border/40 border-y border-border/60 font-mono text-xs"
     >
-      <div v-for="change in fileChanges" :key="change.key" class="flex min-w-0 items-center gap-3 py-1.5">
+      <div v-for="change in fileChanges" :key="change.key" class="flex min-w-0 items-center gap-3 py-1">
         <span class="min-w-0 flex-1 truncate">{{ change.path }}</span>
         <span v-if="change.status" class="text-muted-foreground">{{ change.status }}</span>
         <span v-if="change.additions !== null" class="text-emerald-600 dark:text-emerald-400"
@@ -223,7 +234,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
       </div>
     </div>
 
-    <div v-else-if="kind === 'media' && mediaUrl" class="space-y-2">
+    <div v-else-if="kind === 'media' && mediaUrl" class="space-y-1">
       <img
         v-if="mediaMime.startsWith('image/')"
         :src="mediaUrl"
@@ -251,7 +262,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
       </a>
     </div>
 
-    <div v-else-if="kind === 'image' || kind === 'audio' || kind === 'file' || kind === 'media'" class="space-y-2">
+    <div v-else-if="kind === 'image' || kind === 'audio' || kind === 'file' || kind === 'media'" class="space-y-1">
       <img
         v-if="resourceMime.startsWith('image/') && resourceUri"
         :src="resourceUri"
@@ -278,7 +289,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
       </a>
     </div>
 
-    <div v-else-if="kind === 'resource_link' || kind === 'citation'" class="border-y border-border/50 py-2">
+    <div v-else-if="kind === 'resource_link' || kind === 'citation'" class="border-y border-border/50 py-1">
       <a
         :href="resourceUri || undefined"
         target="_blank"
@@ -293,7 +304,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
       </div>
     </div>
 
-    <div v-else-if="kind === 'embedded_resource'" class="space-y-2 border-y border-border/50 py-2">
+    <div v-else-if="kind === 'embedded_resource'" class="space-y-1 border-y border-border/50 py-1">
       <div class="break-all font-mono text-[11px] text-muted-foreground">{{ resourceTitle }}</div>
       <pre v-if="bodyText" class="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs">{{
         bodyText
@@ -302,7 +313,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
     </div>
 
     <div v-else-if="kind === 'checklist'" class="divide-y divide-border/40 border-y border-border/60 text-xs">
-      <div v-for="item in checklistItems" :key="item.key" class="flex min-w-0 items-start gap-2 py-1.5">
+      <div v-for="item in checklistItems" :key="item.key" class="flex min-w-0 items-start gap-2 py-1">
         <span class="shrink-0 font-mono text-primary">{{ item.status === 'completed' ? '[x]' : '[ ]' }}</span>
         <span class="min-w-0 flex-1 break-words">{{ item.content }}</span>
         <span v-if="item.priority" class="shrink-0 font-mono text-[10px] text-muted-foreground">{{
@@ -311,7 +322,7 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
       </div>
     </div>
 
-    <div v-else-if="kind === 'progress'" class="space-y-1.5 border-y border-border/50 py-2">
+    <div v-else-if="kind === 'progress'" class="space-y-1.5 border-y border-border/50 py-1">
       <div class="flex items-center justify-between gap-3 text-xs">
         <span class="min-w-0 break-words">{{ stringValue(block.phase) }}</span>
         <span class="shrink-0 font-mono text-[10px] text-muted-foreground">{{ progressCount }}</span>
@@ -319,14 +330,22 @@ const progressCount = computed(() => typeof props.block.completed === 'number'
           {{ progressPercent }}%
         </span>
       </div>
-      <div v-if="progressPercent !== null" class="h-1 overflow-hidden rounded-full bg-muted" role="progressbar" :aria-valuenow="progressPercent" :aria-valuemin="0" :aria-valuemax="100" :aria-label="stringValue(block.phase)">
+      <div
+        v-if="progressPercent !== null"
+        class="h-1 overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        :aria-valuenow="progressPercent"
+        :aria-valuemin="0"
+        :aria-valuemax="100"
+        :aria-label="stringValue(block.phase)"
+      >
         <div class="h-full bg-primary" :style="{ width: `${progressPercent}%` }" />
       </div>
     </div>
 
     <div
       v-else-if="kind === 'nested_task'"
-      class="flex min-w-0 items-center gap-2 border-y border-border/50 py-2 text-xs"
+      class="flex min-w-0 items-center gap-2 border-y border-border/50 py-1 text-xs"
     >
       <span class="font-mono text-primary">{{ stringValue(block.status) || 'pending' }}</span>
       <span class="min-w-0 flex-1 break-words">{{ stringValue(block.title) || stringValue(block.task_id) }}</span>

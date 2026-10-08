@@ -236,7 +236,7 @@ impl App {
 
         let transcript_layout = layout_header_body_footer_surface(
             transcript_host_area,
-            pane_header_height(transcript_host_area.height),
+            self.transcript_header_height(transcript_host_area.height),
             transcript_footer_height,
             1,
         );
@@ -297,7 +297,7 @@ impl App {
         let footer_height = self.transcript_footer_height(area.width, area.height);
         let layout = layout_header_body_footer_surface(
             area,
-            pane_header_height(area.height),
+            self.transcript_header_height(area.height),
             footer_height,
             1,
         );
@@ -314,7 +314,7 @@ impl App {
         };
         self.surface_layout.header_subtitle = Rect {
             y: header_inner.y.saturating_add(1),
-            height: 1,
+            height: header_inner.height.saturating_sub(1).min(1),
             ..header_inner
         };
 
@@ -805,7 +805,11 @@ impl App {
     }
 
     pub(crate) fn transcript_footer_height(&self, width: u16, total_height: u16) -> u16 {
-        if total_height <= pane_header_height(total_height).saturating_add(1) {
+        if total_height
+            <= self
+                .transcript_header_height(total_height)
+                .saturating_add(1)
+        {
             return 0;
         }
         let line_count = self.transcript_footer_lines(width).len();
@@ -1428,10 +1432,9 @@ use super::{
     apply_cursor_cell_highlight, apply_line_cell_highlight, build_wrapped_text_lines,
     composer_corner_placement_left, composer_corner_placement_right,
     composer_status_placement_left, find_search_ranges, inset_rect, layout_composer_surface,
-    layout_header_body_footer_surface, min, pane_header_height,
-    pending_interactive_counts_for_execution, render_composer_editor_surface,
-    render_header_body_footer_text_surface, render_wrapped_text, sanitize_display_text,
-    split_vertical_sections,
+    layout_header_body_footer_surface, min, pending_interactive_counts_for_execution,
+    render_composer_editor_surface, render_header_body_footer_text_surface, render_wrapped_text,
+    sanitize_display_text, split_vertical_sections,
 };
 use crate::NoticeSeverity;
 use crate::ui_text;

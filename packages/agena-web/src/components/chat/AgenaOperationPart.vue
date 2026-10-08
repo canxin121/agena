@@ -471,7 +471,7 @@ function toggleOuter() {
   <div class="min-w-0">
     <button
       type="button"
-      class="group/headline flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
+      class="group/headline flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-0.5 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
       :aria-expanded="expanded"
       data-transcript-vim-toggle="true"
       @click="toggleOuter"
@@ -511,8 +511,8 @@ function toggleOuter() {
       </span>
     </button>
 
-    <div v-if="expanded" class="ml-5 rounded-r-md border-l border-border/60 bg-muted/[0.08] pb-1 pl-4 pr-1">
-      <div v-if="operation.userInputs.length" class="space-y-4 py-1 text-sm">
+    <div v-if="expanded" class="ml-5 rounded-r-md border-l border-border/60 bg-muted/[0.08] pl-3 pr-1">
+      <div v-if="operation.userInputs.length" class="space-y-2 py-0.5 text-sm">
         <AgenaInteractionPart
           v-for="interaction in operation.userInputs"
           :key="interaction.requestId || interaction.title"
@@ -521,7 +521,7 @@ function toggleOuter() {
         />
       </div>
 
-      <section v-if="operation.permissions.length" class="space-y-4 py-1 text-sm">
+      <section v-if="operation.permissions.length" class="space-y-2 py-0.5 text-sm">
         <AgenaInteractionPart
           v-for="permission in operation.permissions"
           :key="permission.requestId || `${permission.action}:${permission.status}`"
@@ -533,12 +533,16 @@ function toggleOuter() {
       <section v-if="operation.error" class="py-1.5">
         <div class="text-xs font-semibold text-rose-600 dark:text-rose-400">› Error</div>
         <pre
-          class="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-rose-700 dark:text-rose-300"
+          class="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-snug text-rose-700 dark:text-rose-300"
           >{{ operation.error }}</pre
         >
       </section>
 
-      <div class="space-y-3 py-1" data-tool-presentation>
+      <div
+        v-if="linkedActivity || operation.commandMarkdown || operation.summary || operation.presentationBlocks.length"
+        class="space-y-1 py-0.5"
+        data-tool-presentation
+      >
         <ActivityLogView v-if="linkedActivity && sessionId" :session-id="sessionId" :activity="linkedActivity" />
         <MarkdownRenderer
           v-if="operation.commandMarkdown"
@@ -568,7 +572,7 @@ function toggleOuter() {
 
       <button
         type="button"
-        class="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
+        class="flex min-h-6 items-center gap-2 rounded-md px-1 py-0.5 text-xs text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
         :aria-expanded="detailsExpanded"
         data-tool-details-toggle
         @click="toggleDetails"
@@ -577,10 +581,10 @@ function toggleOuter() {
         {{ t('chat.toolDetails.label') }}
       </button>
       <div v-if="detailsExpanded" class="ml-2 border-l border-border/40 pl-3" data-tool-details>
-        <section v-for="section in toolDetailSections" :key="section" class="py-1">
+        <section v-for="section in toolDetailSections" :key="section" class="py-0.5">
           <button
             type="button"
-            class="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
+            class="flex min-h-6 items-center gap-2 rounded-md px-1 py-0.5 text-xs font-semibold text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
             :aria-expanded="sectionExpanded(section)"
             :aria-busy="sectionPending(section)"
             :data-tool-detail-section="section"

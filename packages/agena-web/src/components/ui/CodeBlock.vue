@@ -26,7 +26,9 @@ const isLarge = computed(() => {
 const userExpanded = ref<boolean>()
 const expanded = computed({
   get: () => userExpanded.value ?? !isLarge.value,
-  set: (value: boolean) => { userExpanded.value = value },
+  set: (value: boolean) => {
+    userExpanded.value = value
+  },
 })
 
 const toasts = useToastsStore()
@@ -54,18 +56,19 @@ async function copyCode() {
 <template>
   <div
     class="relative group w-full min-w-0 rounded-md border border-border bg-muted/40 overflow-hidden"
-    :class="props.compact ? 'my-2' : 'my-4'"
+    :class="props.compact ? 'my-1' : 'my-2'"
+    data-code-block
   >
     <div
       class="flex items-center justify-between bg-muted/50 border-b border-border"
-      :class="props.compact ? 'px-3 py-1.5' : 'px-4 py-2'"
+      :class="props.compact ? 'px-2 py-0.5' : 'px-3 py-1'"
     >
       <span class="text-xs font-mono text-muted-foreground">{{ lang || 'text' }}</span>
       <div class="flex items-center gap-1">
         <button
           v-if="isLarge"
           type="button"
-          class="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/40 active:scale-95 transition"
+          class="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/40 active:scale-95 transition"
           :title="expanded ? t('codeBlock.collapse') : t('codeBlock.expandLines', { lines })"
           :aria-label="expanded ? t('codeBlock.collapseAria') : t('codeBlock.expandAria')"
           @click="expanded = !expanded"
@@ -76,7 +79,7 @@ async function copyCode() {
         <button
           type="button"
           @click="copyCode"
-          class="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/40 active:scale-95 transition opacity-0 group-hover:opacity-100"
+          class="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/40 active:scale-95 transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
           :title="t('codeBlock.copy')"
           :aria-label="t('codeBlock.copyAria')"
         >
@@ -89,7 +92,7 @@ async function copyCode() {
       <pre
         class="overflow-x-auto font-mono"
         :class="[
-          props.compact ? 'p-3 text-xs leading-snug' : 'p-4 text-sm leading-relaxed',
+          props.compact ? 'px-2 py-1.5 text-xs leading-snug' : 'px-3 py-2 text-sm leading-snug',
           !expanded && isLarge ? 'max-h-56 overflow-hidden' : '',
         ]"
       ><code v-html="highlighted" /></pre>

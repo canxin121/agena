@@ -45,7 +45,7 @@ const summary = computed(() => {
     >
       <label
         v-if="state.autorun.value !== null"
-        class="mb-3 inline-flex min-h-8 cursor-pointer items-center gap-2 text-xs"
+        class="mb-1 inline-flex min-h-7 cursor-pointer items-center gap-2 text-xs"
       >
         <input
           type="checkbox"

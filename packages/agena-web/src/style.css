@@ -533,6 +533,82 @@
     @apply pointer-events-auto inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-background/70 backdrop-blur text-muted-foreground hover:text-foreground active:scale-95 transition;
   }
 
+  /* Transcript spacing is shared by prose, streamed segments and tool
+     details. Segment wrappers use display:contents, so trim their real
+     first/last block edges as well as the Markdown root's direct children. */
+  :is([data-transcript-root='true'], [data-session-section]) .prose {
+    line-height: 1.45;
+  }
+  :is([data-transcript-root='true'], [data-session-section])
+    .prose
+    :where(p, ul, ol, blockquote, pre, table, .oc-md-codeblock) {
+    margin-block: 0.25rem;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .prose :where(h1, h2, h3, h4, h5, h6) {
+    margin-block: 0.5rem 0.25rem;
+    line-height: 1.3;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .prose :where(li, li p) {
+    margin-block: 0.125rem;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .prose :where(:not(pre) > code) {
+    padding-block: 0.125rem;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .prose :where(th, td) {
+    padding-block: 0.25rem;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .prose :where(hr) {
+    margin-block: 0.5rem;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .prose > :first-child,
+  :is([data-transcript-root='true'], [data-session-section])
+    .prose
+    > [data-markdown-segment]:first-child
+    > :first-child,
+  :is([data-transcript-root='true'], [data-session-section]) .prose > div:only-child > :first-child {
+    margin-top: 0;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .prose > :last-child,
+  :is([data-transcript-root='true'], [data-session-section]) .prose > [data-markdown-segment]:last-child > :last-child,
+  :is([data-transcript-root='true'], [data-session-section]) .prose > div:only-child > :last-child {
+    margin-bottom: 0;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .oc-md-codeblock__header {
+    padding-block: 0.125rem;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .oc-md-codeblock__iconbtn {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+  :is([data-transcript-root='true'], [data-session-section]) .prose .oc-md-pre {
+    margin: 0;
+    border: 0;
+    padding: 0.375rem 0.5rem;
+    line-height: 1.4;
+  }
+  @media (pointer: coarse) {
+    :is([data-transcript-root='true'], [data-session-section])
+      :where(
+        [data-transcript-vim-toggle],
+        [data-tool-details-toggle],
+        [data-tool-detail-section],
+        .oc-md-codeblock__iconbtn
+      ) {
+      min-height: 2.25rem;
+    }
+    :is([data-transcript-root='true'], [data-session-section]) .oc-md-codeblock__iconbtn {
+      min-width: 2.25rem;
+    }
+    [data-code-block] button,
+    [data-transcript-interaction-part] label,
+    [data-transcript-interaction-part] button,
+    [data-session-section] button,
+    [data-session-section] label {
+      min-width: 2.25rem;
+      min-height: 2.25rem;
+    }
+  }
+
   /* Lightweight highlight.js theme that matches our OKLCH tokens. */
   .hljs {
     color: oklch(var(--foreground));

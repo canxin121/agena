@@ -359,14 +359,14 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
       :collapse-top="composerSplitTopCollapsed"
       @update:model-value="handleComposerResize"
       @dblclick="resetComposerHeight"
-      :min-height="ui.isCompactLayout ? 160 : 190"
+      :min-height="ui.isCompactLayout ? 128 : 112"
       :max-height="composerMaxHeight"
       :disabled="ui.isCompactLayout"
     >
       <template #top>
         <div class="relative flex h-full min-h-0 flex-col" data-vim-chat-surface="true">
           <header class="shrink-0 border-b border-border/70 bg-background/92 backdrop-blur">
-            <div class="chat-message-column flex min-h-12 items-center gap-4 py-2">
+            <div class="chat-message-column flex min-h-10 items-center gap-3 py-1">
               <div class="min-w-0 flex-1">
                 <div class="truncate text-sm font-semibold">
                   {{ sessionTitle || (chat.selectedSessionId ? `Session ${chat.selectedSessionId}` : t('nav.chat')) }}
@@ -458,9 +458,9 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
             @scroll="handleScroll"
             @wheel="handleWheel"
           >
-            <div ref="contentEl" class="min-w-0 py-3">
+            <div ref="contentEl" class="min-w-0 py-1">
               <div class="chat-message-column">
-                <div v-if="chat.messages.length" class="min-h-8 px-2 pb-2" data-transcript-chrome="true">
+                <div v-if="chat.messages.length" class="min-h-6 px-2 pb-1" data-transcript-chrome="true">
                   <button
                     v-if="!chat.selectedHistory.exhausted || loadingOlder"
                     type="button"
@@ -638,7 +638,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
           :style="{ paddingInlineEnd: `${scrollbarGutter}px` }"
           :data-keyboard-avoid="composerFullscreenActive ? 'resize' : 'shift'"
         >
-          <div class="chat-column flex flex-col min-h-0 h-full" :class="ui.isCompactLayout ? 'py-2' : 'py-3'">
+          <div class="chat-column flex flex-col min-h-0 h-full" :class="ui.isCompactLayout ? 'py-1' : 'py-1.5'">
             <div class="relative flex flex-1 flex-col min-h-0">
               <div v-if="failedAttachmentDraft" role="status" class="mb-2 rounded border border-border p-2 text-sm">
                 <p>{{ t('chat.attachments.failedDraftSaved') }}</p>

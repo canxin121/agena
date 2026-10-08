@@ -49,6 +49,18 @@ let writing = false
 let needsReplay = false
 let pending: ContentChunk[] = []
 let pendingBytes = 0
+let fitting = false
+
+function updateLogHeight() {
+  if (props.resource.kind !== 'log' || !terminal || paused.value || selectionActive.value) return
+  const screen = terminal.element?.querySelector('.xterm-screen')
+  const cellHeight = screen ? screen.getBoundingClientRect().height / terminal.rows : 0
+  if (!cellHeight) return
+  // Keep the cursor row (including the newline after the last output), so
+  // following a short log never scrolls its final text off a one-row screen.
+  const rows = Math.min(12, Math.max(1, terminal.buffer.active.baseY + terminal.buffer.active.cursorY + 1))
+  terminalHeight.value = Math.ceil(cellHeight * rows) + 8
+}
 
 function applyTheme() {
   if (!surface.value || !terminal) return
@@ -262,7 +274,7 @@ function flushOutput() {
     else if (payload.type === 'terminal') {
       terminal.resize(payload.screen.cols, payload.screen.rows)
       const screen = terminal.element?.querySelector('.xterm-screen')
-      if (screen) terminalHeight.value = screen.getBoundingClientRect().height + 16
+      if (screen) terminalHeight.value = screen.getBoundingClientRect().height + 8
       pieces.push(terminalSnapshotText(payload.screen))
     } else if (payload.type === 'terminal_patch')
       pieces.push(terminalSnapshotText(payload.screen, payload.rows_changed))
@@ -272,6 +284,7 @@ function flushOutput() {
   terminal.write(pieces.join(''), () => {
     writing = false
     if (stopped) return
+    updateLogHeight()
     if (!paused.value && !terminal?.getSelection()) terminal?.scrollToBottom()
     flushOutput()
   })
@@ -331,7 +344,7 @@ onMounted(async () => {
     scrollback: 5000,
     fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
     fontSize: 12,
-    lineHeight: 1.35,
+    lineHeight: 1.2,
     cursorBlink: false,
     cursorStyle: 'bar',
     allowProposedApi: false,
@@ -340,12 +353,20 @@ onMounted(async () => {
   terminal.open(surface.value)
   applyTheme()
   fit.fit()
+  updateLogHeight()
   terminal.onScroll((line) => {
+    if (fitting) return
     paused.value = line < (terminal?.buffer.active.baseY || 0)
   })
   terminal.onSelectionChange(updateSelection)
   resize = new ResizeObserver(() => {
-    if (props.resource.kind !== 'terminal') fit.fit()
+    if (props.resource.kind === 'log') {
+      fitting = true
+      fit.fit()
+      updateLogHeight()
+      if (!paused.value && !selectionActive.value) terminal?.scrollToBottom()
+      fitting = false
+    }
   })
   resize.observe(surface.value)
   theme = new MutationObserver(applyTheme)
@@ -382,12 +403,12 @@ watch(
 <template>
   <div
     ref="outputRoot"
-    class="my-2 overflow-hidden rounded-md border border-border/60 bg-background"
+    class="my-1 overflow-hidden rounded-md border border-border/60 bg-background"
     data-content-output
     :aria-busy="loading"
   >
     <div
-      class="flex items-center justify-between border-b border-border/40 px-3 py-1.5 text-[11px] text-muted-foreground"
+      class="flex min-h-6 items-center justify-between border-b border-border/40 px-2 py-0.5 text-[11px] text-muted-foreground"
     >
       <div class="flex items-center gap-2">
         <PartLoadingIndicator v-if="loading && resource.kind !== 'text'" />
@@ -415,7 +436,7 @@ watch(
     <div v-if="windowed" class="border-b border-border/40 px-3 py-1 text-[11px] text-muted-foreground">
       {{ t('content.window') }}
     </div>
-    <div v-if="semanticDocument" class="space-y-3 p-3" data-content-document>
+    <div v-if="semanticDocument" class="space-y-1 p-2" data-content-document>
       <OperationBlock v-for="block in semanticDocument.blocks" :key="block.id" :block="block" :session-id="sessionId" />
     </div>
     <AgenaContentText
@@ -423,23 +444,23 @@ watch(
       :resource="resource"
       :session-id="sessionId"
       :format="format || 'plain'"
-      class="p-3"
+      class="px-2 py-1"
     />
     <div
-      v-else-if="resource.kind !== 'structured'"
+      v-else-if="resource.kind === 'log' || resource.kind === 'terminal'"
       ref="surface"
-      class="content-terminal bg-background p-2 text-foreground"
-      :class="resource.kind === 'terminal' ? 'max-h-[32rem] overflow-auto' : 'h-64'"
-      :style="terminalHeight ? { height: `${terminalHeight}px` } : undefined"
+      class="content-terminal bg-background p-1 text-foreground"
+      :class="resource.kind === 'terminal' ? 'max-h-[24rem] overflow-auto' : ''"
+      :style="{ height: `${terminalHeight ?? 32}px` }"
       :aria-label="t('content.label')"
     />
     <div
       v-if="!loading && !hasOutput && status === 'active'"
-      class="border-t border-border/40 px-3 py-1.5 text-xs text-muted-foreground"
+      class="border-t border-border/40 px-2 py-0.5 text-xs text-muted-foreground"
     >
       {{ t('content.waiting') }}
     </div>
-    <div v-if="error" class="border-t border-border/40 px-3 py-1.5 text-xs text-amber-600">{{ error }}</div>
+    <div v-if="error" class="border-t border-border/40 px-2 py-0.5 text-xs text-amber-600">{{ error }}</div>
   </div>
 </template>
 

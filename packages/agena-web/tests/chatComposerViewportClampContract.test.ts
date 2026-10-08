@@ -18,5 +18,5 @@ test('composer switches cleanly between compact and desktop layouts without losi
   assert.match(layoutSource, /composerTargetHeight\.value = DEFAULT_MOBILE_COMPOSER_HEIGHT/)
   assert.doesNotMatch(layoutSource, /composerUserHeight\.value = DEFAULT_MOBILE_COMPOSER_HEIGHT/)
   assert.match(layoutSource, /syncRegularComposerHeight\(\)/)
-  assert.match(viewSource, /:min-height="ui\.isCompactLayout \? 160 : 190"/)
+  assert.match(viewSource, /:min-height="ui\.isCompactLayout \? 128 : 112"/)
 })

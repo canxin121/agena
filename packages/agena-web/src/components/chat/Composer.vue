@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RiArrowDownLine, RiEditLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import AttachmentPicker from '@/components/chat/AttachmentPicker.vue'
@@ -464,7 +464,7 @@ defineExpose({
       :aria-label="t('chat.composer.input.placeholder')"
       :data-placeholder="t('chat.composer.input.placeholder')"
       data-chat-input="true"
-      class="composer-editor w-full min-h-[44px] flex-1 overflow-y-auto border-0 bg-transparent px-3 pb-2 pt-3 pr-9 text-sm shadow-none focus-visible:outline-none sm:min-h-[60px]"
+      class="composer-editor w-full min-h-[44px] flex-1 overflow-y-auto border-0 bg-transparent px-3 pb-1.5 pt-2 pr-9 text-sm shadow-none focus-visible:outline-none"
       :class="fullscreen ? 'composer-textarea-full' : 'max-h-none'"
       spellcheck="false"
       @beforeinput="handleBeforeInput"

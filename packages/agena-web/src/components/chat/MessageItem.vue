@@ -324,7 +324,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
   <article
     ref="articleRef"
     :id="`${pane?.windowId.value || 'page'}-msg-${messageId}`"
-    class="group/message relative min-w-0 scroll-mt-16 rounded-lg px-1 py-2"
+    class="group/message relative min-w-0 scroll-mt-16 rounded-lg px-1 py-1"
     style="content-visibility: auto; contain-intrinsic-size: auto 120px"
     :class="[
       selected(messageNodeKey) ? 'bg-primary/10' : '',
@@ -340,7 +340,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
     @pointerdown="selectMessageNode"
     @focus="$emit('nodeSelect', messageNodeKey)"
   >
-    <header class="flex min-h-6 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+    <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
       <span
         class="font-semibold"
         :class="{
@@ -431,7 +431,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
     </header>
 
     <div
-      class="mt-0.5 min-w-0"
+      class="min-w-0"
       :class="role === 'user' ? 'rounded-r-md border-l-2 border-primary/35 pl-2' : ''"
       data-transcript-copy-root="true"
     >
@@ -462,7 +462,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
       >
         <div
           v-if="row.kind === 'summary'"
-          class="flex min-w-0 flex-wrap items-center gap-1 py-1"
+          class="flex min-w-0 flex-wrap items-center gap-1 py-0.5"
           data-part-controls="true"
           :aria-busy="foldLoading(row.fold)"
           @keydown="handlePartControlsKeydown"

@@ -53,13 +53,13 @@ const visibleFiles = computed(() => {
 </script>
 
 <template>
-  <div class="min-w-0 space-y-3" data-transcript-diff>
+  <div class="min-w-0 space-y-1.5" data-transcript-diff>
     <section
       v-for="(file, index) in visibleFiles"
       :key="`${file.path}:${index}`"
       class="overflow-hidden rounded-md border border-border/60"
     >
-      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 bg-muted/30 px-3 py-2 font-mono text-xs">
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 bg-muted/30 px-3 py-1 font-mono text-xs">
         <span class="text-muted-foreground" :title="t(`chat.toolDetails.diffChange${file.change}`)">{{
           file.change
         }}</span>
@@ -72,7 +72,7 @@ const visibleFiles = computed(() => {
         <span class="text-rose-700 dark:text-rose-400">−{{ file.deletions }}</span>
       </div>
       <div class="overflow-x-auto" tabindex="0" :aria-label="file.path || t('chat.toolDetails.diff')">
-        <div class="min-w-full w-max font-mono text-xs leading-6">
+        <div class="min-w-full w-max font-mono text-xs leading-[1.4]">
           <div
             v-for="(row, rowIndex) in file.rows"
             :key="rowIndex"

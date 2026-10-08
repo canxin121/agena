@@ -987,7 +987,7 @@ fn render_ast_table(
             line.navigation_unit = Some(navigation_unit);
             line.navigation_copy_text.clone_from(&navigation_copy_text);
         }
-        if row_index + 1 < rows.len() {
+        if row_index == 0 && rows.len() > 1 {
             push_table_border(out, prefix, &widths, "├", "┼", "┤", border_style);
         }
     }

@@ -126,7 +126,7 @@ watch(
             <p v-if="detail.operation_history" class="mb-2 text-xs text-muted-foreground">
               {{ t('chat.sessionWork.operationHistory') }}
             </p>
-            <div v-for="op in detail.operations" :key="op.part_id" class="mb-3 min-w-0">
+            <div v-for="op in detail.operations" :key="op.part_id" class="mb-1.5 min-w-0">
               <p class="text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 #{{ op.part_id }} · {{ op.tool }} · {{ op.kind
                 }}<span v-if="op.from_path"> · {{ op.from_path }} → {{ selected.path }}</span>

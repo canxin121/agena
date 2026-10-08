@@ -394,12 +394,9 @@ pub(crate) fn push_markdown_document(
         if should_suppress_markdown_block(blocks.as_slice(), index) {
             continue;
         }
-        if block.leading_blank_line && !out.is_empty() {
-            out.push(
-                RenderedLine::plain(prefix.to_owned(), Style::default())
-                    .with_copy_projection(String::new(), UnicodeWidthStr::width(prefix)),
-            );
-        }
+        // Paragraph boundaries remain in the parsed/copy model. A terminal
+        // row is a full line of space, so do not add layout-only blank rows
+        // between blocks; literal blank lines inside code/output still render.
         render_markdown_block(out, prefix, block, width);
     }
 }

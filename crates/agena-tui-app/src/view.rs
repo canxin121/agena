@@ -10,11 +10,11 @@ use agena_tui_components::{
     composer_corner_placement_left, composer_corner_placement_right,
     composer_status_placement_left, format_fixed_columns, format_key_value_segment, inset_rect,
     join_inline_segments, layout_composer_surface, layout_header_body_footer_surface,
-    pane_header_height, panel_highlight_style, render_composer_editor_surface,
-    render_confirm_dialog, render_dashboard_workbench_dialog,
-    render_header_body_footer_text_surface, render_help_dialog, render_list_workbench_dialog,
-    render_overlay_line_input_dialog, render_sectioned_workbench_dialog, render_wrapped_text,
-    split_vertical_sections, truncate_display_text, workbench_navigation_width,
+    panel_highlight_style, render_composer_editor_surface, render_confirm_dialog,
+    render_dashboard_workbench_dialog, render_header_body_footer_text_surface, render_help_dialog,
+    render_list_workbench_dialog, render_overlay_line_input_dialog,
+    render_sectioned_workbench_dialog, render_wrapped_text, split_vertical_sections,
+    truncate_display_text, workbench_navigation_width,
 };
 use ratatui::{
     style::{Modifier, Style},

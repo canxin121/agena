@@ -2591,8 +2591,8 @@ mod transcript_character_cursor_tests {
         assert_eq!(block_ranges[second.0], Some(first.1..first.1 + 1));
         assert_eq!(
             transcript.selected_text(80),
-            Some("a\n\nq".to_string()),
-            "Ctrl+V copies the selected terminal-cell rectangle without card chrome"
+            Some("a\nq".to_string()),
+            "Ctrl+V copies the compact visible rectangle without layout-only blank rows or card chrome"
         );
     }
 

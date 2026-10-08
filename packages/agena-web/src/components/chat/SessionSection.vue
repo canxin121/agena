@@ -8,14 +8,15 @@ defineEmits<{ (event: 'update:expanded', value: boolean): void }>()
 <template>
   <section
     class="w-full min-w-0 rounded-lg border border-border/60 bg-secondary/10"
-    :class="docked ? 'my-0 flex min-h-0 flex-col overflow-hidden' : 'my-3'"
+    :class="docked ? 'my-0 flex min-h-0 flex-col overflow-hidden' : 'my-1.5'"
     :aria-label="title"
     data-transcript-chrome="true"
+    data-session-section
   >
-    <header class="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2 px-2">
+    <header class="flex min-h-7 shrink-0 flex-wrap items-center gap-x-2 px-2">
       <button
         type="button"
-        class="flex min-h-9 shrink-0 items-center gap-2 rounded px-1 text-left text-xs hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="flex min-h-7 shrink-0 items-center gap-2 rounded px-1 text-left text-xs hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         :aria-expanded="expanded"
         @click="$emit('update:expanded', !expanded)"
       >
@@ -30,7 +31,7 @@ defineEmits<{ (event: 'update:expanded', value: boolean): void }>()
     </header>
     <div
       v-if="expanded"
-      class="min-w-0 border-t border-border/50 px-3 py-3"
+      class="min-w-0 border-t border-border/50 px-3 py-1.5"
       :class="docked ? 'flex min-h-0 flex-col' : ''"
     >
       <slot />

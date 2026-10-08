@@ -59,9 +59,9 @@ export function useChatComposerLayout(opts: {
   }
 
   const STORAGE_COMPOSER_USER_HEIGHT = localStorageKeys.chat.composerUserHeight
-  const DEFAULT_COMPOSER_HEIGHT = 240
-  const DEFAULT_MOBILE_COMPOSER_HEIGHT = 160
-  const MIN_DESKTOP_COMPOSER_HEIGHT = 190
+  const DEFAULT_COMPOSER_HEIGHT = 128
+  const DEFAULT_MOBILE_COMPOSER_HEIGHT = 128
+  const MIN_DESKTOP_COMPOSER_HEIGHT = 112
   const MIN_DESKTOP_TRANSCRIPT_HEIGHT = 160
 
   // Height state

@@ -433,6 +433,20 @@ pub struct ReadToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+/// Read immutable media bytes into the current conversation model's context.
+pub struct ReadMediaInput {
+    /// Local image, PDF, audio, video or UTF-8 file. Relative paths resolve
+    /// against the active workspace, like the other filesystem tools.
+    #[arg(trim, non_empty)]
+    pub path: String,
+    /// Optional revision guard from fs.stat or a previous read_media result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub expected_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
     max_items("exclude", 32),
     min_chars("exclude[]", 1),

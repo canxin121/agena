@@ -1070,15 +1070,16 @@ fn runs_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
                         CompletionInputPart::ToolResult {
                             tool_call_id,
                             output_json,
+                            attachments,
                             ..
                         } => {
-                            if output_json.is_empty() {
+                            if output_json.is_empty() && attachments.is_empty() {
                                 continue;
                             }
                             tool_results.push(TranscriptFragment::ToolResult {
                                 call_id: ToolCallId::from(SmolStr::from(tool_call_id.as_str())),
                                 output: TranscriptToolOutput::Text {
-                                    text: output_json.clone(),
+                                    text: tool_result_transcript_text(output_json, attachments),
                                 },
                             });
                         }
@@ -1106,16 +1107,17 @@ fn runs_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
                     if let CompletionInputPart::ToolResult {
                         tool_call_id,
                         output_json,
+                        attachments,
                         ..
                     } = part
                     {
-                        if output_json.is_empty() {
+                        if output_json.is_empty() && attachments.is_empty() {
                             continue;
                         }
                         transcript.push(TranscriptFragment::ToolResult {
                             call_id: ToolCallId::from(SmolStr::from(tool_call_id.as_str())),
                             output: TranscriptToolOutput::Text {
-                                text: output_json.clone(),
+                                text: tool_result_transcript_text(output_json, attachments),
                             },
                         });
                     }
@@ -1180,7 +1182,9 @@ fn attachment_to_transcript_block(item: &CompletionInputAttachment) -> Transcrip
     // a round-trip through the provider participate.
     let source_marker = match &item.source {
         CompletionInputAttachmentSource::Url { url } => format!("url:{}", url.trim()),
-        CompletionInputAttachmentSource::DataUrl { url } => format!("data_url:{}", url.trim()),
+        CompletionInputAttachmentSource::DataUrl { url } => {
+            format!("data_url:{}", digest_bytes(url.trim().as_bytes()))
+        }
         CompletionInputAttachmentSource::Base64 { data } => {
             format!("base64:{}", digest_bytes(data.trim().as_bytes()))
         }
@@ -1212,6 +1216,18 @@ fn attachment_to_transcript_block(item: &CompletionInputAttachment) -> Transcrip
         )),
         media_type: Some(SmolStr::from(item.mime.trim())),
     }
+}
+
+fn tool_result_transcript_text(output: &str, attachments: &[CompletionInputAttachment]) -> String {
+    if attachments.is_empty() {
+        return output.to_owned();
+    }
+    let identity = attachments
+        .iter()
+        .map(attachment_to_transcript_block)
+        .collect::<Vec<_>>();
+    let identity = serde_json::to_string(&identity).expect("attachment identity is serializable");
+    format!("{output}\n<agena_tool_media_identity>{identity}</agena_tool_media_identity>")
 }
 
 pub(crate) fn approximate_request_overhead_chars(
@@ -1487,13 +1503,12 @@ pub(crate) async fn render_tool_results_for_model(
         }
     }
     let mut seen_counts = std::collections::HashMap::<String, usize>::new();
-    let original_turns = std::mem::take(turns);
-    for mut turn in original_turns {
-        let mut attachment_parts = Vec::new();
+    for turn in turns.iter_mut() {
         for part in &mut turn.parts {
             let CompletionInputPart::ToolResult {
                 tool_call_id,
                 output_json,
+                attachments,
                 ..
             } = part
             else {
@@ -1531,27 +1546,11 @@ pub(crate) async fn render_tool_results_for_model(
                 );
             }
 
-            if !output.attachments.is_empty() {
-                attachment_parts.push(CompletionInputPart::Text {
-                    text: format!(
-                        "<agena_tool_attachment_result tool_call_id={:?}>The immediately preceding tool result returned the following attachment content. Treat it as bytes read by that tool call.</agena_tool_attachment_result>",
-                        tool_call_id
-                    ),
-                });
-                attachment_parts.extend(output.attachments.iter().map(|item| {
-                    CompletionInputPart::Attachment {
-                        attachment: completion_input_attachment_from_raw_output(item),
-                    }
-                }));
-            }
-        }
-        turns.push(turn);
-        if !attachment_parts.is_empty() {
-            turns.push(CompletionInputRun {
-                role: Role::User,
-                parts: attachment_parts,
-                provider_state: Default::default(),
-            });
+            *attachments = output
+                .attachments
+                .iter()
+                .map(completion_input_attachment_from_raw_output)
+                .collect();
         }
     }
 }
@@ -1795,6 +1794,7 @@ mod tool_result_render_tests {
         let mut turns = vec![CompletionInputRun {
             role: Role::Tool,
             parts: vec![CompletionInputPart::ToolResult {
+                attachments: Vec::new(),
                 tool_call_id: "provider-call-17".to_owned(),
                 function: ModelToolFunction::new("test.prompt_renderer.render"),
                 arguments_json: "{}".to_owned(),
@@ -1811,29 +1811,22 @@ mod tool_result_render_tests {
         )
         .await;
 
-        let CompletionInputPart::ToolResult { output_json, .. } = &turns[0].parts[0] else {
+        let CompletionInputPart::ToolResult {
+            output_json,
+            attachments,
+            ..
+        } = &turns[0].parts[0]
+        else {
             panic!("tool result projection");
         };
         assert_eq!(output_json, "plugin-only model projection");
-        assert_eq!(turns.len(), 2);
-        assert_eq!(turns[1].role, Role::User);
-        assert!(matches!(
-            &turns[1].parts[0],
-            CompletionInputPart::Text { text }
-                if text.contains("agena_tool_attachment_result")
-                    && text.contains("provider-call-17")
-        ));
-        assert!(matches!(
-            &turns[1].parts[1],
-            CompletionInputPart::Attachment { attachment }
-                if attachment.kind == CompletionInputAttachmentKind::Image
-                    && attachment.mime == "image/png"
-                    && matches!(
-                        &attachment.source,
-                        CompletionInputAttachmentSource::Base64 { data }
-                            if data == "aW1hZ2UtYnl0ZXM="
-                    )
-        ));
+        assert_eq!(turns.len(), 1);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].kind, CompletionInputAttachmentKind::Image);
+        assert_eq!(attachments[0].mime, "image/png");
+        assert!(matches!(&attachments[0].source,
+            CompletionInputAttachmentSource::Base64 { data }
+                if data == "aW1hZ2UtYnl0ZXM="));
         assert_eq!(durable.content, content);
         assert!(durable.summary.is_none());
     }
@@ -1842,22 +1835,28 @@ mod tool_result_render_tests {
     async fn repeated_provider_call_ids_keep_each_historical_result() {
         let invocation =
             ToolInvocation::new("test.prompt_renderer.render", StructuredObject::default());
-        let mut first = OperationPart::completed(
-            17,
-            invocation.clone(),
-            RawOutput::text("durable raw output"),
-            TimeRange::default(),
+        let mut first_output = RawOutput::text("durable raw output");
+        first_output.attachments.push(
+            serde_json::from_value(serde_json::json!({
+                "kind":"image", "mime":"image/png", "source":{"source":"base64", "data":"Zmlyc3Q="}
+            }))
+            .unwrap(),
         );
+        let mut first =
+            OperationPart::completed(17, invocation.clone(), first_output, TimeRange::default());
         first.metadata.insert(
             OPERATION_ID_METADATA_KEY.to_owned(),
             serde_json::Value::String("reused-call-id".to_owned()),
         );
-        let mut second = OperationPart::completed(
-            29,
-            invocation,
-            RawOutput::text("second durable output"),
-            TimeRange::default(),
+        let mut second_output = RawOutput::text("second durable output");
+        second_output.attachments.push(
+            serde_json::from_value(serde_json::json!({
+                "kind":"image", "mime":"image/png", "source":{"source":"base64", "data":"c2Vjb25k"}
+            }))
+            .unwrap(),
         );
+        let mut second =
+            OperationPart::completed(29, invocation, second_output, TimeRange::default());
         second.metadata.insert(
             OPERATION_ID_METADATA_KEY.to_owned(),
             serde_json::Value::String("reused-call-id".to_owned()),
@@ -1885,6 +1884,7 @@ mod tool_result_render_tests {
         let tool_result = || CompletionInputRun {
             role: Role::Tool,
             parts: vec![CompletionInputPart::ToolResult {
+                attachments: Vec::new(),
                 tool_call_id: "reused-call-id".to_owned(),
                 function: ModelToolFunction::new("test.prompt_renderer.render"),
                 arguments_json: "{}".to_owned(),
@@ -1896,6 +1896,14 @@ mod tool_result_render_tests {
         let executor = executor().await;
         let mut full_replay = vec![tool_result(), tool_result()];
         render_tool_results_for_model(&mut full_replay, &durable, &executor).await;
+        for (run, data) in full_replay.iter().zip(["Zmlyc3Q=", "c2Vjb25k"]) {
+            let CompletionInputPart::ToolResult { attachments, .. } = &run.parts[0] else {
+                panic!("result")
+            };
+            assert!(
+                matches!(&attachments[0].source, CompletionInputAttachmentSource::Base64 { data:actual } if actual == data)
+            );
+        }
         assert!(matches!(
             &full_replay[0].parts[0],
             CompletionInputPart::ToolResult { output_json, .. }
@@ -1909,6 +1917,13 @@ mod tool_result_render_tests {
 
         let mut continuation_delta = vec![tool_result()];
         render_tool_results_for_model(&mut continuation_delta, &durable, &executor).await;
+        let CompletionInputPart::ToolResult { attachments, .. } = &continuation_delta[0].parts[0]
+        else {
+            panic!("result")
+        };
+        assert!(
+            matches!(&attachments[0].source, CompletionInputAttachmentSource::Base64 { data } if data == "c2Vjb25k")
+        );
         assert!(matches!(
             &continuation_delta[0].parts[0],
             CompletionInputPart::ToolResult { output_json, .. }
@@ -2003,6 +2018,7 @@ mod tool_result_render_tests {
         let mut turns = vec![CompletionInputRun {
             role: Role::Tool,
             parts: vec![CompletionInputPart::ToolResult {
+                attachments: Vec::new(),
                 tool_call_id: "reused-call-id".to_owned(),
                 function: ModelToolFunction::new("test.prompt_renderer.render"),
                 arguments_json: "{}".to_owned(),
@@ -2028,6 +2044,7 @@ mod tool_result_render_tests {
             arguments_json: "{}".to_owned(),
         };
         let result = || CompletionInputPart::ToolResult {
+            attachments: Vec::new(),
             tool_call_id: "reused".to_owned(),
             function: ModelToolFunction::new("tools_help"),
             arguments_json: "{}".to_owned(),
@@ -2301,7 +2318,13 @@ fn approximate_run_payload_chars(run: &CompletionInputRun) -> usize {
                 .saturating_add(function.function_name().len())
                 .saturating_add(arguments_json.len())
                 .saturating_add(16),
-            CompletionInputPart::ToolResult { output_json, .. } => output_json.len(),
+            CompletionInputPart::ToolResult {
+                output_json,
+                attachments,
+                ..
+            } => output_json
+                .len()
+                .saturating_add(attachments.len().saturating_mul(64)),
         })
         .sum()
 }
@@ -3257,6 +3280,47 @@ mod compaction_tests {
 #[cfg(test)]
 mod media_identity_tests {
     use super::*;
+
+    #[test]
+    fn tool_media_changes_prompt_digest_without_copying_binary_into_identity() {
+        for role in [Role::Assistant, Role::Tool] {
+            let run = |data: &str, route: &str| {
+                CompletionInputRun {
+                role,
+                parts: vec![serde_json::from_value(serde_json::json!({
+                    "type":"tool_result", "tool_call_id":"media_call", "function":"tools_call", "output_json":"same text result",
+                    "attachments":[{"kind":"image", "mime":"image/png", "source":{"type":"provider_data", "route":route, "data":data}}]
+                })).unwrap()], provider_state:Default::default(),
+            }
+            };
+            let first = vec![WindowItem {
+                id: Some(1),
+                run: run("PRIVATE_FIRST_BYTES", "route-1"),
+            }];
+            let second = vec![WindowItem {
+                id: Some(1),
+                run: run("PRIVATE_SECOND_BYTES", "route-1"),
+            }];
+            let other_route = vec![WindowItem {
+                id: Some(1),
+                run: run("PRIVATE_FIRST_BYTES", "route-2"),
+            }];
+            let transcript = runs_to_provider_transcript(&first);
+            assert_ne!(
+                transcript.digest_hex(),
+                runs_to_provider_transcript(&second).digest_hex()
+            );
+            assert_ne!(
+                transcript.digest_hex(),
+                runs_to_provider_transcript(&other_route).digest_hex()
+            );
+            assert!(
+                !serde_json::to_string(&transcript)
+                    .unwrap()
+                    .contains("PRIVATE_FIRST_BYTES")
+            );
+        }
+    }
     #[test]
     fn prompt_identity_contains_digest_not_inline_image_content() {
         let item = agena_provider::CompletionInputAttachment {

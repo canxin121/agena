@@ -147,6 +147,16 @@ impl ModelRuntime for CatalogedModelsProvider {
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
     }
 
+    fn validate_media_inputs_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+        attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        self.target
+            .validate_media_inputs_for_adapter(adapter_id, model, attachments)
+    }
+
     fn validate_provider_native_tools_request(
         &self,
         adapter_id: Option<&AdapterId>,

@@ -309,14 +309,17 @@ impl OpenAiTransport {
                 .unwrap_or_else(|| OpenAiInputContent::InputText {
                     text: wire_message::hint_text(item),
                 }),
-            AttachmentKind::Audio
-            | AttachmentKind::Video
-            | AttachmentKind::Pdf
-            | AttachmentKind::File => Self::responses_file_content(item).unwrap_or_else(|| {
-                OpenAiInputContent::InputText {
+            AttachmentKind::Audio | AttachmentKind::Video => OpenAiInputContent::InputText {
+                text: format!(
+                    "Unsupported native {} input for Responses: {}",
+                    item.kind,
+                    item.summary_label()
+                ),
+            },
+            AttachmentKind::Pdf | AttachmentKind::File => Self::responses_file_content(item)
+                .unwrap_or_else(|| OpenAiInputContent::InputText {
                     text: wire_message::hint_text(item),
-                }
-            }),
+                }),
         }
     }
 
@@ -551,6 +554,7 @@ impl OpenAiTransport {
                             wire_message::WirePart::ToolResult {
                                 tool_call_id,
                                 output_json,
+                                attachments,
                                 ..
                             } => {
                                 if let Some(output) = pending_output.take() {
@@ -562,7 +566,14 @@ impl OpenAiTransport {
                                 if let Some(call_id) =
                                     responses_input_call_id(tool_call_id.as_ref())
                                 {
-                                    pending_output = Some((call_id, output_json, Vec::new()));
+                                    pending_output = Some((
+                                        call_id,
+                                        output_json,
+                                        attachments
+                                            .into_iter()
+                                            .map(|item| wire_message::WirePart::Attachment { item })
+                                            .collect(),
+                                    ));
                                 }
                             }
                         }
@@ -591,6 +602,7 @@ impl OpenAiTransport {
                     if let wire_message::WirePart::ToolResult {
                         tool_call_id,
                         output_json,
+                        attachments,
                         ..
                     } = part
                         && let Some(call_id) = responses_input_call_id(tool_call_id.as_ref())
@@ -601,7 +613,10 @@ impl OpenAiTransport {
                                 call_id,
                                 output: Self::multimodal_function_output_value(
                                     output_json.as_str(),
-                                    &[],
+                                    &attachments
+                                        .into_iter()
+                                        .map(|item| wire_message::WirePart::Attachment { item })
+                                        .collect::<Vec<_>>(),
                                 ),
                                 copilot_cache_control: None,
                             },
@@ -1082,6 +1097,171 @@ mod tool_api_history_tests {
     }
 
     #[test]
+    fn media_tool_results_use_native_image_and_file_blocks_in_both_replay_roles() {
+        use crate::provider::media_test_support::{attachment, request};
+        use agena_domain::Role;
+        let request = request(
+            "gpt-5",
+            vec![
+                attachment("image", "image/png", "aW1hZ2U="),
+                attachment("pdf", "application/pdf", "JVBERi0xLjc="),
+            ],
+        );
+        for role in [Role::Assistant, Role::Tool] {
+            let mut request = request.clone();
+            if role == Role::Tool {
+                let result = request.turns[0].parts.pop().unwrap();
+                request.turns.push(agena_provider::CompletionInputRun {
+                    role,
+                    parts: vec![result],
+                    provider_state: Default::default(),
+                });
+            }
+            let value = serde_json::to_value(
+                OpenAiTransport::to_responses_input_with_system(&request, false).unwrap(),
+            )
+            .unwrap();
+            let result = value
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["type"] == "function_call_output")
+                .unwrap();
+            assert_eq!(result["call_id"], "call_media");
+            assert_eq!(result["output"][0]["type"], "input_text");
+            assert_eq!(
+                result["output"][1]["image_url"],
+                "data:image/png;base64,aW1hZ2U="
+            );
+            assert_eq!(
+                result["output"][2]["file_data"],
+                "data:application/pdf;base64,JVBERi0xLjc="
+            );
+            assert_eq!(result["output"][2]["type"], "input_file");
+        }
+    }
+
+    #[test]
+    fn chat_tool_media_uses_user_parts_and_native_audio_fields() {
+        use crate::provider::chat_wire;
+        use crate::provider::media_test_support::{attachment, request};
+        let request = request(
+            "gpt-audio",
+            vec![
+                attachment("image", "image/png", "aW1hZ2U="),
+                attachment("audio", "audio/wav", "UklGRldBVkU="),
+                attachment("pdf", "application/pdf", "JVBERi0xLjc="),
+            ],
+        );
+        let value = serde_json::to_value(
+            chat_wire::request_to_chat_messages_with_assistant_reasoning_field(&request, None),
+        )
+        .unwrap();
+        assert_eq!(value[1]["role"], "tool");
+        assert!(value[1]["content"].is_string());
+        assert_eq!(value[2]["role"], "user");
+        assert_eq!(value[2]["content"][1]["type"], "image_url");
+        assert_eq!(value[2]["content"][2]["input_audio"]["format"], "wav");
+        assert_eq!(
+            value[2]["content"][2]["input_audio"]["data"],
+            "UklGRldBVkU="
+        );
+        assert_eq!(value[2]["content"][3]["type"], "file");
+    }
+
+    #[test]
+    fn chat_media_follows_parallel_results_and_keeps_reused_ids_in_replay_order() {
+        use crate::provider::{
+            chat_wire,
+            media_test_support::{attachment, request},
+        };
+        use agena_domain::Role;
+        use agena_provider::{CompletionInputPart, CompletionInputRun};
+        for separate_tool_runs in [false, true] {
+            let mut request = request("gpt-5", vec![attachment("image", "image/png", "Zmlyc3Q=")]);
+            let call = request.turns[0].parts[0].clone();
+            let result = request.turns[0].parts[1].clone();
+            let mut other_call = call.clone();
+            if let CompletionInputPart::ToolCall { id, .. } = &mut other_call {
+                *id = "parallel_call".into();
+            }
+            let mut other_result = result.clone();
+            if let CompletionInputPart::ToolResult {
+                tool_call_id,
+                attachments,
+                ..
+            } = &mut other_result
+            {
+                *tool_call_id = "parallel_call".into();
+                attachments.clear();
+            }
+            let mut later_result = result.clone();
+            if let CompletionInputPart::ToolResult { attachments, .. } = &mut later_result {
+                *attachments = vec![attachment("image", "image/png", "c2Vjb25k")];
+            }
+            let later_parts = vec![
+                CompletionInputPart::Text {
+                    text: "first answer".into(),
+                },
+                call.clone(),
+                later_result,
+                CompletionInputPart::Text {
+                    text: "second answer".into(),
+                },
+            ];
+            if separate_tool_runs {
+                request.turns[0].parts = vec![call, other_call];
+                for part in [result, other_result] {
+                    request.turns.push(CompletionInputRun {
+                        role: Role::Tool,
+                        parts: vec![part],
+                        provider_state: Default::default(),
+                    });
+                }
+                request.turns.push(CompletionInputRun {
+                    role: Role::Assistant,
+                    parts: later_parts,
+                    provider_state: Default::default(),
+                });
+            } else {
+                request.turns[0].parts = vec![call, other_call, result, other_result];
+                request.turns[0].parts.extend(later_parts);
+            }
+            let value = serde_json::to_value(
+                chat_wire::request_to_chat_messages_with_assistant_reasoning_field(&request, None),
+            )
+            .unwrap();
+            let roles: Vec<_> = value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|msg| msg["role"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                roles,
+                [
+                    "assistant",
+                    "tool",
+                    "tool",
+                    "user",
+                    "assistant",
+                    "tool",
+                    "user",
+                    "assistant"
+                ]
+            );
+            assert_eq!(
+                value[3]["content"][1]["image_url"]["url"],
+                "data:image/png;base64,Zmlyc3Q="
+            );
+            assert_eq!(
+                value[6]["content"][1]["image_url"]["url"],
+                "data:image/png;base64,c2Vjb25k"
+            );
+        }
+    }
+
+    #[test]
     fn content_only_reasoning_replays_when_the_model_declares_reasoning_content() {
         let invocation = ToolInvocation::new(
             "fs.read",
@@ -1158,6 +1338,7 @@ mod tool_api_history_tests {
                     arguments_json: r#"{"query":"status"}"#.to_owned(),
                 },
                 CompletionInputPart::ToolResult {
+                    attachments: Vec::new(),
                     tool_call_id: "call_1".to_owned(),
                     function: ModelToolFunction::new("tools_search"),
                     arguments_json: r#"{"query":"status"}"#.to_owned(),
@@ -1170,6 +1351,7 @@ mod tool_api_history_tests {
                     arguments_json: r#"{"query":"rename"}"#.to_owned(),
                 },
                 CompletionInputPart::ToolResult {
+                    attachments: Vec::new(),
                     tool_call_id: "call_2".to_owned(),
                     function: ModelToolFunction::new("tools_search"),
                     arguments_json: r#"{"query":"rename"}"#.to_owned(),

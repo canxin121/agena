@@ -283,6 +283,17 @@ pub trait ModelRuntime: Send + Sync {
         );
     }
 
+    /// Validate actual media transport before model/context preparation.
+    /// Catalog capability overrides never bypass a protocol's input contract.
+    fn validate_media_inputs_for_adapter(
+        &self,
+        _adapter_id: Option<&AdapterId>,
+        _model: &ModelId,
+        _attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
     fn validate_provider_native_tools_request(
         &self,
         adapter_id: Option<&AdapterId>,

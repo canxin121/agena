@@ -201,6 +201,17 @@ impl ToolExecutor {
         resolution: &agena_plugin_host::registry::RegisteredTool,
         invocation: &ToolInvocation,
     ) -> Result<(), ToolError> {
+        if resolution.namespace() == "agena"
+            && resolution.plugin_name() == "fs"
+            && resolution.tool_name() == "read_media"
+        {
+            let input = crate::part::ReadMediaInput::parse_input(serde_json::Value::from(
+                invocation.input.clone(),
+            ))
+            .map_err(|error| self.plugin_error_or_cancelled(error))?;
+            self.push_resolved_path_check(checks, AccessKind::Read, &input.path);
+            return Ok(());
+        }
         let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(resolution, invocation)
         else {

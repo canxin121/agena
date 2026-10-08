@@ -1042,6 +1042,7 @@ mod tests {
         let result = CompletionInputRun {
             role: Role::Tool,
             parts: vec![CompletionInputPart::ToolResult {
+                attachments: Vec::new(),
                 tool_call_id: "call-17".to_owned(),
                 function: ModelToolFunction::new("tools_help"),
                 arguments_json: r#"{"tool":"session.model"}"#.to_owned(),

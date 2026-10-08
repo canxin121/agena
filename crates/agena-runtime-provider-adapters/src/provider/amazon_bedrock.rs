@@ -109,6 +109,23 @@ impl ModelRuntime for AmazonBedrockAdapter {
         Some(agena_provider::CapabilityFamily::Bedrock)
     }
 
+    fn validate_media_inputs_for_adapter(
+        &self,
+        _: Option<&agena_domain::AdapterId>,
+        model: &ModelId,
+        attachments: &[AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        use agena_runtime_provider::provider::media_input::{MediaProtocol, validate};
+        validate(
+            if Self::is_native_anthropic_model(model.as_ref()) {
+                MediaProtocol::Anthropic
+            } else {
+                MediaProtocol::OpenAiChat
+            },
+            attachments,
+        )
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::ReplaySafePrefix
     }
@@ -1129,6 +1146,24 @@ mod tests {
             serde_json::json!({ "effort": "max" })
         );
         assert!(value["thinking"].get("effort").is_none());
+    }
+
+    #[test]
+    fn bedrock_media_tool_results_keep_images_and_documents() {
+        use crate::provider::media_test_support::{attachment, request};
+        let request = request(
+            "anthropic.claude-sonnet-4-6",
+            vec![
+                attachment("image", "image/png", "Zml4dHVyZQ=="),
+                attachment("pdf", "application/pdf", "JVBERi0xLjc="),
+            ],
+        );
+        let messages =
+            AmazonBedrockAdapter::anthropic_assistant_messages_from_parts(&request.turns[0]);
+        let value = serde_json::to_value(messages).unwrap();
+        assert_eq!(value[1]["content"][0]["tool_use_id"], "call_media");
+        assert_eq!(value[1]["content"][0]["content"][1]["type"], "image");
+        assert_eq!(value[1]["content"][0]["content"][2]["type"], "document");
     }
 
     #[test]

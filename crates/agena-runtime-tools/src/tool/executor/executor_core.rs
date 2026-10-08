@@ -14,6 +14,7 @@ impl ToolExecutor {
             allowed_tool_names: None,
             model_id: None,
             cloud_tool_adapter_gate: None,
+            media_input_binder: None,
             plugin_scope: None,
             definition_catalog: None,
             monitor_registry: crate::default_monitor_registry(),

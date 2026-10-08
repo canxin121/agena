@@ -1741,6 +1741,10 @@ pub enum CompletionInputPart {
         #[serde(default)]
         status: CompletionInputToolResultStatus,
         output_json: String,
+        /// Actual media returned by this tool, distinct from local references.
+        /// Adapters choose native tool-result blocks or ordinary media input.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<CompletionInputAttachment>,
     },
 }
 

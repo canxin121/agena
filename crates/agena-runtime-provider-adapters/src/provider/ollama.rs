@@ -151,6 +151,23 @@ impl ModelRuntime for OllamaAdapter {
         Some(agena_provider::CapabilityFamily::OpenAiCompatible)
     }
 
+    fn validate_media_inputs_for_adapter(
+        &self,
+        _: Option<&agena_domain::AdapterId>,
+        _: &ModelId,
+        attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        if attachments.iter().any(|item| {
+            !matches!(
+                item.source,
+                agena_domain::AttachmentSource::LocalPath { .. }
+            )
+        }) {
+            return Err(ProviderError::Config("This Ollama adapter currently sends text messages only and cannot deliver media attachments. Use fs.read for text or a configured multimodal adapter; no media content was sent.".into()));
+        }
+        Ok(())
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::ReplaySafePrefix
     }

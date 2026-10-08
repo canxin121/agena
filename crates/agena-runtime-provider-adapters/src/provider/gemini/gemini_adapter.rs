@@ -188,7 +188,66 @@ impl GeminiAdapter {
             }
         }
 
+        Self::apply_tool_result_media(request, &mut contents);
         (system_chunks, contents)
+    }
+
+    fn apply_tool_result_media(request: &CompletionRequest, contents: &mut [GeminiContent]) {
+        let native = request
+            .model
+            .as_ref()
+            .trim_start_matches("models/")
+            .starts_with("gemini-3");
+        let mut results = request
+            .turns
+            .iter()
+            .filter(|run| matches!(run.role, Role::Assistant | Role::Tool))
+            .flat_map(wire_message::project)
+            .filter_map(|part| match part {
+                wire_message::WirePart::ToolResult {
+                    tool_call_id,
+                    attachments,
+                    ..
+                } => Some((tool_call_id, attachments)),
+                _ => None,
+            });
+        for content in contents {
+            let mut media = Vec::new();
+            for part in &mut content.parts {
+                let Some(response) = part.function_response.as_mut() else {
+                    continue;
+                };
+                let Some((id, attachments)) = results.next() else {
+                    break;
+                };
+                debug_assert_eq!(response.id.as_deref(), Some(id.as_str()));
+                for item in attachments {
+                    if native
+                        && matches!(
+                            item.mime.as_str(),
+                            "image/png"
+                                | "image/jpeg"
+                                | "image/webp"
+                                | "application/pdf"
+                                | "text/plain"
+                        )
+                        && let Some((mime_type, data)) = wire_message::base64_with_mime(&item)
+                    {
+                        response
+                            .parts
+                            .push(agena_provider::GeminiFunctionResponsePart {
+                                inline_data: agena_provider::GeminiInlineData { mime_type, data },
+                            });
+                    } else {
+                        media.push(GeminiPart::text(format!("Media read by tool call {id}: {}. Analyze the following file contents.", item.summary_label())));
+                        media.push(Self::attachment_part(&item));
+                    }
+                }
+            }
+            // Ordinary media follows all function responses in this user turn.
+            // Audio/video and pre-Gemini-3 models use this compatibility path.
+            content.parts.extend(media);
+        }
     }
 
     pub(super) fn push_content(contents: &mut Vec<GeminiContent>, mut content: GeminiContent) {

@@ -127,6 +127,16 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         Some(self.capability_family)
     }
 
+    fn validate_media_inputs_for_adapter(
+        &self,
+        _adapter_id: Option<&agena_domain::AdapterId>,
+        _model: &ModelId,
+        attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        use agena_runtime_provider::provider::media_input::{self, MediaProtocol};
+        media_input::validate(MediaProtocol::OpenAiResponses, attachments)
+    }
+
     fn validate_provider_native_tools_request(
         &self,
         _adapter_id: Option<&agena_domain::AdapterId>,
@@ -925,6 +935,16 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
 
     fn capability_family(&self) -> Option<CapabilityFamily> {
         Some(self.capability_family)
+    }
+
+    fn validate_media_inputs_for_adapter(
+        &self,
+        _adapter_id: Option<&agena_domain::AdapterId>,
+        _model: &ModelId,
+        attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        use agena_runtime_provider::provider::media_input::{self, MediaProtocol};
+        media_input::validate(MediaProtocol::OpenAiChat, attachments)
     }
 
     fn validate_provider_native_tools_request(

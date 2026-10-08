@@ -622,6 +622,9 @@ pub struct ToolExecutor {
     pub(super) model_id: Option<String>,
     /// AI-call execution guard only. Never used to filter tool discovery.
     pub(super) cloud_tool_adapter_gate: Option<CloudToolAdapterGate>,
+    /// Trusted session-owned validation and destination binding for media
+    /// returned to the current model. This never comes from tool arguments.
+    pub(super) media_input_binder: Option<Arc<MediaInputBinder>>,
     /// Opaque plugin capability scope selected from the runtime-only session
     /// carrier. All catalog/permission/execution lookups for this executor use
     /// this exact scope snapshot.
@@ -640,6 +643,10 @@ pub struct ToolExecutor {
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
 }
+
+pub type MediaInputBinder = dyn Fn(agena_domain::AttachmentItem) -> Result<agena_domain::AttachmentItem, ToolError>
+    + Send
+    + Sync;
 
 /// Runtime-owned extension point for adding execution-time permission checks
 /// from trusted state that cannot live in model tool input. Inspectors only

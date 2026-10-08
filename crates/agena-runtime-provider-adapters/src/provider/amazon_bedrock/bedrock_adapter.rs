@@ -578,10 +578,12 @@ impl AmazonBedrockAdapter {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
+                    attachments,
                     ..
-                } => blocks.push(BedrockAnthropicTextBlock::tool_result(
+                } => blocks.push(Self::anthropic_media_tool_result(
                     tool_call_id.clone(),
                     output_json.clone(),
+                    attachments,
                 )),
             }
         }
@@ -615,6 +617,7 @@ impl AmazonBedrockAdapter {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
+                    attachments,
                     ..
                 } if !tool_call_id.trim().is_empty() => {
                     Self::flush_anthropic_assistant_blocks(run, &mut messages, &mut buffered);
@@ -622,9 +625,10 @@ impl AmazonBedrockAdapter {
                         &mut messages,
                         BedrockAnthropicMessage {
                             role: "user".to_owned(),
-                            content: vec![BedrockAnthropicTextBlock::tool_result(
+                            content: vec![Self::anthropic_media_tool_result(
                                 tool_call_id.clone(),
                                 output_json.clone(),
+                                attachments,
                             )],
                         },
                     );
@@ -645,19 +649,21 @@ impl AmazonBedrockAdapter {
     pub(super) fn anthropic_tool_messages_from_parts(
         run: &agena_provider::CompletionInputRun,
     ) -> Vec<BedrockAnthropicMessage> {
-        let content = wire_message::project(run)
-            .into_iter()
-            .filter_map(|part| match part {
-                wire_message::WirePart::ToolResult {
-                    tool_call_id,
-                    output_json,
-                    ..
-                } if !tool_call_id.trim().is_empty() => Some(
-                    BedrockAnthropicTextBlock::tool_result(tool_call_id, output_json),
-                ),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let content =
+            wire_message::project(run)
+                .into_iter()
+                .filter_map(|part| match part {
+                    wire_message::WirePart::ToolResult {
+                        tool_call_id,
+                        output_json,
+                        attachments,
+                        ..
+                    } if !tool_call_id.trim().is_empty() => Some(
+                        Self::anthropic_media_tool_result(tool_call_id, output_json, &attachments),
+                    ),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
         (!content.is_empty())
             .then(|| BedrockAnthropicMessage {
                 role: "user".to_owned(),
@@ -757,6 +763,26 @@ impl AmazonBedrockAdapter {
             _ => None,
         })
         .collect()
+    }
+
+    fn anthropic_media_tool_result(
+        call_id: impl Into<String>,
+        output: impl Into<String>,
+        attachments: &[AttachmentItem],
+    ) -> BedrockAnthropicTextBlock {
+        let output = output.into();
+        let mut result = BedrockAnthropicTextBlock::tool_result(call_id, &output);
+        if !attachments.is_empty() {
+            let mut blocks = vec![BedrockAnthropicTextBlock::text(output)];
+            blocks.extend(
+                attachments
+                    .iter()
+                    .flat_map(Self::anthropic_attachment_blocks),
+            );
+            result.content =
+                Some(serde_json::to_value(blocks).expect("media blocks are serializable"));
+        }
+        result
     }
 
     pub(super) fn anthropic_binary_source(

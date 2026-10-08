@@ -929,6 +929,10 @@ impl SessionManager {
                     execution_state.as_ref(),
                     &execution_tool.session_runtime.execution.selection,
                 ))
+                .with_media_input_binder(Self::media_input_binder(
+                    execution_state.as_ref(),
+                    &execution_tool.session_runtime.execution.selection,
+                ))
                 .with_cancellation_token(Some(cancellation));
             let mut latest = manager.load_session_with_workspace_root(session_id).await?;
             manager

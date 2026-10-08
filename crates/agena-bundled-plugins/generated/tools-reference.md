@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 143 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 144 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
@@ -20,7 +20,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
 - [`agena.content`](#agenacontent) — Read canonical resource-backed text and tool output with resumable byte-bounded pages. (1 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
-- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (9 tools)
+- [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (12 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
@@ -2856,7 +2856,7 @@ Cron-style and one-shot wakeup scheduling tools.
 
 ## agena.fs
 
-**Version** `0.1.0` · **Tools** 9
+**Version** `0.1.0` · **Tools** 10
 
 Filesystem command tools for read/search and explicit edits.
 
@@ -3280,7 +3280,7 @@ Filesystem command tools for read/search and explicit edits.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use read for text previews and directory listings. offset/limit page 1-based lines or entries. For very long single lines, use byte_offset (zero-based) and byte_limit (4–16384, default 8192) to seek directly to a small UTF-8 text range; continue with read_info.next_byte_offset. Byte ranges cannot combine with line offsets/limits, directories or attachment mode. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents.
+> Use read for text previews and directory listings. offset/limit page 1-based lines or entries. For very long single lines, use byte_offset (zero-based) and byte_limit (4–16384, default 8192) to seek directly to a small UTF-8 text range; continue with read_info.next_byte_offset. Byte ranges cannot combine with line offsets/limits, directories or attachment mode. Binary files return local references, not model-visible bytes. Call fs.read_media to see a local image, PDF, audio or video with the current conversation model; use fs.document when you only need extracted PDF/Office text.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -3409,6 +3409,52 @@ Filesystem command tools for read/search and explicit edits.
   },
   "required": [
     "paths"
+  ],
+  "type": "object"
+}
+```
+
+### read_media
+
+`agena.fs.read_media` · **Summary**: Read a local image, PDF, audio or video into the current model's context.
+
+**Tags**: `query` `filesystem` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Call fs.read_media whenever you need to see an image/screenshot, inspect PDF page visuals, listen to audio, or inspect a video stored locally. This returns actual immutable file bytes to the current conversation model, like a user attachment; no separate cloud-analysis provider or credential configuration is needed. Use tools_help for the live schema, then tools_call with tool=fs.read_media and input={path:...}; paths resolve from the active workspace. Image and PDF support depends on the current model. Audio requires a supported OpenAI Chat audio model or Gemini; video requires Gemini. Unsupported protocols, models, MIME types or sizes return an explicit error; a filename/reference is not media understanding. Supported preparation includes PNG/JPEG/GIF/WebP, PDF, common audio/video and UTF-8 text; maximum 20 MiB/file, with lower encoded-request limits on some protocols. expected_sha256 optionally guards the revision. Use fs.read for ordinary text, fs.document for extracted PDF/Office text; do not repeatedly read binary data with fs.read expecting to see it.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_sha256` | `string / null` | — | — | Optional revision guard from fs.stat or a previous read_media result. |
+| `path` | `string` | ✓ | — | Local image, PDF, audio, video or UTF-8 file. Relative paths resolve<br>against the active workspace, like the other filesystem tools. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "description": "Read immutable media bytes into the current conversation model's context.",
+  "properties": {
+    "expected_sha256": {
+      "description": "Optional revision guard from fs.stat or a previous read_media result.",
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "path": {
+      "description": "Local image, PDF, audio, video or UTF-8 file. Relative paths resolve\nagainst the active workspace, like the other filesystem tools.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "path"
   ],
   "type": "object"
 }

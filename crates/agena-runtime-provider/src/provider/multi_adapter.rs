@@ -463,6 +463,17 @@ impl ModelRuntime for MultiAdapterProvider {
         .flatten()
     }
 
+    fn validate_media_inputs_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+        attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        let (_, target_model, _, _, _, adapter) =
+            self.resolve_route_and_adapter(adapter_id, model)?;
+        adapter.validate_media_inputs_for_adapter(None, &target_model, attachments)
+    }
+
     fn validate_provider_native_tools_request(
         &self,
         adapter_id: Option<&AdapterId>,

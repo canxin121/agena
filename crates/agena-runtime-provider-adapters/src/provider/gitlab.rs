@@ -606,6 +606,24 @@ impl ModelRuntime for GitlabProvider {
         Some(agena_provider::CapabilityFamily::Gitlab)
     }
 
+    fn validate_media_inputs_for_adapter(
+        &self,
+        _: Option<&agena_domain::AdapterId>,
+        model: &ModelId,
+        attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        use agena_runtime_provider::provider::media_input::{MediaProtocol, validate};
+        let model = Self::mapped_model(model.as_ref());
+        let protocol = if !Self::use_openai_backend(&model) {
+            MediaProtocol::Anthropic
+        } else if Self::use_responses_api(&model) {
+            MediaProtocol::OpenAiResponses
+        } else {
+            MediaProtocol::OpenAiChat
+        };
+        validate(protocol, attachments)
+    }
+
     fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
         let _ = model;
         false

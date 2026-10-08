@@ -77,6 +77,11 @@ fn sample_payload(tool: &str) -> Value {
             "loaded_paths": ["src/main.rs"],
             "truncated": false
         }),
+        "fs.read_media" => json!({
+            "read_info": {"path":"screenshot.png", "kind":"image", "mime":"image/png", "size_bytes":128, "sha256":"abc123", "width":1, "height":1, "delivery":"model_input"},
+            "attachment":{"path":"screenshot.png", "kind":"image", "mime":"image/png", "size_bytes":128, "filename":"screenshot.png", "width":1, "height":1},
+            "loaded_paths":["screenshot.png"], "preview":null, "truncated":false
+        }),
         "fs.document" => {
             json!({"path":"report.pdf","backend":"markitdown","total_lines":10,"matching_lines":1,"truncated":false,"lines":[{"line":2,"text":"Fixture needle","text_truncated":false}]})
         }
@@ -434,6 +439,7 @@ fn sample_input(tool: &str) -> Value {
     match tool {
         "content.read" => json!({"resource_id":"00000000-0000-0000-0000-000000000002"}),
         "fs.read" => json!({"file_path": "src/main.rs"}),
+        "fs.read_media" => json!({"path": "screenshot.png"}),
         "fs.read_many" => json!({"paths": ["src/lib.rs", "src/main.rs"]}),
         "fs.write" | "fs.replace" | "fs.stat" => {
             json!({"path": "src/lib.rs"})

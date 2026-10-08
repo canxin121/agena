@@ -118,6 +118,130 @@ fn hash(value: &str) -> String {
 }
 
 #[tokio::test]
+async fn read_media_returns_actual_snapshot_through_the_plugin_executor_boundary() {
+    use agena_domain::AttachmentSource;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use std::sync::Arc;
+    let mut f = Fixture::new().await;
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==";
+    let bytes = STANDARD.decode(png).unwrap();
+    std::fs::write(f.root.path().join("input.png"), &bytes).unwrap();
+    assert!(
+        f.call("fs.read_media", json!({"path":"input.png"}))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("active conversation model route")
+    );
+    f.executor = f.executor.with_media_input_binder(Arc::new(|mut item| {
+        let AttachmentSource::Base64 { data } = item.source else {
+            panic!("snapshot")
+        };
+        item.source = AttachmentSource::ProviderData {
+            route: "fixture/vision/connection-1".into(),
+            data,
+        };
+        Ok(item)
+    }));
+    let mut call = ToolInvocation::new(
+        "fs.read_media",
+        StructuredObject::try_from(json!({"path":"input.png"})).unwrap(),
+    );
+    call.tool_api_call = Some(agena_domain::ToolApiCall {
+        function: agena_domain::ToolApiFunction::Call,
+        arguments: StructuredObject::try_from(
+            json!({"tool":"fs.read_media", "input":{"path":"input.png"}}),
+        )
+        .unwrap(),
+    });
+    let prepared = f.executor.prepare_invocation(&call, 41, 1).await.unwrap();
+    let result = f
+        .executor
+        .execute_invocation_detailed(&prepared.invocation, 41, 1)
+        .await
+        .unwrap();
+    let raw = result.view.raw_output(&result.output);
+    assert_eq!(raw.attachments.len(), 1);
+    let AttachmentSource::ProviderData { route, data } = &raw.attachments[0].source else {
+        panic!("bound snapshot")
+    };
+    assert_eq!(route, "fixture/vision/connection-1");
+    assert_eq!(STANDARD.decode(data).unwrap(), bytes);
+    let payload = Value::from(result.output.payload.clone());
+    assert_eq!(payload["read_info"]["delivery"], "model_input");
+    assert_eq!(payload["read_info"]["mime"], "image/png");
+    assert_eq!(
+        payload["read_info"]["sha256"],
+        hex::encode(Sha256::digest(&bytes))
+    );
+    assert!(!payload.to_string().contains(png));
+    assert!(!result.view.output_text.contains(png));
+    f.write("input.png", "changed later");
+    assert_eq!(STANDARD.decode(data).unwrap(), bytes);
+    assert!(
+        f.call("fs.read_media", json!({"path":"input.png"}))
+            .await
+            .is_err()
+    );
+    f.write("note.txt", "original text");
+    assert!(
+        f.call(
+            "fs.read_media",
+            json!({"path":"note.txt","expected_sha256":hash("stale text")})
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("revision changed")
+    );
+    assert!(
+        f.call(
+            "fs.read_media",
+            json!({"path":"note.txt","provider":"other"})
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn read_media_preflight_checks_file_permissions_before_execution() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let mut f = Fixture::new().await;
+    f.write("input.txt", "fixture");
+    let bindings = Arc::new(AtomicUsize::new(0));
+    let observed = bindings.clone();
+    f.executor = f
+        .executor
+        .with_media_input_binder(Arc::new(move |item| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(item)
+        }))
+        .with_permission_config(
+            &serde_json::from_value(json!({"path":{"workspace":{"read":"deny"}}})).unwrap(),
+        );
+    let call = ToolInvocation::new(
+        "fs.read_media",
+        StructuredObject::try_from(json!({"path":"input.txt"})).unwrap(),
+    );
+    let prepared = f.executor.prepare_invocation(&call, 41, 1).await.unwrap();
+    let checks = f
+        .executor
+        .collect_permission_checks_for_invocation_in_session(&prepared.invocation, Some(41))
+        .await
+        .unwrap();
+    assert!(checks.iter().any(|check| matches!(&check.action, agena_domain::PermissionAction::PathAccess { access_kind, .. } if access_kind == "read") && matches!(check.decision, agena_domain::PermissionDecision::Deny { .. })));
+    assert_eq!(
+        bindings.load(Ordering::SeqCst),
+        0,
+        "deny before reading and binding media"
+    );
+}
+
+#[tokio::test]
 async fn audit_replace_preserves_exact_whitespace_unicode_and_crlf() {
     let f = Fixture::new().await;
     for (original, old, new, expected) in [

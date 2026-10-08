@@ -94,6 +94,16 @@ impl ModelRuntime for GeminiAdapter {
         Some(agena_provider::CapabilityFamily::Gemini)
     }
 
+    fn validate_media_inputs_for_adapter(
+        &self,
+        _adapter_id: Option<&agena_domain::AdapterId>,
+        _model: &ModelId,
+        attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        use agena_runtime_provider::provider::media_input::{self, MediaProtocol};
+        media_input::validate(MediaProtocol::Gemini, attachments)
+    }
+
     fn validate_provider_native_tools_request(
         &self,
         _adapter_id: Option<&agena_domain::AdapterId>,
@@ -1054,6 +1064,81 @@ mod tests {
             response["functionResponse"]["response"]["output"],
             "plain output"
         );
+    }
+
+    #[test]
+    fn media_results_use_gemini3_native_parts_and_ordinary_audio_video_input() {
+        use crate::provider::media_test_support::{attachment, request};
+        let mut request = request(
+            "gemini-3-flash-preview",
+            vec![
+                attachment("image", "image/png", "aW1hZ2U="),
+                attachment("pdf", "application/pdf", "JVBERi0xLjc="),
+                attachment("audio", "audio/wav", "UklGRldBVkU="),
+                attachment("video", "video/mp4", "AAAAAGZ0eXBpc29t"),
+            ],
+        );
+        request.turns[0]
+            .provider_state
+            .gemini_thought_signatures
+            .insert("call_media".into(), "signed-thought".into());
+        let (_, contents) = GeminiAdapter::request_system_and_contents(&request);
+        let value = serde_json::to_value(contents).unwrap();
+        assert_eq!(value[0]["parts"][0]["thoughtSignature"], "signed-thought");
+        let result = &value[1]["parts"][0]["functionResponse"];
+        assert_eq!(result["id"], "call_media");
+        assert_eq!(result["name"], "tools_call");
+        assert_eq!(result["parts"][0]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(
+            result["parts"][1]["inlineData"]["mimeType"],
+            "application/pdf"
+        );
+        assert_eq!(value[1]["parts"][2]["inlineData"]["mimeType"], "audio/wav");
+        assert_eq!(value[1]["parts"][4]["inlineData"]["mimeType"], "video/mp4");
+
+        request.model = ModelId::new("gemini-2.5-flash");
+        let (_, contents) = GeminiAdapter::request_system_and_contents(&request);
+        let value = serde_json::to_value(contents).unwrap();
+        assert!(
+            value[1]["parts"][0]["functionResponse"]
+                .get("parts")
+                .is_none()
+        );
+        assert_eq!(value[1]["parts"][2]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(
+            value[1]["parts"][4]["inlineData"]["mimeType"],
+            "application/pdf"
+        );
+    }
+
+    #[test]
+    fn gemini_media_results_with_reused_call_ids_keep_their_own_bytes() {
+        use crate::provider::media_test_support::{attachment, request};
+        for model in ["models/gemini-3-pro-preview", "gemini-2.5-pro"] {
+            let mut request = request(model, vec![attachment("image", "image/png", "Zmlyc3Q=")]);
+            let mut second = request.turns[0].clone();
+            let agena_provider::CompletionInputPart::ToolResult { attachments, .. } =
+                &mut second.parts[1]
+            else {
+                panic!("result")
+            };
+            *attachments = vec![attachment("image", "image/png", "c2Vjb25k")];
+            request.turns.push(second);
+            let (_, contents) = GeminiAdapter::request_system_and_contents(&request);
+            let value = serde_json::to_value(contents).unwrap();
+            for (index, expected) in [(1, "Zmlyc3Q="), (3, "c2Vjb25k")] {
+                assert_eq!(
+                    value[index]["parts"][0]["functionResponse"]["id"],
+                    "call_media"
+                );
+                let data = if model.contains("gemini-3") {
+                    &value[index]["parts"][0]["functionResponse"]["parts"][0]["inlineData"]["data"]
+                } else {
+                    &value[index]["parts"][2]["inlineData"]["data"]
+                };
+                assert_eq!(data, expected);
+            }
+        }
     }
 
     #[test]

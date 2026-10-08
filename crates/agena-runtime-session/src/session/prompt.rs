@@ -59,6 +59,7 @@ mod tests {
         CompletionInputRun {
             role: agena_domain::Role::Tool,
             parts: vec![CompletionInputPart::ToolResult {
+                attachments: Vec::new(),
                 tool_call_id: "call-1".into(),
                 function: agena_provider::ModelToolFunction::new("shell_run"),
                 arguments_json: String::new(),

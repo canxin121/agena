@@ -36,6 +36,16 @@ impl ModelRuntime for AnthropicAdapter {
         Some(agena_provider::CapabilityFamily::Anthropic)
     }
 
+    fn validate_media_inputs_for_adapter(
+        &self,
+        _adapter_id: Option<&agena_domain::AdapterId>,
+        _model: &ModelId,
+        attachments: &[agena_domain::AttachmentItem],
+    ) -> Result<(), ProviderError> {
+        use agena_runtime_provider::provider::media_input::{self, MediaProtocol};
+        media_input::validate(MediaProtocol::Anthropic, attachments)
+    }
+
     fn validate_provider_native_tools_request(
         &self,
         _adapter_id: Option<&agena_domain::AdapterId>,

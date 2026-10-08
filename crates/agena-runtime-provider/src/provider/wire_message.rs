@@ -71,6 +71,7 @@ pub enum WirePart {
         arguments_json: String,
         status: agena_provider::CompletionInputToolResultStatus,
         output_json: String,
+        attachments: Vec<AttachmentItem>,
     },
 }
 
@@ -240,6 +241,10 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                 if matches!(role, Role::Tool) {
                     if is_terminal_result_status(status) {
                         wire.push(WirePart::ToolResult {
+                            attachments: exec
+                                .raw_output()
+                                .map(|output| output.attachments.clone())
+                                .unwrap_or_default(),
                             tool_call_id: call_id,
                             function,
                             arguments_json,
@@ -264,6 +269,10 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                 // an interrupted call must replay as a closed call/result pair
                 // rather than an orphaned call.
                 wire.push(WirePart::ToolResult {
+                    attachments: exec
+                        .raw_output()
+                        .map(|output| output.attachments.clone())
+                        .unwrap_or_default(),
                     tool_call_id: call_id,
                     function,
                     arguments_json,
@@ -344,14 +353,28 @@ fn wire_part_from_completion_input(part: CompletionInputPart) -> WirePart {
             function,
             arguments_json,
             status,
-            output_json,
-        } => WirePart::ToolResult {
-            tool_call_id,
-            function,
-            arguments_json,
-            status,
-            output_json,
-        },
+            mut output_json,
+            attachments,
+        } => {
+            let mut media = Vec::new();
+            for attachment in attachments {
+                let item = attachment_item_from_completion_input(attachment);
+                if let Some(reference) = local_resource_reference_text(&item) {
+                    output_json.push('\n');
+                    output_json.push_str(&reference);
+                } else if !matches!(item.source, AttachmentSource::LocalPath { .. }) {
+                    media.push(item);
+                }
+            }
+            WirePart::ToolResult {
+                tool_call_id,
+                function,
+                arguments_json,
+                status,
+                output_json,
+                attachments: media,
+            }
+        }
     }
 }
 
@@ -447,12 +470,17 @@ pub fn completion_input_part_from_wire(part: WirePart) -> CompletionInputPart {
             arguments_json,
             status,
             output_json,
+            attachments,
         } => CompletionInputPart::ToolResult {
             tool_call_id,
             function,
             arguments_json,
             status,
             output_json,
+            attachments: attachments
+                .into_iter()
+                .map(completion_input_attachment)
+                .collect(),
         },
     }
 }
@@ -865,8 +893,8 @@ pub fn parts_text_lossy(parts: &[WirePart]) -> String {
 /// Render a workspace-local resource as a lazy, model-visible reference.
 ///
 /// Local paths belong to Agena's workspace and are intentionally never sent to
-/// a provider as multimodal bytes. Text can be read by fs.read; media analysis
-/// requires a separately authorized cloud tool or explicit composer delivery.
+/// a provider as multimodal bytes. Text can be read by fs.read; media contents
+/// can be delivered by fs.read_media or explicit composer delivery.
 /// Do not instruct the model to loop through metadata-only media reads.
 fn local_resource_reference_text(item: &AttachmentItem) -> Option<String> {
     let AttachmentSource::LocalPath { path } = &item.source else {
@@ -887,16 +915,16 @@ fn local_resource_reference_text(item: &AttachmentItem) -> Option<String> {
     });
     let inspect = match item.kind {
         AttachmentKind::Image => {
-            "Use tools_search/tools_help to choose an available provider.cloud_image_understanding tool with this exact local path. That is a separate authorized cloud request; fs.read only returns a reference and does not let you see the picture."
+            "Call tools_help for fs.read_media, then tools_call with this exact local path to see the image with the current conversation model. fs.read returns a reference only and does not let you see the picture."
         }
         AttachmentKind::Pdf => {
-            "Use tools_search/tools_help to choose an available provider.cloud_document_understanding tool with this exact local path. That is a separate authorized cloud request; fs.read attachment mode does not analyze the PDF."
+            "Call tools_help for fs.read_media, then tools_call with this exact local path to inspect PDF text and page visuals with the current model. Use fs.document for text extraction. fs.read attachment mode returns a reference only."
         }
         AttachmentKind::Audio | AttachmentKind::Video => {
-            "Media contents are not available through fs.read. Use a separately authorized, supported cloud media capability or ask the user to explicitly send contents to a model with confirmed audio/video input support. Do not infer playback or analysis from metadata."
+            "Call fs.read_media to provide the actual audio/video bytes to the current model. This requires confirmed model and protocol support; unsupported inputs return an explicit error. Do not infer playback or analysis from metadata."
         }
         AttachmentKind::File => {
-            "For UTF-8 text, use fs.read with file_path set exactly to the resource path. Binary attachment mode returns a local reference only; use an explicit supported cloud analysis operation for binary media."
+            "For UTF-8 text, use fs.read with file_path set exactly to the resource path. Use fs.read_media for supported binary media, or fs.document to extract PDF/Office text. Binary attachment mode returns a local reference only."
         }
     };
     let payload = serde_json::json!({
@@ -1080,7 +1108,8 @@ pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
 
 /// Serialize one [`AttachmentItem`] to an OpenAI Chat content-part JSON value.
 ///
-/// Chat Completions has no portable `file` content part. A user-selected text
+/// Chat Completions supports PDF `file` parts and native WAV/MP3 `input_audio`.
+/// A user-selected text
 /// resource (for example a long clipboard paste prepared as a bounded UTF-8 text
 /// file) must reach the model as text: gateways that only implement Chat
 /// Completions drop the Responses-only `file` part silently, which is how a
@@ -1096,7 +1125,12 @@ pub fn attachment_to_openai_content_value(item: &AttachmentItem) -> serde_json::
         AttachmentKind::File => attachment_text(item)
             .map(|text| serde_json::json!({ "type": "text", "text": text }))
             .unwrap_or_else(|| serde_json::json!({ "type": "text", "text": hint_text(item) })),
-        AttachmentKind::Audio | AttachmentKind::Video | AttachmentKind::Pdf => {
+        AttachmentKind::Audio => base64_with_mime(item)
+            .filter(|(mime, _)| matches!(mime.as_str(), "audio/wav" | "audio/x-wav" | "audio/mpeg" | "audio/mp3"))
+            .map(|(mime, data)| serde_json::json!({"type":"input_audio", "input_audio":{"data":data,"format":if matches!(mime.as_str(), "audio/wav" | "audio/x-wav") {"wav"} else {"mp3"}}}))
+            .unwrap_or_else(|| serde_json::json!({"type":"text", "text":hint_text(item)})),
+        AttachmentKind::Video => serde_json::json!({"type":"text", "text":hint_text(item)}),
+        AttachmentKind::Pdf => {
             attachment_file_content_value(item)
                 .unwrap_or_else(|| serde_json::json!({ "type": "text", "text": hint_text(item) }))
         }
@@ -1996,7 +2030,7 @@ mod tests {
     }
 
     #[test]
-    fn local_workspace_image_remains_a_reference_until_explicit_cloud_analysis() {
+    fn local_workspace_image_remains_a_reference_until_media_delivery() {
         let file = part(
             "file_ref",
             PartRole::User,
@@ -2018,12 +2052,35 @@ mod tests {
         assert!(text.contains("message_scoped_user_selected_resource_reference"));
         assert!(text.contains(".agena/uploads/abc123-screenshot.png"));
         assert!(text.contains("screenshot.png"));
-        assert!(text.contains("provider.cloud_image_understanding"));
-        assert!(text.contains("separate authorized cloud request"));
-        assert!(text.contains("fs.read only returns a reference"));
+        assert!(text.contains("fs.read_media"));
+        assert!(text.contains("fs.read returns a reference only"));
         assert!(text.contains("does not let you see the picture"));
         assert!(!text.contains("data:image/png"));
         assert!(!text.contains("Use `fs.read`"));
+    }
+
+    #[test]
+    fn local_tool_attachments_keep_reading_guidance_without_becoming_media_bytes() {
+        let run: agena_provider::CompletionInputRun = serde_json::from_value(serde_json::json!({
+            "role":"tool", "parts":[{
+                "type":"tool_result", "tool_call_id":"call_read", "function":"tools_call", "arguments_json":"{}", "output_json":"Local file reference",
+                "attachments":[{"kind":"image", "mime":"image/png", "source":{"type":"local_path","path":"screenshot.png"}}]
+            }]
+        })).unwrap();
+        let projected = super::project(&run);
+        let WirePart::ToolResult {
+            output_json,
+            attachments,
+            ..
+        } = &projected[0]
+        else {
+            panic!("result")
+        };
+        assert!(attachments.is_empty());
+        assert!(output_json.contains("agena_resource_reference"));
+        assert!(output_json.contains("screenshot.png"));
+        assert!(output_json.contains("fs.read_media"));
+        assert!(!output_json.contains("data:image"));
     }
 
     #[test]
@@ -2035,23 +2092,18 @@ mod tests {
                 "notes.txt",
                 "For UTF-8 text, use fs.read with file_path",
             ),
-            (
-                "pdf",
-                "application/pdf",
-                "report.pdf",
-                "provider.cloud_document_understanding",
-            ),
+            ("pdf", "application/pdf", "report.pdf", "fs.read_media"),
             (
                 "audio",
                 "audio/mpeg",
                 "recording.mp3",
-                "confirmed audio/video input support",
+                "requires confirmed model and protocol support",
             ),
             (
                 "video",
                 "video/mp4",
                 "clip.mp4",
-                "confirmed audio/video input support",
+                "requires confirmed model and protocol support",
             ),
         ] {
             let reference = part(

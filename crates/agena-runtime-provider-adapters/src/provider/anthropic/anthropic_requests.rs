@@ -115,10 +115,12 @@ impl AnthropicAdapter {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
+                    attachments,
                     ..
-                } => blocks.push(AnthropicTextBlock::tool_result(
+                } => blocks.push(Self::media_tool_result(
                     tool_call_id.clone(),
                     output_json.clone(),
+                    attachments,
                 )),
             }
         }
@@ -147,6 +149,7 @@ impl AnthropicAdapter {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
+                    attachments,
                     ..
                 } if !tool_call_id.trim().is_empty() => {
                     Self::flush_assistant_blocks(run, &mut messages, &mut buffered);
@@ -154,9 +157,10 @@ impl AnthropicAdapter {
                         &mut messages,
                         AnthropicMessage {
                             role: "user".to_owned(),
-                            content: vec![AnthropicTextBlock::tool_result(
+                            content: vec![Self::media_tool_result(
                                 tool_call_id.clone(),
                                 output_json.clone(),
+                                attachments,
                             )],
                         },
                     );
@@ -181,10 +185,13 @@ impl AnthropicAdapter {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
+                    attachments,
                     ..
-                } if !tool_call_id.trim().is_empty() => {
-                    Some(AnthropicTextBlock::tool_result(tool_call_id, output_json))
-                }
+                } if !tool_call_id.trim().is_empty() => Some(Self::media_tool_result(
+                    tool_call_id,
+                    output_json,
+                    &attachments,
+                )),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -293,6 +300,24 @@ impl AnthropicAdapter {
             _ => None,
         })
         .collect()
+    }
+
+    fn media_tool_result(
+        call_id: String,
+        output: String,
+        attachments: &[AttachmentItem],
+    ) -> AnthropicTextBlock {
+        let mut result = AnthropicTextBlock::tool_result(call_id, output.clone());
+        if !attachments.is_empty() {
+            let content = std::iter::once(AnthropicTextBlock::text(output))
+                .chain(attachments.iter().flat_map(Self::attachment_blocks))
+                .collect::<Vec<_>>();
+            result.content = Some(
+                serde_json::to_value(content)
+                    .expect("Anthropic tool-result content blocks serialize"),
+            );
+        }
+        result
     }
 
     pub(crate) fn binary_source(item: &AttachmentItem) -> Option<AnthropicBinarySource> {
@@ -635,5 +660,30 @@ mod tests {
 
         request.response_format = None;
         assert!(AnthropicAdapter::structured_output_tool_and_choice(&request).is_none());
+    }
+
+    #[test]
+    fn media_tool_results_keep_images_and_pdf_inside_the_corresponding_result() {
+        use crate::provider::media_test_support::{attachment, request};
+        let request = request(
+            "claude-test",
+            vec![
+                attachment("image", "image/png", "aW1hZ2U="),
+                attachment("pdf", "application/pdf", "JVBERi0xLjc="),
+            ],
+        );
+        let messages = AnthropicAdapter::assistant_messages_from_parts(&request.turns[0]);
+        let value = serde_json::to_value(messages).unwrap();
+        assert_eq!(value[0]["content"][0]["type"], "tool_use");
+        let result = &value[1]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "call_media");
+        assert_eq!(result["content"][1]["type"], "image");
+        assert_eq!(result["content"][1]["source"]["data"], "aW1hZ2U=");
+        assert_eq!(result["content"][2]["type"], "document");
+        assert_eq!(
+            result["content"][2]["source"]["media_type"],
+            "application/pdf"
+        );
     }
 }

@@ -153,6 +153,103 @@ fn parts(path: &str, delivery: ResourceDelivery, sha: Option<String>) -> Vec<Typ
     .unwrap()
 }
 const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==";
+
+#[tokio::test]
+async fn tool_media_binding_and_result_requests_use_the_selected_conversation_route() {
+    use agena_provider::{CompletionInputPart, CompletionInputRun, ModelToolFunction};
+    let (dir, manager, _session, provider) = fixture(CapabilitySupport::Supported).await;
+    std::fs::write(dir.path().join("input.png"), STANDARD.decode(PNG).unwrap()).unwrap();
+    let state = manager.execution_state();
+    let selection = agena_domain::ExecutionSelection {
+        provider: Some("fixture".into()),
+        model: Some("vision".into()),
+        ..Default::default()
+    };
+    let binder = SessionManager::media_input_binder(&state, &selection);
+    let prepared = media_input::read_local(dir.path(), "input.png", None).unwrap();
+    let attachment = binder(prepared.attachment(None)).unwrap();
+    let AttachmentSource::ProviderData {
+        route: bound_route,
+        data,
+    } = &attachment.source
+    else {
+        panic!("bound bytes")
+    };
+    assert_eq!(data, PNG);
+    let model = ModelRef::new("fixture", "vision");
+    assert_eq!(
+        bound_route,
+        &state.provider_registry.media_route_binding(&model).unwrap()
+    );
+    let agena_provider::CompletionInputPart::Attachment { attachment } =
+        agena_runtime_provider::provider::wire_message::completion_input_part_from_wire(
+            agena_runtime_provider::provider::wire_message::WirePart::Attachment {
+                item: attachment,
+            },
+        )
+    else {
+        panic!("media")
+    };
+    let mut request: CompletionRequest =
+        serde_json::from_value(serde_json::json!({"model":"vision","messages":[]})).unwrap();
+    request.turns = vec![CompletionInputRun {
+        role: agena_domain::Role::Tool,
+        parts: vec![CompletionInputPart::ToolResult {
+            tool_call_id: "media_call".into(),
+            function: ModelToolFunction::new("tools_call"),
+            arguments_json: "{}".into(),
+            status: Default::default(),
+            output_json: "read media".into(),
+            attachments: vec![attachment],
+        }],
+        provider_state: Default::default(),
+    }];
+    let error = state
+        .provider_registry
+        .complete(&model, request.clone())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("synthetic request"));
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    for changed_model in [ModelRef::new("fixture", "another-model"), model] {
+        if changed_model.model_id.as_ref() == "vision" {
+            provider.shape.store(2, Ordering::SeqCst);
+        }
+        let error = state
+            .provider_registry
+            .complete(&changed_model, request.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("different provider/model/endpoint/account")
+        );
+    }
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn tool_media_binder_rejects_unconfirmed_model_support_without_a_send() {
+    for support in [CapabilitySupport::Unsupported, CapabilitySupport::Unknown] {
+        let (_dir, manager, _session, provider) = fixture(support).await;
+        let selection = agena_domain::ExecutionSelection {
+            provider: Some("fixture".into()),
+            model: Some("vision".into()),
+            ..Default::default()
+        };
+        let binder = SessionManager::media_input_binder(&manager.execution_state(), &selection);
+        let prepared =
+            media_input::from_bytes("input.png", STANDARD.decode(PNG).unwrap(), None).unwrap();
+        assert!(
+            binder(prepared.attachment(None))
+                .unwrap_err()
+                .to_string()
+                .contains("confirmed support")
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    }
+}
 #[tokio::test]
 async fn explicit_send_snapshots_actual_bytes_and_binds_the_provider_connection() {
     let (dir, manager, session, provider) = fixture(CapabilitySupport::Supported).await;

@@ -27,6 +27,9 @@ pub mod gitlab;
 pub mod ollama;
 pub mod openai;
 
+#[cfg(test)]
+mod media_test_support;
+
 pub use amazon_bedrock::AmazonBedrockAdapter;
 pub use anthropic::{AnthropicAdapter, AnthropicAdapterOptions};
 pub use gemini::{GeminiAdapter, GeminiAdapterOptions};

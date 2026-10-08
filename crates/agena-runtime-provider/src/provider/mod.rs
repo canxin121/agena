@@ -7,6 +7,7 @@ mod catalog_decoration;
 mod cataloged_models;
 pub mod chat_wire;
 pub mod core;
+pub mod media_input;
 mod multi_adapter;
 mod registry;
 mod tool_mode;

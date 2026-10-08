@@ -85,6 +85,7 @@ impl GeminiPart {
                 id,
                 name: name.into(),
                 response,
+                parts: Vec::new(),
             }),
             ..Self::default()
         }
@@ -109,6 +110,14 @@ pub struct GeminiFunctionResponse {
     pub name: String,
     #[serde(default)]
     pub response: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<GeminiFunctionResponsePart>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GeminiFunctionResponsePart {
+    #[serde(rename = "inlineData")]
+    pub inline_data: GeminiInlineData,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

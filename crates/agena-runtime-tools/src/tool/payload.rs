@@ -653,6 +653,12 @@ impl ToolPayloadOutput {
 /// card. Retired tools have output variants only.
 const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
     ("read", "fs.read", "agena.fs.read", "agena_fs_read"),
+    (
+        "read",
+        "fs.read_media",
+        "agena.fs.read_media",
+        "agena_fs_read_media",
+    ),
     ("glob", "fs.glob", "agena.fs.glob", "agena_fs_glob"),
     ("grep", "fs.grep", "agena.fs.grep", "agena_fs_grep"),
     (

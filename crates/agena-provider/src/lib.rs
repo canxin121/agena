@@ -103,7 +103,8 @@ mod gemini_models;
 pub use gemini_models::{GeminiModel, GeminiModelListResponse};
 mod gemini_content_wire;
 pub use gemini_content_wire::{
-    GeminiContent, GeminiFunctionCall, GeminiFunctionResponse, GeminiInlineData, GeminiPart,
+    GeminiContent, GeminiFunctionCall, GeminiFunctionResponse, GeminiFunctionResponsePart,
+    GeminiInlineData, GeminiPart,
 };
 mod gemini_request_wire;
 pub use gemini_request_wire::{

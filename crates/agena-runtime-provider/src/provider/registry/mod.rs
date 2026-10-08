@@ -656,6 +656,11 @@ impl ProviderRegistry {
         attachments: &[AttachmentItem],
     ) -> Result<(), ProviderError> {
         let provider = self.require_provider(model.provider_id.as_ref())?;
+        provider.validate_media_inputs_for_adapter(
+            model.adapter_id.as_ref(),
+            &model.model_id,
+            attachments,
+        )?;
         let capabilities =
             provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id);
         for item in attachments {
@@ -685,34 +690,44 @@ fn validate_request_capabilities(
     let capabilities =
         provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id);
 
-    let mut unsupported = Vec::new();
-    for run in &request.turns {
-        for part in wire_message::project(run) {
-            let wire_message::WirePart::Attachment { item } = part else {
-                continue;
-            };
+    let attachments = request
+        .turns
+        .iter()
+        .flat_map(wire_message::project)
+        .flat_map(|part| match part {
+            wire_message::WirePart::Attachment { item } => vec![item],
+            wire_message::WirePart::ToolResult { attachments, .. } => attachments,
+            _ => Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    provider.validate_media_inputs_for_adapter(
+        model.adapter_id.as_ref(),
+        &model.model_id,
+        &attachments,
+    )?;
 
-            if let agena_domain::AttachmentSource::ProviderData { route, .. } = &item.source
-                && route != &media_route_fingerprint(model, provider)?
-            {
-                return Err(ProviderError::Config(format!(
-                    "attachment is bound to a different provider/model/endpoint/account route; use the original route or start a new conversation and explicitly attach it to {model}"
-                )));
-            }
-            if matches!(
-                item.source,
-                agena_domain::AttachmentSource::ProviderData { .. }
-            ) && let Some(modality) = explicit_media_requirement(&item)
-                && capabilities.support_for_input_modality(modality)
-                    != agena_domain::CapabilitySupport::Supported
-            {
-                return Err(ProviderError::Config(format!(
-                    "media-bound request cannot be sent to {model}: {modality} support is not confirmed"
-                )));
-            }
-            if let Some(modality) = unsupported_attachment_modality(&capabilities, &item) {
-                unsupported.push((modality, item.summary_label()));
-            }
+    let mut unsupported = Vec::new();
+    for item in attachments {
+        if let agena_domain::AttachmentSource::ProviderData { route, .. } = &item.source
+            && route != &media_route_fingerprint(model, provider)?
+        {
+            return Err(ProviderError::Config(format!(
+                "attachment is bound to a different provider/model/endpoint/account route; use the original route or start a new conversation and explicitly attach it to {model}"
+            )));
+        }
+        if matches!(
+            item.source,
+            agena_domain::AttachmentSource::ProviderData { .. }
+        ) && let Some(modality) = explicit_media_requirement(&item)
+            && capabilities.support_for_input_modality(modality)
+                != agena_domain::CapabilitySupport::Supported
+        {
+            return Err(ProviderError::Config(format!(
+                "media-bound request cannot be sent to {model}: {modality} support is not confirmed"
+            )));
+        }
+        if let Some(modality) = unsupported_attachment_modality(&capabilities, &item) {
+            unsupported.push((modality, item.summary_label()));
         }
     }
 

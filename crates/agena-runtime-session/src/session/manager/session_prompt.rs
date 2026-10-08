@@ -201,6 +201,9 @@ fn render_web_reading_section(tool_names: &[String]) -> String {
 fn workflow_sections(tool_names: &[String]) -> Vec<String> {
     let has = |name: &str| tool_names.iter().any(|tool| tool == name);
     let mut sections = Vec::new();
+    if has("fs.read_media") {
+        sections.push("# Reading media files\n\nUse `fs.read_media` to see local images/screenshots, inspect PDF page visuals, listen to audio, or inspect videos with the current conversation model. Read its live schema with `tools_help` and call it through `tools_call`; no preliminary search is needed for this known name. The result supplies actual immutable file contents, like user attachments, and uses the current provider route. `fs.read` binary results and resource references contain metadata only; never claim you have seen or heard a file from its name or reference. Audio/video need model and protocol support; an unsupported-input error means the media was not delivered. Use `fs.read` for ordinary text and `fs.document` for extracted PDF/Office text. Convert media explicitly when required by the current protocol.".into());
+    }
     if ["plan.set", "plan.review", "plan.edit", "plan.phase"]
         .into_iter()
         .any(has)
@@ -330,6 +333,29 @@ mod tests {
 
     fn names(tools: &[&str]) -> Vec<String> {
         tools.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn media_workflow_teaches_current_model_reads_only_when_the_tool_is_available() {
+        assert!(
+            !workflow_sections(&names(&["fs.read"]))
+                .join("\n")
+                .contains("fs.read_media")
+        );
+        let prompt =
+            workflow_sections(&names(&["fs.read_media", "fs.read", "fs.document"])).join("\n");
+        for guidance in [
+            "fs.read_media",
+            "tools_help",
+            "tools_call",
+            "actual immutable file contents",
+            "current provider route",
+            "metadata only",
+            "unsupported-input error",
+            "fs.document",
+        ] {
+            assert!(prompt.contains(guidance), "missing {guidance}");
+        }
     }
 
     #[test]

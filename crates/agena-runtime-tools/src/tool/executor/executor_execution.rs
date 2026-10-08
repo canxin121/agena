@@ -350,6 +350,26 @@ impl ToolExecutor {
         self.check_cloud_tool_adapter(&resolution.canonical_name())?;
 
         if resolution.namespace() == "agena"
+            && resolution.plugin_name() == "fs"
+            && resolution.tool_name() == "read_media"
+        {
+            let input = crate::part::ReadMediaInput::parse_input(
+                resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
+            )
+            .map_err(|error| self.plugin_error_or_cancelled(error))?;
+            let execution = crate::tool::read_media::execute(self, input).await?;
+            return self
+                .finalize_execution_async(
+                    invocation,
+                    session_id,
+                    resolution.canonical_name().as_str(),
+                    call_id,
+                    execution.into(),
+                )
+                .await;
+        }
+
+        if resolution.namespace() == "agena"
             && resolution.plugin_name() == "content"
             && resolution.tool_name() == "read"
         {

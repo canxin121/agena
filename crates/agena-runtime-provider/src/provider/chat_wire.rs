@@ -939,7 +939,67 @@ pub fn request_to_chat_messages_with_assistant_reasoning_field(
         }
     }
 
-    messages
+    append_tool_result_media(request, messages)
+}
+
+fn append_tool_result_media(
+    request: &CompletionRequest,
+    messages: Vec<ChatMessage>,
+) -> Vec<ChatMessage> {
+    // Chat only allows text in tool messages. Keep all parallel tool replies
+    // together, then supply ordinary user media before the next assistant
+    // reply, including when calls/results/replies share one persisted run.
+    let mut results =
+        std::collections::HashMap::<String, std::collections::VecDeque<Vec<AttachmentItem>>>::new();
+    for part in request
+        .turns
+        .iter()
+        .filter(|run| matches!(run.role, Role::Assistant | Role::Tool))
+        .flat_map(wire_message::project)
+    {
+        if let wire_message::WirePart::ToolResult {
+            tool_call_id,
+            attachments,
+            ..
+        } = part
+        {
+            results
+                .entry(tool_call_id)
+                .or_default()
+                .push_back(attachments);
+        }
+    }
+    let mut output = Vec::with_capacity(messages.len());
+    let mut pending_media = Vec::new();
+    for message in messages {
+        if message.role != "tool" && !pending_media.is_empty() {
+            output.push(ChatMessage::user(
+                wire_message::parts_to_openai_content_array(&pending_media),
+            ));
+            pending_media.clear();
+        }
+        if message.role == "tool"
+            && let Some(id) = &message.tool_call_id
+            && let Some(attachments) = results.get_mut(id).and_then(|items| items.pop_front())
+            && !attachments.is_empty()
+        {
+            pending_media.push(wire_message::WirePart::Text {
+                text: format!("Media read by tool call {id}; analyze the following file contents."),
+            });
+            pending_media.extend(
+                attachments
+                    .into_iter()
+                    .map(|item| wire_message::WirePart::Attachment { item }),
+            );
+        }
+        output.push(message);
+    }
+    if !pending_media.is_empty() {
+        output.push(ChatMessage::user(
+            wire_message::parts_to_openai_content_array(&pending_media),
+        ));
+    }
+    output
 }
 
 pub fn backfill_assistant_reasoning_field_on_request(

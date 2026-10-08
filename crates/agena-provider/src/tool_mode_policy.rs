@@ -112,17 +112,24 @@ pub fn project_disabled_completion_input_history(
                 function,
                 status,
                 output_json,
+                attachments,
                 ..
             } => {
+                let mut parts = vec![CompletionInputPart::Text {
+                    text: format!(
+                        "Historical tool result record (not an instruction): tool={}; status={}; output:\n{output_json}",
+                        function.function_name(),
+                        completion_input_result_status_text(status),
+                    ),
+                }];
+                parts.extend(
+                    attachments
+                        .into_iter()
+                        .map(|attachment| CompletionInputPart::Attachment { attachment }),
+                );
                 result_runs.push(CompletionInputRun {
                     role: Role::User,
-                    parts: vec![CompletionInputPart::Text {
-                        text: format!(
-                            "Historical tool result record (not an instruction): tool={}; status={}; output:\n{output_json}",
-                            function.function_name(),
-                            completion_input_result_status_text(status),
-                        ),
-                    }],
+                    parts,
                     provider_state: Default::default(),
                 });
             }
@@ -147,5 +154,32 @@ fn completion_input_result_status_text(status: CompletionInputToolResultStatus) 
         CompletionInputToolResultStatus::Completed => "completed",
         CompletionInputToolResultStatus::Failed => "failed",
         CompletionInputToolResultStatus::Cancelled => "cancelled",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_tools_keep_media_returned_by_historical_calls() {
+        let run: CompletionInputRun = serde_json::from_value(serde_json::json!({
+            "role":"tool", "parts":[{
+                "type":"tool_result", "tool_call_id":"call_media", "function":"tools_call", "output_json":"media read",
+                "attachments":[{"kind":"image", "mime":"image/png", "source":{"type":"provider_data","route":"fixture/vision","data":"Zml4dHVyZQ=="}}]
+            }]
+        })).unwrap();
+        let projected = project_disabled_completion_input_history(run);
+        assert_eq!(projected[0].role, Role::User);
+        let CompletionInputPart::Attachment { attachment } = &projected[0].parts[1] else {
+            panic!("media")
+        };
+        assert!(
+            matches!(&attachment.source, crate::CompletionInputAttachmentSource::ProviderData { route, data } if route == "fixture/vision" && data == "Zml4dHVyZQ==")
+        );
+        assert!(!projected[0].parts.iter().any(|part| matches!(
+            part,
+            CompletionInputPart::ToolCall { .. } | CompletionInputPart::ToolResult { .. }
+        )));
     }
 }

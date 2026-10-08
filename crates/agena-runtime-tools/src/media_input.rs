@@ -172,6 +172,12 @@ pub fn from_bytes(
         (AttachmentKind::Pdf, "application/pdf".into(), None, None)
     } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE") {
         (AttachmentKind::Audio, "audio/wav".into(), None, None)
+    } else if bytes.starts_with(b"fLaC") {
+        (AttachmentKind::Audio, "audio/flac".into(), None, None)
+    } else if bytes.starts_with(b"FORM") && matches!(bytes.get(8..12), Some(b"AIFF" | b"AIFC")) {
+        (AttachmentKind::Audio, "audio/aiff".into(), None, None)
+    } else if bytes.len() > 1 && bytes[0] == 0xff && bytes[1] & 0xf6 == 0xf0 {
+        (AttachmentKind::Audio, "audio/aac".into(), None, None)
     } else if bytes.starts_with(b"ID3")
         || bytes.len() > 1 && bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0
     {
@@ -179,14 +185,22 @@ pub fn from_bytes(
     } else if bytes.starts_with(b"OggS") {
         (AttachmentKind::Audio, "audio/ogg".into(), None, None)
     } else if bytes.get(4..8) == Some(b"ftyp") {
-        (AttachmentKind::Video, "video/mp4".into(), None, None)
+        match bytes.get(8..12) {
+            Some(b"M4A " | b"M4B " | b"M4P ") => (AttachmentKind::Audio, "audio/mp4".into(), None, None),
+            Some(b"qt  ") => (AttachmentKind::Video, "video/quicktime".into(), None, None),
+            Some(b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1" | b"avif" | b"avis") => return Err("HEIF/AVIF media is not supported by this preparation path; convert the image to PNG/JPEG first".into()),
+            _ => (AttachmentKind::Video, "video/mp4".into(), None, None),
+        }
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"AVI ") {
+        (AttachmentKind::Video, "video/avi".into(), None, None)
     } else if bytes.starts_with(b"\x1a\x45\xdf\xa3") {
         (AttachmentKind::Video, "video/webm".into(), None, None)
     } else {
         let name = filename.to_ascii_lowercase();
         if [
             ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".pdf", ".mp3", ".wav",
-            ".mp4",
+            ".mp4", ".m4a", ".m4b", ".flac", ".aac", ".aiff", ".aif", ".ogg", ".mov", ".webm",
+            ".avi", ".heic", ".heif", ".avif",
         ]
         .iter()
         .any(|ext| name.ends_with(ext))
@@ -276,5 +290,65 @@ mod tests {
                 .unwrap();
             assert!(read_local(dir.path(), "link", None).is_err());
         }
+    }
+
+    #[test]
+    fn media_signatures_distinguish_audio_containers_and_reject_disguised_images() {
+        for (filename, bytes, kind, mime) in [
+            (
+                "sample.flac",
+                b"fLaCfixture".as_slice(),
+                AttachmentKind::Audio,
+                "audio/flac",
+            ),
+            (
+                "sample.aiff",
+                b"FORM\0\0\0\0AIFFfixture".as_slice(),
+                AttachmentKind::Audio,
+                "audio/aiff",
+            ),
+            (
+                "sample.aac",
+                b"\xff\xf1fixture".as_slice(),
+                AttachmentKind::Audio,
+                "audio/aac",
+            ),
+            (
+                "sample.mp3",
+                b"\xff\xfbfixture".as_slice(),
+                AttachmentKind::Audio,
+                "audio/mpeg",
+            ),
+            (
+                "sample.m4a",
+                b"\0\0\0\x18ftypM4A fixture".as_slice(),
+                AttachmentKind::Audio,
+                "audio/mp4",
+            ),
+            (
+                "sample.mov",
+                b"\0\0\0\x18ftypqt  fixture".as_slice(),
+                AttachmentKind::Video,
+                "video/quicktime",
+            ),
+            (
+                "sample.mp4",
+                b"\0\0\0\x18ftypisomfixture".as_slice(),
+                AttachmentKind::Video,
+                "video/mp4",
+            ),
+            (
+                "sample.avi",
+                b"RIFF\0\0\0\0AVI fixture".as_slice(),
+                AttachmentKind::Video,
+                "video/avi",
+            ),
+        ] {
+            let media = from_bytes(filename, bytes.to_vec(), None).unwrap();
+            assert_eq!(media.kind, kind, "{filename}");
+            assert_eq!(media.mime, mime, "{filename}");
+        }
+        assert!(from_bytes("image.avif", b"\0\0\0\x18ftypaviffixture".to_vec(), None).is_err());
+        assert!(from_bytes("fake.m4a", b"looks like text".to_vec(), None).is_err());
     }
 }

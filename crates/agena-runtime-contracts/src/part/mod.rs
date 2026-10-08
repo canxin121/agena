@@ -16,8 +16,9 @@ pub use tool::{
     CronListToolInput, CronMisfirePolicyInput, CronRetryPolicyInput, CronUpdateToolInput, GlobKind,
     GlobToolInput, GrepCase, GrepMode, GrepToolInput, InteractionNotifyToolInput,
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
-    MonitorToolInput, MonitorWsInput, OperationPart, ReadToolInput, ShellCommandInput,
-    ShellLaunchInput, ShellMonitorInput, ShellMonitorPatternKind, ShellOpenInput, ShellReadInput,
-    ShellSignal, ShellToolInput, ShellWatchInput, ShellWatchNotifications, ShellWatchPolicy,
-    ShellWriteInput, TaskToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    MonitorToolInput, MonitorWsInput, OperationPart, ReadMediaInput, ReadToolInput,
+    ShellCommandInput, ShellLaunchInput, ShellMonitorInput, ShellMonitorPatternKind,
+    ShellOpenInput, ShellReadInput, ShellSignal, ShellToolInput, ShellWatchInput,
+    ShellWatchNotifications, ShellWatchPolicy, ShellWriteInput, TaskToolInput, ToolSearchToolInput,
+    WebFetchToolInput, WebSearchToolInput,
 };

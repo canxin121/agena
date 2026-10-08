@@ -1887,6 +1887,10 @@ impl SessionManager {
             .with_cloud_tool_adapter(Self::cloud_tool_adapter(
                 state.as_ref(),
                 &session.runtime.execution.selection,
+            ))
+            .with_media_input_binder(Self::media_input_binder(
+                state.as_ref(),
+                &session.runtime.execution.selection,
             ));
         for pending_tool in pending_tools {
             match Box::pin(self.prepare_pending_tool_batch_member(
@@ -2243,6 +2247,10 @@ impl SessionManager {
                 .with_cloud_tool_adapter(Self::cloud_tool_adapter(
                     state.as_ref(),
                     &pending_tool.session_runtime.execution.selection,
+                ))
+                .with_media_input_binder(Self::media_input_binder(
+                    state.as_ref(),
+                    &pending_tool.session_runtime.execution.selection,
                 )),
             None => return Ok(Vec::new()),
         };
@@ -2334,6 +2342,10 @@ impl SessionManager {
             .for_session_context_async(&execution_context)
             .await
             .with_cloud_tool_adapter(Self::cloud_tool_adapter(
+                state,
+                &execution_context.selection,
+            ))
+            .with_media_input_binder(Self::media_input_binder(
                 state,
                 &execution_context.selection,
             ))

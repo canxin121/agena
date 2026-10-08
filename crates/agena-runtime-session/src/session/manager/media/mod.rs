@@ -10,6 +10,39 @@ use agena_runtime_tools::media_input;
 static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 impl SessionManager {
+    /// A trusted destination for model-requested filesystem media reads.
+    /// Resolve and validate the same provider route used by conversation sends.
+    pub(super) fn media_input_binder(
+        state: &super::SessionManagerState,
+        selection: &agena_domain::ExecutionSelection,
+    ) -> std::sync::Arc<crate::tool::MediaInputBinder> {
+        let registry = state.provider_registry.clone();
+        let selection = selection.clone();
+        std::sync::Arc::new(move |mut item| {
+            let model = registry
+                .resolve_default_model_selection(&selection)
+                .map_err(|error| crate::tool::ToolError::invalid_input(error.to_string()))?
+                .ok_or_else(|| {
+                    crate::tool::ToolError::invalid_input(
+                        "fs.read_media requires a selected conversation provider and model",
+                    )
+                })?;
+            registry
+                .validate_media_inputs(&model, std::slice::from_ref(&item))
+                .map_err(|error| crate::tool::ToolError::invalid_input(error.to_string()))?;
+            let route = registry
+                .media_route_binding(&model)
+                .map_err(|error| crate::tool::ToolError::invalid_input(error.to_string()))?;
+            let AttachmentSource::Base64 { data } = item.source else {
+                return Err(crate::tool::ToolError::invalid_input(
+                    "media reader must return a local byte snapshot",
+                ));
+            };
+            item.source = AttachmentSource::ProviderData { route, data };
+            Ok(item)
+        })
+    }
+
     pub(super) async fn materialize_user_media(
         &self,
         session: &Session,

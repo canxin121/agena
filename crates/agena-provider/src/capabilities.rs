@@ -18,8 +18,16 @@ impl Default for CapabilityRegistry {
                     openai_default_capabilities(),
                     vec![
                         ModelCapabilityRule::new(
+                            ModelMatcher::any_prefix([
+                                "gpt-audio",
+                                "gpt-4o-audio",
+                                "gpt-4o-mini-audio",
+                            ]),
+                            openai_audio_capabilities(),
+                        ),
+                        ModelCapabilityRule::new(
                             ModelMatcher::any(vec![
-                                ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
+                                ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5", "gpt-6"]),
                                 ModelMatcher::contains("codex"),
                             ]),
                             openai_multimodal_capabilities(),
@@ -35,8 +43,16 @@ impl Default for CapabilityRegistry {
                     openai_default_capabilities(),
                     vec![
                         ModelCapabilityRule::new(
+                            ModelMatcher::any_prefix([
+                                "gpt-audio",
+                                "gpt-4o-audio",
+                                "gpt-4o-mini-audio",
+                            ]),
+                            openai_audio_capabilities(),
+                        ),
+                        ModelCapabilityRule::new(
                             ModelMatcher::any(vec![
-                                ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
+                                ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5", "gpt-6"]),
                                 ModelMatcher::contains("codex"),
                             ]),
                             openai_multimodal_capabilities(),
@@ -58,10 +74,37 @@ impl Default for CapabilityRegistry {
                 CapabilityFamilyProfile::new(
                     CapabilityFamily::Gemini,
                     gemini_default_capabilities(),
-                    vec![ModelCapabilityRule::new(
-                        ModelMatcher::contains("gemini"),
-                        gemini_multimodal_capabilities(),
-                    )],
+                    vec![
+                        ModelCapabilityRule::new(
+                            // Specialized image/embedding/speech models do not
+                            // inherit the general conversation models' A/V inputs.
+                            ModelMatcher::any(vec![
+                                ModelMatcher::contains("-image"),
+                                ModelMatcher::contains("embedding"),
+                                ModelMatcher::contains("-tts"),
+                            ]),
+                            gemini_multimodal_capabilities(),
+                        ),
+                        ModelCapabilityRule::new(
+                            ModelMatcher::any_prefix([
+                                "gemini-1.5-",
+                                "gemini-2",
+                                "gemini-3",
+                                "models/gemini-1.5-",
+                                "models/gemini-2",
+                                "models/gemini-3",
+                            ]),
+                            ModelCapabilities {
+                                audio_input: CapabilitySupport::Supported,
+                                video_input: CapabilitySupport::Supported,
+                                ..gemini_multimodal_capabilities()
+                            },
+                        ),
+                        ModelCapabilityRule::new(
+                            ModelMatcher::contains("gemini"),
+                            gemini_multimodal_capabilities(),
+                        ),
+                    ],
                 ),
                 CapabilityFamilyProfile::new(
                     CapabilityFamily::Bedrock,
@@ -237,6 +280,13 @@ fn openai_multimodal_capabilities() -> ModelCapabilities {
     }
 }
 
+fn openai_audio_capabilities() -> ModelCapabilities {
+    ModelCapabilities {
+        audio_input: CapabilitySupport::Supported,
+        ..openai_default_capabilities()
+    }
+}
+
 fn openai_reasoning_capabilities() -> ModelCapabilities {
     ModelCapabilities {
         reasoning: CapabilitySupport::Supported,
@@ -302,5 +352,51 @@ fn gitlab_default_capabilities() -> ModelCapabilities {
         tool_calling: CapabilitySupport::Supported,
         streaming: CapabilitySupport::Supported,
         ..ModelCapabilities::default()
+    }
+}
+
+#[cfg(test)]
+mod media_capability_tests {
+    use super::*;
+
+    #[test]
+    fn media_input_support_matches_conversation_model_families() {
+        let registry = CapabilityRegistry::default();
+        for model in [
+            "gpt-audio",
+            "gpt-4o-audio-preview",
+            "gpt-4o-mini-audio-preview",
+        ] {
+            assert_eq!(
+                registry
+                    .capabilities_for_family(CapabilityFamily::OpenAi, model)
+                    .audio_input,
+                CapabilitySupport::Supported
+            );
+        }
+        assert_ne!(
+            registry
+                .capabilities_for_family(CapabilityFamily::OpenAi, "gpt-5")
+                .audio_input,
+            CapabilitySupport::Supported
+        );
+        for model in [
+            "gemini-2.5-pro",
+            "models/gemini-2.5-flash",
+            "gemini-3-pro-preview",
+        ] {
+            let capabilities = registry.capabilities_for_family(CapabilityFamily::Gemini, model);
+            assert_eq!(capabilities.audio_input, CapabilitySupport::Supported);
+            assert_eq!(capabilities.video_input, CapabilitySupport::Supported);
+        }
+        for model in [
+            "gemini-2.5-flash-image",
+            "gemini-embedding-001",
+            "gemini-2.5-flash-preview-tts",
+        ] {
+            let capabilities = registry.capabilities_for_family(CapabilityFamily::Gemini, model);
+            assert_ne!(capabilities.audio_input, CapabilitySupport::Supported);
+            assert_ne!(capabilities.video_input, CapabilitySupport::Supported);
+        }
     }
 }

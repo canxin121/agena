@@ -6,7 +6,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::part::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
+use crate::part::{
+    ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadMediaInput, ReadToolInput,
+};
 use crate::plugins::provided::router;
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
@@ -142,7 +144,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, read_only),
         summary = "Read workspace files.",
-        help = "Use read for text previews and directory listings. offset/limit page 1-based lines or entries. For very long single lines, use byte_offset (zero-based) and byte_limit (4–16384, default 8192) to seek directly to a small UTF-8 text range; continue with read_info.next_byte_offset. Byte ranges cannot combine with line offsets/limits, directories or attachment mode. Binary files return local references, not model-visible bytes. Use a provider cloud_image_understanding/cloud_document_understanding tool or explicitly attach media to the composer to send its contents."
+        help = "Use read for text previews and directory listings. offset/limit page 1-based lines or entries. For very long single lines, use byte_offset (zero-based) and byte_limit (4–16384, default 8192) to seek directly to a small UTF-8 text range; continue with read_info.next_byte_offset. Byte ranges cannot combine with line offsets/limits, directories or attachment mode. Binary files return local references, not model-visible bytes. Call fs.read_media to see a local image, PDF, audio or video with the current conversation model; use fs.document when you only need extracted PDF/Office text."
     )]
     async fn invoke_read(
         &self,
@@ -150,6 +152,19 @@ impl FsPlugin {
         args: ReadToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
         invoke_internal(context, "read", args).await
+    }
+
+    #[tool(
+        tags(query, filesystem, read_only),
+        summary = "Read a local image, PDF, audio or video into the current model's context.",
+        help = "Call fs.read_media whenever you need to see an image/screenshot, inspect PDF page visuals, listen to audio, or inspect a video stored locally. This returns actual immutable file bytes to the current conversation model, like a user attachment; no separate cloud-analysis provider or credential configuration is needed. Use tools_help for the live schema, then tools_call with tool=fs.read_media and input={path:...}; paths resolve from the active workspace. Image and PDF support depends on the current model. Audio requires a supported OpenAI Chat audio model or Gemini; video requires Gemini. Unsupported protocols, models, MIME types or sizes return an explicit error; a filename/reference is not media understanding. Supported preparation includes PNG/JPEG/GIF/WebP, PDF, common audio/video and UTF-8 text; maximum 20 MiB/file, with lower encoded-request limits on some protocols. expected_sha256 optionally guards the revision. Use fs.read for ordinary text, fs.document for extracted PDF/Office text; do not repeatedly read binary data with fs.read expecting to see it."
+    )]
+    async fn invoke_read_media(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: ReadMediaInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        invoke_internal(context, "read_media", input).await
     }
 
     #[tool(
@@ -888,6 +903,7 @@ mod tests {
             [
                 "document",
                 "read",
+                "read_media",
                 "glob",
                 "grep",
                 "apply_patch",

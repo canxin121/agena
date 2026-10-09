@@ -13,8 +13,9 @@ use unicode_width::UnicodeWidthStr;
 use crate::ui_text;
 use crate::{
     RenderedCopySegment, RenderedLine, RenderedTranscriptNode, ToolOutputPreview,
-    TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey, TranscriptNodeKind,
-    TranscriptPartContent, TranscriptPointerSelection, transcript_spinner_placeholder,
+    TranscriptDetailDefaults, TranscriptEntry, TranscriptEntryPart, TranscriptNodeKey,
+    TranscriptNodeKind, TranscriptPartContent, TranscriptPointerSelection,
+    transcript_spinner_placeholder,
 };
 
 mod transcript_ast;
@@ -167,112 +168,88 @@ pub fn render_entry_detailed_with_progressive_expansion(
             expanded: true,
         });
     } else {
+        // A reply entry renders exactly ONE collapsed-run marker row, like
+        // Web. Two producers can supply one: server fold markers that omit a
+        // page prefix (one per run window) and the client's visible budget
+        // for long activity runs. Consecutive assistant runs merge into one
+        // entry, so an entry can carry several of each; the row renders once
+        // — at the first server fold when one exists — and carries the total
+        // hidden count of the whole entry.
+        let fold_markers = if message.role == Some(RunRole::User) {
+            Vec::new()
+        } else {
+            fold_marker_plans(message, parts)
+        };
+        let activity_runs = if message.role == Some(RunRole::User) {
+            Vec::new()
+        } else {
+            activity_run_plans(message, parts, expansions, summary_visible_counts)
+        };
+        let marker = entry_fold_marker(&activity_runs, &fold_markers, expansions);
+        // The single row counts the unloaded server prefix and the budget-hidden
+        // window activities together, and both stay reachable: `Enter` loads the
+        // next older page and the entry-wide reveal (show all) raises every
+        // run's visible count, and an entry whose folds are fully loaded falls
+        // back to the ordinary budget row.
         let mut part_index = 0_usize;
+        let mut run_index = 0_usize;
         while part_index < parts.len() {
-            if message.role != Some(RunRole::User)
-                && let Some(run_end) = collapsed_activity_run_end(parts, part_index)
+            if let Some(run) = activity_runs
+                .get(run_index)
+                .filter(|run| run.start == part_index)
             {
-                let activities = parts[part_index..run_end]
-                    .iter()
-                    .filter(|part| is_activity_node(part))
-                    .collect::<Vec<_>>();
-                // Every activity folds uniformly, exactly like a consecutive
-                // tool-call block: when the run exceeds the visible budget the
-                // oldest activities collapse into one marker row and the newest
-                // `COLLAPSED_ACTIVITY_VISIBLE_COUNT` stay visible. Session
-                // notices injected mid-reply (hook runs, background notices)
-                // are no exception — a long run of hook rows would otherwise
-                // pile up without ever folding. The run still groups them with
-                // the surrounding tool calls, so the whole block folds as one.
-                let key = TranscriptNodeKey::ActivitySummary {
-                    entry_id: message.id,
-                    first_content_id: activities[0].id,
-                };
-                let foldable_count = activities.len();
-                let show_all = expansions.get(&key).copied().unwrap_or(false);
-                let mut visible_count = if show_all {
-                    foldable_count
-                } else {
-                    summary_visible_counts
-                        .get(&key)
-                        .copied()
-                        .unwrap_or(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
-                };
-                // A request awaiting user action must remain reachable even
-                // when later siblings exceed the ordinary recent-part budget.
-                if let Some(index) = activities.iter().position(|part| matches!(
-                    &part.content,
-                    TranscriptPartContent::Activity(crate::TranscriptActivityContent::Operation(tool))
-                        if tool.has_pending_interaction()
-                )) {
-                    visible_count = visible_count.max(foldable_count - index);
+                if let Some(marker) = marker
+                    .as_ref()
+                    .filter(|marker| marker.position == part_index)
+                {
+                    push_entry_fold_marker_row(&mut lines, &mut nodes, marker, i18n, width);
                 }
-                let collapsed_prefix_len = foldable_count.saturating_sub(visible_count);
-                let hidden_count = collapsed_prefix_len;
-                // Run folding is purely positional. Individual Activity
-                // expansion controls that Activity's body only and must not
-                // exempt an old Activity from the collapsed prefix.
-                let hidden_when_collapsed = activities
-                    .iter()
-                    .enumerate()
-                    .map(|(foldable_index, _part)| foldable_index < collapsed_prefix_len)
-                    .collect::<Vec<_>>();
-                if hidden_count > 0 {
-                    // Message headers belong exclusively to the message-level
-                    // parent selection. An activity summary must never make
-                    // the adjacent `assistant` header look selected.
-                    let start_line = lines.len();
-                    let summary = crate::renderer::transcript_tool_summary::push_fold_marker_row(
-                        &mut lines,
-                        i18n,
-                        hidden_count,
+                let mut activity_index = 0_usize;
+                for part in &parts[run.start..run.end] {
+                    // Invisible blank bridges group the run but never render.
+                    if !is_activity_node(part) {
+                        continue;
+                    }
+                    // Run folding is purely positional. Individual Activity
+                    // expansion controls that Activity's body only and must not
+                    // exempt an old Activity from the collapsed prefix.
+                    let hidden = activity_index < run.hidden_prefix_len;
+                    activity_index += 1;
+                    if hidden {
+                        continue;
+                    }
+                    append_rendered_part_node(
+                        message,
+                        part,
                         width,
+                        &mut lines,
+                        &mut nodes,
+                        i18n,
+                        defaults,
+                        expansions,
+                        interactions,
                     );
-                    nodes.push(RenderedTranscriptNode {
-                        key,
-                        kind: TranscriptNodeKind::Activity,
-                        start_line,
-                        end_line: lines.len(),
-                        // The folded run is a UI marker, never real content:
-                        // copying the collapsed block must copy the visible
-                        // marker line, never the hidden activities' full text.
-                        copy_text: summary.clone().into(),
-                        atomic: true,
-                        toggleable: true,
-                        expanded: false,
-                    });
-                    for (part, hidden) in activities.into_iter().zip(hidden_when_collapsed) {
-                        if hidden {
-                            continue;
-                        }
-                        append_rendered_part_node(
-                            message,
-                            part,
-                            width,
-                            &mut lines,
-                            &mut nodes,
-                            i18n,
-                            defaults,
-                            expansions,
-                            interactions,
-                        );
-                    }
-                } else {
-                    for part in activities {
-                        append_rendered_part_node(
-                            message,
-                            part,
-                            width,
-                            &mut lines,
-                            &mut nodes,
-                            i18n,
-                            defaults,
-                            expansions,
-                            interactions,
-                        );
-                    }
                 }
-                part_index = run_end;
+                part_index = run.end;
+                run_index += 1;
+                continue;
+            }
+
+            // Server fold markers are presentation-only rows. The first one
+            // owns the entry's merged row; the rest are already counted in it.
+            if !fold_markers.is_empty()
+                && matches!(
+                    transcript_part_content(&parts[part_index]),
+                    TranscriptPartContent::Activity(crate::TranscriptActivityContent::Fold { .. })
+                )
+            {
+                if let Some(marker) = marker
+                    .as_ref()
+                    .filter(|marker| marker.position == part_index)
+                {
+                    push_entry_fold_marker_row(&mut lines, &mut nodes, marker, i18n, width);
+                }
+                part_index += 1;
                 continue;
             }
 
@@ -342,14 +319,202 @@ pub fn render_entry_detailed_with_progressive_expansion(
     RenderedMessageBlock { lines, nodes }
 }
 
+/// One contiguous activity run of an entry with the client's visible-budget
+/// decision for it. `hidden_prefix_len` leading activities collapse into the
+/// entry's single marker row.
+struct ActivityRunPlan {
+    start: usize,
+    end: usize,
+    key: TranscriptNodeKey,
+    hidden_prefix_len: usize,
+}
+
+/// One server-projected fold marker part of an entry.
+struct FoldMarkerPlan {
+    position: usize,
+    key: TranscriptNodeKey,
+    hidden_count: usize,
+}
+
+/// The single collapsed-run row of one entry.
+struct EntryFoldMarker {
+    /// Index into the entry's parts where the row renders.
+    position: usize,
+    key: TranscriptNodeKey,
+    hidden_count: usize,
+    /// A server fold tracks its own expansion; the client budget summary is
+    /// always collapsed and reveals through visible counts instead.
+    expanded: bool,
+    /// Kept per producer so the row's navigation semantics do not change.
+    atomic: bool,
+}
+
+fn activity_run_plans(
+    message: &TranscriptEntry,
+    parts: &[TranscriptEntryPart],
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+    summary_visible_counts: &std::collections::BTreeMap<TranscriptNodeKey, usize>,
+) -> Vec<ActivityRunPlan> {
+    let mut plans = Vec::new();
+    for (start, end) in activity_runs(parts) {
+        let activities = parts[start..end]
+            .iter()
+            .filter(|part| is_activity_node(part))
+            .collect::<Vec<_>>();
+        let Some(first) = activities.first() else {
+            continue;
+        };
+        // Every activity folds uniformly, exactly like a consecutive
+        // tool-call block: when the run exceeds the visible budget the oldest
+        // activities collapse into the entry's marker row and the newest
+        // `COLLAPSED_ACTIVITY_VISIBLE_COUNT` stay visible. Session notices
+        // injected mid-reply (hook runs, background notices) are no
+        // exception.
+        let key = TranscriptNodeKey::ActivitySummary {
+            entry_id: message.id,
+            first_content_id: first.id,
+        };
+        let foldable_count = activities.len();
+        let show_all = expansions.get(&key).copied().unwrap_or(false);
+        let mut visible_count = if show_all {
+            foldable_count
+        } else {
+            summary_visible_counts
+                .get(&key)
+                .copied()
+                .unwrap_or(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
+        };
+        // A request awaiting user action must remain reachable even when
+        // later siblings exceed the ordinary recent-part budget.
+        if let Some(index) = activities.iter().position(|part| {
+            matches!(
+                &part.content,
+                TranscriptPartContent::Activity(crate::TranscriptActivityContent::Operation(tool))
+                    if tool.has_pending_interaction()
+            )
+        }) {
+            visible_count = visible_count.max(foldable_count - index);
+        }
+        plans.push(ActivityRunPlan {
+            start,
+            end,
+            key,
+            hidden_prefix_len: foldable_count.saturating_sub(visible_count),
+        });
+    }
+    plans
+}
+
+fn fold_marker_plans(
+    message: &TranscriptEntry,
+    parts: &[TranscriptEntryPart],
+) -> Vec<FoldMarkerPlan> {
+    parts
+        .iter()
+        .enumerate()
+        .filter_map(|(position, part)| match transcript_part_content(part) {
+            TranscriptPartContent::Activity(crate::TranscriptActivityContent::Fold {
+                hidden_count,
+            }) => Some(FoldMarkerPlan {
+                position,
+                key: TranscriptNodeKey::Activity {
+                    entry_id: message.id,
+                    content_id: part.id,
+                },
+                hidden_count: *hidden_count,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The entry's single collapsed-run row: the first server fold when the entry
+/// has one, otherwise the first activity run that hides older activities.
+/// `None` when every window activity of the entry is already visible.
+fn entry_fold_marker(
+    runs: &[ActivityRunPlan],
+    folds: &[FoldMarkerPlan],
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> Option<EntryFoldMarker> {
+    if let Some(first) = folds.first() {
+        return Some(EntryFoldMarker {
+            position: first.position,
+            key: first.key.clone(),
+            hidden_count: folds.iter().map(|fold| fold.hidden_count).sum::<usize>()
+                + runs.iter().map(|run| run.hidden_prefix_len).sum::<usize>(),
+            expanded: expansions.get(&first.key).copied().unwrap_or(false),
+            atomic: false,
+        });
+    }
+    let first_hiding = runs.iter().find(|run| run.hidden_prefix_len > 0)?;
+    Some(EntryFoldMarker {
+        position: first_hiding.start,
+        key: first_hiding.key.clone(),
+        hidden_count: runs.iter().map(|run| run.hidden_prefix_len).sum(),
+        // A summary row is progressive: it stays collapsed and reveals
+        // through `summary_visible_counts`.
+        expanded: false,
+        atomic: true,
+    })
+}
+
+/// Emit the single collapsed-run row of an entry. The row is a UI marker,
+/// never real content: copying the collapsed block must copy the visible
+/// marker line, never the hidden activities' full text.
+fn push_entry_fold_marker_row(
+    lines: &mut Vec<RenderedLine>,
+    nodes: &mut Vec<RenderedTranscriptNode>,
+    marker: &EntryFoldMarker,
+    i18n: &I18n,
+    width: u16,
+) {
+    let start_line = lines.len();
+    let summary = crate::renderer::transcript_tool_summary::push_fold_marker_row(
+        lines,
+        i18n,
+        marker.hidden_count,
+        width,
+    );
+    nodes.push(RenderedTranscriptNode {
+        key: marker.key.clone(),
+        kind: TranscriptNodeKind::Activity,
+        start_line,
+        end_line: lines.len(),
+        copy_text: summary.into(),
+        atomic: marker.atomic,
+        toggleable: true,
+        expanded: marker.expanded,
+    });
+}
+
+/// Activity-summary node keys of one entry: one per contiguous activity run,
+/// using the same identity the renderer uses. A single merged marker row
+/// controls every run of its entry, so the app raises all of these keys at
+/// once when the user reveals older activities.
+pub fn entry_activity_summary_keys(entry: &TranscriptEntry<'_>) -> Vec<TranscriptNodeKey> {
+    if entry.role == Some(RunRole::User) {
+        return Vec::new();
+    }
+    activity_runs(entry.parts.as_slice())
+        .into_iter()
+        .filter_map(|(start, _end)| {
+            let first = entry.parts.get(start)?;
+            Some(TranscriptNodeKey::ActivitySummary {
+                entry_id: entry.id,
+                first_content_id: first.id,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
         I18n, Line, RunStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults, TranscriptEntry,
         TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr, activity_status_icon,
-        bounded_title_summary, markdown_blocks, refresh_spinner_line, render_entry_detailed,
-        render_entry_export, render_markdown_block, render_tool_execution,
+        bounded_title_summary, entry_activity_summary_keys, markdown_blocks, refresh_spinner_line,
+        render_entry_detailed, render_entry_export, render_markdown_block, render_tool_execution,
         render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
         transcript_spinner_placeholder,
@@ -1572,6 +1737,275 @@ mod tests {
             !summary.contributes_to_aggregate_copy(),
             "the fold marker must never contribute to an aggregate copy"
         );
+    }
+
+    #[test]
+    fn a_reply_with_a_server_fold_and_many_activities_renders_one_marker_row() {
+        let now = Utc::now();
+        let activity = |part_id: i64| {
+            TranscriptFixture::reasoning_part(
+                part_id,
+                21,
+                now,
+                ExecutionStatus::Completed,
+                agena_domain::ReasoningPart {
+                    summary: vec![format!("activity {part_id}")],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                },
+            )
+        };
+        // Two assistant rounds merge into ONE entry, and a bounded run window
+        // inserts one server fold part per run with an omitted page prefix.
+        // The entry must still render a single collapsed-run row.
+        let mut parts = (61..66).map(activity).collect::<Vec<_>>();
+        parts.push(TranscriptEntryPart {
+            id: TranscriptContentId::TranscriptFold {
+                run_id: 8,
+                anchor_part_id: 70,
+            },
+            status: PartExecutionStatusResource::Completed,
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Fold {
+                hidden_count: 7,
+            }),
+        });
+        // Six activities: one more than the client visible budget.
+        parts.extend((70..76).map(activity));
+        let message = entry(
+            21,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
+            now,
+            parts,
+        );
+
+        let defaults = TranscriptDetailDefaults {
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
+        };
+        let rendered = render_entry_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            &defaults,
+            &Default::default(),
+        );
+        let markers = rendered
+            .nodes
+            .iter()
+            .filter(|node| {
+                matches!(node.key, TranscriptNodeKey::ActivitySummary { .. })
+                    || matches!(
+                        &node.key,
+                        TranscriptNodeKey::Activity {
+                            content_id: TranscriptContentId::TranscriptFold { .. },
+                            ..
+                        }
+                    )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            markers.len(),
+            1,
+            "a reply must render exactly one collapsed-run row"
+        );
+        assert_eq!(
+            markers[0].key,
+            TranscriptNodeKey::Activity {
+                entry_id: TranscriptEntryId::StoredMessage(21),
+                content_id: TranscriptContentId::TranscriptFold {
+                    run_id: 8,
+                    anchor_part_id: 70,
+                },
+            },
+            "the server fold owns the merged row"
+        );
+        assert!(markers[0].toggleable);
+        assert!(!markers[0].atomic);
+        assert!(
+            markers[0].copy_text.contains("older parts hidden"),
+            "the merged row keeps the shared fold vocabulary: {}",
+            markers[0].copy_text
+        );
+        // The rendered row sanitizes the bidi isolates around the count, which
+        // is what the terminal actually shows.
+        let marker_line = &rendered.lines[markers[0].start_line];
+        assert!(
+            marker_line.text.contains("8 older parts hidden"),
+            "seven parts hidden by the server fold plus one hidden by the budget: {}",
+            marker_line.text
+        );
+        // The row counts the unloaded server prefix plus the one window
+        // activity the budget hides, and that activity stays behind the row
+        // instead of rendering.
+        let rendered_ids = rendered
+            .nodes
+            .iter()
+            .filter_map(|node| match &node.key {
+                TranscriptNodeKey::Activity {
+                    content_id: TranscriptContentId::StoredPart(id),
+                    ..
+                } => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !rendered_ids.contains(&70),
+            "the budget hides the oldest window activity of the second run"
+        );
+        for part_id in (61..66).chain(71..76) {
+            assert!(
+                rendered_ids.contains(&part_id),
+                "activity {part_id} must stay rendered"
+            );
+        }
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("activity 61"), "{text}");
+        assert!(text.contains("activity 75"), "{text}");
+        assert!(!text.contains("activity 70"), "{text}");
+    }
+
+    #[test]
+    fn two_long_activity_runs_in_one_reply_share_a_single_marker_row() {
+        let now = Utc::now();
+        let activity = |part_id: i64| {
+            TranscriptFixture::reasoning_part(
+                part_id,
+                22,
+                now,
+                ExecutionStatus::Completed,
+                agena_domain::ReasoningPart {
+                    summary: vec![format!("activity {part_id}")],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                },
+            )
+        };
+        // Two long activity runs in one assistant entry, separated by a
+        // working-note paragraph (exactly what a multi-round tool loop looks
+        // like without a bounded run window).
+        let mut parts = (81..87).map(activity).collect::<Vec<_>>();
+        parts.push(TranscriptFixture::text_part(
+            90,
+            22,
+            now,
+            ExecutionStatus::Completed,
+            "between the rounds",
+        ));
+        parts.extend((91..97).map(activity));
+        let message = entry(
+            22,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
+            now,
+            parts,
+        );
+        let first_run_key = TranscriptNodeKey::ActivitySummary {
+            entry_id: TranscriptEntryId::StoredMessage(22),
+            first_content_id: TranscriptContentId::StoredPart(81),
+        };
+        let second_run_key = TranscriptNodeKey::ActivitySummary {
+            entry_id: TranscriptEntryId::StoredMessage(22),
+            first_content_id: TranscriptContentId::StoredPart(91),
+        };
+        assert_eq!(
+            entry_activity_summary_keys(&message),
+            vec![first_run_key.clone(), second_run_key.clone()],
+            "one summary key per run keeps the merged row discoverable"
+        );
+        let defaults = TranscriptDetailDefaults {
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
+        };
+
+        let rendered = render_entry_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            &defaults,
+            &Default::default(),
+        );
+        let markers = rendered
+            .nodes
+            .iter()
+            .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            markers.len(),
+            1,
+            "two hidden runs must share one collapsed-run row"
+        );
+        assert_eq!(markers[0].key, first_run_key);
+        assert!(markers[0].atomic);
+        assert!(!markers[0].expanded);
+        assert!(
+            rendered.lines[markers[0].start_line]
+                .text
+                .contains("2 older parts hidden"),
+            "the row counts every hidden run: {}",
+            rendered.lines[markers[0].start_line].text
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("activity 81"), "{text}");
+        assert!(text.contains("activity 82"), "{text}");
+        assert!(!text.contains("activity 91"), "{text}");
+        assert!(text.contains("activity 92"), "{text}");
+
+        // Show-all for one run keeps the other run's row, positioned at the
+        // run that still hides an activity.
+        let one_run_shown = std::collections::BTreeMap::from([(first_run_key.clone(), true)]);
+        let rendered =
+            render_entry_detailed(&message, 80, &I18n::english(), &defaults, &one_run_shown);
+        let markers = rendered
+            .nodes
+            .iter()
+            .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].key, second_run_key);
+        assert!(markers[0].copy_text.contains("older parts hidden"));
+        assert!(
+            rendered.lines[markers[0].start_line]
+                .text
+                .contains("1 older parts hidden")
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("activity 81"), "{text}");
+        assert!(!text.contains("activity 91"), "{text}");
+
+        // The app raises every summary key of the entry from one gesture.
+        let all_shown =
+            std::collections::BTreeMap::from([(first_run_key, true), (second_run_key, true)]);
+        let rendered = render_entry_detailed(&message, 80, &I18n::english(), &defaults, &all_shown);
+        assert!(
+            rendered
+                .nodes
+                .iter()
+                .all(|node| !matches!(node.key, TranscriptNodeKey::ActivitySummary { .. })),
+            "the merged row disappears once every run is shown"
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("activity 91"), "{text}");
     }
 
     #[test]

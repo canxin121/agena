@@ -1115,3 +1115,195 @@ async fn reconnect_removes_missed_memberships_without_resurrecting_them_from_old
     app.transcript.merge_parts(old_page);
     assert!(!app.transcript.parts.iter().any(|part| part.part_id == 12));
 }
+
+/// Two assistant rounds (part ids 3 and 8) merge into one entry, and the
+/// bounded run window hides an older page prefix of the second run. The
+/// entry must render exactly ONE collapsed-run row, owned by the server fold.
+#[tokio::test]
+async fn a_folded_multi_run_reply_renders_one_marker_row_and_keeps_every_part_reachable() {
+    let mut app = app(TuiBackend::remote_mock());
+    let mut parts = vec![parts_fixtures::run(3, "assistant", "completed")];
+    parts.extend((4..11).map(|part_id| {
+        parts_fixtures::hook(
+            3,
+            part_id,
+            "assistant",
+            &format!("Part {part_id}"),
+            "detail",
+        )
+    }));
+    parts.push(parts_fixtures::run(8, "assistant", "completed"));
+    parts.extend((14..20).map(|part_id| {
+        parts_fixtures::hook(
+            8,
+            part_id,
+            "assistant",
+            &format!("Part {part_id}"),
+            "detail",
+        )
+    }));
+    app.transcript.parts = parts;
+    app.transcript.transcript_folds = vec![TranscriptFold {
+        run_id: 8,
+        run_ids: vec![8],
+        anchor_part_id: 14,
+        hidden_count: 5,
+        next_cursor: Some("before-14".into()),
+    }];
+    let key = TranscriptNodeKey::Activity {
+        entry_id: TranscriptEntryId::StoredMessage(3),
+        content_id: TranscriptContentId::TranscriptFold {
+            run_id: 8,
+            anchor_part_id: 14,
+        },
+    };
+    assert_eq!(
+        app.transcript
+            .transcript_fold_for_node(&key)
+            .expect("load-more cursor")
+            .hidden_count,
+        5
+    );
+
+    let rendered = app.transcript.rendered(WIDTH);
+    let markers = rendered
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(node.key, TranscriptNodeKey::ActivitySummary { .. })
+                || matches!(
+                    &node.key,
+                    TranscriptNodeKey::Activity {
+                        content_id: TranscriptContentId::TranscriptFold { .. },
+                        ..
+                    }
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        markers.len(),
+        1,
+        "a multi-run reply must show exactly one collapsed-run row"
+    );
+    assert_eq!(markers[0].key, key, "the server fold owns the merged row");
+    assert!(markers[0].toggleable);
+    assert!(
+        markers[0].copy_text.contains("older parts hidden"),
+        "the merged row keeps the shared fold vocabulary: {}",
+        markers[0].copy_text
+    );
+    let marker_text = app.transcript.rendered(WIDTH).lines[markers[0].start_line]
+        .text
+        .clone();
+    assert!(
+        marker_text.contains("8 older parts hidden"),
+        "five parts hidden by the fold plus two and one hidden by the budget: {marker_text}"
+    );
+    // The budget keeps each run compact: run three renders its newest five
+    // activities and run two its newest five, while the merged row counts
+    // everything it hides.
+    assert_parts_visible(&mut app.transcript, 6..11);
+    assert_parts_visible(&mut app.transcript, 15..20);
+    let hidden = |transcript: &mut TranscriptState, part_id: i64| {
+        !transcript.rendered(WIDTH).nodes.iter().any(|node| {
+            matches!(&node.key,
+                TranscriptNodeKey::Activity { content_id: TranscriptContentId::StoredPart(id), .. }
+                    if *id == part_id
+            )
+        })
+    };
+    for part_id in 4..6 {
+        assert!(
+            hidden(&mut app.transcript, part_id),
+            "part {part_id} stays behind the merged row"
+        );
+    }
+    assert!(hidden(&mut app.transcript, 14));
+    // Show-all reaches every run of the entry, including this one whose only
+    // row is the server fold.
+    app.transcript.expand_all_transcript_parts(WIDTH, HEIGHT);
+    assert_parts_visible(&mut app.transcript, 4..11);
+    assert_parts_visible(&mut app.transcript, 14..20);
+}
+
+/// One merged marker row must reveal every activity run of its entry from a
+/// single progressive reveal, and show-all must clear all of them.
+#[tokio::test]
+async fn one_merged_marker_row_reveals_every_run_of_a_multi_run_reply() {
+    let mut app = app(TuiBackend::remote_mock());
+    let mut parts = vec![parts_fixtures::run(3, "assistant", "completed")];
+    parts.extend((4..10).map(|part_id| {
+        parts_fixtures::hook(
+            3,
+            part_id,
+            "assistant",
+            &format!("Part {part_id}"),
+            "detail",
+        )
+    }));
+    // Consecutive run markers alone stay one contiguous activity run, so a
+    // non-activity part is what separates the two rounds into two runs.
+    parts.push(parts_fixtures::paste(3, 10, "user", "pasted note"));
+    parts.push(parts_fixtures::run(8, "assistant", "completed"));
+    parts.extend((14..20).map(|part_id| {
+        parts_fixtures::hook(
+            8,
+            part_id,
+            "assistant",
+            &format!("Part {part_id}"),
+            "detail",
+        )
+    }));
+    app.transcript.merge_parts(parts);
+    let summary_key = TranscriptNodeKey::ActivitySummary {
+        entry_id: TranscriptEntryId::StoredMessage(3),
+        first_content_id: TranscriptContentId::StoredPart(4),
+    };
+
+    let rendered = app.transcript.rendered(WIDTH);
+    let markers = rendered
+        .nodes
+        .iter()
+        .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        markers.len(),
+        1,
+        "two long runs must share one collapsed-run row"
+    );
+    assert_eq!(markers[0].key, summary_key);
+    let marker_text = rendered.lines[markers[0].start_line].text.clone();
+    assert!(
+        marker_text.contains("2 older parts hidden"),
+        "one activity per run: {marker_text}"
+    );
+    let hidden =
+        |transcript: &mut TranscriptState, part_id: i64| {
+            !transcript.rendered(WIDTH).nodes.iter().any(|node| matches!(&node.key,
+            TranscriptNodeKey::Activity { content_id: TranscriptContentId::StoredPart(id), .. }
+                if *id == part_id
+        ))
+        };
+    assert!(hidden(&mut app.transcript, 4));
+    assert!(hidden(&mut app.transcript, 14));
+
+    app.transcript
+        .set_cursor_line(WIDTH, HEIGHT, markers[0].start_line);
+    assert_eq!(
+        app.transcript
+            .toggle_cursor_node_expansion_by(WIDTH, HEIGHT, None),
+        Some((crate::TranscriptNodeKind::Activity, true))
+    );
+    assert_parts_visible(&mut app.transcript, 4..10);
+    assert_parts_visible(&mut app.transcript, 14..20);
+    assert!(
+        app.transcript
+            .rendered(WIDTH)
+            .nodes
+            .iter()
+            .all(|node| !matches!(node.key, TranscriptNodeKey::ActivitySummary { .. })),
+        "one gesture reveals every run of the entry"
+    );
+}

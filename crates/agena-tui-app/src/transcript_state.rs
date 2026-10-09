@@ -721,6 +721,37 @@ impl TranscriptState {
                 }
             }
         }
+        let changed = parts
+            .iter()
+            .filter(|part| {
+                previous.get(&part.part_id).is_none_or(|old| {
+                    (
+                        old.revision,
+                        old.updated_at_ms,
+                        old.kind.as_str(),
+                        old.role.as_str(),
+                        old.state.as_str(),
+                        &old.content,
+                    ) != (
+                        part.revision,
+                        part.updated_at_ms,
+                        part.kind.as_str(),
+                        part.role.as_str(),
+                        part.state.as_str(),
+                        &part.content,
+                    )
+                })
+            })
+            .map(|part| part.part_id)
+            .collect::<BTreeSet<_>>();
+        let restructured = parts.len() != self.parts.len()
+            || self
+                .parts
+                .iter()
+                .zip(&parts)
+                .any(|(old, incoming)| old.part_id != incoming.part_id);
+        let pending_before = self.pending_user_messages.len();
+        let failures_before = self.reply_failures.len();
         self.apply_parts_change(|current| *current = parts);
         self.tool_detail_pending
             .retain(|(id, _)| self.parts.iter().any(|part| part.part_id == *id));
@@ -728,7 +759,20 @@ impl TranscriptState {
             .retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
         self.tool_detail_failures
             .retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
-        self.invalidate_render();
+        // Only the entries whose parts actually changed need to re-render.
+        // Anything that changes the part set or its order (a new or removed
+        // part, a reordered snapshot, a re-woven pending entry) cannot be
+        // attributed to a projected entry and keeps the full invalidation.
+        if restructured || pending_before != self.pending_user_messages.len() {
+            self.invalidate_render();
+        } else if changed.is_empty() && failures_before == self.reply_failures.len() {
+            // Nothing a render could observe changed.
+        } else {
+            match self.projected_entry_ids_for_parts(&changed) {
+                Some(affected) => self.invalidate_entries(&affected),
+                None => self.invalidate_render(),
+            }
+        }
     }
 
     /// A semantic patch changes one fact. Loaded sibling sections and all
@@ -749,8 +793,22 @@ impl TranscriptState {
             return false;
         }
         preserve_loaded_tool_sections(previous, &mut part);
+        let part_id = part.part_id;
+        let pending_before = self.pending_user_messages.len();
         self.apply_parts_change(move |parts| parts[index] = part);
-        self.invalidate_render();
+        // A streamed delta invalidates only the entry that owns it: every other
+        // reply keeps its cached rendered block, so the terminal repaints the
+        // changed entry instead of the whole session. Anything the projection
+        // cannot attribute (a re-woven pending entry, an unknown owner) falls
+        // back to the full invalidation.
+        if pending_before != self.pending_user_messages.len() {
+            self.invalidate_render();
+        } else {
+            match self.projected_entry_ids_for_parts(&BTreeSet::from([part_id])) {
+                Some(affected) => self.invalidate_entries(&affected),
+                None => self.invalidate_render(),
+            }
+        }
         true
     }
 
@@ -2225,6 +2283,48 @@ impl TranscriptState {
         self.projected_entries = None;
         self.projected_resource_ids.clear();
         self.entry_render_cache.clear();
+    }
+
+    /// Frame invalidation for one known set of changed entries: the assembled
+    /// frame and the Part projection are rebuilt, but only the affected
+    /// entries drop their cached rendered blocks. Every other entry keeps its
+    /// block (Arc-shared), so a live streamed delta repaints the entry that
+    /// changed instead of the whole session.
+    pub(crate) fn invalidate_entries(
+        &mut self,
+        entry_ids: &BTreeSet<agena_tui_transcript::TranscriptEntryId>,
+    ) {
+        self.rendered = None;
+        self.projected_entries = None;
+        self.projected_resource_ids.clear();
+        self.entry_render_cache
+            .retain(|id, _| !entry_ids.contains(id));
+    }
+
+    /// Entry ids whose projected parts include every id in `part_ids`, or
+    /// `None` when the projection is not materialized or an id cannot be
+    /// attributed to a projected entry (a new part, a run marker, a removed
+    /// part). Callers fall back to [`Self::invalidate_render`] in that case so
+    /// a changed part can never hide behind a stale cache.
+    fn projected_entry_ids_for_parts(
+        &self,
+        part_ids: &BTreeSet<i64>,
+    ) -> Option<BTreeSet<agena_tui_transcript::TranscriptEntryId>> {
+        let entries = self.projected_entries.as_ref()?;
+        let mut affected = BTreeSet::new();
+        let mut attributed = BTreeSet::new();
+        for entry in entries {
+            for part in &entry.parts {
+                let agena_tui_transcript::TranscriptContentId::StoredPart(part_id) = part.id else {
+                    continue;
+                };
+                if part_ids.contains(&part_id) {
+                    affected.insert(entry.id);
+                    attributed.insert(part_id);
+                }
+            }
+        }
+        (attributed == *part_ids).then_some(affected)
     }
 
     pub(crate) fn invalidate_content_render(&mut self) {
@@ -3897,17 +3997,27 @@ impl TranscriptState {
             let reveal_count = reveal_count
                 .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT)
                 .clamp(1, 50);
-            let current = self
-                .activity_summary_visible_counts
-                .get(&node.key)
-                .copied()
-                .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT);
-            self.activity_summary_visible_counts
-                .insert(node.key.clone(), current.saturating_add(reveal_count));
-            // A summary action is progressive. `Enter` reveals five, a Vim
-            // count followed by Enter reveals that many, and the explicit
-            // show-all action uses the all-visible path below.
-            self.node_expansions.remove(&node.key);
+            // One merged marker row can stand for several activity runs of its
+            // entry, so a single reveal must raise the visible count of every
+            // run: otherwise the parts hidden by a sibling run stay
+            // unreachable behind a row that no longer hides anything.
+            let mut keys = self.entry_activity_summary_keys(node.key.entry_id());
+            if keys.is_empty() {
+                keys.push(node.key.clone());
+            }
+            for key in keys {
+                let current = self
+                    .activity_summary_visible_counts
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT);
+                self.activity_summary_visible_counts
+                    .insert(key.clone(), current.saturating_add(reveal_count));
+                // A summary action is progressive. `Enter` reveals five, a Vim
+                // count followed by Enter reveals that many, and the explicit
+                // show-all action uses the all-visible path below.
+                self.node_expansions.remove(&key);
+            }
             self.invalidate_render();
             let total_lines = self.rendered(width).lines.len();
             let target_line = self.focusable_line_near(
@@ -3972,18 +4082,49 @@ impl TranscriptState {
         let collapsed = std::mem::take(&mut self.activity_summary_collapsed_entries);
         self.activity_summary_visible_counts
             .retain(|key, _| !collapsed.contains(&key.entry_id()));
-        let summary_keys = self
-            .rendered(width)
-            .nodes
-            .iter()
-            .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
-            .map(|node| node.key.clone())
-            .collect::<Vec<_>>();
+        // Every folded reply is covered, including entries whose only marker
+        // row is a server fold: those hide window activities behind that same
+        // row, so show-all must raise every run key of every folded entry. The
+        // rendered marker rows are only the fallback for a state whose
+        // projection is not materialized.
+        let mut summary_keys = self
+            .projected_entries
+            .as_ref()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .flat_map(|entry| agena_tui_transcript::entry_activity_summary_keys(entry))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if summary_keys.is_empty() {
+            let rendered = self.rendered(width);
+            summary_keys.extend(
+                rendered
+                    .nodes
+                    .iter()
+                    .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+                    .map(|node| node.key.clone()),
+            );
+        }
         for key in summary_keys {
             self.activity_summary_visible_counts.insert(key, usize::MAX);
         }
         self.invalidate_render();
         self.ensure_visual_focus(width, height);
+    }
+
+    /// Every activity-summary key of one projected entry. A merged marker row
+    /// controls all of the entry's activity runs.
+    fn entry_activity_summary_keys(
+        &self,
+        entry_id: agena_tui_transcript::TranscriptEntryId,
+    ) -> Vec<TranscriptNodeKey> {
+        self.projected_entries
+            .as_ref()
+            .and_then(|entries| entries.iter().find(|entry| entry.id == entry_id))
+            .map(|entry| agena_tui_transcript::entry_activity_summary_keys(entry))
+            .unwrap_or_default()
     }
 
     fn allow_reply_part_reveal(&mut self, entry_id: agena_tui_transcript::TranscriptEntryId) {
@@ -4869,6 +5010,83 @@ mod stall_recovery_tests {
         );
         assert_eq!(state.interaction.text_selection, Some(selection));
         assert!(state.entry_render_cache.len() > 128);
+    }
+
+    #[test]
+    fn a_streamed_delta_keeps_every_other_entry_render_cache_arc_identical() {
+        use std::sync::Arc;
+        let mut state = state();
+        let mut parts = (1..=40)
+            .flat_map(|id| {
+                let marker = run_part(2 * id - 1, "user");
+                let mut body = text_part(2 * id, &format!("history {id}"));
+                body.run_id = Some(marker.part_id);
+                body.role = "user".into();
+                [marker, body]
+            })
+            .collect::<Vec<_>>();
+        parts.push(run_part(500, "assistant"));
+        let mut live = text_part(501, "live content one");
+        live.run_id = Some(500);
+        parts.push(live);
+        state.merge_parts(parts);
+
+        let (live_block_start, historical_rows) = {
+            let rendered = state.rendered(80);
+            let live_block_start = rendered
+                .nodes
+                .iter()
+                .find(|node| {
+                    matches!(
+                        &node.key,
+                        TranscriptNodeKey::Entry { entry_id }
+                            if *entry_id == agena_tui_transcript::TranscriptEntryId::StoredMessage(500)
+                    )
+                })
+                .expect("live entry block")
+                .start_line;
+            assert!(live_block_start > 0);
+            (
+                live_block_start,
+                rendered.lines[..live_block_start].to_vec(),
+            )
+        };
+        assert!(state.entry_render_cache.len() >= 41);
+
+        // One streamed delta on the live entry: only that entry may re-render.
+        let mut delta = text_part(501, "live content two");
+        delta.run_id = Some(500);
+        delta.revision = 1;
+        delta.updated_at_ms = 1;
+        assert!(state.merge_part(delta));
+
+        let rendered = state.rendered(80);
+        for (index, (before, after)) in historical_rows
+            .iter()
+            .zip(&rendered.lines)
+            .take(live_block_start)
+            .enumerate()
+        {
+            assert!(
+                Arc::ptr_eq(before, after),
+                "an untouched entry must keep its cached rendered row {index}: {:?} -> {:?}",
+                before.text,
+                after.text
+            );
+        }
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.copy_text.contains("live content two"))
+        );
+        assert!(
+            !rendered
+                .lines
+                .iter()
+                .any(|line| line.copy_text.contains("live content one"))
+        );
+        assert!(state.entry_render_cache.len() >= 41);
     }
 
     #[test]

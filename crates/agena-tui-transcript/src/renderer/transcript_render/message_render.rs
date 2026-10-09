@@ -158,6 +158,25 @@ pub(crate) fn collapsed_activity_run_end(
     })
 }
 
+/// Every contiguous activity run of one entry as `(start, end)` indexes into
+/// `parts`. A run starts at an Activity node and extends over adjacent
+/// Activity nodes and invisible blank text bridges, exactly like the collapse
+/// scan above; this is the single source of truth for run identity, shared by
+/// the fold renderer and the entry's activity-summary keys.
+pub(crate) fn activity_runs(parts: &[TranscriptEntryPart]) -> Vec<(usize, usize)> {
+    let mut runs = Vec::new();
+    let mut index = 0_usize;
+    while index < parts.len() {
+        if let Some(end) = collapsed_activity_run_end(parts, index) {
+            runs.push((index, end));
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+    runs
+}
+
 pub const COLLAPSED_ACTIVITY_VISIBLE_COUNT: usize = 5;
 
 fn is_invisible_activity_run_bridge(parts: &[TranscriptEntryPart], index: usize) -> bool {

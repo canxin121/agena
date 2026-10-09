@@ -33,8 +33,8 @@ pub use parts::{
 };
 pub use render_model::*;
 pub use renderer::{
-    COLLAPSED_ACTIVITY_VISIBLE_COUNT, RenderedMessageBlock, render_diff_document,
-    render_entry_detailed, render_entry_detailed_with_interactions,
+    COLLAPSED_ACTIVITY_VISIBLE_COUNT, RenderedMessageBlock, entry_activity_summary_keys,
+    render_diff_document, render_entry_detailed, render_entry_detailed_with_interactions,
     render_entry_detailed_with_progressive_expansion, render_entry_export,
     render_markdown_document, render_parts_export_markdown, rewind_message_preview,
 };

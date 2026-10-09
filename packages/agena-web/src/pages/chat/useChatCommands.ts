@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { RiCommandLine, RiFlashlightLine } from '@remixicon/vue'
 
 import { readPluginCommandCatalog } from '../../lib/pluginCommandRead'
+import { isImeComposing } from '@/lib/imeKeyboard'
 import { getComposerInput, type ComposerExpose } from './composerInput'
 import {
   clientCommandsFromCatalog,
@@ -307,6 +308,10 @@ export function useChatCommands(opts: {
 
   function handleCommandPaletteKeydown(event: KeyboardEvent) {
     if (!commandOpen.value) return
+    // The palette is opened from the composer while the user is typing. An IME
+    // confirm must never pick the highlighted command, close the palette, or
+    // move the selection: those keys belong to the candidate window.
+    if (isImeComposing(event)) return
     if (event.key === 'Escape') {
       event.preventDefault()
       closeCommandPalette()

@@ -15,6 +15,7 @@ import { syncKeySet } from '@/lib/reactiveKeySet'
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { isImeComposing } from '@/lib/imeKeyboard'
 import { getComposerInput, type ComposerExpose } from './composerInput'
 import {
   lastTranscriptMessagePart,
@@ -1709,6 +1710,9 @@ export function useChatTranscriptVim(opts: {
   }
 
   function handleSearchKeydown(event: KeyboardEvent) {
+    // Search owns a real text input: an IME confirm must only commit the
+    // composed query, never jump to a match or close the search bar.
+    if (isImeComposing(event)) return
     event.stopPropagation()
     if (event.key === 'Escape') {
       event.preventDefault()

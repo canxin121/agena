@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import Button from '@/components/ui/Button.vue'
+import { isImeComposing } from '@/lib/imeKeyboard'
 import type { JsonValue } from '@/types/json'
 import {
   jsonArray,
@@ -460,6 +461,10 @@ function handleEscape(target: Element | null) {
 }
 
 async function handleKeydown(event: KeyboardEvent) {
+  // An IME confirmation key belongs to the input method, not to this wizard:
+  // the committed text arrives through `input`, and only the next real Enter
+  // commits the answer or advances to the following question.
+  if (isImeComposing(event)) return
   const target = event.target instanceof HTMLElement ? event.target : rootEl.value
   if (!target) return
   const control = target.closest<HTMLElement>('[data-interaction-control="true"]')

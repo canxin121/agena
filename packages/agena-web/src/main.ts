@@ -26,6 +26,13 @@ import {
   type AuthRequiredDetail,
 } from './lib/authEvents.ts'
 import { readUiAuthTokenVersion } from './lib/uiAuthToken'
+import { installImeCompositionGuard } from './lib/imeKeyboard'
+
+// An input method's confirmation key belongs to the input method. Install the
+// guard before any component hands `Enter` to a submit, save or navigation
+// action so composing a name, a search query or a custom answer never also
+// triggers that action.
+installImeCompositionGuard()
 
 // Capture initial page-load context so components that mount lazily (e.g. mobile sidebar)
 // can still tell whether a session query came from a fresh load vs in-app navigation.

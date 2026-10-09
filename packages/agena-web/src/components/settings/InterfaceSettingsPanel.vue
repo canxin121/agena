@@ -119,12 +119,9 @@ onBeforeUnmount(() => catalogController?.abort())
 
 <template>
   <div class="space-y-6">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <div class="text-lg font-medium">{{ t('settings.tabs.interface') }}</div>
-        <div class="mt-1 max-w-3xl text-sm text-muted-foreground">
-          {{ t('settings.tui.interfaceDescription') }}
-        </div>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="max-w-3xl text-sm text-muted-foreground">
+        {{ t('settings.tui.interfaceDescription') }}
       </div>
       <Button variant="outline" size="sm" :disabled="loadingCatalog" @click="loadCatalog">
         <RiRefreshLine class="mr-2 h-4 w-4" :class="loadingCatalog ? 'animate-spin' : ''" />
@@ -178,6 +175,5 @@ onBeforeUnmount(() => catalogController?.abort())
         monospace
       />
     </section>
-
   </div>
 </template>

@@ -11,8 +11,6 @@ import {
 const props = withDefaults(
   defineProps<{
     section: string
-    title: string
-    description: string
     pages: SettingsSubpageDefinition[]
     defaultPage: string
   }>(),
@@ -91,14 +89,6 @@ onMounted(() => {
 
 <template>
   <section class="grid min-w-0 gap-5">
-    <header class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-5">
-      <div class="min-w-0">
-        <h1 class="text-xl font-semibold tracking-tight">{{ title }}</h1>
-        <p class="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">{{ description }}</p>
-      </div>
-      <slot name="actions" :active-page="activePage" />
-    </header>
-
     <div class="min-w-0">
       <slot :active-page="activePage" :active-definition="activeDefinition" />
     </div>

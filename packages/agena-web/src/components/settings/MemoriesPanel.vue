@@ -128,14 +128,11 @@ async function deleteSelected() {
 
 <template>
   <div class="space-y-6">
-    <div>
-      <div class="text-lg font-medium">{{ $st('Memories') }}</div>
-      <div class="mt-1 text-sm text-muted-foreground">
-        {{ $st('Persistent memory entries the server keeps across sessions.') }}
-      </div>
-      <div v-if="workspaceRoot || directory" class="mt-1 text-[11px] font-mono text-muted-foreground break-all">
-        {{ [workspaceRoot, directory].filter(Boolean).join(' / ') }}
-      </div>
+    <div class="text-sm text-muted-foreground">
+      {{ $st('Persistent memory entries the server keeps across sessions.') }}
+    </div>
+    <div v-if="workspaceRoot || directory" class="text-[11px] font-mono text-muted-foreground break-all">
+      {{ [workspaceRoot, directory].filter(Boolean).join(' / ') }}
     </div>
 
     <div class="grid gap-3">

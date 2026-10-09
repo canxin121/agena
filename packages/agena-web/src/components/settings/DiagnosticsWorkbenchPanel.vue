@@ -15,10 +15,6 @@ const pages = computed(() => buildSettingsSubpages('diagnostics'))
 <template>
   <SettingsSectionWorkbench
     section="diagnostics"
-    :title="$st('Diagnostics')"
-    :description="
-      $st('Trace and validate the runtime, then inspect operational records without mixing them into one long page.')
-    "
     :pages="pages"
     :default-page="SETTINGS_DEFAULT_SUBPAGE.diagnostics"
     v-slot="{ activePage }"

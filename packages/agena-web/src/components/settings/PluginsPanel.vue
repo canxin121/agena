@@ -640,16 +640,13 @@ onMounted(() => void refresh())
 
 <template>
   <div class="space-y-6">
-    <div class="flex items-start justify-between gap-3">
-      <div>
-        <div class="text-lg font-medium">{{ $st('Plugin Workbench') }}</div>
-        <div class="mt-1 text-sm text-muted-foreground">
-          {{
-            $st(
-              'Dependency-aware lifecycle, shared settings contracts, server-owned commands, tools, logs and diagnostics.',
-            )
-          }}
-        </div>
+    <div class="flex items-center justify-between gap-3">
+      <div class="text-sm text-muted-foreground">
+        {{
+          $st(
+            'Dependency-aware lifecycle, shared settings contracts, server-owned commands, tools, logs and diagnostics.',
+          )
+        }}
       </div>
       <IconButton
         variant="outline"

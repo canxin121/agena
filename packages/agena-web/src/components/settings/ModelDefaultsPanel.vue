@@ -4,6 +4,7 @@ import { RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
 import ApprovalModelPanel from '@/components/settings/ApprovalModelPanel.vue'
 import Button from '@/components/ui/Button.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
 import { mutateModelConfiguration } from '@/lib/modelConfigurationApi'
@@ -16,21 +17,12 @@ import {
   useModelSelectionCatalog,
   verbosityOptionsForModel,
   type ModelModeOption,
-  type ProviderModel,
 } from '@/pages/chat/modelSelectionCatalog'
 import { encodeModelSelectionKey, parseModelSlug } from '@/pages/chat/modelSelectionDefaults'
 import { useToastsStore } from '@/stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
 
-type ModelCatalogSummary = {
-  refreshing?: boolean
-  model_count?: number
-  last_refresh_at?: string | null
-  last_failure?: { message?: string; rendered?: string } | null
-}
-
 type RuntimeStatus = {
-  model_catalog?: ModelCatalogSummary | null
   default_selection?: {
     provider?: string | null
     adapter?: string | null
@@ -42,18 +34,12 @@ type RuntimeStatus = {
   } | null
 }
 
-type ModelCatalogList = {
-  summary?: ModelCatalogSummary
-  total?: number
-}
-
 const toasts = useToastsStore()
 const modelSelectionCatalog = useModelSelectionCatalog()
 
 const loading = ref(false)
 const error = ref('')
 const runtime = ref<RuntimeStatus | null>(null)
-const catalog = ref<ModelCatalogList | null>(null)
 const defaultModelKey = ref('')
 const defaultThinkingMode = ref('')
 const defaultSpeedMode = ref('')
@@ -61,38 +47,6 @@ const defaultVerbosity = ref('')
 const defaultParallelToolCalls = ref(false)
 const defaultSaveBusy = ref(false)
 const defaultSaveError = ref('')
-
-const catalogModelCount = computed(() => {
-  const counts = [
-    runtime.value?.model_catalog?.model_count,
-    catalog.value?.summary?.model_count,
-    catalog.value?.total,
-  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-  return counts.length > 0 ? Math.max(...counts) : 0
-})
-
-const defaultSelectionLabel = computed(() => {
-  const selection = runtime.value?.default_selection
-  const provider = String(selection?.provider || '').trim()
-  const adapter = String(selection?.adapter || '').trim()
-  const model = String(selection?.model || '').trim()
-  if (!provider || !model) return 'Unset'
-  return [provider, adapter, model].filter(Boolean).join(' / ')
-})
-
-const defaultModesLabel = computed(() => {
-  const selection = runtime.value?.default_selection
-  return [
-    selection?.thinking_mode ? st('thinking: {thinking_mode}', { thinking_mode: selection.thinking_mode }) : '',
-    selection?.speed_mode ? st('speed: {speed_mode}', { speed_mode: selection.speed_mode }) : '',
-    selection?.verbosity ? st('verbosity: {verbosity}', { verbosity: selection.verbosity }) : '',
-    typeof selection?.parallel_tool_calls === 'boolean'
-      ? st('parallel tools: {value}', { value: selection.parallel_tool_calls ? st('on') : st('off') })
-      : '',
-  ]
-    .filter(Boolean)
-    .join(' · ')
-})
 
 const defaultModelOptions = computed(() => {
   const options: Array<{ value: string; label: string; description: string }> = []
@@ -165,13 +119,11 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [runtimeData, catalogData] = await Promise.all([
+    const [runtimeData] = await Promise.all([
       apiJson<RuntimeStatus>('/api/v1/runtime'),
-      apiJson<ModelCatalogList>('/api/v1/model-catalog?offset=0&limit=1'),
       modelSelectionCatalog.loadProvidersAndModels(),
     ])
     runtime.value = runtimeData && typeof runtimeData === 'object' ? runtimeData : null
-    catalog.value = catalogData && typeof catalogData === 'object' ? catalogData : null
     syncDefaultEditor()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
@@ -232,26 +184,7 @@ onMounted(() => void refresh())
 </script>
 
 <template>
-  <div class="grid min-w-0 gap-6">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-semibold">{{ $st('Model defaults') }}</h2>
-        <p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-          {{ $st('Choose the one runtime-wide default model and its optional execution modes.') }}
-        </p>
-      </div>
-      <IconButton
-        variant="outline"
-        size="md"
-        :tooltip="loading ? $st('Refreshing model settings') : $st('Refresh model settings')"
-        :aria-label="loading ? $st('Refreshing model settings') : $st('Refresh model settings')"
-        :disabled="loading"
-        @click="refresh"
-      >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-    </div>
-
+  <div class="grid min-w-0 gap-4">
     <div
       v-if="error"
       class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -259,106 +192,103 @@ onMounted(() => void refresh())
       {{ error }}
     </div>
 
-    <dl class="grid grid-cols-1 gap-x-6 gap-y-3 border-y border-border/60 py-4 sm:grid-cols-3">
+    <section class="grid gap-4 rounded-lg border border-border/60 p-4">
       <div>
-        <dt class="text-xs text-muted-foreground">{{ $st('Model Catalog') }}</dt>
-        <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">{{ catalogModelCount }}</dd>
+        <h2 class="text-sm font-semibold">{{ $st('Runtime default model') }}</h2>
+        <p class="mt-1 text-xs leading-5 text-muted-foreground">
+          {{
+            $st(
+              'Used when a new run does not provide an explicit model. Provider settings do not define a separate default.',
+            )
+          }}
+        </p>
       </div>
-      <div class="sm:col-span-2">
-        <dt class="text-xs text-muted-foreground">{{ $st('Runtime default') }}</dt>
-        <dd class="mt-1 break-all font-mono text-sm font-semibold">{{ defaultSelectionLabel }}</dd>
-        <div v-if="defaultModesLabel" class="mt-0.5 text-[11px] text-muted-foreground">{{ defaultModesLabel }}</div>
-      </div>
-    </dl>
-
-    <template>
-      <section class="grid gap-4 rounded-lg border border-border/60 p-4">
-        <div>
-          <h3 class="text-sm font-semibold">{{ $st('Runtime default model') }}</h3>
-          <p class="mt-1 text-xs leading-5 text-muted-foreground">
-            {{
-              $st(
-                'Used when a new run does not provide an explicit model. Provider settings do not define a separate default.',
-              )
-            }}
-          </p>
-        </div>
-        <div class="grid gap-3 xl:grid-cols-2">
-          <label class="grid min-w-0 gap-1.5 xl:col-span-2">
-            <span class="text-xs text-muted-foreground">{{ $st('Model route') }}</span>
-            <OptionPicker
-              :model-value="defaultModelKey"
-              :options="defaultModelOptions"
-              :title="$st('Runtime default model')"
-              :placeholder="$st('Select a configured model')"
-              :search-placeholder="$st('Search configured models...')"
-              :include-empty="false"
-              :disabled="loading || defaultSaveBusy"
-              monospace
-              @update:model-value="chooseDefaultModel"
-            />
-          </label>
-          <label class="grid min-w-0 gap-1.5">
-            <span class="text-xs text-muted-foreground">{{ $st('Thinking') }}</span>
-            <OptionPicker
-              v-model="defaultThinkingMode"
-              :options="defaultThinkingOptions"
-              :title="$st('Default thinking mode')"
-              :empty-label="$st('Model default')"
-              :disabled="loading || defaultSaveBusy || !defaultModelKey"
-            />
-          </label>
-          <label class="grid min-w-0 gap-1.5">
-            <span class="text-xs text-muted-foreground">{{ $st('Speed') }}</span>
-            <OptionPicker
-              v-model="defaultSpeedMode"
-              :options="defaultSpeedOptions"
-              :title="$st('Default speed mode')"
-              :empty-label="$st('Model default')"
-              :disabled="loading || defaultSaveBusy || !defaultModelKey"
-            />
-          </label>
-          <label class="grid min-w-0 gap-1.5">
-            <span class="text-xs text-muted-foreground">{{ $st('Verbosity') }}</span>
-            <OptionPicker
-              v-model="defaultVerbosity"
-              :options="defaultVerbosityOptions"
-              :title="$st('Default verbosity')"
-              :empty-label="$st('Model default')"
-              :disabled="loading || defaultSaveBusy || !defaultModelKey || defaultVerbosityOptions.length === 0"
-            />
-          </label>
-          <label class="flex min-h-9 items-center gap-2 rounded-md border border-border/60 px-3 text-sm">
-            <input
-              v-model="defaultParallelToolCalls"
-              type="checkbox"
-              :disabled="loading || defaultSaveBusy || !selectedSupportsParallelTools"
-            />
-            <span>
-              {{ $st('Parallel tool calls') }}
-              <span v-if="!selectedSupportsParallelTools" class="ml-1 text-xs text-muted-foreground">
-                {{ $st('not supported') }}
-              </span>
+      <div class="grid gap-3 xl:grid-cols-2">
+        <label class="grid min-w-0 gap-1.5 xl:col-span-2">
+          <span class="text-xs text-muted-foreground">{{ $st('Model route') }}</span>
+          <OptionPicker
+            :model-value="defaultModelKey"
+            :options="defaultModelOptions"
+            :title="$st('Runtime default model')"
+            :placeholder="$st('Select a configured model')"
+            :search-placeholder="$st('Search configured models...')"
+            :include-empty="false"
+            :disabled="loading || defaultSaveBusy"
+            monospace
+            @update:model-value="chooseDefaultModel"
+          />
+        </label>
+        <label class="grid min-w-0 gap-1.5">
+          <span class="text-xs text-muted-foreground">{{ $st('Thinking') }}</span>
+          <OptionPicker
+            v-model="defaultThinkingMode"
+            :options="defaultThinkingOptions"
+            :title="$st('Default thinking mode')"
+            :empty-label="$st('Model default')"
+            :disabled="loading || defaultSaveBusy || !defaultModelKey"
+          />
+        </label>
+        <label class="grid min-w-0 gap-1.5">
+          <span class="text-xs text-muted-foreground">{{ $st('Speed') }}</span>
+          <OptionPicker
+            v-model="defaultSpeedMode"
+            :options="defaultSpeedOptions"
+            :title="$st('Default speed mode')"
+            :empty-label="$st('Model default')"
+            :disabled="loading || defaultSaveBusy || !defaultModelKey"
+          />
+        </label>
+        <label class="grid min-w-0 gap-1.5">
+          <span class="text-xs text-muted-foreground">{{ $st('Verbosity') }}</span>
+          <OptionPicker
+            v-model="defaultVerbosity"
+            :options="defaultVerbosityOptions"
+            :title="$st('Default verbosity')"
+            :empty-label="$st('Model default')"
+            :disabled="loading || defaultSaveBusy || !defaultModelKey || defaultVerbosityOptions.length === 0"
+          />
+        </label>
+        <label class="flex min-h-9 items-center gap-2 rounded-md border border-border/60 px-3 text-sm">
+          <input
+            v-model="defaultParallelToolCalls"
+            type="checkbox"
+            :disabled="loading || defaultSaveBusy || !selectedSupportsParallelTools"
+          />
+          <span>
+            {{ $st('Parallel tool calls') }}
+            <span v-if="!selectedSupportsParallelTools" class="ml-1 text-xs text-muted-foreground">
+              {{ $st('not supported') }}
             </span>
-          </label>
+          </span>
+        </label>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div v-if="modelSelectionCatalog.catalogError.value" class="break-words text-xs text-destructive">
+          {{ modelSelectionCatalog.catalogError.value }}
         </div>
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div v-if="modelSelectionCatalog.catalogError.value" class="break-words text-xs text-destructive">
-            {{ modelSelectionCatalog.catalogError.value }}
-          </div>
-          <div v-else-if="defaultSaveError" class="break-words text-xs text-destructive">{{ defaultSaveError }}</div>
-          <span v-else class="text-xs text-muted-foreground">{{
-            $st('Clear a mode to inherit the model’s native default.')
-          }}</span>
+        <div v-else-if="defaultSaveError" class="break-words text-xs text-destructive">{{ defaultSaveError }}</div>
+        <span v-else class="text-xs text-muted-foreground">{{
+          $st('Clear a mode to inherit the model’s native default.')
+        }}</span>
+        <div class="flex items-center gap-2">
+          <IconButton
+            variant="outline"
+            size="md"
+            :tooltip="loading ? $st('Refreshing model settings') : $st('Refresh model settings')"
+            :aria-label="loading ? $st('Refreshing model settings') : $st('Refresh model settings')"
+            :disabled="loading || defaultSaveBusy"
+            @click="refresh"
+          >
+            <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
+          </IconButton>
           <Button :disabled="loading || defaultSaveBusy || !defaultModelKey" @click="saveDefaultSelection">
             <RiSave3Line class="mr-2 h-4 w-4" />
             {{ defaultSaveBusy ? $st('Saving…') : $st('Save runtime default') }}
           </Button>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <ApprovalModelPanel />
-    </template>
-
+    <ApprovalModelPanel />
   </div>
 </template>

@@ -1979,21 +1979,11 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
 
 <template>
   <section class="grid gap-4 rounded-lg border border-border/60 bg-background/30 p-4 lg:p-5">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-medium">{{ $st('Provider Studio') }}</h2>
-        <p class="mt-1 text-xs text-muted-foreground">
-          {{
-            $st('Edit the same provider draft, authentication fields, adapters, and model policies exposed by the TUI.')
-          }}
-        </p>
-      </div>
-      <div class="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" :disabled="loading || mutationBusy" @click="createProvider">
-          <RiAddLine class="mr-2 h-4 w-4" />
-          {{ $st('New provider') }}
-        </Button>
-      </div>
+    <div class="flex flex-wrap justify-end gap-2">
+      <Button variant="outline" size="sm" :disabled="loading || mutationBusy" @click="createProvider">
+        <RiAddLine class="mr-2 h-4 w-4" />
+        {{ $st('New provider') }}
+      </Button>
     </div>
 
     <div

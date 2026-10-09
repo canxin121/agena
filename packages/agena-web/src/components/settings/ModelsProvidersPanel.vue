@@ -13,10 +13,6 @@ const pages = computed(() => buildSettingsSubpages('models-providers'))
 <template>
   <SettingsSectionWorkbench
     section="models-providers"
-    :title="$st('Models & Providers')"
-    :description="
-      $st('Manage provider credentials, adapters, and model routes, then inspect the complete model catalog.')
-    "
     :pages="pages"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['models-providers']"
     v-slot="{ activePage }"

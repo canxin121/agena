@@ -244,7 +244,7 @@ struct SectionedWorkbenchSpec<'a> {
     pub target_width: u16,
     pub nav_panel_width: u16,
     pub nav_panel_state: ListWorkbenchPanelState<'a>,
-    pub section_panel: WorkbenchTextSection<'a>,
+    pub section_panel: Option<WorkbenchTextSection<'a>>,
     pub items_panel_state: ListWorkbenchPanelState<'a>,
     pub detail_panel: WorkbenchTextSection<'a>,
 }
@@ -257,7 +257,10 @@ pub struct SectionedWorkbenchDialogSpec<'a> {
     pub target_width: u16,
     pub nav_panel_width: u16,
     pub nav_panel_state: ListWorkbenchPanelState<'a>,
-    pub section_panel: WorkbenchTextSection<'a>,
+    /// Optional overview above the items list. Screens whose navigation
+    /// already names the selected section pass `None` and keep the height
+    /// for the items and detail panels instead of repeating the heading.
+    pub section_panel: Option<WorkbenchTextSection<'a>>,
     pub items_panel_state: ListWorkbenchPanelState<'a>,
     pub detail_panel: WorkbenchTextSection<'a>,
 }
@@ -278,7 +281,7 @@ impl<'a> SectionedWorkbenchDialogSpec<'a> {
             target_width: 140,
             nav_panel_width: 24,
             nav_panel_state,
-            section_panel,
+            section_panel: Some(section_panel),
             items_panel_state,
             detail_panel,
         }
@@ -286,6 +289,14 @@ impl<'a> SectionedWorkbenchDialogSpec<'a> {
 
     pub fn summary(mut self, summary: Option<Cow<'a, str>>) -> Self {
         self.summary = summary;
+        self
+    }
+
+    /// Drop the overview text section so the items list starts directly under
+    /// the workbench title. Use this when the navigation panel already names
+    /// the selected section.
+    pub fn without_section_panel(mut self) -> Self {
+        self.section_panel = None;
         self
     }
 
@@ -527,7 +538,10 @@ fn render_sectioned_workbench(
     }
     .max(1);
     let nav_height = spec.nav_panel_state.resolve_height();
-    let section_height = spec.section_panel.resolve_height(right_width);
+    let section_height = spec
+        .section_panel
+        .as_ref()
+        .map_or(0, |section| section.resolve_height(right_width));
     let items_height = spec.items_panel_state.resolve_height();
     let detail_height = spec.detail_panel.resolve_height(right_width);
     let right_height = section_height
@@ -577,36 +591,49 @@ fn render_sectioned_workbench(
     };
     render_list_panel_state(frame, nav_area, &spec.nav_panel_state);
 
+    let show_section_panel = spec.section_panel.is_some();
+    let section_heights: Vec<u16> = if show_section_panel {
+        vec![section_height, items_height, detail_height]
+    } else {
+        vec![items_height, detail_height]
+    };
     let right_areas = match surface {
-        SurfaceMode::Overlay => {
-            top_aligned_vertical_areas(right_area, &[section_height, items_height, detail_height])
-        }
+        SurfaceMode::Overlay => top_aligned_vertical_areas(right_area, &section_heights),
         SurfaceMode::Route => split_vertical_sections(
             right_area,
-            &[
-                VerticalSectionSize::Fixed(section_height),
-                VerticalSectionSize::Flexible(items_height),
-                VerticalSectionSize::Fixed(detail_height),
-            ],
+            &section_heights
+                .iter()
+                .enumerate()
+                .map(|(index, height)| {
+                    if index + 1 == section_heights.len() {
+                        VerticalSectionSize::Flexible(*height)
+                    } else {
+                        VerticalSectionSize::Fixed(*height)
+                    }
+                })
+                .collect::<Vec<_>>(),
         ),
     };
+    let items_index = usize::from(show_section_panel);
+    if let Some(section_panel) = spec.section_panel.as_ref() {
+        render_text_panel(
+            frame,
+            right_areas[0],
+            &TextPanelSpec {
+                title: Some(section_panel.title.clone()),
+                body: &section_panel.body,
+                wrap: section_panel.wrap,
+                scroll: None,
+                alignment: None,
+            },
+        );
+    }
+
+    render_list_panel_state(frame, right_areas[items_index], &spec.items_panel_state);
+
     render_text_panel(
         frame,
-        right_areas[0],
-        &TextPanelSpec {
-            title: Some(spec.section_panel.title.clone()),
-            body: &spec.section_panel.body,
-            wrap: spec.section_panel.wrap,
-            scroll: None,
-            alignment: None,
-        },
-    );
-
-    render_list_panel_state(frame, right_areas[1], &spec.items_panel_state);
-
-    render_text_panel(
-        frame,
-        right_areas[2],
+        right_areas[items_index + 1],
         &TextPanelSpec {
             title: Some(spec.detail_panel.title.clone()),
             body: &spec.detail_panel.body,
@@ -621,11 +648,11 @@ fn render_sectioned_workbench(
 mod tests {
     use super::{
         BoundedListPanelHeight, ListWorkbenchDialogSpec, ListWorkbenchPanelState,
-        MIN_SECTIONED_CONTENT_WIDTH, MIN_TWO_PANE_DETAIL_WIDTH, WorkbenchTextSection,
-        render_list_workbench_dialog,
+        MIN_SECTIONED_CONTENT_WIDTH, MIN_TWO_PANE_DETAIL_WIDTH, SectionedWorkbenchDialogSpec,
+        WorkbenchTextSection, render_list_workbench_dialog, render_sectioned_workbench_dialog,
     };
     use crate::{SurfaceMode, layout::should_stack_detail_layout};
-    use ratatui::{Terminal, backend::TestBackend, text::Text, widgets::ListItem};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, text::Text, widgets::ListItem};
 
     fn panel_title_positions(width: u16) -> ((usize, usize), (usize, usize)) {
         let backend = TestBackend::new(width, 24);
@@ -715,5 +742,100 @@ mod tests {
 
         assert!(wrapped.resolve_height(10) > unwrapped.resolve_height(10));
         assert_eq!(unwrapped.resolve_height(10), 3);
+    }
+
+    fn buffer_text(buffer: &Buffer) -> String {
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn sectioned_render(show_overview: bool) -> String {
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let nav_items = [ListItem::new("section")];
+                let items = [ListItem::new("item")];
+                let spec = SectionedWorkbenchDialogSpec::new(
+                    "Settings".into(),
+                    "Esc close".into(),
+                    ListWorkbenchPanelState::items(
+                        BoundedListPanelHeight {
+                            lines_per_item: 1,
+                            min_body_height: 2,
+                            max_body_height: 4,
+                        },
+                        Some("SectionsPanel".into()),
+                        &nav_items,
+                        Some(0),
+                        Default::default(),
+                        ">> ".into(),
+                    ),
+                    WorkbenchTextSection::new(
+                        "OverviewPanel".into(),
+                        Text::from("section description"),
+                        2,
+                        4,
+                    ),
+                    ListWorkbenchPanelState::items(
+                        BoundedListPanelHeight {
+                            lines_per_item: 1,
+                            min_body_height: 3,
+                            max_body_height: 8,
+                        },
+                        Some("ItemsPanel".into()),
+                        &items,
+                        Some(0),
+                        Default::default(),
+                        ">> ".into(),
+                    ),
+                    WorkbenchTextSection::new(
+                        "DetailsPanel".into(),
+                        Text::from("detail"),
+                        2,
+                        6,
+                    ),
+                )
+                .target_width(100);
+                let spec = if show_overview {
+                    spec
+                } else {
+                    spec.without_section_panel()
+                };
+                render_sectioned_workbench_dialog(frame, frame.area(), SurfaceMode::Route, &spec);
+            })
+            .unwrap();
+        buffer_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn sectioned_workbench_can_drop_the_redundant_overview_section() {
+        let with_overview = sectioned_render(true);
+        assert!(with_overview.contains("OverviewPanel"));
+        assert!(with_overview.contains("section description"));
+
+        let without_overview = sectioned_render(false);
+        assert!(!without_overview.contains("OverviewPanel"));
+        assert!(!without_overview.contains("section description"));
+        // Navigation, items, and details stay rendered without the overview.
+        assert!(without_overview.contains("SectionsPanel"));
+        assert!(without_overview.contains("ItemsPanel"));
+        assert!(without_overview.contains("DetailsPanel"));
+
+        let row_of = |text: &str, needle: &str| {
+            text.lines()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("missing `{needle}`"))
+        };
+        assert!(
+            row_of(&without_overview, "ItemsPanel") < row_of(&with_overview, "ItemsPanel"),
+            "dropping the overview section moves the items panel up"
+        );
     }
 }

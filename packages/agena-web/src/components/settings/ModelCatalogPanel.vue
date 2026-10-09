@@ -317,29 +317,21 @@ onMounted(() => void load())
 
 <template>
   <div class="grid min-w-0 gap-5">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-semibold">{{ $st('Resolved Model Catalog') }}</h2>
-        <p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-          {{ $st('Search the runtime’s merged catalog rather than guessing model capabilities from provider names.') }}
-        </p>
-      </div>
-      <div class="flex items-center gap-2">
-        <Button variant="outline" size="sm" :disabled="refreshing || loading" @click="refreshCatalog">
-          <RiRestartLine class="mr-2 h-4 w-4" :class="refreshing ? 'animate-spin' : ''" />
-          {{ $st('Refresh source') }}
-        </Button>
-        <IconButton
-          variant="outline"
-          size="md"
-          :disabled="loading"
-          :tooltip="loading ? $st('Loading catalog') : $st('Reload current page')"
-          :aria-label="$st('Reload Model Catalog page')"
-          @click="load()"
-        >
-          <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-        </IconButton>
-      </div>
+    <div class="flex flex-wrap items-center justify-end gap-2">
+      <Button variant="outline" size="sm" :disabled="refreshing || loading" @click="refreshCatalog">
+        <RiRestartLine class="mr-2 h-4 w-4" :class="refreshing ? 'animate-spin' : ''" />
+        {{ $st('Refresh source') }}
+      </Button>
+      <IconButton
+        variant="outline"
+        size="md"
+        :disabled="loading"
+        :tooltip="loading ? $st('Loading catalog') : $st('Reload current page')"
+        :aria-label="$st('Reload Model Catalog page')"
+        @click="load()"
+      >
+        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
+      </IconButton>
     </div>
 
     <div

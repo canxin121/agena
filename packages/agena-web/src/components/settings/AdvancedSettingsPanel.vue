@@ -216,17 +216,14 @@ onMounted(() => {
 
 <template>
   <div class="grid min-w-0 gap-5">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-semibold">{{ $st('Advanced configuration path editor') }}</h2>
-        <p class="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
-          {{
-            $st(
-              'Edit any server configuration path that does not yet have a dedicated form. Writes always target an explicit Global or Workspace layer, run full composed-config validation, and request a runtime reload.',
-            )
-          }}
-        </p>
-      </div>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="max-w-3xl text-sm leading-6 text-muted-foreground">
+        {{
+          $st(
+            'Edit any server configuration path that does not yet have a dedicated form. Writes always target an explicit Global or Workspace layer, run full composed-config validation, and request a runtime reload.',
+          )
+        }}
+      </p>
       <IconButton
         variant="outline"
         size="md"

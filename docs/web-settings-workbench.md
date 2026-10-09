@@ -7,7 +7,7 @@ The Web Settings Workbench is the browser counterpart of the TUI Settings Studio
 1. **TUI parity without copying TUI limitations.** Every setting the TUI can persist has a Web editor or a safe advanced JSON-path escape hatch.
 2. **Explicit configuration layers.** Global, Workspace, Session, and Effective values are never silently conflated. Effective values are read-only; writes always name their target layer.
 3. **Server-owned validation.** The browser may provide structured controls, but the server validates the complete composed configuration before persistence and owns runtime reloads.
-4. **Discoverable hierarchy.** Dense domains use a reusable section workbench with page search, URL deep links (`?view=`), responsive page selection, and per-domain remembered pages.
+4. **Discoverable hierarchy.** Dense domains use a reusable section workbench with page search, URL deep links (`?view=`), responsive page selection, and per-domain remembered pages. The left navigation already names the section and the selected page, so pages do not repeat a second page heading above their controls.
 5. **Preserve unknown data.** Provider models, plugin configuration, and permission documents retain fields that are not represented by the current structured form. Raw JSON remains available where the schema is open-ended.
 6. **Safe source inspection.** Editors show Effective, Global, and Workspace values together. Security-sensitive advanced editing is clearly marked and never guesses a write target.
 

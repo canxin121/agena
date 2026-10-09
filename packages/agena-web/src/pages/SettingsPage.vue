@@ -509,12 +509,6 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
           >
             <InterfaceSettingsPanel v-if="activePage === 'tui'" />
             <div v-else class="space-y-6">
-              <div class="text-lg font-medium">
-                {{
-                  activePage === 'web-appearance' ? t('settings.appearance.intro') : t('settings.appearance.chat.label')
-                }}
-              </div>
-
               <div class="grid gap-6">
                 <div v-if="activePage === 'web-appearance'" class="grid gap-2">
                   <label class="text-sm font-medium leading-none">{{ t('settings.appearance.language.label') }}</label>

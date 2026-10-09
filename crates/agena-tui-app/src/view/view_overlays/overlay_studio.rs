@@ -53,11 +53,6 @@ impl App {
         let section_title = current_section
             .map(|section| sanitize_display_text(section.label.as_str()))
             .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-settings-default-section-title"));
-        let section_text = current_section
-            .map(|section| Text::from(sanitize_display_text(section.description.as_str())))
-            .unwrap_or_else(|| {
-                Text::from(ui_text::t(&self.i18n, "overlay-settings-empty-section"))
-            });
         let inspector_title = settings_item_detail_title(&self.i18n, dialog);
         let inspector_text = settings_item_detail_text(&self.i18n, dialog);
         let content_width = surface.content_width(area, 150);
@@ -79,9 +74,9 @@ impl App {
             ),
             WorkbenchTextSection::new(
                 ui_text::t(&self.i18n, "overlay-workbench-overview").into(),
-                section_text,
-                2,
-                5,
+                Text::default(),
+                0,
+                0,
             ),
             if item_rows.is_empty() {
                 ListWorkbenchPanelState::empty(
@@ -109,7 +104,10 @@ impl App {
             },
             WorkbenchTextSection::new(inspector_title.into(), inspector_text, 5, 14),
         )
-        .summary(Some(section_title.clone().into()))
+        // The navigation panel already names the selected section, so the
+        // studio spends its height on the item list and the inspector instead
+        // of repeating the section heading above them.
+        .without_section_panel()
         .target_width(150)
         .navigation_width(nav_width);
         render_sectioned_workbench_dialog(frame, area, surface, &spec);

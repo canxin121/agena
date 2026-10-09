@@ -121,8 +121,7 @@ const { loading, error, refresh } = usePaneRead(
   <div class="space-y-6">
     <div class="flex items-start justify-between gap-3">
       <div>
-        <div class="text-lg font-medium">{{ $st('Usage') }}</div>
-        <div class="mt-1 text-sm text-muted-foreground">{{ $st('Provider usage recorded by the Agena server.') }}</div>
+        <div class="text-sm text-muted-foreground">{{ $st('Provider usage recorded by the Agena server.') }}</div>
         <div v-if="stats?.period_label" class="mt-1 text-[11px] text-muted-foreground">
           {{ stats.period_label }} · {{ stats.active_days }} {{ $st('active days') }}
         </div>

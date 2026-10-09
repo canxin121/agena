@@ -253,16 +253,13 @@ onMounted(() => {
 
 <template>
   <section class="grid gap-4 rounded-lg border border-border/60 bg-background/30 p-4 lg:p-5">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <div class="text-base font-medium">{{ $st('Agena MCP Server') }}</div>
-        <div class="mt-1 max-w-3xl text-sm text-muted-foreground">
-          {{
-            $st(
-              'Manage the live MCP surface served by the connected Agena server process. Web and TUI are control clients; they do not run a second MCP server.',
-            )
-          }}
-        </div>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="max-w-3xl text-sm text-muted-foreground">
+        {{
+          $st(
+            'Manage the live MCP surface served by the connected Agena server process. Web and TUI are control clients; they do not run a second MCP server.',
+          )
+        }}
       </div>
       <IconButton
         variant="outline"

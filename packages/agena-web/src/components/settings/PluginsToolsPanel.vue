@@ -13,8 +13,6 @@ const pages = computed(() => buildSettingsSubpages('plugins-tools'))
 <template>
   <SettingsSectionWorkbench
     section="plugins-tools"
-    :title="$st('Plugins & Tools')"
-    :description="$st('Operate the plugin runtime, expose Agena through MCP, and inspect available tools.')"
     :pages="pages"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['plugins-tools']"
     v-slot="{ activePage }"

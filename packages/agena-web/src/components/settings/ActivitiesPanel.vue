@@ -319,11 +319,8 @@ onScopeDispose(() => {
 
 <template>
   <div class="space-y-6">
-    <div>
-      <div class="text-lg font-medium">{{ $st('Activities') }}</div>
-      <div class="mt-1 text-sm text-muted-foreground">
-        {{ $st('Background activities running on the Agena server.') }}
-      </div>
+    <div class="text-sm text-muted-foreground">
+      {{ $st('Background activities running on the Agena server.') }}
     </div>
 
     <div class="grid gap-3">

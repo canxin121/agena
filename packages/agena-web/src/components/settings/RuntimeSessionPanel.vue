@@ -35,18 +35,13 @@ async function refreshClientVersions() {
 <template>
   <SettingsSectionWorkbench
     section="runtime-session"
-    :title="String(t('settings.tabs.runtimeSession'))"
-    :description="String(t('settings.tui.runtimeDescription'))"
     :pages="pages"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['runtime-session']"
     v-slot="{ activePage }"
   >
     <section v-if="activePage === 'client-versions'" class="grid gap-4">
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 class="text-base font-semibold">{{ t('settings.tui.clientVersionsTitle') }}</h2>
-          <p class="mt-1 max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.clientVersionsDescription') }}</p>
-        </div>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.clientVersionsDescription') }}</p>
         <Button variant="outline" size="sm" :disabled="refreshBusy" @click="refreshClientVersions">
           <RiRefreshLine class="mr-2 h-4 w-4" :class="refreshBusy ? 'animate-spin' : ''" />
           {{ refreshBusy ? t('settings.tui.refreshing') : t('settings.tui.refreshFromNpm') }}
@@ -61,7 +56,11 @@ async function refreshClientVersions() {
       <ServerSettingField
         path="runtime.providers.client_versions.auto_update"
         :label="st('Automatically update provider client versions')"
-        :description="st('When enabled, refresh Codex, Claude, and Gemini client identities from npm on startup and daily. Turn this off to pin the configured versions.')"
+        :description="
+          st(
+            'When enabled, refresh Codex, Claude, and Gemini client identities from npm on startup and daily. Turn this off to pin the configured versions.',
+          )
+        "
         kind="boolean"
         :default-value="true"
         compact
@@ -95,10 +94,7 @@ async function refreshClientVersions() {
     </section>
 
     <section v-else class="grid gap-3">
-      <div>
-        <h2 class="text-base font-semibold">{{ t('settings.tui.compactionTitle') }}</h2>
-        <p class="mt-1 max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.compactionDescription') }}</p>
-      </div>
+      <p class="max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.compactionDescription') }}</p>
       <ServerSettingField
         path="session.compaction.auto"
         :label="t('settings.tui.fields.autoCompaction')"

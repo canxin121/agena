@@ -12,8 +12,6 @@ const permissionScope = ref<'effective' | 'global' | 'workspace' | 'session'>('e
 <template>
   <SettingsSectionWorkbench
     section="permissions"
-    :title="$st('Permissions')"
-    :description="$st('Set filesystem, network, and tool permissions. Choose the configuration scope across the top.')"
     :pages="pages"
     :default-page="SETTINGS_DEFAULT_SUBPAGE.permissions"
     v-slot="{ activePage }"

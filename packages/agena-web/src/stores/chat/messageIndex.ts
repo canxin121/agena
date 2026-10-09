@@ -9,6 +9,21 @@ export function isOlderPart(
   return revision < previous || (revision === previous && (incoming.updatedAt ?? 0) < (current.updatedAt ?? 0))
 }
 
+/**
+ * True when `incoming` strictly advances the cached snapshot. A
+ * revision/updatedAt tie keeps the object a transcript already displayed, so
+ * identity-keyed projection caches stay valid while a refetched page merges.
+ */
+export function isNewerPart(
+  incoming: { revision?: number; updatedAt?: number },
+  current: { revision?: number; updatedAt?: number },
+): boolean {
+  const revision = incoming.revision ?? 0
+  const previous = current.revision ?? 0
+  if (revision !== previous) return revision > previous
+  return (incoming.updatedAt ?? 0) > (current.updatedAt ?? 0)
+}
+
 export function compareChatIds(left: string, right: string): number {
   if (!/^\d+$/.test(left) || !/^\d+$/.test(right)) {
     throw new TypeError(`Agena chat ids must be decimal integers: ${left}, ${right}`)
@@ -86,6 +101,43 @@ export function upsertMessageEntryIn(list: MessageEntry[], info: MessageInfo): M
   return entry
 }
 
+function sameSnapshotValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) return false
+  try {
+    return JSON.stringify(left) === JSON.stringify(right)
+  } catch {
+    return false
+  }
+}
+
+/** A live snapshot carries no state beyond the part already cached. */
+function samePartSnapshot(cached: MessagePart, incoming: MessagePart): boolean {
+  const keys = Object.keys(cached)
+  if (keys.length !== Object.keys(incoming).length) return false
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(incoming, key)) return false
+    if (!sameSnapshotValue(cached[key], incoming[key])) return false
+  }
+  return true
+}
+
+/**
+ * Apply a live part snapshot to the cached object instead of replacing the
+ * array element. Part objects key the transcript projection caches, so a
+ * replaced object invalidates every derived block; writing the new fields onto
+ * the cached object keeps those identities valid while reactive consumers
+ * still observe the new revision/state/text. Fields the snapshot omits are
+ * cleared, matching the snapshot-replace semantics this branch replaced.
+ */
+function applyPartSnapshot(cached: MessagePart, incoming: MessagePart) {
+  if (samePartSnapshot(cached, incoming)) return
+  for (const key of Object.keys(cached)) {
+    if (!Object.prototype.hasOwnProperty.call(incoming, key)) delete cached[key]
+  }
+  Object.assign(cached, incoming)
+}
+
 export function upsertPart(entry: MessageEntry, part: MessagePart, delta: string) {
   if (!Array.isArray(entry.parts)) {
     entry.parts = []
@@ -118,7 +170,7 @@ export function upsertPart(entry: MessageEntry, part: MessagePart, delta: string
   const base = typeof prev.text === 'string' ? String(prev.text) : ''
   if (isOlderPart(part, prev)) return
   if (part.revision !== undefined && !delta) {
-    parts[index] = part
+    applyPartSnapshot(prev, part)
     return
   }
 

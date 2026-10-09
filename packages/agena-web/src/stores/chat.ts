@@ -6,7 +6,14 @@ import { computed, onScopeDispose, ref } from 'vue'
 import * as chatApi from './chat/api'
 import { TranscriptCacheIndex } from './chat/transcriptCache'
 import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
-import { binarySearchById, compareChatIds, isOlderPart, upsertMessageEntryIn, upsertPart } from './chat/messageIndex'
+import {
+  binarySearchById,
+  compareChatIds,
+  isNewerPart,
+  isOlderPart,
+  upsertMessageEntryIn,
+  upsertPart,
+} from './chat/messageIndex'
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
 import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
@@ -598,7 +605,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
         const partMap = new Map<string, MessagePart>()
         for (const p of [...merged.parts, ...(m.parts || [])]) {
           const pid = String(p?.id ?? '')
-          if (pid && (!partMap.has(pid) || !isOlderPart(p, partMap.get(pid)!))) partMap.set(pid, p)
+          // Only a strictly advancing snapshot replaces the cached part
+          // object. A revision/updatedAt tie keeps the identity the transcript
+          // already rendered instead of churning it on every refetch.
+          if (pid && (!partMap.has(pid) || isNewerPart(p, partMap.get(pid)!))) partMap.set(pid, p)
         }
         merged.parts = [...partMap.values()].sort((a, b) => compareChatIds(String(a.id), String(b.id)))
         // A fold-free second message can be the result of a local expansion,
@@ -769,6 +779,23 @@ const useChatStoreDefinition = defineStore('chat', () => {
         } catch (error) {
           membershipRevalidation.add(sid)
           throw error
+        }
+      }
+      // A reconcile/recovery/visibility resume asks for a fresh transcript even
+      // when the parts resource never moved. Replacing every message then only
+      // churns object identity and re-renders the whole list, so keep the
+      // rendered cache while its own parts revision is still current. Explicit
+      // replace callers, an empty cache and a failed probe still rebuild.
+      if (!opts?.replace && hasCache && messagesHydratedBySession.value[sid]) {
+        const transcriptKey = `session:${sid}:parts`
+        const observed = transcriptObservations.get(sid)
+        const observedToken = observed?.token
+        if (observed?.scope === captureResourceObservation(transcriptKey).scope && observedToken) {
+          const reusable = await checkResourceVersions([transcriptKey])
+            .then(() => canReuseResource(transcriptKey, observedToken))
+            .catch(() => false)
+          if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
+          if (reusable) return
         }
       }
       const limit = sessionMessageLimit(sid)

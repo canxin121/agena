@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { computed, effect, reactive, ref } from 'vue'
 import { createTranscriptProjector, projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
 import type { MessageLike } from '../src/components/chat/messageList.types'
+import { upsertPart } from '../src/stores/chat/messageIndex'
+import type { MessageEntry, MessagePart } from '../src/types/chat'
 import { syncKeySet } from '../src/lib/reactiveKeySet'
 import { SseFrames } from '../src/lib/sseFrames'
 import { highlightCodeToHtml } from '../src/lib/highlight'
@@ -38,6 +40,33 @@ describe('transcript work isolation', () => {
     expect(after[2]).toBe(before[2])
     expect(after[3]).not.toBe(before[3])
     expect(after[3]!.displayParts[0]!.copyText).toBe('tail token')
+  })
+
+  test('a live upsert re-renders only the edited part and keeps its identity', () => {
+    const messages = reactive([
+      message(1, 'user', 'question'),
+      message(3, 'assistant', 'first'),
+      message(5, 'user', 'next'),
+      message(7, 'assistant', 'tail'),
+    ])
+    const project = createTranscriptProjector(() => ({ showReasoning: true }))
+    const blocks = computed(() => project(messages))
+    const initial = blocks.value
+    const target = messages[3]! as unknown as MessageEntry
+    const cachedPart = target.parts[0]! as MessagePart
+
+    upsertPart(target, { ...cachedPart, revision: 2, updatedAt: 20, text: 'tail token' }, '')
+    const after = blocks.value
+    expect(target.parts[0]).toBe(cachedPart)
+    expect(after[0]).toBe(initial[0])
+    expect(after[1]).toBe(initial[1])
+    expect(after[2]).toBe(initial[2])
+    expect(after[3]).not.toBe(initial[3])
+    expect(after[3]!.displayParts[0]!.copyText).toBe('tail token')
+
+    // A repeated snapshot is not an edit: no derived block changes.
+    upsertPart(target, { ...cachedPart, revision: 2, updatedAt: 20 }, '')
+    expect(blocks.value).toBe(after)
   })
 
   test('folded replies retain unchanged part identity and reclassify the old answer', () => {

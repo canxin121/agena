@@ -5,6 +5,7 @@ import {
   binarySearchById,
   compareChatIds,
   foldedMessageCount,
+  isNewerPart,
   upsertMessageEntryIn,
   upsertPart,
 } from '../src/stores/chat/messageIndex'
@@ -82,4 +83,47 @@ test('session 13 shaped history crosses a multi-thousand-part assistant span', (
   // The 2,000 assistant rounds are one folded block; the two user turns are
   // the boundaries an upward load must expose.
   assert.equal(foldedMessageCount(messages), 3)
+})
+
+test('isNewerPart treats a revision/updatedAt tie as not advancing the cached snapshot', () => {
+  assert.equal(isNewerPart({ revision: 2, updatedAt: 20 }, { revision: 1, updatedAt: 10 }), true)
+  assert.equal(isNewerPart({ revision: 2, updatedAt: 30 }, { revision: 2, updatedAt: 20 }), true)
+  assert.equal(isNewerPart({ revision: 1 }, { revision: 2, updatedAt: 20 }), false)
+  assert.equal(isNewerPart({ revision: 2, updatedAt: 20 }, { revision: 2, updatedAt: 20 }), false)
+  assert.equal(isNewerPart({ revision: 2, updatedAt: 10 }, { revision: 2, updatedAt: 20 }), false)
+  assert.equal(isNewerPart({}, {}), false)
+  assert.equal(isNewerPart({ updatedAt: 5 }, {}), true)
+})
+
+test('live part updates keep the cached object and apply the snapshot in place', () => {
+  const entry: MessageEntry = {
+    info: info('2'),
+    parts: [{ ...part('4', 'first'), revision: 1, updatedAt: 10, agenaKind: 'text' }],
+  }
+  const cached = entry.parts[0]!
+
+  upsertPart(entry, { ...cached, revision: 1, updatedAt: 10 }, '')
+  assert.equal(entry.parts[0], cached, 'a repeated snapshot keeps the cached object')
+  assert.equal(cached.revision, 1)
+  assert.equal(cached.text, 'first')
+
+  upsertPart(entry, { ...cached, revision: 2, updatedAt: 20, text: 'first token' }, '')
+  assert.equal(entry.parts[0], cached, 'a newer snapshot updates the cached object in place')
+  assert.equal(cached.revision, 2)
+  assert.equal(cached.updatedAt, 20)
+  assert.equal(cached.text, 'first token')
+
+  upsertPart(entry, { ...cached, revision: 2, updatedAt: 20, text: 'first token, tied revision' }, '')
+  assert.equal(entry.parts[0], cached, 'a same-revision content change still updates in place')
+  assert.equal(cached.text, 'first token, tied revision')
+
+  upsertPart(entry, { ...cached, revision: 3, updatedAt: 30, partState: 'completed' }, '')
+  assert.equal(entry.parts[0], cached)
+  assert.equal(cached.partState, 'completed')
+
+  const withoutPartState = { ...cached }
+  delete withoutPartState.partState
+  upsertPart(entry, { ...withoutPartState, revision: 4, updatedAt: 40 }, '')
+  assert.equal(entry.parts[0], cached)
+  assert.equal(cached.partState, undefined, 'fields the snapshot omits clear like a replace')
 })

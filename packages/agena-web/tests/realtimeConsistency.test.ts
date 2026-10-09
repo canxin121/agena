@@ -342,3 +342,26 @@ test('global live events do not materialize unopened session histories', async (
     })
     assert.equal(chat.getMessagesForSession('99').length, 0)
   }))
+
+test('a refetched page keeps the live part object when its revision ties the cached snapshot', async () =>
+  withChat(async (chat) => {
+    chat.applyEvent({ type: 'session_changed', properties: { kind: 'part_added', session_id: 7, part: marker() } })
+    chat.applyEvent({
+      type: 'session_changed',
+      properties: { kind: 'part_updated', session_id: 7, part: part(2, 'live body') },
+    })
+    const cached = chat.getMessagesForSession('7')[0]!.parts[0]!
+    assert.equal(cached.text, 'live body')
+
+    globalThis.fetch = (async (url) => {
+      const parsed = new URL(String(url), 'http://agena.test')
+      if (parsed.pathname.endsWith('/runs'))
+        return Response.json(page([marker(), part(2, 'stale page body')]))
+      return Response.json(state())
+    }) as typeof fetch
+
+    await chat.refreshMessages('7')
+    const refreshed = chat.getMessagesForSession('7')[0]!.parts[0]!
+    assert.equal(refreshed, cached, 'the displayed object survives a revision tie')
+    assert.equal(refreshed.text, 'live body')
+  }))

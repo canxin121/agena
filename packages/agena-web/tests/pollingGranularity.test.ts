@@ -1357,3 +1357,86 @@ test('temporary local read contention retries promptly without consuming the net
       queue.dispose()
     }
   }))
+
+test('a settled transcript refresh keeps rendered identities and skips the page read while its revision matches', () =>
+  withRuntime(async ({ advance, tokens, calls, reply, setFetch }) => {
+    const sid = 997
+    const partsKey = `session:${sid}:parts`
+    // The shared revision index outlives one test. Register this key inside a
+    // fresh server epoch, then let the first page read observe a newer token.
+    sync.noteResourceVersion(partsKey, 'transcript-settle:1')
+    tokens.set(partsKey, 'transcript-settle:2')
+    let revision = 1
+    let body = 'first token'
+    setFetch((url) => {
+      if (url.pathname.endsWith('/runs'))
+        return reply(partsKey, {
+          session_id: sid,
+          version: revision,
+          parts: [
+            {
+              part_id: 997001,
+              kind: 'run',
+              role: 'assistant',
+              state: 'in_progress',
+              content: {},
+              revision,
+              updated_at_ms: revision,
+            },
+            {
+              part_id: 997002,
+              run_id: 997001,
+              kind: 'text',
+              role: 'assistant',
+              state: 'in_progress',
+              content: { text: body },
+              revision,
+              updated_at_ms: revision,
+            },
+          ],
+          runs: [],
+          user_message_count: 0,
+          page: { has_more: false },
+        })
+      if (url.pathname.endsWith('/state'))
+        return reply(`session:${sid}:state`, {
+          session: { id: sid, version: 1, workspace_id: 1, title: 'settled', state: { kind: 'ready', data: {} } },
+          parts: [],
+        })
+      throw new Error(`Unexpected request ${url}`)
+    })
+    const chat = useChatStore()
+    const release = chat.retainSession(String(sid))
+    try {
+      await chat.refreshMessages(String(sid))
+      const rendered = chat.getMessagesForSession(String(sid))
+      expect(rendered[0]?.parts[0]?.text).toBe('first token')
+      const entry = rendered[0]!
+      const cachedPart = entry.parts[0]!
+
+      // A reconcile-style refresh verifies the parts revision and, when it did
+      // not move, keeps the object identities the transcript already rendered.
+      revision = 2
+      body = 'should never be read'
+      calls.length = 0
+      await advance(30_001)
+      await chat.refreshMessages(String(sid), { silent: true })
+      expect(calls.filter((url) => url.pathname.endsWith('/runs'))).toHaveLength(0)
+      expect(calls.length).toBeGreaterThan(0)
+      // Only the shared revision probe ran: the page itself was never reread.
+      expect(calls.every((url) => url.pathname === '/api/v1/changes/revisions')).toBe(true)
+      expect(chat.getMessagesForSession(String(sid))[0]).toBe(entry)
+      expect(entry.parts[0]).toBe(cachedPart)
+      expect(cachedPart.text).toBe('first token')
+
+      // A real revision change still rebuilds the transcript.
+      tokens.set(partsKey, 'transcript-settle:3')
+      calls.length = 0
+      await advance(30_001)
+      await chat.refreshMessages(String(sid), { silent: true })
+      expect(calls.filter((url) => url.pathname.endsWith('/runs')).length).toBeGreaterThan(0)
+      expect(chat.getMessagesForSession(String(sid))[0]?.parts[0]?.text).toBe('should never be read')
+    } finally {
+      release()
+    }
+  }))

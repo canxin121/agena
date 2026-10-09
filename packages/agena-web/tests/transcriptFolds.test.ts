@@ -42,3 +42,26 @@ test('a complete cached reply retires its server fold, preserving unrelated olde
   assert.deepEqual(result[0]?.folds, older.folds)
   assert.deepEqual(result[1]?.folds, [])
 })
+
+test('an unchanged fold list keeps the entry object the transcript already rendered', () => {
+  const stable = entry(1, [2], [{ ...fold(2, 1, 1), runIds: [1] }])
+  const current = entry(3, [6, 7])
+  const snapshot = [entry(3, [6, 7])]
+  const result = reconcileTranscriptFolds([stable, current], snapshot, [stable, current])
+  assert.equal(result[0], stable)
+  assert.equal(result[1], current)
+  assert.deepEqual(result[0]?.folds, stable.folds)
+  assert.deepEqual(result[1]?.folds, [])
+})
+
+test('a new streaming gap still pushes onto the retained entry and reconciles its prefix', () => {
+  const stable = entry(1, [2], [{ ...fold(2, 1, 1), runIds: [1] }])
+  const current = entry(3, [6, 7])
+  const incoming = entry(3, [6, 7], [fold(7, 4)])
+  const result = reconcileTranscriptFolds([stable, current], [incoming], [stable, current])
+  assert.equal(result[0], stable)
+  assert.equal(result[1], current)
+  assert.deepEqual(result[1]?.folds, [
+    { runId: 3, runIds: [3, 20], anchorPartId: '7', hiddenCount: 3, nextCursor: 'before-7' },
+  ])
+})

@@ -8,12 +8,19 @@
     "tui": {
       "color_scheme": "auto",
       "graphics": "auto",
-      "theme": null,
-      "transcript": {
-        "activity_default_expanded": false,
-        "activity_kinds": {
+      "theme": null
+    },
+    "transcript": {
+      "activity": {
+        "default_expanded": false,
+        "kinds": {
+          "text": true,
           "reasoning": true
         }
+      },
+      "tools": {
+        "categories": {},
+        "overrides": {}
       }
     }
   },
@@ -22,7 +29,8 @@
       "client_versions": {
         "codex": "0.144.4",
         "claude": "2.1.209",
-        "gemini": "0.50.0"
+        "gemini": "0.50.0",
+        "auto_update": true
       }
     }
   },
@@ -216,37 +224,6 @@
             }
           }
         }
-      }
-    }
-  },
-  "harnesses": {
-    "browser": {
-      "default": {
-        "driver": "playwright",
-        "headless": true,
-        "viewport": {
-          "width": 1280,
-          "height": 800
-        },
-        "allowed_domains": [
-          "example.com",
-          "github.com"
-        ]
-      }
-    },
-    "shell": {
-      "default": {
-        "workspace_only": true,
-        "deny_commands": [
-          "sudo",
-          "rm -rf /"
-        ]
-      }
-    },
-    "editor": {
-      "default": {
-        "workspace_only": true,
-        "max_file_bytes": 262144
       }
     }
   },

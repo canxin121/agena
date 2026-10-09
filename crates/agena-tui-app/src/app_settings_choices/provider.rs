@@ -124,7 +124,7 @@ impl App {
                         "model" => model.model_id.to_string(),
                     ),
                 ));
-                self.refresh_tui_palette_from_runtime();
+                self.refresh_tui_preferences_from_runtime();
                 self.current_route = self
                     .route_stack
                     .pop()

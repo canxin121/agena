@@ -351,7 +351,7 @@ overlay-choice-clear-settings-detail = Entfernen Sie die Datei override für {$f
 
 overlay-settings-section-plugins-label = Plugins und Werkzeuge
 
-overlay-settings-section-plugins-summary = Plugin-Konfiguration, Tools, Gurte und Diagnosen
+overlay-settings-section-plugins-summary = Plugin-Konfiguration, Tools und Diagnose
 
 overlay-settings-section-providers-label = Modelle und Anbieter
 
@@ -531,11 +531,8 @@ settings-detail-action-readonly = Öffnen Sie die Read-Only Effective View.
 
 settings-detail-action-file = Öffnen Sie die Backing Config-Datei.
 
-settings-harness-browser-label = Browser Harness
 
-settings-harness-shell-label = Hülle
 
-settings-harness-editor-label = Herausgeberin Harness
 
 settings-field-parse-bool = {$field} erwartet ein boolesches wie true/false oder on/off
 
@@ -1169,7 +1166,7 @@ overlay-settings-help-bool = Geben Sie wahr/falsch, ein/aus, ja/nein oder 1/0 ei
 overlay-settings-help-integer = Geben Sie eine ganze Zahl ein. Lassen Sie das Feld leer oder geben Sie `clear` ein, um die Dateiüberschreibung zu entfernen.
 overlay-settings-help-float = Geben Sie eine Zahl ein. Lassen Sie das Feld leer oder geben Sie `clear` ein, um die Überschreibung zu entfernen.
 overlay-choice-clear-value = Klarer Wert
-overlay-settings-section-plugins-description = Konfigurieren Sie Plugins, überprüfen Sie deren Tools und Diagnosefunktionen und verwalten Sie Browser-, Shell- und Editor-Kabelbäume.
+overlay-settings-section-plugins-description = Konfigurieren Sie Plugins und prüfen Sie deren Tools und Diagnoseinformationen.
 overlay-settings-section-providers-description = Konfigurieren Sie Anbieter und deren Netzwerkverhalten und überprüfen Sie den Modellkatalog.
 overlay-settings-section-model-catalog-description = Durchsuchen Sie den aufgelösten Modellkatalog, überprüfen Sie die Modellmetadaten und aktualisieren Sie den lokalen Cache.
 overlay-settings-section-permissions-description = Bearbeiten Sie globale Berechtigungen, Arbeitsbereichsberechtigungen und Berechtigungen für die aktuelle Sitzung separat.

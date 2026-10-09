@@ -6,6 +6,8 @@
 //! helpers are synchronous because settings presentation runs in the TUI event
 //! loop.
 
+use agena_tui_transcript::TranscriptDetailDefaults;
+
 use crate::{TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource};
 use agena_application::dto::ConfigJsonSources;
 use anyhow::{Context, Result};
@@ -76,19 +78,39 @@ fn tui_preferences_from_effective(effective: &JsonValue) -> TuiPreferencesResour
         Some("unicode") => TuiGraphicsModeResource::Unicode,
         _ => TuiGraphicsModeResource::Auto,
     };
-    let transcript = tui.get("transcript").unwrap_or(&JsonValue::Null);
-    let transcript_activity_default_expanded = transcript
-        .get("activity_default_expanded")
+    let transcript = ui.get("transcript").unwrap_or(&JsonValue::Null);
+    let activity = transcript.get("activity").unwrap_or(&JsonValue::Null);
+    let activity_default_expanded = activity
+        .get("default_expanded")
         .and_then(JsonValue::as_bool)
         .unwrap_or_default();
-    let mut transcript_activity_kinds = BTreeMap::new();
-    if let Some(kinds) = transcript
-        .get("activity_kinds")
-        .and_then(JsonValue::as_object)
-    {
+    let mut kind_defaults = BTreeMap::new();
+    if let Some(kinds) = activity.get("kinds").and_then(JsonValue::as_object) {
         for (id, value) in kinds {
             if let Some(expanded) = value.as_bool() {
-                transcript_activity_kinds.insert(id.clone(), expanded);
+                kind_defaults.insert(id.clone(), expanded);
+            }
+        }
+    }
+    if let Some(categories) = transcript
+        .get("tools")
+        .and_then(|tools| tools.get("categories"))
+        .and_then(JsonValue::as_object)
+    {
+        for (category, value) in categories {
+            if let Some(expanded) = value.as_bool() {
+                kind_defaults.insert(format!("tool-category:{category}"), expanded);
+            }
+        }
+    }
+    if let Some(overrides) = transcript
+        .get("tools")
+        .and_then(|tools| tools.get("overrides"))
+        .and_then(JsonValue::as_object)
+    {
+        for (tool, value) in overrides {
+            if let Some(expanded) = value.as_bool() {
+                kind_defaults.insert(format!("tool:{tool}"), expanded);
             }
         }
     }
@@ -97,7 +119,88 @@ fn tui_preferences_from_effective(effective: &JsonValue) -> TuiPreferencesResour
         theme,
         color_scheme,
         graphics,
-        transcript_activity_default_expanded,
-        transcript_activity_kinds,
+        transcript_detail_defaults: TranscriptDetailDefaults {
+            activity_default_expanded,
+            kind_defaults,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::tui_preferences_from_effective;
+
+    #[test]
+    fn shared_transcript_preferences_drive_tui_activity_and_tool_defaults() {
+        let preferences = tui_preferences_from_effective(&json!({
+            "ui": {
+                "tui": {
+                    "transcript": {
+                        "activity_default_expanded": false,
+                        "activity_kinds": { "reasoning": true }
+                    }
+                },
+                "transcript": {
+                    "activity": {
+                        "default_expanded": true,
+                        "kinds": { "reasoning": false, "example.trace": true }
+                    },
+                    "tools": {
+                        "categories": { "bash": false, "read": true },
+                        "overrides": { "fs.read": false, "agena.shell.run": true }
+                    }
+                }
+            }
+        }));
+
+        assert!(
+            preferences
+                .transcript_detail_defaults
+                .activity_default_expanded
+        );
+        assert_eq!(
+            preferences
+                .transcript_detail_defaults
+                .kind_defaults
+                .get("reasoning"),
+            Some(&false)
+        );
+        assert_eq!(
+            preferences
+                .transcript_detail_defaults
+                .kind_defaults
+                .get("example.trace"),
+            Some(&true)
+        );
+        assert_eq!(
+            preferences
+                .transcript_detail_defaults
+                .kind_defaults
+                .get("tool-category:bash"),
+            Some(&false)
+        );
+        assert_eq!(
+            preferences
+                .transcript_detail_defaults
+                .kind_defaults
+                .get("tool-category:read"),
+            Some(&true)
+        );
+        assert_eq!(
+            preferences
+                .transcript_detail_defaults
+                .kind_defaults
+                .get("tool:fs.read"),
+            Some(&false)
+        );
+        assert_eq!(
+            preferences
+                .transcript_detail_defaults
+                .kind_defaults
+                .get("tool:agena.shell.run"),
+            Some(&true)
+        );
     }
 }

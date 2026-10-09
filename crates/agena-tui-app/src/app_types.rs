@@ -151,7 +151,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
         },
         SettingsFieldSpec {
             section: SettingsStudioSectionId::Interface,
-            path: "ui.tui.transcript.activity_default_expanded".to_string(),
+            path: "ui.transcript.activity.default_expanded".to_string(),
             label_key: "settings-field-activity-default-expanded-label",
             description_key: "settings-field-activity-default-expanded-description",
             kind: SettingsFieldKind::Bool,
@@ -239,6 +239,8 @@ pub struct LaunchOptions {
     pub initial_session_id: Option<i64>,
     pub initial_session_search: Option<String>,
     pub tui_config: TuiConfig,
+    /// Rendering defaults projected from the shared `ui.transcript` config.
+    pub transcript_detail_defaults: TranscriptDetailDefaults,
     pub terminal_background: Option<agena_tui_components::TerminalRgb>,
     pub terminal_context: Option<TerminalContext>,
     pub math_graphics: Option<MathGraphicsConfig>,

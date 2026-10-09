@@ -18,10 +18,10 @@ use agena_provider::{
 };
 
 use crate::{
-    ConfigEnvironment, ConfigError, HarnessViewportConfig, HarnessesConfig,
-    HttpProviderAdapterConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig, SessionConfig, UiConfig,
+    ConfigEnvironment, ConfigError, HttpProviderAdapterConfig, ProviderAdapterDefinition,
+    ProviderApiAuthConfig, ProviderAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
+    SessionConfig, UiConfig,
 };
 
 pub use crate::merge_optional_config as merge_option;
@@ -194,7 +194,6 @@ pub struct RawConfig {
     pub session: Option<RawSessionConfig>,
     pub permission: Option<agena_domain::PermissionConfig>,
     pub plugins: Option<PluginConfig>,
-    pub harnesses: Option<HarnessesConfig>,
     pub providers: RawProvidersConfig,
 }
 
@@ -206,7 +205,6 @@ impl RawConfig {
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
-        merge_option_struct(&mut self.harnesses, overlay.harnesses);
         self.providers.merge_from(overlay.providers);
     }
 
@@ -224,7 +222,6 @@ impl RawConfig {
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
-        merge_option_struct(&mut self.harnesses, overlay.harnesses);
         self.providers.merge_project_from(overlay.providers);
     }
 
@@ -235,7 +232,6 @@ impl RawConfig {
             && self.session.is_none()
             && self.permission.is_none()
             && self.plugins.is_none()
-            && self.harnesses.is_none()
             && self.providers.is_empty()
     }
 
@@ -267,6 +263,7 @@ impl RawConfig {
                 codex,
                 claude,
                 gemini,
+                auto_update: None,
             },
         );
         let runtime = client_versions.map(|client_versions| RawRuntimeConfig {
@@ -305,7 +302,6 @@ impl RawConfig {
             session,
             permission: None,
             plugins: None,
-            harnesses: None,
             providers: RawProvidersConfig::default(),
         })
     }
@@ -343,8 +339,6 @@ impl RawConfig {
         }
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         crate::mcp_config_from_plugins(&plugins).map_err(ConfigError::Validation)?;
-        let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
-        validate_harnesses(&harnesses)?;
 
         let explicit_default_selection = self.providers.default_selection.clone();
         let providers = self
@@ -365,7 +359,6 @@ impl RawConfig {
             session,
             permission,
             plugins,
-            harnesses,
             providers,
         })
     }
@@ -527,20 +520,6 @@ fn merge_timeouts(
     }
 }
 
-impl Merge for HarnessesConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        for (name, config) in overlay.browser {
-            self.browser.insert(name, config);
-        }
-        for (name, config) in overlay.shell {
-            self.shell.insert(name, config);
-        }
-        for (name, config) in overlay.editor {
-            self.editor.insert(name, config);
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
 /// Raw tracing configuration.
@@ -630,6 +609,8 @@ pub struct RawProviderClientVersionSettings {
     pub claude: Option<String>,
     #[merge(strategy = option_override)]
     pub gemini: Option<String>,
+    #[merge(strategy = option_override)]
+    pub auto_update: Option<bool>,
 }
 
 impl RuntimeConfig {
@@ -658,6 +639,7 @@ impl RuntimeConfig {
                         client_versions.gemini,
                         defaults.gemini.as_str(),
                     )?,
+                    auto_update: client_versions.auto_update.unwrap_or(true),
                 },
             },
         })
@@ -877,82 +859,6 @@ fn validate_permission_config(
     agena_runtime_contracts::authorization::validate_permission_config(permission)
         .map(|_| ())
         .map_err(|err| ConfigError::Validation(format!("{label} is invalid: {err}")))
-}
-
-fn validate_harnesses(harnesses: &HarnessesConfig) -> Result<(), ConfigError> {
-    for (name, browser) in &harnesses.browser {
-        validate_harness_name("harnesses.browser", name)?;
-        if browser.driver.trim().is_empty() {
-            return Err(ConfigError::Validation(format!(
-                "harnesses.browser.{name}.driver cannot be empty"
-            )));
-        }
-        validate_non_empty_list(
-            format!("harnesses.browser.{name}.allowed_domains").as_str(),
-            &browser.allowed_domains,
-        )?;
-        validate_viewport(
-            format!("harnesses.browser.{name}.viewport").as_str(),
-            &browser.viewport,
-        )?;
-    }
-
-    for (name, shell) in &harnesses.shell {
-        validate_harness_name("harnesses.shell", name)?;
-        validate_non_empty_list(
-            format!("harnesses.shell.{name}.allow_commands").as_str(),
-            &shell.allow_commands,
-        )?;
-        validate_non_empty_list(
-            format!("harnesses.shell.{name}.deny_commands").as_str(),
-            &shell.deny_commands,
-        )?;
-    }
-
-    for (name, editor) in &harnesses.editor {
-        validate_harness_name("harnesses.editor", name)?;
-        validate_non_empty_list(
-            format!("harnesses.editor.{name}.allowed_extensions").as_str(),
-            &editor.allowed_extensions,
-        )?;
-        if matches!(editor.max_file_bytes, Some(0)) {
-            return Err(ConfigError::Validation(format!(
-                "harnesses.editor.{name}.max_file_bytes must be greater than 0"
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_harness_name(scope: &str, name: &str) -> Result<(), ConfigError> {
-    if name.trim().is_empty() {
-        return Err(ConfigError::Validation(format!(
-            "{scope} names cannot be empty"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_viewport(label: &str, viewport: &HarnessViewportConfig) -> Result<(), ConfigError> {
-    if viewport.is_empty() {
-        return Ok(());
-    }
-    if viewport.width == 0 || viewport.height == 0 {
-        return Err(ConfigError::Validation(format!(
-            "{label} must set both width and height"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_non_empty_list(label: &str, values: &[String]) -> Result<(), ConfigError> {
-    if values.iter().any(|value| value.trim().is_empty()) {
-        return Err(ConfigError::Validation(format!(
-            "{label} cannot contain empty strings"
-        )));
-    }
-    Ok(())
 }
 
 fn validate_configured_models(
@@ -1213,6 +1119,25 @@ mod openai_protocol_adapter_tests {
         let fixture = workspace_fixture("config.example.json");
         validate_config_text(Path::new("config.example.json"), &fixture)
             .expect("config.example.json should remain a valid canonical configuration");
+    }
+
+    #[test]
+    fn example_configs_store_transcript_defaults_once_outside_the_tui_preferences() {
+        for path in ["config.example.json", "config.full.json"] {
+            let fixture = workspace_fixture(path);
+            let value: serde_json::Value =
+                serde_json::from_str(&fixture).expect("example config should be valid JSON");
+            assert!(
+                value
+                    .pointer("/ui/transcript/activity/default_expanded")
+                    .is_some(),
+                "{path} must use the shared ui.transcript path"
+            );
+            assert!(
+                value.pointer("/ui/tui/transcript").is_none(),
+                "{path} must not keep transcript defaults under TUI-only preferences"
+            );
+        }
     }
 
     #[test]

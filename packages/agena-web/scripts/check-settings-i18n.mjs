@@ -63,7 +63,6 @@ const technicalScriptLiterals = new Set([
   'session.compaction',
   'ui',
   'tracing',
-  'harnesses',
   'off',
   'error',
   'warn',
@@ -292,10 +291,8 @@ const sameAsEnglishAllowlist = new Set([
 const contextualGlossary = {
   'ar-SA': {
     'All states': 'جميع حالات التنفيذ',
-    Driver: 'برنامج التشغيل',
     Adapter: 'مهايئ',
     Providers: 'مقدّمو الخدمات',
-    'Tool harnesses': 'بيئات تنفيذ الأدوات',
     Global: 'عام',
     Workspace: 'مساحة العمل',
     'Provider configuration': 'إعدادات مزوّد الخدمة',
@@ -309,10 +306,8 @@ const contextualGlossary = {
   },
   'es-ES': {
     'All states': 'Todos los estados de ejecución',
-    Driver: 'Controlador',
     Adapter: 'Adaptador',
     Providers: 'Proveedores',
-    'Tool harnesses': 'Entornos de ejecución de herramientas',
     Global: 'Global',
     Workspace: 'Espacio de trabajo',
     'Provider configuration': 'Configuración del proveedor',
@@ -326,10 +321,8 @@ const contextualGlossary = {
   },
   'fr-FR': {
     'All states': "Tous les statuts d'exécution",
-    Driver: 'Pilote',
     Adapter: 'Adaptateur',
     Providers: 'Fournisseurs',
-    'Tool harnesses': 'Environnements d’exécution des outils',
     Global: 'Global',
     Workspace: 'Espace de travail',
     'Provider configuration': 'Configuration du fournisseur',
@@ -343,10 +336,8 @@ const contextualGlossary = {
   },
   'hi-IN': {
     'All states': 'सभी निष्पादन स्थितियाँ',
-    Driver: 'ड्राइवर',
     Adapter: 'एडाप्टर',
     Providers: 'प्रदाता',
-    'Tool harnesses': 'टूल निष्पादन परिवेश',
     Global: 'वैश्विक',
     Workspace: 'कार्यक्षेत्र',
     'Provider configuration': 'एआई प्रदाता कॉन्फ़िगरेशन',
@@ -360,10 +351,8 @@ const contextualGlossary = {
   },
   'pt-BR': {
     'All states': 'Todos os status de execução',
-    Driver: 'Driver',
     Adapter: 'Adaptador',
     Providers: 'Provedores',
-    'Tool harnesses': 'Ambientes de execução de ferramentas',
     Global: 'Global',
     Workspace: 'Espaço de trabalho',
     'Provider configuration': 'Configuração do provedor',
@@ -377,10 +366,8 @@ const contextualGlossary = {
   },
   'zh-CN': {
     'All states': '所有状态',
-    Driver: '驱动',
     Adapter: '适配器',
     Providers: '服务商',
-    'Tool harnesses': '工具执行环境',
     Global: '全局',
     Workspace: '工作区',
     'Provider configuration': '服务商配置',
@@ -419,7 +406,6 @@ const coreTranslatedSources = [
   'Provider Studio',
   'Refresh',
   'Save',
-  'Tool harnesses',
   'Workspace',
 ]
 for (const [locale, catalog] of Object.entries(catalogs)) {

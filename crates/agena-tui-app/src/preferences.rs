@@ -5,10 +5,8 @@ pub struct TuiPreferencesResource {
     pub theme: Option<String>,
     pub color_scheme: TuiColorSchemeResource,
     pub graphics: TuiGraphicsModeResource,
-    /// Default transcript expansion for activities without a kind override.
-    pub transcript_activity_default_expanded: bool,
-    /// Per-kind transcript expansion overrides keyed by activity kind id.
-    pub transcript_activity_kinds: std::collections::BTreeMap<String, bool>,
+    /// Read-only rendering projection of the shared `ui.transcript` settings.
+    pub transcript_detail_defaults: agena_tui_transcript::TranscriptDetailDefaults,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

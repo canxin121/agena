@@ -8,6 +8,7 @@ import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSe
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 import Button from '@/components/ui/Button.vue'
 import { apiJson } from '@/lib/api'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const { t } = useI18n()
 const refreshBusy = ref(false)
@@ -57,6 +58,14 @@ async function refreshClientVersions() {
       >
         {{ refreshError }}
       </div>
+      <ServerSettingField
+        path="runtime.providers.client_versions.auto_update"
+        :label="st('Automatically update provider client versions')"
+        :description="st('When enabled, refresh Codex, Claude, and Gemini client identities from npm on startup and daily. Turn this off to pin the configured versions.')"
+        kind="boolean"
+        :default-value="true"
+        compact
+      />
       <div :key="clientVersionNonce" class="grid gap-2">
         <ServerSettingField
           path="runtime.providers.client_versions.codex"

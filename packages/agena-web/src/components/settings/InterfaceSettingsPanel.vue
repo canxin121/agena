@@ -4,11 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
-import SearchInput from '@/components/ui/SearchInput.vue'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import { apiJson } from '@/lib/api'
-import { jsonPathForKey } from '@/lib/runtimeSettings'
-import { normalizeChatActivityKindCatalog, type ChatActivityKindCatalogItem } from '@/lib/chatActivity'
 import { TUI_LOCALE_OPTIONS } from '@/i18n/tuiLocale'
 import { settingsText as st } from '@/i18n/settingsText'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
@@ -23,26 +20,11 @@ type ToolCatalogResponse = {
     }
     operations?: unknown[]
   }
-  permission_tools?: Array<{ name?: string; summary?: string; tags?: string[] }>
-  activity_kinds?: unknown
 }
-
-const BUILTIN_ACTIVITY_TOOLS = [
-  'tools_list',
-  'tools_search',
-  'tools_help',
-  'tools_tags',
-  'tools_call',
-  'plugins_list',
-  'plugins_search',
-  'plugins_tags',
-]
 
 const { t } = useI18n()
 const loadingCatalog = ref(false)
 const catalogError = ref('')
-const activityKinds = ref<ChatActivityKindCatalogItem[]>([])
-const toolNames = ref<string[]>([])
 const themes = ref<Array<{ value: string; label: string; pluginId: string }>>([])
 const themeOptions = computed(() =>
   themes.value.map(({ value, label, pluginId }) => ({
@@ -51,8 +33,6 @@ const themeOptions = computed(() =>
     description: pluginId ? st('Plugin: {pluginId}', { pluginId }) : undefined,
   })),
 )
-const activityQuery = ref('')
-const toolQuery = ref('')
 const visible = usePaneVisibility()
 let catalogController: AbortController | undefined
 let pendingCatalog = true
@@ -77,24 +57,6 @@ const graphicsOptions = computed(() => [
   { value: 'unicode', label: st('Unicode'), description: st('Use portable Unicode rendering.') },
 ])
 
-const filteredActivityKinds = computed(() => {
-  const query = activityQuery.value.trim().toLowerCase()
-  if (!query) return activityKinds.value
-  return activityKinds.value.filter((item) =>
-    `${item.id}
-${item.label}
-${item.category}`
-      .toLowerCase()
-      .includes(query),
-  )
-})
-
-const filteredToolNames = computed(() => {
-  const query = toolQuery.value.trim().toLowerCase()
-  if (!query) return toolNames.value
-  return toolNames.value.filter((name) => name.toLowerCase().includes(query))
-})
-
 async function loadCatalog() {
   if (!visible.value) {
     pendingCatalog = true
@@ -111,8 +73,6 @@ async function loadCatalog() {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
     })
     if (controller.signal.aborted || catalogController !== controller) return
-    const kinds = normalizeChatActivityKindCatalog(response?.activity_kinds)
-    activityKinds.value = kinds
     themes.value = (Array.isArray(response?.catalog?.terminal?.themes) ? response.catalog.terminal.themes : []).flatMap(
       (theme) => {
         const id = String(theme?.id || '').trim()
@@ -128,14 +88,6 @@ async function loadCatalog() {
         ]
       },
     )
-    toolNames.value = [
-      ...new Set([
-        ...BUILTIN_ACTIVITY_TOOLS,
-        ...(Array.isArray(response?.permission_tools) ? response.permission_tools : [])
-          .map((item) => String(item?.name || '').trim())
-          .filter(Boolean),
-      ]),
-    ].sort((a, b) => a.localeCompare(b))
   } catch (reason) {
     if (controller.signal.aborted || catalogController !== controller) return
     catalogError.value = reason instanceof Error ? reason.message : String(reason)
@@ -145,19 +97,6 @@ async function loadCatalog() {
       loadingCatalog.value = false
     }
   }
-}
-
-function activityLabel(item: ChatActivityKindCatalogItem): string {
-  const key = `settings.appearance.chat.activityKinds.${item.id}.label`
-  return t(key) !== key ? String(t(key)) : item.label
-}
-
-function activityPath(id: string): string {
-  return jsonPathForKey('ui.tui.transcript.activity_kinds', id)
-}
-
-function toolPath(name: string): string {
-  return jsonPathForKey('ui.tui.transcript.activity_kinds', `tool:${name}`)
 }
 
 onMounted(() => void loadCatalog())
@@ -238,95 +177,7 @@ onBeforeUnmount(() => catalogController?.abort())
         :empty-label="$st('Default TUI theme')"
         monospace
       />
-      <ServerSettingField
-        path="ui.tui.transcript.activity_default_expanded"
-        :label="t('settings.tui.fields.activityDefaultExpanded')"
-        :description="t('settings.tui.fields.activityDefaultExpandedDescription')"
-        kind="boolean"
-        :default-value="false"
-      />
     </section>
 
-    <section class="grid gap-3 border-t border-border/60 pt-5">
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 class="text-sm font-medium">{{ t('settings.tui.activityKindsTitle') }}</h2>
-          <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.activityKindsDescription') }}</p>
-        </div>
-        <div class="w-64 max-w-full">
-          <SearchInput
-            v-model="activityQuery"
-            :placeholder="$st('Filter activity kinds')"
-            :show-search-button="false"
-            :input-aria-label="$st('Filter TUI activity kinds')"
-          />
-        </div>
-      </div>
-      <div v-if="loadingCatalog && activityKinds.length === 0" class="text-sm text-muted-foreground">
-        {{ $st('Loading activity catalog…') }}
-      </div>
-      <div
-        v-else-if="catalogError"
-        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-      >
-        {{ catalogError }}
-      </div>
-      <div v-else class="grid gap-2">
-        <ServerSettingField
-          v-for="item in filteredActivityKinds"
-          :key="activityPath(item.id)"
-          :path="activityPath(item.id)"
-          :label="activityLabel(item)"
-          :description="`${item.id} · ${item.category}`"
-          kind="boolean"
-          default-value=""
-          :include-empty="true"
-          :empty-label="$st('Inherit TUI default')"
-          compact
-        />
-      </div>
-    </section>
-
-    <section class="grid gap-3 border-t border-border/60 pt-5">
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 class="text-sm font-medium">{{ t('settings.tui.toolOverridesTitle') }}</h2>
-          <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.toolOverridesDescription') }}</p>
-          <p class="mt-1 text-[11px] text-muted-foreground">
-            {{ filteredToolNames.length }} {{ $st('of') }} {{ toolNames.length }} {{ $st('tools shown') }}
-          </p>
-        </div>
-        <div class="w-72 max-w-full">
-          <SearchInput
-            v-model="toolQuery"
-            :placeholder="$st('Filter exact tools')"
-            :show-search-button="false"
-            :input-aria-label="$st('Filter TUI tool expansion overrides')"
-          />
-        </div>
-      </div>
-      <div v-if="toolNames.length === 0" class="text-sm text-muted-foreground">{{ t('settings.tui.noTools') }}</div>
-      <div
-        v-else-if="filteredToolNames.length === 0"
-        class="rounded-md border border-dashed border-border/60 px-4 py-8 text-center text-sm text-muted-foreground"
-      >
-        {{ $st('No matching tools.') }}
-      </div>
-      <div v-else class="grid gap-2">
-        <ServerSettingField
-          v-for="name in filteredToolNames"
-          :key="toolPath(name)"
-          :path="toolPath(name)"
-          :label="name"
-          :description="toolPath(name)"
-          kind="boolean"
-          default-value=""
-          :include-empty="true"
-          :empty-label="$st('Inherit activity default')"
-          monospace
-          compact
-        />
-      </div>
-    </section>
   </div>
 </template>

@@ -351,7 +351,7 @@ overlay-choice-clear-settings-detail = {$field} のファイルオーバーラ�
 
 overlay-settings-section-plugins-label = プラグインとツール
 
-overlay-settings-section-plugins-summary = プラグインの設定、ツール、ハーネス、診断
+overlay-settings-section-plugins-summary = プラグインの設定、ツール、診断
 
 overlay-settings-section-providers-label = モデルとプロバイダー
 
@@ -531,11 +531,8 @@ settings-detail-action-readonly = 読み取り専用の効果的なビューを�
 
 settings-detail-action-file = バックアップ設定ファイルを開きます。
 
-settings-harness-browser-label = ブラウザハーネス
 
-settings-harness-shell-label = シェルハーネス
 
-settings-harness-editor-label = エディターハーネス
 
 settings-field-parse-bool = {$field} は true/false か on/off のような boolean を期待します
 
@@ -1170,7 +1167,7 @@ overlay-settings-help-bool = true/false、オン/オフ、はい/いいえ、ま
 overlay-settings-help-integer = 整数を入力してください。空のままにするか、`clear` と入力してファイルのオーバーライドを削除します。
 overlay-settings-help-float = 数字を入力してください。空のままにするか、`clear` と入力してオーバーライドを削除します。
 overlay-choice-clear-value = クリア値
-overlay-settings-section-plugins-description = プラグインを構成し、そのツールと診断を検査し、ブラウザー、シェル、エディターのハーネスを管理します。
+overlay-settings-section-plugins-description = プラグインを設定し、ツールと診断情報を確認します。
 overlay-settings-section-providers-description = プロバイダーとそのネットワーク動作を構成し、モデル カタログを検査します。
 overlay-settings-section-model-catalog-description = 解決されたモデル カタログを参照し、モデルのメタデータを検査し、ローカル キャッシュを更新します。
 overlay-settings-section-permissions-description = グローバル、ワークスペース、現在のセッションの権限を個別に編集します。

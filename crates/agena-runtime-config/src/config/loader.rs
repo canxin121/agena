@@ -259,12 +259,79 @@ mod tests {
             resolution.config.runtime.providers.client_versions.gemini,
             "0.60.0"
         );
+        assert!(
+            resolution
+                .config
+                .runtime
+                .providers
+                .client_versions
+                .auto_update,
+            "explicit versions do not disable automatic updates"
+        );
         assert!(!resolution.config.session.compaction.auto);
         assert_eq!(
             resolution.config.session.compaction.reserved_tokens,
             Some(8192)
         );
         assert_eq!(resolution.config.session.max_turns, Some(50));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn client_versions_auto_update_can_be_disabled_explicitly() {
+        let root = test_root();
+        let config_dir = root.join("agena");
+        std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        std::fs::write(
+            config_dir.join("agena.json"),
+            r#"{"runtime":{"providers":{"client_versions":{"codex":"0.200.1","auto_update":false}}}}"#,
+        )
+        .expect("write test config");
+        let env = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+
+        let resolution = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect("explicit automatic-update setting should load");
+
+        assert!(
+            !resolution
+                .config
+                .runtime
+                .providers
+                .client_versions
+                .auto_update
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn client_versions_auto_update_defaults_to_enabled_without_explicit_pins() {
+        let root = test_root();
+        std::fs::create_dir_all(root.join("agena")).expect("create test config directory");
+        let env = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+
+        let resolution = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect("default configuration should load");
+
+        assert!(
+            resolution
+                .config
+                .runtime
+                .providers
+                .client_versions
+                .auto_update
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

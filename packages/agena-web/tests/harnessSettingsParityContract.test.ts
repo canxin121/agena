@@ -1,28 +1,20 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
-test('Harness settings expose every runtime field and explicit Global/Workspace layers', () => {
-  const source = readFileSync(resolve(import.meta.dir, '../src/components/settings/HarnessSettingsPanel.vue'), 'utf8')
-  for (const value of [
-    "targetLayer = ref<RuntimeSettingsLayer>('global')",
-    'Copy effective catalog',
-    'launch_options',
-    'allowed_domains',
-    'allow_commands',
-    'deny_commands',
-    'current.env',
-    'max_file_bytes',
-    'allowed_extensions',
-    'renameHarness',
-  ]) {
-    assert.ok(source.includes(value), `missing Harness capability ${value}`)
-  }
-  assert.ok(source.includes('setRuntimeSetting('))
-  assert.ok(source.includes('targetLayer.value'))
-  assert.ok(source.includes('function cloneEditableObject'))
-  assert.ok(source.includes('function scheduleRawHarnessJsonSync'))
-  assert.ok(source.includes('const rawHarnessJsonDirty = ref(false)'))
-  assert.ok(!source.includes('const current = clone((selectedConfig.value || {}) as JsonObject)'))
+test('tool harness configuration is absent from settings navigation and editors', () => {
+  const settingsRoot = resolve(import.meta.dir, '../src/components/settings')
+  const navigation = readFileSync(resolve(settingsRoot, 'settingsNavigationCatalog.ts'), 'utf8')
+  const advanced = readFileSync(resolve(settingsRoot, 'AdvancedSettingsPanel.vue'), 'utf8')
+  const plugins = readFileSync(resolve(settingsRoot, 'PluginsToolsPanel.vue'), 'utf8')
+  const tuiSettings = readFileSync(
+    resolve(import.meta.dir, '../../../crates/agena-tui-app/src/app_session_interactive/settings.rs'),
+    'utf8',
+  )
+  assert.equal(existsSync(resolve(settingsRoot, 'HarnessSettingsPanel.vue')), false)
+  assert.equal(navigation.includes('harnesses'), false)
+  assert.equal(advanced.includes("value: 'harnesses'"), false)
+  assert.equal(plugins.toLowerCase().includes('harness'), false)
+  assert.equal(tuiSettings.includes('settings_studio_harness_items'), false)
 })

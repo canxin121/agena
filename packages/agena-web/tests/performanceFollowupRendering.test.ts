@@ -842,7 +842,9 @@ for (const [name, path, initialize, sentinel] of [
     'permissions',
     '/src/components/settings/PermissionsPanel.vue',
     (state: any) => {
-      state.rules.value = [{ id: 1, subject_kind: 'tool', tool_name: 'retained-permission-sentinel' }]
+      state.rules.value = [
+        { id: 1, subject_kind: 'tool', tool_name: 'retained-permission-sentinel', scope: 'global' },
+      ]
     },
     'retained-permission-sentinel',
   ],
@@ -893,7 +895,7 @@ for (const [name, path, initialize, sentinel] of [
           return state
         },
       }
-      const app = createSSRApp(subject)
+      const app = createSSRApp(subject, name === 'permissions' ? { scope: 'global' } : {})
       const pinia = createPinia()
       const { settingsText } = await vite.ssrLoadModule('/src/i18n/settingsText.ts')
       app.config.globalProperties.$st = settingsText

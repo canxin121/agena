@@ -1,6 +1,5 @@
 use super::{
-    BTreeMap, HarnessesConfig, PathBuf, ResolvedProviderConfig, RuntimeConfig, Serialize,
-    SessionConfig, UiConfig,
+    BTreeMap, PathBuf, ResolvedProviderConfig, RuntimeConfig, Serialize, SessionConfig, UiConfig,
 };
 use crate::RuntimeTracingConfiguration;
 use agena_domain::{ExecutionSelection, PermissionConfig};
@@ -233,8 +232,6 @@ pub struct ResolvedConfig {
     #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
     pub permission: PermissionConfig,
     pub plugins: PluginConfig,
-    #[serde(default, skip_serializing_if = "HarnessesConfig::is_empty")]
-    pub harnesses: HarnessesConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
 }
 
@@ -257,7 +254,6 @@ mod tests {
             session: SessionConfig::default(),
             permission: PermissionConfig::default(),
             plugins: PluginConfig::default(),
-            harnesses: HarnessesConfig::default(),
             providers: BTreeMap::new(),
         }
     }

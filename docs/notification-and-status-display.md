@@ -544,11 +544,12 @@ App.vue：
 
 - notification（EventNotification.kind：event / lagged / resumed / subscription_closed）
 
-### 8.3 TUI 配置项（presentation_config.rs）
+### 8.3 UI 配置项
 
 - TuiConfig.status_line.command + refresh_interval_ms
 - TuiConfig.terminal_title / terminal_notifications / terminal_progress（Auto/Enabled/Disabled）
-- TuiConfig.transcript.activity_default_expanded
+- `ui.transcript.activity.default_expanded` 与 `ui.transcript.activity.kinds.*` 控制活动 part 的默认展开。
+- `ui.transcript.tools.categories.*` 与 `ui.transcript.tools.overrides.*` 控制工具 part 的默认展开；Web 和 TUI 共用这一份配置。
 
 ### 8.4 内建插件保留 statusline 段
 

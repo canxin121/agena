@@ -27,26 +27,25 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       description: () => st('Choose the one runtime-wide default model and its optional execution modes.'),
       keywords: ['default', 'model', 'thinking', 'speed', 'verbosity'],
     },
-    {
-      id: 'inventory',
-      label: () => st('Configured inventory'),
-      description: () => st('Review every configured provider, adapter, endpoint, and model.'),
-      keywords: ['inventory', 'configured', 'provider list', 'adapter list'],
-    },
   ],
   permissions: [
     {
-      id: 'policy-studio',
-      label: () => st('Permission Studio'),
-      description: () => st('Edit global, workspace, current-session, and effective permission policy layers.'),
-      keywords: ['filesystem', 'network', 'tools', 'allow', 'auto', 'ask', 'deny'],
+      id: 'filesystem',
+      label: () => st('Filesystem'),
+      description: () => st('Configure file and path access for each permission scope.'),
+      keywords: ['filesystem', 'file', 'path', 'read', 'write'],
     },
     {
-      id: 'persistent-rules',
-      label: () => st('Persistent rules'),
-      description: () =>
-        st('Inspect and revoke durable approval rules captured from interactive permission decisions.'),
-      keywords: ['rules', 'approval', 'revoke', 'history'],
+      id: 'network',
+      label: () => st('Network'),
+      description: () => st('Configure internet, private-network, and host access for each permission scope.'),
+      keywords: ['network', 'internet', 'private', 'host', 'domain'],
+    },
+    {
+      id: 'tools',
+      label: () => st('Tools'),
+      description: () => st('Configure tool access and review saved approval rules for each permission scope.'),
+      keywords: ['tools', 'commands', 'allow', 'auto', 'ask', 'deny', 'rules'],
     },
   ],
   'plugins-tools': [
@@ -70,12 +69,6 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
         st('Manage the connected server’s MCP listener, OAuth policy, public identity, and tool exposure.'),
       keywords: ['mcp', 'oauth', 'chatgpt', 'public url', 'tools'],
     },
-    {
-      id: 'harnesses',
-      label: () => st('Tool harnesses'),
-      description: () => st('Create named browser, shell, and editor harness configurations.'),
-      keywords: ['browser', 'shell', 'editor', 'environment', 'commands'],
-    },
   ],
   'runtime-session': [
     {
@@ -96,10 +89,7 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     {
       id: 'tui',
       label: () => st('TUI preferences'),
-      description: () =>
-        st(
-          'Server-backed language, color, graphics, plugin theme, and transcript expansion defaults shared with the TUI.',
-        ),
+      description: () => st('Server-backed language, color, graphics, and plugin theme settings for TUI clients.'),
       keywords: ['tui', 'locale', 'color', 'graphics', 'theme', 'transcript'],
     },
     {
@@ -154,7 +144,7 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
 
 export const SETTINGS_DEFAULT_SUBPAGE: Record<SettingsTab, string> = {
   'models-providers': 'provider-studio',
-  permissions: 'policy-studio',
+  permissions: 'filesystem',
   'plugins-tools': 'plugin-workbench',
   'runtime-session': 'client-versions',
   interface: 'tui',

@@ -65,13 +65,8 @@ impl App {
         let base_palette = launch.tui_config.palette(launch.terminal_background);
         let tui_palette = tui_palette_with_plugin(base_palette, plugin_theme.as_ref());
         agena_tui_components::theme::set_active_palette(tui_palette);
-        let mut transcript = TranscriptState::new(
-            i18n.clone(),
-            TranscriptDetailDefaults {
-                activity_default_expanded: launch.tui_config.transcript.activity_default_expanded,
-                kind_defaults: launch.tui_config.transcript.activity_kinds.clone(),
-            },
-        );
+        let mut transcript =
+            TranscriptState::new(i18n.clone(), launch.transcript_detail_defaults.clone());
         transcript.set_math_render_context(math_render_context.clone());
         let mut app = Self {
             #[cfg(test)]
@@ -196,10 +191,11 @@ impl App {
         app
     }
 
-    pub(crate) fn refresh_tui_palette_from_runtime(&mut self) {
-        self.launch.tui_config = crate::tui_config_from_preferences(
-            &crate::app_backend::config::ui_configuration(&self.application),
-        );
+    pub(crate) fn refresh_tui_preferences_from_runtime(&mut self) {
+        let preferences = crate::app_backend::config::ui_configuration(&self.application);
+        self.launch.tui_config = crate::tui_config_from_preferences(&preferences);
+        self.launch.transcript_detail_defaults = preferences.transcript_detail_defaults.clone();
+        self.transcript.detail_expanded_by_default = preferences.transcript_detail_defaults;
         self.plugin_theme = self.launch.tui_config.theme.as_ref().and_then(|theme_id| {
             crate::app_backend::plugin_effects::plugin_theme_palettes(&self.application)
                 .into_iter()
@@ -587,9 +583,9 @@ use crate::{
     DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore, Duration, Editor, Event, HashMap, HashSet,
     I18n, Instant, LaunchOptions, LayoutCache, PromptHistory, REFRESH_INTERVAL_MS,
     REFRESH_STALL_TIMEOUT_MS, Route, RunActivityTracker, RunOptionsState, SessionComposerState,
-    SessionListLoadState, TerminalIntegrationState, TerminalRuntime, TranscriptDetailDefaults,
-    TranscriptState, UI_COMMAND_QUEUE_CAPACITY, UI_TICK_MS, default_draft_store_path,
-    default_prompt_history_path, interval, provider_studio_auth_poll_interval, ui_text,
+    SessionListLoadState, TerminalIntegrationState, TerminalRuntime, TranscriptState,
+    UI_COMMAND_QUEUE_CAPACITY, UI_TICK_MS, default_draft_store_path, default_prompt_history_path,
+    interval, provider_studio_auth_poll_interval, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;

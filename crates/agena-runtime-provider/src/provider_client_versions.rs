@@ -25,6 +25,10 @@ impl ProviderClientIdentity {
         Self { versions }
     }
 
+    pub fn versions(&self) -> ProviderClientVersions {
+        self.versions.clone()
+    }
+
     pub fn codex_package_version(&self) -> String {
         self.versions.codex.clone()
     }
@@ -86,7 +90,7 @@ pub enum ProviderClientVersionFetchError {
     },
 }
 
-/// Fetch compatible provider CLI versions on an explicit user request.
+/// Fetch the current compatible provider CLI versions from npm.
 pub async fn fetch_latest_provider_client_versions()
 -> Result<ProviderClientVersions, ProviderClientVersionFetchError> {
     let client = reqwest::Client::builder()

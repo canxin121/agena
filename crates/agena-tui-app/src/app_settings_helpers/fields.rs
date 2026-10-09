@@ -147,7 +147,7 @@ pub(crate) fn settings_source_rows_for_workspace_config_path(
 
 /// Dynamic Interface items for each activity kind in the catalog (built-in
 /// plus plugin-contributed). Each kind toggles its default expansion state at
-/// `ui.tui.transcript.activity_kinds.<id>`.
+/// `ui.transcript.activity.kinds.<id>`.
 pub(crate) fn settings_studio_activity_kind_items(
     i18n: &I18n,
     application: &crate::TuiBackend,
@@ -158,9 +158,9 @@ pub(crate) fn settings_studio_activity_kind_items(
     for kind in kinds {
         let path = agena_domain::format_json_path(&[
             "ui".to_owned(),
-            "tui".to_owned(),
             "transcript".to_owned(),
-            "activity_kinds".to_owned(),
+            "activity".to_owned(),
+            "kinds".to_owned(),
             kind.id.clone(),
         ]);
         let label_key = format!("settings-activity-kind-{}-label", kind.id);
@@ -221,9 +221,9 @@ pub(crate) fn settings_studio_activity_kind_items(
 
 /// Dynamic Interface items for every concrete tool in the live registry.
 ///
-/// Tool overrides share the open-ended `activity_kinds` map using a `tool:`
-/// selector prefix. Quoted JSON-path segments preserve dotted tool names as a
-/// single map key instead of accidentally creating nested configuration.
+/// Tool overrides live beside activity-kind defaults in the shared UI
+/// transcript preference object. Quoted JSON-path segments preserve dotted
+/// tool names as a single map key.
 pub(crate) fn settings_studio_activity_tool_items(
     i18n: &I18n,
     application: &crate::TuiBackend,
@@ -262,13 +262,12 @@ pub(crate) fn settings_studio_activity_tool_items(
     tools
         .into_iter()
         .map(|(name, summary)| {
-            let selector = format!("tool:{name}");
             let path = agena_domain::format_json_path(&[
                 "ui".to_owned(),
-                "tui".to_owned(),
                 "transcript".to_owned(),
-                "activity_kinds".to_owned(),
-                selector,
+                "tools".to_owned(),
+                "overrides".to_owned(),
+                name.clone(),
             ]);
             let description = if summary.trim().is_empty() {
                 ui_text::t(i18n, "settings-field-activity-tool-description")
@@ -517,57 +516,6 @@ fn approval_model_selection_summary(selection: &agena_domain::ApprovalModelSelec
         route.push(variants.join(", "));
     }
     route.join(" / ")
-}
-
-pub(crate) fn settings_studio_harness_items(
-    i18n: &I18n,
-    sources: &ConfigJsonSources,
-) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
-    ["harnesses.browser", "harnesses.shell", "harnesses.editor"]
-        .into_iter()
-        .map(|path| settings_studio_config_path_item(i18n, sources, path))
-        .collect()
-}
-
-pub(crate) fn settings_studio_config_path_item(
-    i18n: &I18n,
-    sources: &ConfigJsonSources,
-    path: &str,
-) -> SettingsStudioItem<SettingsPickerAction> {
-    let file_value = get_json_path(&sources.file, Some(path)).unwrap_or(JsonValue::Null);
-    let effective_value = get_json_path(&sources.effective, Some(path)).unwrap_or(JsonValue::Null);
-    let effective_summary = format_setting_value_inline(&effective_value);
-    let current_summary = if file_value.is_null() {
-        ui_text::t(i18n, "settings-source-unset")
-    } else {
-        format_setting_value_inline(&file_value)
-    };
-    let source_rows = settings_source_rows_for_config_path(
-        i18n,
-        sources,
-        path,
-        current_summary.clone(),
-        effective_summary.clone(),
-    );
-    SettingsStudioItem::from_parts(
-        settings_config_path_display_label(i18n, path),
-        effective_summary.clone(),
-        ui_text::t(i18n, "settings-config-open-file-detail"),
-        Some(path.to_string()),
-        Some(current_summary),
-        Some(effective_summary),
-        source_rows,
-        SettingsPickerAction::OpenConfigFile,
-    )
-}
-
-pub(crate) fn settings_config_path_display_label(i18n: &I18n, path: &str) -> String {
-    match path {
-        "harnesses.browser" => ui_text::t(i18n, "settings-harness-browser-label"),
-        "harnesses.shell" => ui_text::t(i18n, "settings-harness-shell-label"),
-        "harnesses.editor" => ui_text::t(i18n, "settings-harness-editor-label"),
-        _ => path.to_string(),
-    }
 }
 
 use super::{

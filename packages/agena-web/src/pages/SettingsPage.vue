@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { RiRefreshLine, RiResetLeftLine } from '@remixicon/vue'
 
 import { useSettingsStore, type Settings } from '../stores/settings'
+import { useTranscriptPreferencesStore } from '@/stores/transcriptPreferences'
 import { useUiStore } from '@/stores/ui'
 import { i18n, setAppLocale } from '@/i18n'
 import type { AppLocale } from '@/i18n/locale'
@@ -34,16 +35,10 @@ import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import {
   BUILTIN_CHAT_ACTIVITY_KINDS,
-  DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES,
   normalizeChatActivityKindCatalog,
-  normalizeChatActivityKindDefaultExpanded,
-  normalizeChatToolActivityCategories,
-  normalizeChatToolExpansionOverrides,
+  normalizeChatToolActivityId,
   normalizeChatToolPreferenceId,
-  resolveChatActivityKindDefaultExpanded,
-  resolveChatToolDefaultExpanded,
   type ChatActivityKindCatalogItem,
-  type ChatToolExpansionOverrides,
 } from '@/lib/chatActivity'
 import { settingsText as st } from '@/i18n/settingsText'
 import { resolveTranscriptVimEnabled } from '@/pages/chat/transcriptVimPreference'
@@ -60,6 +55,7 @@ const DiagnosticsWorkbenchPanel = defineAsyncComponent(
 )
 
 const settings = useSettingsStore()
+const transcriptPreferences = useTranscriptPreferencesStore()
 const ui = useUiStore()
 const workspacePane = useWorkspacePaneContext()
 const visible = usePaneVisibility()
@@ -143,12 +139,14 @@ async function refreshSettingsSidebar() {
   // same practical meaning as opening Settings again in the TUI.
   settingsRefreshNonce.value += 1
   await settings.refresh()
+  await transcriptPreferences.refresh()
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (!settings.data && !settings.loading) {
-    void settings.refresh()
+    await settings.refresh()
   }
+  await transcriptPreferences.refresh()
 })
 
 watch(
@@ -280,45 +278,20 @@ const chatTranscriptVim = computed<boolean>({
 
 const chatActivityAutoCollapseOnIdle = makeSetting('chatActivityAutoCollapseOnIdle', true)
 
-const chatActivityKindDefaultExpanded = computed<string[]>({
-  get() {
-    return resolveChatActivityKindDefaultExpanded(settings.data)
-  },
-  set(value) {
-    void settings.save({
-      chatActivityKindDefaultExpanded: normalizeChatActivityKindDefaultExpanded(value),
-    })
-  },
+const transcriptActivityDefaultExpanded = computed({
+  get: () => transcriptPreferences.activityDefaultExpanded,
+  set: (value: boolean) => transcriptPreferences.setActivityDefaultExpanded(value),
 })
 
 function activityKindDefaultExpandedEnabled(id: string): boolean {
-  return chatActivityKindDefaultExpanded.value.includes(id)
+  return transcriptPreferences.kindExpanded(id)
 }
 
 function toggleActivityKindDefaultExpanded(id: string) {
   const normalizedId = String(id || '').trim()
   if (!normalizedId) return
-  const next = new Set(chatActivityKindDefaultExpanded.value)
-  if (next.has(normalizedId)) next.delete(normalizedId)
-  else next.add(normalizedId)
-  const catalogOrder = activityKindOptions.value.map((item) => item.id)
-  const ordered = catalogOrder.filter((item) => next.has(item))
-  const remaining = [...next].filter((item) => !catalogOrder.includes(item)).sort()
-  chatActivityKindDefaultExpanded.value = [...ordered, ...remaining]
+  transcriptPreferences.setActivityKindExpanded(normalizedId, !activityKindDefaultExpandedEnabled(normalizedId))
 }
-
-const chatToolActivityDefaultExpandedCategories = computed<string[]>({
-  get() {
-    const s = settings.data
-    if (s && Object.prototype.hasOwnProperty.call(s, 'chatToolActivityDefaultExpandedCategories')) {
-      return normalizeChatToolActivityCategories(s.chatToolActivityDefaultExpandedCategories)
-    }
-    return DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES.slice()
-  },
-  set(value) {
-    void settings.save({ chatToolActivityDefaultExpandedCategories: normalizeChatToolActivityCategories(value) })
-  },
-})
 
 type ToolCatalogItem = {
   name?: string
@@ -447,46 +420,34 @@ const filteredToolActivityOptions = computed(() => {
   })
 })
 
-const chatToolActivityDefaultExpandedOverrides = computed<ChatToolExpansionOverrides>({
-  get() {
-    return normalizeChatToolExpansionOverrides(settings.data?.chatToolActivityDefaultExpandedOverrides)
-  },
-  set(value) {
-    void settings.save({ chatToolActivityDefaultExpandedOverrides: value })
-  },
-})
-
-const defaultExpandedToolCategories = computed(() => new Set<string>(chatToolActivityDefaultExpandedCategories.value))
-
 function toolDefaultExpandedEnabled(toolId: string): boolean {
-  return resolveChatToolDefaultExpanded(
-    toolId,
-    chatToolActivityDefaultExpandedOverrides.value,
-    defaultExpandedToolCategories.value,
-    activityKindDefaultExpandedEnabled('operation'),
-  )
+  const exact = transcriptPreferences.toolExpanded(toolId)
+  if (exact !== undefined) return exact
+  const category = normalizeChatToolActivityId(toolId)
+  if (Object.prototype.hasOwnProperty.call(transcriptPreferences.toolCategoryOverrides, category)) {
+    return transcriptPreferences.toolCategoryOverrides[category] === true
+  }
+  if (!category && Object.prototype.hasOwnProperty.call(transcriptPreferences.toolCategoryOverrides, 'unknown')) {
+    return transcriptPreferences.toolCategoryOverrides.unknown === true
+  }
+  return transcriptPreferences.kindExpanded('operation')
 }
 
 function toolDefaultExpandedCustomized(toolId: string): boolean {
   const id = normalizeChatToolPreferenceId(toolId)
-  return Boolean(id && Object.prototype.hasOwnProperty.call(chatToolActivityDefaultExpandedOverrides.value, id))
+  return Boolean(id && Object.prototype.hasOwnProperty.call(transcriptPreferences.toolOverrides, id))
 }
 
 function toggleToolDefaultExpanded(toolId: string) {
   const id = normalizeChatToolPreferenceId(toolId)
   if (!id) return
-  chatToolActivityDefaultExpandedOverrides.value = {
-    ...chatToolActivityDefaultExpandedOverrides.value,
-    [id]: !toolDefaultExpandedEnabled(id),
-  }
+  transcriptPreferences.setToolExpanded(id, !toolDefaultExpandedEnabled(id))
 }
 
 function resetToolDefaultExpanded(toolId: string) {
   const id = normalizeChatToolPreferenceId(toolId)
   if (!id || !toolDefaultExpandedCustomized(id)) return
-  const next = { ...chatToolActivityDefaultExpandedOverrides.value }
-  delete next[id]
-  chatToolActivityDefaultExpandedOverrides.value = next
+  transcriptPreferences.clearToolOverride(id)
 }
 
 const dirtyHint = computed(() => (settings.error ? settings.error : null))
@@ -693,6 +654,10 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                       <div class="text-xs font-medium text-muted-foreground">
                         {{ t('settings.appearance.chat.activityDetails') }}
                       </div>
+                      <label class="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
+                        <input type="checkbox" v-model="transcriptActivityDefaultExpanded" />
+                        {{ $st('Expand activity parts by default unless a type has its own setting') }}
+                      </label>
                       <div class="mt-2 overflow-x-auto rounded-md border border-border/60">
                         <table class="min-w-full text-sm">
                           <thead class="bg-muted/30 text-xs text-muted-foreground">

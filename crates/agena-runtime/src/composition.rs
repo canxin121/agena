@@ -149,16 +149,22 @@ pub(crate) fn compose_runtime_snapshot_state<Resolution, Services>(
 /// Start the long-lived maintenance loops owned by one composed runtime.
 /// Concrete adapters supply the loop futures; Runtime owns their task-control
 /// registration and shared shutdown lifecycle.
-pub(crate) fn spawn_runtime_maintenance_loops<Janitor, Reload>(
+pub(crate) fn spawn_runtime_maintenance_loops<Janitor, Reload, ClientVersions, ModelCatalog>(
     task_control: &crate::TaskControl,
     janitor: Janitor,
     reload: Reload,
+    client_versions: ClientVersions,
+    model_catalog: ModelCatalog,
 ) where
     Janitor: std::future::Future<Output = ()> + Send + 'static,
     Reload: std::future::Future<Output = ()> + Send + 'static,
+    ClientVersions: std::future::Future<Output = ()> + Send + 'static,
+    ModelCatalog: std::future::Future<Output = ()> + Send + 'static,
 {
     task_control.spawn(janitor);
     task_control.spawn(reload);
+    task_control.spawn(client_versions);
+    task_control.spawn(model_catalog);
 }
 
 /// Runtime policy for model-catalog cache freshness.

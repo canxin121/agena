@@ -312,6 +312,15 @@ impl RuntimeSnapshot {
         &self.client_identity
     }
 
+    pub(crate) fn provider_client_versions_auto_update(&self) -> bool {
+        self.state
+            .resolution()
+            .runtime
+            .providers
+            .client_versions
+            .auto_update
+    }
+
     pub(crate) fn generation(&self) -> u64 {
         self.state.metadata().generation()
     }

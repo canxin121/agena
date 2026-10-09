@@ -39,9 +39,6 @@ export type Settings = {
   chatActivityAutoCollapseOnIdle?: boolean
   chatActivitySummaryFilters?: string[]
   chatToolActivitySummaryFilters?: string[]
-  chatActivityKindDefaultExpanded?: string[]
-  chatToolActivityDefaultExpandedCategories?: string[]
-  chatToolActivityDefaultExpandedOverrides?: Record<string, boolean>
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side'
   diffViewMode?: 'single' | 'stacked'
 
@@ -79,7 +76,22 @@ export const useSettingsStore = defineStore('settings', () => {
 
   function hydrate() {
     const raw = getLocalJson<unknown>(STORAGE_KEY, null)
-    data.value = cloneRecord(raw)
+    const next = cloneRecord(raw)
+    if (next) {
+      let removedTranscriptPreferences = false
+      for (const key of [
+        'chatActivityKindDefaultExpanded',
+        'chatToolActivityDefaultExpandedCategories',
+        'chatToolActivityDefaultExpandedOverrides',
+      ]) {
+        if (Object.prototype.hasOwnProperty.call(next, key)) {
+          delete (next as Record<string, unknown>)[key]
+          removedTranscriptPreferences = true
+        }
+      }
+      if (removedTranscriptPreferences) setLocalJson(STORAGE_KEY, next)
+    }
+    data.value = next
   }
 
   async function refresh() {

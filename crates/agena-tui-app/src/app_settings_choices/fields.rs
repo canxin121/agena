@@ -49,21 +49,19 @@ impl App {
                 )
                 .as_str(),
             )),
-            "ui.tui.transcript.activity_default_expanded" => Some(boolean_choice_items(
+            "ui.transcript.activity.default_expanded" => Some(boolean_choice_items(
                 ui_text::t(
                     &self.i18n,
                     "settings-field-activity-default-expanded-description",
                 )
                 .as_str(),
             )),
-            path if path.starts_with("ui.tui.transcript.activity_kinds.")
-                && path.contains("tool:") =>
-            {
+            path if path.starts_with("ui.transcript.tools.overrides.") => {
                 Some(boolean_choice_items(
                     ui_text::t(&self.i18n, "settings-field-activity-tool-description").as_str(),
                 ))
             }
-            path if path.starts_with("ui.tui.transcript.activity_kinds.") => {
+            path if path.starts_with("ui.transcript.activity.kinds.") => {
                 Some(boolean_choice_items(
                     ui_text::t(&self.i18n, "settings-field-activity-kind-description").as_str(),
                 ))
@@ -83,11 +81,13 @@ impl App {
             | "tracing.database"
             | "tracing.adapter"
             | "session.compaction.auto"
-            | "ui.tui.transcript.activity_default_expanded" => {
+            | "ui.transcript.activity.default_expanded" => {
                 agena_tui::choice::ChoicePresentationStyle::SelectOnly
             }
             "ui.tui.theme" => agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
-            path if path.starts_with("ui.tui.transcript.activity_kinds.") => {
+            path if path.starts_with("ui.transcript.activity.kinds.")
+                || path.starts_with("ui.transcript.tools.overrides.") =>
+            {
                 agena_tui::choice::ChoicePresentationStyle::SelectOnly
             }
             _ => agena_tui::choice::ChoicePresentationStyle::Searchable,

@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use agena_plugin_sdk::CommandTarget;
@@ -33,6 +34,27 @@ mod auth;
 use auth::*;
 mod provider_catalog;
 use provider_catalog::*;
+
+const PROVIDER_CLIENT_VERSION_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const PROVIDER_CLIENT_VERSION_SETTINGS_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const PROVIDER_CLIENT_VERSION_RETRY_BASE: Duration = Duration::from_secs(5 * 60);
+const PROVIDER_CLIENT_VERSION_RETRY_MAX: Duration = Duration::from_secs(6 * 60 * 60);
+const MODEL_CATALOG_REFRESH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+fn provider_client_version_retry_delay(failures: u32) -> Duration {
+    let exponent = failures.saturating_sub(1).min(7);
+    PROVIDER_CLIENT_VERSION_RETRY_BASE
+        .saturating_mul(1_u32 << exponent)
+        .min(PROVIDER_CLIENT_VERSION_RETRY_MAX)
+}
+
+fn provider_client_version_wait_duration(enabled: bool, until_refresh: Duration) -> Duration {
+    if enabled {
+        until_refresh.min(PROVIDER_CLIENT_VERSION_SETTINGS_POLL_INTERVAL)
+    } else {
+        PROVIDER_CLIENT_VERSION_SETTINGS_POLL_INTERVAL
+    }
+}
 
 /// Compose the concrete Runtime from a schema-neutral process request and
 /// return its stable application capability bundle.
@@ -388,6 +410,51 @@ impl AgenaRuntime {
             }
         }));
         scheduler.start();
+    }
+}
+
+#[cfg(test)]
+mod provider_client_version_refresh_tests {
+    use super::{
+        Duration, PROVIDER_CLIENT_VERSION_RETRY_BASE, PROVIDER_CLIENT_VERSION_RETRY_MAX,
+        PROVIDER_CLIENT_VERSION_SETTINGS_POLL_INTERVAL, provider_client_version_retry_delay,
+        provider_client_version_wait_duration,
+    };
+
+    #[test]
+    fn registry_failures_use_bounded_exponential_retry_delays() {
+        assert_eq!(
+            provider_client_version_retry_delay(1),
+            PROVIDER_CLIENT_VERSION_RETRY_BASE
+        );
+        assert_eq!(
+            provider_client_version_retry_delay(2),
+            PROVIDER_CLIENT_VERSION_RETRY_BASE * 2
+        );
+        assert_eq!(
+            provider_client_version_retry_delay(4),
+            PROVIDER_CLIENT_VERSION_RETRY_BASE * 8
+        );
+        assert_eq!(
+            provider_client_version_retry_delay(u32::MAX),
+            PROVIDER_CLIENT_VERSION_RETRY_MAX
+        );
+    }
+
+    #[test]
+    fn disabled_auto_update_is_rechecked_before_the_daily_refresh_deadline() {
+        assert_eq!(
+            provider_client_version_wait_duration(false, Duration::from_secs(24 * 60 * 60)),
+            PROVIDER_CLIENT_VERSION_SETTINGS_POLL_INTERVAL
+        );
+        assert_eq!(
+            provider_client_version_wait_duration(true, Duration::from_secs(60)),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            provider_client_version_wait_duration(true, Duration::ZERO),
+            Duration::ZERO
+        );
     }
 }
 
@@ -2810,6 +2877,8 @@ impl AgenaRuntime {
     fn spawn_background_tasks(&self) {
         let janitor_runtime = self.clone();
         let reload_runtime = self.clone();
+        let client_versions_runtime = self.clone();
+        let model_catalog_runtime = self.clone();
         agena_runtime::spawn_runtime_maintenance_loops(
             self.inner.control_state.task_control(),
             async move {
@@ -2877,16 +2946,171 @@ impl AgenaRuntime {
                 .await;
             },
             async move { reload::run(reload_runtime).await },
+            async move {
+                let control = client_versions_runtime.task_control_handle();
+                let mut next_refresh_at = tokio::time::Instant::now();
+                let mut failures = 0_u32;
+                loop {
+                    let enabled = client_versions_runtime
+                        .current_snapshot()
+                        .provider_client_versions_auto_update();
+                    if !enabled {
+                        failures = 0;
+                        // Config reloads do not own this long-lived maintenance
+                        // task, so poll briefly while disabled. Re-enabling the
+                        // setting can then take effect without waiting a day.
+                        next_refresh_at = tokio::time::Instant::now();
+                    }
+
+                    let remaining =
+                        next_refresh_at.saturating_duration_since(tokio::time::Instant::now());
+                    let wait = provider_client_version_wait_duration(enabled, remaining);
+                    if !wait.is_zero() {
+                        tokio::select! {
+                            biased;
+                            _ = control.cancelled() => break,
+                            _ = tokio::time::sleep(wait) => {}
+                        }
+                        continue;
+                    }
+                    match client_versions_runtime
+                        .refresh_provider_client_versions_if_enabled()
+                        .await
+                    {
+                        Ok(true) => {
+                            failures = 0;
+                            next_refresh_at = tokio::time::Instant::now()
+                                + PROVIDER_CLIENT_VERSION_REFRESH_INTERVAL;
+                        }
+                        Ok(false) => {
+                            // The file settings can disable auto-update before
+                            // the active runtime snapshot has reloaded.
+                            failures = 0;
+                            next_refresh_at = tokio::time::Instant::now()
+                                + PROVIDER_CLIENT_VERSION_SETTINGS_POLL_INTERVAL;
+                        }
+                        Err(error) => {
+                            failures = failures.saturating_add(1);
+                            next_refresh_at = tokio::time::Instant::now()
+                                + provider_client_version_retry_delay(failures);
+                            tracing::warn!(
+                                error = %error,
+                                "automatic provider client-version refresh failed"
+                            );
+                        }
+                    }
+                }
+            },
+            async move {
+                let control = model_catalog_runtime.task_control_handle();
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = control.cancelled() => break,
+                        _ = tokio::time::sleep(MODEL_CATALOG_REFRESH_CHECK_INTERVAL) => {}
+                    }
+                    if model_catalog_runtime.is_shutdown() {
+                        break;
+                    }
+                    if let Err(error) = model_catalog_runtime
+                        .start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System)
+                    {
+                        model_catalog_runtime
+                            .current_snapshot()
+                            .model_catalog()
+                            .record_refresh_failure(error.to_string());
+                        tracing::warn!(
+                            error = %error,
+                            "failed to enqueue stale model catalog refresh"
+                        );
+                    }
+                }
+            },
         );
 
         if let Err(error) =
             self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System)
         {
+            self.current_snapshot()
+                .model_catalog()
+                .record_refresh_failure(error.to_string());
             tracing::error!(
                 diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
                 "failed to start the initial background model catalog refresh"
             );
         }
+    }
+
+    async fn refresh_provider_client_versions_if_enabled(&self) -> Result<bool, AppError> {
+        if self.is_shutdown() {
+            return Ok(false);
+        }
+        let snapshot = self.current_snapshot();
+        if !snapshot.provider_client_versions_auto_update() {
+            return Ok(false);
+        }
+        let file_settings =
+            <Self as agena_runtime::RuntimeConfigSettingsService>::read_file_settings(
+                self,
+                agena_runtime::ConfigSettingsGetInput {
+                    target: agena_runtime::ConfigSettingsPathInput {
+                        path: Some("runtime.providers.client_versions".to_owned()),
+                    },
+                    source: agena_runtime::ConfigSettingsSource::File,
+                },
+            )
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        let client_versions_settings = file_settings.value.as_object();
+        if client_versions_settings
+            .and_then(|settings| settings.get("auto_update"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+        {
+            return Ok(false);
+        }
+        let expected_revision = file_settings.revision;
+        let latest = agena_runtime::fetch_latest_provider_client_versions()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        let current = self.current_snapshot();
+        if !current.provider_client_versions_auto_update()
+            || current.generation() != snapshot.generation()
+        {
+            return Ok(false);
+        }
+        if current.client_identity().versions() == latest {
+            return Ok(true);
+        }
+
+        let response = <Self as agena_runtime::RuntimeConfigSettingsService>::patch_file_settings(
+            self,
+            agena_runtime::ConfigSettingsPatchInput {
+                target: agena_runtime::ConfigSettingsPathInput {
+                    path: Some("runtime.providers.client_versions".to_owned()),
+                },
+                changes: serde_json::json!({
+                    "codex": latest.codex,
+                    "claude": latest.claude,
+                    "gemini": latest.gemini,
+                    "auto_update": true,
+                }),
+                options: agena_runtime::ConfigSettingsEditOptions {
+                    expected_revision,
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| AppError::Internal(error.to_string()))?;
+        if response.reload_required {
+            self.reload().await?;
+        }
+        tracing::info!(
+            generation = self.current_snapshot().generation(),
+            "provider client identities refreshed from npm"
+        );
+        Ok(true)
     }
 
     fn apply_tracing_filter(&self, tracing: &agena_runtime::RuntimeTracingConfiguration) {

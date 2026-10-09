@@ -351,7 +351,7 @@ overlay-choice-clear-settings-detail = {$field}에 대한 파일 override 제거
 
 overlay-settings-section-plugins-label = 플러그인 및 도구
 
-overlay-settings-section-plugins-summary = 플러그인 구성, 도구, 하네스 및 진단
+overlay-settings-section-plugins-summary = 플러그인, 도구 및 진단
 
 overlay-settings-section-providers-label = 모델 및 공급자
 
@@ -531,11 +531,8 @@ settings-detail-action-readonly = 읽기 전용 효과적인보기를 엽니 다
 
 settings-detail-action-file = backing config 파일을 엽니다.
 
-settings-harness-browser-label = 비밀번호
 
-settings-harness-shell-label = 포탄 마구
 
-settings-harness-editor-label = 편집자 마구
 
 settings-field-parse-bool = {$field}는 true/false 또는 on/off와 같은 불린을 기대합니다.
 
@@ -1169,7 +1166,7 @@ overlay-settings-help-bool = 참/거짓, 설정/해제, 예/아니요 또는 1/0
 overlay-settings-help-integer = 정수를 입력하세요. 파일 재정의를 제거하려면 비워 두거나 `clear`을 입력하세요.
 overlay-settings-help-float = 숫자를 입력하세요. 재정의를 제거하려면 비워 두거나 `clear`을 입력하세요.
 overlay-choice-clear-value = 명확한 가치
-overlay-settings-section-plugins-description = 플러그인을 구성하고, 도구 및 진단을 검사하고, 브라우저, 셸 및 편집기 하네스를 관리하세요.
+overlay-settings-section-plugins-description = 플러그인을 구성하고 도구와 진단 정보를 확인하세요.
 overlay-settings-section-providers-description = 공급자와 해당 네트워크 동작을 구성하고, 모델 카탈로그를 검사합니다.
 overlay-settings-section-model-catalog-description = 확인된 모델 카탈로그를 찾아보고, 모델 메타데이터를 검사하고, 로컬 캐시를 새로 고칩니다.
 overlay-settings-section-permissions-description = 전역, 작업 공간 및 현재 세션 권한을 별도로 편집합니다.

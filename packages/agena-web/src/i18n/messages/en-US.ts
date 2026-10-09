@@ -578,7 +578,7 @@ export default {
     },
     tui: {
       interfaceDescription:
-        'Appearance, language, transcript defaults, and per-tool activity visibility shared with the TUI.',
+        'Language, color, graphics, and plugin theme settings for TUI clients.',
       runtimeDescription: 'Provider client versions and session compaction settings shared with the TUI runtime.',
       diagnosticsDescription: 'Tracing and runtime diagnostics settings exposed by the TUI Settings Studio.',
       clientVersionsTitle: 'Provider client versions',
@@ -587,11 +587,6 @@ export default {
       refreshFromNpm: 'Refresh from npm',
       compactionTitle: 'Session compaction',
       compactionDescription: 'Control automatic context compaction and the token reserve used before compaction.',
-      activityKindsTitle: 'Activity kinds',
-      activityKindsDescription: 'Choose which transcript activity groups start expanded.',
-      toolOverridesTitle: 'Tool activity overrides',
-      toolOverridesDescription: 'Override the expanded state for individual tools, including dotted tool names.',
-      noTools: 'No tool activity overrides are available.',
       effectiveReadOnly:
         'Effective settings are read-only. Choose Global, Workspace, or Session to edit a persisted layer.',
       fields: {
@@ -603,8 +598,6 @@ export default {
         graphicsDescription: 'Enable or disable graphical terminal rendering.',
         theme: 'Theme',
         themeDescription: 'TUI theme name or theme identifier.',
-        activityDefaultExpanded: 'Activities expanded by default',
-        activityDefaultExpandedDescription: 'Whether transcript activity groups start expanded.',
         codexVersion: 'Codex client version',
         codexVersionDescription: 'Version constraint or release selected for the Codex client.',
         claudeVersion: 'Claude client version',

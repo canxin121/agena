@@ -205,20 +205,21 @@ pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
         )
     })?;
     // The server's resolved UI preferences are cached on the backend at
-    // connect; project them into the terminal configuration so the client
-    // launches with the same theme/graphics/locale as the server's runtime.
+    // connect; project terminal appearance and shared transcript defaults so
+    // the client starts from the same settings as the server's runtime.
     let preferences = backend.tui_preferences();
-    let tui_config = agena_tui_app::tui_config_from_preferences(&preferences);
     let i18n = I18n::resolve(args.locale.as_deref(), preferences.locale.as_deref());
-    run_app(backend, tui_config, i18n, &args).await
+    run_app(backend, preferences, i18n, &args).await
 }
 
 async fn run_app(
     backend: TuiBackend,
-    tui_config: agena_tui::presentation_config::TuiConfig,
+    preferences: agena_tui_app::TuiPreferencesResource,
     i18n: I18n,
     args: &TuiLaunchArgs,
 ) -> Result<(), AgenaProcessError> {
+    let tui_config = agena_tui_app::tui_config_from_preferences(&preferences);
+    let transcript_detail_defaults = preferences.transcript_detail_defaults;
     let mut terminal = terminal::TerminalRuntime::enter(tui_config.graphics)
         .map_err(|error| AgenaProcessError::internal_error(error.as_ref()))?;
     let terminal_background = terminal.background();
@@ -244,6 +245,7 @@ async fn run_app(
             initial_session_id: args.session,
             initial_session_search: args.search.clone(),
             tui_config,
+            transcript_detail_defaults,
             terminal_background,
             terminal_context: Some(terminal_context),
             math_graphics: Some(math_graphics),

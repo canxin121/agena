@@ -88,7 +88,7 @@ const SETTINGS_TAB_CONFIG: Array<{
     labelKey: 'settings.tabs.pluginsTools',
     icon: 'plugins-tools',
     group: 'core',
-    keywords: ['plugin', 'plugins', 'tools', 'commands', 'harness', 'browser', 'shell', 'editor'],
+    keywords: ['plugin', 'plugins', 'tools', 'commands'],
   },
   {
     id: 'runtime-session',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiAddLine, RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
@@ -52,15 +52,25 @@ type ToolCatalogResponse = { permission_tools?: Array<{ name?: string; summary?:
 const SHELL_LAUNCH_TOOLS = ['agena.shell.exec', 'agena.shell.spawn', 'agena.shell.watch', 'agena.shell.open'] as const
 const SHELL_CAPABLE_TOOLS = [...SHELL_LAUNCH_TOOLS, 'agena.shell.write'] as const
 
+const props = defineProps<{ section: string; scope: PermissionSource }>()
+const emit = defineEmits<{ (event: 'update:scope', value: PermissionSource): void }>()
 const { t } = useI18n()
 const chat = useChatStore()
 const toasts = useToastsStore()
+const PermissionsPanel = defineAsyncComponent(() => import('@/components/settings/PermissionsPanel.vue'))
 
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
-const selectedSource = ref<PermissionSource>('global')
-const selectedSection = ref<PermissionSection>('path')
+const selectedSource = computed({
+  get: () => props.scope,
+  set: (value: PermissionSource) => emit('update:scope', value),
+})
+const selectedSection = computed<PermissionSection>(() => {
+  if (props.section === 'network') return 'network'
+  if (props.section === 'tools') return 'tools'
+  return 'path'
+})
 const config = ref<PermissionConfig>({})
 const globalConfig = ref<PermissionConfig>({})
 const workspaceConfig = ref<PermissionConfig>({})
@@ -129,6 +139,12 @@ function permissionSummary(value: PermissionConfig): string {
 
 const sourceOptions = computed(() => [
   {
+    value: 'effective',
+    label: st('Effective Permission'),
+    description: st('Read-only merged policy.'),
+    summary: permissionSummary(effectiveConfig.value),
+  },
+  {
     value: 'global',
     label: st('Global Permission'),
     description: st('Baseline for all sessions.'),
@@ -145,25 +161,6 @@ const sourceOptions = computed(() => [
     label: st('Current Session Permission'),
     description: st('Applies only to the selected session.'),
     summary: activeSessionId.value ? permissionSummary(sessionConfigSnapshot.value) : st('No active session'),
-  },
-  {
-    value: 'effective',
-    label: st('Effective Permission'),
-    description: st('Read-only merged policy.'),
-    summary: permissionSummary(effectiveConfig.value),
-  },
-])
-const sectionOptions = computed(() => [
-  {
-    value: 'path',
-    label: st('Filesystem'),
-    description: st('Path defaults, path class defaults, and path rules.'),
-  },
-  { value: 'network', label: st('Network'), description: st('Network zones and domain rules.') },
-  {
-    value: 'tools',
-    label: st('Tool Access'),
-    description: st('Tool defaults, tool names, and command patterns.'),
   },
 ])
 const modeOptions = computed(() => [
@@ -690,18 +687,8 @@ onMounted(() => void load())
 </script>
 
 <template>
-  <section class="grid gap-4 rounded-lg border border-border/60 bg-background/30 p-4 lg:p-5">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-medium">{{ $st('Permission Studio') }}</h2>
-        <p class="mt-1 text-xs text-muted-foreground">
-          {{
-            $st(
-              'The web editor mirrors the TUI hierarchy: source scope first, then Filesystem, Network, and Tool Access.',
-            )
-          }}
-        </p>
-      </div>
+  <section class="grid gap-4">
+    <div class="flex justify-end">
       <Button variant="outline" size="sm" :disabled="loading" @click="load"
         ><RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" /> {{ $st('Refresh') }}</Button
       >
@@ -714,53 +701,41 @@ onMounted(() => void load())
       {{ error }}
     </div>
 
-    <div class="grid gap-4 lg:grid-cols-[minmax(13rem,0.7fr)_minmax(0,2fr)]">
-      <div class="grid content-start gap-2">
-        <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-          {{ $st('Permission source') }}
-        </div>
+    <div class="grid gap-4">
+      <nav class="flex flex-wrap gap-1 border-b border-border/60 pb-2" :aria-label="$st('Permission source')">
         <button
           v-for="option in sourceOptions"
           :key="option.value"
           type="button"
-          class="rounded-md border px-3 py-2 text-left text-xs"
+          class="min-h-9 rounded-md border px-3 py-1.5 text-left text-xs"
           :class="
             selectedSource === option.value ? 'border-primary bg-primary/10' : 'border-border/60 hover:bg-muted/40'
           "
+          :aria-current="selectedSource === option.value ? 'page' : undefined"
           @click="selectedSource = option.value as PermissionSource"
         >
-          <span class="block font-medium">{{ option.label }}</span>
-          <span class="mt-1 block text-[10px] text-muted-foreground">{{ option.description }}</span>
-          <span class="mt-1.5 block text-[10px] leading-4 text-foreground/70">{{ option.summary }}</span>
+          <span class="font-medium">{{ option.label }}</span>
+          <span class="ml-2 hidden text-[10px] text-muted-foreground sm:inline">{{ option.summary }}</span>
         </button>
-        <div
-          v-if="selectedSource === 'session' && !activeSessionId"
-          class="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground"
-        >
-          {{ $st('Open a session to edit current-session permission.') }}
-        </div>
+      </nav>
+      <div class="text-xs text-muted-foreground">
+        {{ sourceOptions.find((option) => option.value === selectedSource)?.description }}
+      </div>
+      <div
+        v-if="selectedSource === 'session' && !activeSessionId"
+        class="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground"
+      >
+        {{ $st('Open a session to edit current-session permission.') }}
       </div>
 
       <div class="grid min-w-0 gap-4">
-        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-3">
-          <div class="flex flex-wrap gap-1">
-            <Button
-              v-for="section in sectionOptions"
-              :key="section.value"
-              :variant="selectedSection === section.value ? 'default' : 'ghost'"
-              size="sm"
-              @click="selectedSection = section.value as PermissionSection"
-              >{{ section.label }}</Button
-            >
-          </div>
-          <div class="flex gap-2">
-            <Button v-if="canEdit" variant="ghost" size="sm" :disabled="saving" @click="clearSource"
-              ><RiDeleteBinLine class="mr-1.5 h-4 w-4" /> {{ $st('Clear source') }}</Button
-            >
-            <Button v-if="canEdit" size="sm" :disabled="saving" @click="save"
-              ><RiSave3Line class="mr-1.5 h-4 w-4" /> {{ saving ? $st('Saving…') : $st('Save permission') }}</Button
-            >
-          </div>
+        <div class="flex flex-wrap items-center justify-end gap-2 border-b border-border/60 pb-3">
+          <Button v-if="canEdit" variant="ghost" size="sm" :disabled="saving" @click="clearSource"
+            ><RiDeleteBinLine class="mr-1.5 h-4 w-4" /> {{ $st('Clear source') }}</Button
+          >
+          <Button v-if="canEdit" size="sm" :disabled="saving" @click="save"
+            ><RiSave3Line class="mr-1.5 h-4 w-4" /> {{ saving ? $st('Saving…') : $st('Save permission') }}</Button
+          >
         </div>
 
         <fieldset :disabled="!canEdit" class="contents">
@@ -1127,6 +1102,8 @@ onMounted(() => void load())
           </div>
         </section>
       </div>
+
+      <PermissionsPanel v-if="selectedSection === 'tools'" :scope="selectedSource" />
     </div>
   </section>
 </template>

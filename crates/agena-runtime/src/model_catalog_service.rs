@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use agena_provider::{
     ModelCatalogProviderRecord, ModelCatalogSnapshot, ModelCatalogSnapshotSourceKind,
@@ -52,7 +55,17 @@ pub struct ModelCatalogService {
     cache_max_age_secs: u64,
     state: Arc<SnapshotStore<ModelCatalogSnapshot>>,
     public_source: Arc<dyn ModelCatalogPublicSource>,
+    refresh_retry: Arc<Mutex<RefreshRetryState>>,
 }
+
+#[derive(Default)]
+struct RefreshRetryState {
+    failures: u32,
+    next_attempt: Option<Instant>,
+}
+
+const REFRESH_RETRY_BASE_SECS: u64 = 30;
+const REFRESH_RETRY_MAX_SECS: u64 = 30 * 60;
 
 impl ModelCatalogService {
     pub async fn new(
@@ -73,6 +86,7 @@ impl ModelCatalogService {
             cache_max_age_secs,
             state: Arc::new(SnapshotStore::new(Arc::new(snapshot))),
             public_source,
+            refresh_retry: Arc::new(Mutex::new(RefreshRetryState::default())),
         })
     }
 
@@ -168,6 +182,10 @@ impl ModelCatalogService {
             failure
         });
         self.replace_snapshot(snapshot.clone());
+        *self
+            .refresh_retry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = RefreshRetryState::default();
         Ok(snapshot)
     }
 
@@ -181,14 +199,31 @@ impl ModelCatalogService {
         );
         snapshot.last_failure = Some(failure);
         self.replace_snapshot(snapshot);
+        let mut retry = self
+            .refresh_retry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        retry.failures = retry.failures.saturating_add(1);
+        retry.next_attempt =
+            Some(Instant::now() + Duration::from_secs(refresh_retry_delay_secs(retry.failures)));
     }
 
     fn snapshot_needs_startup_refresh(&self, snapshot: &ModelCatalogSnapshot) -> bool {
-        should_refresh(
+        let stale = should_refresh(
             !snapshot.official.model_ids().is_empty(),
             snapshot.last_refresh_at,
             chrono::Duration::seconds(self.cache_max_age_secs as i64),
-        )
+        );
+        if !stale {
+            return false;
+        }
+        let retry = self
+            .refresh_retry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        retry
+            .next_attempt
+            .is_none_or(|next_attempt| Instant::now() >= next_attempt)
     }
 
     fn replace_snapshot(&self, snapshot: ModelCatalogSnapshot) {
@@ -218,6 +253,13 @@ fn now_unix_ms() -> i64 {
         .unwrap_or_default()
 }
 
+fn refresh_retry_delay_secs(failures: u32) -> u64 {
+    let exponent = failures.saturating_sub(1).min(6);
+    REFRESH_RETRY_BASE_SECS
+        .saturating_mul(1_u64 << exponent)
+        .min(REFRESH_RETRY_MAX_SECS)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -227,7 +269,10 @@ mod tests {
     };
     use async_trait::async_trait;
 
-    use super::{ModelCatalogPublicSource, ModelCatalogPublicSourceResult, ModelCatalogService};
+    use super::{
+        ModelCatalogPublicSource, ModelCatalogPublicSourceResult, ModelCatalogService,
+        REFRESH_RETRY_MAX_SECS, refresh_retry_delay_secs,
+    };
 
     #[derive(Default)]
     struct MemoryCatalogRepository {
@@ -319,5 +364,23 @@ mod tests {
         assert!(public.contains("model catalog could not be refreshed"));
         assert!(!public.contains("token=secret"));
         assert!(!public.contains("/private/catalog.json"));
+    }
+
+    #[tokio::test]
+    async fn stale_catalog_refresh_retries_with_a_bounded_backoff_after_failure() {
+        let service = ModelCatalogService::new(
+            Arc::new(MemoryCatalogRepository::default()),
+            60,
+            Arc::new(EmptyPublicSource),
+        )
+        .await
+        .expect("construct catalog service");
+        assert!(service.needs_startup_refresh());
+
+        service.record_refresh_failure("source unavailable");
+        assert!(!service.needs_startup_refresh());
+        assert_eq!(refresh_retry_delay_secs(1), 30);
+        assert_eq!(refresh_retry_delay_secs(4), 240);
+        assert_eq!(refresh_retry_delay_secs(u32::MAX), REFRESH_RETRY_MAX_SECS);
     }
 }

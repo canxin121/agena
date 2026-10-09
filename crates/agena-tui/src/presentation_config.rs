@@ -3,10 +3,8 @@
 //! Persistent configuration belongs to the application host.  It maps its
 //! serialized settings into these runtime values before constructing the TUI.
 
-use agena_tui_components::{ColorScheme, TerminalRgb, ThemePalette};
-use std::collections::BTreeMap;
-
 use crate::{input::ComposerKeyBindings, terminal_graphics::GraphicsMode};
+use agena_tui_components::{ColorScheme, TerminalRgb, ThemePalette};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 /// Preferred color scheme.
@@ -26,7 +24,6 @@ pub struct TuiConfig {
     pub theme: Option<String>,
     pub color_scheme: ColorSchemePreference,
     pub graphics: GraphicsMode,
-    pub transcript: TuiTranscriptConfig,
     /// Whether the terminal window/tab title tracks the session name and
     /// activity.
     pub terminal_title: TerminalIntegrationMode,
@@ -54,14 +51,6 @@ pub enum TerminalIntegrationMode {
 pub struct TuiStatusLineConfig {
     pub command: Option<String>,
     pub refresh_interval_ms: u64,
-}
-
-#[derive(Debug, Clone, Default)]
-/// Transcript configuration.
-pub struct TuiTranscriptConfig {
-    pub activity_default_expanded: bool,
-    /// Per-kind expansion overrides keyed by activity kind id.
-    pub activity_kinds: BTreeMap<String, bool>,
 }
 
 impl TuiConfig {
@@ -100,7 +89,6 @@ impl Default for TuiConfig {
             theme: None,
             color_scheme: ColorSchemePreference::Auto,
             graphics: GraphicsMode::Auto,
-            transcript: TuiTranscriptConfig::default(),
             terminal_title: TerminalIntegrationMode::default(),
             terminal_notifications: TerminalIntegrationMode::default(),
             terminal_progress: TerminalIntegrationMode::default(),

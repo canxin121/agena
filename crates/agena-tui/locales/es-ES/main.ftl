@@ -351,7 +351,7 @@ overlay-choice-clear-settings-detail = Remove the file override for {$field}.
 
 overlay-settings-section-plugins-label = Plugins y herramientas
 
-overlay-settings-section-plugins-summary = Configuración de enchufe, herramientas, arneses y diagnósticos
+overlay-settings-section-plugins-summary = Plugins, herramientas y diagnósticos
 
 overlay-settings-section-providers-label = Modelos y proveedores
 
@@ -531,11 +531,8 @@ settings-detail-action-readonly = Abra la vista sólo eficaz.
 
 settings-detail-action-file = Abre el archivo de configuración de respaldo.
 
-settings-harness-browser-label = Arnés del navegador
 
-settings-harness-shell-label = Shell Harness
 
-settings-harness-editor-label = Editor Harness
 
 settings-field-parse-bool = {$field} expects a boolean like true/false or on/off
 
@@ -1169,7 +1166,7 @@ overlay-settings-help-bool = Ingrese verdadero/falso, activado/desactivado, sí/
 overlay-settings-help-integer = Introduzca un número entero. Déjelo vacío o escriba `clear` para eliminar la anulación del archivo.
 overlay-settings-help-float = Introduzca un número. Déjelo vacío o escriba `clear` para eliminar la anulación.
 overlay-choice-clear-value = Borrar valor
-overlay-settings-section-plugins-description = Configure complementos, inspeccione sus herramientas y diagnósticos, y administre los arneses del navegador, el shell y el editor.
+overlay-settings-section-plugins-description = Configure plugins y consulte sus herramientas y diagnósticos.
 overlay-settings-section-providers-description = Configure los proveedores y su comportamiento de red e inspeccione el catálogo de modelos.
 overlay-settings-section-model-catalog-description = Explore el catálogo de modelos resuelto, inspeccione los metadatos del modelo y actualice la caché local.
 overlay-settings-section-permissions-description = Edite los permisos globales, del espacio de trabajo y de la sesión actual por separado.

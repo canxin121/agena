@@ -8,7 +8,7 @@ The Web Settings Workbench is the browser counterpart of the TUI Settings Studio
 2. **Explicit configuration layers.** Global, Workspace, Session, and Effective values are never silently conflated. Effective values are read-only; writes always name their target layer.
 3. **Server-owned validation.** The browser may provide structured controls, but the server validates the complete composed configuration before persistence and owns runtime reloads.
 4. **Discoverable hierarchy.** Dense domains use a reusable section workbench with page search, URL deep links (`?view=`), responsive page selection, and per-domain remembered pages.
-5. **Preserve unknown data.** Provider models, plugin configuration, permission documents, and harness records retain fields that are not represented by the current structured form. Raw JSON remains available where the schema is open-ended.
+5. **Preserve unknown data.** Provider models, plugin configuration, and permission documents retain fields that are not represented by the current structured form. Raw JSON remains available where the schema is open-ended.
 6. **Safe source inspection.** Editors show Effective, Global, and Workspace values together. Security-sensitive advanced editing is clearly marked and never guesses a write target.
 
 ## Information architecture
@@ -17,13 +17,11 @@ The Web Settings Workbench is the browser counterpart of the TUI Settings Studio
 
 - **Provider Studio** — create or delete providers; configure authentication, interactive OAuth, timeout policy, adapters, live model discovery, manual models, and per-model metadata.
 - **Model defaults** — select a complete provider / adapter / model identity plus thinking, speed, verbosity, and parallel-tool-call modes for the runtime default and automatic approval model.
-- **Model Catalog** — server-side search, origin filtering, paging, source refresh, and full capability / mode / pricing inspection.
-- **Configured inventory** — read the configured provider, adapter, endpoint, and model topology.
+- **Model Catalog** — server-side search, origin filtering, paging, source refresh, and full capability / mode / pricing inspection. Stale catalog data refreshes automatically; the page also offers an explicit refresh.
 
 ### Permissions
 
-- **Permission Studio** — edit Global, Workspace, current Session, or read-only Effective permission documents. The editor covers filesystem defaults and path rules; network zones and domain rules; and the default tool policy, tool-name rules, and shell command rules. Every built-in default is an ordinary entry inside those collections: the temporary and managed project-state directories are `path.rules` entries, the interaction and web tools are `tools.names` entries, and the command classes (`no-op`, `routine`, `dangerous`) and the read-only tool class are `tools.rules` entries. Writing an entry of the same name replaces the built-in one and deleting your entry restores it, so `auto` written over a built-in hands that class back to the approval model. All rule types support create, rename, mode changes, and delete. Raw `PermissionConfig` JSON remains available.
-- **Persistent rules** — inspect and revoke durable approval rules created by interactive permission decisions.
+- **Filesystem, Network, and Tools** — separate pages in the Permissions sidebar. Each page has the same top navigation for read-only Effective, Global, Workspace, and current Session policy. Filesystem covers access defaults and path rules; Network covers network zones and domain rules; Tools covers the default tool policy, tool-name rules, shell command rules, and saved approval rules. Every built-in default is an ordinary entry inside those collections: the temporary and managed project-state directories are `path.rules` entries, the interaction and web tools are `tools.names` entries, and the command classes (`no-op`, `routine`, `dangerous`) and the read-only tool class are `tools.rules` entries. Writing an entry of the same name replaces the built-in one and deleting your entry restores it, so `auto` written over a built-in hands that class back to the approval model. All editable rule types support create, rename, mode changes, and delete. Raw `PermissionConfig` JSON remains available.
 
 The source selector shows a compact summary for every loaded layer so the user can see whether a decision comes from Global, Workspace, Session, or the merged Effective policy before editing.
 
@@ -35,7 +33,6 @@ The source selector shows a compact summary for every loaded layer so the user c
   - Dry-run validation and the saved/draft override diff are available before a runtime-reloading save.
   - Manifest tools can be invoked in the active Session with JSON input while their schemas and declared tags remain visible.
 - **MCP Server** — listener enablement, authentication mode, mixed-auth anonymous access, OAuth client registration, public resource URL, issuer URL, OAuth password, endpoint inspection, and tool exposure.
-- **Tool harnesses** — named Browser, Shell, and Editor harnesses with explicit Global/Workspace targets, effective-value copying, rename/delete, raw JSON, browser launch options, shell environment variables, and all typed runtime fields.
 
 #### Bundled web search configuration
 
@@ -151,7 +148,7 @@ Playwright 1.58.0 with the installed Chrome passed local fixtures for covered cl
 
 ### Runtime & Session
 
-- **Provider client versions** — edit exact Codex, Claude, and Gemini compatibility versions or refresh all three from npm.
+- **Provider client versions** — edit exact Codex, Claude, and Gemini compatibility versions; automatic npm updates are enabled by default and can be disabled here.
 - **Session compaction** — configure automatic compaction and reserved tokens, with layer source display and clear-override actions.
 
 ### Interface

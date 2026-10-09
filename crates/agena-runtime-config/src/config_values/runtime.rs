@@ -24,11 +24,15 @@ pub struct RuntimeProvidersConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 /// Preferred client versions for built-in providers.
 pub struct ProviderClientVersionSettings {
     pub codex: String,
     pub claude: String,
     pub gemini: String,
+    /// Whether Runtime should periodically refresh these versions from npm.
+    /// Explicit values provide the initial version until the next refresh.
+    pub auto_update: bool,
 }
 
 impl Default for ProviderClientVersionSettings {
@@ -38,6 +42,7 @@ impl Default for ProviderClientVersionSettings {
             codex: defaults.codex,
             claude: defaults.claude,
             gemini: defaults.gemini,
+            auto_update: true,
         }
     }
 }

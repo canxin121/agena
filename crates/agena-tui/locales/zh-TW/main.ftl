@@ -363,9 +363,9 @@ overlay-choice-clear-settings-detail = 移除 {$field} 的檔案覆蓋值。
 
 overlay-settings-section-plugins-label = 插件與工具
 
-overlay-settings-section-plugins-summary = 插件配置、工具、運行環境與診斷
+overlay-settings-section-plugins-summary = 外掛設定、工具與診斷
 
-overlay-settings-section-plugins-description = 配置插件、查看工具和診斷，並管理瀏覽器、Shell 與編輯器 Harness。
+overlay-settings-section-plugins-description = 設定外掛，並查看工具與診斷資訊。
 
 overlay-settings-section-providers-label = 模型與服務商
 
@@ -567,11 +567,8 @@ settings-detail-action-readonly = 打開只讀的實際生效視圖。
 
 settings-detail-action-file = 打開背後的配置檔案。
 
-settings-harness-browser-label = Browser 執行環境
 
-settings-harness-shell-label = Shell 執行環境
 
-settings-harness-editor-label = Editor 執行環境
 
 settings-field-parse-bool = {$field} 需要布爾值，例如 true/false 或 on/off
 

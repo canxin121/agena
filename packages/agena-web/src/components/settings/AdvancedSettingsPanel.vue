@@ -22,7 +22,7 @@ const COMMON_PATHS = computed(() => [
   {
     value: 'providers',
     label: 'providers',
-    description: st('Provider inventory, adapters, authentication, and model routes.'),
+    description: st('Provider configuration, authentication, and model routes.'),
   },
   {
     value: 'permission',
@@ -53,11 +53,6 @@ const COMMON_PATHS = computed(() => [
     value: 'tracing',
     label: 'tracing',
     description: st('Tracing filters and diagnostic output policy.'),
-  },
-  {
-    value: 'harnesses',
-    label: 'harnesses',
-    description: st('Browser, shell, and editor harness catalogs.'),
   },
 ])
 
@@ -249,7 +244,7 @@ onMounted(() => {
     >
       {{
         $st(
-          'This editor can expose and change credentials or security policy. Prefer the dedicated Provider, Permission, Plugin, MCP, and Harness pages when one exists.',
+          'This editor can expose and change credentials or security policy. Prefer the dedicated Provider, Permission, Plugin, and MCP pages when one exists.',
         )
       }}
     </div>

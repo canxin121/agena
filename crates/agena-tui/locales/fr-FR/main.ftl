@@ -351,7 +351,7 @@ overlay-choice-clear-settings-detail = Supprimez le rebord du fichier pour {$fie
 
 overlay-settings-section-plugins-label = Plugins et outils
 
-overlay-settings-section-plugins-summary = Configuration du plugin, outils, harnais et diagnostics
+overlay-settings-section-plugins-summary = Plugins, outils et diagnostics
 
 overlay-settings-section-providers-label = Modèles et fournisseurs
 
@@ -531,11 +531,8 @@ settings-detail-action-readonly = Ouvrez la vue en lecture seule.
 
 settings-detail-action-file = Ouvrez le fichier de configuration du support.
 
-settings-harness-browser-label = Harnais du navigateur
 
-settings-harness-shell-label = Harnais de coquille
 
-settings-harness-editor-label = Éditeur Harnais
 
 settings-field-parse-bool = {$field} s'attend à un booléen comme vrai/faux ou on/off
 
@@ -1169,7 +1166,7 @@ overlay-settings-help-bool = Saisissez vrai/faux, activé/désactivé, oui/non o
 overlay-settings-help-integer = Entrez un nombre entier. Laissez vide ou tapez `clear` pour supprimer le remplacement du fichier.
 overlay-settings-help-float = Entrez un numéro. Laissez vide ou tapez `clear` pour supprimer le remplacement.
 overlay-choice-clear-value = Effacer la valeur
-overlay-settings-section-plugins-description = Configurez les plugins, inspectez leurs outils et diagnostics, et gérez les harnais du navigateur, du shell et de l'éditeur.
+overlay-settings-section-plugins-description = Configurez les plugins et consultez leurs outils et diagnostics.
 overlay-settings-section-providers-description = Configurez les fournisseurs et leur comportement réseau, et inspectez le catalogue de modèles.
 overlay-settings-section-model-catalog-description = Parcourez le catalogue de modèles résolus, inspectez les métadonnées du modèle et actualisez le cache local.
 overlay-settings-section-permissions-description = Modifiez séparément les autorisations globales, de l'espace de travail et de la session en cours.

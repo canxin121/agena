@@ -508,6 +508,14 @@ impl Application {
             .fetch_provider_client_versions()
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?;
+        let auto_update = self
+            .runtime_configuration
+            .runtime_configuration()
+            .map_err(|error| ApplicationError::internal_error(&error))?
+            .effective_config
+            .pointer("/runtime/providers/client_versions/auto_update")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
         let response = self
             .runtime_config_settings
             .patch_file_settings(agena_runtime::ConfigSettingsPatchInput {
@@ -518,6 +526,7 @@ impl Application {
                     "codex": versions.codex,
                     "claude": versions.claude,
                     "gemini": versions.gemini,
+                    "auto_update": auto_update,
                 }),
                 options: agena_runtime::ConfigSettingsEditOptions {
                     expected_revision: None,

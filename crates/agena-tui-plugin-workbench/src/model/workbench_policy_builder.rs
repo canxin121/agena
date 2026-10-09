@@ -1,10 +1,16 @@
 pub fn build_plugin_workbench_plugin(
     sources: &agena_application::dto::ConfigJsonSources,
-    _locale: &str,
+    locale: &str,
     status: agena_plugin_host::status::PluginStatus,
-    inspect: Option<agena_plugin_host::PluginInspect>,
+    mut inspect: Option<agena_plugin_host::PluginInspect>,
     logs: Vec<agena_plugin_host::PluginLogRecord>,
 ) -> PluginWorkbenchPlugin {
+    if let Some(manifest) = inspect
+        .as_mut()
+        .and_then(|inspect| inspect.manifest.as_mut())
+    {
+        localize_manifest_docs(manifest, locale);
+    }
     let manifest = inspect
         .as_ref()
         .and_then(|inspect| inspect.manifest.as_ref());
@@ -97,6 +103,75 @@ pub fn build_plugin_workbench_plugin(
     };
     recompute_plugin_config_state(&mut plugin);
     plugin
+}
+
+/// Resolve presentation copy in the workbench's owned inspection snapshot.
+/// The manifest sent to model tool selection keeps its stable base docs.
+fn localize_manifest_docs(manifest: &mut agena_plugin_host::sdk::PluginManifest, locale: &str) {
+    let summary = manifest.summary_for_locale(locale).map(str::to_owned);
+    let help = manifest.help_for_locale(locale).map(str::to_owned);
+    manifest.summary = summary;
+    manifest.help = help;
+    for tool in &mut manifest.tools {
+        let docs = &mut tool.docs;
+        let before_help = docs.before_help_for_locale(locale).map(str::to_owned);
+        let after_help = docs.after_help_for_locale(locale).map(str::to_owned);
+        let summary = docs.summary_for_locale(locale).map(str::to_owned);
+        let help = docs.help_for_locale(locale).map(str::to_owned);
+        docs.before_help = before_help;
+        docs.after_help = after_help;
+        docs.summary = summary;
+        docs.help = help;
+    }
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use std::collections::BTreeMap;
+
+    use agena_plugin_host::sdk::{
+        PluginManifest, PluginManifestTranslation, ToolContract, ToolDefinition, ToolDocs,
+        ToolDocsTranslation, ToolRuntimePolicy,
+    };
+
+    use super::localize_manifest_docs;
+
+    #[test]
+    fn workbench_uses_localized_docs_without_changing_the_model_base_contract() {
+        let mut manifest = PluginManifest::new("test", "localized", "1");
+        manifest.summary = Some("Stable plugin summary".to_owned());
+        manifest.translations.insert(
+            "zh-CN".to_owned(),
+            PluginManifestTranslation {
+                summary: Some("插件摘要".to_owned()),
+                help: None,
+            },
+        );
+        let base_docs = ToolDocs {
+            summary: Some("Stable tool summary".to_owned()),
+            translations: BTreeMap::from([(
+                "zh-CN".to_owned(),
+                ToolDocsTranslation {
+                    summary: Some("工具摘要".to_owned()),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        manifest.tools.push(ToolDefinition {
+            name: "inspect".to_owned(),
+            contract: ToolContract::default(),
+            docs: base_docs.clone(),
+            runtime: ToolRuntimePolicy::default(),
+            tags: Vec::new(),
+        });
+
+        localize_manifest_docs(&mut manifest, "zh-CN");
+
+        assert_eq!(manifest.summary.as_deref(), Some("插件摘要"));
+        assert_eq!(manifest.tools[0].docs.summary.as_deref(), Some("工具摘要"));
+        assert_eq!(base_docs.summary.as_deref(), Some("Stable tool summary"));
+    }
 }
 use super::{
     BTreeMap, JsonValue, PluginConfigStatus, PluginConfigStatusKind, PluginWorkbenchPlugin,

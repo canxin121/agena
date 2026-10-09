@@ -5,7 +5,7 @@ import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/se
 
 const ModelCatalogPanel = defineAsyncComponent(() => import('@/components/settings/ModelCatalogPanel.vue'))
 const ProviderStudioPanel = defineAsyncComponent(() => import('@/components/settings/ProviderStudioPanel.vue'))
-const ProvidersPanel = defineAsyncComponent(() => import('@/components/settings/ProvidersPanel.vue'))
+const ModelDefaultsPanel = defineAsyncComponent(() => import('@/components/settings/ModelDefaultsPanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('models-providers'))
 </script>
@@ -23,6 +23,6 @@ const pages = computed(() => buildSettingsSubpages('models-providers'))
   >
     <ProviderStudioPanel v-if="activePage === 'provider-studio'" />
     <ModelCatalogPanel v-else-if="activePage === 'model-catalog'" />
-    <ProvidersPanel v-else :view="activePage === 'defaults' ? 'defaults' : 'inventory'" />
+    <ModelDefaultsPanel v-else />
   </SettingsSectionWorkbench>
 </template>

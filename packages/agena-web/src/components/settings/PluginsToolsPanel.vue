@@ -3,7 +3,6 @@ import { computed, defineAsyncComponent } from 'vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
-const HarnessSettingsPanel = defineAsyncComponent(() => import('@/components/settings/HarnessSettingsPanel.vue'))
 const McpServerControlPanel = defineAsyncComponent(() => import('@/components/settings/McpServerControlPanel.vue'))
 const PluginMarketplacePanel = defineAsyncComponent(() => import('@/components/settings/PluginMarketplacePanel.vue'))
 const PluginsPanel = defineAsyncComponent(() => import('@/components/settings/PluginsPanel.vue'))
@@ -15,16 +14,13 @@ const pages = computed(() => buildSettingsSubpages('plugins-tools'))
   <SettingsSectionWorkbench
     section="plugins-tools"
     :title="$st('Plugins & Tools')"
-    :description="
-      $st('Operate the plugin runtime, expose Agena through MCP, and configure provider-native tool harnesses.')
-    "
+    :description="$st('Operate the plugin runtime, expose Agena through MCP, and inspect available tools.')"
     :pages="pages"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['plugins-tools']"
     v-slot="{ activePage }"
   >
     <PluginsPanel v-if="activePage === 'plugin-workbench'" />
     <PluginMarketplacePanel v-else-if="activePage === 'marketplace'" />
-    <McpServerControlPanel v-else-if="activePage === 'mcp-server'" />
-    <HarnessSettingsPanel v-else />
+    <McpServerControlPanel v-else />
   </SettingsSectionWorkbench>
 </template>

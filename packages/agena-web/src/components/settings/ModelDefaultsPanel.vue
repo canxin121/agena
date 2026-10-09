@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RiArrowDownSLine, RiArrowRightSLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
+import { RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
 import ApprovalModelPanel from '@/components/settings/ApprovalModelPanel.vue'
 import Button from '@/components/ui/Button.vue'
-import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
 import { mutateModelConfiguration } from '@/lib/modelConfigurationApi'
@@ -22,27 +21,6 @@ import {
 import { encodeModelSelectionKey, parseModelSlug } from '@/pages/chat/modelSelectionDefaults'
 import { useToastsStore } from '@/stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
-
-type PanelView = 'all' | 'defaults' | 'inventory'
-
-type ProviderAdapterSummary = {
-  adapter_id: string
-  enabled: boolean
-  configured_model_count: number
-}
-
-type ProviderSummary = {
-  provider_id: string
-  adapters?: ProviderAdapterSummary[]
-}
-
-type ConfiguredAdapter = {
-  adapter_id: string
-  enabled: boolean
-  resolved_base_url?: string | null
-  models?: ProviderModel[]
-  failure?: { message?: string; rendered?: string; user?: { fallback?: string } } | null
-}
 
 type ModelCatalogSummary = {
   refreshing?: boolean
@@ -69,19 +47,13 @@ type ModelCatalogList = {
   total?: number
 }
 
-const props = withDefaults(defineProps<{ view?: PanelView }>(), { view: 'all' })
 const toasts = useToastsStore()
 const modelSelectionCatalog = useModelSelectionCatalog()
 
 const loading = ref(false)
 const error = ref('')
-const providers = ref<ProviderSummary[]>([])
 const runtime = ref<RuntimeStatus | null>(null)
 const catalog = ref<ModelCatalogList | null>(null)
-const expandedId = ref<string | null>(null)
-const expandedLoading = ref(false)
-const expandedError = ref('')
-const expandedAdapters = ref<ConfiguredAdapter[]>([])
 const defaultModelKey = ref('')
 const defaultThinkingMode = ref('')
 const defaultSpeedMode = ref('')
@@ -90,18 +62,6 @@ const defaultParallelToolCalls = ref(false)
 const defaultSaveBusy = ref(false)
 const defaultSaveError = ref('')
 
-const showDefaults = computed(() => props.view === 'all' || props.view === 'defaults')
-const showInventory = computed(() => props.view === 'all' || props.view === 'inventory')
-const panelTitle = computed(() =>
-  props.view === 'defaults' ? st('Model defaults') : st('Configured provider inventory'),
-)
-const panelDescription = computed(() =>
-  props.view === 'defaults'
-    ? st('Choose the one runtime-wide default model and its optional execution modes.')
-    : st('Review the server’s configured providers, enabled adapters, endpoints, and model routes.'),
-)
-
-const sortedProviders = computed(() => [...providers.value].sort((a, b) => a.provider_id.localeCompare(b.provider_id)))
 const catalogModelCount = computed(() => {
   const counts = [
     runtime.value?.model_catalog?.model_count,
@@ -201,34 +161,20 @@ function chooseDefaultModel(value: string) {
   defaultSaveError.value = ''
 }
 
-function configuredModelCount(provider: ProviderSummary): number {
-  return (Array.isArray(provider.adapters) ? provider.adapters : []).reduce((total, adapter) => {
-    const count = Number(adapter.configured_model_count)
-    return total + (Number.isFinite(count) && count > 0 ? Math.floor(count) : 0)
-  }, 0)
-}
-
-function adapterFailure(adapter: ConfiguredAdapter): string {
-  return String(adapter.failure?.user?.fallback || adapter.failure?.rendered || adapter.failure?.message || '').trim()
-}
-
 async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [providerData, runtimeData, catalogData] = await Promise.all([
-      apiJson<ProviderSummary[]>('/api/v1/providers'),
+    const [runtimeData, catalogData] = await Promise.all([
       apiJson<RuntimeStatus>('/api/v1/runtime'),
       apiJson<ModelCatalogList>('/api/v1/model-catalog?offset=0&limit=1'),
       modelSelectionCatalog.loadProvidersAndModels(),
     ])
-    providers.value = Array.isArray(providerData) ? providerData : []
     runtime.value = runtimeData && typeof runtimeData === 'object' ? runtimeData : null
     catalog.value = catalogData && typeof catalogData === 'object' ? catalogData : null
     syncDefaultEditor()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
-    providers.value = []
   } finally {
     loading.value = false
   }
@@ -282,29 +228,6 @@ async function saveDefaultSelection() {
   }
 }
 
-async function toggleExpanded(id: string) {
-  if (!id) return
-  if (expandedId.value === id) {
-    expandedId.value = null
-    expandedAdapters.value = []
-    expandedError.value = ''
-    return
-  }
-  expandedId.value = id
-  expandedAdapters.value = []
-  expandedError.value = ''
-  expandedLoading.value = true
-  try {
-    const data = await apiJson<ConfiguredAdapter[]>(`/api/v1/providers/${encodeURIComponent(id)}/configured-models`)
-    expandedAdapters.value = Array.isArray(data) ? data : []
-  } catch (reason) {
-    expandedError.value = reason instanceof Error ? reason.message : String(reason)
-    toasts.push('error', expandedError.value)
-  } finally {
-    expandedLoading.value = false
-  }
-}
-
 onMounted(() => void refresh())
 </script>
 
@@ -312,8 +235,10 @@ onMounted(() => void refresh())
   <div class="grid min-w-0 gap-6">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2 class="text-base font-semibold">{{ panelTitle }}</h2>
-        <p class="mt-1 max-w-3xl text-sm text-muted-foreground">{{ panelDescription }}</p>
+        <h2 class="text-base font-semibold">{{ $st('Model defaults') }}</h2>
+        <p class="mt-1 max-w-3xl text-sm text-muted-foreground">
+          {{ $st('Choose the one runtime-wide default model and its optional execution modes.') }}
+        </p>
       </div>
       <IconButton
         variant="outline"
@@ -346,7 +271,7 @@ onMounted(() => void refresh())
       </div>
     </dl>
 
-    <template v-if="showDefaults">
+    <template>
       <section class="grid gap-4 rounded-lg border border-border/60 p-4">
         <div>
           <h3 class="text-sm font-semibold">{{ $st('Runtime default model') }}</h3>
@@ -435,91 +360,5 @@ onMounted(() => void refresh())
       <ApprovalModelPanel />
     </template>
 
-    <section v-if="showInventory" class="grid gap-3">
-      <div v-if="loading && sortedProviders.length === 0" class="text-sm text-muted-foreground">
-        {{ $st('Loading providers…') }}
-      </div>
-      <div v-else-if="sortedProviders.length === 0" class="text-sm text-muted-foreground">
-        {{ $st('No providers configured.') }}
-      </div>
-      <div v-else class="grid gap-2">
-        <article
-          v-for="provider in sortedProviders"
-          :key="provider.provider_id"
-          class="overflow-hidden rounded-lg border border-border/60 bg-background/50"
-        >
-          <button
-            type="button"
-            class="flex w-full min-w-0 items-center justify-between gap-3 px-3 py-3 text-left hover:bg-muted/30"
-            @click="toggleExpanded(provider.provider_id)"
-          >
-            <span class="flex min-w-0 items-center gap-2">
-              <RiArrowDownSLine
-                v-if="expandedId === provider.provider_id"
-                class="h-4 w-4 shrink-0 text-muted-foreground"
-              />
-              <RiArrowRightSLine v-else class="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span class="min-w-0">
-                <span class="block truncate font-mono text-sm font-semibold">{{ provider.provider_id }}</span>
-                <span class="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
-                  {{ $st('configured routes') }}
-                </span>
-              </span>
-            </span>
-            <span class="shrink-0 rounded bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums">
-              {{ configuredModelCount(provider) }} {{ $st('models') }}
-            </span>
-          </button>
-
-          <div v-if="expandedId === provider.provider_id" class="border-t border-border/60 px-4 py-3">
-            <div v-if="expandedLoading" class="text-xs text-muted-foreground">
-              {{ $st('Loading configured models…') }}
-            </div>
-            <div v-else-if="expandedError" class="break-words text-xs text-destructive">{{ expandedError }}</div>
-            <div v-else class="grid gap-4">
-              <section
-                v-for="adapter in expandedAdapters"
-                :key="adapter.adapter_id"
-                class="grid gap-2 border-b border-border/50 pb-4 last:border-b-0 last:pb-0"
-              >
-                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                  <span class="font-mono font-semibold">{{ adapter.adapter_id }}</span>
-                  <span :class="adapter.enabled ? 'text-success' : 'text-muted-foreground'">
-                    {{ adapter.enabled ? $st('enabled') : $st('disabled') }}
-                  </span>
-                  <span v-if="adapter.resolved_base_url" class="break-all font-mono text-[11px] text-muted-foreground">
-                    {{ adapter.resolved_base_url }}
-                  </span>
-                </div>
-                <div v-if="adapterFailure(adapter)" class="break-words text-xs text-destructive">
-                  {{ adapterFailure(adapter) }}
-                </div>
-                <ul v-if="adapter.models?.length" class="grid gap-1 sm:grid-cols-2">
-                  <li
-                    v-for="model in adapter.models"
-                    :key="model.id"
-                    class="min-w-0 rounded bg-muted/20 px-2 py-1.5 text-xs"
-                  >
-                    <span class="block truncate">{{ model.display_name || model.id }}</span>
-                    <code
-                      v-if="model.display_name && model.display_name !== model.id"
-                      class="block truncate font-mono text-[10px] text-muted-foreground"
-                    >
-                      {{ model.id }}
-                    </code>
-                  </li>
-                </ul>
-                <div v-else-if="!adapterFailure(adapter)" class="text-xs text-muted-foreground">
-                  {{ $st('No configured models.') }}
-                </div>
-              </section>
-              <div v-if="expandedAdapters.length === 0" class="text-xs text-muted-foreground">
-                {{ $st('No adapters reported.') }}
-              </div>
-            </div>
-          </div>
-        </article>
-      </div>
-    </section>
   </div>
 </template>

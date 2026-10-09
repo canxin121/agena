@@ -4,12 +4,18 @@
   },
   "ui": {
     "tui": {
-      "graphics": "auto",
-      "transcript": {
-        "activity_default_expanded": false,
-        "activity_kinds": {
+      "graphics": "auto"
+    },
+    "transcript": {
+      "activity": {
+        "default_expanded": false,
+        "kinds": {
           "reasoning": true
         }
+      },
+      "tools": {
+        "categories": {},
+        "overrides": {}
       }
     }
   },
@@ -18,7 +24,8 @@
       "client_versions": {
         "codex": "0.144.4",
         "claude": "2.1.209",
-        "gemini": "0.50.0"
+        "gemini": "0.50.0",
+        "auto_update": true
       }
     }
   },

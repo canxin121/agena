@@ -151,6 +151,9 @@ pub struct SessionPartListQuery {
     pub limit: Option<u64>,
     #[serde(default)]
     pub cursor: Option<String>,
+    /// UI language for human headlines. Stored part data stays English.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

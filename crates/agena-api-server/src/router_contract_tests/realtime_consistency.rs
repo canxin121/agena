@@ -85,6 +85,15 @@ async fn bounded_reconciliation_filters_memberships_visibility_and_validates_ids
             "{query}"
         );
     }
+    // A UI language is an accepted transcript read parameter; the stored
+    // part data itself stays language-free.
+    let response = reqwest::get(format!(
+        "{}/api/v1/sessions/{}/parts?locale=zh-CN",
+        server.url, source.id
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
     store.delete(source.id).await.unwrap();
     for endpoint in ["parts?ids=1", "parts", "runs", "state"] {
         let response = reqwest::get(format!(

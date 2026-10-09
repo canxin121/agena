@@ -13,6 +13,9 @@ pub struct RunWindowQuery {
     pub limit: Option<u64>,
     pub part_limit: Option<u64>,
     pub cursor: Option<String>,
+    /// UI language for human headlines. Stored part data stays English.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 pub async fn read_session_runs(
@@ -27,23 +30,25 @@ pub async fn read_session_runs(
     if let Some(response) = read.not_modified(&headers) {
         return Ok(response);
     }
-    read.json(
-        state
-            .application()
-            .read_runs(agena_api::queries::ReadRunsParams {
-                session_id,
-                limit: query.limit,
-                part_limit: query.part_limit,
-                cursor: query.cursor,
-                sections: query
-                    .sections
-                    .as_deref()
-                    .map(|v| v.split(',').map(str::parse).collect::<Result<Vec<_>, _>>())
-                    .transpose()
-                    .map_err(|_| ServerError::bad_request("Unknown Part section."))?
-                    .unwrap_or_default(),
-            })
-            .await?,
-    )
-    .await
+    let mut resource = state
+        .application()
+        .read_runs(agena_api::queries::ReadRunsParams {
+            session_id,
+            limit: query.limit,
+            part_limit: query.part_limit,
+            cursor: query.cursor,
+            sections: query
+                .sections
+                .as_deref()
+                .map(|v| v.split(',').map(str::parse).collect::<Result<Vec<_>, _>>())
+                .transpose()
+                .map_err(|_| ServerError::bad_request("Unknown Part section."))?
+                .unwrap_or_default(),
+        })
+        .await?;
+    agena_application::part_locale::localize_part_headlines(
+        &mut resource.parts,
+        query.locale.as_deref(),
+    );
+    read.json(resource).await
 }

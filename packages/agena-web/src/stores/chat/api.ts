@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n'
+import { normalizeAppLocale } from '@/i18n/locale'
 import type { SessionActivity } from '@/types/activity'
 // Agena REST API client for the chat subsystem.
 //
@@ -952,6 +953,16 @@ export async function getSessionExecution(sessionId: string): Promise<AgenaExecu
   }
 }
 
+/**
+ * Part headlines are stored English data; the server maps its vocabulary
+ * for the requested language, so transcript reads ask for the UI language.
+ */
+function withInterfaceLocale(url: string): string {
+  const locale = normalizeAppLocale(i18n.global.locale.value)
+  if (!locale) return url
+  return `${url}${url.includes('?') ? '&' : '?'}locale=${encodeURIComponent(locale)}`
+}
+
 /** GET /api/v1/sessions/{id}/parts — ordered part snapshot (reconnect catch-up). */
 export async function getSessionParts(
   sessionId: string,
@@ -962,7 +973,9 @@ export async function getSessionParts(
   if (typeof limit === 'number' && Number.isFinite(limit)) params.set('limit', String(Math.floor(limit)))
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const suffix = params.toString() ? `?${params.toString()}` : ''
-  return await apiJson<AgenaSessionParts>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts${suffix}`)
+  return await apiJson<AgenaSessionParts>(
+    withInterfaceLocale(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts${suffix}`),
+  )
 }
 
 /** GET one lazy tool-call detail section. */
@@ -978,7 +991,9 @@ export async function getToolPartDetail(
   if (!sid || !pid) throw new Error(i18n.global.t('chat.errors.sessionAndPartIdRequired'))
   const { value, observation } = await conditionalJsonObserved<ToolDetailResource>(
     section === 'presentation' ? `part:${pid}` : `part:${pid}:${section}`,
-    `/api/v1/sessions/${encodeURIComponent(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
+    withInterfaceLocale(
+      `/api/v1/sessions/${encodeURIComponent(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
+    ),
     signal ? { signal } : undefined,
     force,
   )
@@ -1007,7 +1022,7 @@ export async function listMessages(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const { value: parts, observation } = await conditionalJsonObserved<AgenaSessionParts>(
     `session:${sid}:parts`,
-    `/api/v1/sessions/${encodeURIComponent(sid)}/runs?${params.toString()}`,
+    withInterfaceLocale(`/api/v1/sessions/${encodeURIComponent(sid)}/runs?${params.toString()}`),
     { signal: AbortSignal.timeout(30_000) },
     force,
   )
@@ -1031,9 +1046,12 @@ export async function getLoadedParts(sessionId: string, ids: string[]): Promise<
   const parts: AgenaPart[] = []
   for (let start = 0; start < ids.length; start += 256) {
     const query = new URLSearchParams({ ids: ids.slice(start, start + 256).join(',') })
-    const page = await apiJson<AgenaSessionParts>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts?${query}`, {
-      signal: AbortSignal.timeout(30_000),
-    })
+    const page = await apiJson<AgenaSessionParts>(
+      withInterfaceLocale(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts?${query}`),
+      {
+        signal: AbortSignal.timeout(30_000),
+      },
+    )
     parts.push(...page.parts)
   }
   return parts
@@ -1050,7 +1068,7 @@ export async function listSessionMessages(sessionId: string): Promise<MessageEnt
     const params = new URLSearchParams({ limit: '500' })
     if (cursor) params.set('cursor', cursor)
     const page = await apiJson<AgenaSessionParts>(
-      `/api/v1/sessions/${encodeURIComponent(sid)}/parts?${params.toString()}`,
+      withInterfaceLocale(`/api/v1/sessions/${encodeURIComponent(sid)}/parts?${params.toString()}`),
       { signal: AbortSignal.timeout(30_000) },
     )
     for (const part of page.parts) parts.set(part.part_id, part)
@@ -1079,7 +1097,9 @@ export async function listTranscriptRunParts(
   params.set('limit', String(Math.max(1, Math.min(50, Math.floor(limit || 5)))))
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
-    `/api/v1/sessions/${encodeURIComponent(sid)}/parts?run_ids=${encodeURIComponent(String(runId))}&${params.toString()}`,
+    withInterfaceLocale(
+      `/api/v1/sessions/${encodeURIComponent(sid)}/parts?run_ids=${encodeURIComponent(String(runId))}&${params.toString()}`,
+    ),
     { signal: AbortSignal.timeout(30_000) },
   )
   return {
@@ -1103,7 +1123,9 @@ export async function listTranscriptFoldParts(
   params.set('limit', String(Math.max(1, Math.min(50, Math.floor(limit || 5)))))
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
-    `/api/v1/sessions/${encodeURIComponent(sid)}/parts?run_ids=${encodeURIComponent(ids.join(','))}&${params.toString()}`,
+    withInterfaceLocale(
+      `/api/v1/sessions/${encodeURIComponent(sid)}/parts?run_ids=${encodeURIComponent(ids.join(','))}&${params.toString()}`,
+    ),
     { signal: AbortSignal.timeout(30_000) },
   )
   return {

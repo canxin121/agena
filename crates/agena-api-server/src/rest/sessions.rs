@@ -208,25 +208,28 @@ pub async fn list_session_parts(
             .map(|value| value.unwrap_or_default())
             .map_err(|_| ServerError::bad_request("Invalid Part selection."))
     }
-    Ok(Json(
-        state
-            .application()
-            .read_parts(agena_api::queries::ReadPartsParams {
-                session_id,
-                ids: ids(query.ids.as_deref())?,
-                run_ids: ids(query.run_ids.as_deref())?,
-                cursor: query.cursor,
-                limit: query.limit,
-                sections: query
-                    .sections
-                    .as_deref()
-                    .map(|v| v.split(',').map(str::parse).collect::<Result<Vec<_>, _>>())
-                    .transpose()
-                    .map_err(|_| ServerError::bad_request("Unknown Part section."))?
-                    .unwrap_or_default(),
-            })
-            .await?,
-    ))
+    let mut resource = state
+        .application()
+        .read_parts(agena_api::queries::ReadPartsParams {
+            session_id,
+            ids: ids(query.ids.as_deref())?,
+            run_ids: ids(query.run_ids.as_deref())?,
+            cursor: query.cursor,
+            limit: query.limit,
+            sections: query
+                .sections
+                .as_deref()
+                .map(|v| v.split(',').map(str::parse).collect::<Result<Vec<_>, _>>())
+                .transpose()
+                .map_err(|_| ServerError::bad_request("Unknown Part section."))?
+                .unwrap_or_default(),
+        })
+        .await?;
+    agena_application::part_locale::localize_part_headlines(
+        &mut resource.parts,
+        query.locale.as_deref(),
+    );
+    Ok(Json(resource))
 }
 
 /// Load one tool-call detail section on demand. The normal transcript

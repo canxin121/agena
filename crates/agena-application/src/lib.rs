@@ -31,6 +31,7 @@ pub mod dto;
 mod error;
 pub mod filesystem_discovery;
 pub mod pagination;
+pub mod part_locale;
 pub mod provider_queries;
 pub mod provider_studio;
 pub mod service;

@@ -6,6 +6,7 @@ import { RiCommandLine, RiPlayLine, RiRefreshLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import PluginContractEditor from '@/components/settings/PluginContractEditor.vue'
+import { pluginKindLabel, pluginStateLabel } from '@/components/settings/pluginLabels'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
@@ -292,13 +293,13 @@ const sortedStatuses = computed(() =>
 const transportOptions = computed(() =>
   [...new Set(sortedStatuses.value.map((status) => status.kind).filter(Boolean))].map((value) => ({
     value,
-    label: value,
+    label: pluginKindLabel(value),
   })),
 )
 const stateOptions = computed(() =>
   [...new Set(sortedStatuses.value.map((status) => status.state).filter(Boolean))].map((value) => ({
     value,
-    label: value,
+    label: pluginStateLabel(value),
   })),
 )
 const filteredStatuses = computed(() => {
@@ -711,7 +712,7 @@ onMounted(() => void refresh())
         >
           <span class="min-w-0">
             <span class="block truncate font-mono text-xs font-semibold">{{ status.plugin_id }}</span>
-            <span class="mt-0.5 block text-[11px] text-muted-foreground">{{ status.kind }}</span>
+            <span class="mt-0.5 block text-[11px] text-muted-foreground">{{ pluginKindLabel(status.kind) }}</span>
           </span>
           <span class="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-current" :class="statusTone(status.state)" />
         </button>
@@ -731,8 +732,8 @@ onMounted(() => void refresh())
                 {{ selectedManifest.summary }}
               </p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                <span :class="statusTone(selectedStatus.state)">{{ selectedStatus.state }}</span>
-                <span>{{ $st('transport:') }} {{ selectedStatus.kind }}</span>
+                <span :class="statusTone(selectedStatus.state)">{{ pluginStateLabel(selectedStatus.state) }}</span>
+                <span>{{ $st('transport:') }} {{ pluginKindLabel(selectedStatus.kind) }}</span>
                 <span v-if="selectedManifest?.version">{{ $st('version:') }} {{ selectedManifest.version }}</span>
                 <span>{{ selectedCommands.length }} {{ $st('commands') }}</span>
                 <span>{{ selectedTools.length }} {{ $st('tools') }}</span>

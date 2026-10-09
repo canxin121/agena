@@ -278,6 +278,7 @@ const sameAsEnglishAllowlist = new Set([
   'SAP AI Core',
   'Source',
   'Unicode',
+  'WebAssembly',
   'global',
   'owner/repository@v0.1.0',
   'tool_calling, reasoning, streaming',

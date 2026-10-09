@@ -28,7 +28,7 @@ pub use config::{
     ConfigLoader, RawConfig, RawConfigFile, RawTracingConfig, RawUiConfig, apply_config_override,
     delete_layered_file_setting, list_file_settings, list_json_path, parse_settings_path,
     patch_layered_file_settings, read_file_setting, set_layered_file_setting, validate_config_text,
-    validate_layered_file_settings,
+    validate_layered_config_text, validate_layered_file_settings,
 };
 pub use config_environment::{ConfigEnvironment, ProcessEnvironment};
 pub use config_error::ConfigError;

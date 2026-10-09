@@ -158,3 +158,87 @@ async fn concurrent_settings_edits_preserve_the_file_lock_and_each_distinct_valu
     }
     provider.abort();
 }
+
+/// Layer edits validate the composed configuration rather than the edited
+/// document alone, so a workspace override may reference a provider that only
+/// the global layer declares (the normal setup for `providers.default_selection`).
+#[tokio::test]
+async fn workspace_layer_edits_validate_against_the_global_layer() {
+    let (provider_url, _, provider) = spawn_fake_responses_provider(Vec::new()).await;
+    let server = start_test_server(&provider_url).await;
+    let http = reqwest::Client::new();
+    // Only the isolated test workspace and its global fixture file change.
+    let global = server._workspace.path().join("isolated-global-agena.json");
+    std::fs::write(
+        &global,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "providers": {
+                "globalfake": {
+                    "auth": {
+                        "mode": "api",
+                        "subtype": "custom",
+                        "base_url": provider_url,
+                        "api_key": {"kind": "inline", "value": "fake-test-key"}
+                    },
+                    "adapters": {
+                        "openai_responses": {
+                            "enabled": true,
+                            "models": {"fake-model": {"agena_tools": {"mode": "provider_protocol"}}}
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let response = http
+        .put(format!("{}/api/v1/settings/layers/workspace", server.url))
+        .json(&serde_json::json!({
+            "path": "providers.default_selection",
+            "value": {
+                "provider": "globalfake",
+                "adapter": "openai_responses",
+                "model": "fake-model"
+            },
+            "dry_run": false,
+            "validate": true,
+            "reload": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "a workspace default model may reference a globally declared provider: {}",
+        response.text().await.unwrap()
+    );
+    let workspace_config =
+        std::fs::read_to_string(server._workspace.path().join(".agena/agena.json")).unwrap();
+    assert!(
+        workspace_config.contains("globalfake"),
+        "workspace override must be persisted: {workspace_config}"
+    );
+
+    // The composed configuration still has to resolve, so an edit naming a
+    // provider no layer declares stays rejected.
+    let response = http
+        .put(format!("{}/api/v1/settings/layers/workspace", server.url))
+        .json(&serde_json::json!({
+            "path": "providers.default_selection",
+            "value": {
+                "provider": "ghost",
+                "adapter": "openai_responses",
+                "model": "fake-model"
+            },
+            "dry_run": false,
+            "validate": true,
+            "reload": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    provider.abort();
+}

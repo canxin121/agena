@@ -1965,10 +1965,12 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         input: agena_runtime::ConfigSettingsSetInput,
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
+        let snapshot = self.current_snapshot();
+        let validator = runtime_settings_schema_validator(&snapshot);
         agena_runtime::set_runtime_file_setting(
-            self.current_snapshot().config_path().to_path_buf(),
+            snapshot.config_path().to_path_buf(),
             input,
-            Some(&runtime_settings_schema_validator),
+            Some(&validator),
         )
     }
 
@@ -1977,10 +1979,12 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         input: agena_runtime::ConfigSettingsSetInput,
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
+        let snapshot = self.current_snapshot();
+        let validator = runtime_settings_schema_validator(&snapshot);
         agena_runtime::set_runtime_file_setting(
-            self.current_snapshot().project_config_path().to_path_buf(),
+            snapshot.project_config_path().to_path_buf(),
             input,
-            Some(&runtime_settings_schema_validator),
+            Some(&validator),
         )
     }
 
@@ -1989,10 +1993,12 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         input: agena_runtime::ConfigSettingsPatchInput,
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
+        let snapshot = self.current_snapshot();
+        let validator = runtime_settings_schema_validator(&snapshot);
         agena_runtime::patch_runtime_file_settings(
-            self.current_snapshot().config_path().to_path_buf(),
+            snapshot.config_path().to_path_buf(),
             input,
-            Some(&runtime_settings_schema_validator),
+            Some(&validator),
         )
     }
 
@@ -2001,10 +2007,12 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         input: agena_runtime::ConfigSettingsDeleteInput,
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
+        let snapshot = self.current_snapshot();
+        let validator = runtime_settings_schema_validator(&snapshot);
         agena_runtime::delete_runtime_file_setting(
-            self.current_snapshot().config_path().to_path_buf(),
+            snapshot.config_path().to_path_buf(),
             input,
-            Some(&runtime_settings_schema_validator),
+            Some(&validator),
         )
     }
 
@@ -2013,10 +2021,12 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         input: agena_runtime::ConfigSettingsDeleteInput,
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
+        let snapshot = self.current_snapshot();
+        let validator = runtime_settings_schema_validator(&snapshot);
         agena_runtime::delete_runtime_file_setting(
-            self.current_snapshot().project_config_path().to_path_buf(),
+            snapshot.project_config_path().to_path_buf(),
             input,
-            Some(&runtime_settings_schema_validator),
+            Some(&validator),
         )
     }
 
@@ -2027,19 +2037,44 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         agena_runtime::ConfigSettingsValidateResponse,
         agena_runtime::RuntimeConfigSettingsError,
     > {
+        let snapshot = self.current_snapshot();
+        let validator = runtime_settings_schema_validator(&snapshot);
         agena_runtime::validate_runtime_file_settings(
-            self.current_snapshot().config_path().to_path_buf(),
-            &runtime_settings_schema_validator,
+            snapshot.config_path().to_path_buf(),
+            &validator,
         )
     }
 }
 
+/// Build the schema validator used by settings edits.
+///
+/// A layer document is validated against the *composed* global + workspace
+/// configuration rather than on its own, so a workspace override may reference
+/// entities that only the global layer declares (for example the provider used
+/// by `providers.default_selection`). Validating the workspace document in
+/// isolation would reject every such override even though the merged runtime
+/// configuration is perfectly valid.
 fn runtime_settings_schema_validator(
-    config_path: &std::path::Path,
-    text: &str,
-) -> Result<(), agena_runtime::RuntimeConfigSettingsError> {
-    crate::config::validate_config_text(config_path, text)
+    snapshot: &Arc<RuntimeSnapshot>,
+) -> impl Fn(&std::path::Path, &str) -> Result<(), agena_runtime::RuntimeConfigSettingsError> + 'static
+{
+    let global_path = snapshot.config_path().to_path_buf();
+    let workspace_path = snapshot.project_config_path().to_path_buf();
+    move |config_path: &std::path::Path, text: &str| {
+        let edited_layer = if config_path == global_path {
+            agena_runtime_config::ConfigSettingsLayer::Global
+        } else {
+            agena_runtime_config::ConfigSettingsLayer::Workspace
+        };
+        crate::config::validate_layered_config_text(
+            global_path.as_path(),
+            workspace_path.as_path(),
+            edited_layer,
+            text,
+            &crate::config::ProcessEnvironment,
+        )
         .map_err(agena_runtime::config_error_to_settings_error)
+    }
 }
 
 #[async_trait::async_trait]

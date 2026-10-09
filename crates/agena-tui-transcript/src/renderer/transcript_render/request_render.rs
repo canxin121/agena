@@ -81,15 +81,23 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         }
         TranscriptPartContent::Text(text) => first_non_empty_preview_line(text.text.as_str()),
         TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
-            Some(crate::activity_presentation::activity_presentation(payload).1)
+            let (_, canonical_title, ..) =
+                crate::activity_presentation::activity_presentation(payload);
+            Some(crate::ui_text::localized_activity_title(
+                i18n,
+                canonical_title.as_str(),
+            ))
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment))
-        | TranscriptPartContent::Activity(TranscriptActivityContent::Answer(segment)) => Some(
-            crate::activity_presentation::activity_presentation(
+        | TranscriptPartContent::Activity(TranscriptActivityContent::Answer(segment)) => {
+            let (_, canonical_title, ..) = crate::activity_presentation::activity_presentation(
                 &agena_domain::ActivityPayload::TextSegment(segment.as_ref().clone()),
-            )
-            .1,
-        ),
+            );
+            Some(crate::ui_text::localized_activity_title(
+                i18n,
+                canonical_title.as_str(),
+            ))
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             let summary = reasoning.preferred_text();
             first_non_empty_preview_line(summary.as_str())

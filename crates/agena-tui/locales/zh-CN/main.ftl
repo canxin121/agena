@@ -2349,3 +2349,16 @@ workbench-tool-editor-description = { $summary } 标签：{ $tags }。在下方�
 workbench-tool-editor-placeholder = Ctrl+S 校验并运行 · Esc 取消 · Enter 换行
 workbench-tool-completed = 插件工具已完成
 workbench-tool-completed-no-output = 工具已成功完成，无输出。
+
+# Chrome-only activity headlines (the stored English title is the fallback).
+activity-title-answer = 回答
+activity-title-thinking = 思考
+activity-title-text = 文本
+activity-title-error = 错误
+activity-title-notice = 通知
+activity-title-hook = 钩子
+activity-title-compaction = 上下文压缩
+activity-title-provider-retry = 提供方重试
+activity-title-turn-limit = 轮次上限
+activity-title-user-input = 需要用户输入
+activity-title-pasted-text = 粘贴的文本

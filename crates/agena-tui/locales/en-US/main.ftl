@@ -2349,3 +2349,16 @@ workbench-tool-editor-description = { $summary } Tags: { $tags }. Edit the JSON 
 workbench-tool-editor-placeholder = Ctrl+S validate and run · Esc cancel · Enter newline
 workbench-tool-completed = plugin tool completed
 workbench-tool-completed-no-output = Tool completed successfully with no output.
+
+# Chrome-only activity headlines (the stored English title is the fallback).
+activity-title-answer = Answer
+activity-title-thinking = Thinking
+activity-title-text = Text
+activity-title-error = Error
+activity-title-notice = Notice
+activity-title-hook = Hook
+activity-title-compaction = Compaction
+activity-title-provider-retry = Provider retry
+activity-title-turn-limit = Turn limit
+activity-title-user-input = User input requested
+activity-title-pasted-text = Pasted text

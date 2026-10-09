@@ -79,10 +79,10 @@ pub(crate) fn render_tool_execution_with_sections(
             tool_display_label_localized(tool, i18n),
             details.visible_copy_text,
         ]
-            .into_iter()
-            .filter(|section| !section.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        .into_iter()
+        .filter(|section| !section.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
         return ToolExecutionRender {
             headline_end,
             visible_copy_text,

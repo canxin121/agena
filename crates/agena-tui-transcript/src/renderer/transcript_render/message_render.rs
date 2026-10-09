@@ -1201,7 +1201,7 @@ pub(crate) fn render_part_node(
                 part.status,
                 expanded,
                 true,
-                "Answer",
+                &ui_text::localized_activity_title(i18n, "Answer"),
                 answer.text.as_str(),
                 width,
             );
@@ -2351,7 +2351,10 @@ fn render_activity_canonical(
     let default_expanded = defaults.default_expanded(activity_kind_id_for_payload(payload));
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
     let (_, canonical_title, summary, error) = activity_presentation(payload);
-    let title = title_override.unwrap_or(canonical_title.as_str());
+    let localized_title = title_override.map(str::to_owned).unwrap_or_else(|| {
+        crate::ui_text::localized_activity_title(i18n, canonical_title.as_str())
+    });
+    let title = localized_title.as_str();
     // A notice row carries the wall-clock time it was recorded so the hook
     // timeline reads at a glance instead of by position alone.
     let headline_summary = match payload {

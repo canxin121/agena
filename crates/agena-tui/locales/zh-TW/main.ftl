@@ -1791,3 +1791,16 @@ content-gap = 部分來源輸出已不在保留範圍內。
 content-reconnecting = 正在重新連線輸出…
 
 content-window = 目前僅顯示部分輸出。
+
+# Chrome-only activity headlines (the stored English title is the fallback).
+activity-title-answer = 回答
+activity-title-thinking = 思考
+activity-title-text = 文字
+activity-title-error = 錯誤
+activity-title-notice = 通知
+activity-title-hook = 鉤子
+activity-title-compaction = 上下文壓縮
+activity-title-provider-retry = 提供方重試
+activity-title-turn-limit = 回合上限
+activity-title-user-input = 需要使用者輸入
+activity-title-pasted-text = 貼上的文字

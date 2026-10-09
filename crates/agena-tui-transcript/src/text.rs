@@ -16,6 +16,38 @@ pub fn t(i18n: &I18n, key: &str) -> String {
     i18n.text(key)
 }
 
+/// Catalog key for one chrome-only activity headline.
+///
+/// These are the fixed English headlines the canonical activity presenter
+/// composes for rows that carry no stored title of their own. Content-bearing
+/// titles (a resource name, a command name, a notice's own title) have no key
+/// and keep their own text.
+pub fn activity_title_key(canonical: &str) -> Option<&'static str> {
+    match canonical {
+        "Answer" => Some("activity-title-answer"),
+        "Thinking" => Some("activity-title-thinking"),
+        "Text" => Some("activity-title-text"),
+        "Error" => Some("activity-title-error"),
+        "Notice" => Some("activity-title-notice"),
+        "Hook" => Some("activity-title-hook"),
+        "Compaction" => Some("activity-title-compaction"),
+        "Provider retry" => Some("activity-title-provider-retry"),
+        "Turn limit" => Some("activity-title-turn-limit"),
+        "User input requested" => Some("activity-title-user-input"),
+        "Pasted text" => Some("activity-title-pasted-text"),
+        _ => None,
+    }
+}
+
+/// Localize one chrome-only activity headline. A catalog without the key keeps
+/// the canonical English text, so a partially translated locale degrades to the
+/// stored wording instead of a placeholder.
+pub fn localized_activity_title(i18n: &I18n, canonical: &str) -> String {
+    activity_title_key(canonical)
+        .and_then(|key| i18n.try_text(key))
+        .unwrap_or_else(|| canonical.to_owned())
+}
+
 pub fn thinking_mode_display_value(value: &str) -> String {
     value.trim().to_owned()
 }
@@ -61,9 +93,43 @@ pub fn transcript_header_title(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        I18n, speed_mode_display_value_with_name, text_artifact_display_label,
-        transcript_header_title,
+        I18n, activity_title_key, localized_activity_title, speed_mode_display_value_with_name,
+        text_artifact_display_label, transcript_header_title,
     };
+
+    #[test]
+    fn every_canonical_activity_headline_has_a_catalog_key() {
+        for headline in [
+            "Answer",
+            "Thinking",
+            "Text",
+            "Error",
+            "Notice",
+            "Hook",
+            "Compaction",
+            "Provider retry",
+            "Turn limit",
+            "User input requested",
+            "Pasted text",
+        ] {
+            assert!(activity_title_key(headline).is_some(), "{headline}");
+        }
+        // Titles that carry content own their text.
+        assert!(activity_title_key("README.md").is_none());
+        assert!(activity_title_key("Command: review").is_none());
+    }
+
+    #[test]
+    fn a_translated_catalog_rewrites_only_the_chrome_headline() {
+        let chinese = I18n::resolve(Some("zh-CN"), None);
+        assert_eq!(localized_activity_title(&chinese, "Answer"), "回答");
+        assert_eq!(localized_activity_title(&chinese, "Thinking"), "思考");
+        assert_eq!(localized_activity_title(&chinese, "README.md"), "README.md");
+        // A catalog that has no key yet keeps the stored English wording
+        // instead of rendering a placeholder.
+        let german = I18n::resolve(Some("de-DE"), None);
+        assert_eq!(localized_activity_title(&german, "Thinking"), "Thinking");
+    }
 
     #[test]
     fn session_header_places_id_before_title() {

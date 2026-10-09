@@ -24,7 +24,7 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     {
       id: 'defaults',
       label: () => st('Model defaults'),
-      description: () => st('Choose the one runtime-wide default model and its optional execution modes.'),
+      description: () => st('Choose the default model and its optional execution modes.'),
       keywords: ['default', 'model', 'thinking', 'speed', 'verbosity'],
     },
   ],

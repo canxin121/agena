@@ -437,9 +437,11 @@ settings-runtime-verbosity-label = 詳細程度
 
 settings-runtime-verbosity-description = 目前工作階段 verbosity 覆蓋
 
-settings-field-permission-approval-model-label = 自動核准模型
+settings-field-permission-approval-model-label = 全域自動審批模型
 
 settings-field-permission-approval-model-description = 用於自動權限決策的模型及 think/speed variant；不可用時自動回退到 ask
+settings-workspace-approval-model-label = 工作區自動審批模型
+settings-workspace-approval-model-description = 目前工作區專案設定中儲存的審批模型，會覆寫此處的全域選擇。
 
 settings-field-ui-locale-label = 語言
 
@@ -698,9 +700,11 @@ settings-provider-workbench-value = {$count} 個服務商
 
 settings-provider-workbench-detail = 先打開可搜索的服務商列表，再配置認證、adapter、模型路由或新建服務商。
 
-settings-global-default-model-label = 預設模型
+settings-global-default-model-label = 全域預設模型
 
 settings-global-default-model-description = 工作階段未指定模型時使用的模型；明確指定的工作階段模型永遠優先。
+settings-workspace-default-model-label = 工作區預設模型
+settings-workspace-default-model-description = 目前工作區專案設定中儲存的預設模型，會覆寫此處的全域預設值。
 
 settings-model-default-mode-inherit-detail = 使用所選 model 的原生預設模式。
 
@@ -1463,6 +1467,8 @@ flash-session-busy = 會話正忙
 flash-provider-not-found = 找不到提供者：{ $provider }
 flash-permission-approval-model-updated = 自動核准模型更新：{ $provider }/{ $model }
 flash-global-default-model-updated = 已更新全域預設模型：{ $provider }/{ $model }
+flash-workspace-default-model-updated = 已更新工作區預設模型：{$provider}/{$model}
+flash-workspace-approval-model-updated = 已更新工作區自動審批模型：{$provider}/{$model}
 flash-provider-studio-adapter-required = 首先選擇一個適配器
 flash-provider-studio-adapter-not-enabled = 新增型號之前檢查所選適配器
 flash-provider-studio-adapter-unavailable = 目前的身份驗證模式不允許選擇此適配器

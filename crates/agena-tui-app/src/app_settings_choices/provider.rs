@@ -58,6 +58,19 @@ impl App {
                 );
                 false
             }
+            agena_tui::model_chooser::SessionModelChooserPurpose::WorkspaceDefault => {
+                self.dispatch_backend_operation(
+                    move |application| async move {
+                        application
+                            .set_workspace_config_setting("providers.default_selection", selection)
+                            .await
+                    },
+                    move |app, result| {
+                        app.finish_model_selection_persisted(purpose, model, result.map(|_| ()))
+                    },
+                );
+                false
+            }
             agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
                 let mut approval = serde_json::Map::new();
                 approval.insert(
@@ -92,6 +105,40 @@ impl App {
                 );
                 false
             }
+            agena_tui::model_chooser::SessionModelChooserPurpose::WorkspacePermissionApproval => {
+                let mut approval = serde_json::Map::new();
+                approval.insert(
+                    "provider".to_owned(),
+                    JsonValue::String(model.provider_id.to_string()),
+                );
+                if let Some(adapter_id) = model.adapter_id.as_ref() {
+                    approval.insert(
+                        "adapter".to_owned(),
+                        JsonValue::String(adapter_id.to_string()),
+                    );
+                }
+                approval.insert(
+                    "model".to_owned(),
+                    JsonValue::String(model.model_id.to_string()),
+                );
+                insert_optional_selection_value(&mut approval, "thinking_mode", thinking_mode);
+                insert_optional_selection_value(&mut approval, "speed_mode", speed_mode);
+                insert_optional_selection_value(&mut approval, "verbosity", verbosity);
+                self.dispatch_backend_operation(
+                    move |application| async move {
+                        application
+                            .set_workspace_config_setting(
+                                "permission.approval_model",
+                                JsonValue::Object(approval),
+                            )
+                            .await
+                    },
+                    move |app, result| {
+                        app.finish_model_selection_persisted(purpose, model, result.map(|_| ()))
+                    },
+                );
+                false
+            }
             agena_tui::model_chooser::SessionModelChooserPurpose::RuntimeOverride => {
                 self.finish_model_selection_persisted(purpose, model, Ok(()));
                 true
@@ -112,8 +159,14 @@ impl App {
                         agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
                             "flash-permission-approval-model-updated"
                         }
+                        agena_tui::model_chooser::SessionModelChooserPurpose::WorkspacePermissionApproval => {
+                            "flash-workspace-approval-model-updated"
+                        }
                         agena_tui::model_chooser::SessionModelChooserPurpose::GlobalDefault => {
                             "flash-global-default-model-updated"
+                        }
+                        agena_tui::model_chooser::SessionModelChooserPurpose::WorkspaceDefault => {
+                            "flash-workspace-default-model-updated"
                         }
                         agena_tui::model_chooser::SessionModelChooserPurpose::RuntimeOverride => {
                             "flash-model-selected"
@@ -135,6 +188,36 @@ impl App {
                 self.flash_error(error);
             }
         }
+    }
+
+    /// Default model stored in the workspace (project) layer. The effective
+    /// value keeps its own reader; this one answers what this workspace
+    /// override holds so the chooser can mark it.
+    pub(crate) fn current_workspace_default_model_ref(&self) -> Option<ModelRef> {
+        let sources = crate::app_backend::config::config_json_sources(&self.application).ok()?;
+        let selection = get_json_path(&sources.project_file, Some("providers.default_selection"))
+            .ok()
+            .and_then(|value| {
+                serde_json::from_value::<agena_domain::ModelSelectionConfig>(value).ok()
+            })?;
+        let (provider_id, model_id) = (selection.provider?, selection.model?);
+        match selection.adapter.as_deref() {
+            Some(adapter_id) => {
+                ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id).ok()
+            }
+            None => ModelRef::try_new(provider_id, model_id).ok(),
+        }
+    }
+
+    /// Automatic approval model stored in the workspace (project) layer.
+    pub(crate) fn current_workspace_permission_approval_model_ref(&self) -> Option<ModelRef> {
+        let sources = crate::app_backend::config::config_json_sources(&self.application).ok()?;
+        let approval = get_json_path(&sources.project_file, Some("permission.approval_model"))
+            .ok()
+            .and_then(|value| {
+                serde_json::from_value::<agena_domain::ApprovalModelSelection>(value).ok()
+            })?;
+        approval.model_ref().ok()
     }
 
     pub(crate) fn current_permission_approval_model_ref(&self) -> Option<ModelRef> {

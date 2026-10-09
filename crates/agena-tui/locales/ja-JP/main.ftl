@@ -411,7 +411,7 @@ settings-runtime-verbosity-label = ヴェルボシティ
 
 settings-runtime-verbosity-description = 現在のセッションの動詞オーバーライド
 
-settings-field-permission-approval-model-label = 自動承認モデル
+settings-field-permission-approval-model-label = グローバル自動承認モデル
 
 settings-field-ui-locale-label = 言語
 
@@ -624,9 +624,11 @@ settings-provider-workbench-label = プロバイダーリスト
 
 settings-provider-workbench-value = {$count} プロバイダー
 
-settings-global-default-model-label = デフォルトモデル
+settings-global-default-model-label = グローバル既定モデル
 
 settings-global-default-model-description = セッションでモデルが指定されていない場合に使用するモデル。明示的なセッションモデルが常に優先されます。
+settings-workspace-default-model-label = ワークスペース既定モデル
+settings-workspace-default-model-description = このワークスペースのプロジェクト設定に保存された既定モデル。ここではグローバル既定より優先されます。
 
 settings-model-default-mode-inherit-detail = 選択したモデルのネイティブなデフォルトモードを使用します。
 
@@ -1175,6 +1177,8 @@ overlay-settings-section-runtime-session-description = 互換性のあるクラ�
 settings-permission-effective-detail = 読み取り専用 · グローバル、ワークスペース、セッションからマージされます。
 settings-permission-effective-read-only = 有効な権限は読み取り専用です。代わりにセッション、ワークスペース、またはグローバル ソースを編集してください。
 settings-field-permission-approval-model-description = 自動許可決定に使用されるモデルと思考/速度のバリアント。利用できない選択は「Ask」にフォールバックします
+settings-workspace-approval-model-label = ワークスペース自動承認モデル
+settings-workspace-approval-model-description = このワークスペースのプロジェクト設定に保存された承認モデル。ここではグローバル設定より優先されます。
 settings-field-tui-color-scheme-description = 端末の背景を自動的に検出するか、明るいパレットまたは暗いパレットを強制します
 settings-field-tui-graphics-description = サポートされている場合は、Kitty、Sixel、または iTerm2 を使用して画像とタイプセット式を表示します。変更は TUI を再起動した後に有効になります
 settings-field-activity-default-expanded-description = 種類固有のオーバーライドを持たないアクティビティのデフォルトの展開状態。推論の種類が明示的に設定されない限り、推論は拡張されたままになります。
@@ -1410,6 +1414,8 @@ flash-session-busy = セッションがビジーです
 flash-provider-not-found = プロバイダーが見つかりません: { $provider }
 flash-permission-approval-model-updated = 自動承認モデルが更新されました: { $provider }/{ $model }
 flash-global-default-model-updated = グローバルデフォルトモデルを更新しました: { $provider }/{ $model }
+flash-workspace-default-model-updated = ワークスペース既定モデルを更新しました：{$provider}/{$model}
+flash-workspace-approval-model-updated = ワークスペース自動承認モデルを更新しました：{$provider}/{$model}
 flash-provider-studio-adapter-required = 最初にアダプターを選択してください
 flash-provider-studio-adapter-not-enabled = モデルを追加する前に、選択したアダプターを確認してください
 flash-provider-studio-adapter-unavailable = 現在の認証モードでは、このアダプターを選択できません

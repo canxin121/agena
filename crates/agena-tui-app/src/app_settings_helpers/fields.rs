@@ -365,6 +365,7 @@ pub(crate) fn settings_studio_provider_items(
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
     let mut items = vec![settings_studio_provider_workbench_item(i18n, providers)];
     items.push(settings_studio_global_default_model_item(i18n, sources));
+    items.push(settings_studio_workspace_default_model_item(i18n, sources));
     items.extend(
         settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ModelsProviders)
             .into_iter()
@@ -403,6 +404,42 @@ pub(crate) fn settings_studio_global_default_model_item(
         Some(effective_summary),
         source_rows,
         SettingsPickerAction::OpenGlobalDefaultModelChooser,
+    )
+}
+
+/// Workspace (project) layer of the default model. Kept beside the global
+/// item so both layers are visible and independently editable, mirroring the
+/// permission studio's global/workspace entries.
+pub(crate) fn settings_studio_workspace_default_model_item(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+) -> SettingsStudioItem<SettingsPickerAction> {
+    let workspace_value = get_json_path(&sources.project_file, Some("providers.default_selection"))
+        .unwrap_or(JsonValue::Null);
+    let effective_value = get_json_path(&sources.effective, Some("providers.default_selection"))
+        .unwrap_or(JsonValue::Null);
+    let effective_summary = global_default_selection_summary(i18n, &effective_value);
+    let workspace_summary = if workspace_value.is_null() {
+        ui_text::t(i18n, "settings-source-unset")
+    } else {
+        global_default_selection_summary(i18n, &workspace_value)
+    };
+    let source_rows = settings_source_rows_for_workspace_config_path(
+        i18n,
+        sources,
+        "providers.default_selection",
+        workspace_summary.clone(),
+        effective_summary.clone(),
+    );
+    SettingsStudioItem::from_parts(
+        ui_text::t(i18n, "settings-workspace-default-model-label"),
+        workspace_summary.clone(),
+        ui_text::t(i18n, "settings-workspace-default-model-description"),
+        Some("providers.default_selection".to_owned()),
+        Some(workspace_summary),
+        Some(effective_summary),
+        source_rows,
+        SettingsPickerAction::OpenWorkspaceDefaultModelChooser,
     )
 }
 
@@ -489,6 +526,42 @@ pub(crate) fn settings_studio_provider_approval_model_item(
         Some(effective_summary),
         source_rows,
         SettingsPickerAction::OpenPermissionApprovalModelChooser,
+    )
+}
+
+/// Workspace (project) layer of the automatic approval model.
+pub(crate) fn settings_studio_workspace_provider_approval_model_item(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    workspace_permission: &agena_domain::PermissionConfig,
+    effective_permission: &agena_domain::PermissionConfig,
+) -> SettingsStudioItem<SettingsPickerAction> {
+    let workspace_summary = workspace_permission
+        .approval_model
+        .as_ref()
+        .map(approval_model_selection_summary)
+        .unwrap_or_else(|| ui_text::t(i18n, "settings-source-unset"));
+    let effective_summary = effective_permission
+        .approval_model
+        .as_ref()
+        .map(approval_model_selection_summary)
+        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"));
+    let source_rows = settings_source_rows_for_workspace_config_path(
+        i18n,
+        sources,
+        "permission.approval_model",
+        workspace_summary.clone(),
+        effective_summary.clone(),
+    );
+    SettingsStudioItem::from_parts(
+        ui_text::t(i18n, "settings-workspace-approval-model-label"),
+        workspace_summary.clone(),
+        ui_text::t(i18n, "settings-workspace-approval-model-description"),
+        Some("permission.approval_model".to_owned()),
+        Some(workspace_summary),
+        Some(effective_summary),
+        source_rows,
+        SettingsPickerAction::OpenWorkspacePermissionApprovalModelChooser,
     )
 }
 

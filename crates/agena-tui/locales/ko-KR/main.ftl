@@ -411,7 +411,7 @@ settings-runtime-verbosity-label = 언어 선택
 
 settings-runtime-verbosity-description = 현재 세션 동사성 override
 
-settings-field-permission-approval-model-label = 자동 승인 모델
+settings-field-permission-approval-model-label = 전역 자동 승인 모델
 
 settings-field-ui-locale-label = 언어
 
@@ -624,9 +624,11 @@ settings-provider-workbench-label = 공급자 명부
 
 settings-provider-workbench-value = {$count} 공급자 (s)
 
-settings-global-default-model-label = 기본 모델
+settings-global-default-model-label = 전역 기본 모델
 
 settings-global-default-model-description = 세션에서 모델을 지정하지 않았을 때 사용하는 모델입니다. 명시적인 세션 모델이 항상 우선합니다.
+settings-workspace-default-model-label = 워크스페이스 기본 모델
+settings-workspace-default-model-description = 이 워크스페이스의 프로젝트 구성에 저장된 기본 모델로, 여기서는 전역 기본값을 덮어씁니다.
 
 settings-model-default-mode-inherit-detail = 선택한 모델의 네이티브 기본 모드를 사용합니다.
 
@@ -1174,6 +1176,8 @@ overlay-settings-section-runtime-session-description = 호환성 클라이언트
 settings-permission-effective-detail = 읽기 전용 · 전역, 작업 공간 및 세션에서 병합되었습니다.
 settings-permission-effective-read-only = 유효 권한은 읽기 전용입니다. 대신 세션, 작업공간 또는 전역 소스를 편집하세요.
 settings-field-permission-approval-model-description = 자동 권한 결정에 사용되는 모델 및 사고/속도 변형. 사용할 수 없는 선택 항목은 질문으로 대체됩니다.
+settings-workspace-approval-model-label = 워크스페이스 자동 승인 모델
+settings-workspace-approval-model-description = 이 워크스페이스의 프로젝트 구성에 저장된 승인 모델로, 여기서는 전역 선택을 덮어씁니다.
 settings-field-tui-color-scheme-description = 터미널 배경을 자동으로 감지하거나 밝거나 어두운 팔레트를 강제 적용합니다.
 settings-field-tui-graphics-description = 지원되는 경우 Kitty, Sixel 또는 iTerm2를 사용하여 이미지 및 조판 수식을 표시합니다. TUI를 다시 시작하면 변경 사항이 적용됩니다.
 settings-field-activity-default-expanded-description = 종류별 재정의가 없는 활동의 기본 확장 상태입니다. 추론의 종류가 명시적으로 설정되지 않는 한 추론은 확장된 상태로 유지됩니다.
@@ -1409,6 +1413,8 @@ flash-session-busy = 세션이 바빠요
 flash-provider-not-found = 공급자를 찾을 수 없습니다: { $provider }
 flash-permission-approval-model-updated = 자동 승인 모델 업데이트됨: { $provider }/{ $model }
 flash-global-default-model-updated = 전역 기본 모델이 업데이트되었습니다: { $provider }/{ $model }
+flash-workspace-default-model-updated = 워크스페이스 기본 모델 업데이트됨: {$provider}/{$model}
+flash-workspace-approval-model-updated = 워크스페이스 자동 승인 모델 업데이트됨: {$provider}/{$model}
 flash-provider-studio-adapter-required = 먼저 어댑터를 선택하세요
 flash-provider-studio-adapter-not-enabled = 모델을 추가하기 전에 선택한 어댑터를 확인하세요
 flash-provider-studio-adapter-unavailable = 현재 인증 모드에서는 이 어댑터를 선택할 수 없습니다.

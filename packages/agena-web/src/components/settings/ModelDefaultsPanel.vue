@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { RiRefreshLine, RiSave3Line } from '@remixicon/vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
 import ApprovalModelPanel from '@/components/settings/ApprovalModelPanel.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
-import { apiJson } from '@/lib/api'
-import { mutateModelConfiguration } from '@/lib/modelConfigurationApi'
-import { buildDefaultModelSettingsPatch, sameServerModelIdentity } from '@/lib/serverModelSettings'
+import { sameServerModelIdentity } from '@/lib/serverModelSettings'
+import {
+  deleteRuntimeSetting,
+  hasPersistedSetting,
+  readRuntimeSettingSources,
+  setRuntimeSetting,
+  type RuntimeSettingsReadBundle,
+} from '@/lib/runtimeSettings'
 import {
   defaultModeValue,
   speedModeOptionsForModel,
@@ -20,33 +25,93 @@ import {
 } from '@/pages/chat/modelSelectionCatalog'
 import { encodeModelSelectionKey, parseModelSlug } from '@/pages/chat/modelSelectionDefaults'
 import { useToastsStore } from '@/stores/toasts'
+import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 
-type RuntimeStatus = {
-  default_selection?: {
-    provider?: string | null
-    adapter?: string | null
-    model?: string | null
-    thinking_mode?: string | null
-    speed_mode?: string | null
-    verbosity?: string | null
-    parallel_tool_calls?: boolean | null
-  } | null
+type ModelDefaultScope = 'effective' | 'global' | 'workspace'
+
+type ModelSelectionValue = {
+  provider?: string | null
+  adapter?: string | null
+  model?: string | null
+  thinking_mode?: string | null
+  speed_mode?: string | null
+  verbosity?: string | null
+  parallel_tool_calls?: boolean | null
 }
+
+const DEFAULT_SELECTION_PATH = 'providers.default_selection'
 
 const toasts = useToastsStore()
 const modelSelectionCatalog = useModelSelectionCatalog()
 
+const scope = ref<ModelDefaultScope>('effective')
 const loading = ref(false)
 const error = ref('')
-const runtime = ref<RuntimeStatus | null>(null)
-const defaultModelKey = ref('')
-const defaultThinkingMode = ref('')
-const defaultSpeedMode = ref('')
-const defaultVerbosity = ref('')
-const defaultParallelToolCalls = ref(false)
-const defaultSaveBusy = ref(false)
-const defaultSaveError = ref('')
+const sources = ref<RuntimeSettingsReadBundle | null>(null)
+const modelKey = ref('')
+const thinkingMode = ref('')
+const speedMode = ref('')
+const verbosity = ref('')
+const parallelToolCalls = ref(false)
+const saveBusy = ref(false)
+const saveError = ref('')
+
+const editable = computed(() => scope.value !== 'effective')
+const selectedLayer = computed<'global' | 'workspace' | null>(() =>
+  editable.value ? (scope.value as 'global' | 'workspace') : null,
+)
+
+function asSelection(value: JsonValue | undefined): ModelSelectionValue {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value as ModelSelectionValue
+}
+
+const layerSelections = computed(() => ({
+  effective: asSelection(sources.value?.effective?.value),
+  global: asSelection(sources.value?.global?.value),
+  workspace: asSelection(sources.value?.workspace?.value),
+}))
+
+function selectionLabel(selection: ModelSelectionValue): string {
+  const provider = String(selection.provider || '').trim()
+  const model = String(selection.model || '').trim()
+  if (!provider || !model) return st('Unset')
+  return [provider, String(selection.adapter || '').trim(), model].filter(Boolean).join(' / ')
+}
+
+const scopeOptions = computed(() => [
+  {
+    value: 'effective' as const,
+    label: st('Effective default'),
+    description: st('Read-only merged default.'),
+    summary: selectionLabel(layerSelections.value.effective),
+  },
+  {
+    value: 'global' as const,
+    label: st('Global default'),
+    description: st('Baseline for every workspace.'),
+    summary: selectionLabel(layerSelections.value.global),
+  },
+  {
+    value: 'workspace' as const,
+    label: st('Workspace default'),
+    description: st('Overrides the global default for this workspace.'),
+    summary: selectionLabel(layerSelections.value.workspace),
+  },
+])
+
+const activeScopeOption = computed(
+  () => scopeOptions.value.find((option) => option.value === scope.value) || scopeOptions.value[0],
+)
+
+const layerOverridePersisted = computed(() => {
+  if (!editable.value) return false
+  const response = scope.value === 'workspace' ? sources.value?.workspace : sources.value?.global
+  return hasPersistedSetting(response)
+})
+
+const layerOverrideLabel = computed(() => (scope.value === 'workspace' ? st('Workspace') : st('Global')))
 
 const defaultModelOptions = computed(() => {
   const options: Array<{ value: string; label: string; description: string }> = []
@@ -67,7 +132,7 @@ const defaultModelOptions = computed(() => {
   )
 })
 
-const selectedDefaultIdentity = computed(() => parseModelSlug(defaultModelKey.value))
+const selectedDefaultIdentity = computed(() => parseModelSlug(modelKey.value))
 const selectedDefaultModel = computed(() => {
   const selection = selectedDefaultIdentity.value
   return modelSelectionCatalog.modelMetaFor(selection.provider, selection.model, selection.adapter)
@@ -80,51 +145,51 @@ function withSelectedMode(options: ModelModeOption[], selected: string): ModelMo
 }
 
 const defaultThinkingOptions = computed(() =>
-  withSelectedMode(thinkingModeOptionsForModel(selectedDefaultModel.value), defaultThinkingMode.value),
+  withSelectedMode(thinkingModeOptionsForModel(selectedDefaultModel.value), thinkingMode.value),
 )
 const defaultSpeedOptions = computed(() =>
-  withSelectedMode(speedModeOptionsForModel(selectedDefaultModel.value), defaultSpeedMode.value),
+  withSelectedMode(speedModeOptionsForModel(selectedDefaultModel.value), speedMode.value),
 )
 const defaultVerbosityOptions = computed(() =>
-  withSelectedMode(verbosityOptionsForModel(selectedDefaultModel.value), defaultVerbosity.value),
+  withSelectedMode(verbosityOptionsForModel(selectedDefaultModel.value), verbosity.value),
 )
 const selectedSupportsParallelTools = computed(() => supportsParallelToolCallsForModel(selectedDefaultModel.value))
 
-function syncDefaultEditor() {
-  const selection = runtime.value?.default_selection
-  defaultModelKey.value = encodeModelSelectionKey({
-    provider: String(selection?.provider || ''),
-    adapter: String(selection?.adapter || ''),
-    model: String(selection?.model || ''),
+function syncEditor() {
+  const selection = layerSelections.value[scope.value]
+  modelKey.value = encodeModelSelectionKey({
+    provider: String(selection.provider || ''),
+    adapter: String(selection.adapter || ''),
+    model: String(selection.model || ''),
   })
-  defaultThinkingMode.value = String(selection?.thinking_mode || '').trim()
-  defaultSpeedMode.value = String(selection?.speed_mode || '').trim()
-  defaultVerbosity.value = String(selection?.verbosity || '').trim()
-  defaultParallelToolCalls.value = selection?.parallel_tool_calls === true
-  defaultSaveError.value = ''
+  thinkingMode.value = String(selection.thinking_mode || '').trim()
+  speedMode.value = String(selection.speed_mode || '').trim()
+  verbosity.value = String(selection.verbosity || '').trim()
+  parallelToolCalls.value = selection.parallel_tool_calls === true
+  saveError.value = ''
 }
 
 function chooseDefaultModel(value: string) {
-  defaultModelKey.value = value
+  modelKey.value = value
   const selection = parseModelSlug(value)
   const model = modelSelectionCatalog.modelMetaFor(selection.provider, selection.model, selection.adapter)
-  defaultThinkingMode.value = defaultModeValue(thinkingModeOptionsForModel(model))
-  defaultSpeedMode.value = defaultModeValue(speedModeOptionsForModel(model))
-  defaultVerbosity.value = defaultModeValue(verbosityOptionsForModel(model))
-  defaultParallelToolCalls.value = false
-  defaultSaveError.value = ''
+  thinkingMode.value = defaultModeValue(thinkingModeOptionsForModel(model))
+  speedMode.value = defaultModeValue(speedModeOptionsForModel(model))
+  verbosity.value = defaultModeValue(verbosityOptionsForModel(model))
+  parallelToolCalls.value = false
+  saveError.value = ''
 }
 
 async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [runtimeData] = await Promise.all([
-      apiJson<RuntimeStatus>('/api/v1/runtime'),
+    const [bundle] = await Promise.all([
+      readRuntimeSettingSources(DEFAULT_SELECTION_PATH),
       modelSelectionCatalog.loadProvidersAndModels(),
     ])
-    runtime.value = runtimeData && typeof runtimeData === 'object' ? runtimeData : null
-    syncDefaultEditor()
+    sources.value = bundle
+    syncEditor()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -133,53 +198,65 @@ async function refresh() {
 }
 
 async function saveDefaultSelection() {
-  if (defaultSaveBusy.value) return
+  const layer = selectedLayer.value
+  if (!layer || saveBusy.value) return
   const selected = selectedDefaultIdentity.value
   if (!selected.provider || !selected.model) {
-    defaultSaveError.value = st('Select a configured model.')
+    saveError.value = st('Select a configured model.')
     return
   }
 
-  defaultSaveBusy.value = true
-  defaultSaveError.value = ''
-  const desiredThinkingMode = defaultThinkingMode.value.trim()
-  const desiredSpeedMode = defaultSpeedMode.value.trim()
-  const desiredVerbosity = defaultVerbosity.value.trim()
-  const desiredParallelTools = selectedSupportsParallelTools.value ? defaultParallelToolCalls.value : undefined
+  saveBusy.value = true
+  saveError.value = ''
+  const device = { thinking_mode: thinkingMode.value.trim(), speed_mode: speedMode.value.trim() }
+  const selection: Record<string, JsonValue> = {
+    provider: selected.provider,
+    ...(selected.adapter ? { adapter: selected.adapter } : {}),
+    model: selected.model,
+    ...(device.thinking_mode ? { thinking_mode: device.thinking_mode } : {}),
+    ...(device.speed_mode ? { speed_mode: device.speed_mode } : {}),
+    ...(verbosity.value.trim() ? { verbosity: verbosity.value.trim() } : {}),
+    ...(selectedSupportsParallelTools.value ? { parallel_tool_calls: parallelToolCalls.value } : {}),
+  }
   try {
-    await mutateModelConfiguration('/api/v1/settings', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(
-        buildDefaultModelSettingsPatch(selected, {
-          ...(desiredThinkingMode ? { thinkingMode: desiredThinkingMode } : {}),
-          ...(desiredSpeedMode ? { speedMode: desiredSpeedMode } : {}),
-          ...(desiredVerbosity ? { verbosity: desiredVerbosity } : {}),
-          ...(typeof desiredParallelTools === 'boolean' ? { parallelToolCalls: desiredParallelTools } : {}),
-        }),
-      ),
-    })
+    await setRuntimeSetting(DEFAULT_SELECTION_PATH, selection, { reload: true }, layer)
     await refresh()
-    const applied = runtime.value?.default_selection
-    if (
-      !sameServerModelIdentity(applied, selected) ||
-      String(applied?.thinking_mode || '').trim() !== desiredThinkingMode ||
-      String(applied?.speed_mode || '').trim() !== desiredSpeedMode ||
-      String(applied?.verbosity || '').trim() !== desiredVerbosity ||
-      (typeof desiredParallelTools === 'boolean' && applied?.parallel_tool_calls !== desiredParallelTools)
-    ) {
+    const applied = layerSelections.value[layer]
+    if (!sameServerModelIdentity(applied, selected)) {
       throw new Error(st('The server accepted the update but did not apply the selected default.'))
     }
-    toasts.push('success', st('Runtime default model updated'))
+    toasts.push('success', st('Default model updated'))
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason)
-    defaultSaveError.value = message
+    saveError.value = message
     toasts.push('error', message)
   } finally {
-    defaultSaveBusy.value = false
+    saveBusy.value = false
   }
 }
 
+async function clearLayerOverride() {
+  const layer = selectedLayer.value
+  if (!layer || saveBusy.value) return
+  saveBusy.value = true
+  saveError.value = ''
+  try {
+    await deleteRuntimeSetting(DEFAULT_SELECTION_PATH, { reload: true }, layer)
+    await refresh()
+    toasts.push(
+      'success',
+      st('{layer} override cleared: {path}', { layer: layerOverrideLabel.value, path: DEFAULT_SELECTION_PATH }),
+    )
+  } catch (reason) {
+    const message = reason instanceof Error ? reason.message : String(reason)
+    saveError.value = message
+    toasts.push('error', message)
+  } finally {
+    saveBusy.value = false
+  }
+}
+
+watch(scope, () => syncEditor())
 onMounted(() => void refresh())
 </script>
 
@@ -192,28 +269,60 @@ onMounted(() => void refresh())
       {{ error }}
     </div>
 
+    <nav class="flex flex-wrap gap-1 border-b border-border/60 pb-2" :aria-label="$st('Model default source')">
+      <button
+        v-for="option in scopeOptions"
+        :key="option.value"
+        type="button"
+        class="min-h-9 rounded-md border px-3 py-1.5 text-left text-xs"
+        :class="scope === option.value ? 'border-primary bg-primary/10' : 'border-border/60 hover:bg-muted/40'"
+        :aria-current="scope === option.value ? 'page' : undefined"
+        @click="scope = option.value"
+      >
+        <span class="font-medium">{{ option.label }}</span>
+        <span
+          class="ml-2 hidden max-w-[22rem] truncate align-bottom font-mono text-[10px] text-muted-foreground sm:inline"
+        >
+          {{ option.summary }}
+        </span>
+      </button>
+    </nav>
+    <div class="text-xs text-muted-foreground">{{ activeScopeOption.description }}</div>
+
     <section class="grid gap-4 rounded-lg border border-border/60 p-4">
-      <div>
-        <h2 class="text-sm font-semibold">{{ $st('Runtime default model') }}</h2>
-        <p class="mt-1 text-xs leading-5 text-muted-foreground">
-          {{
-            $st(
-              'Used when a new run does not provide an explicit model. Provider settings do not define a separate default.',
-            )
-          }}
-        </p>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold">{{ $st('Default model') }}</h2>
+          <p class="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
+            {{
+              $st(
+                'Used when a new run does not provide an explicit model. Provider settings do not define a separate default.',
+              )
+            }}
+          </p>
+        </div>
+        <IconButton
+          variant="outline"
+          size="md"
+          :tooltip="loading ? $st('Refreshing model settings') : $st('Refresh model settings')"
+          :aria-label="loading ? $st('Refreshing model settings') : $st('Refresh model settings')"
+          :disabled="loading || saveBusy"
+          @click="refresh"
+        >
+          <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
+        </IconButton>
       </div>
       <div class="grid gap-3 xl:grid-cols-2">
         <label class="grid min-w-0 gap-1.5 xl:col-span-2">
           <span class="text-xs text-muted-foreground">{{ $st('Model route') }}</span>
           <OptionPicker
-            :model-value="defaultModelKey"
+            :model-value="modelKey"
             :options="defaultModelOptions"
-            :title="$st('Runtime default model')"
+            :title="$st('Default model')"
             :placeholder="$st('Select a configured model')"
             :search-placeholder="$st('Search configured models...')"
             :include-empty="false"
-            :disabled="loading || defaultSaveBusy"
+            :disabled="loading || saveBusy || !editable"
             monospace
             @update:model-value="chooseDefaultModel"
           />
@@ -221,38 +330,38 @@ onMounted(() => void refresh())
         <label class="grid min-w-0 gap-1.5">
           <span class="text-xs text-muted-foreground">{{ $st('Thinking') }}</span>
           <OptionPicker
-            v-model="defaultThinkingMode"
+            v-model="thinkingMode"
             :options="defaultThinkingOptions"
             :title="$st('Default thinking mode')"
             :empty-label="$st('Model default')"
-            :disabled="loading || defaultSaveBusy || !defaultModelKey"
+            :disabled="loading || saveBusy || !editable || !modelKey"
           />
         </label>
         <label class="grid min-w-0 gap-1.5">
           <span class="text-xs text-muted-foreground">{{ $st('Speed') }}</span>
           <OptionPicker
-            v-model="defaultSpeedMode"
+            v-model="speedMode"
             :options="defaultSpeedOptions"
             :title="$st('Default speed mode')"
             :empty-label="$st('Model default')"
-            :disabled="loading || defaultSaveBusy || !defaultModelKey"
+            :disabled="loading || saveBusy || !editable || !modelKey"
           />
         </label>
         <label class="grid min-w-0 gap-1.5">
           <span class="text-xs text-muted-foreground">{{ $st('Verbosity') }}</span>
           <OptionPicker
-            v-model="defaultVerbosity"
+            v-model="verbosity"
             :options="defaultVerbosityOptions"
             :title="$st('Default verbosity')"
             :empty-label="$st('Model default')"
-            :disabled="loading || defaultSaveBusy || !defaultModelKey || defaultVerbosityOptions.length === 0"
+            :disabled="loading || saveBusy || !editable || !modelKey || defaultVerbosityOptions.length === 0"
           />
         </label>
         <label class="flex min-h-9 items-center gap-2 rounded-md border border-border/60 px-3 text-sm">
           <input
-            v-model="defaultParallelToolCalls"
+            v-model="parallelToolCalls"
             type="checkbox"
-            :disabled="loading || defaultSaveBusy || !selectedSupportsParallelTools"
+            :disabled="loading || saveBusy || !editable || !selectedSupportsParallelTools"
           />
           <span>
             {{ $st('Parallel tool calls') }}
@@ -266,29 +375,28 @@ onMounted(() => void refresh())
         <div v-if="modelSelectionCatalog.catalogError.value" class="break-words text-xs text-destructive">
           {{ modelSelectionCatalog.catalogError.value }}
         </div>
-        <div v-else-if="defaultSaveError" class="break-words text-xs text-destructive">{{ defaultSaveError }}</div>
-        <span v-else class="text-xs text-muted-foreground">{{
-          $st('Clear a mode to inherit the model’s native default.')
-        }}</span>
-        <div class="flex items-center gap-2">
-          <IconButton
+        <div v-else-if="saveError" class="break-words text-xs text-destructive">{{ saveError }}</div>
+        <span v-else class="text-xs text-muted-foreground">
+          {{ $st('Clear a mode to inherit the model’s native default.') }}
+        </span>
+        <div v-if="editable" class="flex items-center gap-2">
+          <Button
+            v-if="layerOverridePersisted"
             variant="outline"
-            size="md"
-            :tooltip="loading ? $st('Refreshing model settings') : $st('Refresh model settings')"
-            :aria-label="loading ? $st('Refreshing model settings') : $st('Refresh model settings')"
-            :disabled="loading || defaultSaveBusy"
-            @click="refresh"
+            :disabled="loading || saveBusy"
+            @click="clearLayerOverride"
           >
-            <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-          </IconButton>
-          <Button :disabled="loading || defaultSaveBusy || !defaultModelKey" @click="saveDefaultSelection">
+            <RiDeleteBinLine class="mr-2 h-4 w-4" />
+            {{ $st('Clear {layer} override', { layer: layerOverrideLabel }) }}
+          </Button>
+          <Button :disabled="loading || saveBusy || !modelKey" @click="saveDefaultSelection">
             <RiSave3Line class="mr-2 h-4 w-4" />
-            {{ defaultSaveBusy ? $st('Saving…') : $st('Save runtime default') }}
+            {{ saveBusy ? $st('Saving…') : $st('Save default model') }}
           </Button>
         </div>
       </div>
     </section>
 
-    <ApprovalModelPanel />
+    <ApprovalModelPanel :scope="scope" />
   </div>
 </template>

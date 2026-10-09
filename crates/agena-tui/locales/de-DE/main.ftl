@@ -411,7 +411,7 @@ settings-runtime-verbosity-label = Prägung
 
 settings-runtime-verbosity-description = current-session verbosity überschreiben
 
-settings-field-permission-approval-model-label = Automatisches Freigabemodell
+settings-field-permission-approval-model-label = Globales automatisches Genehmigungsmodell
 
 settings-field-ui-locale-label = Sprache
 
@@ -624,9 +624,11 @@ settings-provider-workbench-label = Anbieterliste
 
 settings-provider-workbench-value = {$count} Anbieter(s)
 
-settings-global-default-model-label = Standardmodell
+settings-global-default-model-label = Globales Standardmodell
 
 settings-global-default-model-description = Modell für Sitzungen ohne eigene Modellangabe; ein explizites Sitzungsmodell hat immer Vorrang.
+settings-workspace-default-model-label = Standardmodell des Arbeitsbereichs
+settings-workspace-default-model-description = Im Projekt dieses Arbeitsbereichs gespeichertes Standardmodell; es überschreibt hier den globalen Standard.
 
 settings-model-default-mode-inherit-detail = Verwenden Sie den nativen Standardmodus des ausgewählten Modells.
 
@@ -1174,6 +1176,8 @@ overlay-settings-section-runtime-session-description = Konfigurieren Sie Kompati
 settings-permission-effective-detail = Schreibgeschützt · Zusammengeführt aus Global, Arbeitsbereich und Sitzung.
 settings-permission-effective-read-only = Die effektive Berechtigung ist schreibgeschützt; Bearbeiten Sie stattdessen die Sitzung, den Arbeitsbereich oder die globale Quelle.
 settings-field-permission-approval-model-description = Modell- und Denk-/Geschwindigkeitsvarianten, die für automatische Berechtigungsentscheidungen verwendet werden; Nicht verfügbare Auswahlmöglichkeiten fallen auf „Fragen“ zurück
+settings-workspace-approval-model-label = Automatisches Genehmigungsmodell des Arbeitsbereichs
+settings-workspace-approval-model-description = Im Projekt dieses Arbeitsbereichs gespeichertes Genehmigungsmodell; es überschreibt hier die globale Auswahl.
 settings-field-tui-color-scheme-description = Erkennen Sie automatisch den Hintergrund des Terminals oder erzwingen Sie eine helle oder dunkle Palette
 settings-field-tui-graphics-description = Zeigen Sie Bilder an und setzen Sie Formeln mit Kitty, Sixel oder iTerm2, sofern unterstützt; Änderungen werden nach einem Neustart der TUI wirksam
 settings-field-activity-default-expanded-description = Standarderweiterungsstatus für Aktivitäten ohne artspezifische Überschreibung. Die Argumentation bleibt erweitert, es sei denn, ihre Art wird explizit festgelegt.
@@ -1409,6 +1413,8 @@ flash-session-busy = Die Sitzung ist beschäftigt
 flash-provider-not-found = Anbieter nicht gefunden: { $provider }
 flash-permission-approval-model-updated = Automatisches Genehmigungsmodell aktualisiert: { $provider }/{ $model }
 flash-global-default-model-updated = Globales Standardmodell aktualisiert: { $provider }/{ $model }
+flash-workspace-default-model-updated = Standardmodell des Arbeitsbereichs aktualisiert: {$provider}/{$model}
+flash-workspace-approval-model-updated = automatisches Genehmigungsmodell des Arbeitsbereichs aktualisiert: {$provider}/{$model}
 flash-provider-studio-adapter-required = Wählen Sie zunächst einen Adapter aus
 flash-provider-studio-adapter-not-enabled = Überprüfen Sie den ausgewählten Adapter, bevor Sie ein Modell hinzufügen
 flash-provider-studio-adapter-unavailable = Der aktuelle Authentifizierungsmodus erlaubt die Auswahl dieses Adapters nicht

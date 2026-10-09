@@ -411,7 +411,7 @@ settings-runtime-verbosity-label = Verbosité
 
 settings-runtime-verbosity-description = verbosité de session actuelle
 
-settings-field-permission-approval-model-label = Modèle d’approbation automatique
+settings-field-permission-approval-model-label = Modèle d’approbation automatique global
 
 settings-field-ui-locale-label = Langue
 
@@ -624,9 +624,11 @@ settings-provider-workbench-label = Liste des fournisseurs
 
 settings-provider-workbench-value = {$count} fournisseur(s)
 
-settings-global-default-model-label = Modèle par défaut
+settings-global-default-model-label = Modèle par défaut global
 
 settings-global-default-model-description = Modèle utilisé lorsqu'une session n'en spécifie aucun ; un modèle de session explicite est toujours prioritaire.
+settings-workspace-default-model-label = Modèle par défaut de l’espace de travail
+settings-workspace-default-model-description = Modèle par défaut stocké dans la configuration du projet de cet espace de travail ; il remplace ici le défaut global.
 
 settings-model-default-mode-inherit-detail = Utilisez le mode natif par défaut du modèle sélectionné.
 
@@ -1174,6 +1176,8 @@ overlay-settings-section-runtime-session-description = Configurez les versions c
 settings-permission-effective-detail = Lecture seule · fusionné à partir du global, de l'espace de travail et de la session.
 settings-permission-effective-read-only = L'autorisation effective est en lecture seule ; modifiez plutôt la session, l'espace de travail ou la source globale.
 settings-field-permission-approval-model-description = Variantes de modèle et de réflexion/vitesse utilisées pour les décisions d'autorisation automatiques ; les sélections indisponibles reviennent à Ask
+settings-workspace-approval-model-label = Modèle d’approbation automatique de l’espace de travail
+settings-workspace-approval-model-description = Modèle d’approbation stocké dans la configuration du projet ; il remplace ici la sélection globale.
 settings-field-tui-color-scheme-description = Détecter automatiquement l'arrière-plan du terminal ou forcer une palette claire ou sombre
 settings-field-tui-graphics-description = Affichez des images et des formules de composition avec Kitty, Sixel ou iTerm2 lorsqu'ils sont pris en charge ; les modifications prennent effet après le redémarrage du TUI
 settings-field-activity-default-expanded-description = État d'expansion par défaut pour les activités sans remplacement spécifique au type. Le raisonnement reste étendu à moins que son type ne soit défini explicitement.
@@ -1409,6 +1413,8 @@ flash-session-busy = la séance est occupée
 flash-provider-not-found = fournisseur introuvable : { $provider }
 flash-permission-approval-model-updated = modèle d'approbation automatique mis à jour : { $provider }/{ $model }
 flash-global-default-model-updated = modèle global par défaut mis à jour : { $provider }/{ $model }
+flash-workspace-default-model-updated = modèle par défaut de l’espace de travail mis à jour : {$provider}/{$model}
+flash-workspace-approval-model-updated = modèle d’approbation automatique de l’espace de travail mis à jour : {$provider}/{$model}
 flash-provider-studio-adapter-required = sélectionnez d'abord un adaptateur
 flash-provider-studio-adapter-not-enabled = vérifiez l'adaptateur sélectionné avant d'ajouter un modèle
 flash-provider-studio-adapter-unavailable = le mode d'authentification actuel ne permet pas de sélectionner cet adaptateur

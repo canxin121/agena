@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { RiRefreshLine, RiSave3Line } from '@remixicon/vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
-import { apiJson } from '@/lib/api'
+import { sameServerModelIdentity } from '@/lib/serverModelSettings'
 import {
-  approvalModelFromSettingsResponse,
-  buildApprovalModelSettingsPatch,
-  sameServerModelIdentity,
-} from '@/lib/serverModelSettings'
+  deleteRuntimeSetting,
+  hasPersistedSetting,
+  readRuntimeSettingSources,
+  setRuntimeSetting,
+  type RuntimeSettingsReadBundle,
+} from '@/lib/runtimeSettings'
 import {
   defaultModeValue,
   speedModeOptionsForModel,
@@ -25,16 +27,39 @@ import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 
+const APPROVAL_MODEL_PATH = 'permission.approval_model'
+
+const props = withDefaults(
+  defineProps<{
+    scope?: 'effective' | 'global' | 'workspace'
+  }>(),
+  { scope: 'effective' },
+)
+
 const toasts = useToastsStore()
 const modelSelectionCatalog = useModelSelectionCatalog()
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
+const sources = ref<RuntimeSettingsReadBundle | null>(null)
 const modelKey = ref('')
 const thinkingMode = ref('')
 const speedMode = ref('')
 const verbosity = ref('')
 const parallelToolCalls = ref(false)
+
+const editable = computed(() => props.scope !== 'effective')
+const selectedLayer = computed<'global' | 'workspace' | null>(() =>
+  editable.value ? (props.scope as 'global' | 'workspace') : null,
+)
+function selectionValue(layer: 'effective' | 'global' | 'workspace'): JsonValue | undefined {
+  return sources.value?.[layer]?.value
+}
+
+const layerOverridePersisted = computed(() => {
+  if (!editable.value) return false
+  return hasPersistedSetting(props.scope === 'workspace' ? sources.value?.workspace : sources.value?.global)
+})
 
 const modelOptions = computed(() => {
   const options: Array<{ value: string; label: string; description: string }> = []
@@ -86,26 +111,30 @@ function chooseModel(value: string) {
   error.value = ''
 }
 
+function syncEditor() {
+  const value = selectionValue(props.scope)
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, JsonValue>) : {}
+  const provider = String(record.provider || '').trim()
+  const model = String(record.model || '').trim()
+  modelKey.value =
+    provider && model ? encodeModelSelectionKey({ provider, adapter: String(record.adapter || '').trim(), model }) : ''
+  thinkingMode.value = String(record.thinking_mode || '').trim()
+  speedMode.value = String(record.speed_mode || '').trim()
+  verbosity.value = String(record.verbosity || '').trim()
+  parallelToolCalls.value = record.parallel_tool_calls === true
+  error.value = ''
+}
+
 async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [settingsResponse] = await Promise.all([
-      apiJson<JsonValue>('/api/v1/settings?source=effective&path=permission.approval_model'),
+    const [bundle] = await Promise.all([
+      readRuntimeSettingSources(APPROVAL_MODEL_PATH),
       modelSelectionCatalog.loadProvidersAndModels(),
     ])
-    const approval = approvalModelFromSettingsResponse(settingsResponse)
-    modelKey.value = approval
-      ? encodeModelSelectionKey({
-          provider: approval.identity.provider,
-          adapter: approval.identity.adapter,
-          model: approval.identity.model,
-        })
-      : ''
-    thinkingMode.value = approval?.modes.thinkingMode || ''
-    speedMode.value = approval?.modes.speedMode || ''
-    verbosity.value = approval?.modes.verbosity || ''
-    parallelToolCalls.value = approval?.modes.parallelToolCalls === true
+    sources.value = bundle
+    syncEditor()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -114,6 +143,7 @@ async function refresh() {
 }
 
 async function save() {
+  const layer = selectedLayer.value
   if (saving.value) return
   const desired = selectedIdentity.value
   const hasSelection = Boolean(desired.provider && desired.model)
@@ -124,28 +154,28 @@ async function save() {
   saving.value = true
   error.value = ''
   try {
-    await apiJson('/api/v1/settings', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(
-        buildApprovalModelSettingsPatch(hasSelection ? desired : null, {
-          ...(desiredThinking ? { thinkingMode: desiredThinking } : {}),
-          ...(desiredSpeed ? { speedMode: desiredSpeed } : {}),
-          ...(desiredVerbosity ? { verbosity: desiredVerbosity } : {}),
-          ...(typeof desiredParallel === 'boolean' ? { parallelToolCalls: desiredParallel } : {}),
-        }),
-      ),
-    })
+    if (!hasSelection) {
+      if (!layer || !layerOverridePersisted.value) {
+        error.value = st('Select a configured model.')
+        return
+      }
+      await deleteRuntimeSetting(APPROVAL_MODEL_PATH, { reload: true }, layer)
+    } else {
+      if (!layer) return
+      const selection: Record<string, JsonValue> = {
+        provider: desired.provider,
+        ...(desired.adapter ? { adapter: desired.adapter } : {}),
+        model: desired.model,
+        ...(desiredThinking ? { thinking_mode: desiredThinking } : {}),
+        ...(desiredSpeed ? { speed_mode: desiredSpeed } : {}),
+        ...(desiredVerbosity ? { verbosity: desiredVerbosity } : {}),
+        ...(typeof desiredParallel === 'boolean' ? { parallel_tool_calls: desiredParallel } : {}),
+      }
+      await setRuntimeSetting(APPROVAL_MODEL_PATH, selection, { reload: true }, layer)
+    }
     await refresh()
-    const applied = selectedIdentity.value
-    if (
-      hasSelection !== Boolean(applied.provider && applied.model) ||
-      (hasSelection && !sameServerModelIdentity(applied, desired)) ||
-      (hasSelection && thinkingMode.value.trim() !== desiredThinking) ||
-      (hasSelection && speedMode.value.trim() !== desiredSpeed) ||
-      (hasSelection && verbosity.value.trim() !== desiredVerbosity) ||
-      (typeof desiredParallel === 'boolean' && parallelToolCalls.value !== desiredParallel)
-    ) {
+    const applied = layer && hasSelection ? selectionValue(layer) : undefined
+    if (hasSelection && !sameServerModelIdentity(applied, desired)) {
       throw new Error(st('The server accepted the update but did not apply the automatic approval model.'))
     }
     toasts.push(
@@ -161,6 +191,10 @@ async function save() {
   }
 }
 
+watch(
+  () => props.scope,
+  () => syncEditor(),
+)
 onMounted(() => void refresh())
 </script>
 
@@ -199,7 +233,7 @@ onMounted(() => void refresh())
           :empty-label="$st('No dedicated approval model')"
           :placeholder="$st('Select a configured model')"
           :search-placeholder="$st('Search configured models...')"
-          :disabled="loading || saving"
+          :disabled="loading || saving || !editable"
           monospace
           @update:model-value="chooseModel"
         />
@@ -211,7 +245,7 @@ onMounted(() => void refresh())
           :options="thinkingOptions"
           :title="$st('Approval thinking mode')"
           :empty-label="$st('Model default')"
-          :disabled="loading || saving || !modelKey"
+          :disabled="loading || saving || !editable || !modelKey"
         />
       </label>
       <label class="grid min-w-0 gap-1.5">
@@ -221,7 +255,7 @@ onMounted(() => void refresh())
           :options="speedOptions"
           :title="$st('Approval speed mode')"
           :empty-label="$st('Model default')"
-          :disabled="loading || saving || !modelKey"
+          :disabled="loading || saving || !editable || !modelKey"
         />
       </label>
       <label class="grid min-w-0 gap-1.5">
@@ -231,29 +265,39 @@ onMounted(() => void refresh())
           :options="verbosityOptions"
           :title="$st('Approval verbosity')"
           :empty-label="$st('Model default')"
-          :disabled="loading || saving || !modelKey || verbosityOptions.length === 0"
+          :disabled="loading || saving || !editable || !modelKey || verbosityOptions.length === 0"
         />
       </label>
       <label class="flex min-h-9 items-center gap-2 rounded-md border border-border/60 px-3 text-sm">
-        <input v-model="parallelToolCalls" type="checkbox" :disabled="loading || saving || !supportsParallelTools" />
+        <input
+          v-model="parallelToolCalls"
+          type="checkbox"
+          :disabled="loading || saving || !editable || !supportsParallelTools"
+        />
         <span>
           {{ $st('Parallel tool calls') }}
-          <span v-if="!supportsParallelTools" class="ml-1 text-xs text-muted-foreground">{{
-            $st('not supported')
-          }}</span>
+          <span v-if="!supportsParallelTools" class="ml-1 text-xs text-muted-foreground">
+            {{ $st('not supported') }}
+          </span>
         </span>
       </label>
     </div>
 
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div v-if="error" class="break-words text-xs text-destructive">{{ error }}</div>
-      <span v-else class="text-xs text-muted-foreground">{{
-        $st('All empty mode fields inherit the selected model defaults.')
-      }}</span>
-      <Button :disabled="loading || saving" @click="save">
-        <RiSave3Line class="mr-2 h-4 w-4" />
-        {{ saving ? $st('Saving…') : modelKey ? $st('Save approval model') : $st('Clear approval model') }}
-      </Button>
+      <span v-else class="text-xs text-muted-foreground">
+        {{ $st('All empty mode fields inherit the selected model defaults.') }}
+      </span>
+      <div v-if="editable" class="flex items-center gap-2">
+        <Button v-if="layerOverridePersisted" variant="outline" :disabled="loading || saving" @click="modelKey = ''">
+          <RiDeleteBinLine class="mr-2 h-4 w-4" />
+          {{ $st('Clear approval model') }}
+        </Button>
+        <Button :disabled="loading || saving" @click="save">
+          <RiSave3Line class="mr-2 h-4 w-4" />
+          {{ saving ? $st('Saving…') : $st('Save approval model') }}
+        </Button>
+      </div>
     </div>
   </section>
 </template>

@@ -3,7 +3,7 @@ use super::super::{
     settings_studio_activity_kind_items, settings_studio_activity_tool_items,
     settings_studio_field_items, settings_studio_mcp_items, settings_studio_permission_items,
     settings_studio_plugin_items, settings_studio_provider_approval_model_item,
-    settings_studio_provider_items,
+    settings_studio_provider_items, settings_studio_workspace_provider_approval_model_item,
 };
 
 impl App {
@@ -203,6 +203,12 @@ impl App {
             &self.i18n,
             &sources,
             &global_permission,
+            &effective_permission,
+        ));
+        provider_items.push(settings_studio_workspace_provider_approval_model_item(
+            &self.i18n,
+            &sources,
+            &workspace_permission,
             &effective_permission,
         ));
         provider_items.extend(settings_studio_model_catalog_items(

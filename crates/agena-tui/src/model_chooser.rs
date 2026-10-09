@@ -55,7 +55,9 @@ impl SessionModelIdentity {
 pub enum SessionModelChooserPurpose {
     RuntimeOverride,
     GlobalDefault,
+    WorkspaceDefault,
     PermissionApproval,
+    WorkspacePermissionApproval,
 }
 
 /// One display row in the session-model picker.

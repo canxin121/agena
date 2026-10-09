@@ -69,8 +69,16 @@ impl App {
         self.open_model_chooser(SessionModelChooserPurpose::GlobalDefault);
     }
 
+    pub(crate) fn open_workspace_default_model_chooser(&mut self) {
+        self.open_model_chooser(SessionModelChooserPurpose::WorkspaceDefault);
+    }
+
     pub(crate) fn open_permission_approval_model_chooser(&mut self) {
         self.open_model_chooser(SessionModelChooserPurpose::PermissionApproval);
+    }
+
+    pub(crate) fn open_workspace_permission_approval_model_chooser(&mut self) {
+        self.open_model_chooser(SessionModelChooserPurpose::WorkspacePermissionApproval);
     }
 
     fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
@@ -95,8 +103,14 @@ impl App {
                     SessionModelChooserPurpose::GlobalDefault => {
                         self.current_global_default_model_ref()
                     }
+                    SessionModelChooserPurpose::WorkspaceDefault => {
+                        self.current_workspace_default_model_ref()
+                    }
                     SessionModelChooserPurpose::PermissionApproval => {
                         self.current_permission_approval_model_ref()
+                    }
+                    SessionModelChooserPurpose::WorkspacePermissionApproval => {
+                        self.current_workspace_permission_approval_model_ref()
                     }
                 };
                 mark_current_session_model_choice(&self.i18n, &mut items, current_model.as_ref());

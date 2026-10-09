@@ -292,31 +292,18 @@ impl App {
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Close => true,
             agena_tui::model_chooser::SessionModelChooserReducerEffect::KeepOpen => false,
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
-                purpose: SessionModelChooserPurpose::RuntimeOverride,
-                identity,
-            } => self.apply_model_override(model_ref_from_session_model_identity(identity)),
-            agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
-                purpose: SessionModelChooserPurpose::GlobalDefault,
+                purpose,
                 identity,
             } => {
+                if purpose == SessionModelChooserPurpose::RuntimeOverride {
+                    return self
+                        .apply_model_override(model_ref_from_session_model_identity(identity));
+                }
+                // Every other purpose persists the picked model (and its modes)
+                // through the settings studio's own layer write.
                 let model = model_ref_from_session_model_identity(identity);
                 self.open_model_selection_mode_step_or_finish(
-                    SessionModelChooserPurpose::GlobalDefault,
-                    model,
-                    None,
-                    None,
-                    None,
-                    SessionModelModeStep::ThinkingMode,
-                );
-                false
-            }
-            agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
-                purpose: SessionModelChooserPurpose::PermissionApproval,
-                identity,
-            } => {
-                let model = model_ref_from_session_model_identity(identity);
-                self.open_model_selection_mode_step_or_finish(
-                    SessionModelChooserPurpose::PermissionApproval,
+                    purpose,
                     model,
                     None,
                     None,

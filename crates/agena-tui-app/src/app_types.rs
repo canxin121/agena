@@ -931,7 +931,7 @@ impl UiFailure {
     }
 
     pub(super) fn invalid_with_diagnostic(
-        message: &'static str,
+        message: impl Into<String>,
         diagnostic: impl std::fmt::Display,
     ) -> Self {
         let failure = agena_failure::Failure::new(
@@ -941,7 +941,7 @@ impl UiFailure {
             agena_failure::RetryDirective::CorrectInput,
             agena_failure::RecoveryDirective::None,
             agena_failure::FailureImpact::RequestRejected,
-            agena_failure::UserPresentation::new("ui-invalid-action", message),
+            agena_failure::UserPresentation::validated("ui-invalid-action", message.into()),
         );
         tracing::warn!(
             failure_id = %failure.id,

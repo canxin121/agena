@@ -21,12 +21,12 @@ impl App {
                 return;
             }
             dialog.editor = Some(EditorDialogState::new(
-                "Add Field".to_owned(),
-                format!(
-                    "Enter a field name for {}. If the schema allows multiple value types or shapes, the editor will prompt you after create.",
-                    path_display(&path)
+                self.i18n.text("workbench-editor-title-add-field"),
+                self.i18n.text_args(
+                    "workbench-editor-prompt-add-field",
+                    &agena_tui::fl_args!("path" => path_display(&path)),
                 ),
-                "Type to edit".to_owned(),
+                self.i18n.text("workbench-editor-placeholder-type-to-edit"),
                 false,
                 Editor::default(),
                 PluginConfigEditAction::AddObjectField { plugin_id, path },
@@ -34,7 +34,10 @@ impl App {
         } else if value.is_array() {
             self.append_config_array_item(dialog, plugin_id.as_str(), path.as_slice());
         } else {
-            self.flash_warning("add is available for object and array nodes".to_owned());
+            self.flash_warning(
+                self.i18n
+                    .text("workbench-warning-add-requires-object-or-array"),
+            );
         }
     }
 
@@ -74,9 +77,9 @@ impl App {
                 focus_path.as_slice(),
             );
         } else if !can_append {
-            self.flash_warning("cannot add another item at this array position".to_owned());
+            self.flash_warning(self.i18n.text("workbench-warning-cannot-add-item"));
         } else {
-            self.flash_warning("failed to append array item".to_owned());
+            self.flash_warning(self.i18n.text("workbench-error-append-array-item"));
         }
     }
 
@@ -197,8 +200,8 @@ impl App {
         }) {
             self.open_branch_selection_overlay(
                 dialog,
-                "Select Branch".to_owned(),
-                "Choose schema shape".to_owned(),
+                self.i18n.text("workbench-select-branch-title"),
+                self.i18n.text("workbench-select-branch-prompt"),
                 plugin.plugin_id.clone(),
                 row.primary_path.clone(),
                 branches,
@@ -238,8 +241,11 @@ impl App {
         }
         self.open_named_selection_overlay(
             dialog,
-            "Select Type".to_owned(),
-            format!("Choose JSON type for {}", path_display(&row.primary_path)),
+            self.i18n.text("workbench-select-type-title"),
+            self.i18n.text_args(
+                "workbench-select-type-prompt",
+                &agena_tui::fl_args!("path" => path_display(&row.primary_path)),
+            ),
             String::new(),
             false,
             choices
@@ -419,7 +425,10 @@ impl App {
             .unwrap_or_default()
             .to_owned();
         dialog.editor = Some(EditorDialogState::new(
-            format!("Edit {}", row.title),
+            self.i18n.text_args(
+                "workbench-editor-title-edit",
+                &agena_tui::fl_args!("title" => row.title),
+            ),
             field_prompt_for_path(plugin, &path),
             editor_save_footer(&self.i18n, false),
             false,
@@ -451,9 +460,12 @@ impl App {
             .map(|value| value.to_string())
             .unwrap_or_else(|| "0".to_owned());
         dialog.editor = Some(EditorDialogState::new(
-            format!("Edit {} · {}", row.title, label),
+            self.i18n.text_args(
+                "workbench-editor-title-edit-with-label",
+                &agena_tui::fl_args!("title" => row.title, "label" => label),
+            ),
             field_prompt_for_path(plugin, &path),
-            "Type to edit".to_owned(),
+            self.i18n.text("workbench-editor-placeholder-type-to-edit"),
             false,
             Editor::from_text(current),
             PluginConfigEditAction::SetScalar {
@@ -508,7 +520,10 @@ impl App {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "0".to_owned());
                 dialog.editor = Some(EditorDialogState::new(
-                    format!("Edit {}", row.title),
+                    self.i18n.text_args(
+                        "workbench-editor-title-edit",
+                        &agena_tui::fl_args!("title" => row.title),
+                    ),
                     format!(
                         "Enter the two values for {}.\nFirst line: {}\nSecond line: {}",
                         row.title, left_label, right_label
@@ -578,7 +593,7 @@ impl App {
         }) {
             self.open_branch_selection_overlay(
                 dialog,
-                "Select Branch".to_owned(),
+                self.i18n.text("workbench-select-branch-title"),
                 row.title.clone(),
                 plugin.plugin_id.clone(),
                 row.primary_path.clone(),
@@ -599,7 +614,10 @@ impl App {
             JsonValue::String(text) => {
                 let multiline = schema.as_ref().is_some_and(schema_string_is_multiline);
                 dialog.editor = Some(EditorDialogState::new(
-                    format!("Edit {}", row.title),
+                    self.i18n.text_args(
+                        "workbench-editor-title-edit",
+                        &agena_tui::fl_args!("title" => row.title),
+                    ),
                     field_prompt_for_row(schema.as_ref(), &row),
                     editor_save_footer(&self.i18n, multiline),
                     multiline,
@@ -613,9 +631,12 @@ impl App {
             }
             JsonValue::Number(number) => {
                 dialog.editor = Some(EditorDialogState::new(
-                    format!("Edit {}", row.title),
+                    self.i18n.text_args(
+                        "workbench-editor-title-edit",
+                        &agena_tui::fl_args!("title" => row.title),
+                    ),
                     field_prompt_for_row(schema.as_ref(), &row),
-                    "Type to edit".to_owned(),
+                    self.i18n.text("workbench-editor-placeholder-type-to-edit"),
                     false,
                     Editor::from_text(number.to_string()),
                     PluginConfigEditAction::SetScalar {
@@ -682,7 +703,7 @@ impl App {
             )
             .map_err(|error| {
                 crate::UiFailure::invalid_with_diagnostic(
-                    "The plugin configuration could not be updated.",
+                    self.i18n.text("workbench-error-config-update"),
                     error,
                 )
             })?
@@ -738,7 +759,7 @@ impl App {
             title,
             prompt,
             footer,
-            "No choices available".to_owned(),
+            self.i18n.text("workbench-picker-no-choices"),
             multi,
             rows,
         );
@@ -804,8 +825,11 @@ impl App {
             .collect::<Vec<_>>();
         self.open_named_selection_overlay(
             dialog,
-            format!("Select {title}"),
-            "Choose one value".to_owned(),
+            self.i18n.text_args(
+                "workbench-picker-title-select",
+                &agena_tui::fl_args!("title" => title),
+            ),
+            self.i18n.text("workbench-picker-choose-one"),
             String::new(),
             false,
             items,
@@ -833,9 +857,12 @@ impl App {
             .collect::<Vec<_>>();
         self.open_named_selection_overlay(
             dialog,
-            format!("Select {title}"),
-            "Choose one or more values".to_owned(),
-            "Space toggle".to_owned(),
+            self.i18n.text_args(
+                "workbench-picker-title-select",
+                &agena_tui::fl_args!("title" => title),
+            ),
+            self.i18n.text("workbench-picker-choose-many"),
+            self.i18n.text("workbench-picker-space-toggle"),
             true,
             items,
             PluginConfigSelectionAction::MultiEnum { plugin_id, path },
@@ -877,7 +904,10 @@ impl App {
             return;
         };
         if row.primary_path.is_empty() {
-            self.flash_warning("root config cannot be deleted".to_owned());
+            self.flash_warning(
+                self.i18n
+                    .text("workbench-warning-root-config-not-deletable"),
+            );
             return;
         }
         let plugin_id = overlay.plugin_id.clone();

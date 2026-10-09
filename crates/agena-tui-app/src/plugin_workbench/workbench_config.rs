@@ -123,7 +123,10 @@ impl App {
             return;
         };
         if row.primary_path.is_empty() {
-            self.flash_warning("root config cannot be deleted".to_owned());
+            self.flash_warning(
+                self.i18n
+                    .text("workbench-warning-root-config-not-deletable"),
+            );
             return;
         }
         let Some(selected_plugin_id) = dialog
@@ -178,9 +181,15 @@ impl App {
         let mut actions = Vec::new();
         if context.row.type_mode.is_switchable() {
             let description = if context.row.type_mode == ConfigRowTypeMode::SelectShape {
-                format!("Switch the active shape for {}.", context.row.title)
+                self.i18n.text_args(
+                    "workbench-action-switch-shape-desc",
+                    &agena_tui::fl_args!("title" => context.row.title),
+                )
             } else {
-                format!("Switch the active type for {}.", context.row.title)
+                self.i18n.text_args(
+                    "workbench-action-switch-type-desc",
+                    &agena_tui::fl_args!("title" => context.row.title),
+                )
             };
             actions.push(PluginConfigActionCandidate {
                 label: context.row.type_mode.action_label(&dialog.i18n),
@@ -197,8 +206,11 @@ impl App {
         {
             if value.is_array() && can_append_array_item(plugin, path.as_slice()) {
                 actions.push(PluginConfigActionCandidate {
-                    label: "Add Item".to_owned(),
-                    description: format!("Append a new default item to {}.", context.row.title),
+                    label: self.i18n.text("workbench-action-add-item"),
+                    description: self.i18n.text_args(
+                        "workbench-action-add-item-desc",
+                        &agena_tui::fl_args!("title" => context.row.title),
+                    ),
                     action: PluginConfigAction::AppendArrayItem {
                         plugin_id: context.plugin_id.clone(),
                         path: path.clone(),
@@ -210,8 +222,11 @@ impl App {
                     .is_none()
             {
                 actions.push(PluginConfigActionCandidate {
-                    label: "Add Field".to_owned(),
-                    description: format!("Add a new field inside {}.", context.row.title),
+                    label: self.i18n.text("workbench-action-add-field"),
+                    description: self.i18n.text_args(
+                        "workbench-action-add-field-desc",
+                        &agena_tui::fl_args!("title" => context.row.title),
+                    ),
                     action: PluginConfigAction::PromptAddObjectField {
                         plugin_id: context.plugin_id.clone(),
                         path: path.clone(),
@@ -224,8 +239,8 @@ impl App {
         {
             if info.can_insert_before {
                 actions.push(PluginConfigActionCandidate {
-                    label: "Insert Before".to_owned(),
-                    description: "Insert a new default item before this array item.".to_owned(),
+                    label: self.i18n.text("workbench-action-insert-before"),
+                    description: self.i18n.text("workbench-action-insert-before-desc"),
                     action: PluginConfigAction::InsertArrayItemBefore {
                         plugin_id: context.plugin_id.clone(),
                         path: context.row.primary_path.clone(),
@@ -234,8 +249,8 @@ impl App {
             }
             if info.can_insert_after {
                 actions.push(PluginConfigActionCandidate {
-                    label: "Insert After".to_owned(),
-                    description: "Insert a new default item after this array item.".to_owned(),
+                    label: self.i18n.text("workbench-action-insert-after"),
+                    description: self.i18n.text("workbench-action-insert-after-desc"),
                     action: PluginConfigAction::InsertArrayItemAfter {
                         plugin_id: context.plugin_id.clone(),
                         path: context.row.primary_path.clone(),
@@ -244,8 +259,11 @@ impl App {
             }
             if info.can_duplicate {
                 actions.push(PluginConfigActionCandidate {
-                    label: "Duplicate Item".to_owned(),
-                    description: format!("Duplicate {} inside this array.", context.row.title),
+                    label: self.i18n.text("workbench-action-duplicate-item"),
+                    description: self.i18n.text_args(
+                        "workbench-action-duplicate-item-desc",
+                        &agena_tui::fl_args!("title" => context.row.title),
+                    ),
                     action: PluginConfigAction::DuplicateArrayItem {
                         plugin_id: context.plugin_id.clone(),
                         path: context.row.primary_path.clone(),
@@ -254,8 +272,8 @@ impl App {
             }
             if info.can_move_up {
                 actions.push(PluginConfigActionCandidate {
-                    label: "Move Up".to_owned(),
-                    description: "Move this array item one position earlier.".to_owned(),
+                    label: self.i18n.text("workbench-action-move-up"),
+                    description: self.i18n.text("workbench-action-move-up-desc"),
                     action: PluginConfigAction::MoveArrayItem {
                         plugin_id: context.plugin_id.clone(),
                         path: context.row.primary_path.clone(),
@@ -265,8 +283,8 @@ impl App {
             }
             if info.can_move_down {
                 actions.push(PluginConfigActionCandidate {
-                    label: "Move Down".to_owned(),
-                    description: "Move this array item one position later.".to_owned(),
+                    label: self.i18n.text("workbench-action-move-down"),
+                    description: self.i18n.text("workbench-action-move-down-desc"),
                     action: PluginConfigAction::MoveArrayItem {
                         plugin_id: context.plugin_id.clone(),
                         path: context.row.primary_path.clone(),
@@ -276,8 +294,11 @@ impl App {
             }
             if info.can_remove {
                 actions.push(PluginConfigActionCandidate {
-                    label: "Remove Item".to_owned(),
-                    description: format!("Remove {} from this array.", context.row.title),
+                    label: self.i18n.text("workbench-action-remove-item"),
+                    description: self.i18n.text_args(
+                        "workbench-action-remove-item-desc",
+                        &agena_tui::fl_args!("title" => context.row.title),
+                    ),
                     action: PluginConfigAction::RemoveArrayItem {
                         plugin_id: context.plugin_id.clone(),
                         path: context.row.primary_path.clone(),
@@ -294,8 +315,11 @@ impl App {
             };
         if rename_allowed {
             actions.push(PluginConfigActionCandidate {
-                label: "Rename Field".to_owned(),
-                description: format!("Rename the key for {}.", context.row.title),
+                label: self.i18n.text("workbench-action-rename-field"),
+                description: self.i18n.text_args(
+                    "workbench-action-rename-field-desc",
+                    &agena_tui::fl_args!("title" => context.row.title),
+                ),
                 action: PluginConfigAction::RenameField {
                     plugin_id: context.plugin_id.clone(),
                     path: context.row.primary_path.clone(),
@@ -307,8 +331,11 @@ impl App {
             .cloned()
             .collect::<Vec<_>>();
         actions.push(PluginConfigActionCandidate {
-            label: "Reset Field".to_owned(),
-            description: format!("Restore {} to the plugin default value.", context.row.title),
+            label: self.i18n.text("workbench-action-reset-field"),
+            description: self.i18n.text_args(
+                "workbench-action-reset-field-desc",
+                &agena_tui::fl_args!("title" => context.row.title),
+            ),
             action: PluginConfigAction::ResetField {
                 plugin_id: context.plugin_id.clone(),
                 paths: field_paths,
@@ -316,10 +343,10 @@ impl App {
             },
         });
         actions.push(PluginConfigActionCandidate {
-            label: "Reset Group".to_owned(),
-            description: format!(
-                "Restore every field in {} to the plugin defaults.",
-                context.group_title
+            label: self.i18n.text("workbench-action-reset-group"),
+            description: self.i18n.text_args(
+                "workbench-action-reset-group-desc",
+                &agena_tui::fl_args!("title" => context.group_title),
             ),
             action: PluginConfigAction::ResetGroup {
                 plugin_id: context.plugin_id,
@@ -330,9 +357,9 @@ impl App {
         let selected_action =
             prioritize_config_actions(actions.as_mut_slice(), context.cell, primary_action);
         let title = if primary_action.is_some() {
-            "More Actions".to_owned()
+            self.i18n.text("workbench-action-more")
         } else {
-            "Field Actions".to_owned()
+            self.i18n.text("workbench-action-field")
         };
         let rows = actions
             .iter()
@@ -355,7 +382,7 @@ impl App {
             title,
             context.row.title,
             config_actions_overlay_footer(primary_action),
-            "No actions available".to_owned(),
+            self.i18n.text("workbench-picker-no-actions"),
             false,
             rows,
         );
@@ -504,7 +531,7 @@ impl App {
             .find(|plugin| plugin.plugin_id == plugin_id)
         {
             if !array_item_action_info(plugin, path).is_some_and(|info| info.can_duplicate) {
-                self.flash_warning("cannot duplicate this array item".to_owned());
+                self.flash_warning(self.i18n.text("workbench-warning-cannot-duplicate-item"));
                 return;
             }
             let focus = duplicate_array_item_at_path(&mut plugin.draft_config, path);
@@ -555,7 +582,7 @@ impl App {
                 rebuild_drilldown_stack(dialog, dialog.drilldown_stack.as_slice());
             self.maybe_open_type_selector_for_selected_row(dialog, plugin_id, focus.as_slice());
         } else {
-            self.flash_warning("cannot insert an item at this array position".to_owned());
+            self.flash_warning(self.i18n.text("workbench-warning-cannot-insert-item"));
         }
     }
 
@@ -599,7 +626,7 @@ impl App {
             .find(|plugin| plugin.plugin_id == plugin_id)
         {
             if !array_item_action_info(plugin, path).is_some_and(|info| info.can_remove) {
-                self.flash_warning("cannot remove this array item".to_owned());
+                self.flash_warning(self.i18n.text("workbench-warning-cannot-remove-item"));
                 return;
             }
             let focus = remove_array_item_at_path(&mut plugin.draft_config, path);
@@ -625,13 +652,16 @@ impl App {
         path: ConfigPath,
     ) {
         let Some((_, key)) = path_key_info(path.as_slice()) else {
-            self.flash_warning("selected row does not point to an object field".to_owned());
+            self.flash_warning(self.i18n.text("workbench-warning-row-not-object-field"));
             return;
         };
         dialog.editor = Some(EditorDialogState::new(
-            format!("Rename {}", title_from_key(key.as_str())),
-            "Enter the new field name.".to_owned(),
-            "Type to edit".to_owned(),
+            self.i18n.text_args(
+                "workbench-editor-title-rename",
+                &agena_tui::fl_args!("title" => title_from_key(key.as_str())),
+            ),
+            self.i18n.text("workbench-editor-prompt-new-field-name"),
+            self.i18n.text("workbench-editor-placeholder-type-to-edit"),
             false,
             Editor::from_text(key),
             PluginConfigEditAction::RenameObjectField { plugin_id, path },

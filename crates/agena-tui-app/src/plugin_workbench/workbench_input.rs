@@ -346,7 +346,7 @@ impl App {
             return;
         };
         let Some(tool) = plugin.tools.get(dialog.selected_tool) else {
-            self.flash_warning("this plugin does not expose any tools".to_owned());
+            self.flash_warning(self.i18n.text("workbench-warning-no-tools"));
             return;
         };
         let mut input =
@@ -366,10 +366,7 @@ impl App {
                     ),
                     "plugin tool editor could not be opened"
                 );
-                self.flash_error(
-                    "The plugin tool input could not be prepared. Review the diagnostic log and try again."
-                        .to_owned(),
-                );
+                self.flash_error(self.i18n.text("workbench-error-tool-input-prepare"));
                 return;
             }
         };
@@ -378,9 +375,10 @@ impl App {
             .docs
             .help_for_locale(locale.as_str())
             .or_else(|| tool.docs.summary_for_locale(locale.as_str()))
-            .unwrap_or("Run this plugin tool.");
+            .map(ToString::to_string)
+            .unwrap_or_else(|| self.i18n.text("workbench-tool-default-run"));
         let metadata_tags = if tool.tags.is_empty() {
-            "none declared".to_owned()
+            self.i18n.text("workbench-tool-tags-none")
         } else {
             tool.tags
                 .iter()
@@ -389,11 +387,15 @@ impl App {
                 .join(", ")
         };
         dialog.tool_editor = Some(EditorDialogState::new(
-            format!("Run {} / {}", plugin.plugin_id, tool.name),
-            format!(
-                "{summary} Tags: {metadata_tags}. Edit the JSON arguments below. Submitting is a one-shot approval for this exact tool call; persisted deny rules still apply."
+            self.i18n.text_args(
+                "workbench-tool-editor-title",
+                &agena_tui::fl_args!("plugin" => plugin.plugin_id.clone(), "tool" => tool.name.clone()),
             ),
-            "Ctrl+S validate and run · Esc cancel · Enter newline".to_owned(),
+            self.i18n.text_args(
+                "workbench-tool-editor-description",
+                &agena_tui::fl_args!("summary" => summary, "tags" => metadata_tags),
+            ),
+            self.i18n.text("workbench-tool-editor-placeholder"),
             true,
             Editor::from_text(input),
             PluginToolInvocationAction {
@@ -411,13 +413,13 @@ impl App {
     ) -> UiResult<()> {
         let value = serde_json::from_str::<JsonValue>(input).map_err(|error| {
             crate::UiFailure::invalid_with_diagnostic(
-                "The tool arguments are not valid JSON.",
+                self.i18n.text("workbench-error-args-invalid-json"),
                 error,
             )
         })?;
         if !value.is_object() {
             return Err(crate::UiFailure::message(
-                "plugin tool arguments must be a JSON object",
+                self.i18n.text("workbench-error-args-not-object"),
             ));
         }
         let schema = dialog
@@ -431,11 +433,13 @@ impl App {
                     .find(|tool| tool.name == action.tool_name)
             })
             .map(|tool| tool.contract.input_schema.clone())
-            .ok_or_else(|| crate::UiFailure::message("The plugin tool is no longer available."))?;
+            .ok_or_else(|| {
+                crate::UiFailure::message(self.i18n.text("workbench-error-tool-unavailable"))
+            })?;
         agena_plugin_host::loader::validate_json_schema_value(&schema, &value).map_err(
             |error| {
                 crate::UiFailure::invalid_with_diagnostic(
-                    "The tool arguments do not match the plugin schema.",
+                    self.i18n.text("workbench-error-args-schema-mismatch"),
                     error,
                 )
             },
@@ -445,7 +449,7 @@ impl App {
             .session_id
             .or_else(|| self.sessions.current_selected_id())
             .ok_or_else(|| {
-                crate::UiFailure::message("The plugin tool requires an active session.")
+                crate::UiFailure::message(self.i18n.text("workbench-error-tool-requires-session"))
             })?;
         let plugin_id = action.plugin_id;
         let tool_name = action.tool_name;
@@ -465,10 +469,10 @@ impl App {
             move |app, result| {
                 let (output, succeeded) = match result {
                     Ok(output) => {
-                        app.flash_success("plugin tool completed".to_owned());
+                        app.flash_success(app.i18n.text("workbench-tool-completed"));
                         (
                             if output.trim().is_empty() {
-                                "Tool completed successfully with no output.".to_owned()
+                                app.i18n.text("workbench-tool-completed-no-output")
                             } else {
                                 output
                             },

@@ -2171,7 +2171,7 @@ async function loadDirectory(
             ? nextOffset < resp.total
             : page.length === DIRECTORY_PAGE_SIZE
       if (hasMore && (!page.length || !Number.isFinite(nextOffset) || nextOffset <= pageOffset)) {
-        throw new Error('Directory pagination did not advance')
+        throw new Error(t('errors.files.paginationStalled'))
       }
       for (const entry of page) {
         if (!existing.has(entry.name)) {

@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import type { StagedAttachment } from './attachmentIngestion'
 import type { ComposerSegment } from './composerInput'
 export type FailedAttachmentDraft = {
@@ -13,7 +14,7 @@ export function createFailedAttachmentDraftSlot() {
     save(value: FailedAttachmentDraft) {
       // Only one send can be in flight. The UI disables another send while
       // this recovery slot is occupied, avoiding an unbounded binary queue.
-      if (draft) throw new Error('An earlier failed draft must be restored or discarded first')
+      if (draft) throw new Error(i18n.global.t('chat.errors.failedDraftMustBeResolved'))
       draft = {
         ...value,
         files: value.files.map((file) => ({ ...file })),

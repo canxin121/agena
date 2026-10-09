@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { computed, type ComputedRef, ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -163,7 +164,7 @@ export function useChatSessionActions(opts: {
         if (typeof onSessionForked === 'function') await onSessionForked(createdId)
         toasts.push('success', t('chat.toasts.sessionForked'))
       } else {
-        throw new Error('The server did not return a forked session.')
+        throw new Error(i18n.global.t('chat.errors.forkedSessionMissing'))
       }
     } catch (err) {
       toasts.push('error', err instanceof Error ? err.message : String(err))

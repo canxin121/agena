@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -131,10 +132,11 @@ export function useChatMessageActions(opts: {
     historyActionBusy.value = true
     try {
       const atMessageId = Number(messageId)
-      if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0) throw new Error('A valid message id is required')
+      if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0)
+        throw new Error(i18n.global.t('chat.errors.messageIdRequired'))
       const created = await chat.forkSession(sid, { at_message_id: atMessageId })
       const newId = typeof created?.id === 'string' ? created.id.trim() : ''
-      if (!newId) throw new Error('The server did not return a forked session.')
+      if (!newId) throw new Error(i18n.global.t('chat.errors.forkedSessionMissing'))
       await openBranch(newId)
       await nextTick()
       scrollToBottom('auto')

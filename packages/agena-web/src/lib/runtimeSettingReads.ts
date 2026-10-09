@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { apiJson, apiUrl } from './api'
 import { createSharedRead, limitBackgroundReads } from './backgroundReads'
 import { captureResourceObservation } from './resourceSync'
@@ -42,7 +43,7 @@ async function fetchBatch(entries: Pending[]) {
     for (const entry of entries) {
       const value = response[entry.path]
       if (value) entry.resolve(value)
-      else entry.reject(new Error('Settings batch omitted a requested path'))
+      else entry.reject(new Error(i18n.global.t('errors.settings.batchOmittedPath')))
     }
   } catch (reason) {
     for (const entry of entries) entry.reject(reason)

@@ -304,7 +304,7 @@ async function openSide(question = '') {
   sideBusy.value = true
   try {
     const created = await chat.forkSession(parent, { conversation_mode: 'side' })
-    if (!created?.id) throw new Error('The server did not return a side conversation')
+    if (!created?.id) throw new Error(t('chat.errors.sideConversationMissing'))
     // A slow fork must not pull the user out of a session they navigated to.
     if (chat.selectedSessionId === parent) await chat.selectSession(created.id)
     if (question.trim()) await chat.sendMessage(created.id, { text: question.trim() })
@@ -1509,7 +1509,7 @@ watch(
 function attachmentBase64(dataUrl: string): string {
   const match = /^data:[^,]*;base64,([a-z0-9+/=\s]+)$/i.exec(String(dataUrl || '').trim())
   const data = match?.[1]?.replace(/\s+/g, '') || ''
-  if (!data) throw new Error('Attachment data is not a valid base64 data URL')
+  if (!data) throw new Error(t('chat.errors.attachmentDataNotBase64'))
   return data
 }
 
@@ -1521,15 +1521,15 @@ function workspaceRelativePath(inputPath: string, workspaceRoot: string): string
     .trim()
     .replace(/\\/g, '/')
     .replace(/\/+$/, '')
-  if (!path) throw new Error('Attachment path is empty')
+  if (!path) throw new Error(t('chat.errors.attachmentPathEmpty'))
 
   if (root && (path === root || path.startsWith(`${root}/`))) {
     const relative = path.slice(root.length).replace(/^\/+/, '')
-    if (!relative) throw new Error('The workspace root cannot be attached as a file')
+    if (!relative) throw new Error(t('chat.errors.workspaceRootNotAttachable'))
     return relative
   }
   if (path.startsWith('/') || /^[a-z]:\//i.test(path)) {
-    throw new Error('The attachment must be inside the active workspace')
+    throw new Error(t('chat.errors.attachmentOutsideWorkspace'))
   }
   return path.replace(/^\.\//, '')
 }
@@ -1627,7 +1627,7 @@ function parsePullRequestArguments(raw: string): {
 
 async function downloadWorkspaceFile(pathInput: string) {
   const sid = commandSessionId()
-  if (!sid) throw new Error('Open a session before downloading a workspace file.')
+  if (!sid) throw new Error(t('chat.toasts.openSessionBeforeDownload'))
   const workspace = await chat.resolveSessionWorkspace(sid)
   const path = workspaceRelativePath(pathInput, workspace.path)
   const response = await fetch(
@@ -1678,7 +1678,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       return
     case 'rewind': {
       if (!sid) {
-        toasts.push('error', 'A session is required for /rewind.')
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'rewind' }))
         return
       }
       const requested =
@@ -1710,7 +1710,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
         return
       }
       if (!sid) {
-        toasts.push('error', 'A session is required for /commit.')
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'commit' }))
         return
       }
       const workspace = await chat.resolveSessionWorkspace(sid)
@@ -1731,7 +1731,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
         return
       }
       if (!sid) {
-        toasts.push('error', 'A session is required for /pr.')
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'pr' }))
         return
       }
       const workspace = await chat.resolveSessionWorkspace(sid)
@@ -1749,33 +1749,33 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       await exportTranscript()
       return
     case 'pager':
-      toasts.push('info', 'The web transcript already supports paging through the scroll view.')
+      toasts.push('info', t('chat.toasts.pagerUnsupported'))
       return
     case 'continue':
       if (!sid) {
-        toasts.push('error', 'A session is required for /continue.')
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'continue' }))
         return
       }
       await chat.continueSession(sid)
-      toasts.push('success', 'Session continuation started.')
+      toasts.push('success', t('chat.toasts.sessionContinuationStarted'))
       return
     case 'compact':
       await handleCompactSession()
       return
     case 'user-input':
       if (chat.selectedAttention?.kind === 'question') scrollToBottom('smooth')
-      else toasts.push('info', 'There is no pending user-input request.')
+      else toasts.push('info', t('chat.toasts.noPendingUserInput'))
       return
     case 'allow':
     case 'allow-always':
     case 'deny':
     case 'deny-always': {
       if (!sid || chat.selectedAttention?.kind !== 'permission') {
-        toasts.push('info', 'There is no pending permission request.')
+        toasts.push('info', t('chat.toasts.noPendingPermissionRequest'))
         return
       }
       const requestId = commandRequestId()
-      if (!requestId) throw new Error('The pending permission request has no id.')
+      if (!requestId) throw new Error(t('chat.toasts.pendingPermissionRequestMissingId'))
       const reply =
         command.action === 'allow'
           ? 'once'
@@ -1792,7 +1792,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       openFilePicker()
       return
     case 'paste':
-      toasts.push('info', 'Use your system paste shortcut to insert clipboard text.')
+      toasts.push('info', t('chat.toasts.useSystemPasteShortcut'))
       return
     case 'favorite':
     case 'hub':
@@ -1815,12 +1815,12 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'copy-message': {
       const lastAssistant = [...chat.messages].reverse().find((message) => message.info?.role === 'assistant')
       if (lastAssistant) handleCopyMessage(lastAssistant)
-      else toasts.push('info', 'No assistant message is loaded.')
+      else toasts.push('info', t('chat.toasts.noAssistantMessageLoaded'))
       return
     }
     case 'copy-visible': {
       const visible = String(contentEl.value?.innerText || '').trim()
-      if (!visible) toasts.push('info', 'No transcript content is visible.')
+      if (!visible) toasts.push('info', t('chat.toasts.noVisibleTranscript'))
       else await copyToClipboard(visible)
       return
     }
@@ -1835,7 +1835,7 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       return
     case 'children': {
       if (!sid) {
-        toasts.push('error', 'A session is required for /children.')
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'children' }))
         return
       }
       const parentId = Number(sid)
@@ -1844,17 +1844,17 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       else if (page.sessions.length > 1) {
         ui.setSessionSwitcherOpen(true)
         toasts.push('info', `${page.sessions.length} child sessions are available in the session switcher.`)
-      } else toasts.push('info', 'This session has no child sessions.')
+      } else toasts.push('info', t('chat.toasts.noChildSessions'))
       return
     }
     case 'parent': {
       if (!sid) {
-        toasts.push('error', 'A session is required for /parent.')
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'parent' }))
         return
       }
       const parent = Number(asRecord(chat.selectedSession).parent_id)
       if (!Number.isSafeInteger(parent) || parent <= 0) {
-        toasts.push('info', 'This session has no parent session.')
+        toasts.push('info', t('chat.toasts.noParentSession'))
         return
       }
       await chat.selectSession(String(parent))
@@ -1914,14 +1914,14 @@ async function applyPluginCommandResult(
       continue
     }
     if (effect.kind === 'navigate') {
-      if (!effect.path.startsWith('/')) throw new Error('Plugin navigation must use an application-relative path.')
+      if (!effect.path.startsWith('/')) throw new Error(t('chat.errors.pluginNavigationMustBeRelative'))
       await router.push(effect.path)
       continue
     }
     if (effect.kind === 'open_url') {
       const url = new URL(effect.url, window.location.href)
       if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        throw new Error('Plugin URLs must use HTTP or HTTPS.')
+        throw new Error(t('chat.errors.pluginUrlMustBeHttp'))
       }
       window.open(url.toString(), '_blank', 'noopener,noreferrer')
     }
@@ -2022,7 +2022,7 @@ async function sendReady(sid: string | null) {
   if (!sid || chat.selectedSessionId !== sid) return
 
   if (!modelSelection.selectedProviderId.value || !modelSelection.selectedModelId.value) {
-    toasts.push('error', 'Select a model before sending')
+    toasts.push('error', t('chat.toasts.selectModelBeforeSending'))
     return
   }
 

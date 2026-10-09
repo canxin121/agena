@@ -627,7 +627,7 @@ function hydrateMermaid() {
       const out = await renderMermaid(source, theme, controller.signal)
       if (!out || controller.signal.aborted || !root?.contains(block)) return
       const svg = typeof out === 'string' ? out : out.svg
-      if (!svg?.trim()) throw new Error('Mermaid render returned empty output')
+      if (!svg?.trim()) throw new Error(t('errors.markdown.mermaidEmptyOutput'))
       renderEl.innerHTML = svg
       if (typeof out !== 'string') out.bindFunctions?.(renderEl)
       block.dataset.ocMermaidHash = cacheKey
@@ -797,10 +797,7 @@ watch(
     // A continuous stream must repaint at a bounded rate instead of
     // postponing every render until the stream becomes quiet.
     if (timer !== null) return
-    const delay = Math.max(
-      0,
-      Math.floor(props.streamDebounceMs || 0),
-    )
+    const delay = Math.max(0, Math.floor(props.streamDebounceMs || 0))
     timer = window.setTimeout(() => {
       timer = null
       updateNow()
@@ -890,7 +887,9 @@ onBeforeUnmount(() => {
     </div>
 
     <div ref="rootEl" class="prose prose-sm max-w-none break-words">
-      <template v-if="html.length"><div v-for="(part, index) in html" :key="index" class="contents" data-markdown-segment v-html="part" /></template>
+      <template v-if="html.length"
+        ><div v-for="(part, index) in html" :key="index" class="contents" data-markdown-segment v-html="part"
+      /></template>
       <div v-else v-html="deferredHtml" />
     </div>
   </div>

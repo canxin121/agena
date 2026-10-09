@@ -1,4 +1,5 @@
 /** Local staging only. This module never contacts a model provider. */
+import { i18n } from '@/i18n'
 export type AttachmentDelivery = 'reference' | 'model_input'
 /**
  * Preparation state of one composer attachment. It is the only difference
@@ -241,7 +242,7 @@ export function readLocalDataUrl(file: File, signal: AbortSignal): Promise<strin
     }
     reader.onerror = () => {
       cleanup()
-      reject(reader.error || new Error('Attachment read failed'))
+      reject(reader.error || new Error(i18n.global.t('chat.errors.attachmentReadFailed')))
     }
     reader.onabort = () => {
       cleanup()

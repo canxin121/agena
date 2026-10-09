@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { apiJson } from './api'
 import { createSharedRead, isDocumentVisible } from './backgroundReads'
 import { readActiveBackendBaseUrl } from './backend'
@@ -177,7 +178,7 @@ export async function checkResourceVersions(keys: Iterable<string>, signal?: Abo
     }
     await flight.read.join(signal)
     signal?.throwIfAborted()
-    if (currentScope !== ensureScope()) throw new Error('Backend changed during revision check')
+    if (currentScope !== ensureScope()) throw new Error(i18n.global.t('errors.content.backendChangedDuringRevision'))
     const missing = [...requested].filter((key) => !flight.keys.has(key) || dirty.has(key))
     if (missing.length) await checkResourceVersions(missing, signal)
     return
@@ -209,11 +210,11 @@ export async function checkResourceVersions(keys: Iterable<string>, signal?: Abo
         signal: AbortSignal.any([sharedSignal, AbortSignal.timeout(15_000)]),
         cache: 'no-store',
       })
-      if (currentScope !== ensureScope()) throw new Error('Backend changed during revision check')
+      if (currentScope !== ensureScope()) throw new Error(i18n.global.t('errors.content.backendChangedDuringRevision'))
       sharedSignal.throwIfAborted()
       for (const key of batch) {
         const token = result[key]
-        if (typeof token !== 'string') throw new Error('Missing resource revision')
+        if (typeof token !== 'string') throw new Error(i18n.global.t('errors.content.missingResourceRevision'))
         if (!noteResourceVersion(key, token, observations.get(key))) continue
         checkedAt.set(key, Date.now())
         if (owners.get(key) === (invalidation.get(key) ?? 0)) dirty.delete(key)

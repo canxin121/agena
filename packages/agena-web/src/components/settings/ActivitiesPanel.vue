@@ -404,15 +404,15 @@ onScopeDispose(() => {
       <IconButton
         variant="outline"
         size="md"
-        :tooltip="loading ? 'Refreshing...' : $st('Refresh')"
-        :aria-label="loading ? 'Refreshing...' : $st('Refresh')"
+        :tooltip="loading ? $st('Refreshing...') : $st('Refresh')"
+        :aria-label="loading ? $st('Refreshing...') : $st('Refresh')"
         :disabled="loading"
         @click="refresh"
       >
         <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
       </IconButton>
       <Button variant="outline" size="sm" :disabled="loading" @click="refresh">
-        {{ loading ? 'Refreshing...' : $st('Refresh') }}
+        {{ loading ? $st('Refreshing...') : $st('Refresh') }}
       </Button>
       <Button
         variant="outline"

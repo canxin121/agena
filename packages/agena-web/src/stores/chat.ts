@@ -905,7 +905,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const page = await chatApi.listMessages(sid, OLDER_MESSAGE_PAGE_SIZE, cursor, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE)
       if (generation !== transcriptCacheGeneration) return false
       if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor)) {
-        throw new Error('Session history pagination did not advance')
+        throw new Error(i18n.global.t('chat.errors.historyPaginationStalled'))
       }
       const normalized = normalizeMessageList(page.entries)
       const merged = mergeMessageLists(normalized, ensureSessionMessages(sid))
@@ -954,12 +954,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const seenCursors = new Set<string>()
       const requestedPageSize = all ? 50 : normalizeTranscriptPartPageSize(pageSize)
       do {
-        if (seenCursors.has(cursor)) throw new Error('Reply pagination did not advance')
+        if (seenCursors.has(cursor)) throw new Error(i18n.global.t('chat.errors.replyPaginationStalled'))
         seenCursors.add(cursor)
         const page = await chatApi.listTranscriptFoldParts(sid, activeFold.runIds, requestedPageSize, cursor)
         if (generation !== transcriptCacheGeneration) return false
         if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor)) {
-          throw new Error('Reply pagination did not advance')
+          throw new Error(i18n.global.t('chat.errors.replyPaginationStalled'))
         }
         const normalized = normalizeMessageList(page.entries)
         const loadedIds = new Set(ensureSessionMessages(sid).flatMap((entry) => entry.parts.map((part) => part.id)))
@@ -1130,7 +1130,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       throw error
     })
     if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return
-    if (!st) throw new Error('Session status could not be refreshed')
+    if (!st) throw new Error(i18n.global.t('chat.errors.statusRefreshFailed'))
     if (st.observation) executionObservations.set(sid, st.observation)
     if (Number(getSessionById(sid)?.version || 0) > Number(st.session.version || 0)) return
     upsertSessionCache(st.session)
@@ -1712,7 +1712,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     input: { filename: string; dataBase64?: string; blob?: Blob; mime?: string },
   ) {
     const sid = String(sessionId || '').trim()
-    if (!sid) throw new Error('A session is required for attachments')
+    if (!sid) throw new Error(i18n.global.t('chat.errors.sessionRequiredForAttachments'))
     let session = getSessionById(sid)
     if (!session) {
       session = await chatApi.getSession(sid)
@@ -1720,14 +1720,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
     const workspaceId = Number(session.workspace_id)
     if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
-      throw new Error('The session does not have a valid workspace')
+      throw new Error(i18n.global.t('chat.errors.sessionWorkspaceInvalid'))
     }
     return await chatApi.uploadWorkspaceFile(workspaceId, input)
   }
 
   async function resolveSessionWorkspace(sessionId: string): Promise<{ id: number; path: string }> {
     const sid = String(sessionId || '').trim()
-    if (!sid) throw new Error('A session is required')
+    if (!sid) throw new Error(i18n.global.t('chat.errors.sessionRequired'))
     let session = getSessionById(sid)
     if (!session) {
       session = await chatApi.getSession(sid)
@@ -1735,7 +1735,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
     const workspace = await workspaceForSession(session)
     if (!workspace) {
-      throw new Error('The session does not have a valid workspace')
+      throw new Error(i18n.global.t('chat.errors.sessionWorkspaceInvalid'))
     }
     return workspace
   }
@@ -1891,7 +1891,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     const atMessageId = Number((messageId || '').trim())
     if (!sid || !Number.isSafeInteger(atMessageId) || atMessageId <= 0) {
-      throw new Error('A session id and a valid user message id are required')
+      throw new Error(i18n.global.t('chat.errors.sessionAndUserMessageRequired'))
     }
     const mid = String(atMessageId)
     let target = (messagesBySession.value[sid] ?? []).find((message) => message.info.id === mid)
@@ -1899,7 +1899,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       target = (await chatApi.listSessionMessages(sid)).find((message) => message.info.id === mid)
     }
     if (!target || target.info.role !== 'user' || target.info.runState !== 'completed') {
-      throw new Error('Rewind requires a completed user message in this session')
+      throw new Error(i18n.global.t('chat.errors.rewindRequiresUserMessage'))
     }
 
     const created = await chatApi.rewindSession(sid, atMessageId)

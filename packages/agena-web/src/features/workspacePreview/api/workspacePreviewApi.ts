@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { apiJson } from '@/lib/api'
 import { conditionalJson } from '@/lib/conditionalJson'
 
@@ -83,8 +84,16 @@ function normalizePreviewSessions(payload: PreviewSessionsResponse): WorkspacePr
   return sessions
 }
 
-export async function listWorkspacePreviewSessions(signal?: AbortSignal, force = false): Promise<WorkspacePreviewSession[]> {
-  const payload = await conditionalJson<PreviewSessionsResponse>('preview', '/api/v1/workbench/preview/sessions', { signal }, force)
+export async function listWorkspacePreviewSessions(
+  signal?: AbortSignal,
+  force = false,
+): Promise<WorkspacePreviewSession[]> {
+  const payload = await conditionalJson<PreviewSessionsResponse>(
+    'preview',
+    '/api/v1/workbench/preview/sessions',
+    { signal },
+    force,
+  )
   return normalizePreviewSessions(payload)
 }
 
@@ -103,27 +112,27 @@ export async function createWorkspacePreviewSession(
   input: WorkspacePreviewSessionCreateInput,
 ): Promise<WorkspacePreviewSession> {
   const trimmedId = String(input?.id || '').trim()
-  if (!trimmedId) throw new Error('Session id is required')
+  if (!trimmedId) throw new Error(i18n.global.t('errors.preview.sessionIdRequired'))
 
   const trimmedDirectory = String(input?.directory || '').trim()
-  if (!trimmedDirectory) throw new Error('Directory is required')
+  if (!trimmedDirectory) throw new Error(i18n.global.t('errors.preview.directoryRequired'))
 
   const trimmedRunDirectory = String(input?.runDirectory || '').trim()
-  if (!trimmedRunDirectory) throw new Error('Run directory is required')
+  if (!trimmedRunDirectory) throw new Error(i18n.global.t('errors.preview.runDirectoryRequired'))
 
   const trimmedCommand = String(input?.command || '').trim()
-  if (!trimmedCommand) throw new Error('Command is required')
+  if (!trimmedCommand) throw new Error(i18n.global.t('errors.preview.commandRequired'))
 
   const trimmedLogsPath = String(input?.logsPath || '').trim()
-  if (!trimmedLogsPath) throw new Error('Logs path is required')
+  if (!trimmedLogsPath) throw new Error(i18n.global.t('errors.preview.logsPathRequired'))
 
   const trimmedSessionId = String(input?.agenaSessionId || '').trim()
 
   const args = Array.isArray(input?.args) ? input.args.map((v) => String(v || '').trim()).filter(Boolean) : []
-  if (args.length === 0) throw new Error('Args is required')
+  if (args.length === 0) throw new Error(i18n.global.t('errors.preview.argsRequired'))
 
   const targetUrl = String(input?.targetUrl || '').trim()
-  if (!targetUrl) throw new Error('Target URL is required')
+  if (!targetUrl) throw new Error(i18n.global.t('errors.preview.targetUrlRequired'))
 
   const payload = await apiJson<unknown>('/api/v1/workbench/preview/sessions', {
     method: 'POST',
@@ -143,7 +152,7 @@ export async function createWorkspacePreviewSession(
   })
 
   const session = normalizeWorkspacePreviewSession(payload)
-  if (!session) throw new Error('Invalid preview session response')
+  if (!session) throw new Error(i18n.global.t('errors.preview.invalidSessionResponse'))
   return session
 }
 
@@ -151,23 +160,23 @@ export async function discoverWorkspacePreviewSession(
   input: Omit<WorkspacePreviewSessionCreateInput, 'targetUrl'>,
 ): Promise<WorkspacePreviewSession> {
   const trimmedId = String(input?.id || '').trim()
-  if (!trimmedId) throw new Error('Session id is required')
+  if (!trimmedId) throw new Error(i18n.global.t('errors.preview.sessionIdRequired'))
 
   const trimmedDirectory = String(input?.directory || '').trim()
-  if (!trimmedDirectory) throw new Error('Directory is required')
+  if (!trimmedDirectory) throw new Error(i18n.global.t('errors.preview.directoryRequired'))
 
   const trimmedRunDirectory = String(input?.runDirectory || '').trim()
-  if (!trimmedRunDirectory) throw new Error('Run directory is required')
+  if (!trimmedRunDirectory) throw new Error(i18n.global.t('errors.preview.runDirectoryRequired'))
 
   const trimmedCommand = String(input?.command || '').trim()
-  if (!trimmedCommand) throw new Error('Command is required')
+  if (!trimmedCommand) throw new Error(i18n.global.t('errors.preview.commandRequired'))
 
   const trimmedLogsPath = String(input?.logsPath || '').trim()
-  if (!trimmedLogsPath) throw new Error('Logs path is required')
+  if (!trimmedLogsPath) throw new Error(i18n.global.t('errors.preview.logsPathRequired'))
 
   const trimmedSessionId = String(input?.agenaSessionId || '').trim()
   const args = Array.isArray(input?.args) ? input.args.map((v) => String(v || '').trim()).filter(Boolean) : []
-  if (args.length === 0) throw new Error('Args is required')
+  if (args.length === 0) throw new Error(i18n.global.t('errors.preview.argsRequired'))
 
   const payload = await apiJson<unknown>('/api/v1/workbench/preview/sessions/discover', {
     method: 'POST',
@@ -186,7 +195,7 @@ export async function discoverWorkspacePreviewSession(
   })
 
   const session = normalizeWorkspacePreviewSession(payload)
-  if (!session) throw new Error('Invalid preview session response')
+  if (!session) throw new Error(i18n.global.t('errors.preview.invalidSessionResponse'))
   return session
 }
 
@@ -203,25 +212,28 @@ export async function updateWorkspacePreviewSession(
   },
 ): Promise<WorkspacePreviewSession> {
   const trimmedId = String(sessionId || '').trim()
-  if (!trimmedId) throw new Error('Session id is required')
+  if (!trimmedId) throw new Error(i18n.global.t('errors.preview.sessionIdRequired'))
 
   const directory = typeof patch.directory === 'string' ? patch.directory.trim() : ''
-  if (typeof patch.directory === 'string' && !directory) throw new Error('Directory is required')
+  if (typeof patch.directory === 'string' && !directory)
+    throw new Error(i18n.global.t('errors.preview.directoryRequired'))
 
   const runDirectory = typeof patch.runDirectory === 'string' ? patch.runDirectory.trim() : ''
-  if (typeof patch.runDirectory === 'string' && !runDirectory) throw new Error('Run directory is required')
+  if (typeof patch.runDirectory === 'string' && !runDirectory)
+    throw new Error(i18n.global.t('errors.preview.runDirectoryRequired'))
 
   const command = typeof patch.command === 'string' ? patch.command.trim() : ''
-  if (typeof patch.command === 'string' && !command) throw new Error('Command is required')
+  if (typeof patch.command === 'string' && !command) throw new Error(i18n.global.t('errors.preview.commandRequired'))
 
   const logsPath = typeof patch.logsPath === 'string' ? patch.logsPath.trim() : ''
-  if (typeof patch.logsPath === 'string' && !logsPath) throw new Error('Logs path is required')
+  if (typeof patch.logsPath === 'string' && !logsPath) throw new Error(i18n.global.t('errors.preview.logsPathRequired'))
 
   const targetUrl = typeof patch.targetUrl === 'string' ? patch.targetUrl.trim() : ''
-  if (typeof patch.targetUrl === 'string' && !targetUrl) throw new Error('Target URL is required')
+  if (typeof patch.targetUrl === 'string' && !targetUrl)
+    throw new Error(i18n.global.t('errors.preview.targetUrlRequired'))
 
   const args = Array.isArray(patch.args) ? patch.args.map((v) => String(v || '').trim()).filter(Boolean) : []
-  if (Array.isArray(patch.args) && args.length === 0) throw new Error('Args is required')
+  if (Array.isArray(patch.args) && args.length === 0) throw new Error(i18n.global.t('errors.preview.argsRequired'))
 
   const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}`, {
     method: 'PUT',
@@ -240,13 +252,13 @@ export async function updateWorkspacePreviewSession(
   })
 
   const session = normalizeWorkspacePreviewSession(payload)
-  if (!session) throw new Error('Invalid preview session response')
+  if (!session) throw new Error(i18n.global.t('errors.preview.invalidSessionResponse'))
   return session
 }
 
 export async function deleteWorkspacePreviewSession(sessionId: string): Promise<void> {
   const trimmedId = String(sessionId || '').trim()
-  if (!trimmedId) throw new Error('Session id is required')
+  if (!trimmedId) throw new Error(i18n.global.t('errors.preview.sessionIdRequired'))
 
   await apiJson<{ ok: boolean }>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}`, {
     method: 'DELETE',
@@ -259,8 +271,8 @@ export async function renameWorkspacePreviewSession(
 ): Promise<WorkspacePreviewSession> {
   const trimmedId = String(sessionId || '').trim()
   const trimmedNew = String(newId || '').trim()
-  if (!trimmedId) throw new Error('Session id is required')
-  if (!trimmedNew) throw new Error('New session id is required')
+  if (!trimmedId) throw new Error(i18n.global.t('errors.preview.sessionIdRequired'))
+  if (!trimmedNew) throw new Error(i18n.global.t('errors.preview.newSessionIdRequired'))
 
   const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}/rename`, {
     method: 'POST',
@@ -271,32 +283,32 @@ export async function renameWorkspacePreviewSession(
   })
 
   const session = normalizeWorkspacePreviewSession(payload)
-  if (!session) throw new Error('Invalid preview session response')
+  if (!session) throw new Error(i18n.global.t('errors.preview.invalidSessionResponse'))
   return session
 }
 
 export async function startWorkspacePreviewSession(sessionId: string): Promise<WorkspacePreviewSession> {
   const trimmedId = String(sessionId || '').trim()
-  if (!trimmedId) throw new Error('Session id is required')
+  if (!trimmedId) throw new Error(i18n.global.t('errors.preview.sessionIdRequired'))
 
   const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}/start`, {
     method: 'POST',
   })
 
   const session = normalizeWorkspacePreviewSession(payload)
-  if (!session) throw new Error('Invalid preview session response')
+  if (!session) throw new Error(i18n.global.t('errors.preview.invalidSessionResponse'))
   return session
 }
 
 export async function stopWorkspacePreviewSession(sessionId: string): Promise<WorkspacePreviewSession> {
   const trimmedId = String(sessionId || '').trim()
-  if (!trimmedId) throw new Error('Session id is required')
+  if (!trimmedId) throw new Error(i18n.global.t('errors.preview.sessionIdRequired'))
 
   const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}/stop`, {
     method: 'POST',
   })
 
   const session = normalizeWorkspacePreviewSession(payload)
-  if (!session) throw new Error('Invalid preview session response')
+  if (!session) throw new Error(i18n.global.t('errors.preview.invalidSessionResponse'))
   return session
 }

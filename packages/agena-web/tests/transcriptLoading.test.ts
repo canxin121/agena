@@ -24,6 +24,10 @@ const vite = await createServer({
 })
 after(() => vite.close())
 const { useChatStore } = (await vite.ssrLoadModule('/src/stores/chat.ts')) as { useChatStore: typeof ChatStoreFactory }
+// The SSR module graph owns a separate i18n singleton; pin it to the English
+// source copy that these assertions describe.
+const { i18n: ssrI18n } = (await vite.ssrLoadModule('/src/i18n/index.ts')) as typeof import('../src/i18n')
+ssrI18n.global.locale.value = 'en-US'
 
 test('the rendered reply exposes left-aligned busy/retry controls even with a filtered-out anchor', async () => {
   const { default: MessageItem } = await vite.ssrLoadModule('/src/components/chat/MessageItem.vue')

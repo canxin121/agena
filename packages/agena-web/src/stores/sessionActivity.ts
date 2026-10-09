@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { defineStore } from 'pinia'
 import { computed, onScopeDispose, ref } from 'vue'
 
@@ -109,7 +110,10 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
     const requestRecoveryGeneration = recoveryGeneration
     const request = new AbortController()
     controller = request
-    const timeout = window.setTimeout(() => request.abort(new Error('Activity request timed out')), 30_000)
+    const timeout = window.setTimeout(
+      () => request.abort(new Error(i18n.global.t('chat.errors.activityRequestTimedOut'))),
+      30_000,
+    )
     loading.value = true
     error.value = null
     try {

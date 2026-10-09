@@ -441,8 +441,8 @@ function buildTimelineMenuGroups(side: TimelineSide, items: OptionMenuItem[], pa
   return [
     {
       id: `timeline-${side}-commits`,
-      title: 'Commits',
-      subtitle: `${items.length}/${props.timelineCommits.length} loaded`,
+      title: t('files.timeline.commits'),
+      subtitle: t('files.timeline.loadedCount', { loaded: items.length, total: props.timelineCommits.length }),
       items: visibleItems,
     },
   ]

@@ -1,17 +1,36 @@
+import { i18n } from '@/i18n'
 import { apiJson, apiResponse, apiUrl } from './api'
 import { SseFrames } from './sseFrames'
 import { updateDocument, validateDocument, type ContentDocument, type DocumentMutation } from './contentDocument'
 
 export type ContentCursor = { epoch: string; sequence: number }
 export type ContentRef = { resource_id: string; kind: 'text' | 'log' | 'structured' | 'document' | 'terminal' }
-export type TerminalColor = { type: 'indexed'; index: number } | { type: 'rgb'; red: number; green: number; blue: number }
+export type TerminalColor =
+  | { type: 'indexed'; index: number }
+  | { type: 'rgb'; red: number; green: number; blue: number }
 export type TerminalSnapshot = {
-  rows: number; cols: number; cursor_row: number; cursor_col: number; cursor_visible: boolean
-  alternate_screen: boolean; bracketed_paste: boolean; application_cursor: boolean
-  cells: { row: number; col: number; text: string; attributes: {
-    foreground: TerminalColor | null; background: TerminalColor | null
-    bold: boolean; dim: boolean; italic: boolean; underline: boolean; inverse: boolean
-  } }[]
+  rows: number
+  cols: number
+  cursor_row: number
+  cursor_col: number
+  cursor_visible: boolean
+  alternate_screen: boolean
+  bracketed_paste: boolean
+  application_cursor: boolean
+  cells: {
+    row: number
+    col: number
+    text: string
+    attributes: {
+      foreground: TerminalColor | null
+      background: TerminalColor | null
+      bold: boolean
+      dim: boolean
+      italic: boolean
+      underline: boolean
+      inverse: boolean
+    }
+  }[]
 }
 export type ContentPayload =
   | { type: 'text'; text: string }
@@ -25,7 +44,10 @@ const contentEncoder = new TextEncoder()
 const chunkCosts = new WeakMap<ContentChunk, number>()
 export function contentChunkBytes(chunk: ContentChunk): number {
   let bytes = chunkCosts.get(chunk)
-  if (bytes === undefined) { bytes = contentEncoder.encode(JSON.stringify(chunk)).byteLength; chunkCosts.set(chunk, bytes) }
+  if (bytes === undefined) {
+    bytes = contentEncoder.encode(JSON.stringify(chunk)).byteLength
+    chunkCosts.set(chunk, bytes)
+  }
   return bytes
 }
 export type ContentResource = ContentRef & {
@@ -55,16 +77,27 @@ export function terminalSnapshotText(screen: TerminalSnapshot, rows?: number[]):
   for (const run of screen.cells) {
     output.push(`\x1b[${run.row + 1};${run.col + 1}H\x1b[0m`)
     const attrs = run.attributes
-    for (const [enabled, code] of [[attrs.bold, 1], [attrs.dim, 2], [attrs.italic, 3], [attrs.underline, 4], [attrs.inverse, 7]]) {
+    for (const [enabled, code] of [
+      [attrs.bold, 1],
+      [attrs.dim, 2],
+      [attrs.italic, 3],
+      [attrs.underline, 4],
+      [attrs.inverse, 7],
+    ]) {
       if (enabled) output.push(`\x1b[${code}m`)
     }
-    for (const [color, channel] of [[attrs.foreground, 38], [attrs.background, 48]] as const) {
+    for (const [color, channel] of [
+      [attrs.foreground, 38],
+      [attrs.background, 48],
+    ] as const) {
       if (color?.type === 'indexed') output.push(`\x1b[${channel};5;${color.index}m`)
       else if (color?.type === 'rgb') output.push(`\x1b[${channel};2;${color.red};${color.green};${color.blue}m`)
     }
     output.push(run.text)
   }
-  output.push(`\x1b[0m\x1b[${screen.cursor_row + 1};${screen.cursor_col + 1}H\x1b[?25${screen.cursor_visible ? 'h' : 'l'}`)
+  output.push(
+    `\x1b[0m\x1b[${screen.cursor_row + 1};${screen.cursor_col + 1}H\x1b[?25${screen.cursor_visible ? 'h' : 'l'}`,
+  )
   output.push(`\x1b[?2004${screen.bracketed_paste ? 'h' : 'l'}\x1b[?1${screen.application_cursor ? 'h' : 'l'}`)
   return output.join('')
 }
@@ -92,9 +125,10 @@ export class ContentBuffer {
 
   apply(page: ContentPage): { appended: ContentChunk[]; reset: boolean; missing: boolean } {
     if (this.resource && this.resource.resource_id !== page.resource.resource_id)
-      throw new Error('A content buffer cannot change resource identity')
+      throw new Error(i18n.global.t('errors.content.bufferIdentityChanged'))
     const reset = this.recovering || (this.cursor !== null && this.cursor.epoch !== page.next_cursor.epoch)
-    if (page.resource.cursor.epoch !== page.next_cursor.epoch) throw new Error('Mixed resource epochs')
+    if (page.resource.cursor.epoch !== page.next_cursor.epoch)
+      throw new Error(i18n.global.t('errors.content.mixedResourceEpochs'))
     const appended: ContentChunk[] = []
     let expected = reset ? undefined : this.cursor?.sequence
     let terminalCursor = reset ? null : this.terminalCursor
@@ -108,25 +142,41 @@ export class ContentBuffer {
       return { appended: [], reset: false, missing: true }
     }
     for (const chunk of page.chunks) {
-      if (chunk.cursor.epoch !== page.next_cursor.epoch) throw new Error('Mixed content epochs')
+      if (chunk.cursor.epoch !== page.next_cursor.epoch)
+        throw new Error(i18n.global.t('errors.content.mixedContentEpochs'))
       if (expected !== undefined && chunk.cursor.sequence <= expected) continue
       if (expected !== undefined && chunk.cursor.sequence !== expected + 1 && !page.gap)
         return { appended: [], reset: false, missing: true }
       appended.push(chunk)
       expected = chunk.cursor.sequence
       if (chunk.payload.type === 'structured_snapshot') {
-        try { document = validateDocument(chunk.payload.document) } catch { return recover() }
+        try {
+          document = validateDocument(chunk.payload.document)
+        } catch {
+          return recover()
+        }
         documentCursor = chunk.cursor
       } else if (chunk.payload.type === 'structured') {
         const base = chunk.payload.base_cursor
-        if (!document || !documentCursor || documentCursor.epoch !== base.epoch || documentCursor.sequence !== base.sequence) return recover()
-        try { document = updateDocument(document, chunk.payload.event) } catch { return recover() }
+        if (
+          !document ||
+          !documentCursor ||
+          documentCursor.epoch !== base.epoch ||
+          documentCursor.sequence !== base.sequence
+        )
+          return recover()
+        try {
+          document = updateDocument(document, chunk.payload.event)
+        } catch {
+          return recover()
+        }
         documentCursor = chunk.cursor
       }
       if (chunk.payload.type === 'terminal') terminalCursor = chunk.cursor
       else if (chunk.payload.type === 'terminal_patch') {
         const base = chunk.payload.base_cursor
-        if (!terminalCursor || terminalCursor.epoch !== base.epoch || terminalCursor.sequence !== base.sequence) return recover()
+        if (!terminalCursor || terminalCursor.epoch !== base.epoch || terminalCursor.sequence !== base.sequence)
+          return recover()
         terminalCursor = chunk.cursor
       }
     }
@@ -139,15 +189,21 @@ export class ContentBuffer {
       this.windowed = false
       this.terminalScreen = null
     }
-    if (!this.cursor && appended[0] && appended[0].cursor.sequence > 1 && page.resource.kind !== 'structured') this.windowed = true
+    if (!this.cursor && appended[0] && appended[0].cursor.sequence > 1 && page.resource.kind !== 'structured')
+      this.windowed = true
     for (const chunk of appended) {
-      if (chunk.payload.type === 'terminal') { this.terminalScreen = chunk.payload.screen; this.terminalCapturedAt = chunk.captured_at_ms }
-      else if (chunk.payload.type === 'terminal_patch' && this.terminalScreen) {
+      if (chunk.payload.type === 'terminal') {
+        this.terminalScreen = chunk.payload.screen
+        this.terminalCapturedAt = chunk.captured_at_ms
+      } else if (chunk.payload.type === 'terminal_patch' && this.terminalScreen) {
         this.terminalCapturedAt = chunk.captured_at_ms
         const changed = new Set(chunk.payload.rows_changed)
-        this.terminalScreen = { ...chunk.payload.screen,
-          cells: [...this.terminalScreen.cells.filter((run) => !changed.has(run.row)), ...chunk.payload.screen.cells]
-            .sort((left, right) => left.row - right.row || left.col - right.col),
+        this.terminalScreen = {
+          ...chunk.payload.screen,
+          cells: [
+            ...this.terminalScreen.cells.filter((run) => !changed.has(run.row)),
+            ...chunk.payload.screen.cells,
+          ].sort((left, right) => left.row - right.row || left.col - right.col),
         }
       }
       this.chunks.push(chunk)
@@ -162,8 +218,11 @@ export class ContentBuffer {
     if (!this.cursor || page.next_cursor.sequence >= this.cursor.sequence) this.cursor = page.next_cursor
     if (!this.resource || page.resource.cursor.sequence >= this.resource.cursor.sequence) {
       // Terminal state wins an equal-position race with a delayed live page.
-      if (this.resource?.state !== 'active' && page.resource.state === 'active' &&
-          this.resource?.cursor.sequence === page.resource.cursor.sequence) {
+      if (
+        this.resource?.state !== 'active' &&
+        page.resource.state === 'active' &&
+        this.resource?.cursor.sequence === page.resource.cursor.sequence
+      ) {
         this.resource = { ...page.resource, state: this.resource.state }
       } else this.resource = page.resource
     }
@@ -176,19 +235,29 @@ export class ContentBuffer {
   }
 
   text(): string {
-    return this.chunks.map(({ payload }) => 'text' in payload ? payload.text : '').join('')
+    return this.chunks.map(({ payload }) => ('text' in payload ? payload.text : '')).join('')
   }
 
   replayChunks(): ContentChunk[] {
     if (this.resource?.kind !== 'terminal') return this.chunks.slice()
     if (!this.terminalCursor || !this.terminalScreen) return []
-    return [{ cursor: this.terminalCursor, captured_at_ms: this.terminalCapturedAt, payload: { type: 'terminal', screen: this.terminalScreen } },
-      ...this.chunks.filter((chunk) => chunk.cursor.sequence > this.terminalCursor!.sequence)]
+    return [
+      {
+        cursor: this.terminalCursor,
+        captured_at_ms: this.terminalCapturedAt,
+        payload: { type: 'terminal', screen: this.terminalScreen },
+      },
+      ...this.chunks.filter((chunk) => chunk.cursor.sequence > this.terminalCursor!.sequence),
+    ]
   }
 }
 
 export function readContent(sessionId: string, resourceId: string, after: ContentCursor): Promise<ContentPage> {
-  const query = new URLSearchParams({ epoch: after.epoch, after: String(after.sequence), max_bytes: String(1024 * 1024) })
+  const query = new URLSearchParams({
+    epoch: after.epoch,
+    after: String(after.sequence),
+    max_bytes: String(1024 * 1024),
+  })
   return apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/content/${encodeURIComponent(resourceId)}?${query}`)
 }
 
@@ -208,7 +277,7 @@ export async function streamContent(
   }
   const endpoint = `/api/v1/sessions/${encodeURIComponent(sessionId)}/content/${encodeURIComponent(resourceId)}/stream?${query}`
   const response = await apiResponse(apiUrl(endpoint), { signal, headers: { accept: 'text/event-stream' } })
-  if (!response.body) throw new Error('Content streaming is unavailable')
+  if (!response.body) throw new Error(i18n.global.t('errors.content.streamingUnavailable'))
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   const frames = new SseFrames()
@@ -218,8 +287,14 @@ export async function streamContent(
       if (done) break
       for (const frame of frames.push(decoder.decode(value, { stream: true }))) {
         const lines = frame.split('\n')
-        const event = lines.find((line) => line.startsWith('event:'))?.slice(6).trim()
-        const body = lines.filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n')
+        const event = lines
+          .find((line) => line.startsWith('event:'))
+          ?.slice(6)
+          .trim()
+        const body = lines
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n')
         if (!body) continue
         if (event === 'content_error') {
           const failure = JSON.parse(body)

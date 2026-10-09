@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { apiResponse, apiUrl } from './api'
 import { readUiAuthTokenVersion } from './uiAuthToken'
 import { canReuseResource, captureResourceObservation, noteResourceVersion } from './resourceSync'
@@ -114,9 +115,9 @@ export async function conditionalJsonObserved<T>(
       })
       signal.throwIfAborted()
       if (authVersion !== readUiAuthTokenVersion() || resolvedUrl !== apiUrl(url))
-        throw new Error('Backend or authentication changed during read')
+        throw new Error(i18n.global.t('errors.content.backendOrAuthChanged'))
       if (response.status === 304) {
-        if (!cached) throw new Error('A 304 response has no cached representation')
+        if (!cached) throw new Error(i18n.global.t('errors.content.notModifiedWithoutCache'))
         if (noteResourceVersion(resource, cached.token, observation))
           remember(key, { ...cached, generation: current.generation })
         return { value: cached.value, observation: { ...observation, token: cached.token } }
@@ -124,7 +125,7 @@ export async function conditionalJsonObserved<T>(
       const text = await response.text()
       signal.throwIfAborted()
       if (authVersion !== readUiAuthTokenVersion() || resolvedUrl !== apiUrl(url))
-        throw new Error('Backend or authentication changed during read')
+        throw new Error(i18n.global.t('errors.content.backendOrAuthChanged'))
       const value = JSON.parse(text) as T
       const etag = response.headers.get('etag') ?? ''
       const token = /^(?:W\/)?"(.+)"$/.exec(etag)?.[1] ?? ''

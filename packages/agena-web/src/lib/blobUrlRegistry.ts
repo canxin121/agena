@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 export const MAX_LOCAL_ATTACHMENT_MEMORY_BYTES = 128 * 1024 * 1024
 let liveBytes = 0
 
@@ -25,7 +26,7 @@ export function createBlobUrlRegistry(
   return {
     available,
     create(blob: Blob) {
-      if (blob.size > available()) throw new Error('Local attachment memory budget exceeded')
+      if (blob.size > available()) throw new Error(i18n.global.t('errors.attachments.memoryBudgetExceeded'))
       const url = create(blob)
       urls.set(url, blob.size)
       liveBytes += blob.size

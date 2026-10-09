@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import type { SessionState } from '@/types/chat'
 import type { StrictJsonObject, StrictJsonValue } from '@/types/json'
 import { indexedDbNames } from '@/lib/persistence/storageKeys'
@@ -41,21 +42,21 @@ function hasIndexedDb(): boolean {
 function waitForTransaction(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction failed'))
-    tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'))
+    tx.onerror = () => reject(tx.error || new Error(i18n.global.t('errors.storage.transactionFailed')))
+    tx.onabort = () => reject(tx.error || new Error(i18n.global.t('errors.storage.transactionAborted')))
   })
 }
 
 function requestResult<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error || new Error('IndexedDB request failed'))
+    req.onerror = () => reject(req.error || new Error(i18n.global.t('errors.storage.requestFailed')))
   })
 }
 
 function openSnapshotDb(): Promise<IDBDatabase> {
   if (!hasIndexedDb()) {
-    return Promise.reject(new Error('IndexedDB not available'))
+    return Promise.reject(new Error(i18n.global.t('errors.storage.notAvailable')))
   }
   if (openDbPromise) return openDbPromise
 
@@ -72,7 +73,7 @@ function openSnapshotDb(): Promise<IDBDatabase> {
       db.onversionchange = () => db.close()
       resolve(db)
     }
-    req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB'))
+    req.onerror = () => reject(req.error || new Error(i18n.global.t('errors.storage.openFailed')))
   })
 
   return openDbPromise

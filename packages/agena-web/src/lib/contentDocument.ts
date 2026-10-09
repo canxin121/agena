@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import type { JsonRecord } from '@/pages/chat/transcriptPartPresentation'
 import type { JsonValue } from '@/types/json'
 
@@ -14,42 +15,114 @@ export type DocumentMutation =
   | { type: 'progress'; block_id: string; phase: string; completed: number; total: number | null; unit: string | null }
 
 const encoder = new TextEncoder()
-function validId(id: string) { return typeof id === 'string' && id.length > 0 && encoder.encode(id).byteLength <= 128 && !/[\u0000-\u001f\u007f-\u009f]/u.test(id) }
+function validId(id: string) {
+  return (
+    typeof id === 'string' &&
+    id.length > 0 &&
+    encoder.encode(id).byteLength <= 128 &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(id)
+  )
+}
 
 export function validateDocument(document: ContentDocument): ContentDocument {
-  if (!Array.isArray(document.blocks) || document.blocks.length > 128) throw new Error('Document block budget exhausted')
+  if (!Array.isArray(document.blocks) || document.blocks.length > 128)
+    throw new Error('Document block budget exhausted')
   const ids = new Set<string>()
   for (const block of document.blocks) {
-    if (!validId(block.id) || ids.has(block.id) || !['text', 'markdown', 'log', 'diff', 'command', 'table', 'search_results', 'file_changes', 'media', 'json', 'progress', 'custom'].includes(block.type)) throw new Error('Invalid document block identity')
+    if (
+      !validId(block.id) ||
+      ids.has(block.id) ||
+      ![
+        'text',
+        'markdown',
+        'log',
+        'diff',
+        'command',
+        'table',
+        'search_results',
+        'file_changes',
+        'media',
+        'json',
+        'progress',
+        'custom',
+      ].includes(block.type)
+    )
+      throw new Error('Invalid document block identity')
     ids.add(block.id)
     if (block.type === 'table') {
       const columns = block.columns as JsonValue[]
       const rows = block.rows as JsonValue[][]
-      if (!Array.isArray(columns) || !columns.length || columns.length > 64 || !Array.isArray(rows) || rows.some((row) => !Array.isArray(row) || row.length !== columns.length)) throw new Error('Invalid document table')
+      if (
+        !Array.isArray(columns) ||
+        !columns.length ||
+        columns.length > 64 ||
+        !Array.isArray(rows) ||
+        rows.some((row) => !Array.isArray(row) || row.length !== columns.length)
+      )
+        throw new Error(i18n.global.t('errors.document.invalidTable'))
     }
-    if (block.type === 'progress' && (!Number.isSafeInteger(block.completed) || Number(block.completed) < 0 || (block.total !== null && (!Number.isSafeInteger(block.total) || Number(block.total) < Number(block.completed))))) throw new Error('Invalid progress counts')
+    if (
+      block.type === 'progress' &&
+      (!Number.isSafeInteger(block.completed) ||
+        Number(block.completed) < 0 ||
+        (block.total !== null && (!Number.isSafeInteger(block.total) || Number(block.total) < Number(block.completed))))
+    )
+      throw new Error(i18n.global.t('errors.document.invalidProgressCounts'))
   }
-  if (encoder.encode(JSON.stringify(document)).byteLength > 64 * 1024) throw new Error('Document byte budget exhausted')
+  if (encoder.encode(JSON.stringify(document)).byteLength > 64 * 1024)
+    throw new Error(i18n.global.t('errors.document.byteBudgetExhausted'))
   return document
 }
 
 /** Copy semantic values, preserving source whitespace rather than DOM layout. */
 export function contentDocumentText(document: ContentDocument): string {
-  return document.blocks.map((block) => {
-    switch (block.type) {
-      case 'text': case 'markdown': case 'log': return String(block.text || '')
-      case 'diff': return String(block.diff || '')
-      case 'json': return JSON.stringify(block.value, null, 2)
-      case 'progress': return `${block.phase}: ${block.completed}${block.total === null ? '' : `/${block.total}`}${block.unit ? ` ${block.unit}` : ''}`
-      case 'table': return [(block.columns as JsonValue[]).map(String).join('\t'), ...(block.rows as JsonValue[][]).map((row) => row.map((value) => typeof value === 'string' ? value : JSON.stringify(value)).join('\t'))].join('\n')
-      case 'search_results': return (block.items as JsonRecord[]).map((item) => [item.title, item.url, item.snippet].filter((value) => value !== null && value !== undefined).join('\n')).join('\n\n')
-      case 'command': return [`$ ${block.command}`, block.stdout, block.stderr, block.exit_code === null ? '' : `exit: ${block.exit_code}`].filter((value) => value !== null && value !== undefined && value !== '').join('\n')
-      case 'media': return JSON.stringify(block.artifact)
-      case 'custom': return JSON.stringify(block.schema, null, 2)
-      case 'file_changes': return JSON.stringify(block.changes, null, 2)
-      default: return ''
-    }
-  }).filter((text) => text !== '').join('\n\n')
+  return document.blocks
+    .map((block) => {
+      switch (block.type) {
+        case 'text':
+        case 'markdown':
+        case 'log':
+          return String(block.text || '')
+        case 'diff':
+          return String(block.diff || '')
+        case 'json':
+          return JSON.stringify(block.value, null, 2)
+        case 'progress':
+          return `${block.phase}: ${block.completed}${block.total === null ? '' : `/${block.total}`}${block.unit ? ` ${block.unit}` : ''}`
+        case 'table':
+          return [
+            (block.columns as JsonValue[]).map(String).join('\t'),
+            ...(block.rows as JsonValue[][]).map((row) =>
+              row.map((value) => (typeof value === 'string' ? value : JSON.stringify(value))).join('\t'),
+            ),
+          ].join('\n')
+        case 'search_results':
+          return (block.items as JsonRecord[])
+            .map((item) =>
+              [item.title, item.url, item.snippet].filter((value) => value !== null && value !== undefined).join('\n'),
+            )
+            .join('\n\n')
+        case 'command':
+          return [
+            `$ ${block.command}`,
+            block.stdout,
+            block.stderr,
+            block.exit_code === null ? '' : `exit: ${block.exit_code}`,
+          ]
+            .filter((value) => value !== null && value !== undefined && value !== '')
+            .join('\n')
+        case 'media':
+          return JSON.stringify(block.artifact)
+        case 'custom':
+          return JSON.stringify(block.schema, null, 2)
+        case 'file_changes':
+          return JSON.stringify(block.changes, null, 2)
+        default:
+          return ''
+      }
+    })
+    .filter((text) => text !== '')
+    .join('\n\n')
 }
 
 /** Reuse unaffected blocks. A rejected update leaves the prior state intact. */
@@ -67,12 +140,17 @@ export function updateDocument(previous: ContentDocument, event: DocumentMutatio
       blocks.splice(event.after === null ? 0 : index(event.after) + 1, 0, event.block)
       break
     }
-    case 'replace': blocks[index(event.block.id)] = event.block; break
-    case 'remove': blocks.splice(index(event.block_id), 1); break
+    case 'replace':
+      blocks[index(event.block.id)] = event.block
+      break
+    case 'remove':
+      blocks.splice(index(event.block_id), 1)
+      break
     case 'append_text': {
       const position = index(event.block_id)
       const block = blocks[position]!
-      if (!['text', 'markdown', 'log', 'diff'].includes(block.type)) throw new Error('Text requires an appendable block')
+      if (!['text', 'markdown', 'log', 'diff'].includes(block.type))
+        throw new Error('Text requires an appendable block')
       const field = block.type === 'diff' ? 'diff' : 'text'
       blocks[position] = { ...block, [field]: String(block[field] || '') + event.text }
       break
@@ -81,20 +159,31 @@ export function updateDocument(previous: ContentDocument, event: DocumentMutatio
       const position = index(event.block_id)
       const block = blocks[position]!
       if (block.type !== 'table') throw new Error('Rows require a table block')
-      blocks[position] = { ...block, rows: [...block.rows as JsonValue[][], ...event.rows] }
+      blocks[position] = { ...block, rows: [...(block.rows as JsonValue[][]), ...event.rows] }
       break
     }
     case 'append_search_results': {
       const position = index(event.block_id)
       const block = blocks[position]!
       if (block.type !== 'search_results') throw new Error('Items require a search-results block')
-      blocks[position] = { ...block, items: [...block.items as JsonRecord[], ...event.items], total: event.total ?? block.total ?? null }
+      blocks[position] = {
+        ...block,
+        items: [...(block.items as JsonRecord[]), ...event.items],
+        total: event.total ?? block.total ?? null,
+      }
       break
     }
     case 'progress': {
-      if (!validId(event.block_id)) throw new Error('Invalid progress identity')
+      if (!validId(event.block_id)) throw new Error(i18n.global.t('errors.document.invalidProgressIdentity'))
       const position = blocks.findIndex((block) => block.id === event.block_id)
-      const block: DocumentBlock = { type: 'progress', id: event.block_id, phase: event.phase, completed: event.completed, total: event.total, unit: event.unit }
+      const block: DocumentBlock = {
+        type: 'progress',
+        id: event.block_id,
+        phase: event.phase,
+        completed: event.completed,
+        total: event.total,
+        unit: event.unit,
+      }
       if (position < 0) blocks.push(block)
       else {
         if (blocks[position]?.type !== 'progress') throw new Error('Progress cannot replace a different block kind')

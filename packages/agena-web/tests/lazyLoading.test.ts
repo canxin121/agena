@@ -12,6 +12,10 @@ const vite = await createServer({
   server: { middlewareMode: true, watch: null, hmr: false },
 })
 after(() => vite.close())
+// The SSR module graph owns a separate i18n singleton; pin it to the English
+// source copy that these assertions describe.
+const { i18n: ssrI18n } = (await vite.ssrLoadModule('/src/i18n/index.ts')) as typeof import('../src/i18n')
+ssrI18n.global.locale.value = 'en-US'
 const { renderMarkdown } = (await vite.ssrLoadModule('/src/lib/markdown.ts')) as typeof import('../src/lib/markdown')
 const { createRequestLimiter, loadSidebarSessionPage } = (await vite.ssrLoadModule(
   '/src/stores/chat/sidebarPaging.ts',

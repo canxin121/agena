@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { transcriptDiffFiles } from './transcriptDiff'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { ToolDetailSection } from '@/stores/chat/api'
@@ -160,28 +161,76 @@ export function partStatusPresentation(statusInput: string): PartStatusPresentat
     .trim()
     .toLowerCase()
   if (status === 'in_progress' || status === 'running') {
-    return { icon: '⠋', label: 'running', tone: 'pending', spinning: true, terminal: false }
+    return {
+      icon: '⠋',
+      label: i18n.global.t('chat.partStatus.running'),
+      tone: 'pending',
+      spinning: true,
+      terminal: false,
+    }
   }
   if (status === 'completed') {
-    return { icon: '●', label: 'completed', tone: 'success', spinning: false, terminal: true }
+    return {
+      icon: '●',
+      label: i18n.global.t('chat.partStatus.completed'),
+      tone: 'success',
+      spinning: false,
+      terminal: true,
+    }
   }
   if (status === 'policy_denied') {
-    return { icon: '⊘', label: 'policy denied', tone: 'warning', spinning: false, terminal: true }
+    return {
+      icon: '⊘',
+      label: i18n.global.t('chat.partStatus.policyDenied'),
+      tone: 'warning',
+      spinning: false,
+      terminal: true,
+    }
   }
   if (status === 'user_declined') {
-    return { icon: '–', label: 'declined', tone: 'muted', spinning: false, terminal: true }
+    return {
+      icon: '–',
+      label: i18n.global.t('chat.partStatus.declined'),
+      tone: 'muted',
+      spinning: false,
+      terminal: true,
+    }
   }
   if (status === 'capability_unavailable' || status === 'tool_unavailable') {
-    return { icon: '◇', label: 'unavailable', tone: 'warning', spinning: false, terminal: true }
+    return {
+      icon: '◇',
+      label: i18n.global.t('chat.partStatus.unavailable'),
+      tone: 'warning',
+      spinning: false,
+      terminal: true,
+    }
   }
   if (status === 'failed' || status === 'error') {
-    return { icon: '×', label: 'failed', tone: 'danger', spinning: false, terminal: true }
+    return {
+      icon: '×',
+      label: i18n.global.t('chat.partStatus.failed'),
+      tone: 'danger',
+      spinning: false,
+      terminal: true,
+    }
   }
   if (status === 'cancelled' || status === 'canceled') {
-    return { icon: '–', label: 'cancelled', tone: 'muted', spinning: false, terminal: true }
+    return {
+      icon: '–',
+      label: i18n.global.t('chat.partStatus.cancelled'),
+      tone: 'muted',
+      spinning: false,
+      terminal: true,
+    }
   }
   if (status === 'pending') {
-    return { icon: '○', label: 'pending', tone: 'pending', spinning: false, terminal: false }
+    return {
+      icon: '○',
+      label: i18n.global.t('chat.partStatus.pending'),
+      tone: 'pending',
+      spinning: false,
+      terminal: false,
+    }
   }
   return { icon: '', label: '', tone: 'muted', spinning: false, terminal: false }
 }

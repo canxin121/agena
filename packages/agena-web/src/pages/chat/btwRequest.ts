@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { apiResponse } from '../../lib/api'
 
 export type BtwAnswer = { text: string; done: boolean; error?: string | null }
@@ -10,7 +11,7 @@ export function parseBtwFrame(frame: string): BtwAnswer | null {
     if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
   }
   if (!data.length) return null
-  if (event !== 'btw') throw new Error('Unexpected BTW stream event')
+  if (event !== 'btw') throw new Error(i18n.global.t('chat.errors.btwUnexpectedEvent'))
   const answer: unknown = JSON.parse(data.join('\n'))
   if (
     !answer ||
@@ -21,7 +22,7 @@ export function parseBtwFrame(frame: string): BtwAnswer | null {
     typeof answer.done !== 'boolean' ||
     ('error' in answer && answer.error !== null && typeof answer.error !== 'string')
   ) {
-    throw new Error('Invalid BTW answer')
+    throw new Error(i18n.global.t('chat.errors.btwInvalidAnswer'))
   }
   return answer as BtwAnswer
 }
@@ -39,7 +40,7 @@ export async function askBtw(
     body: JSON.stringify({ question }),
     signal,
   })
-  if (!response.body) throw new Error('The BTW response has no stream')
+  if (!response.body) throw new Error(i18n.global.t('chat.errors.btwNoStream'))
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let pending = ''
@@ -49,12 +50,12 @@ export async function askBtw(
       const chunk = await Promise.race([
         reader.read(),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('The BTW stream stalled')), 60_000)
+          timer = setTimeout(() => reject(new Error(i18n.global.t('chat.errors.btwStreamStalled'))), 60_000)
         }),
       ]).finally(() => clearTimeout(timer))
-      if (chunk.done) throw new Error('The BTW stream ended before completion')
+      if (chunk.done) throw new Error(i18n.global.t('chat.errors.btwStreamEndedEarly'))
       pending += decoder.decode(chunk.value, { stream: true })
-      if (pending.length > 4 * 1024 * 1024) throw new Error('The BTW stream event is too large')
+      if (pending.length > 4 * 1024 * 1024) throw new Error(i18n.global.t('chat.errors.btwStreamTooLarge'))
       let boundary: RegExpExecArray | null
       while ((boundary = /\r?\n\r?\n/.exec(pending))) {
         const frame = pending.slice(0, boundary.index)

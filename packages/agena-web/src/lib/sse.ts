@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import type { JsonValue as JsonLike } from '@/types/json'
 
 import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from './authEvents.ts'
@@ -483,7 +484,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
           throw new Error(`SSE failed: ${resp.status} ${resp.statusText}`)
         }
         if (!resp.body || typeof resp.body.getReader !== 'function') {
-          throw new Error('SSE streaming required')
+          throw new Error(i18n.global.t('errors.stream.sseRequired'))
         }
 
         stats.connectCount += 1
@@ -628,7 +629,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
               try {
                 raw = JSON.parse(rawData)
               } catch {
-                throw new Error('SSE event contains invalid JSON; snapshot reconciliation required')
+                throw new Error(i18n.global.t('errors.stream.invalidEventJson'))
               }
               normalizeAndQueue(raw, { directory: opts.directory ?? undefined, lastEventId: seenId })
             }
@@ -646,7 +647,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
         // If the server closed the stream (but the client didn't), mimic EventSource
         // by reconnecting with backoff instead of spinning.
         if (!closed && !controller.signal.aborted) {
-          throw new Error('SSE connection closed')
+          throw new Error(i18n.global.t('errors.stream.connectionClosed'))
         }
       } catch (err) {
         if (closed || controller.signal.aborted) break
@@ -661,7 +662,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
         debugLog('error', { message: stats.lastErrorMessage, attempt }, { force: true })
 
         // No fallback: modern browsers only.
-        if (nextError instanceof Error && nextError.message.includes('SSE streaming required')) {
+        if (nextError instanceof Error && nextError.message.includes(i18n.global.t('errors.stream.sseRequired'))) {
           closed = true
           break
         }
@@ -689,7 +690,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
   }
 
   if (typeof fetch !== 'function' || typeof TextDecoder === 'undefined') {
-    throw new Error('SSE requires fetch + TextDecoder')
+    throw new Error(i18n.global.t('errors.stream.unsupportedEnvironment'))
   }
   void runFetchStream()
 

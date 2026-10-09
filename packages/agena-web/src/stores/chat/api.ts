@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import type { SessionActivity } from '@/types/activity'
 // Agena REST API client for the chat subsystem.
 //
@@ -185,7 +186,15 @@ function messageFoldsFromWindow(page: AgenaSessionParts): MessageFold[] {
     const hiddenCount = Math.max(0, run.part_count - run.page.returned)
     const anchor = page.parts.find((part) => part.run_id === run.run_id)
     if (!hiddenCount || !anchor) return []
-    return [{ runId: run.run_id, runIds: [run.run_id], anchorPartId: String(anchor.part_id), hiddenCount, nextCursor: run.page.next_cursor ?? null }]
+    return [
+      {
+        runId: run.run_id,
+        runIds: [run.run_id],
+        anchorPartId: String(anchor.part_id),
+        hiddenCount,
+        nextCursor: run.page.next_cursor ?? null,
+      },
+    ]
   })
 }
 
@@ -754,8 +763,9 @@ export type CreateSessionInput = {
 export function buildCreateSessionRequest(input: CreateSessionInput): JsonObject {
   const workspaceId = Number(input.workspaceId)
   const title = String(input.title || '').trim()
-  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) throw new Error('A valid workspace id is required')
-  if (!title) throw new Error('A session title is required')
+  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0)
+    throw new Error(i18n.global.t('chat.errors.workspaceIdRequired'))
+  if (!title) throw new Error(i18n.global.t('chat.errors.sessionTitleRequired'))
 
   const payload: JsonObject = { workspace_id: workspaceId, title }
   if (typeof input.parentId === 'number' && Number.isSafeInteger(input.parentId) && input.parentId > 0) {
@@ -774,7 +784,7 @@ export async function createSession(input: CreateSessionInput): Promise<Session>
     body: JSON.stringify(payload),
   })
   const session = toSession(created, scope)
-  if (!session) throw new Error('Server did not return a session')
+  if (!session) throw new Error(i18n.global.t('chat.errors.sessionMissing'))
   // A successful local write must reconcile its lists even if the stream is
   // disconnected. Probe only this workspace and affected bucket versions;
   // unchanged queries continue to reuse their displayed bodies.
@@ -785,7 +795,7 @@ export async function createSession(input: CreateSessionInput): Promise<Session>
 /** POST /api/v1/workspaces/resolve — resolve a path and create its workspace when needed. */
 export async function resolveWorkspace(path: string): Promise<{ id: number; path: string }> {
   const workspacePath = String(path || '').trim()
-  if (!workspacePath) throw new Error('A workspace path is required')
+  if (!workspacePath) throw new Error(i18n.global.t('chat.errors.workspacePathRequired'))
   const scope = sessionRoutingScope()
   const payload = await apiJson<JsonValue>('/api/v1/workspaces/resolve', {
     method: 'POST',
@@ -796,7 +806,7 @@ export async function resolveWorkspace(path: string): Promise<{ id: number; path
   const id = record.id
   const resolvedPath = str(record.path)
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || !resolvedPath) {
-    throw new Error('Server did not return a workspace')
+    throw new Error(i18n.global.t('chat.errors.workspaceMissing'))
   }
   if (scope === sessionRoutingScope()) invalidateResources(['workspaces:catalog'])
   return { id, path: resolvedPath }
@@ -804,13 +814,14 @@ export async function resolveWorkspace(path: string): Promise<{ id: number; path
 
 /** GET /api/v1/workspaces/{id} — read the authoritative workspace path. */
 export async function getWorkspace(workspaceId: number): Promise<{ id: number; path: string }> {
-  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) throw new Error('A valid workspace id is required')
+  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0)
+    throw new Error(i18n.global.t('chat.errors.workspaceIdRequired'))
   const payload = await apiJson<JsonValue>(`/api/v1/workspaces/${encodeURIComponent(String(workspaceId))}`)
   const record = asRecord(payload)
   const id = record.id
   const path = str(record.path)
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || !path) {
-    throw new Error('Server did not return a workspace')
+    throw new Error(i18n.global.t('chat.errors.workspaceMissing'))
   }
   return { id, path }
 }
@@ -819,7 +830,7 @@ export async function getWorkspace(workspaceId: number): Promise<{ id: number; p
 export async function getRuntimeWorkspaceRoot(): Promise<string> {
   const payload = await apiJson<JsonValue>('/api/v1/runtime')
   const root = str(asRecord(payload).workspace_root)
-  if (!root) throw new Error('Server did not report a workspace root')
+  if (!root) throw new Error(i18n.global.t('chat.errors.workspaceRootMissing'))
   return root
 }
 
@@ -837,10 +848,11 @@ export async function uploadWorkspaceFile(
   workspaceId: number,
   input: { filename: string; dataBase64?: string; blob?: Blob; mime?: string },
 ): Promise<WorkspaceFileUpload> {
-  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) throw new Error('A valid workspace id is required')
+  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0)
+    throw new Error(i18n.global.t('chat.errors.workspaceIdRequired'))
   const filename = String(input.filename || '').trim()
   if (input.blob) {
-    if (!filename || !input.blob.size) throw new Error('Attachment filename and data are required')
+    if (!filename || !input.blob.size) throw new Error(i18n.global.t('chat.errors.attachmentNameAndDataRequired'))
     const query = new URLSearchParams({ filename, ...(input.mime ? { mime: input.mime } : {}) })
     return await apiJson<WorkspaceFileUpload>(`/api/v1/workspaces/${workspaceId}/files?${query}`, {
       method: 'POST',
@@ -849,7 +861,7 @@ export async function uploadWorkspaceFile(
     })
   }
   const dataBase64 = String(input.dataBase64 || '').trim()
-  if (!filename || !dataBase64) throw new Error('Attachment filename and data are required')
+  if (!filename || !dataBase64) throw new Error(i18n.global.t('chat.errors.attachmentNameAndDataRequired'))
   return await apiJson<WorkspaceFileUpload>(`/api/v1/workspaces/${encodeURIComponent(String(workspaceId))}/files`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -872,7 +884,7 @@ export async function createWorkspace(path: string): Promise<number> {
   const record = asRecord(created)
   const id = record?.id
   if (typeof id !== 'number' || !Number.isFinite(id)) {
-    throw new Error('Server did not return a workspace id')
+    throw new Error(i18n.global.t('chat.errors.workspaceIdMissing'))
   }
   if (scope === sessionRoutingScope()) invalidateResources(['workspaces:catalog'])
   return id
@@ -881,7 +893,7 @@ export async function createWorkspace(path: string): Promise<number> {
 /** DELETE /api/v1/workspaces/{id} — remove a workspace (project). */
 export async function deleteWorkspace(workspaceId: string): Promise<void> {
   const wid = String(workspaceId || '').trim()
-  if (!wid) throw new Error('Missing workspace id')
+  if (!wid) throw new Error(i18n.global.t('chat.errors.workspaceIdNotProvided'))
   const scope = sessionRoutingScope()
   await apiJson(`/api/v1/workspaces/${encodeURIComponent(wid)}`, { method: 'DELETE' })
   if (scope !== sessionRoutingScope()) return
@@ -909,7 +921,7 @@ export async function patchSessionMetadata(
     body: JSON.stringify(patch),
   })
   const session = toSession(updated, scope)
-  if (!session) throw new Error('Server did not return a session')
+  if (!session) throw new Error(i18n.global.t('chat.errors.sessionMissing'))
   reconcileSessionMutation(session.id, 'metadata', scope, patch)
   return session
 }
@@ -922,7 +934,7 @@ export async function patchSessionTitle(sessionId: string, title: string): Promi
 export async function getSession(sessionId: string): Promise<Session> {
   const scope = sessionRoutingScope()
   const session = toSession(await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`), scope)
-  if (!session) throw new Error('Server did not return a session')
+  if (!session) throw new Error(i18n.global.t('chat.errors.sessionMissing'))
   return session
 }
 
@@ -963,7 +975,7 @@ export async function getToolPartDetail(
 ): Promise<ToolDetailResource> {
   const sid = String(sessionId || '').trim()
   const pid = String(partId || '').trim()
-  if (!sid || !pid) throw new Error('A session id and part id are required')
+  if (!sid || !pid) throw new Error(i18n.global.t('chat.errors.sessionAndPartIdRequired'))
   const { value, observation } = await conditionalJsonObserved<ToolDetailResource>(
     section === 'presentation' ? `part:${pid}` : `part:${pid}:${section}`,
     `/api/v1/sessions/${encodeURIComponent(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
@@ -1001,7 +1013,7 @@ export async function listMessages(
   )
   const folds = messageFoldsFromWindow(parts)
   if (typeof parts.user_message_count !== 'number' || !Number.isFinite(parts.user_message_count)) {
-    throw new Error('Transcript response is missing user_message_count')
+    throw new Error(i18n.global.t('chat.errors.transcriptCountMissing'))
   }
   return {
     entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], folds),
@@ -1030,7 +1042,7 @@ export async function getLoadedParts(sessionId: string, ids: string[]): Promise<
 /** Read the complete visible history for explicit copy/export and message lookup. */
 export async function listSessionMessages(sessionId: string): Promise<MessageEntry[]> {
   const sid = String(sessionId || '').trim()
-  if (!sid) throw new Error('A session id is required')
+  if (!sid) throw new Error(i18n.global.t('chat.errors.sessionIdRequired'))
   const parts = new Map<number, AgenaPart>()
   const cursors = new Set<string>()
   let cursor = ''
@@ -1044,7 +1056,7 @@ export async function listSessionMessages(sessionId: string): Promise<MessageEnt
     for (const part of page.parts) parts.set(part.part_id, part)
     if (!page.page?.has_more) break
     const next = typeof page.page.next_cursor === 'string' ? page.page.next_cursor.trim() : ''
-    if (!next || cursors.has(next)) throw new Error('Session history pagination did not advance')
+    if (!next || cursors.has(next)) throw new Error(i18n.global.t('chat.errors.historyPaginationStalled'))
     cursors.add(next)
     cursor = next
   }
@@ -1252,7 +1264,8 @@ export async function cancelSession(sessionId: string, executionId?: string | nu
 
 /** POST /api/v1/sessions/{id}/rewind — create a branch before a user message. */
 export async function rewindSession(sessionId: string, atMessageId: number): Promise<Session> {
-  if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0) throw new Error('A valid user message id is required')
+  if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0)
+    throw new Error(i18n.global.t('chat.errors.userMessageIdRequired'))
   const scope = sessionRoutingScope()
   const created = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/rewind`, {
     method: 'POST',
@@ -1260,7 +1273,7 @@ export async function rewindSession(sessionId: string, atMessageId: number): Pro
     body: JSON.stringify({ at_message_id: atMessageId }),
   })
   const session = toSession(created.session, scope)
-  if (!session) throw new Error('Server did not return a rewound session')
+  if (!session) throw new Error(i18n.global.t('chat.errors.rewoundSessionMissing'))
   reconcileSessionMutation(session.id, 'created', scope)
   return session
 }
@@ -1274,7 +1287,7 @@ export async function forkSession(
   const body: JsonValue = {}
   if (opts?.at_message_id !== undefined) {
     if (!Number.isSafeInteger(opts.at_message_id) || opts.at_message_id <= 0) {
-      throw new Error('A valid message id is required')
+      throw new Error(i18n.global.t('chat.errors.messageIdRequired'))
     }
     ;(body as JsonObject).at_message_id = opts.at_message_id
   }
@@ -1287,7 +1300,7 @@ export async function forkSession(
     body: JSON.stringify(body),
   })
   const session = toSession(asRecord(created).session, scope)
-  if (!session) throw new Error('Server did not return a forked session')
+  if (!session) throw new Error(i18n.global.t('chat.errors.forkedSessionMissing'))
   reconcileSessionMutation(session.id, 'created', scope)
   return session
 }

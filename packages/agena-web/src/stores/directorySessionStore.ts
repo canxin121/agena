@@ -1622,7 +1622,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   function applySidebarStatePayload(stateRaw: JsonValue) {
     const stateRecord = asRecord(stateRaw) || {}
     if (!hasOwn(stateRecord, 'preferences')) {
-      throw new Error('chat sidebar state payload is missing preferences')
+      throw new Error(i18n.global.t('chat.errors.sidebarPayloadMissingPreferences'))
     }
     applyAuthoritativeUiPrefs((stateRecord.preferences as Partial<ChatSidebarUiPrefs>) || undefined)
 

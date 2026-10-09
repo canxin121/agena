@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import type { IBuffer } from '@xterm/xterm'
 import { type ContentCursor, type ContentPage } from './content'
 
@@ -16,13 +17,18 @@ export async function readContentForCopy(
   let bytes = 0
   let marked = false
   const encoder = new TextEncoder()
-  const mark = async () => { await consume(`\n[${gapMarker}]\n`); marked = true }
+  const mark = async () => {
+    await consume(`\n[${gapMarker}]\n`)
+    marked = true
+  }
   for (;;) {
     const page = await read(cursor)
-    if (page.next_cursor.epoch !== target.epoch) throw new Error('Content generation changed during copy')
+    if (page.next_cursor.epoch !== target.epoch)
+      throw new Error(i18n.global.t('errors.content.generationChangedDuringCopy'))
     const before = cursor.sequence
     for (const chunk of page.chunks) {
-      if (chunk.cursor.epoch !== target.epoch) throw new Error('Content generation changed during copy')
+      if (chunk.cursor.epoch !== target.epoch)
+        throw new Error(i18n.global.t('errors.content.generationChangedDuringCopy'))
       if (chunk.cursor.sequence > target.sequence) break
       if (chunk.cursor.sequence <= cursor.sequence) continue
       if (chunk.cursor.sequence !== cursor.sequence + 1) await mark()
@@ -48,7 +54,10 @@ export function terminalBufferPlainText(buffer: IBuffer): string {
   let end = buffer.baseY + buffer.cursorY
   for (let row = buffer.length - 1; row > end; row--) {
     const line = buffer.getLine(row)
-    if (line && Array.from({ length: line.length }, (_, col) => line.getCell(col)?.getCode() || 0).some(Boolean)) { end = row; break }
+    if (line && Array.from({ length: line.length }, (_, col) => line.getCell(col)?.getCode() || 0).some(Boolean)) {
+      end = row
+      break
+    }
   }
   const output: string[] = []
   for (let row = 0; row <= end; row++) {

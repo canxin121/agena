@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { isDocumentVisible } from './backgroundReads'
 import { conditionalJson } from './conditionalJson'
 import { createRevalidator } from './revalidation'
@@ -55,7 +56,7 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
     }
     function checkScope() {
       if (scope === captureResourceObservation(resource).scope) return true
-      fail(new Error('Backend or authentication changed while waiting for the task'))
+      fail(new Error(i18n.global.t('errors.task.backendChanged')))
       return false
     }
     const queue = createRevalidator(

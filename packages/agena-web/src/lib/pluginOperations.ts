@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { apiJson } from './api'
 import type { JsonValue } from '../types/json'
 
@@ -133,10 +134,7 @@ export type PluginCommandCatalogItem = {
   aliases?: string[]
   docs?: PluginCommandDocs
   input: PluginSettingsContract
-  target:
-    | { kind: 'client'; action: string }
-    | { kind: 'method'; handler: string }
-    | { kind: 'tool'; tool: string }
+  target: { kind: 'client'; action: string } | { kind: 'method'; handler: string } | { kind: 'tool'; tool: string }
 }
 
 export type PluginCommandStatus = 'succeeded' | 'failed' | 'cancelled' | 'unavailable' | 'permission_required'
@@ -178,6 +176,6 @@ export async function executePluginSlashCommand(input: {
       body: JSON.stringify(pluginCommandInvocationBody(input)),
     },
   )
-  if (!response?.result) throw new Error('The server omitted the plugin command result.')
+  if (!response?.result) throw new Error(i18n.global.t('errors.plugins.commandResultMissing'))
   return response.result
 }

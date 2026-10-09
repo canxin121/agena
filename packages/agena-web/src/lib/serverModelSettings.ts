@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import type { JsonObject, JsonValue } from '@/types/json'
 
 export type ServerModelIdentity = {
@@ -65,7 +66,7 @@ export function sameServerModelIdentity(
 function modelSelectionValue(identity: ServerModelIdentity, modes?: ServerModelModes): JsonObject {
   const normalized = normalizeServerModelIdentity(identity)
   if (!normalized.provider || !normalized.model) {
-    throw new Error('A provider and model are required.')
+    throw new Error(i18n.global.t('errors.settings.providerAndModelRequired'))
   }
   const thinkingMode = text(modes?.thinkingMode)
   const speedMode = text(modes?.speedMode)

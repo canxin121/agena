@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue'
 import { isDocumentVisible } from '../../lib/backgroundReads'
 import { useWorkspacePaneContext } from '../../app/workspace/workspacePaneContext'
@@ -80,7 +81,7 @@ export function useVisibleResource<T>(options: {
     pendingRefresh = false
     force = pendingForce
     pendingForce = false
-    const timeout = setTimeout(() => request.abort(new Error('Request timed out')), 15_000)
+    const timeout = setTimeout(() => request.abort(new Error(i18n.global.t('errors.resource.requestTimedOut'))), 15_000)
     loading.value = true
     lastStart = Date.now()
     try {

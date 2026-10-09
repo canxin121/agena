@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import { renderMarkdown, renderMarkdownPlainText, type MarkdownUiLabels } from './markdown'
 import type { MarkdownWork } from './markdown.worker'
 
@@ -75,7 +76,7 @@ function createWorker() {
     for (const item of work) {
       if (!item) continue
       item.finish()
-      item.reject(new Error('Markdown worker failed'))
+      item.reject(new Error(i18n.global.t('errors.markdown.workerFailed')))
     }
   }
 }

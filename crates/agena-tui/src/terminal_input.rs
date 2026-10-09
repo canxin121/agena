@@ -16,6 +16,15 @@ const INPUT_RECHECK_INTERVAL: Duration = Duration::from_millis(8);
 const LEGACY_PASTE_INTERVAL: Duration = Duration::from_millis(8);
 const LEGACY_PASTE_MIN_CHARS: usize = 3;
 const LEGACY_PASTE_MAX_BYTES: usize = 256 * 1024;
+/// Terminals that forward the key press which confirmed an input-method (IME)
+/// candidate deliver the composed text and that `Enter` inside the same input
+/// burst. An application cannot query a terminal for its composition state, so
+/// the boundary decides from delivery shape and timing instead: text that
+/// arrived faster than a human types, followed immediately by a bare `Enter`.
+/// Waiting out this window costs one repeated key press; delivering that
+/// `Enter` would submit an answer or advance a wizard page the user never
+/// confirmed.
+const IME_COMMIT_ENTER_WINDOW: Duration = Duration::from_millis(60);
 
 /// The runtime's sole terminal-input readiness source.
 ///
@@ -82,13 +91,41 @@ impl TerminalInput {
 /// heuristic lives at the terminal boundary and is enabled only while the App
 /// reports an active text target; generic editors no longer know about tty
 /// timing or protocol support.
+///
+/// The boundary owns the input-method (IME) rule as well. A terminal that
+/// forwards the `Enter` used to confirm a candidate would otherwise let that
+/// key reach the application as a command while the committed text is applied
+/// separately, so the user sees both the text and an action they never asked
+/// for. Such an `Enter` is recognized by its delivery, not by a modifier:
+/// either it arrives inside the text burst, or it follows machine-delivered
+/// text within [`IME_COMMIT_ENTER_WINDOW`]. Both shapes are absorbed here and
+/// never become application keys.
 #[derive(Debug, Default)]
 pub struct InputNormalizer {
     text_input_active: bool,
     pending: Vec<KeyEvent>,
     pending_text: String,
+    /// Characters in the current burst; more than one proves machine delivery.
+    pending_chars: usize,
+    /// A terminal-delivered newline joined the current burst, so the burst is
+    /// text: the application must never observe a command key for it.
+    pending_has_text_enter: bool,
+    /// The terminal-delivered newline is still the last key of the burst, which
+    /// makes it the commit key of a candidate rather than pasted content.
+    pending_ends_with_text_enter: bool,
+    /// Delivery shape of the last burst handed to the target.
+    last_burst: Option<TextBurst>,
     last_at: Option<Instant>,
     ready: VecDeque<Event>,
+}
+
+/// How the last text burst reached the application.
+#[derive(Debug, Clone, Copy)]
+struct TextBurst {
+    at: Instant,
+    /// More than one character, a non-ASCII character, or a newline delivered
+    /// as text: input no human key sequence produced at that cadence.
+    machine: bool,
 }
 
 impl InputNormalizer {
@@ -108,20 +145,12 @@ impl InputNormalizer {
                 self.accept_character(key, ch);
                 return;
             }
+            let now = Instant::now();
+            if self.absorb_ime_commit_enter(key, now) {
+                return;
+            }
             if let Some(text) = legacy_text_for_key(key, !self.pending.is_empty()) {
-                let now = Instant::now();
-                let contiguous = self
-                    .last_at
-                    .is_some_and(|last| now.duration_since(last) <= LEGACY_PASTE_INTERVAL);
-                if !contiguous {
-                    self.flush_pending(false);
-                }
-                if self.pending_text.len().saturating_add(text.len()) > LEGACY_PASTE_MAX_BYTES {
-                    self.flush_pending(false);
-                }
-                self.pending.push(key);
-                self.pending_text.push_str(text);
-                self.last_at = Some(now);
+                self.accept_text_enter(key, text, now);
                 return;
             }
         }
@@ -145,6 +174,10 @@ impl InputNormalizer {
     pub fn reset(&mut self) {
         self.pending.clear();
         self.pending_text.clear();
+        self.pending_chars = 0;
+        self.pending_has_text_enter = false;
+        self.pending_ends_with_text_enter = false;
+        self.last_burst = None;
         self.last_at = None;
         self.ready.clear();
     }
@@ -162,21 +195,91 @@ impl InputNormalizer {
         self.ready = events;
     }
 
+    /// Recognize the `Enter` a terminal forwards together with an IME commit
+    /// after the committed text already reached the target as its own burst.
+    fn absorb_ime_commit_enter(&mut self, key: KeyEvent, now: Instant) -> bool {
+        if key.code != KeyCode::Enter || !key.modifiers.is_empty() {
+            return false;
+        }
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return false;
+        }
+        let Some(burst) = self.last_burst else {
+            return false;
+        };
+        if !burst.machine || now.duration_since(burst.at) > IME_COMMIT_ENTER_WINDOW {
+            return false;
+        }
+        // One commit owns one `Enter`; a repeated press is a real key again.
+        self.last_burst = None;
+        true
+    }
+
+    /// Keep the forwarded commit key inside the burst it belongs to. It is
+    /// tracked as text so [`Self::flush_pending`] can never hand it to the
+    /// application as an `Enter` command.
+    fn accept_text_enter(&mut self, key: KeyEvent, text: &str, now: Instant) {
+        if self.pending_text.len().saturating_add(text.len()) > LEGACY_PASTE_MAX_BYTES {
+            self.flush_pending(false);
+        }
+        self.pending.push(key);
+        self.pending_text.push_str(text);
+        self.pending_has_text_enter = true;
+        self.pending_ends_with_text_enter = true;
+        self.last_at = Some(now);
+    }
+
     fn flush_pending(&mut self, allow_paste: bool) {
         if self.pending.is_empty() {
             self.last_at = None;
             return;
         }
 
-        if allow_paste && self.pending.len() >= LEGACY_PASTE_MIN_CHARS {
-            self.ready
-                .push_back(Event::Paste(std::mem::take(&mut self.pending_text)));
-            self.pending.clear();
-        } else {
-            self.ready.extend(self.pending.drain(..).map(Event::Key));
-            self.pending_text.clear();
+        if self.pending_has_text_enter {
+            // A terminal-delivered newline ended the burst: an input method
+            // confirmed its candidate, or a legacy paste carried line breaks.
+            // Such a burst is text and must reach the target as one text
+            // value. The trailing newline is the commit key, not content the
+            // user wrote, so it is dropped while interior newlines survive.
+            let mut text = std::mem::take(&mut self.pending_text);
+            if self.pending_ends_with_text_enter {
+                text.pop();
+            }
+            self.record_text_burst(true);
+            self.finish_burst();
+            self.ready.push_back(Event::Paste(text));
+            return;
         }
+
+        self.record_text_burst(
+            self.pending_chars > 1 || self.pending_text.chars().any(|ch| !ch.is_ascii()),
+        );
+        if allow_paste && self.pending.len() >= LEGACY_PASTE_MIN_CHARS {
+            let text = std::mem::take(&mut self.pending_text);
+            self.finish_burst();
+            self.ready.push_back(Event::Paste(text));
+            return;
+        }
+        for key in self.pending.drain(..) {
+            self.ready.push_back(Event::Key(key));
+        }
+        self.finish_burst();
+    }
+
+    fn finish_burst(&mut self) {
+        self.pending.clear();
+        self.pending_text.clear();
+        self.pending_chars = 0;
+        self.pending_has_text_enter = false;
+        self.pending_ends_with_text_enter = false;
         self.last_at = None;
+    }
+
+    fn record_text_burst(&mut self, machine: bool) {
+        self.last_burst = Some(TextBurst {
+            at: Instant::now(),
+            machine,
+        });
     }
 }
 
@@ -221,6 +324,10 @@ impl InputNormalizer {
         }
         self.pending.push(key);
         self.pending_text.push(ch);
+        self.pending_chars = self.pending_chars.saturating_add(1);
+        // Text follows the delivered newline, so the burst no longer ends with
+        // a commit key and that newline is content again.
+        self.pending_ends_with_text_enter = false;
         self.last_at = Some(now);
     }
 }
@@ -231,6 +338,10 @@ mod tests {
 
     fn key(ch: char) -> Event {
         Event::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+    }
+
+    fn enter() -> Event {
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
     }
 
     #[test]
@@ -268,5 +379,84 @@ mod tests {
         input.reset();
         input.restore_ready(preserved);
         assert_eq!(input.pop_ready(), Some(key('x')));
+    }
+
+    #[test]
+    fn an_ime_commit_enter_inside_the_burst_never_becomes_an_application_key() {
+        let mut input = InputNormalizer::default();
+        input.set_text_input_active(true);
+        // A one-character commit is the case legacy paste detection cannot
+        // classify on its own: the committed text reached the target as
+        // separate keys and the forwarded Enter would advance the wizard.
+        input.accept(key('好'));
+        input.accept(enter());
+        input.flush_all();
+        assert_eq!(input.pop_ready(), Some(Event::Paste("好".to_string())));
+        assert!(input.pop_ready().is_none());
+    }
+
+    #[test]
+    fn a_commit_enter_after_delivered_text_is_absorbed_once() {
+        let mut input = InputNormalizer::default();
+        input.set_text_input_active(true);
+        for ch in ['a', 'b', 'c'] {
+            input.accept(key(ch));
+        }
+        input.flush_timed_out();
+        assert_eq!(input.pop_ready(), Some(Event::Paste("abc".to_string())));
+
+        // The terminal forwarded the commit key after the text burst was
+        // already handed over.
+        input.accept(enter());
+        assert!(input.pop_ready().is_none());
+
+        // The user's own repeat press is a real key again.
+        input.accept(enter());
+        assert_eq!(input.pop_ready(), Some(enter()));
+    }
+
+    #[test]
+    fn an_enter_after_a_bracketed_paste_still_submits() {
+        let mut input = InputNormalizer::default();
+        input.set_text_input_active(true);
+        input.accept(Event::Paste("pasted".to_string()));
+        assert_eq!(input.pop_ready(), Some(Event::Paste("pasted".to_string())));
+        input.accept(enter());
+        assert_eq!(input.pop_ready(), Some(enter()));
+    }
+
+    #[test]
+    fn interior_newlines_of_a_legacy_paste_survive() {
+        let mut input = InputNormalizer::default();
+        input.set_text_input_active(true);
+        input.accept(key('a'));
+        input.accept(enter());
+        input.accept(key('b'));
+        input.flush_all();
+        assert_eq!(input.pop_ready(), Some(Event::Paste("a\nb".to_string())));
+    }
+
+    #[test]
+    fn a_legacy_paste_trailing_newline_is_not_content() {
+        let mut input = InputNormalizer::default();
+        input.set_text_input_active(true);
+        input.accept(key('a'));
+        input.accept(key('b'));
+        input.accept(enter());
+        input.flush_all();
+        assert_eq!(input.pop_ready(), Some(Event::Paste("ab".to_string())));
+    }
+
+    #[test]
+    fn a_late_enter_after_a_single_typed_character_stays_a_key() {
+        let mut input = InputNormalizer::default();
+        input.set_text_input_active(true);
+        input.accept(key('a'));
+        input.flush_timed_out();
+        assert_eq!(input.pop_ready(), Some(key('a')));
+        // One ASCII character is human cadence: the following Enter is the
+        // user's own submit gesture.
+        input.accept(enter());
+        assert_eq!(input.pop_ready(), Some(enter()));
     }
 }

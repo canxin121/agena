@@ -3,6 +3,13 @@ impl App {
         if self.context_help.is_some() {
             return false;
         }
+        // An inline user-input answer is a text target even though it lives on
+        // the transcript surface: the editor owns the key stream while it is
+        // open, so terminal-delivered text (and the Enter that confirmed an
+        // input-method candidate) must be normalized as text input.
+        if self.interaction_editing.is_some() {
+            return true;
+        }
         if let Some(overlay) = &self.overlay {
             return !matches!(overlay, Overlay::Confirm(_) | Overlay::Permission(_));
         }

@@ -137,6 +137,15 @@ pub(crate) fn tool_display_label(tool: &ToolCallView) -> String {
     }
 }
 
+/// Localized variant of [`tool_display_label`]: the stored headline is
+/// English data, so the render maps its vocabulary into the UI language
+/// while dynamic subjects and identifiers stay untouched.
+pub(crate) fn tool_display_label_localized(tool: &ToolCallView, i18n: &I18n) -> String {
+    let label = tool_display_label(tool);
+    let locale = i18n.locale_tag();
+    agena_tool::localize_tool_title(label.as_str(), locale.as_str())
+}
+
 pub(crate) fn normalized_tool_text(text: &str) -> String {
     let sanitized = sanitize_terminal_text(text);
     trim_empty_line_edges(sanitized.as_str()).to_string()

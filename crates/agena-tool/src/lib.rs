@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub mod tool_activity;
+pub mod tool_title_locale;
 use agena_domain::{
     PermissionAction, PermissionDecision, RawOutput, ToolInvocation, ToolResultState,
 };
@@ -34,6 +35,7 @@ use serde::{Deserialize, Serialize};
 pub use tool_activity::{
     RenderContext, RenderError, ToolActivityEvent, ToolActivityResult, ToolHumanRenderer,
 };
+pub use tool_title_locale::localize_tool_title;
 
 /// Compose one compact tool headline from an action and a detail fragment
 /// (for example `Execute command · cargo test` or

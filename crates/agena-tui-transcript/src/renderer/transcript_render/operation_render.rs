@@ -3,7 +3,7 @@ use super::super::{
     json_value_to_markdown, operation_block_copy_text, push_activity_headline,
     push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
     push_expanded_tool_text, push_label_value, push_multiline, push_section_heading,
-    push_single_line, render_expanded_tool_text_block, tool_display_label,
+    push_single_line, render_expanded_tool_text_block, tool_display_label_localized,
 };
 use super::request_render::render_file_changes;
 use crate::ui_text;
@@ -60,7 +60,7 @@ pub(crate) fn render_tool_execution_with_sections(
     expanded: bool,
 ) -> ToolExecutionRender {
     if part.status == PartExecutionStatusResource::Completed && is_interaction_notification(tool) {
-        render_interaction_notification(tool, out, width, expanded);
+        render_interaction_notification(tool, out, width, expanded, i18n);
         let headline_end = out.len();
         let details = render_tool_detail_sections_with_sections(
             part,
@@ -75,7 +75,10 @@ pub(crate) fn render_tool_execution_with_sections(
             i18n,
             expanded,
         );
-        let visible_copy_text = [tool_display_label(tool), details.visible_copy_text]
+        let visible_copy_text = [
+            tool_display_label_localized(tool, i18n),
+            details.visible_copy_text,
+        ]
             .into_iter()
             .filter(|section| !section.trim().is_empty())
             .collect::<Vec<_>>()
@@ -86,7 +89,7 @@ pub(crate) fn render_tool_execution_with_sections(
             ..details
         };
     }
-    let label = tool_display_label(tool);
+    let label = tool_display_label_localized(tool, i18n);
     if !expanded {
         push_activity_headline(
             out,
@@ -551,6 +554,7 @@ fn render_interaction_notification(
     out: &mut Vec<RenderedLine>,
     width: u16,
     expanded: bool,
+    i18n: &I18n,
 ) {
     let level = tool
         .metadata_value("agena.notification.level")
@@ -562,7 +566,7 @@ fn render_interaction_notification(
         "error" => ("◆", agena_tui_components::theme::danger_color()),
         _ => ("●", agena_tui_components::theme::info_color()),
     };
-    let title = tool_display_label(tool);
+    let title = tool_display_label_localized(tool, i18n);
     if !expanded || !tool.presentation.blocks.is_empty() {
         push_single_line(
             out,

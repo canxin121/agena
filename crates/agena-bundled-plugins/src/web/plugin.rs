@@ -2092,7 +2092,31 @@ impl WebPlugin {
     #[tool(
         summary = "Fetch one web page and inspect its actual content.",
         help = "Read actual page evidence after search. Markdown preserves main content, sibling articles, code, tables and resolved links. Returns content_status, extraction_strategy, final_url, warnings, page_id and next_offset. max_chars defaults to 8000 (maximum 24000); continue long pages with web.read without refetching. prompt adds relevant excerpts from the full snapshot. Use fetch_many for independent known URLs. Omit render_js for HTTP first and one JavaScript-shell browser retry when browser.enabled; false forces HTTP, true forces an isolated browser. One shared fetch deadline includes admission, HTTP, rendering and extraction. Blocked/empty/partial pages are not reusable cache entries. Read statuses before using the text as evidence.",
-        tags(network, read_only)
+        tags(network, read_only),
+        translations(
+            locale("ar-SA", summary = "اجلب صفحة ويب واحدة وافحص محتواها الفعلي."),
+            locale(
+                "de-DE",
+                summary = "Ruft eine Webseite ab und prüft ihren tatsächlichen Inhalt."
+            ),
+            locale(
+                "es-ES",
+                summary = "Obtiene una página web e inspecciona su contenido real."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Récupère une page web et inspecte son contenu réel."
+            ),
+            locale("hi-IN", summary = "एक वेब पेज प्राप्त करके उसकी वास्तविक सामग्री देखता है।"),
+            locale("ja-JP", summary = "ウェブページを1件取得し、実際の内容を確認します。"),
+            locale("ko-KR", summary = "웹 페이지 하나를 가져와 실제 내용을 확인합니다."),
+            locale(
+                "pt-BR",
+                summary = "Obtém uma página web e inspeciona seu conteúdo real."
+            ),
+            locale("zh-CN", summary = "获取一个网页并检查其实际内容。"),
+            locale("zh-TW", summary = "取得一個網頁並檢查其實際內容。")
+        )
     )]
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
         let max_chars = content::bounded(input.max_chars, 8000, 24000, "max_chars")?;
@@ -2108,8 +2132,20 @@ impl WebPlugin {
         summary = "Read several independent web pages concurrently.",
         help = "Fetch 1–8 known URLs concurrently (default concurrency 4, maximum 8), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).",
         stream = invoke_fetch_many_stream,
-        tags(network, read_only)
-    )]
+        tags(network, read_only),
+    translations(
+        locale("ar-SA", summary = "اقرأ عدة صفحات ويب مستقلة في وقت واحد."),
+        locale("de-DE", summary = "Liest mehrere unabhängige Webseiten gleichzeitig."),
+        locale("es-ES", summary = "Lee varias páginas web independientes a la vez."),
+        locale("fr-FR", summary = "Lit plusieurs pages web indépendantes en parallèle."),
+        locale("hi-IN", summary = "कई स्वतंत्र वेब पेज एक साथ पढ़ता है।"),
+        locale("ja-JP", summary = "複数の独立したウェブページを同時に読み取ります。"),
+        locale("ko-KR", summary = "여러 독립 웹 페이지를 동시에 읽습니다."),
+        locale("pt-BR", summary = "Lê várias páginas web independentes ao mesmo tempo."),
+        locale("zh-CN", summary = "并发阅读多个独立网页。"),
+        locale("zh-TW", summary = "同時讀取多個獨立網頁。")
+)
+)]
     async fn invoke_fetch_many(&self, input: &FetchManyInput) -> SdkResult<ToolInvokeOutput> {
         self.run_fetch_many(input, None).await
     }
@@ -2183,7 +2219,34 @@ impl WebPlugin {
     #[tool(
         summary = "Continue reading an immutable fetched-page snapshot.",
         help = "Use page_id and next_offset returned by fetch, fetch_many or query. Returns a contiguous slice of the same extracted Markdown without refetching; offset counts Unicode characters, not bytes. max_chars defaults to 8000, maximum 24000. next_offset=null means the end of available extracted text, not necessarily a complete source: inspect truncated and content_status. Snapshots expire after 15 minutes and share a 32 MiB memory budget; if evicted, fetch the URL or query the crawl index again. Revalidates requested and final URL permissions.",
-        tags(network, read_only)
+        tags(network, read_only),
+        translations(
+            locale("ar-SA", summary = "تابع قراءة لقطة ثابتة لصفحة تم جلبها."),
+            locale(
+                "de-DE",
+                summary = "Liest einen unveränderlichen Schnappschuss einer abgerufenen Seite weiter."
+            ),
+            locale(
+                "es-ES",
+                summary = "Continúa leyendo una instantánea inmutable de una página obtenida."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Poursuit la lecture d’un instantané immuable d’une page récupérée."
+            ),
+            locale("hi-IN", summary = "प्राप्त पेज के अपरिवर्तनीय स्नैपशॉट को पढ़ना जारी रखता है।"),
+            locale(
+                "ja-JP",
+                summary = "取得済みページの不変スナップショットの読み取りを続けます。"
+            ),
+            locale("ko-KR", summary = "가져온 페이지의 변경 불가 스냅샷을 계속 읽습니다."),
+            locale(
+                "pt-BR",
+                summary = "Continua a leitura de um instantâneo imutável de uma página obtida."
+            ),
+            locale("zh-CN", summary = "继续阅读已获取页面的不可变快照。"),
+            locale("zh-TW", summary = "繼續閱讀已取得頁面的不可變快照。")
+        )
     )]
     async fn invoke_read(&self, input: &ReadPageInput) -> SdkResult<ToolInvokeOutput> {
         let max_chars = content::bounded(input.max_chars, 8000, 24000, "max_chars")?;
@@ -2200,7 +2263,43 @@ impl WebPlugin {
     #[tool(
         summary = "Find evidence in locally crawled pages and obtain readable snapshots.",
         help = "Search the index populated by web.crawl, without new network requests. max_results defaults to 5, maximum 20. Hits include source URL, stored fetch time, chunk preview, page_id, and read_offset for web.read. Stored content may be stale; refetch its URL when freshness matters. Permissions are revalidated before exposing each hit; denied hits are omitted and counted. This searches stored documents only; use web.search to discover public pages.",
-        tags(network, read_only)
+        tags(network, read_only),
+        translations(
+            locale(
+                "ar-SA",
+                summary = "ابحث عن الأدلة في الصفحات المزحوفة محليًا واحصل على لقطات قابلة للقراءة."
+            ),
+            locale(
+                "de-DE",
+                summary = "Findet Belege in lokal gecrawlten Seiten und liefert lesbare Schnappschüsse."
+            ),
+            locale(
+                "es-ES",
+                summary = "Busca pruebas en páginas rastreadas localmente y obtiene instantáneas legibles."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Trouve des preuves dans les pages explorées localement et fournit des instantanés lisibles."
+            ),
+            locale(
+                "hi-IN",
+                summary = "स्थानीय रूप से क्रॉल किए गए पेजों में साक्ष्य खोजता है और पठनीय स्नैपशॉट देता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "ローカルでクロール済みのページから根拠を探し、読めるスナップショットを返します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "로컬에서 크롤링한 페이지에서 근거를 찾아 읽을 수 있는 스냅샷을 제공합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Encontra evidências em páginas rastreadas localmente e fornece instantâneos legíveis."
+            ),
+            locale("zh-CN", summary = "在本地已抓取的页面中查找证据并获取可读快照。"),
+            locale("zh-TW", summary = "在本機已檢索的頁面中尋找證據並取得可讀快照。")
+        )
     )]
     async fn invoke_query(&self, input: &QueryCrawlInput) -> SdkResult<ToolInvokeOutput> {
         if input.query.trim().is_empty() || input.query.chars().count() > 4096 {
@@ -2261,8 +2360,20 @@ impl WebPlugin {
         summary = "Crawl a site and cache indexed pages locally.",
         help = "Traverse links breadth first with bounded concurrency (default 4, maximum 8; also capped by config). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.",
         stream = invoke_crawl_stream,
-        tags(network, discovery, mutate)
-    )]
+        tags(network, discovery, mutate),
+    translations(
+        locale("ar-SA", summary = "ازحف موقعًا واخزّن الصفحات المفهرسة محليًا."),
+        locale("de-DE", summary = "Crawlt eine Website und speichert indizierte Seiten lokal zwischen."),
+        locale("es-ES", summary = "Rastrea un sitio y almacena en caché local las páginas indexadas."),
+        locale("fr-FR", summary = "Explore un site et met en cache local les pages indexées."),
+        locale("hi-IN", summary = "किसी साइट को क्रॉल करता है और अनुक्रमित पेज स्थानीय रूप से कैश करता है।"),
+        locale("ja-JP", summary = "サイトをクロールし、索引付けしたページをローカルにキャッシュします。"),
+        locale("ko-KR", summary = "사이트를 크롤링하고 색인된 페이지를 로컬에 캐시합니다."),
+        locale("pt-BR", summary = "Rastreia um site e armazena em cache local as páginas indexadas."),
+        locale("zh-CN", summary = "抓取站点并在本地缓存已索引页面。"),
+        locale("zh-TW", summary = "檢索網站並在本機快取已索引頁面。")
+)
+)]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
         self.run_crawl(input, None).await
     }
@@ -2349,7 +2460,31 @@ impl WebPlugin {
     #[tool(
         summary = "Find candidate public-web pages to fetch.",
         help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines; source is the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Inspect engine_reports for per-source result counts, page counts, cache hits and structured issues. Searches to the same engine are serialized and paced; successful identical queries are reused for two minutes. Rate limits honor Retry-After and verification failures enter cooldown: respect retry_after_secs, use other working sources and avoid bursts of overlapping queries. Verification and unknown pages are failures, not empty results. A confirmed JavaScript shell gets one browser attempt per page when browser.enabled. Later-page failures preserve earlier results with partial diagnostics. Browser rendering does not solve human verification or consent. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
-        tags(network, discovery, read_only)
+        tags(network, discovery, read_only),
+        translations(
+            locale("ar-SA", summary = "اعثر على صفحات ويب عامة مرشحة لجلبها."),
+            locale(
+                "de-DE",
+                summary = "Findet Kandidatenseiten im offenen Web zum Abrufen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Encuentra páginas web públicas candidatas para obtener."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Trouve des pages web publiques candidates à récupérer."
+            ),
+            locale("hi-IN", summary = "प्राप्त करने योग्य सार्वजनिक वेब पेजों के उम्मीदवार ढूँढता है।"),
+            locale("ja-JP", summary = "取得候補となる公開ウェブページを探します。"),
+            locale("ko-KR", summary = "가져올 공개 웹 페이지 후보를 찾습니다."),
+            locale(
+                "pt-BR",
+                summary = "Encontra páginas web públicas candidatas para obter."
+            ),
+            locale("zh-CN", summary = "查找可获取的候选公开网页。"),
+            locale("zh-TW", summary = "尋找可取得的候選公開網頁。")
+        )
     )]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
         search_provider::validate_input(input)?;
@@ -2384,7 +2519,37 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate, read_only),
         name = "browser_open",
-        summary = "Open a page in a managed interactive browser session."
+        summary = "Open a page in a managed interactive browser session.",
+        translations(
+            locale("ar-SA", summary = "افتح صفحة في جلسة متصفح تفاعلية مُدارة."),
+            locale(
+                "de-DE",
+                summary = "Öffnet eine Seite in einer verwalteten interaktiven Browser-Sitzung."
+            ),
+            locale(
+                "es-ES",
+                summary = "Abre una página en una sesión de navegador interactiva gestionada."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Ouvre une page dans une session de navigateur interactive gérée."
+            ),
+            locale("hi-IN", summary = "प्रबंधित इंटरैक्टिव ब्राउज़र सत्र में पेज खोलता है।"),
+            locale(
+                "ja-JP",
+                summary = "管理された対話型ブラウザーセッションでページを開きます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "관리되는 대화형 브라우저 세션에서 페이지를 엽니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Abre uma página em uma sessão de navegador interativa gerenciada."
+            ),
+            locale("zh-CN", summary = "在受管交互式浏览器会话中打开页面。"),
+            locale("zh-TW", summary = "在受管理的互動式瀏覽器工作階段中開啟頁面。")
+        )
     )]
     async fn browser_open(
         &self,
@@ -2579,7 +2744,43 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, query, discovery, read_only),
         name = "browser_list",
-        summary = "List open page targets in the managed interactive browser."
+        summary = "List open page targets in the managed interactive browser.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "اعرض أهداف الصفحات المفتوحة في المتصفح التفاعلي المُدار."
+            ),
+            locale(
+                "de-DE",
+                summary = "Listet offene Seitenziele im verwalteten interaktiven Browser auf."
+            ),
+            locale(
+                "es-ES",
+                summary = "Lista los destinos de página abiertos en el navegador interactivo gestionado."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Liste les cibles de page ouvertes dans le navigateur interactif géré."
+            ),
+            locale(
+                "hi-IN",
+                summary = "प्रबंधित इंटरैक्टिव ब्राउज़र में खुले पेज लक्ष्यों की सूची बनाता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "管理された対話型ブラウザーで開いているページターゲットを一覧表示します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "관리되는 대화형 브라우저에서 열린 페이지 대상을 나열합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Lista os destinos de página abertos no navegador interativo gerenciado."
+            ),
+            locale("zh-CN", summary = "列出受管交互式浏览器中打开的页面目标。"),
+            locale("zh-TW", summary = "列出受管理互動式瀏覽器中開啟的頁面目標。")
+        )
     )]
     async fn browser_list(
         &self,
@@ -2672,7 +2873,37 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate),
         name = "browser_close",
-        summary = "Close one page target in the managed interactive browser."
+        summary = "Close one page target in the managed interactive browser.",
+        translations(
+            locale("ar-SA", summary = "أغلق هدف صفحة واحدًا في المتصفح التفاعلي المُدار."),
+            locale(
+                "de-DE",
+                summary = "Schließt ein Seitenziel im verwalteten interaktiven Browser."
+            ),
+            locale(
+                "es-ES",
+                summary = "Cierra un destino de página en el navegador interactivo gestionado."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Ferme une cible de page dans le navigateur interactif géré."
+            ),
+            locale("hi-IN", summary = "प्रबंधित इंटरैक्टिव ब्राउज़र में एक पेज लक्ष्य बंद करता है।"),
+            locale(
+                "ja-JP",
+                summary = "管理された対話型ブラウザーのページターゲットを1つ閉じます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "관리되는 대화형 브라우저에서 페이지 대상 하나를 닫습니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Fecha um destino de página no navegador interativo gerenciado."
+            ),
+            locale("zh-CN", summary = "关闭受管交互式浏览器中的一个页面目标。"),
+            locale("zh-TW", summary = "關閉受管理互動式瀏覽器中的一個頁面目標。")
+        )
     )]
     async fn browser_close(
         &self,
@@ -2710,7 +2941,49 @@ impl WebPlugin {
         tags(network, interactive, mutate),
         name = "browser_shutdown",
         summary = "Close browser pages owned by the current Agena session without affecting other callers.",
-        help = "Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control."
+        help = "Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "أغلق صفحات المتصفح التي تملكها جلسة Agena الحالية دون التأثير على المتصلين الآخرين."
+            ),
+            locale(
+                "de-DE",
+                summary = "Schließt Browserseiten der aktuellen Agena-Sitzung, ohne andere Aufrufer zu beeinflussen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Cierra las páginas del navegador de la sesión actual de Agena sin afectar a otros usuarios."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Ferme les pages du navigateur de la session Agena en cours sans affecter les autres appelants."
+            ),
+            locale(
+                "hi-IN",
+                summary = "वर्तमान Agena सत्र के स्वामित्व वाले ब्राउज़र पेज बंद करता है, अन्य कॉलर प्रभावित नहीं होते।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "現在の Agena セッションが所有するブラウザーのページを閉じます。他の呼び出し元には影響しません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "현재 Agena 세션이 소유한 브라우저 페이지를 닫습니다. 다른 호출자에는 영향을 주지 않습니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Fecha as páginas do navegador pertencentes à sessão atual do Agena sem afetar outros chamadores."
+            ),
+            locale(
+                "zh-CN",
+                summary = "关闭当前 Agena 会话拥有的浏览器页面，不影响其他调用方。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "關閉目前 Agena 工作階段擁有的瀏覽器頁面，不影響其他呼叫方。"
+            )
+        )
     )]
     async fn browser_shutdown(
         &self,
@@ -2791,7 +3064,43 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, query, read_only),
         name = "browser_snapshot",
-        summary = "Inspect visible text and interactive elements in a browser session."
+        summary = "Inspect visible text and interactive elements in a browser session.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "افحص النص المرئي والعناصر التفاعلية في جلسة متصفح."
+            ),
+            locale(
+                "de-DE",
+                summary = "Prüft sichtbaren Text und interaktive Elemente in einer Browser-Sitzung."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inspecciona el texto visible y los elementos interactivos de una sesión de navegador."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Inspecte le texte visible et les éléments interactifs d’une session de navigateur."
+            ),
+            locale(
+                "hi-IN",
+                summary = "ब्राउज़र सत्र में दिखाई देने वाला पाठ और इंटरैक्टिव तत्व देखता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "ブラウザーセッションの表示テキストと操作可能な要素を確認します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "브라우저 세션에서 표시되는 텍스트와 상호작용 요소를 확인합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inspeciona o texto visível e os elementos interativos de uma sessão de navegador."
+            ),
+            locale("zh-CN", summary = "检查浏览器会话中的可见文本和交互元素。"),
+            locale("zh-TW", summary = "檢查瀏覽器工作階段中的可見文字與互動元素。")
+        )
     )]
     async fn browser_snapshot(
         &self,
@@ -2822,7 +3131,40 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate),
         name = "browser_click",
-        summary = "Click a browser element selected by CSS or the latest snapshot ref."
+        summary = "Click a browser element selected by CSS or the latest snapshot ref.",
+        translations(
+            locale("ar-SA", summary = "انقر عنصر متصفح محددًا بـ CSS أو مرجع أحدث لقطة."),
+            locale(
+                "de-DE",
+                summary = "Klickt ein Browserelement an, das per CSS oder neuester Snapshot-Referenz gewählt wurde."
+            ),
+            locale(
+                "es-ES",
+                summary = "Hace clic en un elemento del navegador seleccionado por CSS o la referencia de la última instantánea."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Clique sur un élément du navigateur sélectionné par CSS ou la référence du dernier instantané."
+            ),
+            locale(
+                "hi-IN",
+                summary = "CSS या नवीनतम स्नैपशॉट संदर्भ से चुने गए ब्राउज़र तत्व पर क्लिक करता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "CSS または最新スナップショットの参照で選んだブラウザー要素をクリックします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "CSS 또는 최신 스냅샷 참조로 선택한 브라우저 요소를 클릭합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Clica em um elemento do navegador selecionado por CSS ou pela referência do instantâneo mais recente."
+            ),
+            locale("zh-CN", summary = "点击由 CSS 或最新快照引用选定的浏览器元素。"),
+            locale("zh-TW", summary = "點擊由 CSS 或最新快照參照選定的瀏覽器元素。")
+        )
     )]
     async fn browser_click(
         &self,
@@ -2880,7 +3222,49 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate),
         name = "browser_type",
-        summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter."
+        summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "املأ حقل إدخال في المتصفح محددًا بـ CSS أو مرجع أحدث لقطة، مع إمكانية الضغط على Enter."
+            ),
+            locale(
+                "de-DE",
+                summary = "Füllt ein Browser-Eingabefeld, das per CSS oder neuester Snapshot-Referenz gewählt wurde, optional mit Enter."
+            ),
+            locale(
+                "es-ES",
+                summary = "Rellena un campo del navegador seleccionado por CSS o la referencia de la última instantánea, opcionalmente pulsando Enter."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Remplit un champ du navigateur sélectionné par CSS ou la référence du dernier instantané, avec Entrée en option."
+            ),
+            locale(
+                "hi-IN",
+                summary = "CSS या नवीनतम स्नैपशॉट संदर्भ से चुने गए ब्राउज़र इनपुट को भरता है, वैकल्पिक रूप से Enter दबाता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "CSS または最新スナップショットの参照で選んだブラウザーの入力欄を埋め、必要に応じて Enter を押します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "CSS 또는 최신 스냅샷 참조로 선택한 브라우저 입력란을 채우고 선택적으로 Enter를 누릅니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Preenche um campo do navegador selecionado por CSS ou pela referência do instantâneo mais recente, opcionalmente pressionando Enter."
+            ),
+            locale(
+                "zh-CN",
+                summary = "填写由 CSS 或最新快照引用选定的浏览器输入框，可选择按回车。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "填寫由 CSS 或最新快照參照選定的瀏覽器輸入框，可選擇按下 Enter。"
+            )
+        )
     )]
     async fn browser_type(
         &self,
@@ -2942,7 +3326,40 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, query, read_only),
         name = "browser_wait",
-        summary = "Wait for page readiness, a CSS selector, or visible text."
+        summary = "Wait for page readiness, a CSS selector, or visible text.",
+        translations(
+            locale("ar-SA", summary = "انتظر جاهزية الصفحة أو محدد CSS أو نصًا مرئيًا."),
+            locale(
+                "de-DE",
+                summary = "Wartet auf Seitenbereitschaft, einen CSS-Selektor oder sichtbaren Text."
+            ),
+            locale(
+                "es-ES",
+                summary = "Espera a que la página esté lista, a un selector CSS o a un texto visible."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Attend que la page soit prête, un sélecteur CSS ou un texte visible."
+            ),
+            locale(
+                "hi-IN",
+                summary = "पेज तैयार होने, CSS चयनकर्ता या दिखाई देने वाले पाठ की प्रतीक्षा करता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "ページの準備完了、CSS セレクター、または表示テキストを待ちます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "페이지 준비, CSS 선택자 또는 표시 텍스트를 기다립니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Aguarda a página ficar pronta, um seletor CSS ou um texto visível."
+            ),
+            locale("zh-CN", summary = "等待页面就绪、CSS 选择器或可见文本。"),
+            locale("zh-TW", summary = "等待頁面就緒、CSS 選擇器或可見文字。")
+        )
     )]
     async fn browser_wait(
         &self,
@@ -2994,7 +3411,40 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate, filesystem),
         name = "browser_screenshot",
-        summary = "Capture a browser screenshot and return it as an image attachment."
+        summary = "Capture a browser screenshot and return it as an image attachment.",
+        translations(
+            locale("ar-SA", summary = "التقط لقطة شاشة للمتصفح وأعِدها كمرفق صورة."),
+            locale(
+                "de-DE",
+                summary = "Erstellt einen Browser-Screenshot und gibt ihn als Bildanhang zurück."
+            ),
+            locale(
+                "es-ES",
+                summary = "Captura una captura de pantalla del navegador y la devuelve como adjunto de imagen."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Capture une capture d’écran du navigateur et la renvoie comme pièce jointe image."
+            ),
+            locale(
+                "hi-IN",
+                summary = "ब्राउज़र स्क्रीनशॉट लेता है और उसे छवि अनुलग्नक के रूप में लौटाता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "ブラウザーのスクリーンショットを取得し、画像添付として返します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "브라우저 스크린샷을 캡처해 이미지 첨부로 반환합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Captura uma captura de tela do navegador e a retorna como anexo de imagem."
+            ),
+            locale("zh-CN", summary = "捕获浏览器截图并将其作为图片附件返回。"),
+            locale("zh-TW", summary = "擷取瀏覽器截圖並將其以圖片附件形式傳回。")
+        )
     )]
     async fn browser_screenshot(
         &self,
@@ -3080,7 +3530,49 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate, filesystem),
         name = "browser_download",
-        summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact."
+        summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "نزّل عنوان HTTP(S) واحدًا عبر جلسة متصفح مُدارة وأعِد ملفًا محليًا."
+            ),
+            locale(
+                "de-DE",
+                summary = "Lädt eine HTTP(S)-URL über eine verwaltete Browser-Sitzung herunter und liefert ein lokales Artefakt."
+            ),
+            locale(
+                "es-ES",
+                summary = "Descarga una URL HTTP(S) a través de una sesión de navegador gestionada y devuelve un archivo local."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Télécharge une URL HTTP(S) via une session de navigateur gérée et renvoie un artefact local."
+            ),
+            locale(
+                "hi-IN",
+                summary = "प्रबंधित ब्राउज़र सत्र के माध्यम से एक HTTP(S) URL डाउनलोड करता है और स्थानीय फ़ाइल लौटाता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "管理されたブラウザーセッション経由で HTTP(S) URL を1件ダウンロードし、ローカル成果物を返します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "관리되는 브라우저 세션을 통해 HTTP(S) URL 하나를 다운로드하고 로컬 산출물을 반환합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Baixa uma URL HTTP(S) por meio de uma sessão de navegador gerenciada e retorna um artefato local."
+            ),
+            locale(
+                "zh-CN",
+                summary = "通过受管浏览器会话下载一个 HTTP(S) URL，并返回本地文件。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "透過受管理瀏覽器工作階段下載一個 HTTP(S) URL，並傳回本機產物。"
+            )
+        )
     )]
     async fn browser_download(
         &self,

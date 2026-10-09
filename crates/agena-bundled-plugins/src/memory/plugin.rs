@@ -289,7 +289,22 @@ impl MemoryPlugin {
 
     #[tool(
         tags(query, filesystem, discovery, read_only),
-        summary = "Search durable memory records."
+        summary = "Search durable memory records.",
+        translations(
+            locale("ar-SA", summary = "ابحث في سجلات الذاكرة الدائمة."),
+            locale("de-DE", summary = "Dauerhafte Speichereinträge durchsuchen."),
+            locale("es-ES", summary = "Buscar en los registros de memoria persistente."),
+            locale(
+                "fr-FR",
+                summary = "Rechercher dans les enregistrements de mémoire persistante."
+            ),
+            locale("hi-IN", summary = "स्थायी मेमोरी रिकॉर्ड खोजें।"),
+            locale("ja-JP", summary = "永続メモリの記録を検索します。"),
+            locale("ko-KR", summary = "영구 메모리 기록을 검색합니다."),
+            locale("pt-BR", summary = "Pesquisar registros de memória persistente."),
+            locale("zh-CN", summary = "搜索持久记忆记录。"),
+            locale("zh-TW", summary = "搜尋持久記憶記錄。")
+        )
     )]
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
@@ -328,7 +343,19 @@ impl MemoryPlugin {
 
     #[tool(
         tags(query, filesystem, read_only),
-        summary = "Read one durable memory record."
+        summary = "Read one durable memory record.",
+        translations(
+            locale("ar-SA", summary = "اقرأ سجل ذاكرة دائمًا واحدًا."),
+            locale("de-DE", summary = "Einen dauerhaften Speichereintrag lesen."),
+            locale("es-ES", summary = "Leer un registro de memoria persistente."),
+            locale("fr-FR", summary = "Lire un enregistrement de mémoire persistante."),
+            locale("hi-IN", summary = "एक स्थायी मेमोरी रिकॉर्ड पढ़ें।"),
+            locale("ja-JP", summary = "永続メモリの記録を1件読み取ります。"),
+            locale("ko-KR", summary = "영구 메모리 기록 하나를 읽습니다."),
+            locale("pt-BR", summary = "Ler um registro de memória persistente."),
+            locale("zh-CN", summary = "读取一条持久记忆记录。"),
+            locale("zh-TW", summary = "讀取一筆持久記憶記錄。")
+        )
     )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
@@ -355,7 +382,22 @@ impl MemoryPlugin {
 
     #[tool(
         tags(query, filesystem, discovery, read_only),
-        summary = "List durable memory records."
+        summary = "List durable memory records.",
+        translations(
+            locale("ar-SA", summary = "اعرض سجلات الذاكرة الدائمة."),
+            locale("de-DE", summary = "Dauerhafte Speichereinträge auflisten."),
+            locale("es-ES", summary = "Listar los registros de memoria persistente."),
+            locale(
+                "fr-FR",
+                summary = "Lister les enregistrements de mémoire persistante."
+            ),
+            locale("hi-IN", summary = "स्थायी मेमोरी रिकॉर्ड की सूची बनाएँ।"),
+            locale("ja-JP", summary = "永続メモリの記録を一覧表示します。"),
+            locale("ko-KR", summary = "영구 메모리 기록을 나열합니다."),
+            locale("pt-BR", summary = "Listar registros de memória persistente."),
+            locale("zh-CN", summary = "列出持久记忆记录。"),
+            locale("zh-TW", summary = "列出持久記憶記錄。")
+        )
     )]
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
@@ -406,7 +448,22 @@ impl MemoryPlugin {
         .await
     }
 
-    #[tool(tags(mutate, filesystem), summary = "Write one durable memory record.")]
+    #[tool(
+        tags(mutate, filesystem),
+        summary = "Write one durable memory record.",
+        translations(
+            locale("ar-SA", summary = "اكتب سجل ذاكرة دائمًا واحدًا."),
+            locale("de-DE", summary = "Einen dauerhaften Speichereintrag schreiben."),
+            locale("es-ES", summary = "Escribir un registro de memoria persistente."),
+            locale("fr-FR", summary = "Écrire un enregistrement de mémoire persistante."),
+            locale("hi-IN", summary = "एक स्थायी मेमोरी रिकॉर्ड लिखें।"),
+            locale("ja-JP", summary = "永続メモリの記録を1件書き込みます。"),
+            locale("ko-KR", summary = "영구 메모리 기록 하나를 기록합니다."),
+            locale("pt-BR", summary = "Gravar um registro de memória persistente."),
+            locale("zh-CN", summary = "写入一条持久记忆记录。"),
+            locale("zh-TW", summary = "寫入一筆持久記憶記錄。")
+        )
+    )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();
         let name = input.name.clone();
@@ -458,7 +515,22 @@ impl MemoryPlugin {
 
     #[tool(
         tags(mutate, filesystem),
-        summary = "Delete one durable memory record."
+        summary = "Delete one durable memory record.",
+        translations(
+            locale("ar-SA", summary = "احذف سجل ذاكرة دائمًا واحدًا."),
+            locale("de-DE", summary = "Einen dauerhaften Speichereintrag löschen."),
+            locale("es-ES", summary = "Eliminar un registro de memoria persistente."),
+            locale(
+                "fr-FR",
+                summary = "Supprimer un enregistrement de mémoire persistante."
+            ),
+            locale("hi-IN", summary = "एक स्थायी मेमोरी रिकॉर्ड हटाएँ।"),
+            locale("ja-JP", summary = "永続メモリの記録を1件削除します。"),
+            locale("ko-KR", summary = "영구 메모리 기록 하나를 삭제합니다."),
+            locale("pt-BR", summary = "Excluir um registro de memória persistente."),
+            locale("zh-CN", summary = "删除一条持久记忆记录。"),
+            locale("zh-TW", summary = "刪除一筆持久記憶記錄。")
+        )
     )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let workspace_root = self.workspace_root()?.to_path_buf();

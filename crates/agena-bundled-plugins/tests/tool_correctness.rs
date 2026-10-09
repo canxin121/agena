@@ -1,9 +1,7 @@
 //! Audit regressions through the real bundled-plugin/executor JSON boundary.
 //! Each fixture owns an isolated workspace; no personal config or service calls.
 use agena_domain::{StructuredObject, ToolInvocation};
-use agena_plugin_host::{
-    ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
-};
+use agena_plugin_host::{ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig};
 use agena_runtime_tools::{
     authorization::ExecutionPrincipal,
     permission::{PermissionPolicy, ToolPermissionPolicy},

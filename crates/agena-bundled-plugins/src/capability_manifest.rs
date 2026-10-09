@@ -370,3 +370,7 @@ mod boundary_audit {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "capability_manifest_i18n_tests.rs"]
+mod i18n_tests;

@@ -381,7 +381,49 @@ impl ChatGptToolsPlugin {
         name = "cloud_image_understanding",
         tags(query, network, mutate),
         summary = "Send explicit images to OpenAI cloud for understanding; not local file viewing.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback."
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "أرسل صورًا محددة صراحةً إلى سحابة OpenAI لفهمها؛ وليس لعرض الملفات المحلية."
+            ),
+            locale(
+                "de-DE",
+                summary = "Sendet ausdrücklich angegebene Bilder zur Analyse an die OpenAI-Cloud; kein lokales Anzeigen von Dateien."
+            ),
+            locale(
+                "es-ES",
+                summary = "Envía imágenes explícitas a la nube de OpenAI para comprenderlas; no es visualización de archivos locales."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Envoie des images explicites au cloud OpenAI pour analyse ; ce n’est pas la consultation de fichiers locaux."
+            ),
+            locale(
+                "hi-IN",
+                summary = "समझने के लिए स्पष्ट रूप से दी गई छवियाँ OpenAI क्लाउड पर भेजता है; यह स्थानीय फ़ाइल देखना नहीं है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "明示的に指定した画像を OpenAI クラウドに送って解析します。ローカルファイルの閲覧ではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "명시적으로 지정한 이미지를 OpenAI 클라우드로 보내 분석합니다. 로컬 파일 보기가 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Envia imagens explícitas para a nuvem da OpenAI para compreensão; não é visualização de arquivos locais."
+            ),
+            locale(
+                "zh-CN",
+                summary = "将显式指定的图像发送到 OpenAI 云端进行理解；并非查看本地文件。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將明確指定的圖像傳送至 OpenAI 雲端進行理解；並非檢視本機檔案。"
+            )
+        )
     )]
     async fn image_understanding(
         &self,
@@ -398,7 +440,49 @@ impl ChatGptToolsPlugin {
         name = "cloud_document_understanding",
         tags(query, network, mutate),
         summary = "Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback."
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "أرسل مستندات PDF/نصية محددة صراحةً إلى سحابة OpenAI لفهمها؛ وليس لعرض الملفات المحلية."
+            ),
+            locale(
+                "de-DE",
+                summary = "Sendet ausdrücklich angegebene PDF-/Textdokumente zur Analyse an die OpenAI-Cloud; kein lokales Anzeigen von Dateien."
+            ),
+            locale(
+                "es-ES",
+                summary = "Envía documentos PDF/texto explícitos a la nube de OpenAI para comprenderlos; no es visualización de archivos locales."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Envoie des documents PDF/textuels explicites au cloud OpenAI pour analyse ; ce n’est pas la consultation de fichiers locaux."
+            ),
+            locale(
+                "hi-IN",
+                summary = "समझने के लिए स्पष्ट रूप से दिए गए PDF/टेक्स्ट दस्तावेज़ OpenAI क्लाउड पर भेजता है; यह स्थानीय फ़ाइल देखना नहीं है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "明示的に指定した PDF／テキスト文書を OpenAI クラウドに送って解析します。ローカルファイルの閲覧ではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "명시적으로 지정한 PDF/텍스트 문서를 OpenAI 클라우드로 보내 분석합니다. 로컬 파일 보기가 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Envia documentos PDF/texto explícitos para a nuvem da OpenAI para compreensão; não é visualização de arquivos locais."
+            ),
+            locale(
+                "zh-CN",
+                summary = "将显式指定的 PDF/文本文档发送到 OpenAI 云端进行理解；并非查看本地文件。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將明確指定的 PDF／文字文件傳送至 OpenAI 雲端進行理解；並非檢視本機檔案。"
+            )
+        )
     )]
     async fn document_understanding(
         &self,
@@ -415,7 +499,49 @@ impl ChatGptToolsPlugin {
         name = "cloud_file_upload",
         tags(mutate, network),
         summary = "Upload one permitted local file to OpenAI cloud and return a session-owned handle.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly."
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "ارفع ملفًا محليًا واحدًا مسموحًا به إلى سحابة OpenAI وأعِد معرّفًا مملوكًا للجلسة."
+            ),
+            locale(
+                "de-DE",
+                summary = "Lädt eine zulässige lokale Datei in die OpenAI-Cloud hoch und gibt ein sitzungseigenes Handle zurück."
+            ),
+            locale(
+                "es-ES",
+                summary = "Sube un archivo local permitido a la nube de OpenAI y devuelve un identificador propiedad de la sesión."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Téléverse un fichier local autorisé vers le cloud OpenAI et renvoie un identifiant propre à la session."
+            ),
+            locale(
+                "hi-IN",
+                summary = "एक अनुमत स्थानीय फ़ाइल OpenAI क्लाउड पर अपलोड करता है और सत्र के स्वामित्व वाला हैंडल लौटाता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "許可されたローカルファイルを1件 OpenAI クラウドにアップロードし、セッション所有のハンドルを返します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "허용된 로컬 파일 하나를 OpenAI 클라우드에 업로드하고 세션 소유 핸들을 반환합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Envia um arquivo local permitido para a nuvem da OpenAI e retorna um identificador pertencente à sessão."
+            ),
+            locale(
+                "zh-CN",
+                summary = "将一个获准的本地文件上传到 OpenAI 云端，并返回会话持有的句柄。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將一個獲准的本機檔案上傳至 OpenAI 雲端，並傳回工作階段持有的控制代碼。"
+            )
+        )
     )]
     async fn file_upload(
         &self,
@@ -429,7 +555,49 @@ impl ChatGptToolsPlugin {
         name = "cloud_file_status",
         tags(query, network, mutate),
         summary = "Query the remote status of an owned OpenAI cloud file, not a local path.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload."
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "استعلم عن الحالة البعيدة لملف OpenAI سحابي مملوك، وليس مسارًا محليًا."
+            ),
+            locale(
+                "de-DE",
+                summary = "Fragt den entfernten Status einer eigenen OpenAI-Cloud-Datei ab, nicht einen lokalen Pfad."
+            ),
+            locale(
+                "es-ES",
+                summary = "Consulta el estado remoto de un archivo propio en la nube de OpenAI, no una ruta local."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Interroge l’état distant d’un fichier OpenAI détenu, et non un chemin local."
+            ),
+            locale(
+                "hi-IN",
+                summary = "स्वामित्व वाली OpenAI क्लाउड फ़ाइल की दूरस्थ स्थिति पूछता है, स्थानीय पथ की नहीं।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "所有する OpenAI クラウドファイルの遠隔状態を問い合わせます。ローカルパスではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "소유한 OpenAI 클라우드 파일의 원격 상태를 조회합니다. 로컬 경로가 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Consulta o estado remoto de um arquivo próprio na nuvem da OpenAI, não um caminho local."
+            ),
+            locale(
+                "zh-CN",
+                summary = "查询对话持有的 OpenAI 云端文件的远端状态，而非本地路径。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "查詢工作階段持有的 OpenAI 雲端檔案的遠端狀態，而非本機路徑。"
+            )
+        )
     )]
     async fn file_status(
         &self,
@@ -445,7 +613,46 @@ impl ChatGptToolsPlugin {
         name = "cloud_file_delete",
         tags(mutate, network),
         summary = "Request deletion of an owned file from OpenAI cloud; preserve the local original.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup."
+        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "اطلب حذف ملف مملوك من سحابة OpenAI؛ مع الحفاظ على الأصل المحلي."
+            ),
+            locale(
+                "de-DE",
+                summary = "Fordert das Löschen einer eigenen Datei aus der OpenAI-Cloud an; das lokale Original bleibt erhalten."
+            ),
+            locale(
+                "es-ES",
+                summary = "Solicita eliminar un archivo propio de la nube de OpenAI; conserva el original local."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Demande la suppression d’un fichier détenu dans le cloud OpenAI ; l’original local est conservé."
+            ),
+            locale(
+                "hi-IN",
+                summary = "OpenAI क्लाउड से स्वामित्व वाली फ़ाइल हटाने का अनुरोध करता है; स्थानीय मूल सुरक्षित रहता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "所有するファイルの OpenAI クラウドからの削除を要求します。ローカルの原本は保持されます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "소유한 파일을 OpenAI 클라우드에서 삭제하도록 요청합니다. 로컬 원본은 유지됩니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Solicita a exclusão de um arquivo próprio da nuvem da OpenAI; o original local é preservado."
+            ),
+            locale("zh-CN", summary = "请求从 OpenAI 云端删除持有的文件；保留本地原件。"),
+            locale(
+                "zh-TW",
+                summary = "要求從 OpenAI 雲端刪除持有的檔案；保留本機原始檔。"
+            )
+        )
     )]
     async fn file_delete(
         &self,
@@ -460,7 +667,49 @@ impl ChatGptToolsPlugin {
         name = "cloud_web_search",
         tags(network, interactive, discovery, read_only),
         summary = "Search the web in OpenAI cloud and return sources; not a local browser operation.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks."
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "ابحث في الويب داخل سحابة OpenAI وأعِد المصادر؛ وليس عملية متصفح محلي."
+            ),
+            locale(
+                "de-DE",
+                summary = "Durchsucht das Web in der OpenAI-Cloud und liefert Quellen; kein lokaler Browser-Vorgang."
+            ),
+            locale(
+                "es-ES",
+                summary = "Busca en la web en la nube de OpenAI y devuelve fuentes; no es una operación del navegador local."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Recherche sur le Web dans le cloud OpenAI et renvoie les sources ; ce n’est pas une opération du navigateur local."
+            ),
+            locale(
+                "hi-IN",
+                summary = "OpenAI क्लाउड में वेब खोजता है और स्रोत लौटाता है; यह स्थानीय ब्राउज़र कार्रवाई नहीं है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "OpenAI クラウドでウェブを検索し、出典を返します。ローカルブラウザーの操作ではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "OpenAI 클라우드에서 웹을 검색하고 출처를 반환합니다. 로컬 브라우저 작업이 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Pesquisa na web na nuvem da OpenAI e retorna fontes; não é uma operação do navegador local."
+            ),
+            locale(
+                "zh-CN",
+                summary = "在 OpenAI 云端中搜索网络并返回来源；并非本地浏览器操作。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "在 OpenAI 雲端中搜尋網路並傳回來源；並非本機瀏覽器操作。"
+            )
+        )
     )]
     async fn web_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
@@ -476,7 +725,46 @@ impl ChatGptToolsPlugin {
         name = "cloud_file_search",
         tags(network, interactive, discovery, read_only),
         summary = "Search configured OpenAI cloud file stores, not files on this computer.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI."
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "ابحث في مخازن ملفات OpenAI السحابية المُهيّأة، وليس في ملفات هذا الحاسوب."
+            ),
+            locale(
+                "de-DE",
+                summary = "Durchsucht konfigurierte OpenAI-Cloud-Dateispeicher, nicht Dateien auf diesem Computer."
+            ),
+            locale(
+                "es-ES",
+                summary = "Busca en los almacenes de archivos configurados de OpenAI, no en archivos de este equipo."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Recherche dans les stockages de fichiers OpenAI configurés, pas dans les fichiers de cet ordinateur."
+            ),
+            locale(
+                "hi-IN",
+                summary = "कॉन्फ़िगर किए गए OpenAI क्लाउड फ़ाइल स्टोर खोजता है, इस कंप्यूटर की फ़ाइलें नहीं।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "設定済みの OpenAI クラウドファイルストアを検索します。このコンピューター上のファイルではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "설정된 OpenAI 클라우드 파일 저장소를 검색합니다. 이 컴퓨터의 파일이 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Pesquisa nos armazenamentos de arquivos configurados da OpenAI, não em arquivos deste computador."
+            ),
+            locale("zh-CN", summary = "搜索已配置的 OpenAI 云端文件存储，而非本机文件。"),
+            locale(
+                "zh-TW",
+                summary = "搜尋已設定的 OpenAI 雲端檔案儲存庫，而非本機檔案。"
+            )
+        )
     )]
     async fn file_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
@@ -493,8 +781,20 @@ impl ChatGptToolsPlugin {
         stream = code_interpreter_stream,
         tags(network, interactive, read_only),
         summary = "Run Python in an OpenAI cloud container, not the Agena local workspace.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy."
-    )]
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.",
+    translations(
+        locale("ar-SA", summary = "شغّل Python في حاوية OpenAI سحابية، وليس في مساحة عمل Agena المحلية."),
+        locale("de-DE", summary = "Führt Python in einem OpenAI-Cloud-Container aus, nicht im lokalen Agena-Arbeitsbereich."),
+        locale("es-ES", summary = "Ejecuta Python en un contenedor de OpenAI, no en el espacio de trabajo local de Agena."),
+        locale("fr-FR", summary = "Exécute Python dans un conteneur OpenAI, pas dans l’espace de travail local d’Agena."),
+        locale("hi-IN", summary = "Python को OpenAI क्लाउड कंटेनर में चलाता है, Agena के स्थानीय कार्यक्षेत्र में नहीं।"),
+        locale("ja-JP", summary = "Python を OpenAI クラウドコンテナで実行します。Agena のローカルワークスペースではありません。"),
+        locale("ko-KR", summary = "Python을 OpenAI 클라우드 컨테이너에서 실행합니다. Agena 로컬 작업 공간이 아닙니다."),
+        locale("pt-BR", summary = "Executa Python em um contêiner da OpenAI, não no espaço de trabalho local do Agena."),
+        locale("zh-CN", summary = "在 OpenAI 云端容器中运行 Python，而非 Agena 本地工作区。"),
+        locale("zh-TW", summary = "在 OpenAI 雲端容器中執行 Python，而非 Agena 本機工作區。")
+)
+)]
     async fn code_interpreter(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "code_interpreter",
@@ -521,7 +821,49 @@ impl ChatGptToolsPlugin {
         name = "cloud_image_generation",
         tags(network, interactive, mutate),
         summary = "Generate images in OpenAI cloud; save returned images as local attachments.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments."
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "أنشئ صورًا في سحابة OpenAI؛ واحفظ الصور المُعادة كمرفقات محلية."
+            ),
+            locale(
+                "de-DE",
+                summary = "Erzeugt Bilder in der OpenAI-Cloud; zurückgegebene Bilder werden als lokale Anhänge gespeichert."
+            ),
+            locale(
+                "es-ES",
+                summary = "Genera imágenes en la nube de OpenAI; guarda las imágenes devueltas como adjuntos locales."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Génère des images dans le cloud OpenAI ; les images reçues sont enregistrées comme pièces jointes locales."
+            ),
+            locale(
+                "hi-IN",
+                summary = "OpenAI क्लाउड में छवियाँ बनाता है; लौटाई गई छवियाँ स्थानीय अनुलग्नक के रूप में सहेजता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "OpenAI クラウドで画像を生成します。返された画像はローカル添付として保存されます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "OpenAI 클라우드에서 이미지를 생성합니다. 반환된 이미지는 로컬 첨부로 저장됩니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Gera imagens na nuvem da OpenAI; salva as imagens retornadas como anexos locais."
+            ),
+            locale(
+                "zh-CN",
+                summary = "在 OpenAI 云端生成图像；将返回的图像保存为本地附件。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "在 OpenAI 雲端生成圖像；將傳回的圖像儲存為本機附件。"
+            )
+        )
     )]
     async fn image_generation(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
@@ -538,8 +880,20 @@ impl ChatGptToolsPlugin {
         stream = shell_stream,
         tags(network, interactive, mutate),
         summary = "Run shell commands in an OpenAI cloud container, never in the local terminal.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback."
-    )]
+        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.",
+    translations(
+        locale("ar-SA", summary = "نفّذ أوامر الصدفة في حاوية OpenAI سحابية، وليس في الطرفية المحلية أبدًا."),
+        locale("de-DE", summary = "Führt Shell-Befehle in einem OpenAI-Cloud-Container aus, niemals im lokalen Terminal."),
+        locale("es-ES", summary = "Ejecuta comandos de shell en un contenedor de OpenAI, nunca en la terminal local."),
+        locale("fr-FR", summary = "Exécute des commandes shell dans un conteneur OpenAI, jamais dans le terminal local."),
+        locale("hi-IN", summary = "शेल कमांड OpenAI क्लाउड कंटेनर में चलाता है, स्थानीय टर्मिनल में कभी नहीं।"),
+        locale("ja-JP", summary = "シェルコマンドを OpenAI クラウドコンテナで実行します。ローカル端末では実行しません。"),
+        locale("ko-KR", summary = "셸 명령을 OpenAI 클라우드 컨테이너에서 실행합니다. 로컬 터미널에서는 실행하지 않습니다."),
+        locale("pt-BR", summary = "Executa comandos de shell em um contêiner da OpenAI, nunca no terminal local."),
+        locale("zh-CN", summary = "在 OpenAI 云端容器中运行 Shell 命令，绝不在本地终端运行。"),
+        locale("zh-TW", summary = "在 OpenAI 雲端容器中執行 Shell 命令，絕不在本機終端執行。")
+)
+)]
     async fn shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "shell",
@@ -566,7 +920,49 @@ impl ChatGptToolsPlugin {
         name = "cloud_image_edit",
         summary = "Upload permitted images for editing in OpenAI cloud; save the returned image separately.",
         help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.",
-        tags(mutate)
+        tags(mutate),
+        translations(
+            locale(
+                "ar-SA",
+                summary = "ارفع صورًا مسموحًا بها للتحرير في سحابة OpenAI؛ واحفظ الصورة المُعادة على حدة."
+            ),
+            locale(
+                "de-DE",
+                summary = "Lädt zulässige Bilder zur Bearbeitung in die OpenAI-Cloud hoch; das zurückgegebene Bild wird separat gespeichert."
+            ),
+            locale(
+                "es-ES",
+                summary = "Sube imágenes permitidas para editarlas en la nube de OpenAI; guarda la imagen devuelta por separado."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Téléverse des images autorisées pour édition dans le cloud OpenAI ; l’image renvoyée est enregistrée séparément."
+            ),
+            locale(
+                "hi-IN",
+                summary = "संपादन के लिए अनुमत छवियाँ OpenAI क्लाउड पर अपलोड करता है; लौटाई गई छवि अलग से सहेजता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "編集用に許可された画像を OpenAI クラウドへアップロードします。返された画像は別途保存されます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "편집을 위해 허용된 이미지를 OpenAI 클라우드에 업로드합니다. 반환된 이미지는 따로 저장합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Envia imagens permitidas para edição na nuvem da OpenAI; salva a imagem retornada separadamente."
+            ),
+            locale(
+                "zh-CN",
+                summary = "将获准的图像上传到 OpenAI 云端进行编辑；返回的图像单独保存。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將獲准的圖像上傳至 OpenAI 雲端進行編輯；傳回的圖像另行儲存。"
+            )
+        )
     )]
     async fn image_edit(&self, input: ChatGptImageEditInput) -> SdkResult<ToolInvokeOutput> {
         super::official_service::hosted::validate_options(&input.options, "options")?;

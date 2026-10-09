@@ -373,11 +373,11 @@ impl App {
                 return;
             }
         };
+        let locale = self.i18n.locale_tag();
         let summary = tool
             .docs
-            .help
-            .as_deref()
-            .or(tool.docs.summary.as_deref())
+            .help_for_locale(locale.as_str())
+            .or_else(|| tool.docs.summary_for_locale(locale.as_str()))
             .unwrap_or("Run this plugin tool.");
         let metadata_tags = if tool.tags.is_empty() {
             "none declared".to_owned()

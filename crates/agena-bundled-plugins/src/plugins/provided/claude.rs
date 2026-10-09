@@ -321,7 +321,49 @@ impl ClaudeToolsPlugin {
         name = "cloud_image_understanding",
         tags(query, network, mutate),
         summary = "Send explicit images to Anthropic cloud for understanding; not local file viewing.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback."
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "أرسل صورًا محددة صراحةً إلى سحابة Anthropic لفهمها؛ وليس لعرض الملفات المحلية."
+            ),
+            locale(
+                "de-DE",
+                summary = "Sendet ausdrücklich angegebene Bilder zur Analyse an die Anthropic-Cloud; kein lokales Anzeigen von Dateien."
+            ),
+            locale(
+                "es-ES",
+                summary = "Envía imágenes explícitas a la nube de Anthropic para comprenderlas; no es visualización de archivos locales."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Envoie des images explicites au cloud Anthropic pour analyse ; ce n’est pas la consultation de fichiers locaux."
+            ),
+            locale(
+                "hi-IN",
+                summary = "समझने के लिए स्पष्ट रूप से दी गई छवियाँ Anthropic क्लाउड पर भेजता है; यह स्थानीय फ़ाइल देखना नहीं है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "明示的に指定した画像を Anthropic クラウドに送って解析します。ローカルファイルの閲覧ではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "명시적으로 지정한 이미지를 Anthropic 클라우드로 보내 분석합니다. 로컬 파일 보기가 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Envia imagens explícitas para a nuvem da Anthropic para compreensão; não é visualização de arquivos locais."
+            ),
+            locale(
+                "zh-CN",
+                summary = "将显式指定的图像发送到 Anthropic 云端进行理解；并非查看本地文件。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將明確指定的圖像傳送至 Anthropic 雲端進行理解；並非檢視本機檔案。"
+            )
+        )
     )]
     async fn image_understanding(
         &self,
@@ -338,7 +380,49 @@ impl ClaudeToolsPlugin {
         name = "cloud_document_understanding",
         tags(query, network, mutate),
         summary = "Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback."
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "أرسل مستندات PDF/نصية محددة صراحةً إلى سحابة Anthropic لفهمها؛ وليس لعرض الملفات المحلية."
+            ),
+            locale(
+                "de-DE",
+                summary = "Sendet ausdrücklich angegebene PDF-/Textdokumente zur Analyse an die Anthropic-Cloud; kein lokales Anzeigen von Dateien."
+            ),
+            locale(
+                "es-ES",
+                summary = "Envía documentos PDF/texto explícitos a la nube de Anthropic para comprenderlos; no es visualización de archivos locales."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Envoie des documents PDF/textuels explicites au cloud Anthropic pour analyse ; ce n’est pas la consultation de fichiers locaux."
+            ),
+            locale(
+                "hi-IN",
+                summary = "समझने के लिए स्पष्ट रूप से दिए गए PDF/टेक्स्ट दस्तावेज़ Anthropic क्लाउड पर भेजता है; यह स्थानीय फ़ाइल देखना नहीं है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "明示的に指定した PDF／テキスト文書を Anthropic クラウドに送って解析します。ローカルファイルの閲覧ではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "명시적으로 지정한 PDF/텍스트 문서를 Anthropic 클라우드로 보내 분석합니다. 로컬 파일 보기가 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Envia documentos PDF/texto explícitos para a nuvem da Anthropic para compreensão; não é visualização de arquivos locais."
+            ),
+            locale(
+                "zh-CN",
+                summary = "将显式指定的 PDF/文本文档发送到 Anthropic 云端进行理解；并非查看本地文件。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將明確指定的 PDF／文字文件傳送至 Anthropic 雲端進行理解；並非檢視本機檔案。"
+            )
+        )
     )]
     async fn document_understanding(
         &self,
@@ -355,7 +439,49 @@ impl ClaudeToolsPlugin {
         name = "cloud_file_upload",
         tags(mutate, network),
         summary = "Upload one permitted local file to Anthropic cloud and return a session-owned handle.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly."
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "ارفع ملفًا محليًا واحدًا مسموحًا به إلى سحابة Anthropic وأعِد معرّفًا مملوكًا للجلسة."
+            ),
+            locale(
+                "de-DE",
+                summary = "Lädt eine zulässige lokale Datei in die Anthropic-Cloud hoch und gibt ein sitzungseigenes Handle zurück."
+            ),
+            locale(
+                "es-ES",
+                summary = "Sube un archivo local permitido a la nube de Anthropic y devuelve un identificador propiedad de la sesión."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Téléverse un fichier local autorisé vers le cloud Anthropic et renvoie un identifiant propre à la session."
+            ),
+            locale(
+                "hi-IN",
+                summary = "एक अनुमत स्थानीय फ़ाइल Anthropic क्लाउड पर अपलोड करता है और सत्र के स्वामित्व वाला हैंडल लौटाता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "許可されたローカルファイルを1件 Anthropic クラウドにアップロードし、セッション所有のハンドルを返します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "허용된 로컬 파일 하나를 Anthropic 클라우드에 업로드하고 세션 소유 핸들을 반환합니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Envia um arquivo local permitido para a nuvem da Anthropic e retorna um identificador pertencente à sessão."
+            ),
+            locale(
+                "zh-CN",
+                summary = "将一个获准的本地文件上传到 Anthropic 云端，并返回会话持有的句柄。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將一個獲准的本機檔案上傳至 Anthropic 雲端，並傳回工作階段持有的控制代碼。"
+            )
+        )
     )]
     async fn file_upload(
         &self,
@@ -369,7 +495,49 @@ impl ClaudeToolsPlugin {
         name = "cloud_file_status",
         tags(query, network, mutate),
         summary = "Query the remote status of an owned Anthropic cloud file, not a local path.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload."
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "استعلم عن الحالة البعيدة لملف Anthropic سحابي مملوك، وليس مسارًا محليًا."
+            ),
+            locale(
+                "de-DE",
+                summary = "Fragt den entfernten Status einer eigenen Anthropic-Cloud-Datei ab, nicht einen lokalen Pfad."
+            ),
+            locale(
+                "es-ES",
+                summary = "Consulta el estado remoto de un archivo propio en la nube de Anthropic, no una ruta local."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Interroge l’état distant d’un fichier Anthropic détenu, et non un chemin local."
+            ),
+            locale(
+                "hi-IN",
+                summary = "स्वामित्व वाली Anthropic क्लाउड फ़ाइल की दूरस्थ स्थिति पूछता है, स्थानीय पथ की नहीं।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "所有する Anthropic クラウドファイルの遠隔状態を問い合わせます。ローカルパスではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "소유한 Anthropic 클라우드 파일의 원격 상태를 조회합니다. 로컬 경로가 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Consulta o estado remoto de um arquivo próprio na nuvem da Anthropic, não um caminho local."
+            ),
+            locale(
+                "zh-CN",
+                summary = "查询对话持有的 Anthropic 云端文件的远端状态，而非本地路径。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "查詢工作階段持有的 Anthropic 雲端檔案的遠端狀態，而非本機路徑。"
+            )
+        )
     )]
     async fn file_status(
         &self,
@@ -385,7 +553,49 @@ impl ClaudeToolsPlugin {
         name = "cloud_file_delete",
         tags(mutate, network),
         summary = "Request deletion of an owned file from Anthropic cloud; preserve the local original.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup."
+        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "اطلب حذف ملف مملوك من سحابة Anthropic؛ مع الحفاظ على الأصل المحلي."
+            ),
+            locale(
+                "de-DE",
+                summary = "Fordert das Löschen einer eigenen Datei aus der Anthropic-Cloud an; das lokale Original bleibt erhalten."
+            ),
+            locale(
+                "es-ES",
+                summary = "Solicita eliminar un archivo propio de la nube de Anthropic; conserva el original local."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Demande la suppression d’un fichier détenu dans le cloud Anthropic ; l’original local est conservé."
+            ),
+            locale(
+                "hi-IN",
+                summary = "Anthropic क्लाउड से स्वामित्व वाली फ़ाइल हटाने का अनुरोध करता है; स्थानीय मूल सुरक्षित रहता है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "所有するファイルの Anthropic クラウドからの削除を要求します。ローカルの原本は保持されます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "소유한 파일을 Anthropic 클라우드에서 삭제하도록 요청합니다. 로컬 원본은 유지됩니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Solicita a exclusão de um arquivo próprio da nuvem da Anthropic; o original local é preservado."
+            ),
+            locale(
+                "zh-CN",
+                summary = "请求从 Anthropic 云端删除持有的文件；保留本地原件。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "要求從 Anthropic 雲端刪除持有的檔案；保留本機原始檔。"
+            )
+        )
     )]
     async fn file_delete(
         &self,
@@ -401,8 +611,20 @@ impl ClaudeToolsPlugin {
         stream = code_execution_stream,
         tags(network, interactive, read_only),
         summary = "Execute code in Anthropic cloud infrastructure, not on this computer.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options."
-    )]
+        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.",
+    translations(
+        locale("ar-SA", summary = "نفّذ تعليمة برمجية في البنية السحابية لـ Anthropic، وليس على هذا الحاسوب."),
+        locale("de-DE", summary = "Führt Code in der Anthropic-Cloud-Infrastruktur aus, nicht auf diesem Computer."),
+        locale("es-ES", summary = "Ejecuta código en la infraestructura de Anthropic, no en este equipo."),
+        locale("fr-FR", summary = "Exécute du code dans l’infrastructure Anthropic, pas sur cet ordinateur."),
+        locale("hi-IN", summary = "Anthropic क्लाउड अधोसंरचना में कोड चलाता है, इस कंप्यूटर पर नहीं।"),
+        locale("ja-JP", summary = "Anthropic クラウド基盤でコードを実行します。このコンピューター上ではありません。"),
+        locale("ko-KR", summary = "Anthropic 클라우드 인프라에서 코드를 실행합니다. 이 컴퓨터가 아닙니다."),
+        locale("pt-BR", summary = "Executa código na infraestrutura da nuvem da Anthropic, não neste computador."),
+        locale("zh-CN", summary = "在 Anthropic 云端基础设施中执行代码，而非在本机执行。"),
+        locale("zh-TW", summary = "在 Anthropic 雲端基礎架構中執行程式碼，而非在本機執行。")
+)
+)]
     async fn code_execution(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "code_execution",
@@ -429,7 +651,49 @@ impl ClaudeToolsPlugin {
         name = "cloud_web_search",
         tags(network, interactive, discovery, read_only),
         summary = "Search the web in Anthropic cloud and return sources; not a local browser operation.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location."
+        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "ابحث في الويب داخل سحابة Anthropic وأعِد المصادر؛ وليس عملية متصفح محلي."
+            ),
+            locale(
+                "de-DE",
+                summary = "Durchsucht das Web in der Anthropic-Cloud und liefert Quellen; kein lokaler Browser-Vorgang."
+            ),
+            locale(
+                "es-ES",
+                summary = "Busca en la web en la nube de Anthropic y devuelve fuentes; no es una operación del navegador local."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Recherche sur le Web dans le cloud Anthropic et renvoie les sources ; ce n’est pas une opération du navigateur local."
+            ),
+            locale(
+                "hi-IN",
+                summary = "Anthropic क्लाउड में वेब खोजता है और स्रोत लौटाता है; यह स्थानीय ब्राउज़र कार्रवाई नहीं है।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "Anthropic クラウドでウェブを検索し、出典を返します。ローカルブラウザーの操作ではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "Anthropic 클라우드에서 웹을 검색하고 출처를 반환합니다. 로컬 브라우저 작업이 아닙니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Pesquisa na web na nuvem da Anthropic e retorna fontes; não é uma operação do navegador local."
+            ),
+            locale(
+                "zh-CN",
+                summary = "在 Anthropic 云端中搜索网络并返回来源；并非本地浏览器操作。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "在 Anthropic 雲端中搜尋網路並傳回來源；並非本機瀏覽器操作。"
+            )
+        )
     )]
     async fn web_search(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
@@ -446,7 +710,49 @@ impl ClaudeToolsPlugin {
         name = "cloud_web_fetch",
         tags(network, interactive, discovery, read_only),
         summary = "Fetch and process web content in Anthropic cloud, not through the local browser.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache."
+        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.",
+        translations(
+            locale(
+                "ar-SA",
+                summary = "اجلب محتوى الويب وعالجه في سحابة Anthropic، وليس عبر المتصفح المحلي."
+            ),
+            locale(
+                "de-DE",
+                summary = "Ruft Webinhalte in der Anthropic-Cloud ab und verarbeitet sie, nicht über den lokalen Browser."
+            ),
+            locale(
+                "es-ES",
+                summary = "Obtiene y procesa contenido web en la nube de Anthropic, no mediante el navegador local."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Récupère et traite du contenu web dans le cloud Anthropic, pas via le navigateur local."
+            ),
+            locale(
+                "hi-IN",
+                summary = "वेब सामग्री Anthropic क्लाउड में प्राप्त और संसाधित करता है, स्थानीय ब्राउज़र से नहीं।"
+            ),
+            locale(
+                "ja-JP",
+                summary = "ウェブコンテンツを Anthropic クラウドで取得・処理します。ローカルブラウザー経由ではありません。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "웹 콘텐츠를 Anthropic 클라우드에서 가져와 처리합니다. 로컬 브라우저를 통하지 않습니다."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Obtém e processa conteúdo web na nuvem da Anthropic, não pelo navegador local."
+            ),
+            locale(
+                "zh-CN",
+                summary = "在 Anthropic 云端获取并处理网页内容，而非通过本地浏览器。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "在 Anthropic 雲端取得並處理網頁內容，而非透過本機瀏覽器。"
+            )
+        )
     )]
     async fn web_fetch(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
@@ -464,8 +770,20 @@ impl ClaudeToolsPlugin {
         stream = advisor_stream,
         tags(network, interactive, read_only),
         summary = "Consult an advisor model in Anthropic cloud using the supplied context.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict."
-    )]
+        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.",
+    translations(
+        locale("ar-SA", summary = "استشر نموذجًا استشاريًا في سحابة Anthropic باستخدام السياق المقدَّم."),
+        locale("de-DE", summary = "Zieht ein Beratermodell in der Anthropic-Cloud mit dem übergebenen Kontext zu Rate."),
+        locale("es-ES", summary = "Consulta un modelo asesor en la nube de Anthropic usando el contexto proporcionado."),
+        locale("fr-FR", summary = "Consulte un modèle conseiller dans le cloud Anthropic à partir du contexte fourni."),
+        locale("hi-IN", summary = "दिए गए संदर्भ के साथ Anthropic क्लाउड में सलाहकार मॉडल से परामर्श लेता है।"),
+        locale("ja-JP", summary = "指定したコンテキストを使って Anthropic クラウドのアドバイザーモデルに相談します。"),
+        locale("ko-KR", summary = "제공된 컨텍스트로 Anthropic 클라우드의 어드바이저 모델에 자문합니다."),
+        locale("pt-BR", summary = "Consulta um modelo conselheiro na nuvem da Anthropic usando o contexto fornecido."),
+        locale("zh-CN", summary = "使用提供的上下文向 Anthropic 云端中的顾问模型咨询。"),
+        locale("zh-TW", summary = "使用提供的內容向 Anthropic 雲端中的顧問模型諮詢。")
+)
+)]
     async fn advisor(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "advisor",

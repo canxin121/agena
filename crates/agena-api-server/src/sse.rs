@@ -32,12 +32,16 @@ pub struct StreamQuery {
     pub workspace_id: Option<i64>,
     #[serde(default)]
     pub session_id: Option<i64>,
+    /// UI language for human headlines. Stored part data stays English.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 pub async fn handler(
     State(state): State<AppState>,
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ServerError> {
+    let locale = query.locale.clone();
     let scope = query.into_scope()?;
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
@@ -53,11 +57,17 @@ pub async fn handler(
             tokio::task::consume_budget().await;
             let revisions = subscription.revisions_for(&item);
             let notification = match item {
-                LiveItem::SessionChanged(change) => Notification::SessionChanged {
-                    subscription: subscription_id.clone(),
-                    change: Box::new(change),
-                    revisions,
-                },
+                LiveItem::SessionChanged(mut change) => {
+                    agena_application::part_locale::localize_session_change(
+                        &mut change,
+                        locale.as_deref(),
+                    );
+                    Notification::SessionChanged {
+                        subscription: subscription_id.clone(),
+                        change: Box::new(change),
+                        revisions,
+                    }
+                }
                 LiveItem::RuntimeSignal(signal) => Notification::RuntimeSignal {
                     subscription: subscription_id.clone(),
                     signal: Box::new(signal),

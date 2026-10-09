@@ -161,6 +161,9 @@ pub struct SessionPartListQuery {
 pub struct SessionChangeStreamQuery {
     #[serde(default)]
     pub since_version: Option<i64>,
+    /// UI language for human headlines. Stored part data stays English.
+    #[serde(default)]
+    pub locale: Option<String>,
     /// Deterministic overflow control for the in-process transport contract
     /// test. This field does not exist in production builds.
     #[cfg(test)]
@@ -176,6 +179,16 @@ pub struct SessionChangeStreamQuery {
     #[cfg(test)]
     #[serde(default)]
     pub test_subscription_probe: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+/// Query for one lazily loaded tool-call detail section.
+#[serde(deny_unknown_fields)]
+pub struct ToolDetailSectionQuery {
+    /// UI language for the human presentation headline. Stored data stays
+    /// English.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

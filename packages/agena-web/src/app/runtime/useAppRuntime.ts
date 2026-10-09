@@ -9,6 +9,7 @@ import { useUiStore } from '@/stores/ui'
 import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 
+import { withInterfaceLocale } from '@/i18n/interfaceLocale'
 import { connectSse } from '@/lib/sse'
 import { createRevalidator } from '@/lib/revalidation'
 import { isDocumentVisible } from '@/lib/backgroundReads'
@@ -198,7 +199,7 @@ export function useAppRuntime() {
 
     try {
       sse = connectSse({
-        endpoint: '/api/v1/changes/stream?scope_kind=global',
+        endpoint: withInterfaceLocale('/api/v1/changes/stream?scope_kind=global'),
         initialLastEventId: globalSseCursor,
         debugLabel: 'sse:global',
         onCursor: (lastEventId) => {

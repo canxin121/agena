@@ -228,3 +228,132 @@ async fn resource_stream_delivers_live_text_without_part_writes_and_workspace_de
     .await
     .expect("empty deletion must survive workspace filtering");
 }
+
+#[tokio::test]
+async fn a_live_session_stream_localizes_tool_headlines_for_the_asked_language() {
+    use futures_util::StreamExt as _;
+    let server = start_test_server("http://127.0.0.1:9").await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let http = reqwest::Client::new();
+    let session = client
+        .create_session(server.workspace_id, "live headline locale", None)
+        .await
+        .unwrap();
+    let store = AppState::from_application(application_for_test(&server.runtime))
+        .session_store()
+        .unwrap();
+    let tool = agena_runtime_contracts::part_content::ToolCallContent {
+        name: "shell.exec".into(),
+        input: serde_json::json!({"command":"echo hello"}),
+        state: agena_domain::ToolResultState::Running,
+        ..Default::default()
+    };
+    let run = store
+        .submit_user_run(
+            session.id,
+            vec![NewPart {
+                state: PartState::InProgress,
+                ..NewPart::pending("tool_call", PartRole::Assistant, tool.as_value())
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+    let part = run
+        .parts
+        .iter()
+        .find(|part| part.kind == "tool_call")
+        .unwrap();
+
+    // The stored headline stays English; a reader that names a language gets the
+    // mapped vocabulary on both the snapshot and every later push.
+    let endpoint = format!(
+        "{}/api/v1/sessions/{}/parts/{}/tool-sections/presentation",
+        server.url, session.id, part.part_id
+    );
+    let english: serde_json::Value = http
+        .get(endpoint)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let english_title = english["value"]["title"]
+        .as_str()
+        .expect("the tool presentation carries a headline")
+        .to_owned();
+    let english_action = english_title
+        .split(" · ")
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(english_title.contains("echo hello"), "{english_title}");
+    assert!(!english_action.is_empty(), "{english_title}");
+
+    let response = http
+        .get(format!(
+            "{}/api/v1/sessions/{}/changes/stream?locale=zh-CN",
+            server.url, session.id
+        ))
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let mut stream = response.bytes_stream();
+    let mut received = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !String::from_utf8_lossy(&received).contains("session_snapshot") {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the localized snapshot: {}",
+            String::from_utf8_lossy(&received)
+        );
+        let chunk = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("snapshot chunk arrives")
+            .expect("session stream stays open")
+            .expect("read snapshot bytes");
+        received.extend_from_slice(&chunk);
+    }
+    store
+        .update_part(
+            session.id,
+            part.part_id,
+            PartDelta {
+                state: Some(PartState::Completed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !String::from_utf8_lossy(&received).contains("part_updated") {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the localized push: {}",
+            String::from_utf8_lossy(&received)
+        );
+        let chunk = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("push chunk arrives")
+            .expect("session stream stays open")
+            .expect("read push bytes");
+        received.extend_from_slice(&chunk);
+    }
+    let text = String::from_utf8(received).expect("session SSE is UTF-8");
+    assert!(text.contains("echo hello"), "{text}");
+    assert!(
+        !text.contains(english_action.as_str()),
+        "the streamed headline must be localized: {text}"
+    );
+    assert!(
+        text.chars()
+            .any(|character| ('\u{4e00}'..='\u{9fff}').contains(&character)),
+        "the Chinese vocabulary should reach the live reader: {text}"
+    );
+    store.delete(session.id).await.unwrap();
+}

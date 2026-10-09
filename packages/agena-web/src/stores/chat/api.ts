@@ -1,5 +1,5 @@
 import { i18n } from '@/i18n'
-import { normalizeAppLocale } from '@/i18n/locale'
+import { withInterfaceLocale } from '@/i18n/interfaceLocale'
 import type { SessionActivity } from '@/types/activity'
 // Agena REST API client for the chat subsystem.
 //
@@ -951,16 +951,6 @@ export async function getSessionExecution(sessionId: string): Promise<AgenaExecu
       state: normalizeSessionState(raw.session?.state),
     },
   }
-}
-
-/**
- * Part headlines are stored English data; the server maps its vocabulary
- * for the requested language, so transcript reads ask for the UI language.
- */
-function withInterfaceLocale(url: string): string {
-  const locale = normalizeAppLocale(i18n.global.locale.value)
-  if (!locale) return url
-  return `${url}${url.includes('?') ? '&' : '?'}locale=${encodeURIComponent(locale)}`
 }
 
 /** GET /api/v1/sessions/{id}/parts — ordered part snapshot (reconnect catch-up). */

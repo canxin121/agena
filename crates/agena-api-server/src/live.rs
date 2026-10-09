@@ -394,11 +394,13 @@ pub(crate) async fn project_part_for_sections(
 
 /// Project exactly one tool-call detail section. The returned value never
 /// contains a sibling section, which keeps the lazy-loading boundary useful
-/// even when the requested section is large.
+/// even when the requested section is large. `locale` localizes the human
+/// presentation; the stored metadata/input/output sections stay as recorded.
 pub(crate) async fn project_tool_detail(
     state: &AppState,
     part: &Part,
     section: ToolDetailSection,
+    locale: Option<&str>,
 ) -> Option<ToolDetailResource> {
     if part.kind != ToolCallContent::kind() {
         return None;
@@ -408,7 +410,7 @@ pub(crate) async fn project_tool_detail(
         ToolDetailSection::Metadata => serde_json::to_value(content.metadata).ok()?,
         ToolDetailSection::Input => content.input,
         ToolDetailSection::Output => serde_json::to_value(content.output).ok()?,
-        ToolDetailSection::Presentation => project_tool_presentation(state, part)
+        ToolDetailSection::Presentation => project_tool_presentation(state, part, locale)
             .await
             .and_then(|presentation| serde_json::to_value(presentation).ok())
             .unwrap_or(serde_json::Value::Null),
@@ -473,11 +475,17 @@ fn is_user_message_marker(part: &PartResource) -> bool {
     part.kind == "run" && part.role == "user"
 }
 
-async fn project_tool_presentation(state: &AppState, part: &Part) -> Option<PartDocument> {
-    state
+async fn project_tool_presentation(
+    state: &AppState,
+    part: &Part,
+    locale: Option<&str>,
+) -> Option<PartDocument> {
+    let mut document = state
         .application()
         .part_document(&agena_application::session::part_resource_from_fact(part))
-        .await
+        .await?;
+    agena_application::part_locale::localize_part_document(&mut document, locale);
+    Some(document)
 }
 
 async fn project_change(state: &AppState, change: SessionChange) -> Option<SessionChangeResource> {

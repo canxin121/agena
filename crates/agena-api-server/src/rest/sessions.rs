@@ -238,6 +238,7 @@ pub async fn list_session_parts(
 pub async fn get_session_tool_detail(
     State(state): State<AppState>,
     Path((session_id, part_id, section_name)): Path<(i64, i64, String)>,
+    AxumQuery(query): AxumQuery<ToolDetailSectionQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
     let section = section_name
@@ -265,7 +266,7 @@ pub async fn get_session_tool_detail(
         .find(|part| part.part_id == part_id && part.visibility.visible_to_user())
         .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
     state.revisions()?.register_part(&part);
-    let detail = crate::live::project_tool_detail(&state, &part, section)
+    let detail = crate::live::project_tool_detail(&state, &part, section, query.locale.as_deref())
         .await
         .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
     read.json(detail).await
@@ -303,6 +304,7 @@ pub async fn stream_session_changes(
     Path(session_id): Path<i64>,
     AxumQuery(query): AxumQuery<SessionChangeStreamQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let locale = query.locale.clone();
     // Subscribe before reading the snapshot so mutations committed during the
     // read remain queued. The snapshot is current state, not replay.
     #[cfg(test)]
@@ -323,7 +325,8 @@ pub async fn stream_session_changes(
     if let Some(delay_ms) = query.test_snapshot_delay_ms.filter(|delay| *delay > 0) {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
     }
-    let initial = crate::live::session_parts(&state, session_id).await?;
+    let mut initial = crate::live::session_parts(&state, session_id).await?;
+    agena_application::part_locale::localize_session_parts(&mut initial, locale.as_deref());
 
     let stream = stream! {
         if query.since_version != Some(initial.version) {
@@ -338,7 +341,11 @@ pub async fn stream_session_changes(
 
         loop {
             match subscription.recv().await {
-                Some(crate::live::LiveItem::SessionChanged(change)) => {
+                Some(crate::live::LiveItem::SessionChanged(mut change)) => {
+                    agena_application::part_locale::localize_session_change(
+                        &mut change,
+                        locale.as_deref(),
+                    );
                     let changed_session_id = change.session_id();
                     let frame_name = if changed_session_id == session_id {
                         "session_change"
@@ -593,6 +600,6 @@ use super::{
     PermissionReply, ServerError, SessionChangeStreamQuery, SessionCreateRequest,
     SessionForkRequestBody, SessionListQuery, SessionPartListQuery, SessionReplyRequestBody,
     SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest, Sse,
-    State, UserInputReply, if_match_version, json_http, json_http_found,
+    State, ToolDetailSectionQuery, UserInputReply, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,
 };

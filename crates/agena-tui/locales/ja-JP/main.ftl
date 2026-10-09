@@ -1747,3 +1747,16 @@ content-gap = 保持範囲外となった出力があります。
 content-reconnecting = 出力に再接続しています…
 
 content-window = 表示範囲外の出力があります。
+
+# Chrome-only activity headlines (the stored English title is the fallback).
+activity-title-answer = 回答
+activity-title-thinking = 思考
+activity-title-text = テキスト
+activity-title-error = エラー
+activity-title-notice = 通知
+activity-title-hook = フック
+activity-title-compaction = コンテキスト圧縮
+activity-title-provider-retry = プロバイダー再試行
+activity-title-turn-limit = ターン上限
+activity-title-user-input = ユーザー入力が必要
+activity-title-pasted-text = 貼り付けたテキスト

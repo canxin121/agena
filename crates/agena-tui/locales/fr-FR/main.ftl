@@ -1746,3 +1746,16 @@ content-gap = Une partie de la sortie source n’est plus conservée.
 content-reconnecting = Reconnexion à la sortie…
 
 content-window = Une partie de la sortie est hors de la fenêtre affichée.
+
+# Chrome-only activity headlines (the stored English title is the fallback).
+activity-title-answer = Réponse
+activity-title-thinking = Réflexion
+activity-title-text = Texte
+activity-title-error = Erreur
+activity-title-notice = Notification
+activity-title-hook = Hook
+activity-title-compaction = Compactage du contexte
+activity-title-provider-retry = Nouvelle tentative du fournisseur
+activity-title-turn-limit = Limite de tours
+activity-title-user-input = Entrée utilisateur requise
+activity-title-pasted-text = Texte collé

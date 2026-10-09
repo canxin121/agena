@@ -1746,3 +1746,16 @@ content-gap = 보관 범위에서 제외된 출력이 있습니다.
 content-reconnecting = 출력에 다시 연결하는 중…
 
 content-window = 현재 출력의 일부만 표시합니다.
+
+# Chrome-only activity headlines (the stored English title is the fallback).
+activity-title-answer = 답변
+activity-title-thinking = 생각
+activity-title-text = 텍스트
+activity-title-error = 오류
+activity-title-notice = 알림
+activity-title-hook = 훅
+activity-title-compaction = 컨텍스트 압축
+activity-title-provider-retry = 공급자 재시도
+activity-title-turn-limit = 턴 한도
+activity-title-user-input = 사용자 입력 필요
+activity-title-pasted-text = 붙여넣은 텍스트

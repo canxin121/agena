@@ -124,11 +124,15 @@ mod tests {
         let chinese = I18n::resolve(Some("zh-CN"), None);
         assert_eq!(localized_activity_title(&chinese, "Answer"), "回答");
         assert_eq!(localized_activity_title(&chinese, "Thinking"), "思考");
-        assert_eq!(localized_activity_title(&chinese, "README.md"), "README.md");
-        // A catalog that has no key yet keeps the stored English wording
-        // instead of rendering a placeholder.
         let german = I18n::resolve(Some("de-DE"), None);
-        assert_eq!(localized_activity_title(&german, "Thinking"), "Thinking");
+        assert_eq!(localized_activity_title(&german, "Thinking"), "Denken");
+        // A title that carries content keeps its own text, and the English
+        // catalog stays the fallback wording.
+        assert_eq!(localized_activity_title(&chinese, "README.md"), "README.md");
+        assert_eq!(
+            localized_activity_title(&I18n::english(), "Thinking"),
+            "Thinking"
+        );
     }
 
     #[test]

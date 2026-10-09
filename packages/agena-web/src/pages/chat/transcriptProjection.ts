@@ -336,6 +336,19 @@ export function partHasInteraction(part: MessagePartLike): boolean {
   return Array.isArray(blocks) && blocks.some((block) => record(record(block).resource).kind === 'terminal')
 }
 
+export function partIsDelegatedTask(part: MessagePartLike): boolean {
+  if (durablePartKind(part) !== 'tool_call') return false
+  const content = durablePartContent(part)
+  const name = firstText(content, ['name']).toLowerCase()
+  const plugin = firstText(content, ['plugin']).toLowerCase()
+  const metadata = record(content.metadata)
+  return (
+    `${plugin}.${name}`.includes('tasks.run') ||
+    metadata.child_session_id !== undefined ||
+    metadata.task_id !== undefined
+  )
+}
+
 function classifyPart(part: MessagePartLike, answerPartId: string | null, assistant: boolean): TranscriptPartKind {
   const kind = durablePartKind(part)
   if (kind === 'text') {

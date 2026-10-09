@@ -54,6 +54,7 @@ export async function conditionalJsonObserved<T>(
   init?: RequestInit,
   force = false,
   requiredGeneration?: number,
+  forceFresh = false,
 ): Promise<Observed<T>> {
   init?.signal?.throwIfAborted()
   const authVersion = readUiAuthTokenVersion()
@@ -90,7 +91,7 @@ export async function conditionalJsonObserved<T>(
     if (force) flight.requestedGeneration = Math.max(flight.requestedGeneration, requiredGeneration!)
     const value = await flight.read.join(init?.signal)
     if (force && flight.generation < requiredGeneration!)
-      return conditionalJsonObserved<T>(resource, url, init, true, requiredGeneration)
+      return conditionalJsonObserved<T>(resource, url, init, true, requiredGeneration, forceFresh)
     return value as Observed<T>
   }
   const current: Flight = { read: undefined!, generation: forcedSequence, requestedGeneration: forcedSequence }
@@ -102,7 +103,9 @@ export async function conditionalJsonObserved<T>(
       const observation = captureResourceObservation(resource)
       const cached = cache.get(key)
       const headers = new Headers(init?.headers)
-      if (cached) headers.set('if-none-match', cached.etag)
+      // Some callers have evidence that the retained representation is
+      // incomplete and need a fresh body even if its validator is unchanged.
+      if (cached && !forceFresh) headers.set('if-none-match', cached.etag)
       const response = await apiResponse(resolvedUrl, {
         ...init,
         headers,

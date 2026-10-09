@@ -10,6 +10,7 @@ export async function loadSidebarSessionPage(
   requestedPage: number,
   pageSize: number,
   list = api.listSessions,
+  force = false,
 ) {
   let page = Math.max(0, Math.floor(requestedPage))
   const size = Math.max(1, Math.min(200, Math.floor(pageSize)))
@@ -18,7 +19,15 @@ export async function loadSidebarSessionPage(
   const parentId = Number(options.parentId)
   const excludeSubagents = options.excludeSubagents ?? !(Number.isSafeInteger(parentId) && parentId > 0)
   const fetchPage = () => {
-    const run = () => list({ ...options, limit: size, offset: page * size, excludeSubagents, includeTotal: true })
+    const run = () =>
+      list({
+        ...options,
+        limit: size,
+        offset: page * size,
+        excludeSubagents,
+        includeTotal: true,
+        ...(force ? { force: true, forceFresh: true } : {}),
+      })
     return list === api.listSessions ? run() : limitBackgroundReads(run, options.signal)
   }
   let result = await fetchPage()

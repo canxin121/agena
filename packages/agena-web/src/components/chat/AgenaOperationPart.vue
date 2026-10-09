@@ -6,15 +6,20 @@ import { RiArrowRightSLine } from '@remixicon/vue'
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
+import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
 import ActivityLogView from '@/components/chat/ActivityLogView.vue'
 import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
 import { useChatStore } from '@/stores/chat'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
+import type { ContentRef } from '@/lib/content'
 import {
+  jsonArray,
+  jsonRecord,
   operationPresentation,
   partStatusPresentation,
   prettyJson,
+  stringValue,
   structuredValueMarkdown,
 } from '@/pages/chat/transcriptPartPresentation'
 import { getToolPartDetail, type ToolDetailSection } from '@/stores/chat/api'
@@ -77,7 +82,28 @@ const loadedPartKey = ref('')
 const toolDetailSections: ToolDetailSection[] = ['input', 'output', 'metadata', 'presentation']
 
 const operation = computed(() => operationPresentation(props.part, sectionValues.value, props.expanded))
-const hasContentOutput = computed(() => operation.value.presentationBlocks.some((block) => block.type === 'content'))
+const unpresentedContentResources = computed<ContentRef[]>(() => {
+  if (!props.expanded || !props.sessionId) return []
+  const content = jsonRecord(props.part.source.agenaContent)
+  const alreadyPresented = new Set(
+    operation.value.presentationBlocks
+      .filter((block) => stringValue(block.type) === 'content')
+      .map((block) => stringValue(jsonRecord(block.resource).resource_id))
+      .filter(Boolean),
+  )
+  return jsonArray(content.resources).flatMap((raw) => {
+    const resource = jsonRecord(raw)
+    const resourceId = stringValue(resource.resource_id)
+    const kind = stringValue(resource.kind)
+    if (!resourceId || alreadyPresented.has(resourceId) || !['text', 'log', 'terminal'].includes(kind)) return []
+    return [{ resource_id: resourceId, kind: kind as ContentRef['kind'] }]
+  })
+})
+const hasContentOutput = computed(
+  () =>
+    unpresentedContentResources.value.length > 0 ||
+    operation.value.presentationBlocks.some((block) => block.type === 'content'),
+)
 const status = computed(() => partStatusPresentation(props.part.status))
 const chat = useChatStore()
 const linkedActivity = computed(() =>
@@ -540,7 +566,13 @@ function toggleOuter() {
       </section>
 
       <div
-        v-if="linkedActivity || operation.commandMarkdown || operation.summary || operation.presentationBlocks.length"
+        v-if="
+          linkedActivity ||
+          operation.commandMarkdown ||
+          operation.summary ||
+          operation.presentationBlocks.length ||
+          unpresentedContentResources.length
+        "
         class="space-y-1 py-0.5"
         data-tool-presentation
       >
@@ -548,6 +580,13 @@ function toggleOuter() {
           v-if="linkedActivity && sessionId && !hasContentOutput"
           :session-id="sessionId"
           :activity="linkedActivity"
+        />
+        <AgenaContentOutput
+          v-for="resource in unpresentedContentResources"
+          :key="resource.resource_id"
+          :resource="resource"
+          :session-id="String(sessionId)"
+          data-operation-content-output
         />
         <MarkdownRenderer
           v-if="operation.commandMarkdown"

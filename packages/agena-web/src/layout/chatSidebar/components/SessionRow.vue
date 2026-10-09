@@ -302,7 +302,7 @@ function handleRowDragStart(event: DragEvent) {
         <div class="flex items-center gap-1.5 min-w-0">
           <ListItemSelectionIndicator v-if="multiSelectEnabled" :selected="multiSelected" />
           <button
-            v-if="isParent"
+            v-if="isParent || isExpanded"
             type="button"
             class="h-5 w-5 flex-shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6 cursor-pointer active:scale-95 transition"
             :aria-label="
@@ -387,111 +387,118 @@ function handleRowDragStart(event: DragEvent) {
         </template>
       </div>
 
-      <template v-if="actionControlsVisible" #actions>
-        <template v-if="isInlineRename">
-          <IconButton
-            size="xs"
-            class="text-muted-foreground hover:text-foreground hover:bg-primary/6"
-            :title="String(t('chat.sidebar.sessionRow.rename.cancel'))"
-            :aria-label="String(t('chat.sidebar.sessionRow.rename.cancel'))"
-            :disabled="renameBusy"
-            @click.stop="emit('rename-cancel')"
-          >
-            <RiCloseLine class="h-3.5 w-3.5" />
-          </IconButton>
-          <IconButton
-            size="xs"
-            class="text-primary hover:bg-primary/12"
-            :title="
-              String(t(renameBusy ? 'chat.sidebar.sessionRow.rename.saving' : 'chat.sidebar.sessionRow.rename.save'))
-            "
-            :aria-label="
-              String(t(renameBusy ? 'chat.sidebar.sessionRow.rename.saving' : 'chat.sidebar.sessionRow.rename.save'))
-            "
-            :disabled="!canSaveRename"
-            @click.stop="emit('rename-save')"
-          >
-            <RiLoader4Line v-if="renameBusy" class="h-3.5 w-3.5 animate-spin" />
-            <RiCheckLine v-else class="h-3.5 w-3.5" />
-          </IconButton>
-        </template>
-
-        <template v-else-if="uiIsCompactLayout && canShowActions">
-          <ListItemOverflowActionButton
-            mobile
-            :label="String(t('chat.sidebar.sessionActions.menuTitle'))"
-            @trigger="handleMobileOpenActionsClick"
-          />
-        </template>
-
-        <template v-else-if="canShowActions">
-          <ListItemOverflowActionButton
-            :label="String(t('chat.sidebar.sessionActions.menuTitle'))"
-            @trigger="handleDesktopOpenActionMenu"
-          />
-
-          <IconButton
-            size="xs"
-            class="hover:dark:bg-accent/40 hover:bg-primary/6"
-            :class="isFavorite ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'"
-            :title="
-              String(
-                t(
-                  isFavorite
-                    ? 'chat.sidebar.sessionActions.unfavorite.label'
-                    : 'chat.sidebar.sessionActions.favorite.label',
-                ),
-              )
-            "
-            :aria-label="
-              String(
-                t(
-                  isFavorite
-                    ? 'chat.sidebar.sessionActions.unfavorite.label'
-                    : 'chat.sidebar.sessionActions.favorite.label',
-                ),
-              )
-            "
-            @click.stop="emit('toggle-favorite', isFavorite)"
-          >
-            <component :is="isFavorite ? RiStarFill : RiStarLine" class="h-4 w-4" />
-          </IconButton>
-
-          <IconButton
-            v-if="canPin"
-            size="xs"
-            class="hover:dark:bg-accent/40 hover:bg-primary/6"
-            :class="pinned ? 'text-primary' : 'text-muted-foreground hover:text-primary'"
-            :title="
-              String(t(pinned ? 'chat.sidebar.sessionActions.unpin.label' : 'chat.sidebar.sessionActions.pin.label'))
-            "
-            :aria-label="
-              String(t(pinned ? 'chat.sidebar.sessionActions.unpin.label' : 'chat.sidebar.sessionActions.pin.label'))
-            "
-            @click.stop="emit('toggle-pin')"
-          >
-            <component :is="pinned ? RiPushpinFill : RiPushpinLine" class="h-4 w-4" />
-          </IconButton>
-
-          <ConfirmPopover
-            v-if="canDelete"
-            :title="String(t('chat.sidebar.sessionActions.delete.confirmTitle'))"
-            :description="String(t('chat.sidebar.sessionActions.delete.confirmDescription'))"
-            :confirm-text="String(t('chat.sidebar.sessionActions.delete.confirmText'))"
-            :cancel-text="String(t('common.cancel'))"
-            variant="destructive"
-            @confirm="emit('delete')"
-          >
+      <!-- Always provide the actions slot so SidebarListItem renders a neutral
+           row container and keeps its primary button beside the thread toggle.
+           Hiding this slot when a recycled row leaves the viewport used to put
+           the thread button inside the row's native button, which is invalid
+           interactive markup and behaves inconsistently across browsers. -->
+      <template #actions>
+        <template v-if="actionControlsVisible">
+          <template v-if="isInlineRename">
             <IconButton
               size="xs"
-              class="text-muted-foreground hover:text-destructive hover:dark:bg-accent/40 hover:bg-primary/6"
-              :title="String(t('chat.sidebar.sessionActions.delete.label'))"
-              :aria-label="String(t('chat.sidebar.sessionActions.delete.label'))"
-              @click.stop
+              class="text-muted-foreground hover:text-foreground hover:bg-primary/6"
+              :title="String(t('chat.sidebar.sessionRow.rename.cancel'))"
+              :aria-label="String(t('chat.sidebar.sessionRow.rename.cancel'))"
+              :disabled="renameBusy"
+              @click.stop="emit('rename-cancel')"
             >
-              <RiDeleteBinLine class="h-4 w-4" />
+              <RiCloseLine class="h-3.5 w-3.5" />
             </IconButton>
-          </ConfirmPopover>
+            <IconButton
+              size="xs"
+              class="text-primary hover:bg-primary/12"
+              :title="
+                String(t(renameBusy ? 'chat.sidebar.sessionRow.rename.saving' : 'chat.sidebar.sessionRow.rename.save'))
+              "
+              :aria-label="
+                String(t(renameBusy ? 'chat.sidebar.sessionRow.rename.saving' : 'chat.sidebar.sessionRow.rename.save'))
+              "
+              :disabled="!canSaveRename"
+              @click.stop="emit('rename-save')"
+            >
+              <RiLoader4Line v-if="renameBusy" class="h-3.5 w-3.5 animate-spin" />
+              <RiCheckLine v-else class="h-3.5 w-3.5" />
+            </IconButton>
+          </template>
+
+          <template v-else-if="uiIsCompactLayout && canShowActions">
+            <ListItemOverflowActionButton
+              mobile
+              :label="String(t('chat.sidebar.sessionActions.menuTitle'))"
+              @trigger="handleMobileOpenActionsClick"
+            />
+          </template>
+
+          <template v-else-if="canShowActions">
+            <ListItemOverflowActionButton
+              :label="String(t('chat.sidebar.sessionActions.menuTitle'))"
+              @trigger="handleDesktopOpenActionMenu"
+            />
+
+            <IconButton
+              size="xs"
+              class="hover:dark:bg-accent/40 hover:bg-primary/6"
+              :class="isFavorite ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'"
+              :title="
+                String(
+                  t(
+                    isFavorite
+                      ? 'chat.sidebar.sessionActions.unfavorite.label'
+                      : 'chat.sidebar.sessionActions.favorite.label',
+                  ),
+                )
+              "
+              :aria-label="
+                String(
+                  t(
+                    isFavorite
+                      ? 'chat.sidebar.sessionActions.unfavorite.label'
+                      : 'chat.sidebar.sessionActions.favorite.label',
+                  ),
+                )
+              "
+              @click.stop="emit('toggle-favorite', isFavorite)"
+            >
+              <component :is="isFavorite ? RiStarFill : RiStarLine" class="h-4 w-4" />
+            </IconButton>
+
+            <IconButton
+              v-if="canPin"
+              size="xs"
+              class="hover:dark:bg-accent/40 hover:bg-primary/6"
+              :class="pinned ? 'text-primary' : 'text-muted-foreground hover:text-primary'"
+              :title="
+                String(t(pinned ? 'chat.sidebar.sessionActions.unpin.label' : 'chat.sidebar.sessionActions.pin.label'))
+              "
+              :aria-label="
+                String(t(pinned ? 'chat.sidebar.sessionActions.unpin.label' : 'chat.sidebar.sessionActions.pin.label'))
+              "
+              @click.stop="emit('toggle-pin')"
+            >
+              <component :is="pinned ? RiPushpinFill : RiPushpinLine" class="h-4 w-4" />
+            </IconButton>
+
+            <ConfirmPopover
+              v-if="canDelete"
+              :title="String(t('chat.sidebar.sessionActions.delete.confirmTitle'))"
+              :description="String(t('chat.sidebar.sessionActions.delete.confirmDescription'))"
+              :confirm-text="String(t('chat.sidebar.sessionActions.delete.confirmText'))"
+              :cancel-text="String(t('common.cancel'))"
+              variant="destructive"
+              @confirm="emit('delete')"
+            >
+              <IconButton
+                size="xs"
+                class="text-muted-foreground hover:text-destructive hover:dark:bg-accent/40 hover:bg-primary/6"
+                :title="String(t('chat.sidebar.sessionActions.delete.label'))"
+                :aria-label="String(t('chat.sidebar.sessionActions.delete.label'))"
+                @click.stop
+              >
+                <RiDeleteBinLine class="h-4 w-4" />
+              </IconButton>
+            </ConfirmPopover>
+          </template>
         </template>
       </template>
     </SidebarListItem>

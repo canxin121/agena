@@ -465,7 +465,7 @@ test('preview consumers share one event stream, perform no idle list reads and p
     const releaseFirst = store.retainLiveSessions()
     const releaseSecond = store.retainLiveSessions()
     await settle()
-    await advance(0)
+    await advance(1000)
     assert.equal(streams.length, 1, 'sidebar and dock share their stream')
     assert.equal(listReads, 0, 'initial stream supplies the registry without a second GET')
     const bRecord = store.sessions.find((item) => item.id === unrelated.id)
@@ -657,13 +657,16 @@ test('real sidebar refreshes only dirty directories and buckets, including after
   let treeEnabled = false
   let footerTreeEnabled = false
   let taskChildCount = 1
+  let taskParentSummaryCount = 1
+  let staleEmptyTaskChildReads = 0
+  const taskChildRequestValidators: Array<string | null> = []
   const childTitles = new Map([
     ['8201', 'child A'],
     ['8401', 'child B'],
   ])
   const calls: URL[] = []
   const etag = (key: string) => ({ etag: `W/"${tokens.get(key) || 'sidebar-granularity:1'}"` })
-  globalThis.fetch = (async (input) => {
+  globalThis.fetch = (async (input, init) => {
     const url = new URL(String(input), 'http://agena.test')
     calls.push(url)
     if (url.pathname === '/api/v1/changes/revisions')
@@ -735,6 +738,7 @@ test('real sidebar refreshes only dirty directories and buckets, including after
               },
             ]
           : []
+      let reportedTotal: number | undefined
       if (treeEnabled && id === '8101') {
         const roots = [8201, 8401].map((sid) => ({
           id: sid,
@@ -744,7 +748,7 @@ test('real sidebar refreshes only dirty directories and buckets, including after
           title: sid === 8201 ? titles.get('8101') : 'other root',
           pinned: sid === 8201,
           state: { kind: 'ready' },
-          child_session_count: 1,
+          child_session_count: sid === 8201 ? taskParentSummaryCount : 1,
           version: 2,
         }))
         const parent = url.searchParams.get('parent_id')
@@ -764,6 +768,12 @@ test('real sidebar refreshes only dirty directories and buckets, including after
           : bucket
             ? [roots[0]!]
             : roots
+        if (parent === '8201') taskChildRequestValidators.push(new Headers(init?.headers).get('if-none-match'))
+        if (parent === '8201' && staleEmptyTaskChildReads > 0) {
+          staleEmptyTaskChildReads--
+          items = []
+          reportedTotal = taskChildCount
+        }
       }
       return Response.json(
         {
@@ -774,7 +784,7 @@ test('real sidebar refreshes only dirty directories and buckets, including after
                   Number(url.searchParams.get('offset') || 0),
                   Number(url.searchParams.get('offset') || 0) + Number(url.searchParams.get('limit') || 10),
                 ),
-          total: items.length,
+          total: reportedTotal ?? items.length,
           page: { has_more: false },
         },
         { headers: etag(key) },
@@ -929,11 +939,22 @@ test('real sidebar refreshes only dirty directories and buckets, including after
     tokens.set('workspace:8101:sessions:parent:8401', 'sidebar-granularity:6')
     tokens.set('workspace:8101:stats', 'sidebar-granularity:6')
     resourceSync.invalidateResources(keys)
+    staleEmptyTaskChildReads = 1
+    taskChildRequestValidators.length = 0
+    calls.length = 0
     const treeBoot = store.revalidateFromApi()
     await advance(11_000)
     assert.equal(await treeBoot, true)
+    assert.equal(
+      calls.filter((url) => url.searchParams.get('parent_id') === '8201').length,
+      2,
+      'an empty child page is force-read again when the parent reports task children, even if its page count is stale',
+    )
+    assert.deepEqual(taskChildRequestValidators, [null, null], 'the forced retry must not accept a stale 304 body')
     const otherRoot = store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8401')
+    const taskChild = store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8501')
     const otherChild = store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8701')
+    assert.ok(taskChild, 'task-created child appears after the fresh child-page retry')
     assert.ok(otherChild, 'second expanded branch is loaded')
     await Promise.all(Array.from({ length: 90 }, (_, i) => conditionalJson('sessions', `/evict-sidebar/tree-${i}`)))
     calls.length = 0
@@ -964,6 +985,131 @@ test('real sidebar refreshes only dirty directories and buckets, including after
       otherChild,
     )
 
+    // The parent summary and its child-list revision can cross in flight.
+    // Preserve the known expanded branch long enough to read the child list,
+    // even if the parent row temporarily reports zero children.
+    const collapseTaskParent = store.commandSetSessionExpanded('8201', false, { silent: true })
+    await advance(1000)
+    assert.equal(await collapseTaskParent, true)
+    taskParentSummaryCount = 0
+    // Keep revisions monotonic across the rest of this fixture.
+    tokens.set('workspace:8101:sessions:roots', 'sidebar-granularity:8')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:8')
+    resourceSync.invalidateResources(['workspace:8101:sessions:roots', 'workspace:8101:sessions:parent:8201'])
+    staleEmptyTaskChildReads = 1
+    taskChildRequestValidators.length = 0
+    const reopenTaskParent = store.commandSetSessionExpanded('8201', true, { silent: true })
+    await advance(1000)
+    assert.equal(await reopenTaskParent, true)
+    const staleZeroParent = store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8201')
+    assert.equal(staleZeroParent?.isParent, true, 'the parent disclosure survives a stale zero child count')
+    assert.equal(
+      taskChildRequestValidators.at(-1),
+      null,
+      'an empty child page for a previously expanded parent must be re-read without its stale validator',
+    )
+    assert.ok(
+      store.directorySidebarById['8101']!.recentRows.some((row) => row.id === '8501'),
+      'task sessions remain visible when the parent summary briefly reports zero children',
+    )
+    const collapseWithStaleZero = store.commandSetSessionExpanded('8201', false, { silent: true })
+    await advance(1000)
+    assert.equal(await collapseWithStaleZero, true)
+    assert.equal(
+      store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8201')?.isParent,
+      true,
+      'a temporarily zero child count does not remove the disclosure while the branch is collapsed',
+    )
+    const reopenWithStaleZero = store.commandSetSessionExpanded('8201', true, { silent: true })
+    await advance(1000)
+    assert.equal(await reopenWithStaleZero, true)
+    assert.ok(
+      store.directorySidebarById['8101']!.recentRows.some((row) => row.id === '8501'),
+      'the child can be loaded again after collapsing during the stale zero-count window',
+    )
+
+    // Recover even if an earlier empty read already removed the disclosure
+    // flag. The user's persisted expansion is enough reason to inspect the
+    // child list and bypass an empty cached page once more.
+    const knownTaskParentRows = [
+      ...store.directorySidebarById['8101']!.recentRows,
+      ...store.directorySidebarById['8101']!.pinnedRows,
+      ...store.pinnedFooterView.rows,
+      ...store.favoriteFooterView.rows,
+      ...store.recentFooterView.rows,
+      ...store.runningFooterView.rows,
+    ].filter((row) => row.id === '8201')
+    assert.ok(knownTaskParentRows.length > 0)
+    for (const row of knownTaskParentRows) row.isParent = false
+    tokens.set('workspace:8101:sessions:roots', 'sidebar-granularity:9')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:9')
+    resourceSync.invalidateResources(['workspace:8101:sessions:roots', 'workspace:8101:sessions:parent:8201'])
+    staleEmptyTaskChildReads = 1
+    taskChildRequestValidators.length = 0
+    calls.length = 0
+    const recoverExpandedTask = store.revalidateDirectorySessionPageFromApi('8101', { silent: true })
+    await advance(1000)
+    assert.equal(await recoverExpandedTask, true)
+    assert.ok(
+      taskChildRequestValidators.includes(null),
+      'an already-expanded task branch retries an empty child page without stale request validators',
+    )
+    assert.equal(
+      store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8201')?.isParent,
+      true,
+      'the disclosure returns when the fresh child page contains a delegated session',
+    )
+    assert.ok(
+      store.directorySidebarById['8101']!.recentRows.some((row) => row.id === '8501'),
+      'the expanded child remains visible after disclosure state was lost',
+    )
+
+    // During task creation, both the root summary and child page can briefly
+    // report zero before the child session is committed. Keep the expanded
+    // disclosure available while the bounded recovery reads catch up.
+    taskChildCount = 0
+    taskParentSummaryCount = 0
+    const temporarilyEmptyTaskParentRows = [
+      ...store.directorySidebarById['8101']!.recentRows,
+      ...store.directorySidebarById['8101']!.pinnedRows,
+      ...store.pinnedFooterView.rows,
+      ...store.favoriteFooterView.rows,
+      ...store.recentFooterView.rows,
+      ...store.runningFooterView.rows,
+    ].filter((row) => row.id === '8201')
+    for (const row of temporarilyEmptyTaskParentRows) row.isParent = false
+    tokens.set('workspace:8101:sessions:roots', 'sidebar-granularity:10')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:10')
+    resourceSync.invalidateResources(['workspace:8101:sessions:roots', 'workspace:8101:sessions:parent:8201'])
+    const emptyTaskRefresh = store.revalidateDirectorySessionPageFromApi('8101', { silent: true })
+    await advance(1000)
+    assert.equal(await emptyTaskRefresh, true)
+    const emptyTaskParent = store.directorySidebarById['8101']!.recentRows.find((row) => row.id === '8201')
+    assert.equal(emptyTaskParent?.isExpanded, true)
+    assert.equal(
+      emptyTaskParent?.isParent,
+      true,
+      'an expanded task parent retains its disclosure while both child reads are temporarily empty',
+    )
+    assert.equal(
+      store.directorySidebarById['8101']!.recentRows.some((row) => row.id === '8501'),
+      false,
+      'the temporarily empty state does not fabricate a child row',
+    )
+
+    taskChildCount = 1
+    taskParentSummaryCount = 1
+    tokens.set('workspace:8101:sessions:roots', 'sidebar-granularity:11')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:11')
+    resourceSync.invalidateResources(['workspace:8101:sessions:roots', 'workspace:8101:sessions:parent:8201'])
+    const committedTaskRefresh = store.revalidateDirectorySessionPageFromApi('8101', { silent: true })
+    await advance(1000)
+    assert.equal(await committedTaskRefresh, true)
+    assert.ok(
+      store.directorySidebarById['8101']!.recentRows.some((row) => row.id === '8501'),
+      'the child becomes visible when the task session commits after the temporary empty window',
+    )
+
     calls.length = 0
     resourceSync.applyResourceEvent({
       type: 'session_changed',
@@ -986,7 +1132,7 @@ test('real sidebar refreshes only dirty directories and buckets, including after
 
     footerTreeEnabled = true
     taskChildCount = 23
-    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:10')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:12')
     resourceSync.invalidateResources(['workspace:8101:sessions:parent:8201'])
     const openFooter = store.commandSetFooterOpen('recent', true, { silent: true })
     await advance(1000)
@@ -1018,11 +1164,11 @@ test('real sidebar refreshes only dirty directories and buckets, including after
     assert.equal(store.recentFooterView.rows[0]!.childPage, 2)
 
     childTitles.set('8201', 'live task title')
-    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:11')
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:13')
     resourceSync.applyResourceEvent({
       type: 'session_changed',
       properties: {
-        resource_revisions: { 'workspace:8101:sessions:parent:8201': 'sidebar-granularity:11' },
+        resource_revisions: { 'workspace:8101:sessions:parent:8201': 'sidebar-granularity:13' },
       },
     })
     await advance(11_000)
@@ -1030,6 +1176,31 @@ test('real sidebar refreshes only dirty directories and buckets, including after
       store.recentFooterView.rows[1]!.session!.title,
       'live task title',
       'expanded footer children remain subscribed',
+    )
+
+    taskChildCount = 0
+    tokens.set('workspace:8101:sessions:parent:8201', 'sidebar-granularity:14')
+    resourceSync.applyResourceEvent({
+      type: 'session_changed',
+      properties: {
+        resource_revisions: { 'workspace:8101:sessions:parent:8201': 'sidebar-granularity:14' },
+      },
+    })
+    await advance(1000)
+    assert.deepEqual(
+      store.recentFooterView.rows.map((row) => row.id),
+      ['8201'],
+      'an expanded footer parent remains visible while its child page is temporarily empty',
+    )
+    assert.equal(store.recentFooterView.rows[0]!.isParent, true)
+
+    // The child commits after the empty response, without a second revision
+    // event. The scheduled recovery must refresh the footer section itself.
+    taskChildCount = 1
+    await advance(2000)
+    assert.ok(
+      store.recentFooterView.rows.some((row) => row.id === '8501'),
+      'an expanded footer task branch recovers its child from the scheduled re-read',
     )
   } finally {
     for (const instance of (pinia as unknown as { _s: Map<string, { $dispose(): void }> })._s.values())

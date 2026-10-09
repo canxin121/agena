@@ -244,7 +244,12 @@ async fn capture(
             .into_iter()
             .flatten()
             .filter_map(|value| serde_json::from_value::<ContentRef>(value.clone()).ok())
-            .filter(|reference| matches!(reference.kind, ContentKind::Text | ContentKind::Log))
+            .filter(|reference| {
+                matches!(
+                    reference.kind,
+                    ContentKind::Text | ContentKind::Log | ContentKind::Terminal
+                )
+            })
             .collect::<Vec<_>>();
         let entry = seen
             .entry(part.part_id)
@@ -422,6 +427,21 @@ async fn relay(
                     append(&writer, CommandOutputStream::Stdout, text).await?
                 }
                 ContentPayload::Log { stream, text } => append(&writer, stream, text).await?,
+                ContentPayload::Terminal { screen } => {
+                    append(&writer, CommandOutputStream::Stdout, screen.formatted()).await?
+                }
+                ContentPayload::TerminalPatch {
+                    screen,
+                    rows_changed,
+                    ..
+                } => {
+                    append(
+                        &writer,
+                        CommandOutputStream::Stdout,
+                        screen.formatted_patch(&rows_changed),
+                    )
+                    .await?
+                }
                 _ => {}
             }
         }

@@ -1,5 +1,3 @@
-import type { JsonValue } from '@/types/json'
-
 export type ChatActivityKindCategory = 'builtin' | 'plugin'
 
 export type ChatActivityKindCatalogItem = {
@@ -22,22 +20,6 @@ export const BUILTIN_CHAT_ACTIVITY_KINDS: ChatActivityKindCatalogItem[] = [
   { id: 'text', category: 'builtin', label: 'Text' },
 ]
 
-export const DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED = ['text']
-
-function normalizedStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const item of value) {
-    if (typeof item !== 'string') continue
-    const id = item.trim()
-    if (!id || seen.has(id)) continue
-    seen.add(id)
-    out.push(id)
-  }
-  return out
-}
-
 export function normalizeChatActivityKindCatalog(value: unknown): ChatActivityKindCatalogItem[] {
   if (!Array.isArray(value)) return []
   const out: ChatActivityKindCatalogItem[] = []
@@ -55,20 +37,6 @@ export function normalizeChatActivityKindCatalog(value: unknown): ChatActivityKi
     })
   }
   return out
-}
-
-export function normalizeChatActivityKindDefaultExpanded(value: unknown): string[] {
-  return normalizedStringList(value)
-}
-
-export function resolveChatActivityKindDefaultExpanded(settings: unknown): string[] {
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-    return DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED.slice()
-  }
-  const record = settings as Record<string, unknown>
-  return Object.prototype.hasOwnProperty.call(record, 'chatActivityKindDefaultExpanded')
-    ? normalizeChatActivityKindDefaultExpanded(record.chatActivityKindDefaultExpanded)
-    : DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED.slice()
 }
 
 export function chatActivityKindIdForTranscriptPart(partKind: unknown, durablePartKind: unknown): string {
@@ -112,8 +80,6 @@ export type KnownChatToolActivityType =
   | 'plan_exit'
   | 'unknown'
 
-export type ChatToolExpansionOverrides = Record<string, boolean>
-
 const KNOWN_CHAT_TOOL_ACTIVITY_TYPES: KnownChatToolActivityType[] = [
   'read',
   'list',
@@ -139,8 +105,6 @@ const KNOWN_CHAT_TOOL_ACTIVITY_TYPES: KnownChatToolActivityType[] = [
   'unknown',
 ]
 
-export const DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES: string[] = []
-
 const CHAT_TOOL_ACTIVITY_SET = new Set(KNOWN_CHAT_TOOL_ACTIVITY_TYPES)
 
 export function isKnownChatToolActivityType(value: string): value is KnownChatToolActivityType {
@@ -148,7 +112,8 @@ export function isKnownChatToolActivityType(value: string): value is KnownChatTo
 }
 
 export function normalizeChatToolActivityId(value: unknown): string {
-  const raw = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  const supplied = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  const raw = supplied.startsWith('agena.') ? supplied.slice('agena.'.length) : supplied
   if (!raw || isKnownChatToolActivityType(raw)) return raw
 
   const [namespace = '', ...nameParts] = raw.split('.')
@@ -191,49 +156,4 @@ export function normalizeChatToolActivityId(value: unknown): string {
 export function normalizeChatToolPreferenceId(value: unknown): string {
   const raw = typeof value === 'string' ? value.trim().toLowerCase() : ''
   return raw.startsWith('agena.') ? raw.slice('agena.'.length) : raw
-}
-
-export function normalizeChatToolExpansionOverrides(value: unknown): ChatToolExpansionOverrides {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  const out: ChatToolExpansionOverrides = {}
-  for (const [rawTool, rawExpanded] of Object.entries(value as Record<string, unknown>)) {
-    const tool = normalizeChatToolPreferenceId(rawTool)
-    if (!tool || typeof rawExpanded !== 'boolean') continue
-    out[tool] = rawExpanded
-  }
-  return out
-}
-
-export function resolveChatToolDefaultExpanded(
-  toolName: unknown,
-  overrides: ChatToolExpansionOverrides,
-  defaultExpandedCategories: ReadonlySet<string>,
-  operationDefaultExpanded = false,
-): boolean {
-  const exactTool = normalizeChatToolPreferenceId(toolName)
-  if (exactTool && Object.prototype.hasOwnProperty.call(overrides, exactTool)) {
-    return overrides[exactTool] === true
-  }
-
-  const category = normalizeChatToolActivityId(exactTool)
-  if (!category) return defaultExpandedCategories.has('unknown')
-  if (defaultExpandedCategories.has(category)) return true
-  if (isKnownChatToolActivityType(category)) return operationDefaultExpanded
-  return defaultExpandedCategories.has('unknown') || operationDefaultExpanded
-}
-
-export function normalizeChatToolActivityCategories(value: JsonValue): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (typeof item !== 'string') continue
-      const key = normalizeChatToolActivityId(item)
-      if (!key) continue
-      if (seen.has(key)) continue
-      seen.add(key)
-      out.push(key)
-    }
-  }
-  return out
 }

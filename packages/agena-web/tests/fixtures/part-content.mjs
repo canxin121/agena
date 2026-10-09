@@ -85,7 +85,11 @@ const task = part('task', 'log', 'Review project')
 task.source.agenaContent.name = 'tasks.run'
 task.source.agenaContent.input = { description: 'Review project', prompt: 'Review the project in a child session' }
 task.source.agenaContent.metadata = { child_session_id: 3, task_id: 'task-fixture' }
-task.source.agenaPresentation.blocks = task.source.agenaPresentation.blocks.filter((block) => block.type !== 'command')
+// Real delegated-task output is attached to operation.resources; the task
+// tool does not synthesize the content presentation block that shell emits.
+task.source.agenaPresentation.blocks = task.source.agenaPresentation.blocks.filter(
+  (block) => !['command', 'content'].includes(block.type),
+)
 const expanded = reactive({shell:true,pty:true,task:true})
 fixture.expanded = expanded
 fixture.emit = (id, payload, state='active') => {

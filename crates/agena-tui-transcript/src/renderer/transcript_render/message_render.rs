@@ -229,7 +229,8 @@ fn operation_default_expanded(
     name: &str,
     plugin_name: Option<&str>,
 ) -> bool {
-    for tool_id in operation_tool_preference_ids(name, plugin_name) {
+    let tool_ids = operation_tool_preference_ids(name, plugin_name);
+    for tool_id in &tool_ids {
         if let Some(expanded) = defaults
             .kind_defaults
             .get(format!("tool:{tool_id}").as_str())
@@ -237,7 +238,54 @@ fn operation_default_expanded(
             return *expanded;
         }
     }
+    for tool_id in &tool_ids {
+        if let Some(category) = operation_tool_activity_category(tool_id)
+            && let Some(expanded) = defaults
+                .kind_defaults
+                .get(format!("tool-category:{category}").as_str())
+        {
+            return *expanded;
+        }
+    }
+    // Delegated tasks can run for a while and publish shell-like output into
+    // the parent operation's content resource. Open that operation by default
+    // so the live log is visible as soon as it starts; an explicit tool
+    // preference above still lets users choose a collapsed default.
+    if tool_ids
+        .iter()
+        .any(|tool_id| matches!(tool_id.as_str(), "agena.tasks.run" | "tasks.run" | "task"))
+    {
+        return true;
+    }
     defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
+}
+
+fn operation_tool_activity_category(tool_id: &str) -> Option<&'static str> {
+    let tool = tool_id.strip_prefix("agena.").unwrap_or(tool_id);
+    match tool {
+        "read" | "fs.read" | "fs.read_many" | "fs.stat" => Some("read"),
+        "list" | "fs.list" => Some("list"),
+        "glob" | "fs.glob" => Some("glob"),
+        "grep" | "fs.grep" => Some("grep"),
+        "edit" | "fs.replace" => Some("edit"),
+        "write" | "fs.write" => Some("write"),
+        "apply_patch" | "fs.apply_patch" => Some("apply_patch"),
+        "multiedit" => Some("multiedit"),
+        "bash" | "shell.exec" | "shell.spawn" | "shell.watch" | "shell.open" => Some("bash"),
+        "task" | "tasks.run" => Some("task"),
+        "webfetch" | "web.read" | "web.fetch" => Some("webfetch"),
+        "websearch" | "web.search" => Some("websearch"),
+        "codesearch" | "code.search" => Some("codesearch"),
+        "command" | "commands.run" => Some("command"),
+        "lsp" | "lsp.hover" | "lsp.definition" | "lsp.references" => Some("lsp"),
+        "todowrite" | "todo.write" => Some("todowrite"),
+        "todoread" | "todo.read" => Some("todoread"),
+        "question" | "interaction.ask" => Some("question"),
+        "batch" | "tools.batch" => Some("batch"),
+        "plan_enter" | "plan.enter" => Some("plan_enter"),
+        "plan_exit" | "plan.exit" => Some("plan_exit"),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2687,5 +2735,37 @@ mod ask_wizard_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod delegated_task_default_tests {
+    use super::*;
+
+    #[test]
+    fn delegated_task_output_is_visible_by_default_but_tool_preferences_win() {
+        let defaults = TranscriptDetailDefaults {
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
+        };
+        assert!(operation_default_expanded(
+            &defaults,
+            "run",
+            Some("agena.tasks")
+        ));
+        assert!(operation_default_expanded(&defaults, "tasks.run", None));
+        assert!(!operation_default_expanded(&defaults, "shell.exec", None));
+
+        let configured = TranscriptDetailDefaults {
+            activity_default_expanded: false,
+            kind_defaults: [("tool:agena.tasks.run".to_owned(), false)]
+                .into_iter()
+                .collect(),
+        };
+        assert!(!operation_default_expanded(
+            &configured,
+            "run",
+            Some("agena.tasks")
+        ));
     }
 }

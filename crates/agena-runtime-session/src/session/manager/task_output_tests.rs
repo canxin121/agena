@@ -207,12 +207,111 @@ async fn task_output_streams_text_and_shell_bytes_without_parent_part_mutations(
         .await
         .unwrap();
     wait_text(&manager, &reference, "live shell diagnostic").await;
+
+    let terminal = OperationPart::pending(
+        3,
+        ToolInvocation::new(
+            "shell.open",
+            StructuredObject::try_from(serde_json::json!({"command":"interactive fixture"}))
+                .unwrap(),
+        ),
+        TimeRange::default(),
+    );
+    let terminal = manager
+        .store
+        .append_parts(
+            child,
+            child_run,
+            vec![NewPart {
+                state: PartState::InProgress,
+                ..NewPart::pending(
+                    "tool_call",
+                    PartRole::Assistant,
+                    tool_call_from_operation(&terminal).as_value(),
+                )
+            }],
+        )
+        .await
+        .unwrap()
+        .remove(0);
+    let terminal_writer = manager
+        .store
+        .facade
+        .contents()
+        .open(child, terminal.part_id, ContentKind::Terminal)
+        .await
+        .unwrap();
+    let mut terminal_operation = operation_from_part(&terminal).unwrap();
+    terminal_operation
+        .resources
+        .push(terminal_writer.resource().reference());
+    manager
+        .store
+        .update_part(
+            child,
+            terminal.part_id,
+            PartDelta {
+                content: Some(tool_call_from_operation(&terminal_operation).as_value()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let first_frame = agena_domain::TerminalSnapshot {
+        rows: 1,
+        cols: 80,
+        cursor_row: 0,
+        cursor_col: 22,
+        cursor_visible: true,
+        alternate_screen: false,
+        bracketed_paste: false,
+        application_cursor: false,
+        cells: vec![agena_domain::TerminalCellRun {
+            row: 0,
+            col: 0,
+            text: "streaming terminal frame".into(),
+            attributes: Default::default(),
+        }],
+    };
+    let terminal_cursor = terminal_writer
+        .append(ContentInput::Terminal {
+            screen: first_frame,
+        })
+        .await
+        .unwrap();
+    wait_text(&manager, &reference, "streaming terminal frame").await;
+    terminal_writer
+        .append(ContentInput::TerminalPatch {
+            base_cursor: terminal_cursor,
+            screen: agena_domain::TerminalSnapshot {
+                rows: 1,
+                cols: 80,
+                cursor_row: 0,
+                cursor_col: 23,
+                cursor_visible: true,
+                alternate_screen: false,
+                bracketed_paste: false,
+                application_cursor: false,
+                cells: vec![agena_domain::TerminalCellRun {
+                    row: 0,
+                    col: 0,
+                    text: "latest terminal frame".into(),
+                    attributes: Default::default(),
+                }],
+            },
+            rows_changed: vec![0],
+        })
+        .await
+        .unwrap();
+    wait_text(&manager, &reference, "latest terminal frame").await;
+
     text_writer
         .append_text("second streamed line\n")
         .await
         .unwrap();
     text_writer.finish().await.unwrap();
     shell_writer.finish().await.unwrap();
+    terminal_writer.finish().await.unwrap();
     operation.state = agena_domain::ToolResultState::Completed;
     operation.output = Some(agena_domain::RawOutput::text("live shell diagnostic\n"));
     manager

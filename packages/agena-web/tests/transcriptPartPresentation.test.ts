@@ -14,6 +14,7 @@ import {
   structuredValueMarkdown,
 } from '../src/pages/chat/transcriptPartPresentation'
 import { projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
+import { activityInitiallyExpandedForPart } from '../src/pages/chat/transcriptExpansion'
 
 function operationPart(
   content: Record<string, unknown>,
@@ -432,6 +433,54 @@ describe('TUI-parity part presentation', () => {
     )
     expect(block?.kind).toBe('message')
     if (block?.kind === 'message') expect(block.displayParts[0]?.defaultExpanded).toBe(true)
+  })
+
+  test('opens delegated task parts by default while honoring explicit tool and category preferences', () => {
+    const [block] = projectTranscriptBlocks(
+      [
+        {
+          info: { id: 'message-task', role: 'assistant' },
+          parts: [
+            {
+              id: 'task-1',
+              type: 'tool',
+              tool: 'run',
+              partState: 'in_progress',
+              agenaKind: 'tool_call',
+              agenaRole: 'assistant',
+              agenaContent: { plugin: 'agena.tasks', name: 'run' },
+            },
+          ],
+        },
+      ],
+      { showReasoning: true },
+    )
+    expect(block?.kind).toBe('message')
+    if (block?.kind === 'message') {
+      const part = block.displayParts[0]!
+      expect(part.defaultExpanded).toBe(false)
+      const defaults = {
+        toolExpanded: () => undefined,
+        toolCategoryOverrides: {},
+        kindExpanded: () => false,
+      }
+      expect(activityInitiallyExpandedForPart(part, defaults)).toBe(true)
+      expect(
+        activityInitiallyExpandedForPart(part, {
+          ...defaults,
+          toolExpanded: (tool) => {
+            expect(tool).toBe('agena.tasks.run')
+            return false
+          },
+        }),
+      ).toBe(false)
+      expect(
+        activityInitiallyExpandedForPart(part, {
+          ...defaults,
+          toolCategoryOverrides: { task: false },
+        }),
+      ).toBe(false)
+    }
   })
 
   test('keeps the raw output and plugin-owned stdout logs independent', () => {

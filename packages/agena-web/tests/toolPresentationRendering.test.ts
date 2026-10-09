@@ -145,6 +145,98 @@ test('human output and actual diff remain visible while both technical levels ar
   assert.doesNotMatch(html, /1 file changed/)
 })
 
+test('delegated task log resources stream in the expanded parent part without a content presentation block', async () => {
+  const html = await render('/src/components/chat/AgenaOperationPart.vue', {
+    expanded: true,
+    collapseSignal: 0,
+    sessionId: '7',
+    part: {
+      id: '4',
+      kind: 'operation',
+      status: 'in_progress',
+      title: 'Review project',
+      summary: '',
+      source: {
+        id: '4',
+        agenaKind: 'tool_call',
+        agenaContent: {
+          name: 'tasks.run',
+          input: { description: 'Review project' },
+          metadata: { child_session_id: 9, task_id: 'task-9' },
+          resources: [{ resource_id: 'task-output', kind: 'log' }],
+        },
+        agenaPresentation: { blocks: [{ type: 'nested_task', task_id: 'task-9', title: 'Review project' }] },
+      },
+    },
+  })
+  assert.equal((html.match(/data-operation-content-output/g) || []).length, 1)
+  assert.equal((html.match(/data-content-output/g) || []).length, 1)
+  assert.match(html, /data-tool-details-toggle/)
+  assert.doesNotMatch(html, /data-tool-detail-section/)
+})
+
+test('an operation content block is not duplicated from the part resource list', async () => {
+  const html = await render('/src/components/chat/AgenaOperationPart.vue', {
+    expanded: true,
+    collapseSignal: 0,
+    sessionId: '7',
+    part: {
+      id: '5',
+      kind: 'operation',
+      status: 'in_progress',
+      title: 'Shell',
+      summary: '',
+      source: {
+        id: '5',
+        agenaKind: 'tool_call',
+        agenaContent: {
+          name: 'shell.exec',
+          resources: [{ resource_id: 'shell-output', kind: 'log' }],
+        },
+        agenaPresentation: {
+          blocks: [{ type: 'content', resource: { resource_id: 'shell-output', kind: 'log' } }],
+        },
+      },
+    },
+  })
+  assert.equal((html.match(/data-content-output/g) || []).length, 1)
+  assert.doesNotMatch(html, /data-operation-content-output/)
+})
+
+test('a running delegated task renders its child-session log resource through the live content viewer', async () => {
+  const html = await render('/src/components/chat/AgenaOperationPart.vue', {
+    expanded: true,
+    collapseSignal: 0,
+    sessionId: '7',
+    part: {
+      id: '6',
+      kind: 'operation',
+      status: 'in_progress',
+      title: 'Review project',
+      summary: 'running',
+      source: {
+        id: '6',
+        agenaKind: 'tool_call',
+        agenaContent: {
+          plugin: 'agena.tasks',
+          name: 'run',
+          metadata: { child_session_id: 9, task_id: 'task-9' },
+          resources: [{ resource_id: 'task-output', kind: 'log' }],
+        },
+        agenaPresentation: {
+          blocks: [
+            { type: 'nested_task', task_id: 'task-9', title: 'Review project', status: 'running' },
+            { type: 'content', id: 'output:task-output', resource: { resource_id: 'task-output', kind: 'log' } },
+          ],
+        },
+      },
+    },
+  })
+  assert.equal((html.match(/data-content-output/g) || []).length, 1)
+  assert.doesNotMatch(html, /data-operation-content-output/)
+  assert.match(html, /data-tool-presentation/)
+})
+
 test('diff renderer gives long patches a visible left-aligned expansion control and escapes source HTML', async () => {
   const source = `--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,100 @@\n${Array.from({ length: 100 }, (_, i) => `+line ${i} <img onerror="bad">`).join('\n')}`
   const html = await render('/src/components/chat/AgenaDiffBlock.vue', { diff: source })

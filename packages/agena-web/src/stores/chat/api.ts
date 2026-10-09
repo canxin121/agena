@@ -691,6 +691,10 @@ export async function listSessions(opts?: {
   bucket?: 'pinned' | 'favorite' | 'running' | 'attention' | 'recent'
   includeTotal?: boolean
   countOnly?: boolean
+  /** Skip the retained body and request a fresh representation. */
+  force?: boolean
+  /** Also ignore the retained ETag if the body itself is known to be stale. */
+  forceFresh?: boolean
   signal?: AbortSignal
 }): Promise<SessionListResponse> {
   const params: string[] = []
@@ -722,6 +726,9 @@ export async function listSessions(opts?: {
     sessionListResourceKey(opts),
     `/api/v1/sessions${suffix}`,
     opts?.signal ? { signal: opts.signal } : undefined,
+    opts?.force === true,
+    undefined,
+    opts?.forceFresh === true,
   )
   const body = asRecord(payload)
   const rawItems = body.items

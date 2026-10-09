@@ -824,6 +824,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   const dirtyDirectories = new Set<string>()
   const dirtyStats = new Set<string>()
   const dirtyFooters = new Set<SidebarFooterKind>()
+  const expandedChildRecoveryAttempts = new Map<string, number>()
+  const expandedChildRecoveryTimers = new Map<string, number>()
   let sidebarSync = createSidebarSync()
   const workspaceSubscriptions = new Map<string, () => void>()
   const footerSubscriptions = new Map<SidebarFooterKind, { key: string; release: () => void }>()
@@ -1524,6 +1526,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   ): Promise<boolean> {
     const sid = String(sessionId || '').trim()
     if (!sid) return false
+    if (!expanded) clearExpandedChildRecovery(sid)
     return executeSidebarCommand({ type: 'setSessionExpanded', sessionId: sid, expanded }, opts)
   }
 
@@ -1716,12 +1719,17 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     )
   }
 
-  async function loadDirectoryPage(options: Parameters<typeof chatApi.listSessions>[0], page: number, size: number) {
+  async function loadDirectoryPage(
+    options: Parameters<typeof chatApi.listSessions>[0],
+    page: number,
+    size: number,
+    force = false,
+  ) {
     const resource = chatApi.sessionListResourceKey(options)
     subscribeDirectoryList(resource, String(options?.workspaceId))
     const key = `${resource}:${page}:${size}`
     const cached = directoryPages.get(key)
-    if (cached) {
+    if (cached && !force) {
       await checkResourceVersions([resource], options?.signal)
       if (
         cached.scope === captureResourceObservation(resource).scope &&
@@ -1730,7 +1738,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       )
         return cached.value
     }
-    const value = await loadSidebarSessionPage(options ?? {}, page, size)
+    const value = await loadSidebarSessionPage(options ?? {}, page, size, chatApi.listSessions, force)
     options?.signal?.throwIfAborted()
     const observed = value.observation
     if (observed && observed.scope === captureResourceObservation(resource).scope) {
@@ -1831,6 +1839,40 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     uiPrefs.value = normalizeUiPrefs(patchChatSidebarUiPrefs(uiPrefs.value, { pinnedSessionIds: [...pinnedIds] }))
   }
 
+  function clearExpandedChildRecovery(sessionId: string) {
+    const timer = expandedChildRecoveryTimers.get(sessionId)
+    if (timer !== undefined) window.clearTimeout(timer)
+    expandedChildRecoveryTimers.delete(sessionId)
+    expandedChildRecoveryAttempts.delete(sessionId)
+  }
+
+  function scheduleExpandedChildRecovery(workspaceId: number, sessionId: string) {
+    if (disposed || !Number.isSafeInteger(workspaceId) || workspaceId <= 0) return
+    if (!uiPrefs.value.expandedParentSessionIds.includes(sessionId)) return
+    if (expandedChildRecoveryTimers.has(sessionId)) return
+    const attempt = expandedChildRecoveryAttempts.get(sessionId) || 0
+    // Session creation and parent-list revisions can arrive in adjacent SSE
+    // events. Retry an empty expanded branch a few times so an empty page from
+    // the first event cannot strand the disclosure before the child commits.
+    if (attempt >= 3) return
+    expandedChildRecoveryAttempts.set(sessionId, attempt + 1)
+    const timer = window.setTimeout(
+      () => {
+        expandedChildRecoveryTimers.delete(sessionId)
+        if (disposed || !uiPrefs.value.expandedParentSessionIds.includes(sessionId)) {
+          clearExpandedChildRecovery(sessionId)
+          return
+        }
+        dirtyDirectories.add(String(workspaceId))
+        for (const kind of footerKinds)
+          if (footerViewForKind(kind).rows.some((row) => row.id === sessionId && row.isExpanded)) dirtyFooters.add(kind)
+        sidebarSync.invalidate(0)
+      },
+      350 * 2 ** attempt,
+    )
+    expandedChildRecoveryTimers.set(sessionId, timer)
+  }
+
   function footerViewForKind(kind: SidebarFooterKind): SidebarFooterView {
     return kind === 'pinned'
       ? pinnedFooterView.value
@@ -1862,13 +1904,36 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         seen.add(row.id)
         row.depth = depth
         row.rootId = agenaSessionId(root)
-        if (!row.isExpanded || !row.isParent) return { row }
-        const children = await loadDirectoryPage(
-          { workspaceId, parentId: row.id, signal },
-          childPageById.get(row.id) || 0,
-          pageSize,
-        )
-        row.isParent = children.total > 0
+        const previousRow = knownSidebarRowBySessionId()[row.id]
+        if (!row.isExpanded) {
+          // A parent can briefly report zero children while the task-created
+          // child row is committing. Keep its disclosure affordance through a
+          // collapse so the user can retry the branch after the count catches up.
+          if (previousRow?.isParent) row.isParent = true
+          return { row }
+        }
+        const childOptions = { workspaceId, parentId: row.id, signal }
+        let children = await loadDirectoryPage(childOptions, childPageById.get(row.id) || 0, pageSize)
+        const expectedChildren = Number(session.child_session_count)
+        if (children.sessions.length === 0) {
+          // An expanded branch was shown to the user as a parent previously.
+          // Treat the persisted expansion as evidence even if this refresh's
+          // summary temporarily says zero children, and bypass the ETag once
+          // in case an empty child page survived the session-created event.
+          children = await loadDirectoryPage(childOptions, childPageById.get(row.id) || 0, pageSize, true)
+        }
+        const knownParent =
+          row.isParent ||
+          row.isExpanded ||
+          (Number.isFinite(expectedChildren) && expectedChildren > 0) ||
+          previousRow?.isParent === true
+        if (children.sessions.length > 0) clearExpandedChildRecovery(row.id)
+        else if (knownParent || row.isExpanded) scheduleExpandedChildRecovery(workspaceId, row.id)
+        row.isParent =
+          children.total > 0 ||
+          children.sessions.length > 0 ||
+          (Number.isFinite(expectedChildren) && expectedChildren > 0) ||
+          knownParent
         row.childPage = children.page
         row.childPageCount = children.pageCount
         return { row, children: children.sessions as unknown as UnknownRecord[] }
@@ -2013,6 +2078,9 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
   onScopeDispose(() => {
     disposed = true
+    for (const timer of expandedChildRecoveryTimers.values()) window.clearTimeout(timer)
+    expandedChildRecoveryTimers.clear()
+    expandedChildRecoveryAttempts.clear()
     sidebarStateRequestInFlight?.controller?.abort()
     targetedController?.abort()
     for (const controller of pageRequests.values()) controller.abort()
@@ -2686,6 +2754,9 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     targetedController?.abort()
     for (const controller of pageRequests.values()) controller.abort()
     pageRequests.clear()
+    for (const timer of expandedChildRecoveryTimers.values()) window.clearTimeout(timer)
+    expandedChildRecoveryTimers.clear()
+    expandedChildRecoveryAttempts.clear()
     sectionLoads.clear()
     workspaceStats.clear()
     workspaceStatsVersions.clear()

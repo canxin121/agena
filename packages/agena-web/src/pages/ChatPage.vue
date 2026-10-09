@@ -54,6 +54,7 @@ import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
 import { useChatMessageActions } from './chat/useChatMessageActions'
+import { activityInitiallyExpandedForPart as resolveActivityInitiallyExpanded } from './chat/transcriptExpansion'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
@@ -62,15 +63,7 @@ import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginCommandResult } from '@/lib/pluginOperations'
-import {
-  DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES,
-  chatActivityKindIdForTranscriptPart,
-  normalizeChatToolActivityCategories,
-  normalizeChatToolExpansionOverrides,
-  resolveChatActivityKindDefaultExpanded,
-  resolveChatToolDefaultExpanded,
-  type ChatToolExpansionOverrides,
-} from '@/lib/chatActivity'
+import { useTranscriptPreferencesStore } from '@/stores/transcriptPreferences'
 
 type ComposerActionItem = { id: string; label: string; description?: string; icon?: Component; disabled?: boolean }
 
@@ -952,35 +945,12 @@ function handleDraftKeydown(e: KeyboardEvent) {
 }
 
 const settingsData = computed<JsonObject>(() => asRecord(settings.data))
+const transcriptPreferences = useTranscriptPreferencesStore()
 
 const activityAutoCollapseOnIdle = computed(() => settingsData.value.chatActivityAutoCollapseOnIdle !== false)
 
-const activityKindDefaultExpanded = computed<string[]>(() => resolveChatActivityKindDefaultExpanded(settingsData.value))
-
-const activityDefaultExpandedToolSet = computed<Set<string>>(() => {
-  const s = settingsData.value
-  if (s && Object.prototype.hasOwnProperty.call(s, 'chatToolActivityDefaultExpandedCategories')) {
-    return new Set(normalizeChatToolActivityCategories(s.chatToolActivityDefaultExpandedCategories))
-  }
-  return new Set(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES)
-})
-
-const activityDefaultExpandedToolOverrides = computed<ChatToolExpansionOverrides>(() =>
-  normalizeChatToolExpansionOverrides(settings.data?.chatToolActivityDefaultExpandedOverrides),
-)
-
 function activityInitiallyExpandedForPart(part: TranscriptDisplayPart): boolean {
-  const activityKind = chatActivityKindIdForTranscriptPart(part.kind, part.source.agenaKind)
-  if (!activityKind) return false
-  if (activityKind === 'operation') {
-    return resolveChatToolDefaultExpanded(
-      part.source.tool,
-      activityDefaultExpandedToolOverrides.value,
-      activityDefaultExpandedToolSet.value,
-      activityKindDefaultExpanded.value.includes('operation'),
-    )
-  }
-  return activityKindDefaultExpanded.value.includes(activityKind)
+  return resolveActivityInitiallyExpanded(part, transcriptPreferences)
 }
 
 const showThinking = computed(() => settingsData.value.showReasoningTraces !== false)
@@ -2238,6 +2208,7 @@ watch(
 )
 
 onMounted(async () => {
+  await transcriptPreferences.refresh()
   // MainLayout already refreshes these, but keep Chat resilient on direct navigation.
   if (!chat.sessions.length) await chat.refreshSessions().catch(() => {})
 

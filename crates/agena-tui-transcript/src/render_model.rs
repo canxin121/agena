@@ -9,10 +9,9 @@ use agena_api::{
     },
     resource::{RunRole, RunStatus},
 };
-use agena_domain::PartDocument;
 use agena_domain::{
-    ActivityId, ActivityPayload, AssistantReplyId, RawOutput, TextSegmentActivity, TextSegmentId,
-    TimeRange, ToolOutput, TurnId,
+    ActivityId, ActivityPayload, AssistantReplyId, ContentFormat, PartDocument, RawOutput,
+    TextSegmentActivity, TextSegmentId, TimeRange, ToolOutput, TurnId, ViewBlock,
 };
 use agena_runtime_contracts::part::OperationPart;
 use agena_tui_components::ThemePalette;
@@ -136,7 +135,7 @@ impl ToolCallView {
     }
 
     pub fn from_operation(operation: OperationPart, presentation: Option<PartDocument>) -> Self {
-        let presentation = presentation.unwrap_or_else(|| {
+        let mut presentation = presentation.unwrap_or_else(|| {
             let title = operation
                 .output
                 .as_ref()
@@ -156,6 +155,35 @@ impl ToolCallView {
                 blocks: Vec::new(),
             }
         });
+        // Some tools attach live text/log resources directly to the operation
+        // without creating a presentation block. Keep those resources visible
+        // in the normal human output path, while reusing explicit content
+        // blocks when a tool already supplied one.
+        let mut presented_resources = presentation
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ViewBlock::Content { resource, .. } => Some(resource.resource_id),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        for resource in &operation.resources {
+            if !matches!(
+                resource.kind,
+                agena_domain::ContentKind::Text
+                    | agena_domain::ContentKind::Log
+                    | agena_domain::ContentKind::Terminal
+            ) {
+                continue;
+            }
+            if presented_resources.insert(resource.resource_id) {
+                presentation.blocks.push(ViewBlock::Content {
+                    id: format!("operation-resource:{}", resource.resource_id),
+                    resource: resource.clone(),
+                    format: ContentFormat::Plain,
+                });
+            }
+        }
         Self {
             operation,
             presentation,
@@ -633,7 +661,7 @@ pub struct RenderedCopySegment {
     pub separator_before: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Default detail settings of the transcript.
 pub struct TranscriptDetailDefaults {
     /// Global default expansion for activities without a kind override.

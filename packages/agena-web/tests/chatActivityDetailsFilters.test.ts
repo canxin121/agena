@@ -5,17 +5,10 @@ import test from 'node:test'
 
 import {
   BUILTIN_CHAT_ACTIVITY_KINDS,
-  DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES,
-  DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED,
   chatActivityKindIdForTranscriptPart,
   normalizeChatActivityKindCatalog,
-  normalizeChatActivityKindDefaultExpanded,
   normalizeChatToolActivityId,
-  normalizeChatToolActivityCategories,
-  normalizeChatToolExpansionOverrides,
   normalizeChatToolPreferenceId,
-  resolveChatActivityKindDefaultExpanded,
-  resolveChatToolDefaultExpanded,
 } from '../src/lib/chatActivity'
 
 const BUILTIN_KIND_IDS = [
@@ -62,21 +55,6 @@ test('server activity catalog normalization retains plugin-contributed kinds', (
   )
 })
 
-test('part expansion defaults use only the canonical activity preference', () => {
-  assert.deepEqual(DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED, ['text'])
-  assert.deepEqual(normalizeChatActivityKindDefaultExpanded([' operation ', 'reasoning', 'OPERATION']), [
-    'operation',
-    'reasoning',
-    'OPERATION',
-  ])
-  assert.deepEqual(resolveChatActivityKindDefaultExpanded(null), ['text'])
-  assert.deepEqual(resolveChatActivityKindDefaultExpanded({ chatActivityKindDefaultExpanded: [] }), [])
-  assert.deepEqual(
-    resolveChatActivityKindDefaultExpanded({ chatActivityKindDefaultExpanded: ['operation', 'example.trace'] }),
-    ['operation', 'example.trace'],
-  )
-})
-
 test('transcript presentation kinds resolve to server activity kind ids', () => {
   assert.equal(chatActivityKindIdForTranscriptPart('reasoning', 'think'), 'reasoning')
   assert.equal(chatActivityKindIdForTranscriptPart('operation', 'tool_call'), 'operation')
@@ -88,22 +66,6 @@ test('transcript presentation kinds resolve to server activity kind ids', () => 
   assert.equal(chatActivityKindIdForTranscriptPart('compaction', 'compaction'), 'notice')
   assert.equal(chatActivityKindIdForTranscriptPart('answer', 'text'), '')
   assert.equal(chatActivityKindIdForTranscriptPart('unknown', 'Example.Trace'), 'Example.Trace')
-})
-
-test('tools stay collapsed by default and explicit preferences still apply', () => {
-  assert.deepEqual(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES, [])
-  const defaults = new Set<string>(DEFAULT_CHAT_TOOL_EXPANDED_CATEGORIES)
-  assert.equal(resolveChatToolDefaultExpanded('fs.replace', {}, defaults, false), false)
-  assert.equal(resolveChatToolDefaultExpanded('fs.glob', {}, defaults, false), false)
-  assert.equal(resolveChatToolDefaultExpanded('fs.glob', {}, defaults, true), true)
-  assert.equal(resolveChatToolDefaultExpanded('fs.glob', { 'fs.glob': false }, defaults, true), false)
-})
-
-test('tool category preferences use the current category identities', () => {
-  assert.deepEqual(normalizeChatToolActivityCategories(['edit', ' invalid ', 'EDIT', '', 3 as never]), [
-    'edit',
-    'invalid',
-  ])
 })
 
 test('Agena namespaced tools map to categories while exact preferences stay distinct', () => {
@@ -121,21 +83,16 @@ test('Agena namespaced tools map to categories while exact preferences stay dist
 
   assert.equal(normalizeChatToolPreferenceId('agena.fs.read'), 'fs.read')
   assert.equal(normalizeChatToolPreferenceId('fs.read_many'), 'fs.read_many')
-  assert.deepEqual(
-    normalizeChatToolExpansionOverrides({
-      'agena.fs.read': true,
-      'fs.read_many': false,
-      'agena.shell.run': 'invalid',
-    }),
-    { 'fs.read': true, 'fs.read_many': false },
-  )
 })
 
 test('settings page consumes the current server activity catalog', () => {
   const settingsPage = readFileSync(resolve(import.meta.dir, '../src/pages/SettingsPage.vue'), 'utf8')
+  const preferencesStore = readFileSync(resolve(import.meta.dir, '../src/stores/transcriptPreferences.ts'), 'utf8')
   assert.ok(settingsPage.includes('response?.activity_kinds'))
   assert.ok(settingsPage.includes('v-for="opt in activityKindOptions"'))
-  assert.ok(settingsPage.includes('chatActivityKindDefaultExpanded'))
+  assert.ok(settingsPage.includes('transcriptPreferences.setActivityKindExpanded'))
+  assert.ok(preferencesStore.includes("setRuntimeSetting('ui.transcript'"))
+  assert.ok(preferencesStore.includes("getRuntimeSetting('ui.transcript')"))
   assert.ok(!settingsPage.includes('activityTable.summary'))
   assert.ok(!settingsPage.includes('activityDefaultExpandedOptions'))
 })

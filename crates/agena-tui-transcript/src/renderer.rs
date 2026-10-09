@@ -573,6 +573,84 @@ mod tests {
     }
 
     #[test]
+    fn operation_resource_without_a_presentation_block_renders_live_task_output() {
+        use crate::content::ContentFrame;
+        use agena_domain::{ContentCursor, ContentId, ContentKind, ContentResource, ContentState};
+        use std::sync::Arc;
+
+        let resource_id = ContentId::new();
+        let cursor = ContentCursor {
+            epoch: resource_id.0,
+            sequence: 1,
+        };
+        let mut tool = ToolCallView::from_operation(
+            OperationPart {
+                resources: vec![agena_domain::ContentRef {
+                    resource_id,
+                    kind: ContentKind::Log,
+                }],
+                call_id: 10,
+                invocation: ToolInvocation::new("tasks.run", StructuredObject::default()),
+                authorization: Default::default(),
+                user_input: Default::default(),
+                output: None,
+                state: ToolResultState::Running,
+                error: None,
+                metadata: Default::default(),
+                lifecycle: TimeRange::default(),
+            },
+            None,
+        );
+        assert_eq!(tool.presentation.blocks.len(), 1);
+        assert!(matches!(
+            tool.presentation.blocks.first(),
+            Some(ViewBlock::Content { resource, .. }) if resource.resource_id == resource_id
+        ));
+        tool.contents.insert(
+            resource_id,
+            Arc::new(ContentFrame {
+                resource: ContentResource {
+                    resource_id,
+                    owner_session_id: 1,
+                    part_id: 10,
+                    kind: ContentKind::Log,
+                    state: ContentState::Active,
+                    cursor,
+                    committed_cursor: cursor,
+                    total_bytes: 16,
+                    dropped_bytes: 0,
+                    retained_ranges: Vec::new(),
+                    capture_error: None,
+                },
+                lines: vec![ratatui::text::Line::from("live task output")],
+                wrapped: vec![false],
+                terminal_size: None,
+                gap: false,
+                windowed: false,
+                text: Arc::from("live task output\n"),
+                document: None,
+            }),
+        );
+        let part =
+            TranscriptFixture::operation_part(10, 1, Utc::now(), ExecutionStatus::InProgress, tool);
+        let mut rendered = Vec::new();
+        render_tool_execution(
+            &part,
+            tool_view(&part),
+            &mut rendered,
+            100,
+            &I18n::english(),
+            true,
+        );
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("live task output"), "{text}");
+    }
+
+    #[test]
     fn a_pending_interaction_is_never_hidden_by_newer_siblings() {
         let parts = (0..12)
             .map(|i| TranscriptEntryPart {

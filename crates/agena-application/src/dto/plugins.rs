@@ -34,10 +34,7 @@ pub struct PermissionToolCatalogResource {
     pub summary: String,
     /// UI-only summaries keyed by BCP-47 locale; permission editors pick
     /// the client language and fall back to `summary`.
-    #[serde(
-        default,
-        skip_serializing_if = "std::collections::BTreeMap::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub summary_translations: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,

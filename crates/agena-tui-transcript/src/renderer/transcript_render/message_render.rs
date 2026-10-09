@@ -1258,18 +1258,21 @@ pub(crate) fn render_part_node(
                 defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_REASONING))
             });
             let summary = reasoning.preferred_text();
+            // An empty thought trail still needs a label; the stored English
+            // wording is the fallback when the catalog has no key.
+            let empty_reasoning = ui_text::localized_activity_title(i18n, "Thinking");
             let headline = summary
                 .lines()
                 .next()
                 .map(str::trim)
                 .filter(|line| !line.is_empty())
-                .unwrap_or("thinking");
+                .unwrap_or(empty_reasoning.as_str());
             push_activity_headline(
                 out,
                 part.status,
                 expanded,
                 true,
-                "thinking",
+                &ui_text::localized_activity_title(i18n, "Thinking"),
                 headline,
                 width,
             );

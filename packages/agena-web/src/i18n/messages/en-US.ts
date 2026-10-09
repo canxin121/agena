@@ -129,6 +129,24 @@ export default {
     toggleDiagramAria: 'Toggle diagram',
     expandDiagramAria: 'Expand diagram',
   },
+  editor: {
+    loadingDiff: 'Loading diff editor…',
+    find: {
+      placeholderFind: 'Find',
+      placeholderReplace: 'Replace',
+      previousMatch: 'Previous match',
+      nextMatch: 'Next match',
+      matchCase: 'Match case',
+      wholeWord: 'Whole word',
+      useRegex: 'Use regular expression',
+      close: 'Close search',
+      invalid: 'Invalid',
+      showReplace: 'Show replace controls',
+      hideReplace: 'Hide replace controls',
+      replaceCurrent: 'Replace current match',
+      replaceAll: 'Replace all matches',
+    },
+  },
   markdown: {
     tableOfContents: 'Table of Contents',
   },
@@ -202,6 +220,10 @@ export default {
   mcp: {
     dialog: {
       title: 'MCP servers',
+      runtimeDescription:
+        'MCP servers loaded by the Agena runtime. Connection lifecycle is managed by server configuration.',
+      serversLabel: 'servers',
+      toolsLabel: 'tools',
       description: 'Inspect Model Context Protocol servers loaded by Agena',
       loading: 'Loading MCP status...',
       empty: 'No MCP servers configured.',
@@ -222,6 +244,15 @@ export default {
     },
   },
   ui: {
+    inlineSearch: {
+      placeholder: 'Search…',
+      useValue: 'Use "{value}"',
+      truncated: 'Type to search. Showing {shown} of {total}.',
+      noMatches: 'No matches.',
+    },
+    imageViewer: {
+      title: 'Image viewer',
+    },
     codeEditor: {
       loading: 'Loading editor...',
       loadFailed: 'Editor failed to load.',
@@ -577,8 +608,7 @@ export default {
       system: 'System',
     },
     tui: {
-      interfaceDescription:
-        'Language, color, graphics, and plugin theme settings for TUI clients.',
+      interfaceDescription: 'Language, color, graphics, and plugin theme settings for TUI clients.',
       runtimeDescription: 'Provider client versions and session compaction settings shared with the TUI runtime.',
       diagnosticsDescription: 'Tracing and runtime diagnostics settings exposed by the TUI Settings Studio.',
       clientVersionsTitle: 'Provider client versions',
@@ -1097,6 +1127,10 @@ export default {
     },
   },
   chat: {
+    activityLog: {
+      exitCode: 'exit {code}',
+      errorBand: 'Error',
+    },
     sessionWork: {
       backToFiles: 'Back to files',
       moreDiff: 'Diff preview · load more',
@@ -1165,6 +1199,8 @@ export default {
       stopped: 'Stopped. The partial answer is preserved.',
       returnToParent: 'Side · return to parent',
       sideDescription: 'Open a separate branch with the current context',
+      sectionTitle: 'BTW',
+      sideChip: 'Side',
     },
     toolDetails: {
       copyDiff: 'Copy diff',
@@ -1198,6 +1234,7 @@ export default {
       failedToCopyErrorDetails: 'Failed to copy error details',
       titleCannotBeEmpty: 'Title cannot be empty',
       sessionRenamed: 'Session renamed',
+      sessionForked: 'Session forked',
       noTranscriptAvailable: 'No transcript available',
       transcriptCopied: 'Transcript copied',
       transcriptExportedAs: 'Transcript exported as {filename}',
@@ -1213,6 +1250,31 @@ export default {
       answerAllQuestions: 'Please answer all questions',
       answerSent: 'Answer sent',
       questionRejected: 'Question rejected',
+      sessionRequiredForCommand: 'A session is required for /{command}.',
+      sessionContinuationStarted: 'Session continuation started.',
+      pagerUnsupported: 'The web transcript already supports paging through the scroll view.',
+      noPendingUserInput: 'There is no pending user-input request.',
+      noPendingPermissionRequest: 'There is no pending permission request.',
+      pendingPermissionRequestMissingId: 'The pending permission request has no id.',
+      useSystemPasteShortcut: 'Use your system paste shortcut to insert clipboard text.',
+      noAssistantMessageLoaded: 'No assistant message is loaded.',
+      noVisibleTranscript: 'No transcript content is visible.',
+      noChildSessions: 'This session has no child sessions.',
+      noParentSession: 'This session has no parent session.',
+      openSessionBeforeDownload: 'Open a session before downloading a workspace file.',
+      selectModelBeforeSending: 'Select a model before sending',
+    },
+    selectedModelFallback: 'selected model',
+    errors: {
+      sideConversationMissing: 'The server did not return a side conversation',
+      attachmentDataNotBase64: 'Attachment data is not a valid base64 data URL',
+      attachmentPathEmpty: 'Attachment path is empty',
+      workspaceRootNotAttachable: 'The workspace root cannot be attached as a file',
+      attachmentOutsideWorkspace: 'The attachment must be inside the active workspace',
+      pluginNavigationMustBeRelative: 'Plugin navigation must use an application-relative path.',
+      pluginUrlMustBeHttp: 'Plugin URLs must use HTTP or HTTPS.',
+      toolDetailSectionMismatch: 'The server returned a mismatched tool detail section',
+      toolDetailChangedRetry: 'This tool changed while loading its details. Retry this section.',
     },
     headerOverlay: {
       title: {
@@ -2436,6 +2498,8 @@ export default {
       },
     },
     authDialogs: {
+      useTerminal: 'Use Terminal',
+      ssoBrowserHint: 'Complete the SSO authorization in your browser, then retry the operation.',
       credentials: {
         title: 'Git Authentication',
         description: 'Enter credentials to continue',

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import EditorFindBar from '@/components/editor/EditorFindBar.vue'
 import { useMonacoFindSession } from '@/components/editor/useMonacoFindSession'
@@ -25,6 +26,8 @@ type HunkAction = {
   discardEnabled?: boolean
   disabled?: boolean
 }
+
+const { t } = useI18n()
 
 const props = withDefaults(
   defineProps<{
@@ -1192,7 +1195,7 @@ watch(
       @close="closeFindBar"
     />
     <div ref="containerRef" class="monaco-diff-container" :class="{ 'is-hidden': !ready }" />
-    <div v-if="!ready" class="monaco-loading">Loading diff editor...</div>
+    <div v-if="!ready" class="monaco-loading">{{ t('editor.loadingDiff') }}</div>
   </div>
 </template>
 

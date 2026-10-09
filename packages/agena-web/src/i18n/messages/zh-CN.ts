@@ -129,6 +129,24 @@ export default {
     toggleDiagramAria: '切换图表展开状态',
     expandDiagramAria: '展开图表',
   },
+  editor: {
+    loadingDiff: '正在加载差异编辑器…',
+    find: {
+      placeholderFind: '查找',
+      placeholderReplace: '替换',
+      previousMatch: '上一个匹配',
+      nextMatch: '下一个匹配',
+      matchCase: '区分大小写',
+      wholeWord: '全字匹配',
+      useRegex: '使用正则表达式',
+      close: '关闭搜索',
+      invalid: '无效',
+      showReplace: '显示替换控件',
+      hideReplace: '隐藏替换控件',
+      replaceCurrent: '替换当前匹配',
+      replaceAll: '替换全部匹配',
+    },
+  },
   markdown: {
     tableOfContents: '目录',
   },
@@ -202,6 +220,9 @@ export default {
   mcp: {
     dialog: {
       title: 'MCP 服务器',
+      runtimeDescription: '由 Agena 运行时加载的 MCP 服务器。连接生命周期由服务端配置管理。',
+      serversLabel: '个服务器',
+      toolsLabel: '个工具',
       description: '查看 Agena 已加载的 Model Context Protocol 服务器',
       loading: '正在加载 MCP 状态...',
       empty: '未配置 MCP 服务器。',
@@ -222,6 +243,15 @@ export default {
     },
   },
   ui: {
+    inlineSearch: {
+      placeholder: '搜索…',
+      useValue: '使用“{value}”',
+      truncated: '输入以搜索。显示 {shown} / {total} 项。',
+      noMatches: '没有匹配项。',
+    },
+    imageViewer: {
+      title: '图片查看器',
+    },
     codeEditor: {
       loading: '编辑器加载中...',
       loadFailed: '编辑器加载失败。',
@@ -1092,6 +1122,10 @@ export default {
     },
   },
   chat: {
+    activityLog: {
+      exitCode: '退出码 {code}',
+      errorBand: '错误',
+    },
     sessionWork: {
       backToFiles: '文件列表',
       moreDiff: 'Diff 预览 · 加载更多',
@@ -1158,6 +1192,8 @@ export default {
       stopped: '已停止，已收到的内容已保留。',
       returnToParent: 'Side · 返回原会话',
       sideDescription: '带上当前上下文，打开独立的工作分支',
+      sectionTitle: 'BTW',
+      sideChip: 'Side',
     },
     toolDetails: {
       copyDiff: '复制 diff',
@@ -1191,6 +1227,7 @@ export default {
       failedToCopyErrorDetails: '复制错误详情失败',
       titleCannotBeEmpty: '标题不能为空',
       sessionRenamed: '会话已重命名',
+      sessionForked: '已创建会话分支',
       noTranscriptAvailable: '没有可用的转录',
       transcriptCopied: '转录已复制',
       transcriptExportedAs: '转录已导出为 {filename}',
@@ -1206,6 +1243,31 @@ export default {
       answerAllQuestions: '请回答所有问题',
       answerSent: '答案已发送',
       questionRejected: '问题已拒绝',
+      sessionRequiredForCommand: '执行 /{command} 需要先打开会话。',
+      sessionContinuationStarted: '会话已继续。',
+      pagerUnsupported: '网页转录已支持滚动分页。',
+      noPendingUserInput: '当前没有待处理的用户输入请求。',
+      noPendingPermissionRequest: '当前没有待处理的权限请求。',
+      pendingPermissionRequestMissingId: '待处理的权限请求没有 id。',
+      useSystemPasteShortcut: '请使用系统粘贴快捷键插入剪贴板文本。',
+      noAssistantMessageLoaded: '尚未加载助手消息。',
+      noVisibleTranscript: '当前没有可见的转录内容。',
+      noChildSessions: '该会话没有子会话。',
+      noParentSession: '该会话没有父会话。',
+      openSessionBeforeDownload: '下载工作区文件前请先打开会话。',
+      selectModelBeforeSending: '发送前请选择模型',
+    },
+    selectedModelFallback: '已选模型',
+    errors: {
+      sideConversationMissing: '服务端未返回侧谈会话',
+      attachmentDataNotBase64: '附件数据不是有效的 base64 data URL',
+      attachmentPathEmpty: '附件路径为空',
+      workspaceRootNotAttachable: '工作区根目录不能作为文件附加',
+      attachmentOutsideWorkspace: '附件必须位于当前工作区内',
+      pluginNavigationMustBeRelative: '插件导航必须使用应用内相对路径。',
+      pluginUrlMustBeHttp: '插件 URL 必须使用 HTTP 或 HTTPS。',
+      toolDetailSectionMismatch: '服务端返回的工具详情分区不匹配',
+      toolDetailChangedRetry: '该工具在加载详情时发生了变化，请重试此分区。',
     },
     headerOverlay: {
       title: {
@@ -2425,6 +2487,8 @@ export default {
       },
     },
     authDialogs: {
+      useTerminal: '使用终端',
+      ssoBrowserHint: '请在浏览器中完成 SSO 授权，然后重试该操作。',
       credentials: {
         title: 'Git 认证',
         description: '输入凭据以继续',

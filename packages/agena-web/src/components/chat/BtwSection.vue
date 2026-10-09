@@ -42,7 +42,7 @@ function handleKeydown(event: KeyboardEvent) {
   <SessionSection
     v-if="state"
     docked
-    title="BTW"
+    :title="t('chat.btw.sectionTitle')"
     v-model:expanded="state.expanded"
     :summary="[t('chat.btw.inlineHint'), state.exchanges.length || ''].filter(Boolean).join(' · ')"
     :busy="loading"

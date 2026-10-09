@@ -204,7 +204,7 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
     )
       return
     if (resource.part_id !== Number(partId) || resource.section !== section) {
-      throw new Error('The server returned a mismatched tool detail section')
+      throw new Error(t('chat.errors.toolDetailSectionMismatch'))
     }
     if (resource.revision < (sectionRevisions.get(section) ?? -1)) return
     const revision = props.part.source.revision ?? 0
@@ -219,7 +219,7 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
       // The tool moved on while this section was loading. While it is still
       // streaming, retry quietly and keep the rendered snapshot instead of
       // flashing an error into the part the reader has expanded.
-      if (status.value.terminal) throw new Error('This tool changed while loading its details. Retry this section.')
+      if (status.value.terminal) throw new Error(t('chat.errors.toolDetailChangedRetry'))
       // Live snapshots are best effort. Keep this useful intermediate value
       // on screen and schedule catch-up, rather than starving a section while
       // its source advances faster than HTTP can round-trip.
@@ -558,7 +558,9 @@ function toggleOuter() {
       </section>
 
       <section v-if="operation.error" class="py-1.5">
-        <div class="text-xs font-semibold text-rose-600 dark:text-rose-400">› Error</div>
+        <div class="text-xs font-semibold text-rose-600 dark:text-rose-400">
+          › {{ t('chat.activityLog.errorBand') }}
+        </div>
         <pre
           class="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-snug text-rose-700 dark:text-rose-300"
           >{{ operation.error }}</pre

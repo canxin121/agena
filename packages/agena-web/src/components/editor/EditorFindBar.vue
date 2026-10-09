@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { RiArrowDownSLine, RiArrowRightSLine, RiArrowUpSLine, RiCloseLine, RiListCheck3 } from '@remixicon/vue'
 
 import IconButton from '@/components/ui/IconButton.vue'
@@ -46,6 +47,7 @@ const emit = defineEmits<{
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
+const { t } = useI18n()
 
 function focusInput(selectAll = false) {
   nextTick(() => {
@@ -119,9 +121,9 @@ defineExpose({
       size="xs"
       variant="ghost"
       class="h-8 w-8 text-muted-foreground hover:text-foreground"
-      :aria-label="replaceVisible ? 'Hide replace controls' : 'Show replace controls'"
-      :title="replaceVisible ? 'Hide replace controls' : 'Show replace controls'"
-      :tooltip="replaceVisible ? 'Hide replace controls' : 'Show replace controls'"
+      :aria-label="replaceVisible ? t('editor.find.hideReplace') : t('editor.find.showReplace')"
+      :title="replaceVisible ? t('editor.find.hideReplace') : t('editor.find.showReplace')"
+      :tooltip="replaceVisible ? t('editor.find.hideReplace') : t('editor.find.showReplace')"
       @click="emit('toggle-replace')"
     >
       <component :is="replaceVisible ? RiArrowDownSLine : RiArrowRightSLine" class="h-4 w-4" />
@@ -131,17 +133,17 @@ defineExpose({
       <Input
         :model-value="modelValue"
         type="text"
-        placeholder="Find"
+        :placeholder="t('editor.find.placeholderFind')"
         data-oc-find-input="query"
         class="h-8 px-2.5 font-mono text-xs"
-        aria-label="Find"
+        :aria-label="t('editor.find.placeholderFind')"
         @update:model-value="(value) => emit('update:modelValue', String(value ?? ''))"
         @keydown="onInputKeydown"
       />
     </div>
 
     <div class="min-w-[4.5rem] text-right font-mono text-[11px] text-muted-foreground">
-      <span v-if="invalidRegex" class="text-destructive">Invalid</span>
+      <span v-if="invalidRegex" class="text-destructive">{{ t('editor.find.invalid') }}</span>
       <span v-else-if="matchCount > 0">{{ currentMatch }} / {{ matchCount }}</span>
       <span v-else>0 / 0</span>
     </div>
@@ -152,9 +154,9 @@ defineExpose({
         variant="ghost"
         class="h-6 w-6 text-muted-foreground hover:text-foreground"
         :disabled="matchCount < 1 || invalidRegex"
-        title="Previous match"
-        tooltip="Previous match"
-        aria-label="Previous match"
+        :title="t('editor.find.previousMatch')"
+        :tooltip="t('editor.find.previousMatch')"
+        :aria-label="t('editor.find.previousMatch')"
         @click="emit('previous')"
       >
         <RiArrowUpSLine class="h-4 w-4" />
@@ -164,9 +166,9 @@ defineExpose({
         variant="ghost"
         class="h-6 w-6 text-muted-foreground hover:text-foreground"
         :disabled="matchCount < 1 || invalidRegex"
-        title="Next match"
-        tooltip="Next match"
-        aria-label="Next match"
+        :title="t('editor.find.nextMatch')"
+        :tooltip="t('editor.find.nextMatch')"
+        :aria-label="t('editor.find.nextMatch')"
         @click="emit('next')"
       >
         <RiArrowDownSLine class="h-4 w-4" />
@@ -178,8 +180,8 @@ defineExpose({
         :active="caseSensitive"
         size="xs"
         class="h-6 px-1.5 font-mono text-[11px]"
-        aria-label="Match case"
-        title="Match case"
+        :aria-label="t('editor.find.matchCase')"
+        :title="t('editor.find.matchCase')"
         @click="emit('toggle-case-sensitive')"
       >
         Aa
@@ -188,8 +190,8 @@ defineExpose({
         :active="wholeWord"
         size="xs"
         class="h-6 px-1.5 font-mono text-[11px]"
-        aria-label="Whole word"
-        title="Whole word"
+        :aria-label="t('editor.find.wholeWord')"
+        :title="t('editor.find.wholeWord')"
         @click="emit('toggle-whole-word')"
       >
         W
@@ -198,8 +200,8 @@ defineExpose({
         :active="regex"
         size="xs"
         class="h-6 px-1.5 font-mono text-[11px]"
-        aria-label="Use regular expression"
-        title="Use regular expression"
+        :aria-label="t('editor.find.useRegex')"
+        :title="t('editor.find.useRegex')"
         @click="emit('toggle-regex')"
       >
         .*
@@ -210,9 +212,9 @@ defineExpose({
       size="xs"
       variant="ghost"
       class="h-6 w-6 text-muted-foreground hover:bg-muted hover:text-foreground"
-      title="Close search"
-      tooltip="Close search"
-      aria-label="Close search"
+      :title="t('editor.find.close')"
+      :tooltip="t('editor.find.close')"
+      :aria-label="t('editor.find.close')"
       @click="emit('close')"
     >
       <RiCloseLine class="h-4 w-4" />
@@ -223,10 +225,10 @@ defineExpose({
         <Input
           :model-value="replaceValue"
           type="text"
-          placeholder="Replace"
+          :placeholder="t('editor.find.placeholderReplace')"
           data-oc-find-input="replace"
           class="h-8 px-2.5 font-mono text-xs"
-          aria-label="Replace"
+          :aria-label="t('editor.find.placeholderReplace')"
           @update:model-value="(value) => emit('update:replaceValue', String(value ?? ''))"
           @keydown="onReplaceKeydown"
         />
@@ -237,9 +239,9 @@ defineExpose({
         variant="outline"
         class="h-8 w-8 text-muted-foreground hover:text-foreground"
         :disabled="replaceCurrentDisabled"
-        title="Replace current match"
-        tooltip="Replace current match"
-        aria-label="Replace current match"
+        :title="t('editor.find.replaceCurrent')"
+        :tooltip="t('editor.find.replaceCurrent')"
+        :aria-label="t('editor.find.replaceCurrent')"
         @click="emit('replace')"
       >
         <RiArrowRightSLine class="h-4 w-4" />
@@ -250,9 +252,9 @@ defineExpose({
         variant="outline"
         class="h-8 w-8 text-muted-foreground hover:text-foreground"
         :disabled="replaceAllDisabled"
-        title="Replace all matches"
-        tooltip="Replace all matches"
-        aria-label="Replace all matches"
+        :title="t('editor.find.replaceAll')"
+        :tooltip="t('editor.find.replaceAll')"
+        :aria-label="t('editor.find.replaceAll')"
         @click="emit('replace-all')"
       >
         <RiListCheck3 class="h-4 w-4" />

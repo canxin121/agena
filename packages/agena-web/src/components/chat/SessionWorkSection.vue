@@ -125,7 +125,7 @@ async function control(activity: SessionActivity, action: string) {
           <span v-if="logs.data.value"
             >{{ t(`chat.sessionWork.status.${logs.data.value.status}`)
             }}<template v-if="logs.data.value.exit_code != null">
-              · exit {{ logs.data.value.exit_code }}</template
+              · {{ t('chat.activityLog.exitCode', { code: logs.data.value.exit_code }) }}</template
             ></span
           >
         </div>

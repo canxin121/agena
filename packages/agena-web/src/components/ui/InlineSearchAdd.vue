@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { RiCheckLine } from '@remixicon/vue'
 
 import Input from '@/components/ui/Input.vue'
@@ -39,6 +40,7 @@ const emit = defineEmits<{
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
+const { t } = useI18n()
 
 const open = ref(false)
 const internalQuery = ref('')
@@ -55,6 +57,10 @@ const query = computed<string>({
 })
 
 const q = computed(() => query.value.trim().toLowerCase())
+const placeholderText = computed(() => {
+  const raw = String(props.placeholder || '').trim()
+  return !raw || raw === 'Search…' ? t('ui.inlineSearch.placeholder') : raw
+})
 const selectedSet = computed(
   () => new Set((props.selectedValues || []).map((v) => String(v || '').trim()).filter(Boolean)),
 )
@@ -173,7 +179,7 @@ function optionLabel(opt: PickerOption): string {
   <div ref="rootRef" class="relative">
     <Input
       v-model="query"
-      :placeholder="placeholder"
+      :placeholder="placeholderText"
       :class="cn('w-full', monospace ? 'font-mono' : '')"
       :disabled="disabled"
       @focus="onFocus"
@@ -197,7 +203,7 @@ function optionLabel(opt: PickerOption): string {
           @mousedown.prevent
           @click="addCustom"
         >
-          <span class="text-xs truncate">Use "{{ query.trim() }}"</span>
+          <span class="text-xs truncate">{{ t('ui.inlineSearch.useValue', { value: query.trim() }) }}</span>
         </button>
 
         <div v-if="canOfferCustom" class="h-px bg-border/40 my-1" />
@@ -221,10 +227,10 @@ function optionLabel(opt: PickerOption): string {
         </button>
 
         <div v-if="isTruncated" class="px-3 py-2 text-[11px] text-muted-foreground">
-          Type to search. Showing {{ showOptions.length }} of {{ filteredOptions.length }}.
+          {{ t('ui.inlineSearch.truncated', { shown: showOptions.length, total: filteredOptions.length }) }}
         </div>
         <div v-else-if="q && filteredOptions.length === 0" class="px-3 py-3 text-xs text-muted-foreground">
-          No matches.
+          {{ t('ui.inlineSearch.noMatches') }}
         </div>
       </div>
     </div>

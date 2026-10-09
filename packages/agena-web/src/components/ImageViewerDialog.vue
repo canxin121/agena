@@ -386,7 +386,7 @@ onBeforeUnmount(() => {
       <DialogContent
         class="fixed inset-0 z-[81] flex min-h-0 flex-col bg-black/20 pt-[var(--oc-safe-area-top,0px)] pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)] text-white outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       >
-        <DialogTitle class="sr-only">Image viewer</DialogTitle>
+        <DialogTitle class="sr-only">{{ t('ui.imageViewer.title') }}</DialogTitle>
         <div class="flex items-center gap-2 border-b border-white/15 bg-black/40 px-3 py-2">
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm font-medium">{{ activeItem?.title || activeItem?.alt || '' }}</div>

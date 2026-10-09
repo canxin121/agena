@@ -1,6 +1,12 @@
 import { createI18n } from 'vue-i18n'
 
-import enUS from './messages/en-US'
+import arSAMessages from './messages/ar-SA'
+import enUSMessages from './messages/en-US'
+import esESMessages from './messages/es-ES'
+import frFRMessages from './messages/fr-FR'
+import hiINMessages from './messages/hi-IN'
+import ptBRMessages from './messages/pt-BR'
+import zhCNMessages from './messages/zh-CN'
 import {
   readStoredLocale,
   storeLocale,
@@ -9,14 +15,13 @@ import {
   normalizeAppLocale,
   type AppLocale,
 } from './locale'
+import arSAOverlay from './settings-overlays/ar-SA.json'
+import esESOverlay from './settings-overlays/es-ES.json'
+import frFROverlay from './settings-overlays/fr-FR.json'
+import hiINOverlay from './settings-overlays/hi-IN.json'
+import ptBROverlay from './settings-overlays/pt-BR.json'
 
-type MessageSchema = typeof enUS
-
-const messageModules = import.meta.glob('./messages/*.ts', { eager: true }) as Record<string, { default?: unknown }>
-const settingsOverlayModules = import.meta.glob('./settings-overlays/*.json', { eager: true }) as Record<
-  string,
-  { default?: unknown }
->
+type MessageSchema = typeof enUSMessages
 
 function mergeMessageTree(base: unknown, overlay: unknown): unknown {
   if (!base || typeof base !== 'object' || Array.isArray(base)) return overlay
@@ -28,28 +33,30 @@ function mergeMessageTree(base: unknown, overlay: unknown): unknown {
   return next
 }
 
-const loadedMessages: Record<string, MessageSchema> = {}
-for (const [path, mod] of Object.entries(messageModules)) {
-  const match = path.match(/\/([^/]+)\.ts$/)
-  if (!match) continue
-  const locale = match[1]
-  if (locale && mod?.default && typeof mod.default === 'object') {
-    loadedMessages[locale] = mod.default as MessageSchema
-  }
+// Catalogs are imported statically rather than through `import.meta.glob` so
+// non-Vite consumers such as `bun test` can load this module directly.
+const loadedMessages: Record<string, MessageSchema> = {
+  'ar-SA': arSAMessages as unknown as MessageSchema,
+  'en-US': enUSMessages,
+  'es-ES': esESMessages as unknown as MessageSchema,
+  'fr-FR': frFRMessages as unknown as MessageSchema,
+  'hi-IN': hiINMessages as unknown as MessageSchema,
+  'pt-BR': ptBRMessages as unknown as MessageSchema,
+  'zh-CN': zhCNMessages as unknown as MessageSchema,
 }
 
-const loadedSettingsOverlays: Record<string, unknown> = {}
-for (const [path, mod] of Object.entries(settingsOverlayModules)) {
-  const match = path.match(/\/([^/]+)\.json$/)
-  if (!match) continue
-  const locale = match[1]
-  if (locale && mod?.default && typeof mod.default === 'object') loadedSettingsOverlays[locale] = mod.default
+const loadedSettingsOverlays: Record<string, unknown> = {
+  'ar-SA': arSAOverlay,
+  'es-ES': esESOverlay,
+  'fr-FR': frFROverlay,
+  'hi-IN': hiINOverlay,
+  'pt-BR': ptBROverlay,
 }
 
-const enUSMessages = loadedMessages['en-US'] || enUS
+const fallbackMessages = loadedMessages['en-US']
 const messages = Object.fromEntries(
   SUPPORTED_LOCALES.map((locale) => {
-    const base = loadedMessages[locale] || enUSMessages
+    const base = loadedMessages[locale] || fallbackMessages
     const overlay = loadedSettingsOverlays[locale]
     return [locale, overlay ? mergeMessageTree(base, { settings: overlay }) : base]
   }),

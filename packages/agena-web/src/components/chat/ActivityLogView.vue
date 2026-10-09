@@ -7,7 +7,7 @@ import Button from '@/components/ui/Button.vue'
 
 const props = defineProps<{ sessionId: string; activity: SessionActivity }>()
 const { t } = useI18n()
-const key = computed(() => props.sessionId ? `${props.sessionId}/${props.activity.id}` : '')
+const key = computed(() => (props.sessionId ? `${props.sessionId}/${props.activity.id}` : ''))
 const logs = useActivityLogs(key, () => props.activity)
 </script>
 
@@ -16,7 +16,9 @@ const logs = useActivityLogs(key, () => props.activity)
     <div class="flex items-center gap-2 text-xs text-muted-foreground">
       <span>{{ t('chat.sessionWork.logTail') }}</span>
       <span>{{ t(`chat.sessionWork.status.${logs.data.value?.status ?? activity.status}`) }}</span>
-      <span v-if="logs.data.value?.exit_code != null">· exit {{ logs.data.value.exit_code }}</span>
+      <span v-if="logs.data.value?.exit_code != null"
+        >· {{ t('chat.activityLog.exitCode', { code: logs.data.value.exit_code }) }}</span
+      >
       <Button size="sm" variant="ghost" :disabled="logs.loading.value" @click="logs.refresh()">
         {{ t('chat.sessionWork.refresh') }}
       </Button>
@@ -25,7 +27,11 @@ const logs = useActivityLogs(key, () => props.activity)
     <pre
       class="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-xs"
       :aria-busy="logs.loading.value"
-    >{{ activityLogText(logs.data.value) || t(logs.loading.value ? 'chat.sessionWork.loading' : 'chat.sessionWork.noOutput') }}</pre>
+      >{{
+        activityLogText(logs.data.value) ||
+        t(logs.loading.value ? 'chat.sessionWork.loading' : 'chat.sessionWork.noOutput')
+      }}</pre
+    >
     <p v-if="logs.data.value?.dropped_lines" class="text-xs text-muted-foreground">
       {{ t('chat.sessionWork.dropped', { count: logs.data.value.dropped_lines }) }}
     </p>

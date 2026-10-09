@@ -184,7 +184,7 @@ function repoDirOrEmpty(): string {
             }
           "
         >
-          Use Terminal
+          {{ t('git.authDialogs.useTerminal') }}
         </Button>
         <Button size="sm" :disabled="!credUsername.trim() || !credPassword.trim()" @click="props.submitCredentials">{{
           t('common.continue')
@@ -247,7 +247,7 @@ function repoDirOrEmpty(): string {
         {{ ssoExplain }}
       </div>
       <div class="rounded-md border border-border/60 bg-muted/10 p-3 text-[11px] text-muted-foreground">
-        Complete the SSO authorization in your browser, then retry the operation.
+        {{ t('git.authDialogs.ssoBrowserHint') }}
       </div>
       <div
         class="rounded-md border border-border/60 bg-muted/10 p-3 text-[11px] font-mono text-muted-foreground whitespace-pre-wrap"
@@ -269,7 +269,7 @@ function repoDirOrEmpty(): string {
             }
           "
         >
-          Use Terminal
+          {{ t('git.authDialogs.useTerminal') }}
         </Button>
         <Button size="sm" @click="props.retryGitSso">{{ t('common.retry') }}</Button>
       </div>

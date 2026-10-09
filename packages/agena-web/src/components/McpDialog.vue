@@ -60,7 +60,7 @@ watch(
   <Dialog
     :open="ui.isMcpDialogOpen"
     :title="t('mcp.dialog.title')"
-    description="MCP servers loaded by the Agena runtime. Connection lifecycle is managed by server configuration."
+    :description="t('mcp.dialog.runtimeDescription')"
     maxWidth="max-w-[calc(100vw-2rem)] sm:max-w-lg"
     @update:open="(value) => ui.setMcpDialogOpen(value)"
   >
@@ -77,8 +77,10 @@ watch(
           <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
         </IconButton>
         <div class="text-xs text-muted-foreground">
-          <span class="font-mono font-semibold text-foreground">{{ serverCount }}</span> servers ·
-          <span class="font-mono font-semibold text-foreground">{{ toolCount }}</span> tools
+          <span class="font-mono font-semibold text-foreground">{{ serverCount }}</span>
+          {{ t('mcp.dialog.serversLabel') }} ·
+          <span class="font-mono font-semibold text-foreground">{{ toolCount }}</span>
+          {{ t('mcp.dialog.toolsLabel') }}
         </div>
       </div>
 

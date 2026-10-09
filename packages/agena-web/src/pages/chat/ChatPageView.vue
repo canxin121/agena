@@ -685,7 +685,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                         @click.stop="ctx.returnFromSide"
                       >
                         <RiGitBranchLine class="h-3 w-3" />
-                        <span :class="modeChipTextClass">Side</span>
+                        <span :class="modeChipTextClass">{{ t('chat.btw.sideChip') }}</span>
                       </button>
                       <span class="text-muted-foreground/50">|</span>
                     </template>
@@ -981,7 +981,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
     :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
     :desktop-viewport-margin-px="COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX"
     :attached-files="attachedFiles"
-    :provider-label="String(unref(modelStatusLabel) || 'selected model')"
+    :provider-label="String(unref(modelStatusLabel) || t('chat.selectedModelFallback'))"
     @delivery="
       (id, delivery) => {
         attachedFiles = attachedFiles.map((file) => (file.id === id ? { ...file, delivery } : file))

@@ -1127,6 +1127,21 @@ export default {
     },
   },
   chat: {
+    partTitles: {
+      answer: 'Answer',
+      reasoning: 'thinking',
+      textSegment: 'Text',
+      operation: 'Operation',
+      command: 'Command',
+      error: 'Error',
+      notice: 'Notice',
+      compaction: 'Compaction',
+      responseRunning: 'Response running',
+      responseCompleted: 'Response completed',
+      responseCancelled: 'Response cancelled',
+      responseFailed: 'Response failed',
+      runFailed: 'The run failed.',
+    },
     partStatus: {
       running: 'Running',
       completed: 'Completed',

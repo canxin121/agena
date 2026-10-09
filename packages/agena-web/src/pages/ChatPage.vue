@@ -963,7 +963,22 @@ const renderBlocksApi = useChatRenderBlocks({
   formatTime,
   // Row vocabulary follows the UI language; a runtime presentation title on
   // the part itself still wins over this fallback.
-  labels: () => ({ attachment: String(t('chat.attachments.rowTitle')) }),
+  labels: () => ({
+    attachment: String(t('chat.attachments.rowTitle')),
+    operation: String(t('chat.partTitles.operation')),
+    command: String(t('chat.partTitles.command')),
+    error: String(t('chat.partTitles.error')),
+    notice: String(t('chat.partTitles.notice')),
+    compaction: String(t('chat.partTitles.compaction')),
+    answer: String(t('chat.partTitles.answer')),
+    reasoning: String(t('chat.partTitles.reasoning')),
+    textSegment: String(t('chat.partTitles.textSegment')),
+    responseRunning: String(t('chat.partTitles.responseRunning')),
+    responseCompleted: String(t('chat.partTitles.responseCompleted')),
+    responseCancelled: String(t('chat.partTitles.responseCancelled')),
+    responseFailed: String(t('chat.partTitles.responseFailed')),
+    runFailed: String(t('chat.partTitles.runFailed')),
+  }),
 })
 
 const {

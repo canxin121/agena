@@ -21,6 +21,7 @@ pub async fn get_plugin_surface_catalog(
                 |tool| agena_application::dto::PermissionToolCatalogResource {
                     name: tool.name,
                     summary: tool.summary,
+                    summary_translations: tool.summary_translations,
                     tags: tool.tags,
                 },
             )

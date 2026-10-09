@@ -3242,6 +3242,7 @@ mod tests {
             vec![agena_application::dto::PermissionToolCatalogResource {
                 name: "agena.shell.exec".to_owned(),
                 summary: "Run a command".to_owned(),
+                summary_translations: Default::default(),
                 tags: vec!["shell".to_owned()],
             }];
         *backend

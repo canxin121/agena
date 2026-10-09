@@ -26,6 +26,9 @@ pub struct PluginToolDescriptor {
 pub struct RuntimePluginToolCatalogItem {
     pub name: String,
     pub summary: String,
+    /// UI-only summaries keyed by BCP-47 locale. `summary` stays the English
+    /// contract that models and older clients read.
+    pub summary_translations: std::collections::BTreeMap<String, String>,
     pub tags: Vec<String>,
 }
 

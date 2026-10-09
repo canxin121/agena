@@ -1116,6 +1116,26 @@ mod router_contract_tests {
                 .and_then(serde_json::Value::as_array)
                 .is_some_and(|tools| !tools.is_empty())
         );
+        // Tool descriptions are UI copy: clients pick the manifest
+        // translation for their language and keep the English base otherwise.
+        let shell_tool = plugin_surface
+            .get("permission_tools")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|tools| {
+                tools
+                    .iter()
+                    .find(|tool| tool["name"].as_str() == Some("agena.shell.exec"))
+            })
+            .expect("bundled shell tool is listed in the permission catalog");
+        assert!(
+            shell_tool["summary_translations"]["zh-CN"]
+                .as_str()
+                .is_some_and(|summary| !summary.trim().is_empty())
+        );
+        assert_ne!(
+            shell_tool["summary_translations"]["zh-CN"].as_str(),
+            shell_tool["summary"].as_str(),
+        );
         assert!(
             plugin_surface
                 .get("activity_kinds")

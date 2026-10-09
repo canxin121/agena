@@ -8,6 +8,7 @@ import { useSettingsStore, type Settings } from '../stores/settings'
 import { useTranscriptPreferencesStore } from '@/stores/transcriptPreferences'
 import { useUiStore } from '@/stores/ui'
 import { i18n, setAppLocale } from '@/i18n'
+import { normalizeAppLocale } from '@/i18n/locale'
 import type { AppLocale } from '@/i18n/locale'
 
 import OptionPicker from '@/components/ui/OptionPicker.vue'
@@ -296,6 +297,7 @@ function toggleActivityKindDefaultExpanded(id: string) {
 type ToolCatalogItem = {
   name?: string
   summary?: string
+  summary_translations?: Record<string, string>
   tags?: string[]
 }
 
@@ -394,6 +396,15 @@ function activityKindDescription(item: ChatActivityKindCatalogItem): string {
   return item.id
 }
 
+/// Runtime tool summaries arrive with UI-only manifest translations; the
+/// permission editor shows the client language and falls back to English.
+function localizedToolSummary(item: ToolCatalogItem): string {
+  const locale = normalizeAppLocale(i18n.global.locale.value)
+  const translations = item.summary_translations || {}
+  const localized = locale ? translations[locale] : undefined
+  return String(localized || item.summary || '').trim()
+}
+
 const toolActivityOptions = computed<ToolExpansionOption[]>(() => {
   const byId = new Map<string, ToolExpansionOption>()
   for (const option of toolApiFunctions.value) byId.set(option.id, option)
@@ -401,7 +412,7 @@ const toolActivityOptions = computed<ToolExpansionOption[]>(() => {
     const label = String(item.name || '').trim()
     const id = normalizeChatToolPreferenceId(label)
     if (!id) continue
-    const summary = String(item.summary || '').trim()
+    const summary = localizedToolSummary(item)
     const tags = Array.isArray(item.tags) ? item.tags.map((tag) => String(tag).trim()).filter(Boolean) : []
     byId.set(id, {
       id,

@@ -27,6 +27,20 @@ export type TranscriptProjectionLabels = {
    * a hardcoded English label for something the user just attached.
    */
   attachment?: string
+  /** Fallback titles for rows whose part carries no runtime presentation. */
+  operation?: string
+  command?: string
+  error?: string
+  notice?: string
+  compaction?: string
+  answer?: string
+  reasoning?: string
+  textSegment?: string
+  responseRunning?: string
+  responseCompleted?: string
+  responseCancelled?: string
+  responseFailed?: string
+  runFailed?: string
 }
 
 export type TranscriptProjectionOptions = {
@@ -144,10 +158,16 @@ function toolCallView(part: MessagePartLike): JsonRecord {
   }
 }
 
-function operationTitle(part: MessagePartLike): string {
+function operationTitle(part: MessagePartLike, labels?: TranscriptProjectionLabels): string {
   const content = durablePartContent(part)
   const operation = toolCallView(part)
-  return firstText(operation, ['title']) || firstText(content, ['name']) || text(part.tool) || 'Operation'
+  return (
+    firstText(operation, ['title']) ||
+    firstText(content, ['name']) ||
+    text(part.tool) ||
+    text(labels?.operation) ||
+    'Operation'
+  )
 }
 
 function operationSummary(part: MessagePartLike): string {
@@ -278,7 +298,7 @@ function commandLabels(part: MessagePartLike): string[] {
   return labels
 }
 
-function noticeTitle(part: MessagePartLike): string {
+function noticeTitle(part: MessagePartLike, labels?: TranscriptProjectionLabels): string {
   const kind = durablePartKind(part)
   const content = durablePartContent(part)
   if (kind === 'system_notification') {
@@ -286,7 +306,10 @@ function noticeTitle(part: MessagePartLike): string {
     const operationId = firstText(content, ['operation_id'])
     return operationId ? `${operationKind}:${operationId}` : operationKind
   }
-  return firstText(content, ['title', 'hook', 'kind']) || (kind === 'compaction' ? 'Compaction' : 'Notice')
+  return (
+    firstText(content, ['title', 'hook', 'kind']) ||
+    (kind === 'compaction' ? text(labels?.compaction) || 'Compaction' : text(labels?.notice) || 'Notice')
+  )
 }
 
 function noticeSummary(part: MessagePartLike): string {
@@ -396,13 +419,19 @@ function displayFields(
     return {
       title:
         presentedTitle ||
-        (kind === 'answer' ? 'Answer' : kind === 'reasoning' ? 'thinking' : kind === 'text_segment' ? 'Text' : ''),
+        (kind === 'answer'
+          ? text(presentationLabels?.answer) || 'Answer'
+          : kind === 'reasoning'
+            ? text(presentationLabels?.reasoning) || 'thinking'
+            : kind === 'text_segment'
+              ? text(presentationLabels?.textSegment) || 'Text'
+              : ''),
       summary: presentedSummary || firstLine || '',
       copyText: body,
     }
   }
   if (kind === 'operation') {
-    return { title: operationTitle(part), summary: operationSummary(part), copyText: '' }
+    return { title: operationTitle(part, presentationLabels), summary: operationSummary(part), copyText: '' }
   }
   if (kind === 'resource') {
     const labels = attachmentLabels(part)
@@ -415,7 +444,7 @@ function displayFields(
   if (kind === 'command') {
     const labels = commandLabels(part)
     return {
-      title: presentedTitle || 'Command',
+      title: presentedTitle || text(presentationLabels?.command) || 'Command',
       summary: presentedSummary || labels.join(', '),
       copyText: labels.join('\n'),
     }
@@ -423,26 +452,26 @@ function displayFields(
   if (kind === 'lifecycle') {
     const state = normalizeRunState(text(part.partState) || firstText(durablePartContent(part), ['state']))
     const title = isRunInFlight(state)
-      ? 'Response running'
+      ? text(presentationLabels?.responseRunning) || 'Response running'
       : state === 'completed'
-        ? 'Response completed'
+        ? text(presentationLabels?.responseCompleted) || 'Response completed'
         : isRunCancelled(state)
-          ? 'Response cancelled'
+          ? text(presentationLabels?.responseCancelled) || 'Response cancelled'
           : isRunFailureState(state)
-            ? 'Response failed'
+            ? text(presentationLabels?.responseFailed) || 'Response failed'
             : state
     return { title: presentedTitle || title, summary: presentedSummary || '', copyText: title }
   }
   if (kind === 'error') {
-    const body = transcriptPartText(part) || 'The run failed.'
+    const body = transcriptPartText(part) || text(presentationLabels?.runFailed) || 'The run failed.'
     return {
-      title: presentedTitle || 'Error',
+      title: presentedTitle || text(presentationLabels?.error) || 'Error',
       summary: presentedSummary || body,
       copyText: `${body}\n${prettyJson(durablePartContent(part))}`,
     }
   }
   if (kind === 'notice' || kind === 'compaction') {
-    const title = shownTitle(part, presentedTitle, noticeTitle(part))
+    const title = shownTitle(part, presentedTitle, noticeTitle(part, presentationLabels))
     const summary = shownSummary(part, presentedSummary, noticeSummary(part))
     return { title, summary, copyText: [title, summary].filter(Boolean).join('\n') }
   }

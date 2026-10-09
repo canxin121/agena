@@ -1320,9 +1320,24 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
                     .collect::<Vec<_>>();
                 tags.sort();
                 tags.dedup();
+                let summary_translations = tool
+                    .definition
+                    .docs
+                    .translations
+                    .iter()
+                    .filter_map(|(locale, translation)| {
+                        translation
+                            .summary
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(|value| (locale.clone(), value.to_owned()))
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>();
                 agena_runtime::RuntimePluginToolCatalogItem {
                     name: tool.canonical_name(),
                     summary: tool.summary_text().unwrap_or_default().to_string(),
+                    summary_translations,
                     tags,
                 }
             })

@@ -52,9 +52,9 @@ test('older-part controls load parts instead of showing them', () => {
   const enLocale = readFileSync(resolve(import.meta.dir, '../src/i18n/messages/en-US.ts'), 'utf8')
 
   assert.match(zhLocale, /expandNextLead: '再加载'/)
-  assert.match(zhLocale, /expandNextTail: '个 part'/)
-  assert.match(zhLocale, /collectAll: '加载全部 part'/)
-  assert.match(zhLocale, /pageSizeInputLabel: '本次要多加载的 part 数量（1–50）'/)
+  assert.match(zhLocale, /expandNextTail: '个片段'/)
+  assert.match(zhLocale, /collectAll: '加载全部片段'/)
+  assert.match(zhLocale, /pageSizeInputLabel: '本次要多加载的片段数量（1–50）'/)
   assert.match(enLocale, /expandNextLead: 'Load'/)
   assert.match(enLocale, /collectAll: 'Load all parts'/)
 })

@@ -40,6 +40,10 @@ pub struct PluginManifest {
     /// Detailed plugin help shown by inspect/catalog surfaces when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// UI-facing translations keyed by BCP-47 locale. The base fields above
+    /// remain the stable default documentation sent to models.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translations: BTreeMap<String, PluginManifestTranslation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<String>,
     #[serde(default)]
@@ -103,6 +107,30 @@ pub struct PluginSkillDefinition {
     pub instructions: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+/// UI translations of a plugin's summary and detailed help.
+pub struct PluginManifestTranslation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+/// UI translations for one locale of a tool's documentation.
+pub struct ToolDocsTranslation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
 }
 
 /// The tag vocabulary a tool declares for discovery, search, UI badges,
@@ -289,6 +317,7 @@ impl From<&ToolTag> for ToolTag {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 /// Definition of a plugin tool.
 pub struct ToolDefinition {
     pub name: String,
@@ -312,6 +341,7 @@ pub struct ToolDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 /// Input and output contract of a tool.
 pub struct ToolContract {
     #[serde(default)]
@@ -324,6 +354,7 @@ pub struct ToolContract {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
 /// Documentation of a tool.
 pub struct ToolDocs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -334,9 +365,14 @@ pub struct ToolDocs {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// UI-facing translations keyed by BCP-47 locale. Model-facing tool
+    /// definitions continue to use the stable default fields above.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translations: BTreeMap<String, ToolDocsTranslation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 /// Runtime behavior policy of a tool.
 ///
 /// Nothing about a tool's output belongs here. Concurrency is not declared:
@@ -494,6 +530,14 @@ impl ToolDefinition {
             .filter(|value| !value.is_empty())
     }
 
+    pub fn summary_for_locale(&self, locale: &str) -> Option<&str> {
+        self.docs.summary_for_locale(locale)
+    }
+
+    pub fn help_for_locale(&self, locale: &str) -> Option<&str> {
+        self.docs.help_for_locale(locale)
+    }
+
     pub fn input_schema(&self) -> serde_json::Value {
         let schema = normalize_schema_json(self.contract.input_schema.clone());
         if schema.is_null() {
@@ -525,6 +569,62 @@ impl ToolDefinition {
             .iter()
             .any(|existing| existing == &tag)
     }
+}
+
+impl ToolDocs {
+    pub fn summary_for_locale(&self, locale: &str) -> Option<&str> {
+        translated_field(&self.translations, locale, |translation| {
+            translation.summary.as_deref()
+        })
+        .or_else(|| non_empty_text(self.summary.as_deref()))
+    }
+
+    pub fn help_for_locale(&self, locale: &str) -> Option<&str> {
+        translated_field(&self.translations, locale, |translation| {
+            translation.help.as_deref()
+        })
+        .or_else(|| non_empty_text(self.help.as_deref()))
+    }
+
+    pub fn before_help_for_locale(&self, locale: &str) -> Option<&str> {
+        translated_field(&self.translations, locale, |translation| {
+            translation.before_help.as_deref()
+        })
+        .or_else(|| non_empty_text(self.before_help.as_deref()))
+    }
+
+    pub fn after_help_for_locale(&self, locale: &str) -> Option<&str> {
+        translated_field(&self.translations, locale, |translation| {
+            translation.after_help.as_deref()
+        })
+        .or_else(|| non_empty_text(self.after_help.as_deref()))
+    }
+}
+
+fn non_empty_text(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn translated_field<'a, T>(
+    translations: &'a BTreeMap<String, T>,
+    locale: &str,
+    field: impl Fn(&'a T) -> Option<&'a str>,
+) -> Option<&'a str> {
+    let locale = locale.trim().replace('_', "-");
+    let language = locale.split('-').next().filter(|tag| !tag.is_empty());
+    let candidates = [Some(locale.as_str()), language, Some("en-US"), Some("en")];
+    for candidate in candidates.into_iter().flatten() {
+        if let Some((_, translation)) = translations
+            .iter()
+            .find(|(tag, _)| tag.eq_ignore_ascii_case(candidate))
+            && let Some(value) = field(translation)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        {
+            return Some(value);
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -700,8 +800,9 @@ pub struct PluginTerminalThemeColors {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContributionKind, PluginDisplayContent, PluginDisplayContribution,
-        PluginSurfaceContributions, PluginTerminalColor, PluginTerminalThemeColors,
+        ContributionKind, PluginDisplayContent, PluginDisplayContribution, PluginManifest,
+        PluginSurfaceContributions, PluginTerminalColor, PluginTerminalThemeColors, ToolDocs,
+        ToolDocsTranslation,
     };
     use crate::manifest_support::normalize_schema_json;
     use serde_json::json;
@@ -781,6 +882,45 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn tool_documentation_translations_omit_undeclared_fields() {
+        let docs = ToolDocs {
+            translations: [(
+                "zh-CN".to_owned(),
+                ToolDocsTranslation {
+                    summary: Some("摘要".to_owned()),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let wire = serde_json::to_value(docs).expect("serialize translated docs");
+        assert_eq!(wire["translations"]["zh-CN"]["summary"], "摘要");
+        assert!(wire["translations"]["zh-CN"].get("help").is_none());
+    }
+
+    #[test]
+    fn plugin_manifest_rejects_fields_the_sdk_does_not_declare() {
+        let base = json!({
+            "schema_version": 1,
+            "namespace": "example",
+            "name": "strict",
+            "version": "1.0.0",
+            "tools": [{ "name": "inspect" }]
+        });
+        assert!(serde_json::from_value::<PluginManifest>(base.clone()).is_ok());
+
+        let mut extra_tool_field = base.clone();
+        extra_tool_field["tools"][0]["legacy_output"] = json!({"text": "old shape"});
+        assert!(serde_json::from_value::<PluginManifest>(extra_tool_field).is_err());
+
+        let mut extra_docs_field = base;
+        extra_docs_field["tools"][0]["docs"] = json!({"description": "old docs field"});
+        assert!(serde_json::from_value::<PluginManifest>(extra_docs_field).is_err());
     }
 }
 
@@ -921,6 +1061,7 @@ impl PluginManifest {
             version: version.into(),
             summary: None,
             help: None,
+            translations: BTreeMap::new(),
             authors: Vec::new(),
             transports: Vec::new(),
             hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
@@ -947,6 +1088,20 @@ impl PluginManifest {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+    }
+
+    pub fn summary_for_locale(&self, locale: &str) -> Option<&str> {
+        translated_field(&self.translations, locale, |translation| {
+            translation.summary.as_deref()
+        })
+        .or_else(|| self.summary_text())
+    }
+
+    pub fn help_for_locale(&self, locale: &str) -> Option<&str> {
+        translated_field(&self.translations, locale, |translation| {
+            translation.help.as_deref()
+        })
+        .or_else(|| self.help_text())
     }
 }
 

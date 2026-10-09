@@ -113,12 +113,36 @@ pub(crate) fn new_plugin() -> FsPlugin {
     name = "fs",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Filesystem command tools for read/search and explicit edits.",
+    translations(
+        locale("zh-CN", summary = "文件系统工具：读取、搜索并按需修改工作区文件。"),
+        locale("zh-TW", summary = "檔案系統工具：讀取、搜尋並依需求修改工作區檔案。"),
+        locale("ja-JP", summary = "ワークスペース内のファイルを読み取り、検索し、必要に応じて編集するためのツールです。"),
+        locale("ko-KR", summary = "작업 공간 파일을 읽고 검색하고 필요에 따라 편집하는 파일 시스템 도구입니다."),
+        locale("fr-FR", summary = "Outils de fichiers pour lire, rechercher et modifier les fichiers de l’espace de travail."),
+        locale("de-DE", summary = "Dateisystemwerkzeuge zum Lesen, Durchsuchen und gezielten Bearbeiten von Dateien im Arbeitsbereich."),
+        locale("es-ES", summary = "Herramientas de archivos para leer, buscar y editar los archivos del espacio de trabajo."),
+        locale("hi-IN", summary = "वर्कस्पेस की फ़ाइलें पढ़ने, खोजने और ज़रूरत के अनुसार संपादित करने के फ़ाइल सिस्टम टूल।"),
+        locale("ar-SA", summary = "أدوات لنظام الملفات تتيح قراءة ملفات مساحة العمل والبحث فيها وتعديلها عند الحاجة."),
+        locale("pt-BR", summary = "Ferramentas de arquivos para ler, pesquisar e editar os arquivos do espaço de trabalho.")
+    ),
 )]
 impl FsPlugin {
     #[tool(
         stream = invoke_document_stream,
         tags(query, filesystem, read_only),
         summary = "Extract or search text in one local PDF/Office document.",
+        translations(
+            locale("zh-CN", summary = "提取或搜索本地 PDF、Office 文档中的文本。"),
+            locale("zh-TW", summary = "從本機 PDF 或 Office 文件擷取或搜尋文字。"),
+            locale("ja-JP", summary = "ローカルの PDF／Office 文書からテキストを抽出または検索します。"),
+            locale("ko-KR", summary = "로컬 PDF/Office 문서에서 텍스트를 추출하거나 검색합니다."),
+            locale("fr-FR", summary = "Extraire ou rechercher du texte dans un document PDF ou Office local."),
+            locale("de-DE", summary = "Text aus einem lokalen PDF- oder Office-Dokument auslesen oder darin suchen."),
+            locale("es-ES", summary = "Extrae o busca texto en un documento PDF u Office local."),
+            locale("hi-IN", summary = "किसी स्थानीय PDF/Office दस्तावेज़ से पाठ निकालें या उसमें खोजें।"),
+            locale("ar-SA", summary = "استخرج النص من مستند PDF أو Office محلي أو ابحث فيه."),
+            locale("pt-BR", summary = "Extraia ou pesquise texto em um documento PDF ou Office local.")
+        ),
         help = "Supported formats: pdf, docx, pptx, xlsx. backend=auto prefers pdftotext for PDFs and otherwise uses selected local MarkItDown converters. MarkItDown needs a Python environment with its format extras; set AGENA_DOCUMENT_PYTHON to that interpreter, or install in the host python3 environment. No dependency installation, plugins, audio/image transcription or remote document service is enabled. Supply pattern to search extracted lines (fixed_strings defaults true); start_line is 1-based, max_lines 1–500. Outputs include source_sha256, extraction warnings, line counts and explicit truncation. Source limit 32 MiB; conversion 30 seconds / 2 MiB per output stream; displayed records 128 KiB. Empty text can indicate a scanned PDF needing OCR. Extracted lines are not source page numbers."
     )]
     async fn invoke_document(
@@ -144,6 +168,18 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, read_only),
         summary = "Read workspace files.",
+        translations(
+            locale("zh-CN", summary = "读取工作区文件。"),
+            locale("zh-TW", summary = "讀取工作區檔案。"),
+            locale("ja-JP", summary = "ワークスペースのファイルを読み取ります。"),
+            locale("ko-KR", summary = "작업 공간의 파일을 읽습니다."),
+            locale("fr-FR", summary = "Lire les fichiers de l’espace de travail."),
+            locale("de-DE", summary = "Dateien im Arbeitsbereich lesen."),
+            locale("es-ES", summary = "Lee archivos del espacio de trabajo."),
+            locale("hi-IN", summary = "वर्कस्पेस की फ़ाइलें पढ़ें।"),
+            locale("ar-SA", summary = "اقرأ ملفات مساحة العمل."),
+            locale("pt-BR", summary = "Leia arquivos do espaço de trabalho.")
+        ),
         help = "Use read for text previews and directory listings. offset/limit page 1-based lines or entries. For very long single lines, use byte_offset (zero-based) and byte_limit (4–16384, default 8192) to seek directly to a small UTF-8 text range; continue with read_info.next_byte_offset. Byte ranges cannot combine with line offsets/limits, directories or attachment mode. Binary files return local references, not model-visible bytes. Call fs.read_media to see a local image, PDF, audio or video with the current conversation model; use fs.document when you only need extracted PDF/Office text."
     )]
     async fn invoke_read(
@@ -157,6 +193,49 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, read_only),
         summary = "Read a local image, PDF, audio or video into the current model's context.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "将本地图片、PDF、音频或视频读入当前模型的上下文。",
+                help = "当需要查看本地图片或截图、检查 PDF 页面画面、收听音频，或查看本地视频时，调用 fs.read_media。它会像用户附件一样，把实际且不可变的文件内容提供给当前对话模型；无需额外配置云端分析服务或凭据。先用 tools_help 获取当前工具架构，再通过 tools_call 调用 tool=fs.read_media、input={path:...}；路径以当前工作区为基准。图片和 PDF 能否处理取决于当前模型。音频需要支持 OpenAI Chat 音频的模型或 Gemini；视频需要 Gemini。协议、模型、MIME 类型或文件大小不受支持时会明确报错；文件名或引用本身并不代表模型已经理解了媒体内容。支持准备 PNG/JPEG/GIF/WebP、PDF、常见音视频及 UTF-8 文本；每个文件最多 20 MiB，部分协议的编码后请求上限更低。可用 expected_sha256 校验文件版本。普通文本用 fs.read，提取 PDF/Office 文本用 fs.document；不要反复用 fs.read 读取二进制文件并期待模型看到内容。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將本機圖片、PDF、音訊或影片讀入目前模型的內容脈絡。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "ローカルの画像、PDF、音声、動画を現在のモデルのコンテキストに読み込みます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "로컬 이미지, PDF, 오디오 또는 비디오를 현재 모델의 컨텍스트로 읽어옵니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Charger une image, un PDF, un fichier audio ou une vidéo locale dans le contexte du modèle actuel."
+            ),
+            locale(
+                "de-DE",
+                summary = "Ein lokales Bild, PDF, Audio- oder Videomedium in den Kontext des aktuellen Modells laden."
+            ),
+            locale(
+                "es-ES",
+                summary = "Carga una imagen, PDF, audio o vídeo local en el contexto del modelo actual."
+            ),
+            locale(
+                "hi-IN",
+                summary = "स्थानीय छवि, PDF, ऑडियो या वीडियो को मौजूदा मॉडल के संदर्भ में पढ़ें।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "أدخل صورة أو ملف PDF أو صوتًا أو فيديو محليًا إلى سياق النموذج الحالي."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Carregue uma imagem, PDF, áudio ou vídeo local no contexto do modelo atual."
+            )
+        ),
         help = "Call fs.read_media whenever you need to see an image/screenshot, inspect PDF page visuals, listen to audio, or inspect a video stored locally. This returns actual immutable file bytes to the current conversation model, like a user attachment; no separate cloud-analysis provider or credential configuration is needed. Use tools_help for the live schema, then tools_call with tool=fs.read_media and input={path:...}; paths resolve from the active workspace. Image and PDF support depends on the current model. Audio requires a supported OpenAI Chat audio model or Gemini; video requires Gemini. Unsupported protocols, models, MIME types or sizes return an explicit error; a filename/reference is not media understanding. Supported preparation includes PNG/JPEG/GIF/WebP, PDF, common audio/video and UTF-8 text; maximum 20 MiB/file, with lower encoded-request limits on some protocols. expected_sha256 optionally guards the revision. Use fs.read for ordinary text, fs.document for extracted PDF/Office text; do not repeatedly read binary data with fs.read expecting to see it."
     )]
     async fn invoke_read_media(
@@ -170,6 +249,36 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, discovery, read_only),
         summary = "Find paths with glob patterns.",
+        translations(
+            locale("zh-CN", summary = "使用 glob 模式查找文件和目录路径。"),
+            locale("zh-TW", summary = "使用 glob 模式尋找檔案與目錄路徑。"),
+            locale(
+                "ja-JP",
+                summary = "glob パターンでファイルやディレクトリのパスを検索します。"
+            ),
+            locale("ko-KR", summary = "glob 패턴으로 파일과 디렉터리 경로를 찾습니다."),
+            locale(
+                "fr-FR",
+                summary = "Rechercher des chemins de fichiers et de dossiers avec des motifs glob."
+            ),
+            locale(
+                "de-DE",
+                summary = "Datei- und Verzeichnispfade mit Glob-Mustern suchen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Busca rutas de archivos y directorios con patrones glob."
+            ),
+            locale("hi-IN", summary = "glob पैटर्न से फ़ाइल और निर्देशिका पथ खोजें।"),
+            locale(
+                "ar-SA",
+                summary = "اعثر على مسارات الملفات والمجلدات باستخدام أنماط glob."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Encontre caminhos de arquivos e diretórios usando padrões glob."
+            )
+        ),
         help = "Use `glob` for focused path discovery before reading or editing files. Use kind=file/directory/all and exclude globs to narrow results. Results are paginated (default 200, maximum 1000); scans are cancellable, bounded to 100,000 entries / 10 seconds between I/O, and 256 KiB of paths. Pagination is deterministic for an unchanged directory tree. Ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory."
     )]
     async fn invoke_glob(
@@ -183,6 +292,42 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, discovery, read_only),
         summary = "Search text with ripgrep, returning lines, paths, or counts.",
+        translations(
+            locale("zh-CN", summary = "用 ripgrep 搜索文本，并返回匹配行、路径或计数。"),
+            locale("zh-TW", summary = "使用 ripgrep 搜尋文字，並傳回相符行、路徑或計數。"),
+            locale(
+                "ja-JP",
+                summary = "ripgrep でテキストを検索し、一致した行、パス、件数を返します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "ripgrep으로 텍스트를 검색하고 일치하는 줄, 경로 또는 개수를 반환합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Rechercher du texte avec ripgrep et renvoyer les lignes, chemins ou nombres de résultats."
+            ),
+            locale(
+                "de-DE",
+                summary = "Text mit ripgrep durchsuchen und Trefferzeilen, Pfade oder Anzahlen zurückgeben."
+            ),
+            locale(
+                "es-ES",
+                summary = "Busca texto con ripgrep y devuelve líneas, rutas o recuentos."
+            ),
+            locale(
+                "hi-IN",
+                summary = "ripgrep से पाठ खोजें और मिलान वाली पंक्तियाँ, पथ या संख्या लौटाएँ।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "ابحث في النص باستخدام ripgrep وأعد الأسطر أو المسارات أو أعداد النتائج."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Pesquise texto com ripgrep e retorne linhas, caminhos ou contagens."
+            )
+        ),
         help = "Use regex or fixed_strings with case=sensitive/insensitive/smart. Pattern whitespace is significant. mode=content returns structured lines with optional before_context/after_context (0–20); files returns each matching path once; count returns matching-line counts per file, omitting zeroes. max_results is global (1–500): lines for content, files otherwise, never a per-file count cap. include and includes are ORed relative-path globs; exclude wins. Hidden/ignored paths follow ripgrep rules unless explicitly targeted or include_ignored=true. Search is bounded to 32 MiB/file, 256 MiB total, 25,000 files, 100,000 entries, 20 seconds between I/O/callbacks, and 256 KiB of records. Lines over 4 KiB are visibly shortened; lines beyond the 2 MiB search buffer may be skipped. scan_complete distinguishes an incomplete scan from clipped display text; partial counts are lower bounds. Files mode stops at its first match. Binary data detected while scanning is excluded. Narrow path or filters if truncated; use fs.read for nearby lines. Blocking filesystem I/O itself has no hard deadline."
     )]
     async fn invoke_grep(
@@ -196,6 +341,33 @@ impl FsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Apply a text patch to workspace files.",
+        translations(
+            locale("zh-CN", summary = "将文本补丁应用到工作区文件。"),
+            locale("zh-TW", summary = "將文字修補程式套用至工作區檔案。"),
+            locale(
+                "ja-JP",
+                summary = "テキストパッチをワークスペースのファイルに適用します。"
+            ),
+            locale("ko-KR", summary = "텍스트 패치를 작업 공간 파일에 적용합니다."),
+            locale(
+                "fr-FR",
+                summary = "Appliquer un correctif textuel aux fichiers de l’espace de travail."
+            ),
+            locale(
+                "de-DE",
+                summary = "Einen Text-Patch auf Dateien im Arbeitsbereich anwenden."
+            ),
+            locale(
+                "es-ES",
+                summary = "Aplica un parche de texto a los archivos del espacio de trabajo."
+            ),
+            locale("hi-IN", summary = "वर्कस्पेस की फ़ाइलों पर टेक्स्ट पैच लागू करें।"),
+            locale("ar-SA", summary = "طبّق تصحيحًا نصيًا على ملفات مساحة العمل."),
+            locale(
+                "pt-BR",
+                summary = "Aplique um patch de texto aos arquivos do espaço de trabalho."
+            )
+        ),
         help = "Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Relative paths resolve against the current Agena workspace, not a previous shell command's working directory. When intentionally editing another worktree, use explicit absolute paths permitted by the runtime; a shell cd does not change subsequent file-tool path resolution."
     )]
     async fn invoke_apply_patch(
@@ -209,6 +381,42 @@ impl FsPlugin {
     #[tool(
         tags(mutate, filesystem),
         summary = "Create a UTF-8 text file or replace one at an expected revision.",
+        translations(
+            locale("zh-CN", summary = "创建 UTF-8 文本文件，或按预期版本替换现有文件。"),
+            locale("zh-TW", summary = "建立 UTF-8 文字檔，或依預期版本取代現有檔案。"),
+            locale(
+                "ja-JP",
+                summary = "UTF-8 テキストファイルを作成するか、指定したリビジョンの既存ファイルを置き換えます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "UTF-8 텍스트 파일을 만들거나 지정한 리비전의 기존 파일을 교체합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Créer un fichier texte UTF-8 ou en remplacer un si sa révision correspond à celle attendue."
+            ),
+            locale(
+                "de-DE",
+                summary = "Eine UTF-8-Textdatei erstellen oder eine vorhandene Datei bei passender Revision ersetzen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Crea un archivo de texto UTF-8 o reemplaza uno si coincide con la revisión esperada."
+            ),
+            locale(
+                "hi-IN",
+                summary = "UTF-8 टेक्स्ट फ़ाइल बनाएँ या अपेक्षित रिविज़न मिलने पर उसे बदलें।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "أنشئ ملفًا نصيًا بترميز UTF-8 أو استبدله عند تطابق المراجعة المتوقعة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Crie um arquivo de texto UTF-8 ou substitua um existente se a revisão corresponder à esperada."
+            )
+        ),
         help = "Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites."
     )]
     async fn invoke_write(
@@ -360,7 +568,49 @@ impl FsPlugin {
 
     #[tool(
         tags(mutate, filesystem),
-        summary = "Replace exact UTF-8 text with occurrence and revision checks."
+        summary = "Replace exact UTF-8 text with occurrence and revision checks.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "按匹配次数和文件版本校验，替换完全一致的 UTF-8 文本。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "依相符次數與檔案版本檢查，取代完全一致的 UTF-8 文字。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "一致件数とリビジョンを確認して、完全一致する UTF-8 テキストを置き換えます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "일치 횟수와 리비전을 확인한 뒤 정확히 일치하는 UTF-8 텍스트를 바꿉니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Remplacer un texte UTF-8 exact après vérification du nombre d’occurrences et de la révision."
+            ),
+            locale(
+                "de-DE",
+                summary = "Exakten UTF-8-Text nach Prüfung von Trefferzahl und Revision ersetzen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Reemplaza texto UTF-8 exacto tras comprobar las coincidencias y la revisión."
+            ),
+            locale(
+                "hi-IN",
+                summary = "मिलान की संख्या और रिविज़न जाँचकर बिल्कुल मेल खाने वाला UTF-8 पाठ बदलें।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "استبدل نص UTF-8 المطابق تمامًا بعد التحقق من عدد مرات التطابق والمراجعة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Substitua texto UTF-8 exato após conferir as ocorrências e a revisão do arquivo."
+            )
+        )
     )]
     async fn invoke_replace(
         &self,
@@ -468,7 +718,37 @@ impl FsPlugin {
 
     #[tool(
         tags(query, filesystem, read_only),
-        summary = "Read multiple UTF-8 files within one bounded byte budget."
+        summary = "Read multiple UTF-8 files within one bounded byte budget.",
+        translations(
+            locale("zh-CN", summary = "在限定的字节预算内读取多个 UTF-8 文件。"),
+            locale("zh-TW", summary = "在限定的位元組預算內讀取多個 UTF-8 檔案。"),
+            locale(
+                "ja-JP",
+                summary = "上限付きのバイト数で複数の UTF-8 ファイルを読み取ります。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "제한된 바이트 예산 안에서 여러 UTF-8 파일을 읽습니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Lire plusieurs fichiers UTF-8 dans un budget d’octets limité."
+            ),
+            locale(
+                "de-DE",
+                summary = "Mehrere UTF-8-Dateien innerhalb eines begrenzten Bytebudgets lesen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Lee varios archivos UTF-8 dentro de un límite de bytes."
+            ),
+            locale("hi-IN", summary = "सीमित बाइट बजट के भीतर कई UTF-8 फ़ाइलें पढ़ें।"),
+            locale("ar-SA", summary = "اقرأ عدة ملفات UTF-8 ضمن حدّ محدد لعدد البايتات."),
+            locale(
+                "pt-BR",
+                summary = "Leia vários arquivos UTF-8 dentro de um limite de bytes."
+            )
+        )
     )]
     async fn invoke_read_many(
         &self,
@@ -547,7 +827,43 @@ impl FsPlugin {
 
     #[tool(
         tags(query, filesystem, read_only),
-        summary = "Inspect file metadata and an optional SHA-256 revision."
+        summary = "Inspect file metadata and an optional SHA-256 revision.",
+        translations(
+            locale("zh-CN", summary = "查看文件元数据，并可选读取其 SHA-256 版本标识。"),
+            locale(
+                "zh-TW",
+                summary = "檢視檔案中繼資料，並可選擇讀取 SHA-256 版本識別碼。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "ファイルのメタデータと、必要に応じて SHA-256 リビジョンを確認します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "파일 메타데이터와 선택적 SHA-256 리비전을 확인합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Consulter les métadonnées du fichier et, si besoin, sa révision SHA-256."
+            ),
+            locale(
+                "de-DE",
+                summary = "Dateimetadaten und optional die SHA-256-Revision prüfen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Consulta los metadatos del archivo y, opcionalmente, su revisión SHA-256."
+            ),
+            locale("hi-IN", summary = "फ़ाइल मेटाडेटा और वैकल्पिक SHA-256 रिविज़न देखें।"),
+            locale(
+                "ar-SA",
+                summary = "افحص بيانات الملف الوصفية، ويمكنك أيضًا قراءة مراجعة SHA-256."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Consulte os metadados do arquivo e, opcionalmente, sua revisão SHA-256."
+            )
+        )
     )]
     async fn invoke_stat(
         &self,
@@ -895,6 +1211,10 @@ mod tests {
     fn manifest_exposes_safe_high_frequency_file_tools() {
         let manifest = FsPlugin.manifest();
         assert_eq!(
+            manifest.summary_for_locale("zh-CN"),
+            Some("文件系统工具：读取、搜索并按需修改工作区文件。")
+        );
+        assert_eq!(
             manifest
                 .tools
                 .iter()
@@ -912,6 +1232,30 @@ mod tests {
                 "read_many",
                 "stat",
             ]
+        );
+        for locale in [
+            "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", "de-DE", "es-ES", "hi-IN", "ar-SA",
+            "pt-BR",
+        ] {
+            assert_ne!(
+                manifest.summary_for_locale(locale),
+                manifest.summary.as_deref(),
+                "filesystem plugin summary needs a native {locale} translation"
+            );
+            assert!(
+                manifest.tools.iter().all(|tool| {
+                    tool.docs.summary_for_locale(locale) != tool.docs.summary.as_deref()
+                }),
+                "every filesystem tool summary needs a native {locale} translation"
+            );
+        }
+        assert!(
+            manifest
+                .tools
+                .iter()
+                .find(|tool| tool.name == "read_media")
+                .and_then(|tool| tool.docs.help_for_locale("zh-CN"))
+                .is_some_and(|help| help.starts_with("当需要查看本地图片或截图"))
         );
     }
 

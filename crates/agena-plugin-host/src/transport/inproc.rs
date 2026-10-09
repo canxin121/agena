@@ -10,12 +10,15 @@ use futures_util::FutureExt;
 use crate::error::TransportError;
 use crate::sdk::drivers::dispatch::PluginDispatcher;
 use crate::sdk::host_api::{current_host_callback_context, run_in_host_callback_context};
-use crate::sdk::{HostClient, Plugin, ToolInvokeInput};
+use crate::sdk::{HostClient, InitOutcome, Plugin, PluginManifest, ToolInvokeInput};
 use crate::transport::{PluginTransport, ToolStreamHandle};
+
+type ManifestTransform = Arc<dyn Fn(&mut PluginManifest) + Send + Sync>;
 
 /// In-process plugin transport.
 pub struct InProcessTransport<P: Plugin> {
     dispatcher: Arc<PluginDispatcher<P>>,
+    manifest_transform: Option<ManifestTransform>,
 }
 
 /// Keep cancellation tied to the caller when a plugin is dispatched on a
@@ -32,6 +35,43 @@ impl<P: Plugin> InProcessTransport<P> {
     pub fn new(plugin: P) -> Self {
         Self {
             dispatcher: Arc::new(PluginDispatcher::new(plugin)),
+            manifest_transform: None,
+        }
+    }
+
+    pub fn new_with_manifest_transform(
+        plugin: P,
+        transform: impl Fn(&mut PluginManifest) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            dispatcher: Arc::new(PluginDispatcher::new(plugin)),
+            manifest_transform: Some(Arc::new(transform)),
+        }
+    }
+
+    fn transform_manifest_reply(
+        &self,
+        method: &str,
+        value: serde_json::Value,
+    ) -> Result<serde_json::Value, TransportError> {
+        let Some(transform) = &self.manifest_transform else {
+            return Ok(value);
+        };
+        match method {
+            crate::sdk::rpc::method::META_MANIFEST => {
+                let mut manifest: PluginManifest = serde_json::from_value(value)
+                    .map_err(|error| TransportError::Io(error.to_string()))?;
+                transform(&mut manifest);
+                serde_json::to_value(manifest)
+                    .map_err(|error| TransportError::Io(error.to_string()))
+            }
+            crate::sdk::rpc::method::META_INIT => {
+                let mut outcome: InitOutcome = serde_json::from_value(value)
+                    .map_err(|error| TransportError::Io(error.to_string()))?;
+                transform(&mut outcome.manifest);
+                serde_json::to_value(outcome).map_err(|error| TransportError::Io(error.to_string()))
+            }
+            _ => Ok(value),
         }
     }
 
@@ -48,7 +88,8 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, TransportError> {
         let dispatcher = Arc::clone(&self.dispatcher);
-        let method = method.to_string();
+        let method_name = method.to_string();
+        let method = method_name.clone();
         let context = current_host_callback_context();
         // A Tool API call may arrive through several nested async layers.
         // Dispatch it on a fresh worker stack while preserving the callback
@@ -70,7 +111,7 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
             TransportError::disconnected_error("in-process plugin task stopped", &error)
         })?;
         match dispatch {
-            Ok(Ok(value)) => Ok(value),
+            Ok(Ok(value)) => self.transform_manifest_reply(&method_name, value),
             Ok(Err(error)) => Err(TransportError::Plugin(error)),
             Err(payload) => Err(TransportError::panicked(payload)),
         }
@@ -91,5 +132,55 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
             chunks: handle.chunks,
             end: handle.end,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InProcessTransport;
+    use crate::sdk::{Plugin, PluginManifest};
+    use crate::transport::PluginTransport;
+
+    struct DocumentationPlugin;
+
+    #[async_trait::async_trait]
+    impl Plugin for DocumentationPlugin {
+        fn manifest(&self) -> PluginManifest {
+            let mut manifest = PluginManifest::new("example", "docs", "1.0.0");
+            manifest.summary = Some("English summary".to_owned());
+            manifest
+        }
+    }
+
+    #[tokio::test]
+    async fn manifest_transform_is_consistent_for_discovery_and_initialization() {
+        let transport =
+            InProcessTransport::new_with_manifest_transform(DocumentationPlugin, |manifest| {
+                manifest.summary = Some("Localized summary".to_owned());
+            });
+
+        let manifest = transport
+            .dispatch(
+                crate::sdk::rpc::method::META_MANIFEST,
+                serde_json::json!({}),
+            )
+            .await
+            .expect("localized manifest discovery");
+        assert_eq!(manifest["summary"], "Localized summary");
+
+        let outcome = transport
+            .dispatch(
+                crate::sdk::rpc::method::META_INIT,
+                serde_json::json!({
+                    "agena_version": "test",
+                    "workspace_root": "/workspace",
+                    "plugin_id": "example.docs",
+                    "settings": {},
+                    "protocol_version": crate::sdk::rpc::PROTOCOL_VERSION,
+                }),
+            )
+            .await
+            .expect("localized initialization response");
+        assert_eq!(outcome["manifest"]["summary"], "Localized summary");
     }
 }

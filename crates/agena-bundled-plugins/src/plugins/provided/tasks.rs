@@ -141,6 +141,18 @@ const fn default_output_limit() -> u32 {
     name = "tasks",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Delegated subtask orchestration tools.",
+    translations(
+        locale("zh-CN", summary = "委派子任务编排工具。"),
+        locale("zh-TW", summary = "委派子工作編排工具。"),
+        locale("ja-JP", summary = "委任したサブタスクを管理するツールです。"),
+        locale("ko-KR", summary = "하위 작업 위임과 관리를 위한 도구입니다."),
+        locale("fr-FR", summary = "Outils de délégation et de gestion de sous-tâches."),
+        locale("de-DE", summary = "Werkzeuge zum Delegieren und Verwalten von Teilaufgaben."),
+        locale("es-ES", summary = "Herramientas para delegar y coordinar subtareas."),
+        locale("hi-IN", summary = "उप-कार्य सौंपने और उन्हें व्यवस्थित करने के टूल।"),
+        locale("ar-SA", summary = "أدوات لتفويض المهام الفرعية وإدارتها."),
+        locale("pt-BR", summary = "Ferramentas para delegar e coordenar subtarefas.")
+    ),
 )]
 impl TasksPlugin {
     pub(crate) fn new() -> Self {
@@ -163,6 +175,49 @@ impl TasksPlugin {
     #[tool(
         tags(subtask, execute, task),
         summary = "Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach command names in `commands` so the child session applies their instructions as task guidance.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "将有明确边界的任务委派给子代理会话。设置 `run_in_background` 可让任务在后台执行，并在结束时通知你。通过 `commands` 附加命令名称，让子会话将对应说明作为任务指导。",
+                help = "当工作适合某个现有命令或子代理类型、需要并行处理相互独立的事项，或回答问题必须跨多个文件阅读时，使用此工具委派任务，并由你整理结论，而不是转发文件内容。若只需查询一个已知文件、符号或值，请直接搜索；委派搜索后不要再亲自重复搜索，等待子任务结果。小任务自行完成，不要把一个任务拆成许多子任务；能够自行验证时就直接验证，不要重复已委派的工作。不要委派理解工作：给子代理明确的文件路径、行号和修改要求，再检查它的结果。`commands` 可填写命令名、斜杠命令或别名，例如给审查任务指定只读审查命令，或给探索任务指定 explore 命令；子会话会收到这些命令所对应的说明并遵循。未知命令会在子任务启动前被拒绝。使用 `agena.commands` 插件的 `list` 工具查看当前工作区提供的命令。默认情况下，任务会在当前调用中执行完毕并返回最终结果。设置 `run_in_background: true` 后会立即返回任务 id，完成后通过 `system_notification` 通知；不要轮询 `tasks.get` 或 `tasks.output` 等待完成。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "將範圍明確的工作委派給子代理工作階段。將 `run_in_background` 設為 true 可在背景執行，並於完成時通知你。透過 `commands` 附上命令名稱，讓子工作階段依照命令說明執行。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "範囲を絞ったタスクをサブエージェントのセッションに委任します。`run_in_background` を true にするとバックグラウンドで実行し、終了時に通知します。`commands` にコマンド名を指定すると、その説明を子セッションの指針として引き継ぎます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "범위가 명확한 작업을 하위 에이전트 세션에 맡깁니다. `run_in_background`를 true로 설정하면 백그라운드에서 실행하고 완료 시 알립니다. `commands`에 명령 이름을 지정하면 해당 설명이 하위 세션의 작업 지침으로 전달됩니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Déléguer une tâche bien délimitée à une session de sous-agent. Avec `run_in_background`, elle s’exécute en arrière-plan et une notification est envoyée à la fin. Indiquez des noms de commandes dans `commands` pour transmettre leurs consignes à la session enfant."
+            ),
+            locale(
+                "de-DE",
+                summary = "Eine klar abgegrenzte Aufgabe an eine Subagent-Sitzung delegieren. Mit `run_in_background` läuft sie im Hintergrund und meldet sich nach Abschluss. Über `commands` lassen sich Befehlsnamen mitgeben, deren Anweisungen die Sitzung übernehmen soll."
+            ),
+            locale(
+                "es-ES",
+                summary = "Delega una tarea acotada a una sesión de subagente. Con `run_in_background` se ejecuta en segundo plano y recibirás un aviso al terminar. Indica nombres de comandos en `commands` para que la sesión hija siga sus instrucciones."
+            ),
+            locale(
+                "hi-IN",
+                summary = "सीमित दायरे वाला काम उप-एजेंट सत्र को सौंपें। `run_in_background` चालू करने पर काम बैकग्राउंड में चलेगा और पूरा होने पर सूचना मिलेगी। `commands` में कमांड नाम दें ताकि उनका मार्गदर्शन चाइल्ड सत्र तक पहुँचे।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "فوّض مهمة محددة النطاق إلى جلسة وكيل فرعي. عند تفعيل `run_in_background` تعمل المهمة في الخلفية ويصلك إشعار عند انتهائها. أدرج أسماء الأوامر في `commands` لنقل تعليماتها إلى الجلسة التابعة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Delegue uma tarefa bem delimitada a uma sessão de subagente. Com `run_in_background`, ela roda em segundo plano e você recebe uma notificação ao terminar. Informe nomes de comandos em `commands` para que as instruções sejam repassadas à sessão filha."
+            )
+        ),
         help = "Reach for this tool when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `commands` to command names, slash spellings or aliases (for example a read-only review command for a review task, or an explore command for an exploration task); the child session receives the instructions those commands name and should follow them. Unknown names are rejected before the subtask starts. Use the `agena.commands` plugin's `list` tool to discover what this workspace offers. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it."
     )]
     async fn run(
@@ -245,7 +300,22 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, query, discovery, read_only, task),
-        summary = "List delegated background tasks."
+        summary = "List delegated background tasks.",
+        translations(
+            locale("zh-CN", summary = "列出已委派的后台任务。"),
+            locale("zh-TW", summary = "列出已委派的背景工作。"),
+            locale(
+                "ja-JP",
+                summary = "委任済みのバックグラウンドタスクを一覧表示します。"
+            ),
+            locale("ko-KR", summary = "위임된 백그라운드 작업을 나열합니다."),
+            locale("fr-FR", summary = "Lister les tâches déléguées en arrière-plan."),
+            locale("de-DE", summary = "Delegierte Hintergrundaufgaben auflisten."),
+            locale("es-ES", summary = "Muestra las tareas delegadas en segundo plano."),
+            locale("hi-IN", summary = "सौंपे गए बैकग्राउंड कार्यों की सूची दिखाएँ।"),
+            locale("ar-SA", summary = "اعرض المهام المفوّضة التي تعمل في الخلفية."),
+            locale("pt-BR", summary = "Liste as tarefas delegadas em segundo plano.")
+        )
     )]
     async fn list(
         &self,
@@ -277,7 +347,40 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, query, read_only, task),
-        summary = "Get delegated task metadata and terminal result."
+        summary = "Get delegated task metadata and terminal result.",
+        translations(
+            locale("zh-CN", summary = "查看已委派任务的状态信息和最终结果。"),
+            locale("zh-TW", summary = "查看已委派工作的中繼資料與最終結果。"),
+            locale(
+                "ja-JP",
+                summary = "委任したタスクのメタデータと最終結果を取得します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "위임된 작업의 메타데이터와 최종 결과를 가져옵니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Consulter les métadonnées et le résultat final d’une tâche déléguée."
+            ),
+            locale(
+                "de-DE",
+                summary = "Metadaten und Endergebnis einer delegierten Aufgabe abrufen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Consulta los metadatos y el resultado final de una tarea delegada."
+            ),
+            locale("hi-IN", summary = "सौंपे गए कार्य का मेटाडेटा और अंतिम परिणाम देखें।"),
+            locale(
+                "ar-SA",
+                summary = "اعرض بيانات المهمة المفوّضة الوصفية ونتيجتها النهائية."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Consulte os metadados e o resultado final de uma tarefa delegada."
+            )
+        )
     )]
     async fn get(
         &self,
@@ -297,7 +400,40 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, query, read_only, task),
-        summary = "Read incremental delegated-task transcript output after a cursor."
+        summary = "Read incremental delegated-task transcript output after a cursor.",
+        translations(
+            locale("zh-CN", summary = "从指定游标开始读取已委派任务新增的会话输出。"),
+            locale("zh-TW", summary = "從指定游標開始讀取委派工作新增的對話輸出。"),
+            locale(
+                "ja-JP",
+                summary = "指定したカーソル以降の、委任タスクの新しい会話出力を読み取ります。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "지정한 커서 이후에 추가된 위임 작업의 대화 출력을 읽습니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Lire les nouvelles sorties de conversation d’une tâche déléguée à partir d’un curseur."
+            ),
+            locale(
+                "de-DE",
+                summary = "Neue Gesprächsausgaben einer delegierten Aufgabe ab einem Cursor lesen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Lee la nueva salida de conversación de una tarea delegada desde un cursor."
+            ),
+            locale("hi-IN", summary = "कर्सर के बाद से सौंपे गए कार्य का नया संवाद आउटपुट पढ़ें।"),
+            locale(
+                "ar-SA",
+                summary = "اقرأ مخرجات المحادثة الجديدة للمهمة المفوّضة بدءًا من مؤشر محدد."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Leia as novas saídas de conversa de uma tarefa delegada a partir de um cursor."
+            )
+        )
     )]
     async fn output(
         &self,
@@ -360,7 +496,40 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, mutate, task),
-        summary = "Cancel a running delegated task and its child execution."
+        summary = "Cancel a running delegated task and its child execution.",
+        translations(
+            locale("zh-CN", summary = "取消正在运行的已委派任务及其子会话执行。"),
+            locale("zh-TW", summary = "取消執行中的委派工作及其子工作階段。"),
+            locale(
+                "ja-JP",
+                summary = "実行中の委任タスクと子セッションの処理をキャンセルします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "실행 중인 위임 작업과 하위 세션 실행을 취소합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Annuler une tâche déléguée en cours et son exécution dans la session enfant."
+            ),
+            locale(
+                "de-DE",
+                summary = "Eine laufende delegierte Aufgabe und ihre Ausführung in der Kind-Sitzung abbrechen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Cancela una tarea delegada en curso y su ejecución en la sesión hija."
+            ),
+            locale("hi-IN", summary = "चल रहे सौंपे गए कार्य और चाइल्ड सत्र की प्रक्रिया रद्द करें।"),
+            locale(
+                "ar-SA",
+                summary = "ألغِ المهمة المفوّضة قيد التشغيل وتنفيذها في الجلسة التابعة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Cancele uma tarefa delegada em andamento e a execução na sessão filha."
+            )
+        )
     )]
     async fn cancel(
         &self,
@@ -419,7 +588,31 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, mutate, task),
-        summary = "Send additional guidance to a running delegated task."
+        summary = "Send additional guidance to a running delegated task.",
+        translations(
+            locale("zh-CN", summary = "向正在运行的已委派任务发送补充指导。"),
+            locale("zh-TW", summary = "向執行中的委派工作傳送補充指引。"),
+            locale("ja-JP", summary = "実行中の委任タスクに追加の指示を送ります。"),
+            locale("ko-KR", summary = "실행 중인 위임 작업에 추가 지침을 보냅니다."),
+            locale(
+                "fr-FR",
+                summary = "Envoyer des consignes supplémentaires à une tâche déléguée en cours."
+            ),
+            locale(
+                "de-DE",
+                summary = "Einer laufenden delegierten Aufgabe zusätzliche Anweisungen senden."
+            ),
+            locale(
+                "es-ES",
+                summary = "Envía instrucciones adicionales a una tarea delegada en curso."
+            ),
+            locale("hi-IN", summary = "चल रहे सौंपे गए कार्य को अतिरिक्त निर्देश भेजें।"),
+            locale("ar-SA", summary = "أرسل إرشادات إضافية إلى مهمة مفوّضة قيد التشغيل."),
+            locale(
+                "pt-BR",
+                summary = "Envie orientações adicionais para uma tarefa delegada em andamento."
+            )
+        )
     )]
     async fn message(
         &self,
@@ -453,7 +646,37 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, mutate, task),
-        summary = "Resume a terminal delegated task with a follow-up prompt."
+        summary = "Resume a terminal delegated task with a follow-up prompt.",
+        translations(
+            locale("zh-CN", summary = "使用后续提示恢复已结束的已委派任务。"),
+            locale("zh-TW", summary = "使用後續提示重新啟動已結束的委派工作。"),
+            locale(
+                "ja-JP",
+                summary = "追加のプロンプトを使って、終了した委任タスクを再開します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "후속 프롬프트로 종료된 위임 작업을 다시 시작합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Reprendre une tâche déléguée terminée avec une nouvelle consigne."
+            ),
+            locale(
+                "de-DE",
+                summary = "Eine beendete delegierte Aufgabe mit einer Folgeanweisung fortsetzen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Reanuda una tarea delegada finalizada con una nueva indicación."
+            ),
+            locale("hi-IN", summary = "आगे का प्रॉम्प्ट देकर समाप्त सौंपे गए कार्य को फिर शुरू करें।"),
+            locale("ar-SA", summary = "استأنف مهمة مفوّضة انتهت باستخدام طلب متابعة."),
+            locale(
+                "pt-BR",
+                summary = "Retome uma tarefa delegada encerrada com uma nova solicitação."
+            )
+        )
     )]
     async fn followup(
         &self,
@@ -883,8 +1106,39 @@ mod tests {
     #[test]
     fn task_contract_exposes_terminal_task_fields() {
         let manifest = TasksPlugin::new().manifest();
+        assert_eq!(
+            manifest.summary_for_locale("zh-CN"),
+            Some("委派子任务编排工具。")
+        );
         let tool = manifest.tools.first().expect("task tool");
         assert_eq!(tool.name, "run");
+        let translated_tools = manifest
+            .tools
+            .iter()
+            .filter(|tool| tool.docs.summary_for_locale("zh-CN") != tool.docs.summary.as_deref())
+            .count();
+        assert_eq!(
+            translated_tools,
+            manifest.tools.len(),
+            "every task tool needs a Chinese UI summary"
+        );
+        assert!(tool.docs.help_for_locale("zh-CN").is_some());
+        for locale in [
+            "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", "de-DE", "es-ES", "hi-IN", "ar-SA",
+            "pt-BR",
+        ] {
+            assert_ne!(
+                manifest.summary_for_locale(locale),
+                manifest.summary.as_deref(),
+                "task plugin summary needs a native {locale} translation"
+            );
+            assert!(
+                manifest.tools.iter().all(|tool| {
+                    tool.docs.summary_for_locale(locale) != tool.docs.summary.as_deref()
+                }),
+                "every task tool summary needs a native {locale} translation"
+            );
+        }
         let schema = &tool.contract.input_schema;
         assert!(schema.pointer("/properties/profile").is_none());
         assert!(schema.pointer("/properties/selection").is_some());

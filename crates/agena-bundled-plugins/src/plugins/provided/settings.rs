@@ -290,6 +290,18 @@ struct SettingsInspectResponse {
     name = "settings",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Inspect and edit Agena's global and workspace agena.json settings.",
+    translations(
+        locale("zh-CN", summary = "查看并编辑 Agena 的全局和工作区 agena.json 设置。"),
+        locale("zh-TW", summary = "檢視並編輯 Agena 的全域與工作區 agena.json 設定。"),
+        locale("ja-JP", summary = "Agena のグローバルおよびワークスペースの agena.json 設定を確認・編集します。"),
+        locale("ko-KR", summary = "Agena의 전역 및 작업 공간 agena.json 설정을 확인하고 편집합니다."),
+        locale("fr-FR", summary = "Consulter et modifier les paramètres agena.json globaux et de l’espace de travail."),
+        locale("de-DE", summary = "Globale und arbeitsbereichsbezogene agena.json-Einstellungen von Agena prüfen und bearbeiten."),
+        locale("es-ES", summary = "Consulta y edita la configuración global y del espacio de trabajo en agena.json."),
+        locale("hi-IN", summary = "Agena की वैश्विक और वर्कस्पेस agena.json सेटिंग देखें और संपादित करें।"),
+        locale("ar-SA", summary = "افحص إعدادات agena.json العامة والخاصة بمساحة العمل في Agena وعدّلها."),
+        locale("pt-BR", summary = "Consulte e edite as configurações globais e do espaço de trabalho no agena.json do Agena.")
+    ),
     settings = SettingsPluginConfig,
     settings_default = default,
     settings_metadata = settings_plugin_metadata(),
@@ -395,6 +407,58 @@ impl SettingsPlugin {
     #[tool(
         summary = "Read one settings path.",
         help = "Use `source=file` with `layer=global|workspace` for persisted values. Effective reads merge both files plus environment and CLI layers; prefer explicit `scope=config|meta` with a relative path.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "读取一个设置路径。",
+                help = "读取持久化值时使用 `source=file` 和 `layer=global|workspace`。effective 读取会合并两个配置文件以及环境变量和命令行层；请优先通过相对路径明确指定 `scope=config|meta`。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "讀取一個設定路徑。",
+                help = "讀取持久化值時使用 `source=file` 與 `layer=global|workspace`。effective 讀取會合併兩個設定檔，以及環境變數和命令列層；請優先使用相對路徑明確指定 `scope=config|meta`。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "設定パスを 1 つ読み取ります。",
+                help = "永続化された値には `source=file` と `layer=global|workspace` を指定します。effective は両方の設定ファイルに環境変数と CLI の値を重ねて返します。相対パスで `scope=config|meta` を明示してください。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "설정 경로 하나를 읽습니다.",
+                help = "저장된 값을 읽으려면 `source=file`, `layer=global|workspace`를 사용하세요. effective 조회는 두 설정 파일과 환경 변수·CLI 계층을 병합합니다. 상대 경로와 함께 `scope=config|meta`를 명시하는 편이 좋습니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Lire un chemin de configuration.",
+                help = "Pour les valeurs enregistrées, utilisez `source=file` avec `layer=global|workspace`. Une lecture effective fusionne les deux fichiers, l’environnement et la ligne de commande. Précisez de préférence `scope=config|meta` avec un chemin relatif."
+            ),
+            locale(
+                "de-DE",
+                summary = "Einen Einstellungspfad lesen.",
+                help = "Für gespeicherte Werte verwenden Sie `source=file` mit `layer=global|workspace`. Effektive Werte führen beide Dateien sowie Umgebungs- und CLI-Einstellungen zusammen. Geben Sie vorzugsweise `scope=config|meta` und einen relativen Pfad an."
+            ),
+            locale(
+                "es-ES",
+                summary = "Lee una ruta de configuración.",
+                help = "Para valores guardados, usa `source=file` con `layer=global|workspace`. La lectura effective combina ambos archivos y las capas de entorno y CLI. Es preferible indicar `scope=config|meta` con una ruta relativa."
+            ),
+            locale(
+                "hi-IN",
+                summary = "एक सेटिंग पथ पढ़ें।",
+                help = "सहेजे गए मान के लिए `source=file` और `layer=global|workspace` दें। effective रीड दोनों फ़ाइलों के साथ environment और CLI स्तरों को मिलाता है। सापेक्ष पथ के साथ `scope=config|meta` स्पष्ट रूप से देना बेहतर है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "اقرأ مسار إعداد واحدًا.",
+                help = "للقيم المحفوظة استخدم `source=file` مع `layer=global|workspace`. تدمج القراءة الفعلية الملفين وطبقتي البيئة وسطر الأوامر. يُفضّل تحديد `scope=config|meta` صراحةً مع مسار نسبي."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Leia um caminho de configuração.",
+                help = "Para valores persistidos, use `source=file` com `layer=global|workspace`. A leitura effective combina os dois arquivos e as camadas de ambiente e CLI. Prefira indicar `scope=config|meta` explicitamente com um caminho relativo."
+            )
+        ),
         tags(
             ToolTag::Query,
             ToolTag::Discovery,
@@ -454,6 +518,18 @@ impl SettingsPlugin {
 
     #[tool(
         summary = "List settings paths.",
+        translations(
+            locale("zh-CN", summary = "列出设置路径。"),
+            locale("zh-TW", summary = "列出設定路徑。"),
+            locale("ja-JP", summary = "設定パスを一覧表示します。"),
+            locale("ko-KR", summary = "설정 경로를 나열합니다."),
+            locale("fr-FR", summary = "Lister les chemins de configuration."),
+            locale("de-DE", summary = "Einstellungspfade auflisten."),
+            locale("es-ES", summary = "Enumera las rutas de configuración."),
+            locale("hi-IN", summary = "सेटिंग पथ की सूची दें।"),
+            locale("ar-SA", summary = "اعرض مسارات الإعدادات."),
+            locale("pt-BR", summary = "Liste os caminhos de configuração.")
+        ),
         tags(
             ToolTag::Query,
             ToolTag::Discovery,
@@ -524,6 +600,58 @@ impl SettingsPlugin {
     #[tool(
         summary = "Inspect a setting across every config layer.",
         help = "Returns the persisted global value, persisted workspace value, effective merged value, source file paths, and applied-layer metadata. Secret values are always redacted.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "查看某项设置在所有配置层中的取值。",
+                help = "返回已保存的全局值、工作区值、合并后的生效值、来源文件路径和应用层元数据。秘密值始终会脱敏。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "檢視某項設定在所有設定層中的值。",
+                help = "回傳已儲存的全域值、工作區值、合併後的生效值、來源檔案路徑與套用層中繼資料。機密值一律會遮蔽。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "設定値をすべての構成レイヤーで確認します。",
+                help = "保存済みのグローバル値、ワークスペース値、統合後の有効値、参照元ファイルのパス、適用レイヤーの情報を返します。秘密値は常に伏せられます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "모든 설정 계층에서 설정 값을 확인합니다.",
+                help = "저장된 전역 값과 작업 공간 값, 병합된 유효 값, 원본 파일 경로, 적용된 계층 정보를 반환합니다. 비밀 값은 항상 가려집니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Examiner une valeur dans toutes les couches de configuration.",
+                help = "Renvoie les valeurs globales et d’espace de travail enregistrées, la valeur effective fusionnée, les chemins des fichiers source et les métadonnées des couches appliquées. Les secrets sont toujours masqués."
+            ),
+            locale(
+                "de-DE",
+                summary = "Eine Einstellung über alle Konfigurationsebenen hinweg prüfen.",
+                help = "Liefert den gespeicherten globalen und Workspace-Wert, den zusammengeführten effektiven Wert, Quellpfade und Metadaten der angewendeten Ebenen. Geheimnisse werden immer ausgeblendet."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inspecciona un ajuste en todas las capas de configuración.",
+                help = "Devuelve el valor global guardado, el valor del espacio de trabajo, el valor efectivo combinado, las rutas de los archivos de origen y los metadatos de las capas aplicadas. Los secretos siempre se ocultan."
+            ),
+            locale(
+                "hi-IN",
+                summary = "हर कॉन्फ़िगरेशन स्तर में सेटिंग देखें।",
+                help = "सहेजा गया वैश्विक मान, कार्यक्षेत्र मान, मिला हुआ प्रभावी मान, स्रोत फ़ाइल पथ और लागू स्तरों का मेटाडेटा लौटाता है। गोपनीय मान हमेशा छिपाए जाते हैं।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "افحص إعدادًا عبر جميع طبقات التكوين.",
+                help = "يعرض القيمة العامة المحفوظة وقيمة مساحة العمل والقيمة الفعلية المدمجة ومسارات ملفات المصدر وبيانات الطبقات المطبقة. تُحجب القيم السرية دائمًا."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inspecione uma configuração em todas as camadas.",
+                help = "Retorna o valor global salvo, o valor do espaço de trabalho, o valor efetivo combinado, os caminhos dos arquivos de origem e os metadados das camadas aplicadas. Valores secretos são sempre ocultados."
+            )
+        ),
         tags(
             ToolTag::Query,
             ToolTag::Discovery,
@@ -558,6 +686,58 @@ impl SettingsPlugin {
     #[tool(
         summary = "Set one settings value.",
         help = "Writes the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing; dry runs request read permission for both config files instead of write permission.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "设置一个配置值。",
+                help = "写入 `layer` 指定的全局或工作区配置，并校验合并后的分层配置。使用 `dry_run=true` 可只预览不写入；此时会请求读取两个配置文件的权限，而不是写权限。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "設定一個設定值。",
+                help = "寫入 `layer` 指定的全域或工作區設定，並驗證合併後的分層設定。使用 `dry_run=true` 可預覽而不寫入；此時會要求讀取兩個設定檔的權限，而非寫入權限。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "設定値を 1 つ書き込みます。",
+                help = "`layer` で選んだグローバルまたはワークスペース設定を書き込み、統合後の構成を検証します。`dry_run=true` なら書き込まずに確認でき、その場合は両方の設定ファイルへの読み取り権限を求めます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "설정 값 하나를 지정합니다.",
+                help = "`layer`로 선택한 전역 또는 작업 공간 설정을 쓰고 병합된 구성을 검증합니다. `dry_run=true`로 쓰지 않고 미리 볼 수 있으며, 이때는 쓰기 대신 두 설정 파일에 대한 읽기 권한을 요청합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Définir une valeur de configuration.",
+                help = "Écrit dans la configuration globale ou d’espace de travail choisie par `layer`, puis valide l’ensemble fusionné. `dry_run=true` permet de prévisualiser sans écrire ; il demande alors l’accès en lecture aux deux fichiers plutôt qu’un accès en écriture."
+            ),
+            locale(
+                "de-DE",
+                summary = "Einen Einstellungswert setzen.",
+                help = "Schreibt in die mit `layer` gewählte globale oder Workspace-Konfiguration und validiert die zusammengeführte Konfiguration. Mit `dry_run=true` wird nur eine Vorschau erstellt; dafür werden Leserechte auf beide Dateien statt Schreibrechte angefordert."
+            ),
+            locale(
+                "es-ES",
+                summary = "Establece un valor de configuración.",
+                help = "Escribe en la configuración global o del espacio de trabajo indicada por `layer` y valida la configuración combinada. Con `dry_run=true` puedes previsualizar sin escribir; se solicita permiso de lectura para ambos archivos en lugar de permiso de escritura."
+            ),
+            locale(
+                "hi-IN",
+                summary = "एक सेटिंग मान लिखें।",
+                help = "`layer` से चुने गए वैश्विक या कार्यक्षेत्र कॉन्फ़िगरेशन में लिखकर संयुक्त परतों की जाँच करता है। `dry_run=true` बिना लिखे पूर्वावलोकन करता है; तब लिखने की जगह दोनों कॉन्फ़िग फ़ाइलों की पढ़ने की अनुमति माँगी जाती है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "عيّن قيمة إعداد واحدة.",
+                help = "اكتب في التكوين العام أو الخاص بمساحة العمل الذي يحدده `layer` ثم تحقّق من التكوين المدمج. استخدم `dry_run=true` للمعاينة دون كتابة؛ عندها يُطلب إذن القراءة للملفين بدلًا من إذن الكتابة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Defina um valor de configuração.",
+                help = "Grava na configuração global ou do espaço de trabalho escolhida por `layer` e valida a configuração combinada. Use `dry_run=true` para visualizar sem gravar; nesse caso, é solicitada permissão de leitura para os dois arquivos em vez de permissão de escrita."
+            )
+        ),
         tags(
             ToolTag::Mutate,
             ToolTag::Filesystem,
@@ -595,6 +775,58 @@ impl SettingsPlugin {
     #[tool(
         summary = "Delete one settings value.",
         help = "Deletes from the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "删除一个设置值。",
+                help = "从 `layer` 指定的全局或工作区配置中删除，并校验合并后的分层配置。使用 `dry_run=true` 可只预览不写入。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "刪除一個設定值。",
+                help = "從 `layer` 指定的全域或工作區設定中刪除，並驗證合併後的分層設定。使用 `dry_run=true` 可預覽而不寫入。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "設定値を 1 つ削除します。",
+                help = "`layer` で選んだグローバルまたはワークスペース設定から削除し、統合後の構成を検証します。`dry_run=true` なら書き込みなしで確認できます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "설정 값 하나를 삭제합니다.",
+                help = "`layer`로 선택한 전역 또는 작업 공간 설정에서 삭제하고 병합된 구성을 검증합니다. `dry_run=true`로 쓰지 않고 미리 볼 수 있습니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Supprimer une valeur de configuration.",
+                help = "Supprime la valeur de la configuration globale ou d’espace de travail choisie par `layer`, puis valide l’ensemble fusionné. Utilisez `dry_run=true` pour prévisualiser sans écrire."
+            ),
+            locale(
+                "de-DE",
+                summary = "Einen Einstellungswert löschen.",
+                help = "Löscht den Wert aus der mit `layer` gewählten globalen oder Workspace-Konfiguration und validiert die zusammengeführte Konfiguration. Mit `dry_run=true` können Sie die Änderung ohne Schreiben prüfen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Elimina un valor de configuración.",
+                help = "Elimina el valor de la configuración global o del espacio de trabajo indicada por `layer` y valida la configuración combinada. Usa `dry_run=true` para previsualizar sin escribir."
+            ),
+            locale(
+                "hi-IN",
+                summary = "एक सेटिंग मान हटाएँ।",
+                help = "`layer` से चुने गए वैश्विक या कार्यक्षेत्र कॉन्फ़िगरेशन से हटाकर संयुक्त कॉन्फ़िगरेशन की जाँच करता है। `dry_run=true` बिना लिखे पूर्वावलोकन देता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "احذف قيمة إعداد واحدة.",
+                help = "احذف من التكوين العام أو تكوين مساحة العمل الذي يحدده `layer` ثم تحقّق من التكوين المدمج. استخدم `dry_run=true` للمعاينة دون كتابة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Exclua um valor de configuração.",
+                help = "Exclui da configuração global ou do espaço de trabalho escolhida por `layer` e valida a configuração combinada. Use `dry_run=true` para visualizar sem gravar."
+            )
+        ),
         tags(
             ToolTag::Mutate,
             ToolTag::Filesystem,
@@ -631,6 +863,58 @@ impl SettingsPlugin {
     #[tool(
         summary = "Patch settings in agena.json.",
         help = "Deep-merges a JSON object into the global or workspace config selected by `layer`, then validates the combined layered configuration; null object entries delete keys. Use `dry_run=true` to preview without writing.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "以补丁方式更新 agena.json 设置。",
+                help = "将 JSON 对象深度合并到 `layer` 指定的全局或工作区配置，再校验合并后的分层配置；对象项为 null 时会删除对应键。使用 `dry_run=true` 可只预览不写入。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "以補丁方式更新 agena.json 設定。",
+                help = "將 JSON 物件深度合併至 `layer` 指定的全域或工作區設定，再驗證合併後的分層設定；物件項目為 null 時會刪除對應索引鍵。使用 `dry_run=true` 可預覽而不寫入。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "agena.json の設定にパッチを適用します。",
+                help = "JSON オブジェクトを `layer` で選んだグローバルまたはワークスペース設定に深くマージし、統合後の構成を検証します。オブジェクト内の null はキーを削除します。`dry_run=true` なら書き込みなしで確認できます。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "agena.json 설정에 패치를 적용합니다.",
+                help = "JSON 객체를 `layer`로 선택한 전역 또는 작업 공간 설정에 깊게 병합한 뒤 통합 구성을 검증합니다. 객체 항목이 null이면 해당 키를 삭제합니다. `dry_run=true`로 쓰지 않고 미리 볼 수 있습니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Appliquer un patch aux réglages de agena.json.",
+                help = "Fusionne récursivement un objet JSON dans la configuration globale ou d’espace de travail choisie par `layer`, puis valide l’ensemble ; une valeur null dans un objet supprime la clé correspondante. Utilisez `dry_run=true` pour prévisualiser sans écrire."
+            ),
+            locale(
+                "de-DE",
+                summary = "Einstellungen in agena.json patchen.",
+                help = "Führt ein JSON-Objekt tief in die mit `layer` gewählte globale oder Workspace-Konfiguration ein und validiert danach die Gesamtkonfiguration. Null-Einträge löschen den jeweiligen Schlüssel. Mit `dry_run=true` ist eine Vorschau ohne Schreiben möglich."
+            ),
+            locale(
+                "es-ES",
+                summary = "Aplica un parche a los ajustes de agena.json.",
+                help = "Combina en profundidad un objeto JSON con la configuración global o del espacio de trabajo indicada por `layer` y valida el resultado conjunto. Las entradas null eliminan la clave correspondiente. Usa `dry_run=true` para previsualizar sin escribir."
+            ),
+            locale(
+                "hi-IN",
+                summary = "agena.json सेटिंग पर पैच लगाएँ।",
+                help = "JSON ऑब्जेक्ट को `layer` से चुने गए वैश्विक या कार्यक्षेत्र कॉन्फ़िगरेशन में गहराई से मिलाकर संयुक्त कॉन्फ़िगरेशन जाँचता है। ऑब्जेक्ट में null संबंधित कुंजी हटाता है। `dry_run=true` बिना लिखे पूर्वावलोकन देता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "طبّق تحديثًا على إعدادات agena.json.",
+                help = "ادمج كائن JSON بعمق في التكوين العام أو تكوين مساحة العمل الذي يحدده `layer` ثم تحقّق من التكوين المدمج. تحذف قيمة null داخل الكائن المفتاح المقابل. استخدم `dry_run=true` للمعاينة دون كتابة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Aplique um patch às configurações de agena.json.",
+                help = "Mescla profundamente um objeto JSON à configuração global ou do espaço de trabalho escolhida por `layer` e valida o conjunto. Entradas null em objetos excluem as chaves correspondentes. Use `dry_run=true` para visualizar sem gravar."
+            )
+        ),
         tags(
             ToolTag::Mutate,
             ToolTag::Filesystem,
@@ -667,6 +951,18 @@ impl SettingsPlugin {
 
     #[tool(
         summary = "Validate layered agena.json settings.",
+        translations(
+            locale("zh-CN", summary = "校验分层的 agena.json 设置。"),
+            locale("zh-TW", summary = "驗證分層的 agena.json 設定。"),
+            locale("ja-JP", summary = "階層化された agena.json 設定を検証します。"),
+            locale("ko-KR", summary = "계층형 agena.json 설정을 검증합니다."),
+            locale("fr-FR", summary = "Valider les réglages agena.json par couche."),
+            locale("de-DE", summary = "Geschichtete agena.json-Einstellungen validieren."),
+            locale("es-ES", summary = "Valida los ajustes por capas de agena.json."),
+            locale("hi-IN", summary = "स्तरित agena.json सेटिंग की जाँच करें।"),
+            locale("ar-SA", summary = "تحقّق من إعدادات agena.json متعددة الطبقات."),
+            locale("pt-BR", summary = "Valide as configurações em camadas do agena.json.")
+        ),
         tags(
             ToolTag::Query,
             ToolTag::Filesystem,

@@ -81,6 +81,18 @@ struct ReportFindingsInput {
     name = "report",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Structured review and verification findings.",
+    translations(
+        locale("zh-CN", summary = "以结构化形式提交审查与验证发现。"),
+        locale("zh-TW", summary = "以結構化格式提交審查與驗證發現。"),
+        locale("ja-JP", summary = "レビューや検証で見つかった事項を構造化して報告します。"),
+        locale("ko-KR", summary = "검토 및 검증에서 발견한 내용을 구조화해 보고합니다."),
+        locale("fr-FR", summary = "Présenter de façon structurée les constats de revue et de vérification."),
+        locale("de-DE", summary = "Prüfungs- und Verifikationsergebnisse strukturiert festhalten."),
+        locale("es-ES", summary = "Presenta de forma estructurada los hallazgos de revisión y verificación."),
+        locale("hi-IN", summary = "समीक्षा और सत्यापन में मिली बातों को संरचित रूप में दर्ज करें।"),
+        locale("ar-SA", summary = "قدّم نتائج المراجعة والتحقق بصيغة منظمة."),
+        locale("pt-BR", summary = "Registre de forma estruturada os achados de revisão e verificação.")
+    ),
 )]
 impl ReportPlugin {
     pub(crate) fn new() -> Self {
@@ -90,7 +102,49 @@ impl ReportPlugin {
     #[tool(
         tags(mutate, discovery, read_only),
         name = "findings",
-        summary = "Publish structured file-and-line findings for UI and integrations."
+        summary = "Publish structured file-and-line findings for UI and integrations.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "以结构化格式提交带文件和行号的发现，供界面和集成使用。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "以結構化格式提交附有檔案與行號的發現，供介面與整合使用。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "ファイル名と行番号を含む検出事項を構造化して、画面や連携機能に渡します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "파일과 줄 번호가 포함된 발견 사항을 구조화해 UI와 연동 기능에 전달합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Transmettre aux interfaces et intégrations des constats structurés avec fichier et ligne."
+            ),
+            locale(
+                "de-DE",
+                summary = "Strukturierte Befunde mit Datei und Zeile an die Oberfläche und Integrationen übergeben."
+            ),
+            locale(
+                "es-ES",
+                summary = "Envía hallazgos estructurados con archivo y línea a la interfaz y a las integraciones."
+            ),
+            locale(
+                "hi-IN",
+                summary = "UI और इंटीग्रेशन के लिए फ़ाइल और पंक्ति सहित निष्कर्ष संरचित रूप में भेजें।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "أرسل نتائج منظمة تتضمن الملف ورقم السطر إلى الواجهة والتكاملات."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Envie achados estruturados com arquivo e linha para a interface e as integrações."
+            )
+        )
     )]
     async fn invoke_findings(&self, input: &ReportFindingsInput) -> SdkResult<ToolInvokeOutput> {
         // An empty list is a valid "no findings" report. Validate members

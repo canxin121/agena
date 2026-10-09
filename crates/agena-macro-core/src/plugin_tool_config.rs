@@ -245,7 +245,24 @@ fn parse_plugin_inline_tool_config(
                             spec.tags.push(expr.clone());
                         }
                     }
-                    "capabilities" => spec.capabilities = parse_expr_list(list.tokens)?,
+                    "translations" => {
+                        let mut translated =
+                            crate::tool_spec_support::parse_localized_tool_docs(list.tokens)?;
+                        for translation in &translated {
+                            if spec.translations.iter().any(|existing| {
+                                existing
+                                    .locale
+                                    .value()
+                                    .eq_ignore_ascii_case(&translation.locale.value())
+                            }) {
+                                return Err(syn::Error::new_spanned(
+                                    &translation.locale,
+                                    "duplicate translation locale",
+                                ));
+                            }
+                        }
+                        spec.translations.append(&mut translated);
+                    }
                     "output" => spec.output_ty = Some(parse_type_list(list.tokens, "output")?),
                     "command" => {
                         if command

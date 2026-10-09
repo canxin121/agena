@@ -1,6 +1,9 @@
 //! Tool spec generation shared by input and plugin expansion.
 
-use syn::{Expr, LitStr, Path, Type};
+use syn::parse::Parser;
+use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
+use syn::{Expr, LitStr, Meta, Path, Result, Token, Type};
 
 use crate::PluginInputFieldMetadata;
 
@@ -12,6 +15,7 @@ pub struct ToolSpecConfig {
     pub after_help: Option<LitStr>,
     pub summary: Option<LitStr>,
     pub help: Option<LitStr>,
+    pub translations: Vec<LocalizedToolDocs>,
     pub normalize: Option<Path>,
     pub validate: Option<Path>,
     pub trim: Vec<LitStr>,
@@ -41,7 +45,6 @@ pub struct ToolSpecConfig {
     pub choices: Vec<PathValuesConstraint>,
     pub input_field_metadata: Vec<PluginInputFieldMetadata>,
     pub tags: Vec<Expr>,
-    pub capabilities: Vec<Expr>,
     pub streaming: bool,
     pub input_shape: Option<Type>,
     pub output_ty: Option<Type>,
@@ -54,6 +57,7 @@ pub fn empty_tool_spec_config() -> ToolSpecConfig {
         after_help: None,
         summary: None,
         help: None,
+        translations: Vec::new(),
         normalize: None,
         validate: None,
         trim: Vec::new(),
@@ -83,11 +87,137 @@ pub fn empty_tool_spec_config() -> ToolSpecConfig {
         choices: Vec::new(),
         input_field_metadata: Vec::new(),
         tags: Vec::new(),
-        capabilities: Vec::new(),
         streaming: false,
         input_shape: None,
         output_ty: None,
     }
+}
+
+/// Localized UI copy attached to plugin and tool documentation. These values
+/// never replace the stable English docs supplied to models.
+#[derive(Clone)]
+pub struct LocalizedToolDocs {
+    pub locale: LitStr,
+    pub before_help: Option<LitStr>,
+    pub after_help: Option<LitStr>,
+    pub summary: Option<LitStr>,
+    pub help: Option<LitStr>,
+}
+
+struct LocalizedDocsArguments {
+    locale: LitStr,
+    fields: Punctuated<Meta, Token![,]>,
+}
+
+impl Parse for LocalizedDocsArguments {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let locale = input.parse::<LitStr>()?;
+        let fields = if input.is_empty() {
+            Punctuated::new()
+        } else {
+            input.parse::<Token![,]>()?;
+            input.parse_terminated(Meta::parse, Token![,])?
+        };
+        Ok(Self { locale, fields })
+    }
+}
+
+/// Parse `translations(locale("zh-CN", summary = "..."), ...)` metadata.
+pub fn parse_localized_tool_docs(
+    tokens: proc_macro2::TokenStream,
+) -> Result<Vec<LocalizedToolDocs>> {
+    let entries = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(tokens)?;
+    let mut translations = Vec::new();
+    for entry in entries {
+        let Meta::List(entry) = entry else {
+            return Err(syn::Error::new_spanned(
+                entry,
+                "translations entries must use locale(\"tag\", field = \"text\")",
+            ));
+        };
+        if !entry.path.is_ident("locale") {
+            return Err(syn::Error::new_spanned(
+                entry.path,
+                "translations entries must use locale(\"tag\", field = \"text\")",
+            ));
+        }
+        let parsed = syn::parse2::<LocalizedDocsArguments>(entry.tokens)?;
+        let mut result = LocalizedToolDocs {
+            locale: parsed.locale,
+            before_help: None,
+            after_help: None,
+            summary: None,
+            help: None,
+        };
+        for field in parsed.fields {
+            let Meta::NameValue(field) = field else {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "translation fields must use `name = \"text\"`",
+                ));
+            };
+            let Some(name) = field.path.get_ident().map(ToString::to_string) else {
+                return Err(syn::Error::new_spanned(
+                    field.path,
+                    "expected a translation field name",
+                ));
+            };
+            let value = match field.value {
+                Expr::Lit(value) => match value.lit {
+                    syn::Lit::Str(value) => value,
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            other,
+                            "translation text must be a string literal",
+                        ));
+                    }
+                },
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "translation text must be a string literal",
+                    ));
+                }
+            };
+            let slot = match name.as_str() {
+                "before_help" => &mut result.before_help,
+                "after_help" => &mut result.after_help,
+                "summary" => &mut result.summary,
+                "help" => &mut result.help,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        field.path,
+                        format!("unsupported translated documentation field '{name}'"),
+                    ));
+                }
+            };
+            if slot.replace(value).is_some() {
+                return Err(syn::Error::new_spanned(
+                    field.path,
+                    format!("duplicate translated documentation field '{name}'"),
+                ));
+            }
+        }
+        if result.locale.value().trim().is_empty() {
+            return Err(syn::Error::new_spanned(
+                result.locale,
+                "translation locale must not be empty",
+            ));
+        }
+        if translations.iter().any(|existing: &LocalizedToolDocs| {
+            existing
+                .locale
+                .value()
+                .eq_ignore_ascii_case(&result.locale.value())
+        }) {
+            return Err(syn::Error::new_spanned(
+                result.locale,
+                "duplicate translation locale",
+            ));
+        }
+        translations.push(result);
+    }
+    Ok(translations)
 }
 
 #[derive(Clone)]

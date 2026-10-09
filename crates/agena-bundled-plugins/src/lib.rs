@@ -9,12 +9,16 @@ mod artifact_file;
 pub mod capability_manifest;
 pub mod docs_reference;
 pub mod memory;
+mod plugin_tool_docs;
 pub mod plugins;
 pub mod tool;
 pub mod web;
 
 #[cfg(test)]
 mod prompt_contract_tests;
+
+#[cfg(test)]
+mod tool_docs_i18n_tests;
 
 pub(crate) static BLOCKING_PLUGIN_WORKERS: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(32);

@@ -66,7 +66,6 @@ pub fn expand_plugin_layer_export(
 
 pub fn expand_plugin_layer_manifest(
     config: &PluginImplConfig,
-    self_ty: &Type,
     cacheable: bool,
     docs: Option<&str>,
     tools: &[PluginToolPlan],
@@ -92,7 +91,7 @@ pub fn expand_plugin_layer_manifest(
     };
     let hooks_expr = plugin_layer_hooks_expr(tools, hooks);
 
-    let settings_assignment = expand_plugin_layer_settings_assignment(config, self_ty)?;
+    let settings_assignment = expand_plugin_layer_settings_assignment(config)?;
     let help_assignment = if let Some(help) = config.help.as_ref() {
         quote! { manifest.help = Some(#help.to_string()); }
     } else if let Some(help) = lit_str_from_text(docs) {
@@ -100,11 +99,45 @@ pub fn expand_plugin_layer_manifest(
     } else {
         quote! {}
     };
+    let authors_assignment = config.authors.as_ref().map(|authors| {
+        quote! {
+            manifest.authors = ::core::iter::IntoIterator::into_iter(#authors)
+                .map(::core::convert::Into::into)
+                .collect();
+        }
+    });
+    let transports_assignment = config
+        .transports
+        .as_ref()
+        .map(|transports| quote! { manifest.transports = #transports; });
+    let surface_assignment = config
+        .surface
+        .as_ref()
+        .map(|surface| quote! { manifest.surface = #surface; });
     let skills_assignment = config
         .skills
         .as_ref()
         .map(|skills| quote! { manifest.skills.extend(#skills); })
         .unwrap_or_default();
+    let translation_assignments = config.translations.iter().map(|translation| {
+        let locale = &translation.locale;
+        let summary = translation
+            .summary
+            .as_ref()
+            .map(|value| quote! { Some(#value.to_string()) })
+            .unwrap_or_else(|| quote! { None });
+        let help = translation
+            .help
+            .as_ref()
+            .map(|value| quote! { Some(#value.to_string()) })
+            .unwrap_or_else(|| quote! { None });
+        quote! {
+            manifest.translations.insert(
+                #locale.to_string(),
+                ::agena_plugin_sdk::PluginManifestTranslation { summary: #summary, help: #help },
+            );
+        }
+    });
     let commands_assignment = config
         .commands
         .as_ref()
@@ -195,8 +228,12 @@ pub fn expand_plugin_layer_manifest(
             let mut manifest = ::agena_plugin_sdk::PluginManifest::new(#namespace, #name, #version);
             manifest.summary = Some(#summary.to_string());
             manifest.hooks = #hooks_expr;
+            #authors_assignment
+            #transports_assignment
+            #surface_assignment
             #settings_assignment
             #help_assignment
+            #(#translation_assignments)*
             #skills_assignment
             #commands_assignment
             #activity_kinds_assignment
@@ -226,16 +263,8 @@ pub fn expand_plugin_layer_manifest(
 
 fn expand_plugin_layer_settings_assignment(
     config: &PluginImplConfig,
-    self_ty: &Type,
 ) -> Result<proc_macro2::TokenStream> {
     let Some(ty) = config.settings.as_ref() else {
-        if config.settings_store {
-            return Ok(quote! {
-                manifest.settings = Some(
-                    <#self_ty as ::agena_plugin_sdk::plugin::PluginSettingsStoreAccess>::plugin_settings_contract(),
-                );
-            });
-        }
         return Ok(quote! {});
     };
     let contract = if let Some(default) = config.settings_default.as_ref() {

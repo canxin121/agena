@@ -63,9 +63,8 @@ struct WriteNoteOutput {
     bytes: usize,
 }
 
-#[derive(Default, PluginSettingsStore)]
+#[derive(Default)]
 struct NotesPlugin {
-    #[settings(default)]
     settings: PluginSettings<NotesConfig>,
 }
 
@@ -74,7 +73,9 @@ struct NotesPlugin {
     name = "notes",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Multi-tool stdio plugin example for notes formatting and file writes.",
-    settings,
+    settings = NotesConfig,
+    settings_default = default,
+    settings_field = settings,
     export = stdio
 )]
 impl NotesPlugin {

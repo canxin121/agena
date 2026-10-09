@@ -275,7 +275,26 @@ impl ClaudeToolsPlugin {
     }
 }
 
-#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="claude", version=env!("CARGO_PKG_VERSION"), summary="Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback.", settings=ClaudeToolsConfig, settings_default=default)]
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "claude",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback.",
+    translations(
+        locale("zh-CN", summary = "使用 Anthropic 云端搜索、网页抓取、计算和顾问模型。输入会离开本机；不会回退到本地执行。"),
+        locale("zh-TW", summary = "使用 Anthropic 雲端搜尋、網頁擷取、運算與顧問模型。輸入會離開這台電腦；不會改用本機執行。"),
+        locale("ja-JP", summary = "Anthropic のクラウド検索・取得・計算・アドバイザー機能を利用します。入力は端末外へ送信され、ローカル実行には切り替わりません。"),
+        locale("ko-KR", summary = "Anthropic 클라우드 검색, 가져오기, 계산 및 어드바이저 기능을 사용합니다. 입력은 이 컴퓨터 밖으로 전송되며 로컬 실행으로 대체되지 않습니다."),
+        locale("fr-FR", summary = "Utiliser la recherche, la récupération, le calcul et le modèle conseiller dans le cloud Anthropic. Les données quittent cet ordinateur, sans repli local."),
+        locale("de-DE", summary = "Anthropic-Cloudfunktionen für Suche, Abruf, Berechnungen und Beratung nutzen. Eingaben verlassen diesen Rechner; eine lokale Ausführung gibt es nicht als Ausweichlösung."),
+        locale("es-ES", summary = "Usa las funciones de búsqueda, obtención, cálculo y asesoramiento en la nube de Anthropic. Los datos salen de este equipo y no hay ejecución local alternativa."),
+        locale("hi-IN", summary = "Anthropic क्लाउड की खोज, फ़ेच, गणना और सलाहकार सुविधाएँ उपयोग करें। इनपुट इस कंप्यूटर से बाहर भेजे जाते हैं; स्थानीय विकल्प पर स्विच नहीं होता।"),
+        locale("ar-SA", summary = "استخدم البحث والجلب والحوسبة ونموذج الاستشارة في سحابة Anthropic. تُرسل المدخلات خارج هذا الجهاز ولا يوجد تنفيذ محلي بديل."),
+        locale("pt-BR", summary = "Use os recursos de busca, obtenção, computação e consultoria na nuvem da Anthropic. As entradas saem deste computador; não há execução local alternativa.")
+    ),
+    settings = ClaudeToolsConfig,
+    settings_default = default
+)]
 impl ClaudeToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {

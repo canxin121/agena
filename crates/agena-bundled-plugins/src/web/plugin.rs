@@ -1296,6 +1296,18 @@ const fn default_browser_action_timeout_ms() -> u64 {
     name = "web",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
+    translations(
+        locale("zh-CN", summary = "本地网页搜索、抓取和爬取工具，内置爬取缓存与去重，并可选用浏览器渲染。"),
+        locale("zh-TW", summary = "本機網頁搜尋、擷取與爬取工具，內建爬取快取與去重，並可選擇使用瀏覽器呈現。"),
+        locale("ja-JP", summary = "ローカルのWeb検索・取得・クロール機能です。クロール結果をキャッシュして重複を除去し、必要に応じてブラウザーで描画します。"),
+        locale("ko-KR", summary = "로컬 웹 검색, 가져오기, 크롤링 도구입니다. 크롤링 캐시와 중복 제거 기능이 있으며 브라우저 렌더링을 선택할 수 있습니다."),
+        locale("fr-FR", summary = "Recherche, récupération et exploration Web locales, avec cache intégré, déduplication et rendu par navigateur en option."),
+        locale("de-DE", summary = "Lokale Websuche, Abruf und Crawling mit integriertem Crawling-Cache, Duplikaterkennung und optionalem Browser-Rendering."),
+        locale("es-ES", summary = "Búsqueda, descarga y rastreo web local con caché integrada, eliminación de duplicados y renderizado opcional en navegador."),
+        locale("hi-IN", summary = "स्थानीय वेब खोज, फ़ेच और क्रॉल टूल; इसमें क्रॉल कैश, डुप्लिकेट हटाना और वैकल्पिक ब्राउज़र रेंडरिंग है।"),
+        locale("ar-SA", summary = "أدوات محلية للبحث في الويب وجلب الصفحات والزحف إليها، مع ذاكرة زحف مدمجة وإزالة للتكرار وخيار العرض عبر المتصفح."),
+        locale("pt-BR", summary = "Busca, obtenção e rastreamento web locais, com cache integrado, remoção de duplicatas e renderização opcional no navegador.")
+    ),
     settings = WebConfig,
     settings_default = default_web_config(),
     settings_metadata = web_settings_metadata(),
@@ -1328,9 +1340,9 @@ impl WebPlugin {
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("web plugin workspace root initialized more than once")
         })?;
-        Ok(agena_plugin_host::sdk::InitOutcome::ack(
-            agena_plugin_host::sdk::Plugin::manifest(self),
-        ))
+        let mut manifest = agena_plugin_host::sdk::Plugin::manifest(self);
+        crate::plugin_tool_docs::localize_builtin_tool_docs(&mut manifest);
+        Ok(agena_plugin_host::sdk::InitOutcome::ack(manifest))
     }
 
     #[hook(shutdown)]

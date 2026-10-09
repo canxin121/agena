@@ -1,4 +1,7 @@
-use super::{MANIFEST_SETTINGS_METADATA, ManifestEchoEndpoint, ManifestSettings};
+use super::{
+    MANIFEST_SETTINGS_METADATA, ManifestEchoEndpoint, ManifestSettings, PluginSurfaceContributions,
+    TransportKind,
+};
 
 #[derive(Default)]
 pub(super) struct ManifestPlugin;
@@ -8,9 +11,16 @@ pub(super) struct ManifestPlugin;
     name = "manifest",
     version = "0.0.0",
     summary = "Manifest macro behavior test plugin.",
+    translations(
+        locale("zh-CN", summary = "清单宏行为测试插件。", help = "用于测试本地化插件说明。"),
+        locale("fr-FR", summary = "Plugin de test du manifeste."),
+    ),
+    authors = ["Agena Team"],
+    transports = vec![TransportKind::Static, TransportKind::Http],
+    surface = PluginSurfaceContributions::default(),
+    settings_metadata = MANIFEST_SETTINGS_METADATA,
     settings = ManifestSettings,
     settings_default = default,
-    settings_metadata = MANIFEST_SETTINGS_METADATA,
     imports(PluginServiceImport::optional("test.telemetry", 1))
 )]
 impl ManifestPlugin {
@@ -30,6 +40,10 @@ impl ManifestPlugin {
 
     #[tool(
         summary = "Render text.",
+        translations(
+            locale("zh-CN", summary = "渲染文本。", help = "将输入文本作为渲染结果返回。"),
+            locale("fr-FR", summary = "Rendre le texte."),
+        ),
         stream = render_stream,
         command(
             "/manifest-render",

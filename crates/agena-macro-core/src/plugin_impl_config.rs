@@ -5,6 +5,7 @@ use syn::punctuated::Punctuated;
 use syn::{Expr, ExprLit, Ident, Lit, Meta, Result, Token, Type, parse_quote};
 
 use super::parse_expr_list;
+use crate::tool_spec_support::{LocalizedToolDocs, parse_localized_tool_docs};
 
 /// Configuration of a plugin impl.
 pub struct PluginImplConfig {
@@ -13,6 +14,10 @@ pub struct PluginImplConfig {
     pub version: Option<Expr>,
     pub summary: Option<Expr>,
     pub help: Option<Expr>,
+    pub translations: Vec<LocalizedToolDocs>,
+    pub authors: Option<Expr>,
+    pub transports: Option<Expr>,
+    pub surface: Option<Expr>,
     pub skills: Option<Expr>,
     /// Data-style command declarations, mirroring `skills = [...]`. The bridge
     /// plugin and the built-in command table declare their catalog as data
@@ -25,7 +30,6 @@ pub struct PluginImplConfig {
     /// Presentation-only decoration applied after compiling `settings = Type`.
     pub settings_metadata: Option<Expr>,
     pub settings_field: Option<Ident>,
-    pub settings_store: bool,
     pub plugin_tags: Vec<Expr>,
     /// Declarative consumer dependencies. Provider exports are generated only
     /// from method-level `#[service]` handlers so manifest and dispatch cannot drift.
@@ -41,6 +45,10 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
     let mut version = None;
     let mut summary = None;
     let mut help = None;
+    let mut translations = Vec::new();
+    let mut authors = None;
+    let mut transports = None;
+    let mut surface = None;
     let mut skills = None;
     let mut commands = None;
     let mut activity_kinds = None;
@@ -48,7 +56,6 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
     let mut settings_default = None;
     let mut settings_metadata = None;
     let mut settings_field = None;
-    let mut settings_store = false;
     let mut plugin_tags = Vec::new();
     let mut service_imports = Vec::new();
     let mut export = None;
@@ -65,32 +72,30 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                     "version" => version = Some(value.value),
                     "summary" => summary = Some(value.value),
                     "help" => help = Some(value.value),
+                    "authors" => authors = Some(value.value),
+                    "transports" => transports = Some(value.value),
+                    "surface" => surface = Some(value.value),
                     "skills" => skills = Some(value.value),
                     "activity_kinds" => activity_kinds = Some(value.value),
                     "settings" => {
                         if settings.is_some() {
                             return Err(syn::Error::new_spanned(ident, "duplicate settings type"));
                         }
-                        if settings_metadata.is_some() && settings.is_none() {
-                            return Err(syn::Error::new(
-                                proc_macro2::Span::call_site(),
-                                "`settings_metadata = ...` requires `settings = Type`",
-                            ));
-                        }
                         settings = Some(expr_as_type(value.value)?);
                     }
                     "settings_default" => settings_default = Some(value.value),
-                    "settings_metadata" => settings_metadata = Some(value.value),
-                    "settings_builder" => {
-                        return Err(syn::Error::new_spanned(
-                            ident,
-                            "plugin-level `settings_builder = ...` was removed; use `settings = Type`, optional `settings_default`, and presentation-only `settings_metadata`",
-                        ));
+                    "settings_metadata" => {
+                        if settings_metadata.is_some() {
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                "duplicate settings metadata",
+                            ));
+                        }
+                        settings_metadata = Some(value.value);
                     }
                     "settings_field" => {
                         settings_field = Some(expr_path_ident(value.value, "settings_field")?)
                     }
-                    "settings_store" => settings_store = expr_bool(value.value, "settings_store")?,
                     "commands" => commands = Some(value.value),
                     "tags" => {
                         return Err(syn::Error::new_spanned(
@@ -119,6 +124,30 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                     return Err(syn::Error::new_spanned(list.path, "expected identifier"));
                 };
                 match ident.to_string().as_str() {
+                    "translations" => {
+                        let mut translated = parse_localized_tool_docs(list.tokens)?;
+                        for translation in &translated {
+                            if translation.before_help.is_some() || translation.after_help.is_some()
+                            {
+                                return Err(syn::Error::new_spanned(
+                                    &translation.locale,
+                                    "plugin translations support only `summary` and `help`",
+                                ));
+                            }
+                            if translations.iter().any(|existing: &LocalizedToolDocs| {
+                                existing
+                                    .locale
+                                    .value()
+                                    .eq_ignore_ascii_case(&translation.locale.value())
+                            }) {
+                                return Err(syn::Error::new_spanned(
+                                    &translation.locale,
+                                    "duplicate translation locale",
+                                ));
+                            }
+                        }
+                        translations.append(&mut translated);
+                    }
                     "tags" => {
                         plugin_tags.extend(parse_expr_list(list.tokens)?);
                     }
@@ -140,14 +169,6 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                 }
             }
             Meta::Path(path) => {
-                if path.is_ident("settings") {
-                    settings_store = true;
-                    continue;
-                }
-                if path.is_ident("settings_store") {
-                    settings_store = true;
-                    continue;
-                }
                 return Err(syn::Error::new_spanned(
                     path,
                     "unsupported bare plugin argument",
@@ -179,12 +200,22 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
             "`settings_default = ...` requires `settings = Type`",
         ));
     }
+    if settings_metadata.is_some() && settings.is_none() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "`settings_metadata = ...` requires `settings = Type`",
+        ));
+    }
     Ok(PluginImplConfig {
         namespace,
         name,
         version,
         summary,
         help,
+        translations,
+        authors,
+        transports,
+        surface,
         skills,
         commands,
         activity_kinds,
@@ -192,7 +223,6 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
         settings_default,
         settings_metadata,
         settings_field,
-        settings_store,
         plugin_tags,
         service_imports,
         export,
@@ -285,19 +315,6 @@ pub fn expr_path_ident(expr: Expr, label: &str) -> Result<Ident> {
         other => Err(syn::Error::new_spanned(
             other,
             format!("{label} must be a single identifier"),
-        )),
-    }
-}
-
-fn expr_bool(expr: Expr, label: &str) -> Result<bool> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Bool(value),
-            ..
-        }) => Ok(value.value),
-        other => Err(syn::Error::new_spanned(
-            other,
-            format!("{label} must be a boolean literal"),
         )),
     }
 }

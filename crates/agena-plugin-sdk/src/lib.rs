@@ -12,9 +12,6 @@
 //! ```ignore
 //! use agena_plugin_sdk::prelude::*;
 //!
-//! #[derive(Default, PluginSettingsStore)]
-//! struct MyPlugin;
-//!
 //! #[agena_plugin(namespace = "demo", name = "hello", version = "0.1.0", export = cdylib)]
 //! impl MyPlugin {
 //!     #[tool(name = "hello", summary = "Say hello", tags(read_only))]
@@ -33,8 +30,7 @@
 //! - [`PluginKey`] / [`ToolKey`] — stable identifiers.
 //! - [`AttachmentKind`] — attachment classification.
 //! - [`prelude`] — everything a plugin author needs in one import.
-//! - `agena_macros` re-exports: [`agena_plugin`], [`ToolInput`],
-//!   [`PluginSettingsStore`].
+//! - `agena_macros` re-exports: [`agena_plugin`], [`ToolInput`].
 
 pub extern crate schemars;
 extern crate self as agena_plugin_sdk;
@@ -64,7 +60,7 @@ pub mod cdylib_abi;
 pub mod drivers;
 
 pub use activity::ActivitySourceAdapter;
-pub use agena_macros::{PluginSettingsStore, ToolInput, agena_plugin};
+pub use agena_macros::{ToolInput, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
@@ -80,13 +76,14 @@ pub use manifest::{
     CommandDefinition, CommandDiagnostic, CommandDocs, CommandHostEffect, CommandInvokeInput,
     CommandResult, CommandStatus, CommandTarget, ContributionKind, EmptyPluginSettings,
     HookSubscription, MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathKind, PluginDisplayContent,
-    PluginDisplayContribution, PluginManifest, PluginServiceDeclarations, PluginServiceExport,
-    PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
-    PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
-    PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
-    SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
-    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolRuntimePolicy,
-    ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    PluginDisplayContribution, PluginManifest, PluginManifestTranslation,
+    PluginServiceDeclarations, PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput,
+    PluginServiceInvokeOutput, PluginServiceMethod, PluginSkillDefinition,
+    PluginSurfaceContributions, PluginTerminalColor, PluginTerminalContributions,
+    PluginTerminalThemeColors, PluginTerminalThemePalette, SettingsConstraints, SettingsContract,
+    SettingsNode, SettingsNodeKind, SettingsOption, SettingsVariant, ToolContract, ToolDefinition,
+    ToolDocs, ToolDocsTranslation, ToolInput, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
+    TransportKind, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use schemars::JsonSchema;

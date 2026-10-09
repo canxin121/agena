@@ -39,13 +39,14 @@ pub use crate::manifest::{
     CommandDefinition, CommandDiagnostic, CommandHostEffect, CommandInvokeInput, CommandResult,
     CommandStatus, CommandTarget, ContributionKind, EmptyPluginSettings, HookSubscription,
     MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathInputKind, PathKind, PluginDisplayContent,
-    PluginDisplayContribution, PluginManifest, PluginServiceDeclarations, PluginServiceExport,
-    PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput, PluginServiceMethod,
-    PluginSkillDefinition, PluginSurfaceContributions, PluginTerminalColor,
-    PluginTerminalContributions, PluginTerminalThemeColors, PluginTerminalThemePalette,
-    SettingsConstraints, SettingsContract, SettingsNode, SettingsNodeKind, SettingsOption,
-    SettingsVariant, ToolContract, ToolDefinition, ToolDocs, ToolInput, ToolRuntimePolicy,
-    ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    PluginDisplayContribution, PluginManifest, PluginManifestTranslation,
+    PluginServiceDeclarations, PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput,
+    PluginServiceInvokeOutput, PluginServiceMethod, PluginSkillDefinition,
+    PluginSurfaceContributions, PluginTerminalColor, PluginTerminalContributions,
+    PluginTerminalThemeColors, PluginTerminalThemePalette, SettingsConstraints, SettingsContract,
+    SettingsNode, SettingsNodeKind, SettingsOption, SettingsVariant, ToolContract, ToolDefinition,
+    ToolDocs, ToolDocsTranslation, ToolInput, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
+    TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use crate::service_client::{
@@ -53,7 +54,7 @@ pub use crate::service_client::{
     PluginServiceInvokeExt, PluginServiceResponse, encode_service_output,
 };
 pub use crate::settings_contract::{bounded_json_schema, decorate_settings_contract};
-pub use agena_macros::{PluginSettingsStore, ToolInput, agena_plugin};
+pub use agena_macros::{ToolInput, agena_plugin};
 
 #[cfg(feature = "cdylib")]
 pub use crate::cdylib_abi::{AgenaPluginCdylib, AgenaPluginCdylib_Ref};

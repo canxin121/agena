@@ -14,9 +14,8 @@ struct EchoPluginConfig {
     uppercase: bool,
 }
 
-#[derive(Default, PluginSettingsStore)]
+#[derive(Default)]
 pub struct EchoPlugin {
-    #[settings(default)]
     settings: PluginSettings<EchoPluginConfig>,
 }
 
@@ -25,7 +24,9 @@ pub struct EchoPlugin {
     name = "echo",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Sample plugin: echo + before/after/shell hooks.",
-    settings,
+    settings = EchoPluginConfig,
+    settings_default = default,
+    settings_field = settings,
     export = cdylib
 )]
 impl EchoPlugin {

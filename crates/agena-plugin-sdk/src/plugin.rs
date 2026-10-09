@@ -10,7 +10,7 @@ use crate::error::{PluginError, Result};
 use crate::hooks::*;
 use crate::host_api::HostClient;
 use crate::identity::PluginKey;
-use crate::manifest::{PluginManifest, SettingsContract};
+use crate::manifest::PluginManifest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -134,19 +134,6 @@ where
         let value = crate::macro_support::parse_defaulted_settings(input, invalid.as_ref())?;
         self.set(value, already)
     }
-}
-
-#[doc(hidden)]
-/// Access to the plugin settings store.
-pub trait PluginSettingsStoreAccess {
-    fn plugin_settings_contract() -> SettingsContract;
-
-    fn set_plugin_settings_from_json(
-        &self,
-        input: serde_json::Value,
-        invalid: &str,
-        already: String,
-    ) -> Result<()>;
 }
 
 /// The trait every plugin implements. Every method has a default no-op body so

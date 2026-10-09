@@ -811,6 +811,23 @@ impl StaticPluginRegistration {
             },
         }
     }
+
+    /// Register an in-process plugin with a host-side metadata transform.
+    /// Both `meta/manifest` and `meta/init` pass through the same transform so
+    /// the plugin contract remains immutable across initialization.
+    pub fn new_with_manifest_transform<P, F>(key: PluginKey, plugin: P, transform: F) -> Self
+    where
+        P: crate::sdk::Plugin,
+        F: Fn(&mut crate::sdk::PluginManifest) + Send + Sync + 'static,
+    {
+        let inproc = InProcessTransport::new_with_manifest_transform(plugin, transform);
+        Self {
+            key,
+            registration: StaticRegistration {
+                builder: Box::new(move || Arc::new(inproc) as Arc<dyn PluginTransport>),
+            },
+        }
+    }
 }
 
 /// A plugin-emitted notification intent through the unified `host.notify`

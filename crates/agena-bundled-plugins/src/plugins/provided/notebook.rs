@@ -71,6 +71,18 @@ struct NotebookEditInput {
     name = "notebook",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Revision-safe Jupyter notebook cell editing.",
+    translations(
+        locale("zh-CN", summary = "带版本校验的 Jupyter 笔记本单元格编辑。"),
+        locale("zh-TW", summary = "具版本檢查的 Jupyter 筆記本儲存格編輯。"),
+        locale("ja-JP", summary = "リビジョンを確認しながら Jupyter ノートブックのセルを編集します。"),
+        locale("ko-KR", summary = "리비전을 확인하며 Jupyter 노트북 셀을 편집합니다."),
+        locale("fr-FR", summary = "Modifier des cellules Jupyter Notebook en vérifiant leur révision."),
+        locale("de-DE", summary = "Jupyter-Notebookzellen mit Revisionsprüfung bearbeiten."),
+        locale("es-ES", summary = "Edita celdas de Jupyter Notebook con comprobación de revisión."),
+        locale("hi-IN", summary = "रिविज़न जाँच के साथ Jupyter Notebook सेल संपादित करें।"),
+        locale("ar-SA", summary = "حرّر خلايا Jupyter Notebook مع التحقق من المراجعة."),
+        locale("pt-BR", summary = "Edite células do Jupyter Notebook com verificação de revisão.")
+    ),
 )]
 impl NotebookPlugin {
     pub(crate) fn new() -> Self {
@@ -80,7 +92,49 @@ impl NotebookPlugin {
     #[tool(
         tags(mutate, filesystem),
         name = "edit_cell",
-        summary = "Replace, insert, or delete one Jupyter notebook cell with a revision check."
+        summary = "Replace, insert, or delete one Jupyter notebook cell with a revision check.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "校验版本后替换、插入或删除一个 Jupyter 笔记本单元格。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "檢查版本後替換、插入或刪除一個 Jupyter 筆記本儲存格。"
+            ),
+            locale(
+                "ja-JP",
+                summary = "リビジョンを確認して Jupyter ノートブックのセルを置換・挿入・削除します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "리비전을 확인한 뒤 Jupyter 노트북 셀 하나를 바꾸거나 삽입 또는 삭제합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Remplacer, insérer ou supprimer une cellule Jupyter après vérification de sa révision."
+            ),
+            locale(
+                "de-DE",
+                summary = "Eine Jupyter-Notebookzelle nach Revisionsprüfung ersetzen, einfügen oder löschen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Sustituye, inserta o elimina una celda de Jupyter Notebook tras comprobar su revisión."
+            ),
+            locale(
+                "hi-IN",
+                summary = "रिविज़न जाँचकर Jupyter Notebook की एक सेल बदलें, जोड़ें या हटाएँ।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "استبدل خلية واحدة أو أدرجها أو احذفها في Jupyter Notebook بعد التحقق من المراجعة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Substitua, insira ou exclua uma célula do Jupyter Notebook após verificar a revisão."
+            )
+        )
     )]
     async fn edit_cell(
         &self,

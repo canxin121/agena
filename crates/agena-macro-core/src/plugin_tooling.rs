@@ -172,6 +172,40 @@ pub fn expand_plugin_tool_definition(
         .as_ref()
         .map(|value| quote! { Some(#value.to_string()) })
         .unwrap_or_else(|| quote! { None });
+    let translations = spec.translations.iter().map(|translation| {
+        let locale = &translation.locale;
+        let before_help = translation
+            .before_help
+            .as_ref()
+            .map(|value| quote! { Some(#value.to_string()) })
+            .unwrap_or_else(|| quote! { None });
+        let after_help = translation
+            .after_help
+            .as_ref()
+            .map(|value| quote! { Some(#value.to_string()) })
+            .unwrap_or_else(|| quote! { None });
+        let summary = translation
+            .summary
+            .as_ref()
+            .map(|value| quote! { Some(#value.to_string()) })
+            .unwrap_or_else(|| quote! { None });
+        let help = translation
+            .help
+            .as_ref()
+            .map(|value| quote! { Some(#value.to_string()) })
+            .unwrap_or_else(|| quote! { None });
+        quote! {
+            __agena_translations.insert(
+                #locale.to_string(),
+                ::agena_plugin_sdk::manifest::ToolDocsTranslation {
+                    before_help: #before_help,
+                    after_help: #after_help,
+                    summary: #summary,
+                    help: #help,
+                },
+            );
+        }
+    });
     // Tags are declaration-only: only the tags(...) explicitly declared on
     // the tool attribute are used. Nothing is inferred from an input spec.
     let tags_expr = if spec.tags.is_empty() {
@@ -187,6 +221,8 @@ pub fn expand_plugin_tool_definition(
     };
     Ok(quote! {{
         let input_schema = #input_schema_expr;
+        let mut __agena_translations = ::std::collections::BTreeMap::new();
+        #(#translations)*
         ::agena_plugin_sdk::ToolDefinition {
             name: #tool.to_string(),
             contract: ::agena_plugin_sdk::manifest::ToolContract {
@@ -198,6 +234,7 @@ pub fn expand_plugin_tool_definition(
                 after_help: #after_help_expr,
                 summary: Some(#summary.to_string()),
                 help: #help_expr,
+                translations: __agena_translations,
             },
             runtime: ::agena_plugin_sdk::manifest::ToolRuntimePolicy {
                 streaming: #streaming_expr,

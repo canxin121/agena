@@ -242,7 +242,6 @@ pub fn expand_plugin_layer_tool_stream(
 
 pub fn expand_plugin_layer_init_method(
     config: &PluginImplConfig,
-    self_ty: &Type,
     binding: Option<&PluginHookPlan>,
 ) -> Result<proc_macro2::TokenStream> {
     let config_store = {
@@ -254,15 +253,6 @@ pub fn expand_plugin_layer_init_method(
         if let Some(field) = config.settings_field.as_ref() {
             quote! {
                 self.#field.set_from_json(ctx.settings.clone(), #invalid, #already)?;
-            }
-        } else if config.settings_store {
-            quote! {
-                <#self_ty as ::agena_plugin_sdk::plugin::PluginSettingsStoreAccess>::set_plugin_settings_from_json(
-                    self,
-                    ctx.settings.clone(),
-                    #invalid,
-                    #already.to_string(),
-                )?;
             }
         } else {
             quote! {}

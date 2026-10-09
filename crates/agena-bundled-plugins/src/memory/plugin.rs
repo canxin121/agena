@@ -171,6 +171,18 @@ struct MemoryRecordOutput {
     name = "memory",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Persistent memory with searchable retrieval and write tools.",
+    translations(
+        locale("zh-CN", summary = "提供可搜索的持久记忆读取与写入工具。"),
+        locale("zh-TW", summary = "提供可搜尋的持久記憶讀取與寫入工具。"),
+        locale("ja-JP", summary = "検索して呼び出せる永続メモリの読み書きツールです。"),
+        locale("ko-KR", summary = "검색해 불러올 수 있는 영구 메모리의 읽기 및 쓰기 도구입니다."),
+        locale("fr-FR", summary = "Outils de lecture et d’écriture d’une mémoire persistante consultable."),
+        locale("de-DE", summary = "Werkzeuge zum Lesen und Schreiben eines durchsuchbaren Langzeitgedächtnisses."),
+        locale("es-ES", summary = "Herramientas para consultar y escribir memoria persistente mediante búsqueda."),
+        locale("hi-IN", summary = "खोजकर प्राप्त की जा सकने वाली स्थायी मेमोरी पढ़ने और लिखने के टूल।"),
+        locale("ar-SA", summary = "أدوات لقراءة الذاكرة الدائمة القابلة للبحث والكتابة فيها."),
+        locale("pt-BR", summary = "Ferramentas para ler e gravar memória persistente com recuperação por busca.")
+    ),
     settings = MemoryConfig,
     settings_default = default_memory_config(),
     settings_metadata = memory_settings_metadata(),
@@ -196,9 +208,9 @@ impl MemoryPlugin {
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("memory plugin workspace root already initialized")
         })?;
-        Ok(agena_plugin_host::sdk::InitOutcome::ack(
-            agena_plugin_host::sdk::Plugin::manifest(self),
-        ))
+        let mut manifest = agena_plugin_host::sdk::Plugin::manifest(self);
+        crate::plugin_tool_docs::localize_builtin_tool_docs(&mut manifest);
+        Ok(agena_plugin_host::sdk::InitOutcome::ack(manifest))
     }
 
     fn config(&self) -> SdkResult<&MemoryConfig> {

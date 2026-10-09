@@ -115,6 +115,18 @@ fn recover_write<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLock
     name = "terminal",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Terminal window title and attention notification integration.",
+    translations(
+        locale("zh-CN", summary = "集成终端窗口标题和注意事项通知。"),
+        locale("zh-TW", summary = "整合終端機視窗標題與提醒通知。"),
+        locale("ja-JP", summary = "ターミナルのウィンドウタイトル設定と注意喚起通知を連携します。"),
+        locale("ko-KR", summary = "터미널 창 제목 설정과 주의 알림을 연동합니다."),
+        locale("fr-FR", summary = "Intégration du titre de la fenêtre du terminal et des notifications d’attention."),
+        locale("de-DE", summary = "Integration von Terminalfenstertiteln und Aufmerksamkeitshinweisen."),
+        locale("es-ES", summary = "Integra el título de la ventana del terminal y las notificaciones de atención."),
+        locale("hi-IN", summary = "टर्मिनल विंडो का शीर्षक और ध्यान-सूचनाएँ एकीकृत करता है।"),
+        locale("ar-SA", summary = "تكامل عنوان نافذة الطرفية مع إشعارات التنبيه."),
+        locale("pt-BR", summary = "Integra o título da janela do terminal e notificações de atenção.")
+    ),
 )]
 impl TerminalPlugin {
     pub(crate) fn new() -> Self {

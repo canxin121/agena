@@ -74,6 +74,44 @@ fn plugin_macro_compiles_typed_settings_then_applies_presentation_metadata() {
 }
 
 #[test]
+fn plugin_macro_covers_manifest_metadata_declared_by_the_sdk_contract() {
+    let manifest = Plugin::manifest(&ManifestPlugin);
+    assert_eq!(manifest.authors, ["Agena Team"]);
+    assert_eq!(
+        manifest.transports,
+        [TransportKind::Static, TransportKind::Http]
+    );
+    assert!(manifest.surface.is_empty());
+}
+
+#[test]
+fn plugin_and_tool_documentation_translations_are_ui_only_and_locale_aware() {
+    let manifest = Plugin::manifest(&ManifestPlugin);
+    assert_eq!(
+        manifest.summary.as_deref(),
+        Some("Manifest macro behavior test plugin.")
+    );
+    assert_eq!(
+        manifest.summary_for_locale("zh-CN"),
+        Some("清单宏行为测试插件。")
+    );
+    assert_eq!(manifest.help_for_locale("fr-FR"), manifest.help_text());
+    assert_eq!(
+        manifest.summary_for_locale("fr-FR"),
+        Some("Plugin de test du manifeste.")
+    );
+
+    let tool = tool_by_name(&manifest, "render");
+    assert_eq!(tool.docs.summary.as_deref(), Some("Render text."));
+    assert_eq!(tool.docs.summary_for_locale("zh_CN"), Some("渲染文本。"));
+    assert_eq!(
+        tool.docs.help_for_locale("zh-CN"),
+        Some("将输入文本作为渲染结果返回。")
+    );
+    assert_eq!(tool.docs.summary_for_locale("en-US"), Some("Render text."));
+}
+
+#[test]
 fn tool_macro_manifest_uses_doc_comments_and_dynamic_output() {
     let manifest = Plugin::manifest(&ManifestPlugin);
     let doc_tool = tool_by_name(&manifest, "doc_render");

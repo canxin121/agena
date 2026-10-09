@@ -122,6 +122,18 @@ fn default_mcp_config() -> McpConfig {
     name = "mcp",
     version = env!("CARGO_PKG_VERSION"),
     summary = "MCP discovery and bridge tools.",
+    translations(
+        locale("zh-CN", summary = "发现并调用 MCP 服务器提供的资源、提示和工具。"),
+        locale("zh-TW", summary = "探索並呼叫 MCP 伺服器提供的資源、提示與工具。"),
+        locale("ja-JP", summary = "MCP サーバーが提供するリソース、プロンプト、ツールを検出して利用します。"),
+        locale("ko-KR", summary = "MCP 서버가 제공하는 리소스, 프롬프트, 도구를 찾아 호출합니다."),
+        locale("fr-FR", summary = "Découvrir et appeler les ressources, prompts et outils fournis par des serveurs MCP."),
+        locale("de-DE", summary = "Ressourcen, Prompts und Werkzeuge von MCP-Servern entdecken und aufrufen."),
+        locale("es-ES", summary = "Descubre y utiliza los recursos, prompts y herramientas que ofrecen los servidores MCP."),
+        locale("hi-IN", summary = "MCP सर्वर के संसाधन, प्रॉम्प्ट और टूल खोजें और उनका उपयोग करें।"),
+        locale("ar-SA", summary = "اكتشف الموارد والمطالبات والأدوات التي توفرها خوادم MCP واستخدمها."),
+        locale("pt-BR", summary = "Descubra e use recursos, prompts e ferramentas oferecidos por servidores MCP.")
+    ),
     settings = McpConfig,
     settings_default = default_mcp_config(),
     settings_metadata = mcp_settings_metadata(),
@@ -145,7 +157,22 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "resources.list",
-        summary = "List MCP resources from one server."
+        summary = "List MCP resources from one server.",
+        translations(
+            locale("zh-CN", summary = "列出一个 MCP 服务器提供的资源。"),
+            locale("zh-TW", summary = "列出一個 MCP 伺服器提供的資源。"),
+            locale(
+                "ja-JP",
+                summary = "1 台の MCP サーバーが提供するリソースを一覧表示します。"
+            ),
+            locale("ko-KR", summary = "MCP 서버 하나가 제공하는 리소스를 나열합니다."),
+            locale("fr-FR", summary = "Lister les ressources d’un serveur MCP."),
+            locale("de-DE", summary = "MCP-Ressourcen eines Servers auflisten."),
+            locale("es-ES", summary = "Enumera los recursos de un servidor MCP."),
+            locale("hi-IN", summary = "एक MCP सर्वर के संसाधनों की सूची दें।"),
+            locale("ar-SA", summary = "اعرض موارد خادم MCP واحد."),
+            locale("pt-BR", summary = "Liste os recursos de um servidor MCP.")
+        )
     )]
     async fn invoke_resources_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -161,7 +188,31 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "resources.templates.list",
-        summary = "List MCP resource templates from one server."
+        summary = "List MCP resource templates from one server.",
+        translations(
+            locale("zh-CN", summary = "列出一个 MCP 服务器提供的资源模板。"),
+            locale("zh-TW", summary = "列出一個 MCP 伺服器提供的資源範本。"),
+            locale(
+                "ja-JP",
+                summary = "1 台の MCP サーバーが提供するリソーステンプレートを一覧表示します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "MCP 서버 하나가 제공하는 리소스 템플릿을 나열합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Lister les modèles de ressources d’un serveur MCP."
+            ),
+            locale("de-DE", summary = "Ressourcenvorlagen eines MCP-Servers auflisten."),
+            locale(
+                "es-ES",
+                summary = "Enumera las plantillas de recursos de un servidor MCP."
+            ),
+            locale("hi-IN", summary = "एक MCP सर्वर के संसाधन टेम्पलेट की सूची दें।"),
+            locale("ar-SA", summary = "اعرض قوالب الموارد من خادم MCP واحد."),
+            locale("pt-BR", summary = "Liste os modelos de recursos de um servidor MCP.")
+        )
     )]
     async fn invoke_resource_templates_list(
         &self,
@@ -183,7 +234,19 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, read_only),
         name = "resources.read",
-        summary = "Read one MCP resource by URI."
+        summary = "Read one MCP resource by URI.",
+        translations(
+            locale("zh-CN", summary = "通过 URI 读取一个 MCP 资源。"),
+            locale("zh-TW", summary = "透過 URI 讀取一個 MCP 資源。"),
+            locale("ja-JP", summary = "URI を指定して MCP リソースを 1 つ読み取ります。"),
+            locale("ko-KR", summary = "URI로 MCP 리소스 하나를 읽습니다."),
+            locale("fr-FR", summary = "Lire une ressource MCP à partir de son URI."),
+            locale("de-DE", summary = "Eine MCP-Ressource über ihre URI lesen."),
+            locale("es-ES", summary = "Lee un recurso MCP mediante su URI."),
+            locale("hi-IN", summary = "URI के ज़रिए एक MCP संसाधन पढ़ें।"),
+            locale("ar-SA", summary = "اقرأ مورد MCP واحدًا باستخدام URI."),
+            locale("pt-BR", summary = "Leia um recurso MCP pela URI.")
+        )
     )]
     async fn invoke_resources_read(
         &self,
@@ -205,7 +268,28 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "prompts.list",
-        summary = "List MCP prompt templates from one server."
+        summary = "List MCP prompt templates from one server.",
+        translations(
+            locale("zh-CN", summary = "列出一个 MCP 服务器提供的提示模板。"),
+            locale("zh-TW", summary = "列出一個 MCP 伺服器提供的提示範本。"),
+            locale(
+                "ja-JP",
+                summary = "1 台の MCP サーバーが提供するプロンプトテンプレートを一覧表示します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "MCP 서버 하나가 제공하는 프롬프트 템플릿을 나열합니다."
+            ),
+            locale("fr-FR", summary = "Lister les modèles de prompt d’un serveur MCP."),
+            locale("de-DE", summary = "Prompt-Vorlagen eines MCP-Servers auflisten."),
+            locale(
+                "es-ES",
+                summary = "Enumera las plantillas de prompts de un servidor MCP."
+            ),
+            locale("hi-IN", summary = "एक MCP सर्वर के प्रॉम्प्ट टेम्पलेट की सूची दें।"),
+            locale("ar-SA", summary = "اعرض قوالب الطلبات من خادم MCP واحد."),
+            locale("pt-BR", summary = "Liste os modelos de prompt de um servidor MCP.")
+        )
     )]
     async fn invoke_prompts_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -221,7 +305,19 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, read_only),
         name = "prompts.get",
-        summary = "Fetch one MCP prompt template."
+        summary = "Fetch one MCP prompt template.",
+        translations(
+            locale("zh-CN", summary = "获取一个 MCP 提示模板。"),
+            locale("zh-TW", summary = "取得一個 MCP 提示範本。"),
+            locale("ja-JP", summary = "MCP のプロンプトテンプレートを 1 つ取得します。"),
+            locale("ko-KR", summary = "MCP 프롬프트 템플릿 하나를 가져옵니다."),
+            locale("fr-FR", summary = "Récupérer un modèle de prompt MCP."),
+            locale("de-DE", summary = "Eine MCP-Prompt-Vorlage abrufen."),
+            locale("es-ES", summary = "Obtiene una plantilla de prompt MCP."),
+            locale("hi-IN", summary = "एक MCP प्रॉम्प्ट टेम्पलेट प्राप्त करें।"),
+            locale("ar-SA", summary = "اجلب قالب طلب واحدًا من MCP."),
+            locale("pt-BR", summary = "Obtenha um modelo de prompt MCP.")
+        )
     )]
     async fn invoke_prompts_get(&self, input: &GetPromptInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -240,7 +336,19 @@ impl McpPlugin {
     #[tool(
         tags(execute, mcp, mutate),
         name = "tools.call",
-        summary = "Call one discovered MCP tool."
+        summary = "Call one discovered MCP tool.",
+        translations(
+            locale("zh-CN", summary = "调用一个已发现的 MCP 工具。"),
+            locale("zh-TW", summary = "呼叫一個已探索的 MCP 工具。"),
+            locale("ja-JP", summary = "検出済みの MCP ツールを 1 つ呼び出します。"),
+            locale("ko-KR", summary = "검색된 MCP 도구 하나를 호출합니다."),
+            locale("fr-FR", summary = "Appeler un outil MCP découvert."),
+            locale("de-DE", summary = "Ein gefundenes MCP-Werkzeug aufrufen."),
+            locale("es-ES", summary = "Llama a una herramienta MCP detectada."),
+            locale("hi-IN", summary = "पहचाने गए MCP टूल को कॉल करें।"),
+            locale("ar-SA", summary = "استدعِ أداة MCP تم اكتشافها."),
+            locale("pt-BR", summary = "Chame uma ferramenta MCP descoberta.")
+        )
     )]
     async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -263,7 +371,40 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "tools.search",
-        summary = "Search the current MCP tool index without expanding all schemas."
+        summary = "Search the current MCP tool index without expanding all schemas.",
+        translations(
+            locale("zh-CN", summary = "搜索当前 MCP 工具索引，无需展开所有工具结构。"),
+            locale("zh-TW", summary = "搜尋目前的 MCP 工具索引，不必展開所有工具結構。"),
+            locale(
+                "ja-JP",
+                summary = "すべてのスキーマを展開せずに、現在の MCP ツール索引を検索します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "모든 스키마를 펼치지 않고 현재 MCP 도구 색인을 검색합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Rechercher dans l’index MCP actuel sans développer tous les schémas."
+            ),
+            locale(
+                "de-DE",
+                summary = "Den aktuellen MCP-Werkzeugindex durchsuchen, ohne alle Schemas zu laden."
+            ),
+            locale(
+                "es-ES",
+                summary = "Busca en el índice actual de herramientas MCP sin desplegar todos los esquemas."
+            ),
+            locale("hi-IN", summary = "सभी स्कीमा खोले बिना मौजूदा MCP टूल इंडेक्स खोजें।"),
+            locale(
+                "ar-SA",
+                summary = "ابحث في فهرس أدوات MCP الحالي دون تحميل جميع المخططات."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Pesquise o índice atual de ferramentas MCP sem expandir todos os esquemas."
+            )
+        )
     )]
     async fn invoke_tools_search(&self, input: &McpToolSearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.trim().to_ascii_lowercase();
@@ -352,7 +493,43 @@ impl McpPlugin {
     #[tool(
         tags(query, mcp, discovery, read_only),
         name = "servers.status",
-        summary = "Inspect configured MCP connection health and discovered tool counts."
+        summary = "Inspect configured MCP connection health and discovered tool counts.",
+        translations(
+            locale("zh-CN", summary = "查看已配置 MCP 连接的健康状态和已发现工具数量。"),
+            locale("zh-TW", summary = "檢視已設定 MCP 連線的健康狀態與已探索工具數量。"),
+            locale(
+                "ja-JP",
+                summary = "設定済み MCP 接続の状態と検出済みツール数を確認します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "구성된 MCP 연결 상태와 검색된 도구 수를 확인합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Vérifier l’état des connexions MCP et le nombre d’outils détectés."
+            ),
+            locale(
+                "de-DE",
+                summary = "Status der MCP-Verbindungen und Anzahl gefundener Werkzeuge prüfen."
+            ),
+            locale(
+                "es-ES",
+                summary = "Consulta el estado de las conexiones MCP y el número de herramientas detectadas."
+            ),
+            locale(
+                "hi-IN",
+                summary = "कॉन्फ़िगर किए गए MCP कनेक्शन की स्थिति और मिले टूल की संख्या देखें।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "افحص حالة اتصالات MCP المُهيأة وعدد الأدوات المكتشفة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Verifique a saúde das conexões MCP e a quantidade de ferramentas descobertas."
+            )
+        )
     )]
     async fn invoke_servers_status(&self) -> SdkResult<ToolInvokeOutput> {
         let statuses = self.manager.statuses().await;
@@ -433,7 +610,43 @@ impl McpPlugin {
     #[tool(
         tags(mutate, mcp),
         name = "servers.reconnect",
-        summary = "Reconnect one configured MCP server and refresh its tool cache."
+        summary = "Reconnect one configured MCP server and refresh its tool cache.",
+        translations(
+            locale("zh-CN", summary = "重新连接一个已配置的 MCP 服务器并刷新工具缓存。"),
+            locale("zh-TW", summary = "重新連線至一個已設定的 MCP 伺服器並更新工具快取。"),
+            locale(
+                "ja-JP",
+                summary = "設定済み MCP サーバーに再接続し、ツールキャッシュを更新します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "구성된 MCP 서버 하나에 다시 연결하고 도구 캐시를 새로 고칩니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Reconnecter un serveur MCP configuré et actualiser son cache d’outils."
+            ),
+            locale(
+                "de-DE",
+                summary = "Einen konfigurierten MCP-Server erneut verbinden und den Werkzeugcache aktualisieren."
+            ),
+            locale(
+                "es-ES",
+                summary = "Reconecta un servidor MCP configurado y actualiza su caché de herramientas."
+            ),
+            locale(
+                "hi-IN",
+                summary = "कॉन्फ़िगर किए गए MCP सर्वर से फिर जुड़ें और टूल कैश ताज़ा करें।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "أعد الاتصال بخادم MCP مُهيأ وحدّث ذاكرة أدواته المؤقتة."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Reconecte um servidor MCP configurado e atualize o cache de ferramentas."
+            )
+        )
     )]
     async fn invoke_servers_reconnect(
         &self,

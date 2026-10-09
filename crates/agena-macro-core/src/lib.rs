@@ -37,7 +37,6 @@ pub mod plugin_method_arg_support;
 pub mod plugin_method_support;
 pub mod plugin_plan_support;
 pub mod plugin_runtime;
-pub mod plugin_settings_store;
 pub mod plugin_tool_config;
 pub mod plugin_tooling;
 pub mod plugin_types;

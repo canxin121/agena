@@ -97,7 +97,6 @@ fn expand_plugin_inherent_impl_attr(
 
     let manifest_method = expand_plugin_layer_manifest(
         &config,
-        &self_ty,
         item.generics.params.is_empty(),
         docs.as_deref(),
         &tool_plans,
@@ -122,10 +121,9 @@ fn expand_plugin_inherent_impl_attr(
     let init_binding = hook_bindings
         .iter()
         .find(|binding| binding.hook == PluginHookKind::Init);
-    let init_method =
-        (config.settings_field.is_some() || config.settings_store || init_binding.is_some())
-            .then(|| expand_plugin_layer_init_method(&config, &self_ty, init_binding))
-            .transpose()?;
+    let init_method = (config.settings_field.is_some() || init_binding.is_some())
+        .then(|| expand_plugin_layer_init_method(&config, init_binding))
+        .transpose()?;
     let hook_methods = expand_plugin_layer_hook_methods(&self_ty, &hook_bindings)?;
     let generics = &item.generics;
     let export = expand_plugin_layer_export(&config, &self_ty, generics)?;

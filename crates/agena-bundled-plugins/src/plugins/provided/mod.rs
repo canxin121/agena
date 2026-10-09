@@ -10,6 +10,7 @@ pub mod mcp;
 pub mod monitor;
 pub mod notebook;
 pub mod planning;
+pub(crate) mod provider_tool_docs;
 pub mod report;
 pub mod session;
 pub mod settings;

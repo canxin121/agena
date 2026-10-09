@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { RiCommandLine, RiPlayLine, RiRefreshLine } from '@remixicon/vue'
 
@@ -11,6 +12,7 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import { settingsText as st } from '@/i18n/settingsText'
 import { apiJson } from '@/lib/api'
+import { localizePluginManifest } from '@/lib/pluginDocumentation'
 import {
   clonePluginJson,
   type PluginHostEffect,
@@ -44,7 +46,11 @@ type PluginTool = {
   summary?: string
   description?: string
   tags?: string[]
-  docs?: { summary?: string; help?: string }
+  docs?: {
+    summary?: string
+    help?: string
+    translations?: Record<string, { summary?: string | null; help?: string | null } | undefined>
+  }
 }
 
 type PluginManifest = {
@@ -53,6 +59,7 @@ type PluginManifest = {
   version?: string
   summary?: string | null
   help?: string | null
+  translations?: Record<string, { summary?: string | null; help?: string | null } | undefined>
   authors?: string[]
   transports?: string[]
   tools?: PluginTool[]
@@ -254,6 +261,7 @@ const PANEL_TAB_IDS = new Set<PanelTab>(PANEL_TABS.value.map((tab) => tab.id))
 
 const route = useRoute()
 const router = useRouter()
+const { locale } = useI18n()
 const chat = useChatStore()
 const toasts = useToastsStore()
 
@@ -310,7 +318,10 @@ const selectedStatus = computed(
   () => statuses.value.find((status) => status.plugin_id === selectedPluginId.value) || null,
 )
 const selectedPlugin = computed(() => selectedInspect.value?.plugin || null)
-const selectedManifest = computed(() => selectedPlugin.value?.manifest || null)
+const selectedManifest = computed(() => {
+  const manifest = selectedPlugin.value?.manifest
+  return manifest ? localizePluginManifest(manifest, String(locale.value || 'en-US')) : null
+})
 const selectedActivation = computed(() => selectedPlugin.value?.activation || null)
 const selectedAuthority = computed(() => selectedPlugin.value?.authority || null)
 const selectedArchitectureNode = computed(

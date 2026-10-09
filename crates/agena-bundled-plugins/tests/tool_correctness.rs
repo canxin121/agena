@@ -2,7 +2,7 @@
 //! Each fixture owns an isolated workspace; no personal config or service calls.
 use agena_domain::{StructuredObject, ToolInvocation};
 use agena_plugin_host::{
-    ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
+    ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
 };
 use agena_runtime_tools::{
     authorization::ExecutionPrincipal,
@@ -34,28 +34,9 @@ impl Fixture {
                 .insert(name.into(), ConfiguredPlugin::static_default());
         }
         let plugins = PluginHost::new(PluginHostBuildConfig {
-            static_plugins: vec![
-                StaticPluginRegistration::new(
-                    "agena.code".parse().unwrap(),
-                    agena_bundled_plugins::tool::new_code_plugin(),
-                ),
-                StaticPluginRegistration::new(
-                    "agena.fs".parse().unwrap(),
-                    agena_bundled_plugins::tool::new_fs_plugin(),
-                ),
-                StaticPluginRegistration::new(
-                    "agena.notebook".parse().unwrap(),
-                    agena_bundled_plugins::tool::new_notebook_plugin(),
-                ),
-                StaticPluginRegistration::new(
-                    "agena.memory".parse().unwrap(),
-                    agena_bundled_plugins::tool::new_memory_plugin(),
-                ),
-                StaticPluginRegistration::new(
-                    "agena.report".parse().unwrap(),
-                    agena_bundled_plugins::tool::new_report_plugin(),
-                ),
-            ],
+            static_plugins: agena_bundled_plugins::plugins::sources::static_plugin_registrations(
+                None,
+            ),
             config,
             workspace_root: workspace.clone(),
             agena_version: "audit-test".into(),

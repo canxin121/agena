@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 136,
+    "execution_tools": 137,
     "gateway_tools": 7,
     "plugins": 22,
-    "tools": 143
+    "tools": 144
   },
   "plugins": [
     {
@@ -718,6 +718,19 @@
           "definition_identity": "a6d769aa318dc61f50c12e43a7d0c35e894c3ef6a059be0c54cd64e444dc02f0",
           "gateway": false,
           "input_schema_sha256": "0175a15e309568465ce137c3937620ced7ffecabe5821537fc3901b38a326b14",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "filesystem",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.read_media",
+          "conditional": null,
+          "definition_identity": "02b4794b6ceee08a002fc035fe8b203678aaddfa1b3ddac392610a31bec8db99",
+          "gateway": false,
+          "input_schema_sha256": "392b15c5378b0869b9f2f81375ce6c39ea3052b627da89201b98be15de2d2cd9",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",

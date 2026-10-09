@@ -340,6 +340,18 @@ impl ChatGptToolsPlugin {
     name = "chatgpt",
     version = env!("CARGO_PKG_VERSION"),
     summary = "OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.",
+    translations(
+        locale("zh-CN", summary = "使用 OpenAI 云端搜索、计算和图像能力。输入会离开本机；不会回退到本地执行。"),
+        locale("zh-TW", summary = "使用 OpenAI 雲端搜尋、運算與影像功能。輸入會離開這台電腦；不會改用本機執行。"),
+        locale("ja-JP", summary = "OpenAI のクラウド検索・計算・画像機能を利用します。入力はこの端末の外部に送信され、ローカル実行には切り替わりません。"),
+        locale("ko-KR", summary = "OpenAI 클라우드 검색, 계산, 이미지 기능을 사용합니다. 입력은 이 컴퓨터 밖으로 전송되며 로컬 실행으로 대체되지 않습니다."),
+        locale("fr-FR", summary = "Utiliser les fonctions de recherche, de calcul et d’image dans le cloud OpenAI. Les données sont envoyées hors de cet ordinateur, sans solution de repli locale."),
+        locale("de-DE", summary = "OpenAI-Cloudfunktionen für Suche, Berechnungen und Bilder nutzen. Eingaben verlassen diesen Rechner; eine lokale Ausführung gibt es nicht als Ausweichlösung."),
+        locale("es-ES", summary = "Usa las funciones de búsqueda, cálculo e imagen en la nube de OpenAI. Los datos salen de este equipo y no hay ejecución local alternativa."),
+        locale("hi-IN", summary = "OpenAI क्लाउड की खोज, गणना और छवि सुविधाएँ उपयोग करें। इनपुट इस कंप्यूटर से बाहर भेजे जाते हैं; स्थानीय विकल्प पर स्विच नहीं होता।"),
+        locale("ar-SA", summary = "استخدم إمكانات البحث والحوسبة والصور في سحابة OpenAI. تُرسل المدخلات خارج هذا الجهاز ولا يوجد تنفيذ محلي بديل."),
+        locale("pt-BR", summary = "Use os recursos de busca, computação e imagem na nuvem da OpenAI. As entradas saem deste computador; não há alternativa de execução local.")
+    ),
     settings = ChatGptToolsConfig,
     settings_default = default,
 )]

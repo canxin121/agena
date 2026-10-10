@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import test from 'node:test'
 
 import {
   foldTranscriptActivityRun,
   foldTranscriptReply,
+  nextActivityWindowCount,
   preserveActivityVisibility,
   transcriptActivityRunKey,
 } from '../src/pages/chat/transcriptActivityFolding'
@@ -76,4 +79,40 @@ test('an unanswered interaction remains visible ahead of newer siblings', () => 
   assert.deepEqual(folded.visibleParts, parts.slice(2))
   const answered = parts.map((part) => ({ ...part, pending: false }))
   assert.equal(foldTranscriptReply(answered, [], 5, (part) => part.pending).hiddenCount, 7)
+})
+
+test('a collapsed reply keeps following its newest parts while it streams', () => {
+  const collapsed = { ids: ['4', '5', '6', '7', '8'] }
+
+  // Nothing was revealed, so the window stays a pure suffix: parts 4 and 5 roll
+  // back into the collapsed prefix as the reply keeps appending parts.
+  assert.equal(nextActivityWindowCount(collapsed, ['4', '5', '6', '7', '8', '9']), undefined)
+  assert.equal(nextActivityWindowCount(collapsed, ['4', '5', '6', '7', '8', '9', '10']), undefined)
+  // Prepending older history does not open the window either.
+  assert.equal(nextActivityWindowCount(collapsed, ['1', '2', '3', ...collapsed.ids]), undefined)
+})
+
+test('a revealed window keeps the rows the user loaded', () => {
+  const revealed = { count: 10, ids: ['4', '5', '6', '7', '8', '9', '10', '11', '12', '13'] }
+
+  // Explicitly revealed rows stay readable while newer parts append.
+  assert.equal(nextActivityWindowCount(revealed, [...revealed.ids, '14']), 11)
+  // A prepended page shifts positions without hiding a revealed row.
+  assert.equal(nextActivityWindowCount(revealed, ['1', ...revealed.ids, '14']), 11)
+})
+
+test('only the message load controls change the part window', () => {
+  const item = readFileSync(resolve(import.meta.dir, '../src/components/chat/MessageItem.vue'), 'utf8')
+
+  // Streaming and history changes go through the window rule, so a collapsed
+  // reply keeps folding its older parts away.
+  assert.match(item, /state\.count = nextActivityWindowCount\(state, next\)/)
+  // Selecting a row, navigating the transcript and expanding one part body must
+  // never pin the list: a tap on the reply text used to keep every later part
+  // visible until the message was collapsed by hand.
+  assert.doesNotMatch(item, /keepVisibleParts/)
+  assert.doesNotMatch(item, /preserveActivityVisibility/)
+  // The explicit load controls still anchor the window; collapsing clears it.
+  assert.match(item, /visibility\.value\.keepOpen = true/)
+  assert.match(item, /visibility\.value\.count = undefined\s+visibility\.value\.keepOpen = false/)
 })

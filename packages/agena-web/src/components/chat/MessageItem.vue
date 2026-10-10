@@ -12,7 +12,7 @@ import type { MessageFold } from '@/types/chat'
 import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
 import {
   foldTranscriptReply,
-  preserveActivityVisibility,
+  nextActivityWindowCount,
   transcriptActivityRunKey,
   type ActivityVisibility,
 } from '@/pages/chat/transcriptActivityFolding'
@@ -88,12 +88,15 @@ const activityPageSize = computed(() => normalizeTranscriptPartPageSize(props.ac
 const summaryKey = computed(() => transcriptActivityRunKey(messageId.value, [], 0))
 const requestedFoldKey = ref('')
 
-// Explicitly revealed rows remain visible when a live reply appends content.
+// A message that follows its newest parts keeps following them: while nothing
+// has been revealed the window stays collapsed and every new part pushes the
+// oldest visible one back into the collapsed prefix. Only the message's own load
+// controls pin rows (`nextActivityWindowCount` keeps a revealed window visible).
 watch(
   () => props.displayParts.filter((part) => part.kind !== 'lifecycle').map((part) => part.id),
   (next) => {
     const state = visibility.value
-    if (state.count !== undefined) state.count = preserveActivityVisibility(next, state.ids, state.count)
+    state.count = nextActivityWindowCount(state, next)
     state.ids = next
   },
   { flush: 'sync', immediate: true },
@@ -103,26 +106,6 @@ watch(
   () => {
     if (!visibility.value.keepOpen) visibility.value.count = undefined
   },
-)
-
-function keepVisibleParts() {
-  const current = visibility.value.count ?? DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
-  const visible = foldTranscriptReply(props.displayParts, [], current, (part) =>
-    partHasPendingInteraction(part.source),
-  ).visibleParts.filter((part) => part.kind !== 'lifecycle').length
-  visibility.value.count = Math.max(current, visible)
-  visibility.value.keepOpen = true
-}
-
-// Vim toggles go through the page's expansion map rather than togglePart.
-// Preserve the same visible suffix for either input path.
-watch(
-  () => props.displayParts.map((part) => [part.id, props.isPartExpanded(part)] as const),
-  (next, previous) => {
-    const before = new Map(previous)
-    if (next.some(([id, expanded]) => expanded && before.get(id) === false)) keepVisibleParts()
-  },
-  { flush: 'sync' },
 )
 
 const canCollapseParts = computed(
@@ -193,8 +176,9 @@ function selectMessageNode(event: PointerEvent) {
   emit('nodeSelect', messageNodeKey.value)
 }
 
+// Expanding one part body is not a list-level reveal: the message keeps
+// following its newest parts unless its own load controls asked for more.
 function togglePart(part: TranscriptDisplayPart) {
-  keepVisibleParts()
   emit('revealParts')
   emit('nodeSelect', part.key)
   emit('partToggle', part, !props.isPartExpanded(part))
@@ -288,12 +272,10 @@ function restoreSummaryControlFocusAfterUpdate() {
 }
 
 function selectPartRow(row: TranscriptRow) {
-  // Interacting with an already open default-expanded part is deliberate
-  // viewing too; new siblings must not fold it away while it is being read.
-  if (row.kind === 'part' && props.isPartExpanded(row.part)) {
-    keepVisibleParts()
-    emit('revealParts')
-  }
+  // Selecting a row is not a list-level reveal. Only the message's own load
+  // controls change the part window, so a tap on the reply text (or on an
+  // already expanded part) can no longer pin every later part visible.
+  emit('revealParts')
   emit('nodeSelect', row.key)
 }
 

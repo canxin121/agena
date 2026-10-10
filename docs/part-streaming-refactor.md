@@ -141,6 +141,7 @@ PTY 提供通用 TerminalSnapshot/TerminalPatch：真实尺寸、cells/runs、�
 - PTY 屏幕在 Part 内显示，支持明确取得交互控制。
 - 客户端 frame scheduler 合并更新，只失效变动 Part/block；不逐增量克隆整个 transcript。
 - Markdown 已稳定的部分复用解析/布局，活跃尾部按本地预算更新。
+- 一条消息的 part 窗口只有两种状态：收起（默认）只显示最新的 N 个 part，回复继续产生新 part 时旧的自动收回被折叠的前缀；显式“展开 n 个”或“展开全部”后，用户展开的行保持可见、新 part 追加显示，直到显式收起。待处理的交互 part 在任何状态下都可见；选择、键盘导航、展开单个 part 正文都不改变窗口状态。
 - 折叠、主题、高度、快捷键、graphics、scroll/follow 等只存在于客户端。共享 runtime/application 中的 TUI preference 解释迁走。
 
 ## 10. 重构后的实际运作

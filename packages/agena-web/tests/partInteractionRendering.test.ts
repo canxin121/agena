@@ -171,20 +171,25 @@ test('remote loading stays observable when its final page retires the fold', asy
   }
 })
 
-test('an opened shell remains mounted while revisions and new siblings arrive, including idle', async () => {
+test('streaming keeps the window sliding while an opened shell keeps its detail choice', async () => {
   const subject = mount()
   try {
     subject.state.togglePart(subject.props.displayParts[7])
     await settle()
+    assert.ok(subject.ids().includes('8'))
     for (let revision = 1; revision <= 20; revision++) {
       subject.props.displayParts[7]!.source.revision = revision
       subject.props.displayParts.push(part(12 + revision))
       await settle()
-      assert.ok(subject.ids().includes('8'), 'streaming must not fold the open shell out of the DOM')
+      // The window follows the newest parts. An opened part body is a detail
+      // choice, not a list reveal, so it never pins every later part visible.
+      assert.equal(subject.ids().length, 5, 'the collapsed window keeps its budget while the reply streams')
     }
+    assert.equal(subject.expansions['part:8'], true, 'the detail choice survives the sliding window')
+    assert.ok(!subject.ids().includes('8'), 'the opened shell rolled into the collapsed prefix')
     subject.props.collapseSignal++
     await settle()
-    assert.ok(subject.ids().includes('8'))
+    assert.equal(subject.ids().length, 5)
     assert.equal(subject.expansions['part:8'], true)
     subject.state.collapseParts()
     await settle()
@@ -195,7 +200,7 @@ test('an opened shell remains mounted while revisions and new siblings arrive, i
   }
 })
 
-test('a Vim expansion pins the same suffix, and load-all keeps a collapse row', async () => {
+test('a Vim expansion keeps the sliding window, and load-all keeps a collapse row', async () => {
   const subject = mount()
   try {
     subject.expansions['part:8'] = false
@@ -204,7 +209,11 @@ test('a Vim expansion pins the same suffix, and load-all keeps a collapse row', 
     await settle()
     subject.props.displayParts.push(part(13))
     await settle()
-    assert.ok(subject.ids().includes('8'))
+    // Expanding one part body through the page's expansion map is not a list
+    // reveal either: only the message's load controls change the window.
+    assert.equal(subject.ids().length, 5)
+    assert.ok(!subject.ids().includes('8'))
+    assert.equal(subject.expansions['part:8'], true)
     const summary = subject.state.transcriptRows.value.find((row: any) => row.kind === 'summary')
     subject.state.revealSummary(summary, true)
     await settle()

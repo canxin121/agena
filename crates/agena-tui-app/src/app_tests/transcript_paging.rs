@@ -546,6 +546,78 @@ async fn a_state_only_refresh_keeps_the_transcript_the_session_was_opened_with()
     assert_parts_visible(&mut app.transcript, 12..17);
 }
 
+fn visible_activity_ids(transcript: &mut TranscriptState) -> Vec<i64> {
+    let mut ids = transcript
+        .rendered(WIDTH)
+        .nodes
+        .iter()
+        .filter_map(|node| match node.key {
+            TranscriptNodeKey::Activity {
+                content_id: TranscriptContentId::StoredPart(id),
+                ..
+            } => Some(id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
+/// A reply that keeps streaming must not turn into a wall of parts: while the
+/// user has not revealed anything, the message keeps showing only its newest
+/// activities and the older ones roll back into the collapsed prefix.
+#[tokio::test]
+async fn a_streaming_reply_keeps_only_its_newest_activities_visible() {
+    let mut app = app(TuiBackend::remote_mock());
+    let reply = |range: std::ops::Range<i64>| {
+        std::iter::once(parts_fixtures::run(3, "assistant", "in_progress"))
+            .chain(activities(range))
+            .collect::<Vec<_>>()
+    };
+    app.transcript.merge_parts(reply(4..12));
+    assert_parts_visible(&mut app.transcript, 7..12);
+    let visible = visible_activity_ids(&mut app.transcript);
+    for part_id in 4..7 {
+        assert!(
+            !visible.contains(&part_id),
+            "part {part_id} starts behind the collapsed prefix"
+        );
+    }
+
+    app.transcript.merge_parts(reply(4..15));
+    let visible = visible_activity_ids(&mut app.transcript);
+    assert_parts_visible(&mut app.transcript, 10..15);
+    for part_id in 4..10 {
+        assert!(
+            !visible.contains(&part_id),
+            "part {part_id} must roll into the collapsed prefix while the reply streams"
+        );
+    }
+}
+
+/// A deliberate reveal is kept: while the reply streams, the rows the user
+/// loaded stay visible instead of silently sliding out of the window.
+#[tokio::test]
+async fn an_explicitly_revealed_window_survives_a_streaming_append() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 1)));
+    assert!(app.transcript.merge_fold_parts(
+        3,
+        12,
+        activities(9..12),
+        Some("before-9".into()),
+        true
+    ));
+    assert_parts_visible(&mut app.transcript, 9..17);
+
+    app.transcript.merge_parts(
+        std::iter::once(parts_fixtures::run(3, "assistant", "in_progress"))
+            .chain(activities(9..20))
+            .collect(),
+    );
+    assert_parts_visible(&mut app.transcript, 9..20);
+}
+
 #[tokio::test]
 async fn newest_reply_folds_update_after_older_history_was_loaded() {
     let mut app = app(TuiBackend::remote_mock());

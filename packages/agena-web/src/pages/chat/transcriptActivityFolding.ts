@@ -1,5 +1,19 @@
 import type { MessageFold } from '../../types/chat'
 
+/**
+ * One message's part window.
+ *
+ * `count` is how many parts the window shows. `undefined` is the default
+ * collapsed state: the message follows its newest parts, so every part a live
+ * reply appends pushes the oldest visible one back into the collapsed prefix.
+ * A number means the user asked for more through the message's own load
+ * controls; `keepOpen` then keeps the rows that were revealed visible while
+ * newer parts append, until the message is collapsed again.
+ *
+ * `ids` mirrors the last projection of the message so a revealed window can be
+ * shifted when parts are prepended or appended. `pendingRequestIds` tracks
+ * outstanding user requests, whose parts stay visible in any state.
+ */
 export type ActivityVisibility = { count?: number; ids: string[]; keepOpen?: boolean; pendingRequestIds?: string[] }
 
 export type TranscriptActivityFold<T> = {
@@ -43,6 +57,28 @@ export function preserveActivityVisibility(next: string[], previous: string[], c
   if (!previous.length) return count
   const tail = next.indexOf(previous[previous.length - 1]!)
   return tail < 0 ? count : count + next.length - tail - 1
+}
+
+/**
+ * The part window a message keeps while its parts change (streaming, reconnect,
+ * prepended history).
+ *
+ * A message that follows its newest parts keeps following them: an undefined
+ * count stays undefined, so the window is a pure suffix and every new part
+ * pushes the oldest visible one back into the collapsed prefix. Only a count the
+ * user set through the message's own load controls pins rows, and then only the
+ * rows that were visible stay visible while newer parts append.
+ *
+ * Nothing else may change the window: selecting a row, navigating the
+ * transcript, or expanding a single part body never turns a collapsed reply
+ * into a wall of parts.
+ */
+export function nextActivityWindowCount(
+  state: { count?: number; ids: readonly string[] },
+  nextIds: readonly string[],
+): number | undefined {
+  if (state.count === undefined) return undefined
+  return preserveActivityVisibility([...nextIds], [...state.ids], state.count)
 }
 
 /**

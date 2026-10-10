@@ -1255,6 +1255,11 @@ impl TranscriptState {
 
         change(&mut self.parts);
         self.record_reply_failures();
+        // A reply the user revealed keeps showing the rows it covers: the window
+        // follows those rows while the reply streams instead of sliding back to
+        // the recent-part budget and hiding them again. Entries the user
+        // collapsed explicitly are skipped, so an explicit collapse still wins.
+        self.reveal_loaded_fold_activities();
 
         let visible_after = agena_tui_transcript::parts_visible_user_inputs(&self.parts);
         let newly_visible = visible_after.saturating_sub(visible_before);

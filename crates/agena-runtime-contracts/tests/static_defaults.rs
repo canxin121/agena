@@ -417,6 +417,27 @@ fn temp_paths_are_allowed_by_default_for_read_and_write() {
 }
 
 #[test]
+fn the_classic_temp_locations_are_allowed_by_default_too() {
+    // `$TMPDIR` is the private per-user directory; `/tmp` (macOS resolves it to
+    // `/private/tmp`) is the spelling users and tools actually type. Covering
+    // only `$TMPDIR` sent `/private/tmp/...` to the external default, so writing
+    // a scratch file there asked for permission.
+    let config = shipped(|_| {});
+    for temp in [
+        "/tmp/agena-defaults-test.bin",
+        "/private/tmp/agena-defaults-test.bin",
+    ] {
+        for access in [AccessKind::Read, AccessKind::Write] {
+            assert_eq!(
+                path_decision(&config, "/work", temp, access),
+                PermissionDecision::Allow,
+                "{temp} must be allowed by the default ({access:?})"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_narrowed_temp_rule_reaches_the_model() {
     let config = shipped(|config| {
         config.path.as_mut().expect("path section").rules.insert(

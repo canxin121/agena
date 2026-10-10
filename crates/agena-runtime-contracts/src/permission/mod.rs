@@ -1170,6 +1170,10 @@ impl RuleMatcher {
 enum PathPattern {
     Workspace(WildcardPattern),
     Absolute(WildcardPattern),
+    /// One alias that resolves to several roots. The pattern matches when any
+    /// of them matches, which is what `<tmp>` needs: the private per-user temp
+    /// directory and the classic `/tmp` location are different paths.
+    AbsoluteAny(Vec<WildcardPattern>),
 }
 
 impl PathPattern {
@@ -1186,10 +1190,15 @@ impl PathPattern {
             )));
         }
         if let Some(rest) = strip_path_alias(&normalized, "home") {
-            return absolute_alias_pattern(&normalized, "home", home_dir(), rest);
+            return absolute_alias_patterns(
+                &normalized,
+                "home",
+                home_dir().into_iter().collect(),
+                rest,
+            );
         }
         if let Some(rest) = strip_path_alias(&normalized, "tmp") {
-            return absolute_alias_pattern(&normalized, "tmp", Some(std::env::temp_dir()), rest);
+            return absolute_alias_patterns(&normalized, "tmp", temp_roots(), rest);
         }
         if let Some(alias) = unknown_angle_alias(&normalized) {
             return Err(PermissionConfigError::UnknownPathAlias {
@@ -1210,6 +1219,9 @@ impl PathPattern {
                 .as_deref()
                 .is_some_and(|relative| pattern.matches(relative)),
             Self::Absolute(pattern) => pattern.matches(&ctx.absolute_norm),
+            Self::AbsoluteAny(patterns) => patterns
+                .iter()
+                .any(|pattern| pattern.matches(&ctx.absolute_norm)),
         }
     }
 }
@@ -1229,25 +1241,58 @@ fn workspace_alias_pattern(rest: &str) -> String {
     }
 }
 
-fn absolute_alias_pattern(
+/// The roots a path alias expands to.
+///
+/// `<tmp>` covers every location a user and the runtime's own tooling call
+/// "temp": the OS temp directory (`std::env::temp_dir()` — on macOS the private
+/// per-user `$TMPDIR` under `/var/folders`) plus the classic `/tmp`, which macOS
+/// resolves to `/private/tmp`. Covering only the OS directory left a path that a
+/// user or a tool spelled `/tmp/...` to the external default, so writing a
+/// scratch file there asked for permission even though the temp class is
+/// allowed outright.
+fn temp_roots() -> Vec<PathBuf> {
+    vec![
+        std::env::temp_dir(),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
+    ]
+}
+
+fn absolute_alias_patterns(
     pattern: &str,
     alias: &str,
-    root: Option<PathBuf>,
+    roots: Vec<PathBuf>,
     rest: &str,
 ) -> Result<PathPattern, PermissionConfigError> {
-    let Some(root) = root else {
+    let rest = rest.trim_start_matches('/');
+    let mut expansions: Vec<String> = Vec::new();
+    for root in roots {
+        let mut normalized = normalize_path_string(&root);
+        if normalized.is_empty() {
+            continue;
+        }
+        if !rest.is_empty() {
+            normalized.push('/');
+            normalized.push_str(rest);
+        }
+        if !expansions.contains(&normalized) {
+            expansions.push(normalized);
+        }
+    }
+    if expansions.is_empty() {
         return Err(PermissionConfigError::UnresolvedPathAlias {
             pattern: pattern.to_string(),
             alias: alias.to_string(),
         });
-    };
-    let mut normalized = normalize_path_string(&root);
-    let rest = rest.trim_start_matches('/');
-    if !rest.is_empty() {
-        normalized.push('/');
-        normalized.push_str(rest);
     }
-    Ok(PathPattern::Absolute(WildcardPattern::new(normalized)))
+    let mut patterns = expansions
+        .into_iter()
+        .map(WildcardPattern::new)
+        .collect::<Vec<_>>();
+    if patterns.len() == 1 {
+        return Ok(PathPattern::Absolute(patterns.remove(0)));
+    }
+    Ok(PathPattern::AbsoluteAny(patterns))
 }
 
 fn unknown_angle_alias(pattern: &str) -> Option<String> {

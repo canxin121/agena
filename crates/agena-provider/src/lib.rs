@@ -317,10 +317,10 @@ mod tests {
     #[test]
     fn tool_config_has_stable_default_and_wire_shape() {
         let config = AgenaToolsConfig::default();
-        assert_eq!(config.mode, AgenaToolMode::Disabled);
+        assert_eq!(config.mode, AgenaToolMode::ProviderProtocol);
         assert_eq!(
             serde_json::to_value(config).unwrap(),
-            serde_json::json!({"mode": "disabled"})
+            serde_json::json!({"mode": "provider_protocol"})
         );
     }
 

@@ -53,6 +53,30 @@ and verifies its contents before every supervised restart. The Unix process
 fixtures require `/usr/bin/python3`; they create their own scripts and working
 directories, and do not modify the parent process's environment.
 
+## Live model tool-mode probe
+
+Model routes default to `agena_tools.mode = "provider_protocol"`, including a
+bare `{}` model configuration. An explicit `"disabled"` setting is preserved
+when configuration is saved. Disabled requests omit tool declarations, project
+historical tool results into ordinary messages, and tell the model that tools
+are unavailable even when the shared system prompt mentions tool workflows.
+
+Use the live probe to check a gateway's complete help → execution → result →
+answer loop with an existing provider configuration:
+
+```sh
+cargo run --locked -p agena --example model_tool_mode_probe -- \
+  --config /path/to/agena.json --provider gateway --adapter openai_responses \
+  --model deepseek-v4.1-flash --thinking max --scenario tool-loop
+```
+
+The probe uses temporary session and scheduler databases. It inspects the
+environment/model and renames only its temporary session, then verifies native
+Tool API provenance, completed operations and a final answer using the returned
+model name. `--scenario greeting` checks a plain `你好` conversation.
+`--scenario disabled` requires a configuration with tools explicitly disabled;
+it verifies a normal explanation of unavailable tools and zero tool operations.
+
 ## Stdio process supervision
 
 Run the real subprocess regressions independently when changing the stdio

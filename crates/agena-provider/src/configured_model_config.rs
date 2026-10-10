@@ -109,3 +109,26 @@ impl Default for ResolvedProviderModelConfig {
 fn is_true(value: &bool) -> bool {
     *value
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AgenaToolMode;
+
+    #[test]
+    fn a_bare_model_route_exposes_tools_and_an_explicit_disabled_route_stays_disabled() {
+        let default: ResolvedProviderModelConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(default.agena_tools.mode, AgenaToolMode::ProviderProtocol);
+        assert_eq!(
+            ResolvedProviderModelConfig::default().agena_tools,
+            default.agena_tools
+        );
+        let disabled: ResolvedProviderModelConfig =
+            serde_json::from_str(r#"{"agena_tools":{"mode":"disabled"}}"#).unwrap();
+        assert_eq!(disabled.agena_tools.mode, AgenaToolMode::Disabled);
+        assert_eq!(
+            serde_json::to_value(disabled).unwrap()["agena_tools"]["mode"],
+            "disabled"
+        );
+    }
+}

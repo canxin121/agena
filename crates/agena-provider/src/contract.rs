@@ -8,8 +8,9 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgenaToolMode {
-    ProviderProtocol,
+    /// Normal agent routes expose the Tool API unless explicitly disabled.
     #[default]
+    ProviderProtocol,
     Disabled,
 }
 
@@ -40,7 +41,7 @@ pub struct AgenaToolsConfig {
 
 impl AgenaToolsConfig {
     pub fn is_default(&self) -> bool {
-        self.mode.is_disabled()
+        self.mode == AgenaToolMode::default()
     }
 }
 

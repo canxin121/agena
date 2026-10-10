@@ -2027,7 +2027,10 @@ mod tool_api_function_validation_tests {
         assert!(recorded.provider_native_tools.is_empty());
         assert_eq!(recorded.previous_response_id, None);
         assert!(!recorded.request_override.body_patch.contains_key("tools"));
-        assert_eq!(recorded.system.as_deref(), Some("base system"));
+        let system = recorded.system.as_deref().expect("system instructions");
+        assert!(system.starts_with("base system\n\n"));
+        assert!(system.contains("Agena tools are disabled"));
+        assert!(system.contains("No Tool API functions are available"));
     }
 
     #[tokio::test]

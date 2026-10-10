@@ -59,6 +59,18 @@ pub fn prepare_disabled_tool_request(request: &mut CompletionRequest) {
         projected_runs.extend(project_disabled_completion_input_history(run));
     }
     request.turns = projected_runs;
+
+    // The shared identity can mention tools even on a route that explicitly
+    // disables them. Without a matching availability instruction, reasoning
+    // models can print their internal call syntax (for example DSML) as text.
+    const DISABLED_TOOLS_INSTRUCTION: &str = "# Tool availability for this request\n\nAgena tools are disabled for this model route. No Tool API functions are available. Do not attempt tool calls or write tool-call markup as your answer. Respond using the conversation and any supplied historical results. If the task requires a tool, explain that tools are disabled for the selected model.";
+    let system = request.system.get_or_insert_with(String::new);
+    if !system.contains(DISABLED_TOOLS_INSTRUCTION) {
+        if !system.is_empty() {
+            system.push_str("\n\n");
+        }
+        system.push_str(DISABLED_TOOLS_INSTRUCTION);
+    }
 }
 
 /// Remove raw body patches that could bypass Agena's fixed five-function tool
@@ -160,6 +172,32 @@ fn completion_input_result_status_text(status: CompletionInputToolResultStatus) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_requests_explain_availability_and_repeat_preparation_is_idempotent() {
+        let mut request: CompletionRequest = serde_json::from_value(serde_json::json!({
+            "model": "deepseek-v4.1-flash",
+            "system": "Name the session with tools_help and tools_call.",
+            "messages": [],
+            "tools": []
+        }))
+        .unwrap();
+        prepare_disabled_tool_request(&mut request);
+        let once = request.system.clone();
+        assert!(
+            once.as_deref()
+                .unwrap()
+                .contains("Agena tools are disabled")
+        );
+        assert!(
+            once.as_deref()
+                .unwrap()
+                .contains("No Tool API functions are available")
+        );
+        prepare_disabled_tool_request(&mut request);
+        assert_eq!(request.system, once);
+        assert!(request.tool_api_functions.is_empty());
+    }
 
     #[test]
     fn disabled_tools_keep_media_returned_by_historical_calls() {

@@ -1628,7 +1628,7 @@ function modelCapabilityValue(key: 'features' | 'input'): { supported: string[];
 
 function modelFieldValue(key: string): string {
   if (key === 'model_id') return editingModel.value?.modelId || ''
-  if (key === 'agena_tools.mode' && modelPathValue(key) === undefined) return 'disabled'
+  if (key === 'agena_tools.mode' && modelPathValue(key) === undefined) return 'provider_protocol'
   if (key === 'features' || key === 'input') return modelCapabilityValue(key).supported.join(', ')
   if (key === 'thinking_modes' || key === 'speed_modes') {
     const value = modelPathValue(key)

@@ -1,7 +1,6 @@
 //! Bundled documentation copy must cover every locale the UIs ship.
 
 use super::bundled_plugins;
-use agena_plugin_host::sdk::Plugin;
 
 /// Locales every bundled surface ships copy for. Adding a locale to the Web or
 /// terminal catalogs means adding it here and to the manifests below.

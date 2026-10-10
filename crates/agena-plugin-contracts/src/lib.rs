@@ -174,6 +174,43 @@ fn validate_command_slash(value: &str) -> Result<(), CommandDefinitionError> {
 }
 
 impl SettingsContract {
+    /// Transform only presentation copy, including nested fields, options and
+    /// variants. Runtime validation and default materialization use the same
+    /// stable identifiers, values, paths and constraints after localization.
+    pub fn map_presentation_text(&mut self, mut translate: impl FnMut(&str) -> String) {
+        fn visit(node: &mut SettingsNode, translate: &mut impl FnMut(&str) -> String) {
+            node.title = translate(&node.title);
+            node.description = translate(&node.description);
+            match &mut node.kind {
+                SettingsNodeKind::Object { fields } => {
+                    for field in fields {
+                        visit(field, translate);
+                    }
+                }
+                SettingsNodeKind::List { item } => visit(item, translate),
+                SettingsNodeKind::Record { value } => visit(value, translate),
+                SettingsNodeKind::Choice { options }
+                | SettingsNodeKind::MultiChoice { options } => {
+                    for option in options {
+                        option.title = translate(&option.title);
+                        option.description = translate(&option.description);
+                    }
+                }
+                SettingsNodeKind::TaggedVariant { variants, .. } => {
+                    for variant in variants {
+                        variant.title = translate(&variant.title);
+                        variant.description = translate(&variant.description);
+                        for field in &mut variant.fields {
+                            visit(field, translate);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        visit(&mut self.root, &mut translate);
+    }
+
     pub fn new(root: SettingsNode) -> Self {
         Self {
             version: SETTINGS_CONTRACT_VERSION,

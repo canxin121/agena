@@ -1,6 +1,9 @@
+import type { PluginSettingsContract, PluginSettingsNode } from './pluginOperations'
+
 export type PluginDocumentationTranslation = {
   summary?: string | null
   help?: string | null
+  settings?: Record<string, string>
 }
 
 export type ToolDocumentationTranslation = PluginDocumentationTranslation & {
@@ -28,6 +31,7 @@ export type LocalizablePluginManifest = {
   help?: string | null
   translations?: Record<string, PluginDocumentationTranslation | undefined>
   tools?: LocalizableTool[]
+  settings?: PluginSettingsContract | null
   [key: string]: unknown
 }
 
@@ -39,16 +43,53 @@ function localeCandidates(locale: string): string[] {
 
 export function localizedDocumentationField(
   base: string | null | undefined,
-  translations: Record<string, { [field: string]: string | null | undefined } | undefined> | undefined,
+  translations: Record<string, PluginDocumentationTranslation | undefined> | undefined,
   field: string,
   locale: string,
 ): string | undefined {
   for (const candidate of localeCandidates(locale)) {
     const entry = Object.entries(translations || {}).find(([tag]) => tag.toLowerCase() === candidate.toLowerCase())?.[1]
-    const value = entry?.[field]
+    const value = entry?.[field as keyof PluginDocumentationTranslation]
     if (typeof value === 'string' && value.trim()) return value.trim()
   }
   return typeof base === 'string' && base.trim() ? base.trim() : undefined
+}
+
+export function localizePluginSettings(
+  contract: PluginSettingsContract,
+  translations: LocalizablePluginManifest['translations'],
+  locale: string,
+): PluginSettingsContract {
+  function text(source: string): string {
+    for (const candidate of localeCandidates(locale)) {
+      const entry = Object.entries(translations || {}).find(([tag]) => tag.toLowerCase() === candidate.toLowerCase())?.[1]
+      const translated = entry?.settings?.[source]
+      if (translated?.trim()) return translated.trim()
+    }
+    return source
+  }
+  function node(value: PluginSettingsNode): PluginSettingsNode {
+    return {
+      ...value,
+      title: text(value.title),
+      description: value.description ? text(value.description) : value.description,
+      fields: value.fields?.map(node),
+      item: value.item ? node(value.item) : undefined,
+      value: value.value ? node(value.value) : undefined,
+      options: value.options?.map((option) => ({
+        ...option,
+        title: text(option.title),
+        description: option.description ? text(option.description) : option.description,
+      })),
+      variants: value.variants?.map((variant) => ({
+        ...variant,
+        title: text(variant.title),
+        description: variant.description ? text(variant.description) : variant.description,
+        fields: variant.fields?.map(node),
+      })),
+    }
+  }
+  return { ...contract, root: node(contract.root) }
 }
 
 export function localizePluginManifest<T extends LocalizablePluginManifest>(manifest: T, locale: string): T {
@@ -74,5 +115,6 @@ export function localizePluginManifest<T extends LocalizablePluginManifest>(mani
     summary: localizedDocumentationField(manifest.summary, manifest.translations, 'summary', locale),
     help: localizedDocumentationField(manifest.help, manifest.translations, 'help', locale),
     tools,
+    settings: manifest.settings ? localizePluginSettings(manifest.settings, manifest.translations, locale) : manifest.settings,
   }
 }

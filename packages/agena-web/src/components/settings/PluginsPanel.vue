@@ -13,7 +13,7 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import { settingsText as st } from '@/i18n/settingsText'
 import { apiJson } from '@/lib/api'
-import { localizePluginManifest } from '@/lib/pluginDocumentation'
+import { localizePluginManifest, localizePluginSettings, type PluginDocumentationTranslation } from '@/lib/pluginDocumentation'
 import {
   clonePluginJson,
   type PluginHostEffect,
@@ -60,7 +60,7 @@ type PluginManifest = {
   version?: string
   summary?: string | null
   help?: string | null
-  translations?: Record<string, { summary?: string | null; help?: string | null } | undefined>
+  translations?: Record<string, PluginDocumentationTranslation | undefined>
   authors?: string[]
   transports?: string[]
   tools?: PluginTool[]
@@ -323,6 +323,11 @@ const selectedManifest = computed(() => {
   const manifest = selectedPlugin.value?.manifest
   return manifest ? localizePluginManifest(manifest, String(locale.value || 'en-US')) : null
 })
+const localizedSettings = computed(() =>
+  settingsState.value
+    ? localizePluginSettings(settingsState.value.contract, selectedPlugin.value?.manifest?.translations, String(locale.value || 'en-US'))
+    : null,
+)
 const selectedActivation = computed(() => selectedPlugin.value?.activation || null)
 const selectedAuthority = computed(() => selectedPlugin.value?.authority || null)
 const selectedArchitectureNode = computed(
@@ -1061,7 +1066,7 @@ onMounted(() => void refresh())
               </div>
               <template v-else-if="settingsState">
                 <PluginContractEditor
-                  :node="settingsState.contract.root"
+                  :node="localizedSettings!.root"
                   :model-value="settingsDraft"
                   :disabled="settingsSaving"
                   @update:model-value="settingsDraft = $event"

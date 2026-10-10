@@ -17,6 +17,7 @@ const LOCALES: [&str; 10] = [
 /// and initialization, leaving the model-facing English contract unchanged.
 pub(crate) fn localize_bundled_plugin_manifest(manifest: &mut PluginManifest) {
     localize_builtin_tool_docs(manifest);
+    crate::plugin_settings_docs::localize_settings_docs(manifest);
     if matches!(manifest.name.as_str(), "chatgpt" | "claude" | "gemini") {
         crate::plugins::provided::provider_tool_docs::localize_provider_manifest(manifest);
     }

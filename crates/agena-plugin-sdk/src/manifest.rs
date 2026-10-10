@@ -111,12 +111,16 @@ pub struct PluginSkillDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
-/// UI translations of a plugin's summary and detailed help.
+/// UI translations of a plugin's documentation and settings presentation.
 pub struct PluginManifestTranslation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// Settings titles and descriptions keyed by their canonical English copy.
+    /// Identifiers, defaults, values and validation constraints remain unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1102,6 +1106,20 @@ impl PluginManifest {
             translation.help.as_deref()
         })
         .or_else(|| self.help_text())
+    }
+
+    /// Localize the settings tree in a UI-owned manifest snapshot. The base
+    /// manifest used by validation and model contracts is left to the caller.
+    pub fn localize_settings(&mut self, locale: &str) {
+        if let Some(settings) = &mut self.settings {
+            settings.map_presentation_text(|source| {
+                translated_field(&self.translations, locale, |translation| {
+                    translation.settings.get(source).map(String::as_str)
+                })
+                .unwrap_or(source)
+                .to_owned()
+            });
+        }
     }
 }
 

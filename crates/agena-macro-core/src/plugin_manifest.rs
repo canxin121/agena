@@ -134,7 +134,7 @@ pub fn expand_plugin_layer_manifest(
         quote! {
             manifest.translations.insert(
                 #locale.to_string(),
-                ::agena_plugin_sdk::PluginManifestTranslation { summary: #summary, help: #help },
+                ::agena_plugin_sdk::PluginManifestTranslation { summary: #summary, help: #help, ..Default::default() },
             );
         }
     });

@@ -1,3 +1,9 @@
+use super::{
+    BTreeMap, JsonValue, PluginConfigStatus, PluginConfigStatusKind, PluginWorkbenchPlugin,
+    derive_override_value, materialized_config_value, plugin_get_json_path, plugin_settings_schema,
+    quote_settings_segment, recompute_plugin_config_state,
+};
+
 pub fn build_plugin_workbench_plugin(
     sources: &agena_application::dto::ConfigJsonSources,
     locale: &str,
@@ -108,6 +114,7 @@ pub fn build_plugin_workbench_plugin(
 /// Resolve presentation copy in the workbench's owned inspection snapshot.
 /// The manifest sent to model tool selection keeps its stable base docs.
 fn localize_manifest_docs(manifest: &mut agena_plugin_host::sdk::PluginManifest, locale: &str) {
+    manifest.localize_settings(locale);
     let summary = manifest.summary_for_locale(locale).map(str::to_owned);
     let help = manifest.help_for_locale(locale).map(str::to_owned);
     manifest.summary = summary;
@@ -145,8 +152,25 @@ mod localization_tests {
             PluginManifestTranslation {
                 summary: Some("插件摘要".to_owned()),
                 help: None,
+                settings: BTreeMap::from([
+                    ("Settings".to_owned(), "设置".to_owned()),
+                    ("Plugin settings".to_owned(), "插件设置说明".to_owned()),
+                    ("Enabled".to_owned(), "已启用".to_owned()),
+                ]),
             },
         );
+        let settings = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "root": {
+                "id": "root", "path": "", "title": "Settings", "description": "Plugin settings",
+                "kind": "object", "fields": [
+                    {"id": "enabled", "path": "/enabled", "title": "Enabled", "kind": "boolean", "default": true}
+                ]
+            }
+        }))
+        .unwrap();
+        manifest.settings = Some(settings);
+        let base_settings = manifest.settings.clone();
         let base_docs = ToolDocs {
             summary: Some("Stable tool summary".to_owned()),
             translations: BTreeMap::from([(
@@ -171,10 +195,15 @@ mod localization_tests {
         assert_eq!(manifest.summary.as_deref(), Some("插件摘要"));
         assert_eq!(manifest.tools[0].docs.summary.as_deref(), Some("工具摘要"));
         assert_eq!(base_docs.summary.as_deref(), Some("Stable tool summary"));
+        let localized = manifest.settings.as_ref().unwrap();
+        assert_eq!(localized.root.title, "设置");
+        assert_eq!(localized.root.description, "插件设置说明");
+        let schema = super::plugin_settings_schema(&manifest).unwrap();
+        assert_eq!(schema["properties"]["enabled"]["title"], "已启用");
+        assert_eq!(
+            localized.default_value().unwrap(),
+            serde_json::json!({"enabled": true})
+        );
+        assert_eq!(base_settings.unwrap().root.title, "Settings");
     }
 }
-use super::{
-    BTreeMap, JsonValue, PluginConfigStatus, PluginConfigStatusKind, PluginWorkbenchPlugin,
-    derive_override_value, materialized_config_value, plugin_get_json_path, plugin_settings_schema,
-    quote_settings_segment, recompute_plugin_config_state,
-};

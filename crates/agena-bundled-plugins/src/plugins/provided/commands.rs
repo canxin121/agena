@@ -1077,6 +1077,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("声明由 Agena 各客户端本地呈现的内置命令，并将其他智能体生态中的技能映射到同一界面。".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1084,6 +1085,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("宣告由 Agena 各用戶端本機呈現的內建命令，並將其他代理生態系的技能映射至同一介面。".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1091,6 +1093,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("Agena の各クライアントがローカルで表示する組み込みコマンドを宣言し、他のエージェント環境のスキルも同じ画面に取り込みます。".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1098,6 +1101,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("Agena 각 클라이언트에서 로컬로 표시할 기본 명령을 선언하고 다른 에이전트 생태계의 스킬도 같은 화면에 연결합니다.".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1105,6 +1109,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("Déclarer les commandes intégrées affichées localement par les clients Agena et intégrer les compétences d’autres écosystèmes d’agents dans la même interface.".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1112,6 +1117,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("Die von Agena-Clients lokal dargestellten integrierten Befehle deklarieren und Skills anderer Agenten-Ökosysteme in dieselbe Oberfläche übernehmen.".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1119,6 +1125,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("Declara los comandos integrados que los clientes de Agena muestran localmente e incorpora en la misma interfaz las habilidades de otros ecosistemas de agentes.".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1126,6 +1133,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("Agena क्लाइंट में स्थानीय रूप से दिखने वाले अंतर्निहित कमांड घोषित करें और दूसरे एजेंट इकोसिस्टम के स्किल को भी इसी इंटरफ़ेस में जोड़ें।".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1133,6 +1141,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("يعرّف الأوامر المضمّنة التي تعرضها عملاء Agena محليًا، ويضيف مهارات بيئات الوكلاء الأخرى إلى الواجهة نفسها.".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
             (
@@ -1140,6 +1149,7 @@ impl CommandsPlugin {
                 PluginManifestTranslation {
                     summary: Some("Declara os comandos integrados exibidos localmente pelos clientes Agena e reúne na mesma interface as habilidades de outros ecossistemas de agentes.".to_owned()),
                     help: None,
+                    ..Default::default()
                 },
             ),
         ]);

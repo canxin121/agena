@@ -520,7 +520,16 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             !tool_calls.is_empty(),
         );
 
-        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
+        // Compatible gateways can return a `completed` envelope without any
+        // output or usage for stream=false. A status alone is not a usable
+        // completion; recover through the same stream used by agent turns.
+        // Keep explicit truncation/refusal and reasoning-only results intact.
+        if text.trim().is_empty()
+            && tool_calls.is_empty()
+            && (finish_reason.is_none()
+                || (finish_reason == Some(CompletionFinishReason::Stop)
+                    && reasoning_text.is_none()))
+        {
             return self.complete_by_aggregating_stream(request).await;
         }
 

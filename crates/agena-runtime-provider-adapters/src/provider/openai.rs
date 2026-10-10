@@ -524,6 +524,115 @@ mod tests {
             .expect("request JSON")
     }
 
+    async fn complete_responses_fixture(
+        payload: serde_json::Value,
+        stream_fallback: bool,
+    ) -> (agena_provider::CompletionResponse, Vec<serde_json::Value>) {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            let mut bodies = vec![("application/json", payload.to_string())];
+            if stream_fallback {
+                bodies.push((
+                    "text/event-stream",
+                    concat!(
+                        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Durable checkpoint.\"}\n\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream\",\"status\":\"completed\",\"usage\":{\"input_tokens\":42,\"output_tokens\":3,\"total_tokens\":45}}}\n\n"
+                    ).to_owned(),
+                ));
+            }
+            let mut requests = Vec::new();
+            for (content_type, body) in bodies {
+                let (mut stream, _) = listener.accept().await.expect("accept request");
+                requests.push(read_http_request_body(&mut stream).await);
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(headers.as_bytes()).await.expect("headers");
+                stream.write_all(body.as_bytes()).await.expect("body");
+            }
+            requests
+        });
+        let adapter = OpenAiResponsesAdapter::new_managed_with_options(
+            "responses-fixture",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("test key", "secret"),
+            format!("http://{address}/v1"),
+            "deepseek-v4.1-flash",
+            OpenAiResponsesAdapterOptions {
+                capability_family: CapabilityFamily::OpenAiCompatible,
+                ..Default::default()
+            },
+        );
+        let mut request: agena_provider::CompletionRequest = serde_json::from_value(
+            serde_json::json!({"model": "deepseek-v4.1-flash", "messages": []}),
+        )
+        .expect("request");
+        request.max_output_tokens = Some(32_000);
+        request.thinking = Some(agena_domain::ThinkingRequest::Effort {
+            effort: agena_domain::ReasoningEffort::High,
+        });
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ModelRuntime::complete(&adapter, request),
+        )
+        .await
+        .expect("bounded completion")
+        .expect("completion");
+        (response, server.await.expect("fixture server"))
+    }
+
+    #[tokio::test]
+    async fn completed_responses_envelope_without_output_recovers_through_stream() {
+        let (response, requests) = complete_responses_fixture(
+            serde_json::json!({"id": "resp_empty", "status": "completed"}),
+            true,
+        )
+        .await;
+        assert_eq!(response.text, "Durable checkpoint.");
+        assert_eq!(response.usage.expect("stream usage").input_tokens, 42);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["stream"], false);
+        assert_eq!(requests[1]["stream"], true);
+        for request in requests {
+            assert_eq!(request["max_output_tokens"], 32_000);
+            assert_eq!(request["reasoning"]["effort"], "high");
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_truncation_and_reasoning_only_responses_do_not_retry_stream() {
+        let (response, requests) = complete_responses_fixture(
+            serde_json::json!({
+                "status": "incomplete", "output": [],
+                "incomplete_details": {"reason": "max_output_tokens"},
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(
+            response.finish_reason,
+            Some(agena_provider::CompletionFinishReason::Length)
+        );
+        assert_eq!(requests.len(), 1);
+
+        let (response, requests) = complete_responses_fixture(
+            serde_json::json!({
+                "status": "completed",
+                "output": [{"type": "reasoning", "summary": [{"text": "Still reasoning."}]}],
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(response.reasoning_text.as_deref(), Some("Still reasoning."));
+        assert_eq!(requests.len(), 1);
+    }
+
     fn chat_transport(id: &str, base_url: &str) -> OpenAiTransport {
         OpenAiChatCompletionsAdapter::new_managed_with_options(
             id,

@@ -117,14 +117,31 @@ mod tests {
 
     #[test]
     fn a_bare_model_route_exposes_tools_and_an_explicit_disabled_route_stays_disabled() {
-        let default: ResolvedProviderModelConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(default.agena_tools.mode, AgenaToolMode::ProviderProtocol);
-        assert_eq!(
-            ResolvedProviderModelConfig::default().agena_tools,
-            default.agena_tools
-        );
-        let disabled: ResolvedProviderModelConfig =
-            serde_json::from_str(r#"{"agena_tools":{"mode":"disabled"}}"#).unwrap();
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"agena_tools": {}}),
+            serde_json::json!({"features": ["tool_calling"]}),
+            serde_json::json!({"features": {"unsupported": ["tool_calling"]}}),
+            serde_json::json!({
+                "agena_tools": {"mode": "provider_protocol"},
+                "features": {"unsupported": ["tool_calling"]},
+            }),
+        ] {
+            let default: ResolvedProviderModelConfig = serde_json::from_value(value).unwrap();
+            assert_eq!(default.agena_tools.mode, AgenaToolMode::ProviderProtocol);
+            assert_eq!(
+                ResolvedProviderModelConfig::default().agena_tools,
+                default.agena_tools
+            );
+            let reloaded: ResolvedProviderModelConfig =
+                serde_json::from_value(serde_json::to_value(default).unwrap()).unwrap();
+            assert_eq!(reloaded.agena_tools.mode, AgenaToolMode::ProviderProtocol);
+        }
+        let disabled: ResolvedProviderModelConfig = serde_json::from_value(serde_json::json!({
+            "agena_tools": {"mode": "disabled"},
+            "features": ["tool_calling"],
+        }))
+        .unwrap();
         assert_eq!(disabled.agena_tools.mode, AgenaToolMode::Disabled);
         assert_eq!(
             serde_json::to_value(disabled).unwrap()["agena_tools"]["mode"],

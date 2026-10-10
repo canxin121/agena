@@ -11,12 +11,12 @@ use super::catalog::{
     apply_provider_auth_required_adapter_defaults_to_json_value,
     build_provider_auth_patch_value_for_save, build_provider_patch_value_for_save,
     canonical_provider_model_id, catalog_lookup_candidates,
-    merge_provider_model_adapter_patch_for_save, preferred_catalog_model_for_lookup_ids,
-    preferred_catalog_model_for_provider_model, provider_adapter_settings_path,
-    provider_model_catalog_lookup_candidates, provider_model_json_for_model_id,
-    provider_model_overlay_to_json, provider_model_selection_contains,
-    provider_model_settings_path, provider_settings_path, quoted_settings_segment,
-    required_provider_save_field, required_trimmed,
+    catalog_model_to_provider_model_overlay, merge_provider_model_adapter_patch_for_save,
+    preferred_catalog_model_for_lookup_ids, preferred_catalog_model_for_provider_model,
+    provider_adapter_settings_path, provider_model_catalog_lookup_candidates,
+    provider_model_json_for_model_id, provider_model_overlay_to_json,
+    provider_model_selection_contains, provider_model_settings_path, provider_settings_path,
+    quoted_settings_segment, required_provider_save_field, required_trimmed,
 };
 use super::draft_auth_data::{
     ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
@@ -586,10 +586,15 @@ fn generated_provider_model_settings(
         catalog_entries,
         &catalog_lookup_candidates(model_id),
     )
-    .is_some()
-        || preferred_catalog_model_for_provider_model(catalog_entries, provider_model).is_some();
-    if matched {
+    .or_else(|| preferred_catalog_model_for_provider_model(catalog_entries, provider_model));
+    if let Some(catalog_model) = matched {
         let mut route = JsonMap::new();
+        // Tool mode is operational policy, not catalog metadata. Preserve a
+        // non-default policy while leaving model metadata dynamically resolved.
+        let tools = catalog_model_to_provider_model_overlay(catalog_model).agena_tools;
+        if !tools.is_default() {
+            route.insert("agena_tools".to_owned(), serde_json::to_value(tools)?);
+        }
         if !provider_model.native_compaction {
             route.insert("native_compaction".to_owned(), JsonValue::Bool(false));
         }
@@ -1064,6 +1069,64 @@ mod tests {
                 "agena_tools": { "mode": "disabled" },
             })
         );
+    }
+
+    #[test]
+    fn unmatched_model_save_keeps_unknown_tool_capabilities_enabled() {
+        let model =
+            agena_api::resource::ProviderModelResource::configured("openai_responses", "new-model");
+        let generated = generated_provider_model_settings(&[], "new-model", &model).unwrap();
+        let config: agena_provider::ResolvedProviderModelConfig =
+            serde_json::from_value(generated).unwrap();
+        assert_eq!(
+            config.agena_tools.mode,
+            agena_provider::AgenaToolMode::ProviderProtocol
+        );
+    }
+
+    #[test]
+    fn matched_model_save_retains_tool_policy_without_pinning_catalog_metadata() {
+        for (features, expected, expected_value) in [
+            (
+                None,
+                agena_provider::AgenaToolMode::ProviderProtocol,
+                json!({}),
+            ),
+            (
+                Some(json!(["tool_calling"])),
+                agena_provider::AgenaToolMode::ProviderProtocol,
+                json!({}),
+            ),
+            (
+                Some(json!({"unsupported": ["tool_calling"]})),
+                agena_provider::AgenaToolMode::Disabled,
+                json!({"agena_tools": {"mode": "disabled"}}),
+            ),
+        ] {
+            let mut value = json!({
+                "model_id": "new-model",
+                "source": "generated",
+                "context_window_tokens": 128000,
+            });
+            if let Some(features) = features {
+                value["features"] = features;
+            }
+            let catalog: crate::dto::CatalogModelResource = serde_json::from_value(value).unwrap();
+            let mut model = agena_api::resource::ProviderModelResource::configured(
+                "openai_responses",
+                "new-model",
+            );
+            // A catalog match owns capability inference, even if discovery
+            // advertises a different value.
+            model.capabilities.tool_calling =
+                agena_api::resource::CapabilitySupportResource::Supported;
+            let generated =
+                generated_provider_model_settings(&[catalog], "new-model", &model).unwrap();
+            assert_eq!(generated, expected_value);
+            let config: agena_provider::ResolvedProviderModelConfig =
+                serde_json::from_value(generated).unwrap();
+            assert_eq!(config.agena_tools.mode, expected);
+        }
     }
 
     #[test]

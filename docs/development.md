@@ -57,7 +57,17 @@ directories, and do not modify the parent process's environment.
 
 Model routes default to `agena_tools.mode = "provider_protocol"`, including a
 bare `{}` model configuration. An explicit `"disabled"` setting is preserved
-when configuration is saved. Disabled requests omit tool declarations, project
+when configuration is saved. Capability metadata does not override the mode
+while loading a saved route or preparing a request.
+
+When Provider Studio generates a new route from catalog or discovery metadata,
+supported and unknown tool-calling capabilities use `provider_protocol`; only
+an explicitly unsupported capability generates `disabled`. Catalog-backed
+route saves omit copied model metadata and default operational settings, but
+retain a non-default tool mode. Provider refreshes preserve existing explicit
+model settings, including a user-selected `disabled` mode.
+
+Disabled requests omit tool declarations, project
 historical tool results into ordinary messages, and tell the model that tools
 are unavailable even when the shared system prompt mentions tool workflows.
 

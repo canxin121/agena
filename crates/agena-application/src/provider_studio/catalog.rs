@@ -867,6 +867,37 @@ mod tests {
     }
 
     #[test]
+    fn new_live_model_drafts_use_the_default_tool_mode_for_unknown_capabilities() {
+        for (support, expected) in [
+            (
+                CapabilitySupportResource::Unknown,
+                agena_provider::AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                CapabilitySupportResource::Supported,
+                agena_provider::AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                CapabilitySupportResource::Unsupported,
+                agena_provider::AgenaToolMode::Disabled,
+            ),
+        ] {
+            let mut model = ProviderModelResource::configured("openai_responses", "new-model");
+            model.capabilities.tool_calling = support;
+            let draft = crate::provider_studio::provider_model_draft_value_from_resource(
+                "new-model",
+                Some(&model),
+            )
+            .unwrap();
+            let overlay: ResolvedProviderModelConfig = serde_json::from_value(draft).unwrap();
+            assert_eq!(
+                overlay.agena_tools.mode, expected,
+                "capability: {support:?}"
+            );
+        }
+    }
+
+    #[test]
     fn unmatched_live_model_overlay_preserves_modes_and_capabilities() {
         let model = live_model_with_modes_and_capabilities();
         let value =

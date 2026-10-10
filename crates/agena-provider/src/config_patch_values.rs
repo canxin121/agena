@@ -493,19 +493,63 @@ pub fn provider_model_overlay_from_catalog_definition(
 pub fn provider_model_overlay_from_definition(
     definition: ConfiguredModelDefinition,
 ) -> ResolvedProviderModelConfig {
+    // Live gateways and new model IDs often have no tool capability metadata.
+    // Only an explicitly unsupported capability disables a generated route.
     let mode = if definition
         .capabilities
         .feature_support(crate::ModelCapabilityFeature::ToolCalling)
-        == Some(agena_domain::CapabilitySupport::Supported)
+        == Some(agena_domain::CapabilitySupport::Unsupported)
     {
-        crate::AgenaToolMode::ProviderProtocol
-    } else {
         crate::AgenaToolMode::Disabled
+    } else {
+        crate::AgenaToolMode::default()
     };
     ResolvedProviderModelConfig {
         enabled: true,
         native_compaction: true,
         agena_tools: crate::AgenaToolsConfig { mode },
         definition,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AgenaToolMode;
+    use serde_json::json;
+
+    #[test]
+    fn generated_routes_disable_tools_only_for_explicitly_unsupported_capabilities() {
+        for (definition, expected) in [
+            (json!({}), AgenaToolMode::ProviderProtocol),
+            (
+                json!({"features": ["reasoning"]}),
+                AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                json!({"features": ["tool_calling"]}),
+                AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                json!({"features": {"unsupported": ["tool_calling"]}}),
+                AgenaToolMode::Disabled,
+            ),
+        ] {
+            for overlay in [
+                provider_model_overlay_from_definition(
+                    serde_json::from_value(definition.clone()).unwrap(),
+                ),
+                provider_model_overlay_from_catalog_definition(
+                    &serde_json::from_value(definition.clone()).unwrap(),
+                ),
+            ] {
+                let saved = serde_json::to_value(overlay).unwrap();
+                let reloaded: ResolvedProviderModelConfig = serde_json::from_value(saved).unwrap();
+                assert_eq!(
+                    reloaded.agena_tools.mode, expected,
+                    "definition: {definition}"
+                );
+            }
+        }
     }
 }

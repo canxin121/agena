@@ -19,6 +19,9 @@ enum ApprovalReply {
     },
     /// Prose with no tool call — the recovery path's input.
     Text(&'static str),
+    /// Reasoning with no answer at all: what a model produces when it spends
+    /// its output budget thinking and never emits the verdict.
+    Reasoning(&'static str),
 }
 
 struct ApprovalProvider {
@@ -73,25 +76,27 @@ impl ModelRuntime for ApprovalProvider {
             replies.remove(0)
         };
         self.requests.lock().expect("request lock").push(request);
-        let (text, tool_calls) = match reply {
+        let (text, reasoning_text, tool_calls) = match reply {
             ApprovalReply::Verdict {
                 name,
                 arguments_json,
             } => (
                 String::new(),
+                None,
                 vec![CompletionToolCall::Function {
                     id: format!("call_{name}"),
                     name: name.to_owned(),
                     arguments_json: arguments_json.to_owned(),
                 }],
             ),
-            ApprovalReply::Text(text) => (text.to_owned(), Vec::new()),
+            ApprovalReply::Text(text) => (text.to_owned(), None, Vec::new()),
+            ApprovalReply::Reasoning(text) => (String::new(), Some(text.to_owned()), Vec::new()),
         };
         Ok(CompletionResponse {
             provider_id: ProviderId::new(self.id()),
             model: self.model.clone(),
             text,
-            reasoning_text: None,
+            reasoning_text,
             finish_reason: Some(CompletionFinishReason::Stop),
             tool_calls,
             usage: Some(CompletionUsage::default()),
@@ -418,6 +423,52 @@ async fn two_empty_attempts_report_an_empty_response() {
         Some(agena_permission::ClassifyFailure::EmptyResponse)
     ));
     assert_eq!(requests.len(), 2);
+}
+
+#[tokio::test]
+async fn an_empty_attempt_is_retried_without_reasoning_and_a_larger_budget() {
+    // The reported failure: the approval model spends its output budget while
+    // thinking, returns nothing at all, and the user is asked to review the
+    // action themselves. The retry must not repeat the request that produced
+    // nothing: it asks for the verdict with no reasoning and a budget that
+    // leaves room for it.
+    let (outcome, requests, _, _) = classify(vec![
+        ApprovalReply::Text(""),
+        ApprovalReply::Text(r#"{"shouldBlock": false, "reason": "scratch write"}"#),
+    ])
+    .await;
+    assert_eq!(
+        outcome.decision(),
+        agena_domain::PermissionDecision::Allow,
+        "the retried verdict decides"
+    );
+    assert_eq!(requests.len(), 2, "one retry");
+    assert_ne!(
+        requests[0].max_output_tokens, requests[1].max_output_tokens,
+        "the retry must not repeat the budget the first attempt exhausted"
+    );
+    assert_eq!(
+        requests[1].thinking,
+        Some(agena_domain::ThinkingRequest::Disabled),
+        "the retry must not spend its budget on reasoning"
+    );
+}
+
+#[tokio::test]
+async fn a_verdict_left_in_the_reasoning_channel_still_decides() {
+    // Some routes return the verdict in the reasoning channel and then stop
+    // without an answer. The decision is still there, and the strict contract is
+    // what keeps a stray mention from counting as one.
+    let (outcome, requests, _, _) = classify(vec![ApprovalReply::Reasoning(
+        r#"{"shouldBlock": false, "reason": "routine workspace read"}"#,
+    )])
+    .await;
+    assert_eq!(outcome.decision(), agena_domain::PermissionDecision::Allow);
+    assert_eq!(
+        requests.len(),
+        1,
+        "the reasoning already carried the verdict"
+    );
 }
 
 #[tokio::test]

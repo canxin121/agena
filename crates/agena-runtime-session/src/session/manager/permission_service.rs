@@ -29,6 +29,15 @@ use agena_domain::Role;
 /// reasoning behind the verdict.
 const AUTO_APPROVAL_MAX_OUTPUT_TOKENS: u32 = 2_048;
 
+/// Output budget for the retry after an attempt produced no verdict.
+///
+/// The retry asks for the verdict again with no reasoning requested, so this
+/// budget only has to cover the tool call itself. It is deliberately larger
+/// than [`AUTO_APPROVAL_MAX_OUTPUT_TOKENS`]: a route that reasons anyway, or a
+/// provider that bills reasoning against the same budget, must not truncate the
+/// verdict a second time — an empty response is exactly that failure.
+const AUTO_APPROVAL_RETRY_MAX_OUTPUT_TOKENS: u32 = 8_192;
+
 /// Verdict attempts per candidate: the first request, then one retry after
 /// [`AUTO_APPROVAL_VERDICT_REMINDER`]. Two is deliberate — a third attempt
 /// buys little and delays the fail-closed `Ask` the user is waiting on.
@@ -398,7 +407,7 @@ impl SessionManager {
                     &action,
                     &candidate.policy_reason,
                 );
-                let build_request = |reminder: Option<&str>| {
+                let build_request = |reminder: Option<&str>, retry: bool| {
                     let mut turns = Vec::with_capacity(3);
                     if let Some(context) = &context {
                         turns.push(agena_provider::CompletionInputRun {
@@ -437,7 +446,11 @@ impl SessionManager {
                         // very tool call the model is asked to make.
                         disable_tools: false,
                         temperature: Some(0.0),
-                        max_output_tokens: Some(AUTO_APPROVAL_MAX_OUTPUT_TOKENS),
+                        max_output_tokens: Some(if retry {
+                            AUTO_APPROVAL_RETRY_MAX_OUTPUT_TOKENS
+                        } else {
+                            AUTO_APPROVAL_MAX_OUTPUT_TOKENS
+                        }),
                         prompt_cache_key: Some(format!("agena:auto:{}", model_ref.model_id)),
                         previous_response_id: None,
                         prompt_window_generation: None,
@@ -446,7 +459,15 @@ impl SessionManager {
                         top_p: None,
                         top_k: None,
                         seed: None,
-                        thinking: thinking.clone(),
+                        // The retry must not spend its budget on reasoning: a
+                        // model that thinks before it answers can exhaust the
+                        // first attempt's budget before the verdict exists,
+                        // which is what an empty classifier response is.
+                        thinking: if retry {
+                            Some(agena_domain::ThinkingRequest::Disabled)
+                        } else {
+                            thinking.clone()
+                        },
                         verbosity: verbosity.clone(),
                         // The verdict is a tool call now, not a JSON body, so
                         // there is no response schema to constrain.
@@ -467,7 +488,7 @@ impl SessionManager {
                 for attempt in 0..AUTO_APPROVAL_ATTEMPTS {
                     let reminder =
                         (attempt > 0).then_some(AUTO_APPROVAL_VERDICT_REMINDER);
-                    let request = build_request(reminder);
+                    let request = build_request(reminder, attempt > 0);
                     match tokio::time::timeout_at(
                         deadline,
                         state.provider_registry.complete(&model_ref, request),
@@ -597,7 +618,16 @@ fn classifier_verdict_from_response(
             return Some(verdict);
         }
     }
-    agena_permission::ClassifierVerdict::parse(response.text.as_str())
+    if let Some(verdict) = agena_permission::ClassifierVerdict::parse(response.text.as_str()) {
+        return Some(verdict);
+    }
+    // A model that reasons its way to the verdict and then stops without an
+    // answer still submitted one; the strict contract is what keeps a stray
+    // mention in the reasoning from counting as a decision.
+    response
+        .reasoning_text
+        .as_deref()
+        .and_then(agena_permission::ClassifierVerdict::parse)
 }
 
 /// Bound the classifier text echoed into a fallback `Ask` reason so a

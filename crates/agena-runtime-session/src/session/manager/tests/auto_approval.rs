@@ -426,12 +426,11 @@ async fn two_empty_attempts_report_an_empty_response() {
 }
 
 #[tokio::test]
-async fn an_empty_attempt_is_retried_without_reasoning_and_a_larger_budget() {
-    // The reported failure: the approval model spends its output budget while
-    // thinking, returns nothing at all, and the user is asked to review the
-    // action themselves. The retry must not repeat the request that produced
-    // nothing: it asks for the verdict with no reasoning and a budget that
-    // leaves room for it.
+async fn a_classifier_verdict_gets_thinking_headroom_and_keeps_reasoning() {
+    // The reported failure: the approval model spends its output budget while it
+    // reasons, returns nothing at all, and the user is asked to review the
+    // action themselves. The budget must leave room for the thinking that
+    // precedes the verdict - not take reasoning away from the model.
     let (outcome, requests, _, _) = classify(vec![
         ApprovalReply::Text(""),
         ApprovalReply::Text(r#"{"shouldBlock": false, "reason": "scratch write"}"#),
@@ -443,14 +442,21 @@ async fn an_empty_attempt_is_retried_without_reasoning_and_a_larger_budget() {
         "the retried verdict decides"
     );
     assert_eq!(requests.len(), 2, "one retry");
-    assert_ne!(
-        requests[0].max_output_tokens, requests[1].max_output_tokens,
-        "the retry must not repeat the budget the first attempt exhausted"
-    );
+    for (index, request) in requests.iter().enumerate() {
+        let budget = request.max_output_tokens.expect("an explicit budget");
+        assert!(
+            budget >= 8_192,
+            "attempt {index} must leave room for the reasoning before the verdict, got {budget}"
+        );
+        assert_ne!(
+            request.thinking,
+            Some(agena_domain::ThinkingRequest::Disabled),
+            "the approval model keeps its own reasoning mode"
+        );
+    }
     assert_eq!(
-        requests[1].thinking,
-        Some(agena_domain::ThinkingRequest::Disabled),
-        "the retry must not spend its budget on reasoning"
+        requests[0].max_output_tokens, requests[1].max_output_tokens,
+        "the retry repeats the budget that leaves room for thinking"
     );
 }
 

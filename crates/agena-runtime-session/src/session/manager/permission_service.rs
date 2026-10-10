@@ -17,26 +17,23 @@ use super::{
 use crate::session::prompt_window;
 use agena_domain::Role;
 
-/// Output budget for one classifier verdict.
+/// Output budget for one classifier verdict when the approval model does not
+/// advertise its own output ceiling.
 ///
 /// The verdict itself is tiny (a tool call with one rule name and one
-/// sentence), but 256 was too tight: a model that reasons before it emits the
-/// tool call — or a provider that bills reasoning tokens against this same
-/// budget — gets truncated before the verdict exists, which is the failure
-/// mode claude-code works around with dedicated thinking headroom ("Without
-/// headroom, stop_reason=max_tokens yields an empty text response →
-/// unparseable → safe commands blocked"). The budget leaves room for that
-/// reasoning behind the verdict.
-const AUTO_APPROVAL_MAX_OUTPUT_TOKENS: u32 = 2_048;
+/// sentence), but the approval model is allowed to reason first and that
+/// reasoning is billed against this same output budget. 256 and 2 048 both
+/// truncated the thinking before the verdict existed on models that reason
+/// before they answer, and a truncated attempt returns nothing at all - which is
+/// the empty response that fails the classification closed into an interactive
+/// ask. The budget therefore leaves real thinking headroom rather than just
+/// enough room for the verdict.
+const AUTO_APPROVAL_DEFAULT_OUTPUT_TOKENS: u32 = 16_384;
 
-/// Output budget for the retry after an attempt produced no verdict.
-///
-/// The retry asks for the verdict again with no reasoning requested, so this
-/// budget only has to cover the tool call itself. It is deliberately larger
-/// than [`AUTO_APPROVAL_MAX_OUTPUT_TOKENS`]: a route that reasons anyway, or a
-/// provider that bills reasoning against the same budget, must not truncate the
-/// verdict a second time — an empty response is exactly that failure.
-const AUTO_APPROVAL_RETRY_MAX_OUTPUT_TOKENS: u32 = 8_192;
+/// Upper bound for the derived budget: one verdict must not turn into a minute
+/// of generation on a model that advertises a very large output window. The
+/// classify deadline bounds the wait either way.
+const AUTO_APPROVAL_MAX_OUTPUT_TOKENS: u32 = 32_768;
 
 /// Verdict attempts per candidate: the first request, then one retry after
 /// [`AUTO_APPROVAL_VERDICT_REMINDER`]. Two is deliberate — a third attempt
@@ -288,6 +285,19 @@ impl SessionManager {
             return Vec::new();
         };
 
+        // The model reasons before it answers, and that reasoning shares this
+        // output budget with the verdict. Follow the approval model's own output
+        // ceiling when it advertises one, so a thinking model is never cut off
+        // before it can submit the verdict.
+        let verdict_output_tokens = state
+            .provider_registry
+            .model_metadata(&model)
+            .ok()
+            .and_then(|metadata| metadata.limits.max_output_tokens)
+            .map_or(AUTO_APPROVAL_DEFAULT_OUTPUT_TOKENS, |tokens| {
+                tokens.min(AUTO_APPROVAL_MAX_OUTPUT_TOKENS)
+            });
+
         let mut options = SessionRunOptions {
             model: model.clone(),
             thinking_mode: selection
@@ -303,7 +313,7 @@ impl SessionManager {
             request_override: Default::default(),
             system: None,
             temperature: Some(0.0),
-            max_output_tokens: Some(AUTO_APPROVAL_MAX_OUTPUT_TOKENS),
+            max_output_tokens: Some(verdict_output_tokens),
         };
         if let Some(parallel_tool_calls) = selection
             .as_ref()
@@ -407,7 +417,7 @@ impl SessionManager {
                     &action,
                     &candidate.policy_reason,
                 );
-                let build_request = |reminder: Option<&str>, retry: bool| {
+                let build_request = |reminder: Option<&str>| {
                     let mut turns = Vec::with_capacity(3);
                     if let Some(context) = &context {
                         turns.push(agena_provider::CompletionInputRun {
@@ -446,11 +456,7 @@ impl SessionManager {
                         // very tool call the model is asked to make.
                         disable_tools: false,
                         temperature: Some(0.0),
-                        max_output_tokens: Some(if retry {
-                            AUTO_APPROVAL_RETRY_MAX_OUTPUT_TOKENS
-                        } else {
-                            AUTO_APPROVAL_MAX_OUTPUT_TOKENS
-                        }),
+                        max_output_tokens: Some(verdict_output_tokens),
                         prompt_cache_key: Some(format!("agena:auto:{}", model_ref.model_id)),
                         previous_response_id: None,
                         prompt_window_generation: None,
@@ -459,15 +465,10 @@ impl SessionManager {
                         top_p: None,
                         top_k: None,
                         seed: None,
-                        // The retry must not spend its budget on reasoning: a
-                        // model that thinks before it answers can exhaust the
-                        // first attempt's budget before the verdict exists,
-                        // which is what an empty classifier response is.
-                        thinking: if retry {
-                            Some(agena_domain::ThinkingRequest::Disabled)
-                        } else {
-                            thinking.clone()
-                        },
+                        // The approval model keeps its own reasoning mode: the
+                        // budget above is sized so the thinking and the verdict
+                        // both fit.
+                        thinking: thinking.clone(),
                         verbosity: verbosity.clone(),
                         // The verdict is a tool call now, not a JSON body, so
                         // there is no response schema to constrain.
@@ -488,7 +489,7 @@ impl SessionManager {
                 for attempt in 0..AUTO_APPROVAL_ATTEMPTS {
                     let reminder =
                         (attempt > 0).then_some(AUTO_APPROVAL_VERDICT_REMINDER);
-                    let request = build_request(reminder, attempt > 0);
+                    let request = build_request(reminder);
                     match tokio::time::timeout_at(
                         deadline,
                         state.provider_registry.complete(&model_ref, request),

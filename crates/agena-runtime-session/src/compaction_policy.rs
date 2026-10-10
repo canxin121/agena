@@ -5,9 +5,9 @@
 
 /// Number of recent user turns retained in the compacted context suffix.
 pub const MAX_RECENT_USER_TURNS: usize = 2;
-/// Character budget for the recent context suffix sent to the compactor.
+/// UTF-8 byte budget for the recent context suffix sent to the compactor.
 pub const MAX_RECENT_CONTEXT_CHARS: usize = 32_000;
-/// Per-message character bound used while preparing compaction context.
+/// Per-message UTF-8 byte bound used while preparing compaction context.
 pub const MAX_COMPACTOR_RUN_CHARS: usize = 8_000;
 /// Default output-token budget for the compaction request.
 pub const DEFAULT_COMPACTION_OUTPUT_TOKENS: u32 = 32_000;
@@ -15,6 +15,6 @@ pub const DEFAULT_COMPACTION_OUTPUT_TOKENS: u32 = 32_000;
 pub const MAX_COMPACTION_OUTPUT_TOKENS: u32 = 64_000;
 /// Failure suppression belongs to a strategy, so repaired strategies can
 /// recover sessions disabled by an older implementation.
-pub const COMPACTION_POLICY_VERSION: u64 = 3;
+pub const COMPACTION_POLICY_VERSION: u64 = 4;
 /// Number of failed compaction attempts before the session disables retries.
 pub const MAX_COMPACTION_FAILURES: u8 = 3;

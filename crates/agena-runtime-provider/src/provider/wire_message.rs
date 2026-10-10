@@ -661,6 +661,12 @@ const CLASSIFIER_PART_CHARS: usize = 4_000;
 /// transcript carrying tool inputs and outputs.
 pub fn project_classifier_run_text(parts: &[Part]) -> String {
     let run = project_completion_input(parts);
+    project_classifier_input_run_text(&run)
+}
+
+/// Render an already-resolved semantic run, including checkpoint text and
+/// rendered tool outputs that do not have a standalone stored part.
+pub fn project_classifier_input_run_text(run: &CompletionInputRun) -> String {
     let role = classifier_role_label(run.role);
     let mut lines: Vec<String> = Vec::new();
     for part in &run.parts {
@@ -762,12 +768,20 @@ fn push_classifier_line(lines: &mut Vec<String>, label: &str, text: &str) {
 }
 
 fn truncate_classifier_part(text: &str) -> String {
-    if text.chars().count() <= CLASSIFIER_PART_CHARS {
+    if text.len() <= CLASSIFIER_PART_CHARS {
         return text.to_owned();
     }
-    let mut out = text.chars().take(CLASSIFIER_PART_CHARS).collect::<String>();
-    out.push_str("…[truncated]");
-    out
+    let marker = "…[truncated]…";
+    let remaining = CLASSIFIER_PART_CHARS.saturating_sub(marker.len());
+    let mut head = remaining * 2 / 3;
+    while !text.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = text.len() - (remaining - remaining * 2 / 3);
+    while !text.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!("{}{marker}{}", &text[..head], &text[tail..])
 }
 
 // ─── Part helpers ─────────────────────────────────────────────────────────────

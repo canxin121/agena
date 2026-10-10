@@ -59,9 +59,10 @@ pub fn estimate_auto_compaction_limit_tokens(
         .map(u64::from)
         .unwrap_or_else(|| {
             let proportional = context_window_tokens
+                .filter(|tokens| *tokens > 0)
                 .map(|tokens| u64::from(tokens) * 5 / 100)
                 .unwrap_or(hard_limit * 5 / 100);
-            proportional.clamp(4_096, 20_000)
+            proportional.clamp(4_096, 20_000).min(hard_limit / 8)
         });
     Some(hard_limit.saturating_sub(headroom).max(512.min(hard_limit)))
 }
@@ -79,6 +80,34 @@ mod tests {
         assert_eq!(
             estimate_auto_compaction_limit_tokens(Some(200_000), None, Some(100_000), None),
             Some(90_000)
+        );
+    }
+
+    #[test]
+    fn headroom_adapts_to_small_and_input_only_windows() {
+        assert_eq!(
+            estimate_auto_compaction_limit_tokens(Some(8_192), None, Some(1_024), None),
+            Some(6_272)
+        );
+        assert_eq!(
+            estimate_auto_compaction_limit_tokens(None, Some(100_000), None, None),
+            Some(95_000)
+        );
+        assert_eq!(
+            estimate_auto_compaction_limit_tokens(Some(0), Some(100_000), None, None),
+            Some(95_000)
+        );
+        assert_eq!(
+            estimate_auto_compaction_limit_tokens(Some(8_192), None, Some(1_024), Some(u32::MAX)),
+            Some(512)
+        );
+        assert_eq!(
+            estimate_auto_compaction_limit_tokens(Some(8_192), None, Some(1_024), Some(0)),
+            Some(7_168)
+        );
+        assert_eq!(
+            estimate_auto_compaction_limit_tokens(None, None, None, None),
+            None
         );
     }
 }

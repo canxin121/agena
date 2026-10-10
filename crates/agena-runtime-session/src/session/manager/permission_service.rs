@@ -285,15 +285,14 @@ impl SessionManager {
             return Vec::new();
         };
 
-        // The model reasons before it answers, and that reasoning shares this
-        // output budget with the verdict. Follow the approval model's own output
-        // ceiling when it advertises one, so a thinking model is never cut off
-        // before it can submit the verdict.
-        let verdict_output_tokens = state
+        let metadata = state
             .provider_registry
             .model_metadata(&model)
-            .ok()
-            .and_then(|metadata| metadata.limits.max_output_tokens)
+            .unwrap_or_default();
+        let default_output_tokens = metadata
+            .limits
+            .max_output_tokens
+            .filter(|tokens| *tokens > 0)
             .map_or(AUTO_APPROVAL_DEFAULT_OUTPUT_TOKENS, |tokens| {
                 tokens.min(AUTO_APPROVAL_MAX_OUTPUT_TOKENS)
             });
@@ -313,7 +312,7 @@ impl SessionManager {
             request_override: Default::default(),
             system: None,
             temperature: Some(0.0),
-            max_output_tokens: Some(verdict_output_tokens),
+            max_output_tokens: Some(default_output_tokens),
         };
         if let Some(parallel_tool_calls) = selection
             .as_ref()
@@ -330,44 +329,86 @@ impl SessionManager {
             );
         }
 
-        let transcript_budget_chars = state
-            .provider_registry
-            .model_metadata(&model)
-            .ok()
-            .and_then(|metadata| metadata.limits.context_window_tokens)
-            // The window is measured in tokens but the projection budget is
-            // characters; cap it so a large model window (1M tokens) cannot
-            // balloon the classifier transcript to megabytes per request.
-            .map(|tokens| {
-                (tokens as usize / 4)
-                    .clamp(8_000, agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS)
-            })
-            .unwrap_or(agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS);
-        let transcript = session.map(|session| {
-            // v2: the transcript is the parts projection (the store is the
-            // single durable source; the active-window part count doubles as
-            // the cache key).
-            let parts = session.active_window_parts();
-            let part_count = parts.len();
-            let cached = recover_mutex(
-                state.auto_projection.as_ref(),
-                "read automatic-approval transcript projection cache",
+        // Mode body patches are applied after serialization. Admit and align
+        // them too, using the approval model's limits rather than the agent's.
+        let requested_output =
+            crate::prompt_budget::requested_output_tokens_from_override(&options.request_override)
+                .unwrap_or(default_output_tokens)
+                .min(AUTO_APPROVAL_MAX_OUTPUT_TOKENS);
+        let window = metadata
+            .limits
+            .context_window_tokens
+            .filter(|tokens| *tokens > 0);
+        let verdict_output_tokens = agena_runtime::session_output_token_budget(
+            window,
+            metadata.limits.max_output_tokens,
+            Some(requested_output.min(window.map_or(u32::MAX, |tokens| (tokens / 8).max(1)))),
+        );
+        let retry_output_tokens = agena_runtime::session_output_token_budget(
+            window,
+            metadata.limits.max_output_tokens,
+            Some(
+                verdict_output_tokens
+                    .saturating_mul(2)
+                    .min(AUTO_APPROVAL_MAX_OUTPUT_TOKENS)
+                    .min(window.map_or(u32::MAX, |tokens| (tokens / 4).max(1))),
+            ),
+        );
+        let input_limit_tokens = crate::prompt_budget::prompt_token_budget(
+            window,
+            metadata.limits.max_input_tokens,
+            Some(retry_output_tokens),
+        )
+        .map(u64::from)
+        .unwrap_or_else(|| {
+            crate::prompt_budget::estimate_prompt_tokens_from_chars(
+                state.context_governor.max_prompt_chars(),
             )
-            .get(&session_id)
-            .cloned();
-            match cached {
-                Some((len, text)) if len == part_count => text,
-                _ => {
-                    let text = prompt_window::project_transcript(parts, transcript_budget_chars);
-                    recover_mutex(
-                        state.auto_projection.as_ref(),
-                        "cache automatic-approval transcript projection",
-                    )
-                    .insert(session_id, (part_count, text.clone()));
-                    text
-                }
-            }
         });
+
+        // Build once per batch from the semantic prompt window. This includes
+        // text checkpoints and resolves external content; active parts alone
+        // lose the user's earlier instructions after compaction. Do not cache
+        // by part count: payload edits and model switches can keep that count.
+        let transcript = if let Some(session) = session {
+            let resolved = match prompt_window::resolve_content_for_model(
+                session,
+                self.store.facade.contents(),
+            )
+            .await
+            {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    return fail_all(
+                        candidates,
+                        agena_permission::ClassifyFailure::Provider(error.to_string()),
+                    );
+                }
+            };
+            let mut runs =
+                prompt_window::compactable_prompt_runs(&resolved, None, None, None, false);
+            prompt_window::render_session_tool_results_for_model(
+                &mut runs,
+                &resolved,
+                &state.tool_executor,
+            )
+            .await;
+            let runs = match crate::session::prompt::bound_model_tool_outputs_async(runs).await {
+                Ok(runs) => runs,
+                Err(error) => {
+                    return fail_all(
+                        candidates,
+                        agena_permission::ClassifyFailure::Provider(error.to_string()),
+                    );
+                }
+            };
+            Some(prompt_window::project_transcript(
+                &runs,
+                agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS,
+            ))
+        } else {
+            None
+        };
         let recent_decisions = self.auto_budget(session_id).recent_decision_labels();
         let context_message = agena_permission::build_classifier_context_message(
             transcript.as_deref(),
@@ -417,17 +458,10 @@ impl SessionManager {
                     &action,
                     &candidate.policy_reason,
                 );
-                let build_request = |reminder: Option<&str>| {
+                let build_request = |reminder: Option<&str>, output_tokens: u32, context_cap: usize| {
+                    let mut request_override = request_override.clone();
+                    crate::prompt_budget::align_output_token_overrides(&mut request_override, output_tokens);
                     let mut turns = Vec::with_capacity(3);
-                    if let Some(context) = &context {
-                        turns.push(agena_provider::CompletionInputRun {
-                            role: Role::User,
-                            parts: vec![agena_provider::CompletionInputPart::Text {
-                                text: context.clone(),
-                            }],
-                            provider_state: Default::default(),
-                        });
-                    }
                     turns.push(agena_provider::CompletionInputRun {
                         role: Role::User,
                         parts: vec![agena_provider::CompletionInputPart::Text {
@@ -444,7 +478,7 @@ impl SessionManager {
                             provider_state: Default::default(),
                         });
                     }
-                    agena_provider::CompletionRequest {
+                    let mut request = agena_provider::CompletionRequest {
                         model: model_ref.model_id.clone(),
                         system: Some(system_prompt.clone()),
                         turns,
@@ -456,7 +490,7 @@ impl SessionManager {
                         // very tool call the model is asked to make.
                         disable_tools: false,
                         temperature: Some(0.0),
-                        max_output_tokens: Some(verdict_output_tokens),
+                        max_output_tokens: Some(output_tokens),
                         prompt_cache_key: Some(format!("agena:auto:{}", model_ref.model_id)),
                         previous_response_id: None,
                         prompt_window_generation: None,
@@ -474,8 +508,10 @@ impl SessionManager {
                         // there is no response schema to constrain.
                         response_format: None,
                         responses_api_metadata: None,
-                        request_override: request_override.clone(),
-                    }
+                        request_override,
+                    };
+                    bound_classifier_context(&mut request, context.as_deref(), input_limit_tokens, context_cap)?;
+                    Ok::<_, String>(request)
                 };
 
                 // One deadline for every attempt, so a slow first attempt
@@ -486,10 +522,21 @@ impl SessionManager {
                 let mut verdict = None;
                 let mut failure = None;
                 let mut last_text = String::new();
+                let mut context_cap = agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS;
                 for attempt in 0..AUTO_APPROVAL_ATTEMPTS {
                     let reminder =
                         (attempt > 0).then_some(AUTO_APPROVAL_VERDICT_REMINDER);
-                    let request = build_request(reminder);
+                    let output_tokens = if attempt == 0 { verdict_output_tokens } else { retry_output_tokens };
+                    let request = match build_request(reminder, output_tokens, context_cap) {
+                        Ok(request) => request,
+                        Err(reason) => {
+                            failure = Some(agena_permission::ClassifyFailure::Provider(reason));
+                            break;
+                        }
+                    };
+                    let sent_context_bytes = context.as_ref().map_or(0, |_| {
+                        request.turns.first().map_or(0, |run| run.as_text_lossy().len())
+                    });
                     match tokio::time::timeout_at(
                         deadline,
                         state.provider_registry.complete(&model_ref, request),
@@ -527,6 +574,13 @@ impl SessionManager {
                         // A provider error or an expired deadline is not a
                         // formatting problem a reminder can fix, and the
                         // registry already retried the transport call.
+                        Ok(Err(error)) if attempt + 1 < AUTO_APPROVAL_ATTEMPTS
+                            && context.is_some()
+                            && error.provider_error_kind() == Some(agena_provider::ProviderErrorKind::ContextOverflow) => {
+                            context_cap = sent_context_bytes / 2;
+                            tracing::debug!(model_id = model_ref.model_id.as_ref(),
+                                "automatic approval context overflow; retrying with a smaller transcript");
+                        }
                         Ok(Err(error)) => {
                             failure = Some(agena_permission::ClassifyFailure::Provider(
                                 error.to_string(),
@@ -572,6 +626,74 @@ impl SessionManager {
             });
         }
         futures_util::future::join_all(futures).await
+    }
+}
+
+/// The policy, verdict declarations, complete action and retry reminder are
+/// mandatory. Only historical context may shrink. Reject an oversized action
+/// before sending it, so truncation can never change what is being approved.
+fn bound_classifier_context(
+    request: &mut agena_provider::CompletionRequest,
+    context: Option<&str>,
+    input_limit_tokens: u64,
+    context_cap: usize,
+) -> Result<(), String> {
+    let estimate_bytes = |request: &agena_provider::CompletionRequest| -> Result<usize, String> {
+        serde_json::to_vec(request)
+            .map(|bytes| {
+                bytes
+                    .len()
+                    .saturating_add(request.turns.len().saturating_mul(64))
+            })
+            .map_err(|error| error.to_string())
+    };
+    let max_bytes = usize::try_from(input_limit_tokens)
+        .unwrap_or(usize::MAX / 4)
+        .saturating_mul(4);
+    let mandatory = estimate_bytes(request)?;
+    if mandatory > max_bytes {
+        return Err(
+            "approval policy and complete action exceed the approval model's input budget"
+                .to_owned(),
+        );
+    }
+    let Some(context) = context.filter(|text| !text.is_empty()) else {
+        return Ok(());
+    };
+    let mut budget = max_bytes
+        .saturating_sub(mandatory)
+        .saturating_sub(256)
+        .min(context_cap);
+    if budget < 256 {
+        return Err(
+            "approval model has insufficient input space for conversation context".to_owned(),
+        );
+    }
+    request.turns.insert(
+        0,
+        agena_provider::CompletionInputRun {
+            role: Role::User,
+            parts: Vec::new(),
+            provider_state: Default::default(),
+        },
+    );
+    loop {
+        request.turns[0].parts = vec![agena_provider::CompletionInputPart::Text {
+            text: crate::prompt_budget::truncate_prompt_text(
+                context,
+                budget,
+                "\n[Approval conversation context truncated; omitted content is unavailable.]\n",
+            ),
+        }];
+        if estimate_bytes(request)? <= max_bytes {
+            return Ok(());
+        }
+        budget /= 2;
+        if budget < 256 {
+            return Err(
+                "approval model has insufficient input space for conversation context".to_owned(),
+            );
+        }
     }
 }
 

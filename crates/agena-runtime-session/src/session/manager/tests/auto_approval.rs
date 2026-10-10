@@ -22,12 +22,15 @@ enum ApprovalReply {
     /// Reasoning with no answer at all: what a model produces when it spends
     /// its output budget thinking and never emits the verdict.
     Reasoning(&'static str),
+    Overflow,
 }
 
 struct ApprovalProvider {
     model: ModelId,
     replies: std::sync::Mutex<Vec<ApprovalReply>>,
     requests: std::sync::Mutex<Vec<CompletionRequest>>,
+    limits: agena_domain::ModelTokenLimits,
+    thinking_mode: Option<agena_domain::ModelThinkingMode>,
 }
 
 impl ApprovalProvider {
@@ -36,6 +39,8 @@ impl ApprovalProvider {
             model: ModelId::new("approval-model"),
             replies: std::sync::Mutex::new(replies),
             requests: std::sync::Mutex::new(Vec::new()),
+            limits: Default::default(),
+            thinking_mode: None,
         }
     }
 
@@ -52,6 +57,25 @@ impl ModelRuntime for ApprovalProvider {
 
     fn default_model(&self) -> &ModelId {
         &self.model
+    }
+
+    fn model_metadata(&self, model: &ModelId) -> agena_domain::ModelMetadata {
+        agena_domain::ModelMetadata {
+            limits: if model.as_ref() == "agent-model" {
+                agena_domain::ModelTokenLimits {
+                    context_window_tokens: Some(1_000_000),
+                    max_input_tokens: Some(1_000_000),
+                    max_output_tokens: Some(384_000),
+                }
+            } else {
+                self.limits.clone()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn model_thinking_modes(&self, _model: &ModelId) -> Vec<agena_domain::ModelThinkingMode> {
+        self.thinking_mode.iter().cloned().collect()
     }
 
     /// The route must carry tools, or the verdict tools would be stripped
@@ -75,6 +99,7 @@ impl ModelRuntime for ApprovalProvider {
             }
             replies.remove(0)
         };
+        let model = request.model.clone();
         self.requests.lock().expect("request lock").push(request);
         let (text, reasoning_text, tool_calls) = match reply {
             ApprovalReply::Verdict {
@@ -91,10 +116,18 @@ impl ModelRuntime for ApprovalProvider {
             ),
             ApprovalReply::Text(text) => (text.to_owned(), None, Vec::new()),
             ApprovalReply::Reasoning(text) => (String::new(), Some(text.to_owned()), Vec::new()),
+            ApprovalReply::Overflow => {
+                return Err(ProviderError::ProviderClassified {
+                    provider: self.id().to_owned(),
+                    message: "input exceeded context window".to_owned(),
+                    kind: agena_provider::ProviderErrorKind::ContextOverflow,
+                    retryable: false,
+                });
+            }
         };
         Ok(CompletionResponse {
             provider_id: ProviderId::new(self.id()),
-            model: self.model.clone(),
+            model,
             text,
             reasoning_text,
             finish_reason: Some(CompletionFinishReason::Stop),
@@ -454,9 +487,9 @@ async fn a_classifier_verdict_gets_thinking_headroom_and_keeps_reasoning() {
             "the approval model keeps its own reasoning mode"
         );
     }
-    assert_eq!(
-        requests[0].max_output_tokens, requests[1].max_output_tokens,
-        "the retry repeats the budget that leaves room for thinking"
+    assert!(
+        requests[1].max_output_tokens > requests[0].max_output_tokens,
+        "an empty verdict gets additional reasoning headroom on recovery"
     );
 }
 
@@ -535,4 +568,221 @@ async fn prose_recovery_still_resolves_a_verdict_on_a_tool_less_route() {
         panic!("the text recovery path must still resolve a cited block");
     };
     assert!(reason.contains("[Exfiltration]"), "{reason}");
+}
+
+async fn review_session(
+    manager: &SessionManager,
+    session: &Session,
+    candidate: agena_permission::ClassifierCandidate,
+) -> agena_permission::ClassifiedCandidate {
+    manager
+        .classify_auto_candidates(
+            Some(session),
+            &manager.execution_state(),
+            Some(session.id),
+            vec![candidate],
+        )
+        .await
+        .pop()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn approval_model_limits_bound_long_utf8_context_and_mode_output_patches() {
+    let mut fixture = ApprovalProvider::new(vec![
+        ApprovalReply::Text(""),
+        ApprovalReply::Verdict {
+            name: "approve_action",
+            arguments_json: r#"{"reason":"authorized scratch write"}"#,
+        },
+    ]);
+    fixture.limits = agena_domain::ModelTokenLimits {
+        context_window_tokens: Some(8_192),
+        max_input_tokens: Some(6_000),
+        max_output_tokens: Some(2_048),
+    };
+    let mut mode = agena_domain::ModelThinkingMode {
+        is_default: true,
+        thinking: Some(agena_domain::ThinkingRequest::Effort {
+            effort: agena_domain::ReasoningEffort::Max,
+        }),
+        ..Default::default()
+    };
+    mode.request_override
+        .body_patch
+        .insert("max_output_tokens".into(), serde_json::json!(64_000));
+    fixture.thinking_mode = Some(mode);
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = create_with_model(&manager, "small reviewer", "approval", "agent-model").await;
+    let mut session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![TypedContent::Text(text_content(format!(
+            "BEGIN{}END",
+            "审核上下文🦀".repeat(20_000)
+        )))],
+    )
+    .await;
+    session
+        .runtime
+        .execution
+        .effective_permission
+        .approval_model = Some(agena_domain::ApprovalModelSelection::from_model_ref(
+        &ModelRef::new("approval", "small-reviewer"),
+    ));
+    let outcome = review_session(&manager, &session, write_candidate()).await;
+    assert_eq!(outcome.decision(), agena_domain::PermissionDecision::Allow);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].max_output_tokens, Some(1_024));
+    assert_eq!(requests[1].max_output_tokens, Some(2_048));
+    for request in requests {
+        assert_eq!(request.model.as_ref(), "small-reviewer");
+        assert!(serde_json::to_vec(&request).unwrap().len() <= 6_000 * 4);
+        assert_eq!(
+            request.request_override.body_patch["max_output_tokens"],
+            request.max_output_tokens.unwrap()
+        );
+        assert_eq!(
+            request.thinking,
+            Some(agena_domain::ThinkingRequest::Effort {
+                effort: agena_domain::ReasoningEffort::Max
+            })
+        );
+        let context = request.turns[0].as_text_lossy();
+        assert!(context.contains("BEGIN"));
+        assert!(context.contains("END"));
+    }
+}
+
+#[tokio::test]
+async fn oversized_approval_action_is_never_silently_truncated_or_sent() {
+    let mut fixture = ApprovalProvider::new(Vec::new());
+    fixture.limits.max_input_tokens = Some(4_096);
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session =
+        create_with_model(&manager, "oversized action", "approval", "approval-model").await;
+    let mut candidate = write_candidate();
+    candidate.action = agena_domain::ActionSpec::Tool {
+        tool_name: "shell.exec".into(),
+        command: Some("x".repeat(100_000)),
+    };
+    let outcome = review_session(&manager, &session, candidate).await;
+    assert!(matches!(
+        outcome.decision(),
+        agena_domain::PermissionDecision::Ask { .. }
+    ));
+    assert!(matches!(
+        outcome.failure,
+        Some(agena_permission::ClassifyFailure::Provider(_))
+    ));
+    assert!(provider.requests().is_empty());
+}
+
+#[tokio::test]
+async fn approval_context_overflow_retries_a_smaller_transcript_with_the_complete_action() {
+    let provider = Arc::new(ApprovalProvider::new(vec![
+        ApprovalReply::Overflow,
+        ApprovalReply::Verdict {
+            name: "approve_action",
+            arguments_json: r#"{"reason":"authorized scratch write"}"#,
+        },
+    ]));
+    let manager = manager_with_provider(provider.clone()).await;
+    let session =
+        create_with_model(&manager, "reviewer recovery", "approval", "approval-model").await;
+    let session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![TypedContent::Text(text_content(format!(
+            "BEGIN{}END",
+            "x".repeat(40_000)
+        )))],
+    )
+    .await;
+    let outcome = review_session(&manager, &session, write_candidate()).await;
+    assert_eq!(outcome.decision(), agena_domain::PermissionDecision::Allow);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1].turns[0].as_text_lossy().len() < requests[0].turns[0].as_text_lossy().len()
+    );
+    assert_eq!(requests[0].turns[1], requests[1].turns[1]);
+    assert!(requests[1].turns[0].as_text_lossy().contains("END"));
+}
+
+#[tokio::test]
+async fn reviewer_uses_the_checkpoint_and_refreshes_payloads_with_the_same_part_count() {
+    let provider = Arc::new(ApprovalProvider::new(vec![
+        ApprovalReply::Verdict {
+            name: "approve_action",
+            arguments_json: "{}",
+        },
+        ApprovalReply::Verdict {
+            name: "approve_action",
+            arguments_json: "{}",
+        },
+    ]));
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = create_with_model(
+        &manager,
+        "checkpoint evidence",
+        "approval",
+        "approval-model",
+    )
+    .await;
+    let mut session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![TypedContent::Text(text_content("current user instruction"))],
+    )
+    .await;
+    session.runtime.prompt_window.compaction =
+        Some(crate::session::model::PromptCompactionRuntime {
+            checkpoint_id: "review-checkpoint".into(),
+            compacted_through_message_id: 0,
+            trigger: agena_domain::PromptCompactionTrigger::Auto,
+            strategy: agena_domain::PromptCompactionStrategy::LocalSummary,
+            content: crate::session::model::PromptCompactionContent::TextSummary {
+                summary: "Earlier restriction: write scratch files only.".into(),
+                recent_messages: Vec::new(),
+            },
+            before_tokens: 50_000,
+            after_tokens: 100,
+            created_at_ms: 1,
+        });
+    review_session(&manager, &session, write_candidate()).await;
+    if let Some(checkpoint) = &mut session.runtime.prompt_window.compaction {
+        checkpoint.content = crate::session::model::PromptCompactionContent::TextSummary {
+            summary: "Updated restriction: no network uploads.".into(),
+            recent_messages: Vec::new(),
+        };
+    }
+    review_session(&manager, &session, write_candidate()).await;
+    let requests = provider.requests();
+    assert!(
+        requests[0].turns[0]
+            .as_text_lossy()
+            .contains("write scratch files only")
+    );
+    assert!(
+        requests[1].turns[0]
+            .as_text_lossy()
+            .contains("no network uploads")
+    );
+    assert!(
+        !requests[1].turns[0]
+            .as_text_lossy()
+            .contains("write scratch files only")
+    );
+    assert!(requests.iter().all(|request| {
+        request.turns[0]
+            .as_text_lossy()
+            .contains("current user instruction")
+    }));
 }

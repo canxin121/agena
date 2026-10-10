@@ -347,7 +347,6 @@ struct SessionManagerState {
         Arc<StdRwLock<HashMap<i64, crate::authorization::PermissionConfig>>>,
     auto_approval: Arc<StdMutex<HashMap<Option<i64>, agena_permission::DenialBudget>>>,
     rule_snapshots: Arc<StdRwLock<HashMap<Option<i64>, Arc<permission_service::RuleSnapshot>>>>,
-    auto_projection: Arc<StdMutex<HashMap<Option<i64>, (usize, String)>>>,
 }
 
 /// Per-run collaborators that belong to one execution lifecycle.
@@ -499,7 +498,6 @@ impl SessionManagerState {
             Arc::new(StdRwLock::new(HashMap::new())),
             Arc::new(StdMutex::new(HashMap::new())),
             Arc::new(StdRwLock::new(HashMap::new())),
-            Arc::new(StdMutex::new(HashMap::new())),
         )
     }
 
@@ -516,7 +514,6 @@ impl SessionManagerState {
         >,
         auto_approval: Arc<StdMutex<HashMap<Option<i64>, agena_permission::DenialBudget>>>,
         rule_snapshots: Arc<StdRwLock<HashMap<Option<i64>, Arc<permission_service::RuleSnapshot>>>>,
-        auto_projection: Arc<StdMutex<HashMap<Option<i64>, (usize, String)>>>,
     ) -> Self {
         let tool_execution_semaphore = Arc::new(Semaphore::new(config.max_concurrent_tools));
         Self {
@@ -530,7 +527,6 @@ impl SessionManagerState {
             shared_session_permissions,
             auto_approval,
             rule_snapshots,
-            auto_projection,
         }
     }
 }
@@ -1900,7 +1896,6 @@ impl SessionManager {
                 Arc::clone(&previous.shared_session_permissions),
                 Arc::clone(&previous.auto_approval),
                 Arc::clone(&previous.rule_snapshots),
-                Arc::clone(&previous.auto_projection),
             )));
     }
 

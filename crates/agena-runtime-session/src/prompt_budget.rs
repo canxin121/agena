@@ -95,7 +95,7 @@ pub fn prompt_token_budget(
         return max_input_tokens;
     }
     let context_window_tokens = context_window_tokens?;
-    let min_prompt_tokens = MIN_PROMPT_BUDGET_TOKENS.min(context_window_tokens);
+    let min_prompt_tokens = MIN_PROMPT_BUDGET_TOKENS.min(context_window_tokens.saturating_sub(1));
     let max_reserve_tokens = context_window_tokens
         .saturating_sub(min_prompt_tokens)
         .max(1);
@@ -124,6 +124,31 @@ pub fn estimate_prompt_tokens_from_chars(chars: usize) -> u64 {
         .saturating_add(APPROX_CHARS_PER_TOKEN.saturating_sub(1))
         .checked_div(APPROX_CHARS_PER_TOKEN)
         .unwrap_or(usize::MAX) as u64
+}
+
+/// Prompt estimates use UTF-8 bytes. Keep both edges without exceeding that
+/// byte budget, including the omission marker, even for Chinese or emoji.
+pub(crate) fn truncate_prompt_text(value: &str, max_bytes: usize, marker: &str) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let marker = if marker.len() <= max_bytes {
+        marker
+    } else {
+        ""
+    };
+    let remaining = max_bytes.saturating_sub(marker.len());
+    let head_bytes = remaining.saturating_mul(2) / 3;
+    let tail_bytes = remaining.saturating_sub(head_bytes);
+    let mut head_end = head_bytes;
+    while !value.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = value.len().saturating_sub(tail_bytes);
+    while !value.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    format!("{}{marker}{}", &value[..head_end], &value[tail_start..])
 }
 
 #[cfg(test)]
@@ -190,5 +215,37 @@ mod tests {
         assert_eq!(prompt_token_budget(None, Some(65_536), None), Some(65_536));
         assert_eq!(estimate_prompt_tokens_from_chars(0), 0);
         assert_eq!(estimate_prompt_tokens_from_chars(5), 2);
+    }
+
+    #[test]
+    fn tiny_windows_never_reserve_more_than_the_whole_context() {
+        for window in [1, 32, 256, 512, 513, 1_024, 4_096, 8_192] {
+            for requested in [None, Some(1), Some(1_024), Some(64_000)] {
+                let output = session_output_token_budget(Some(window), None, requested);
+                let input = prompt_token_budget(Some(window), None, Some(output)).unwrap();
+                assert!(
+                    input.saturating_add(output) <= window,
+                    "window={window}, input={input}, output={output}"
+                );
+            }
+        }
+        assert_eq!(
+            prompt_token_budget(Some(0), Some(4_096), Some(0)),
+            Some(4_096)
+        );
+        assert_eq!(prompt_token_budget(Some(0), Some(0), None), None);
+    }
+
+    #[test]
+    fn utf8_projection_preserves_edges_inside_the_byte_budget() {
+        let text = format!("BEGIN{}END", "审核模型🦀".repeat(1_000));
+        for budget in [0, 1, 10, 64, 512, 1_024] {
+            let result = super::truncate_prompt_text(&text, budget, "[omitted]");
+            assert!(result.len() <= budget);
+            if budget >= 64 {
+                assert!(result.starts_with("BEGIN"));
+                assert!(result.ends_with("END"));
+            }
+        }
     }
 }

@@ -1445,12 +1445,7 @@ pub(crate) fn prompt_char_budget(
     tools: &[ToolApiBinding],
 ) -> usize {
     let overhead_chars = approximate_request_overhead_chars(system, tools);
-    let fallback_budget = fallback_max_prompt_chars
-        .saturating_sub(overhead_chars)
-        .max(
-            agena_runtime::APPROX_CHARS_PER_TOKEN
-                * agena_runtime::MIN_PROMPT_BUDGET_TOKENS as usize,
-        );
+    let fallback_budget = fallback_max_prompt_chars.saturating_sub(overhead_chars);
 
     let Some(prompt_tokens) = agena_runtime::prompt_token_budget(
         context_window_tokens,
@@ -1460,9 +1455,7 @@ pub(crate) fn prompt_char_budget(
         return fallback_budget;
     };
     let prompt_chars = prompt_tokens as usize * agena_runtime::APPROX_CHARS_PER_TOKEN;
-    prompt_chars.saturating_sub(overhead_chars).max(
-        agena_runtime::APPROX_CHARS_PER_TOKEN * agena_runtime::MIN_PROMPT_BUDGET_TOKENS as usize,
-    )
+    prompt_chars.saturating_sub(overhead_chars)
 }
 
 pub(crate) fn build_prepared_prompt(
@@ -2319,55 +2312,45 @@ mod response_id_tests {
 /// permission reviewer that cannot see what a tool was called with, or what it
 /// returned, cannot judge whether the next action exfiltrates or destroys
 /// anything — which is precisely the judgement being asked of it.
-pub(crate) fn project_transcript(parts: &[Part], budget_chars: usize) -> String {
-    let projected = parts_into_runs(parts)
+pub(crate) fn project_transcript(runs: &[CompletionInputRun], budget_chars: usize) -> String {
+    const MARKER: &str = "[transcript truncated to fit the approval context window]";
+    let projected = runs
         .iter()
-        .map(|run| crate::provider::project_classifier_run_text(run))
+        .map(crate::provider::project_classifier_input_run_text)
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>();
-    if projected.is_empty() {
+    if projected.is_empty() || budget_chars == 0 {
         return String::new();
     }
-    let total: usize = projected.iter().map(String::len).sum();
-    if total <= budget_chars {
-        return projected.join(
-            "
-",
-        );
+    let full = projected.join("\n");
+    if full.len() <= budget_chars {
+        return full;
     }
-    if projected.len() == 1 {
-        return truncate_chars(&projected[0], budget_chars);
+    if projected.len() == 1 || budget_chars <= MARKER.len() + 2 {
+        return crate::prompt_budget::truncate_prompt_text(&full, budget_chars, MARKER);
     }
-    let head_budget = (budget_chars / 4).max(1);
-    let tail_budget = budget_chars.saturating_sub(head_budget);
-    let mut parts = vec![truncate_chars(&projected[0], head_budget)];
+    let available = budget_chars.saturating_sub(MARKER.len() + 2);
+    let head = crate::prompt_budget::truncate_prompt_text(&projected[0], available / 4, MARKER);
+    let tail_budget = available.saturating_sub(head.len());
     let mut tail = Vec::new();
     let mut used = 0usize;
-    for text in projected.iter().rev().take(projected.len() - 1) {
-        if used + text.len() <= tail_budget {
+    for text in projected.iter().skip(1).rev() {
+        let separator = usize::from(!tail.is_empty());
+        let remaining = tail_budget.saturating_sub(used).saturating_sub(separator);
+        if text.len() <= remaining {
             tail.push(text.clone());
-            used += text.len();
-        } else if tail.is_empty() {
-            tail.push(truncate_chars(text, tail_budget));
-            break;
+            used += text.len() + separator;
         } else {
+            if tail.is_empty() && remaining > 0 {
+                tail.push(crate::prompt_budget::truncate_prompt_text(
+                    text, remaining, MARKER,
+                ));
+            }
             break;
         }
     }
     tail.reverse();
-    parts.extend(tail);
-    parts.push("[transcript truncated to fit the approval context window]".to_owned());
-    parts.join(
-        "
-",
-    )
-}
-
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
-        return text.to_owned();
-    }
-    text.chars().take(max_chars).collect()
+    format!("{head}\n{MARKER}\n{}", tail.join("\n"))
 }
 
 pub(crate) fn approximate_run_payload_chars(run: &CompletionInputRun) -> usize {

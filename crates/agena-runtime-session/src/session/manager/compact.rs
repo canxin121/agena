@@ -504,8 +504,7 @@ impl SessionManager {
         .saturating_sub(COMPACTION_SYSTEM_PROMPT.len())
         .saturating_sub(COMPACTION_USER_PROMPT.len())
         .saturating_sub(COMPACTION_RECOVERY_PROMPT.len())
-        .saturating_sub(2_048)
-        .max(MAX_COMPACTOR_RUN_CHARS);
+        .saturating_sub(2_048);
         // Summarize the complete active source, including the suffix. The suffix
         // is retained for fidelity, but candidate validation may need to shrink
         // it; the checkpoint must remain semantically complete in that case.
@@ -575,7 +574,35 @@ impl SessionManager {
             let response = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(AppError::Cancelled),
-                result = future => result?,
+                result = future => result,
+            };
+            let response = match response {
+                Ok(response) => response,
+                Err(error)
+                    if attempt == 0
+                        && error.provider_error_kind()
+                            == Some(ProviderErrorKind::ContextOverflow) =>
+                {
+                    request.turns =
+                        bounded_compactor_history(source.as_slice(), max_input_chars / 2);
+                    if request.turns.is_empty() {
+                        return Err(error.into());
+                    }
+                    request.turns.push(CompletionInputRun {
+                        role: Role::User,
+                        parts: vec![CompletionInputPart::Text {
+                            text: COMPACTION_USER_PROMPT.to_owned(),
+                        }],
+                        provider_state: Default::default(),
+                    });
+                    tracing::warn!(
+                        session_id = session.id,
+                        "compactor context overflow; retrying with a smaller historical projection"
+                    );
+                    attempt += 1;
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
             };
             let needs_retry = response.text.trim().is_empty()
                 || matches!(response.finish_reason, Some(CompletionFinishReason::Length));
@@ -809,7 +836,10 @@ fn bounded_compactor_history(
     messages: &[CompletionInputRun],
     max_chars: usize,
 ) -> Vec<CompletionInputRun> {
-    if messages.is_empty() {
+    const RUN_OVERHEAD_BYTES: usize = 64;
+    const MIN_RECORD_BYTES: usize = 128;
+    const OMISSION: &str = "[A middle span of an exceptionally dense transcript could not fit after per-message hardening. Do not invent omitted details.]";
+    if messages.is_empty() || max_chars < RUN_OVERHEAD_BYTES + MIN_RECORD_BYTES {
         return Vec::new();
     }
     let initial = messages
@@ -818,7 +848,12 @@ fn bounded_compactor_history(
         .collect::<Vec<_>>();
     let initial_chars = initial
         .iter()
-        .map(|message| message.as_text_lossy().len())
+        .map(|message| {
+            message
+                .as_text_lossy()
+                .len()
+                .saturating_add(RUN_OVERHEAD_BYTES)
+        })
         .sum::<usize>();
     if initial_chars <= max_chars {
         return initial;
@@ -828,40 +863,46 @@ fn bounded_compactor_history(
     // silently dropping the oldest state. Each message keeps both edges, which
     // preserves commands/results and final error tails better than prefix-only
     // truncation. Protocol overhead is covered by the caller's reserved space.
-    let per_message = max_chars
-        .checked_div(messages.len())
-        .unwrap_or_default()
-        .clamp(128, MAX_COMPACTOR_RUN_CHARS);
-    let mut selected = messages
+    let dense = max_chars / messages.len() < MIN_RECORD_BYTES + RUN_OVERHEAD_BYTES;
+    let available = if dense {
+        max_chars.saturating_sub(OMISSION.len() + RUN_OVERHEAD_BYTES)
+    } else {
+        max_chars
+    };
+    let keep_count = (available / (MIN_RECORD_BYTES + RUN_OVERHEAD_BYTES)).min(messages.len());
+    if keep_count == 0 || (dense && keep_count < 2) {
+        return Vec::new();
+    }
+    let per_message = (available / keep_count)
+        .saturating_sub(RUN_OVERHEAD_BYTES)
+        .min(MAX_COMPACTOR_RUN_CHARS);
+    let head_count = if dense {
+        (keep_count / 3).max(1)
+    } else {
+        keep_count
+    };
+    let tail_count = keep_count.saturating_sub(head_count);
+    let mut selected = messages[..head_count]
         .iter()
         .map(|message| compaction_safe_message(message, per_message))
         .collect::<Vec<_>>();
-    let mut used = selected
-        .iter()
-        .map(|message| message.as_text_lossy().len())
-        .sum::<usize>();
-    if used <= max_chars {
-        return selected;
-    }
-
-    // Extremely long, message-dense sessions cannot fit even hardened 128-char
-    // records. Keep both ends and make the omitted middle explicit.
-    while used > max_chars && selected.len() > 2 {
-        let remove_index = selected.len() / 2;
-        used = used.saturating_sub(selected.remove(remove_index).as_text_lossy().len());
-    }
-    if selected.len() < messages.len() {
+    if dense {
         selected.insert(
-            selected.len() / 2,
+            selected.len(),
             CompletionInputRun {
                 role: Role::System,
                 parts: vec![CompletionInputPart::Text {
-                    text: "[A middle span of an exceptionally dense transcript could not fit after per-message hardening. Do not invent omitted details.]".to_owned(),
+                    text: OMISSION.to_owned(),
                 }],
                 provider_state: Default::default(),
             },
         );
     }
+    selected.extend(
+        messages[messages.len() - tail_count..]
+            .iter()
+            .map(|message| compaction_safe_message(message, per_message)),
+    );
     selected
 }
 
@@ -955,24 +996,11 @@ fn latest_durable_user_text(session: &Session) -> Option<String> {
 }
 
 fn truncate_middle(value: &str, max_chars: usize) -> String {
-    let count = value.chars().count();
-    if count <= max_chars {
-        return value.to_owned();
-    }
-    let marker = "\n…[content truncated for compaction safety]…\n";
-    let remaining = max_chars.saturating_sub(marker.chars().count());
-    let head = remaining.saturating_mul(2) / 3;
-    let tail = remaining.saturating_sub(head);
-    let prefix = value.chars().take(head).collect::<String>();
-    let suffix = value
-        .chars()
-        .rev()
-        .take(tail)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
-    format!("{prefix}{marker}{suffix}")
+    crate::prompt_budget::truncate_prompt_text(
+        value,
+        max_chars,
+        "\n…[content truncated for compaction safety]…\n",
+    )
 }
 
 fn checkpoint_message(session: &Session, summary: &str) -> CompletionInputRun {
@@ -1123,6 +1151,36 @@ mod tests {
         assert!(text.starts_with("BEGIN"));
         assert!(text.ends_with("END"));
         assert!(text.contains("truncated for compaction safety"));
+    }
+
+    #[test]
+    fn dense_multilingual_history_includes_markers_and_framing_in_its_budget() {
+        let messages = (0..200)
+            .map(|index| {
+                projected_message(
+                    Role::User,
+                    &format!("turn-{index}: {} END-{index}", "用户指令🦀".repeat(1_000)),
+                )
+            })
+            .collect::<Vec<_>>();
+        for budget in [512, 1_024, 2_048, 8_000, 32_000] {
+            let history = bounded_compactor_history(&messages, budget);
+            let used = history
+                .iter()
+                .map(|run| run.as_text_lossy().len() + 64)
+                .sum::<usize>();
+            assert!(used <= budget, "used={used}, budget={budget}");
+            if !history.is_empty() {
+                assert!(history.first().unwrap().as_text_lossy().contains("turn-0"));
+                assert!(history.last().unwrap().as_text_lossy().contains("END-199"));
+                assert!(
+                    history
+                        .iter()
+                        .any(|run| run.as_text_lossy().contains("middle span"))
+                );
+            }
+        }
+        assert!(bounded_compactor_history(&messages, 100).is_empty());
     }
 
     #[test]

@@ -9,6 +9,8 @@ struct ContextProvider {
     native_attempts: AtomicUsize,
     prompt_tokens: u64,
     repaired: bool,
+    limits: agena_domain::ModelTokenLimits,
+    overflow_first: bool,
 }
 
 impl ContextProvider {
@@ -20,6 +22,12 @@ impl ContextProvider {
             native_attempts: AtomicUsize::new(0),
             prompt_tokens: 320_000,
             repaired: false,
+            limits: agena_domain::ModelTokenLimits {
+                context_window_tokens: Some(1_000_000),
+                max_input_tokens: Some(1_000_000),
+                max_output_tokens: Some(384_000),
+            },
+            overflow_first: false,
         }
     }
 }
@@ -34,11 +42,7 @@ impl ModelRuntime for ContextProvider {
     }
     fn model_metadata(&self, _model: &ModelId) -> agena_domain::ModelMetadata {
         agena_domain::ModelMetadata {
-            limits: agena_domain::ModelTokenLimits {
-                context_window_tokens: Some(1_000_000),
-                max_input_tokens: Some(1_000_000),
-                max_output_tokens: Some(384_000),
-            },
+            limits: self.limits.clone(),
             ..Default::default()
         }
     }
@@ -63,6 +67,14 @@ impl ModelRuntime for ContextProvider {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         self.requests.lock().unwrap().push(request);
+        if self.overflow_first && self.requests.lock().unwrap().len() == 1 {
+            return Err(ProviderError::ProviderClassified {
+                provider: self.id().to_owned(),
+                message: "context length exceeded".to_owned(),
+                kind: agena_provider::ProviderErrorKind::ContextOverflow,
+                retryable: false,
+            });
+        }
         let (text, finish_reason) = self
             .summaries
             .lock()
@@ -662,4 +674,97 @@ async fn failed_summary_recovery_keeps_history_and_native_capability_state() {
         loaded.runtime.prompt_window.consecutive_compaction_failures,
         1
     );
+}
+
+#[tokio::test]
+async fn small_model_compactor_keeps_history_within_its_input_ceiling() {
+    let mut fixture = ContextProvider::new(vec![(
+        "Keep working on the permission fix.",
+        CompletionFinishReason::Stop,
+    )]);
+    fixture.limits = agena_domain::ModelTokenLimits {
+        context_window_tokens: Some(8_192),
+        max_input_tokens: Some(6_000),
+        max_output_tokens: Some(2_048),
+    };
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    let compacted = manager
+        .compact_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            options(),
+        ))
+        .await
+        .unwrap();
+    assert!(compacted.runtime.prompt_window.compaction.is_some());
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(serde_json::to_vec(&requests[0]).unwrap().len() <= 6_000 * 4);
+    assert_eq!(requests[0].max_output_tokens, Some(1_024));
+}
+
+#[tokio::test]
+async fn compactor_recovers_provider_overflow_by_reducing_history_once() {
+    let mut fixture = ContextProvider::new(vec![(
+        "Continue the permission fix and run its tests.",
+        CompletionFinishReason::Stop,
+    )]);
+    fixture.overflow_first = true;
+    fixture.limits = agena_domain::ModelTokenLimits {
+        context_window_tokens: Some(65_536),
+        max_input_tokens: Some(32_768),
+        max_output_tokens: Some(16_384),
+    };
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    let compacted = manager
+        .compact_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            options(),
+        ))
+        .await
+        .unwrap();
+    assert!(compacted.runtime.prompt_window.compaction.is_some());
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        serde_json::to_vec(&requests[1]).unwrap().len()
+            < serde_json::to_vec(&requests[0]).unwrap().len()
+    );
+    assert_eq!(requests[0].thinking, requests[1].thinking);
+}
+
+#[tokio::test]
+async fn unrepresentable_compaction_preserves_history_without_sending_an_oversized_request() {
+    let mut fixture = ContextProvider::new(Vec::new());
+    fixture.limits = agena_domain::ModelTokenLimits {
+        context_window_tokens: Some(1_024),
+        max_input_tokens: Some(512),
+        max_output_tokens: Some(128),
+    };
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    let original = session.parts().to_vec();
+    let result = manager
+        .compact_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            options(),
+        ))
+        .await;
+    assert!(result.is_err());
+    assert!(provider.requests.lock().unwrap().is_empty());
+    let loaded = manager.get_session(session.id).await.unwrap();
+    assert!(loaded.runtime.prompt_window.compaction.is_none());
+    for part in original {
+        assert_eq!(
+            loaded
+                .parts()
+                .iter()
+                .find(|current| current.part_id == part.part_id),
+            Some(&part)
+        );
+    }
 }

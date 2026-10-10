@@ -114,7 +114,7 @@ LLM 工具参数片段与已解析调用参数分开；未验证的片段不启�
 - 订阅队列与 replay ring 有界，资源缺口需明确通知与补读。
 - REST/WS/SSE/IPC 使用同一应用服务，只有传输封装不同。
 
-当前服务端 fold 查询替换为 RunSummary 与 PartWindow：索引化计数、范围、尾部 N 条、前后游标。客户端拥有折叠和相邻 run 的视觉分组策略。不能为返回一小段内容读取所有 run Part，也不能要求客户端下载完整历史才能折叠。
+当前服务端 fold 查询替换为 RunSummary 与 PartWindow：索引化计数、范围、尾部 N 条、前后游标。分页按消息计数：同角色的连续 run 属于同一条消息，页面始终结束在角色边界，因此一页不会只剩一条回复的其中一轮。客户端拥有折叠和相邻 run 的视觉分组策略。不能为返回一小段内容读取所有 run Part，也不能要求客户端下载完整历史才能折叠。
 
 ## 8. 日志与终端
 
@@ -229,7 +229,7 @@ provider trace 不再放进大 metadata，也不逐 start/progress 重写。完�
 | 语义文档 | 64 KiB、最多 128 blocks；依赖链有源端 checkpoint |
 | PTY 原子 frame | 最多 40,000 cells、16 MiB 原子预算；普通 pipe 记录仍小 |
 | 范围读取 | 字节和 record 数双重有界；text page 最多 32 records，支持 record 内 offset |
-| Part 查询 | ids 最多 256；Part window 最多 256，run window 最多 32，按 run 取尾部有独立预算 |
+| Part 查询 | ids 最多 256；Part window 最多 256，run window 最多 32 条消息（同角色的连续 run 属于同一条消息，页面不切开一条消息），按 run 取尾部有独立预算 |
 | Web 日志观察 | Xterm 5000 行；资源 reducer 与 pending frame 独立有界 |
 | TUI 日志观察 | 本地保留窗口明确标识 windowed；不把本地省略误报为 source gap |
 | Markdown 解析 | 共享 worker、稳定 block 复用；单次解析 250 ms 预算，超时终止 worker 并保留原文显示，后续 Part 可继续解析 |

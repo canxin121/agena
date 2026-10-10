@@ -1794,7 +1794,7 @@ impl PersistenceEngine for SqliteEngine {
                          (parent_id, depth, root_id, workspace_id, relation_kind, cutoff_part_id, title, \
                           version, lifecycle_state, task_id, subtask_status, config_json, provider_anchors_json, \
                           created_at_ms, updated_at_ms) \
-                         VALUES (?, ?, ?, ?, 'subagent', NULL, ?, 1, 'creating', ?, 'created', NULL, NULL, ?, ?)",
+                         VALUES (?, ?, ?, ?, 'subagent', NULL, ?, 1, 'ready', ?, 'created', NULL, NULL, ?, ?)",
                         [
                             parent_session_id.into(),
                             depth.into(),

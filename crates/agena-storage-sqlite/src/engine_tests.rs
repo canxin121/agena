@@ -2379,6 +2379,11 @@ async fn subagent_helpers_find_create_and_update_subtask_state() {
     assert_eq!(child.parent_id, Some(parent_id));
     assert_eq!(child.task_id.as_deref(), Some("task-9"));
     assert_eq!(child.relation_kind, SessionRelationKind::Subagent);
+    assert_eq!(
+        child.lifecycle_state,
+        agena_domain::SessionLifecycleState::Ready
+    );
+    assert_eq!(child.subtask_status.as_deref(), Some("created"));
     // Depth and root follow the hierarchy invariant: depth = parent.depth + 1,
     // root inherited from the parent.
     let parent_meta = engine.session_meta(parent_id).await.expect("parent meta");
@@ -2433,6 +2438,10 @@ async fn subagent_helpers_find_create_and_update_subtask_state() {
     assert_eq!(failed.subtask_status.as_deref(), Some("failed"));
     assert_eq!(failed.subtask_finished_at_ms, Some(1_000_002));
     assert_eq!(failed.subtask_failure, Some(failure));
+    assert_eq!(
+        failed.lifecycle_state,
+        agena_domain::SessionLifecycleState::Ready
+    );
 
     // The unique (parent_id, task_id) index refuses a duplicate create.
     let err = engine

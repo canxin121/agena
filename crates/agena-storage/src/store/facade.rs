@@ -3238,6 +3238,11 @@ mod tests {
         assert_eq!(meta.id, child_id);
         assert_eq!(meta.parent_id, Some(parent));
         assert_eq!(meta.task_id.as_deref(), Some("task-1"));
+        assert_eq!(
+            meta.lifecycle_state,
+            agena_domain::SessionLifecycleState::Ready
+        );
+        assert_eq!(meta.subtask_status.as_deref(), Some("created"));
 
         let updated = facade
             .update_subtask_state(
@@ -3251,6 +3256,10 @@ mod tests {
             .expect("update subtask");
         assert_eq!(updated.subtask_status.as_deref(), Some("running"));
         assert!(updated.subtask_started_at_ms.is_some());
+        assert_eq!(
+            updated.lifecycle_state,
+            agena_domain::SessionLifecycleState::Ready
+        );
 
         // Creating the same (parent, task) again must be refused.
         let err = facade

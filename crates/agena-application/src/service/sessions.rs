@@ -439,6 +439,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subagent_transcripts_remain_readable_through_task_lifecycle() {
+        let (service, store, workspace_id) = test_service().await;
+        let parent = store
+            .create_session(NewSession {
+                workspace_id,
+                parent_id: None,
+                relation_kind: SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: "Parent".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .unwrap();
+
+        for terminal_status in ["completed", "failed", "cancelled"] {
+            let child_id = store
+                .create_subagent_session(parent.id, terminal_status.to_owned(), "Child".to_owned())
+                .await
+                .unwrap();
+            let created = service
+                .get_session(child_id)
+                .await
+                .unwrap()
+                .expect("a committed subagent must be openable before its task starts");
+            assert_eq!(
+                created.lifecycle_state,
+                agena_domain::SessionLifecycleState::Ready
+            );
+            assert!(created.is_subagent);
+            assert_eq!(created.parent_id, Some(parent.id));
+
+            let mut part = marker_part();
+            part.state = agena_storage::store::PartState::Completed;
+            store
+                .submit_user_run(child_id, vec![part], None)
+                .await
+                .unwrap();
+            store
+                .update_subtask_state(child_id, Some("running".to_owned()), Some(1000), None, None)
+                .await
+                .unwrap();
+            assert!(service.get_session(child_id).await.unwrap().is_some());
+
+            let failure = (terminal_status == "failed").then(|| {
+                json!({
+                    "id": "task-failure",
+                    "code": "execution_failed",
+                    "user": {"fallback": "The task failed."}
+                })
+            });
+            store
+                .update_subtask_state(
+                    child_id,
+                    Some(terminal_status.to_owned()),
+                    Some(1000),
+                    Some(1001),
+                    failure,
+                )
+                .await
+                .unwrap();
+            let finished = service.get_session(child_id).await.unwrap().unwrap();
+            assert_eq!(
+                finished.lifecycle_state,
+                agena_domain::SessionLifecycleState::Ready
+            );
+            assert_eq!(finished.message_count, 1);
+            let view = store.load(child_id).await.unwrap();
+            assert!(
+                view.parts
+                    .iter()
+                    .any(|part| part.kind == "text" && part.content["text"] == "hello")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn session_list_survives_deletion_between_summary_and_state_reads() {
         let (service, store, workspace_id) = test_service().await;
         let mut sessions = Vec::new();

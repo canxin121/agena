@@ -935,7 +935,7 @@ impl PersistenceEngine for InMemoryEngine {
             favorite: false,
             pinned: false,
             version: 1,
-            lifecycle_state: SessionLifecycleState::Creating,
+            lifecycle_state: SessionLifecycleState::Ready,
             creation_failure: None,
             task_id: Some(task_id),
             // `created` is the initial delegated-task lifecycle (matches the

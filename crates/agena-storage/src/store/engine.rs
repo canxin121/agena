@@ -303,6 +303,8 @@ pub trait PersistenceEngine: Send + Sync {
     /// `(parent_id, task_id)` pair makes create idempotent at the schema level;
     /// callers check `find_subagent_by_task_id` first so a conflicting create
     /// is an unexpected error.
+    /// The committed session is `ready` and readable immediately; `created`
+    /// belongs to the independent subtask status, not the session lifecycle.
     async fn create_subagent_session(
         &self,
         parent_session_id: i64,

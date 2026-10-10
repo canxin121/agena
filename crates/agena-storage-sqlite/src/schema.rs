@@ -127,6 +127,8 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
 /// from the current declarations. Existing tables, required indexes and
 /// triggers must match exactly. Additional, non-unique performance indexes
 /// may be absent and are installed only after the durable schema validates.
+/// Reopening also settles subagent session lifecycles left `creating` by an
+/// older atomic creation path, preserving their independent task state.
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let _lock = SchemaLock::acquire(db).await?;
     let fresh = schema_objects(db).await?.is_empty();
@@ -147,9 +149,6 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
         .await?;
     }
     if !fresh {
-        if missing_indexes.is_empty() {
-            return Ok(());
-        }
         let txn = db.begin().await?;
         for statement in missing_indexes {
             txn.execute(Statement::from_string(
@@ -158,6 +157,20 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
             ))
             .await?;
         }
+        // Subagent creation commits a complete, usable session in one
+        // transaction. Older builds incorrectly persisted `creating` forever
+        // while their tasks ran and finished, causing session detail reads to
+        // return 404 and preventing transcript hydration. Repair only that
+        // stale state after schema validation, leaving messages, task status,
+        // failures and ordering timestamps intact. The version bump makes
+        // existing resource caches observe the change; reopening is idempotent.
+        txn.execute(Statement::from_string(
+            txn.get_database_backend(),
+            "UPDATE agena_sessions SET lifecycle_state = 'ready', version = version + 1 \
+             WHERE relation_kind = 'subagent' AND lifecycle_state = 'creating' \
+               AND creation_failure_json IS NULL",
+        ))
+        .await?;
         return txn.commit().await;
     }
     let txn = db.begin().await?;
@@ -380,6 +393,91 @@ mod tests {
         let before = validation::schema_objects(&db).await.unwrap();
         initialize_schema(&db).await.unwrap();
         assert_eq!(validation::schema_objects(&db).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn reopening_repairs_subagent_lifecycles_without_changing_tasks_or_transcripts() {
+        use agena_domain::SessionLifecycleState;
+        use agena_storage::store::PersistenceEngine;
+        use sea_orm::Value;
+        use std::sync::Arc;
+
+        let db = initialized_database().await;
+        seed_parts(&db).await;
+        let failure = r#"{"id":"task-failure","code":"execution_failed","user":{"fallback":"The task failed."}}"#;
+        for (index, status) in [
+            "created",
+            "running",
+            "completed",
+            "cancelled",
+            "failed",
+            "timed_out",
+            "interrupted",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let started = (status != "created").then_some(10_i64);
+            let finished = (!matches!(status, "created" | "running")).then_some(20_i64);
+            let failed = matches!(status, "failed" | "timed_out" | "interrupted");
+            db.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO agena_sessions \
+                 (id, parent_id, depth, root_id, workspace_id, relation_kind, title, version, \
+                  lifecycle_state, task_id, subtask_status, subtask_started_at_ms, \
+                  subtask_finished_at_ms, subtask_failure_json, config_json, created_at_ms, updated_at_ms) \
+                 VALUES (?, 1, 1, 1, 1, 'subagent', 'old child', 7, 'creating', ?, ?, ?, ?, ?, \
+                         '{\"conversation\":{\"mode\":\"task\"}}', 1, 2)",
+                [
+                    Value::BigInt(Some(i64::try_from(index).unwrap() + 2)),
+                    status.into(),
+                    status.into(),
+                    Value::BigInt(started),
+                    Value::BigInt(finished),
+                    Value::String(failed.then(|| Box::new(failure.to_owned()))),
+                ],
+            ))
+            .await
+            .unwrap();
+        }
+        execute(&db, "INSERT INTO agena_session_parts (session_id, part_id, added_at_ms) VALUES (2, 1, 1), (2, 2, 2)")
+            .await
+            .unwrap();
+        // Genuine root/child creation and an explicitly failed subagent
+        // retain their lifecycle even when other subagents are repaired.
+        execute(&db,
+            "INSERT INTO agena_sessions \
+             (id, parent_id, depth, root_id, workspace_id, relation_kind, title, version, lifecycle_state, task_id, subtask_status, created_at_ms, updated_at_ms) \
+             VALUES (9, NULL, 0, 0, 1, 'root', 'creating root', 3, 'creating', NULL, NULL, 1, 2), \
+                    (10, 1, 1, 1, 1, 'subagent', 'failed creation', 3, 'creating', 'creation-failure', 'created', 1, 2), \
+                    (11, 1, 1, 1, 1, 'child', 'creating child', 3, 'creating', NULL, NULL, 1, 2)")
+            .await.unwrap();
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE agena_sessions SET lifecycle_state = 'failed', creation_failure_json = ?, version = version + 1 WHERE id = 10",
+            [failure.into()],
+        )).await.unwrap();
+
+        let engine = crate::SqliteEngine::new(Arc::new(db.clone()));
+        let mut expected = Vec::new();
+        for id in 1..=11 {
+            let mut meta = engine.session_meta(id).await.unwrap();
+            if (2..=8).contains(&id) {
+                meta.lifecycle_state = SessionLifecycleState::Ready;
+                meta.version += 1;
+            }
+            expected.push(meta);
+        }
+        let parts = engine.load_session(2).await.unwrap().parts;
+        let schema = validation::schema_objects(&db).await.unwrap();
+        for _ in 0..2 {
+            initialize_schema(&db).await.unwrap();
+            for meta in &expected {
+                assert_eq!(engine.session_meta(meta.id).await.unwrap(), *meta);
+            }
+            assert_eq!(engine.load_session(2).await.unwrap().parts, parts);
+            assert_eq!(validation::schema_objects(&db).await.unwrap(), schema);
+        }
     }
 
     #[tokio::test]

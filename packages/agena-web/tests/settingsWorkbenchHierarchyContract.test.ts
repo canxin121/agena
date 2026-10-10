@@ -25,10 +25,19 @@ test('the shared catalog exposes the high-value models and plugin subpages', () 
     resolve(import.meta.dir, '../src/components/settings/settingsNavigationCatalog.ts'),
     'utf8',
   )
-  for (const id of ['provider-studio', 'model-catalog', 'defaults']) {
+  for (const id of ['provider-studio', 'model-catalog', 'defaults', 'approval-model']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing models subpage ${id}`)
   }
-  for (const id of ['plugin-workbench', 'marketplace', 'mcp-server']) {
+  for (const id of [
+    'plugin-workbench',
+    'plugin-settings',
+    'plugin-commands',
+    'plugin-tools',
+    'plugin-logs',
+    'plugin-diagnostics',
+    'marketplace',
+    'mcp-server',
+  ]) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing plugins subpage ${id}`)
   }
   for (const id of ['filesystem', 'network', 'tools']) {
@@ -47,6 +56,8 @@ test('the section workbench renders only the selected content, not a second navi
   assert.ok(!source.includes('SearchInput'), 'section-local navigation search must be removed')
   assert.ok(!source.includes('OptionPicker'), 'compact layout must use the shared left navigation')
   assert.ok(source.includes('<slot :active-page="activePage"'))
+  assert.ok(!source.includes('useRouter'), 'content must not maintain a second route state')
+  assert.ok(!source.includes('localStorage'), 'remembering the destination belongs to SettingsPage')
 })
 
 test('permission tool rules follow the shared source scope without a second scope picker', () => {

@@ -2,11 +2,17 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { PLUGIN_SETTINGS_VIEWS } from '../src/components/settings/pluginSettingsNavigation'
 
 test('Plugin Workbench exposes the unified Settings/Commands/Tools architecture surface', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/components/settings/PluginsPanel.vue'), 'utf8')
   for (const tab of ['overview', 'settings', 'commands', 'tools', 'logs', 'diagnostics']) {
-    assert.ok(source.includes(`id: '${tab}'`), `missing plugin tab ${tab}`)
+    assert.ok(
+      Object.values(PLUGIN_SETTINGS_VIEWS).includes(
+        tab as (typeof PLUGIN_SETTINGS_VIEWS)[keyof typeof PLUGIN_SETTINGS_VIEWS],
+      ),
+      `missing plugin destination ${tab}`,
+    )
   }
   assert.ok(source.includes('<PluginContractEditor'))
   assert.ok(source.includes("apiJson<PluginArchitectureCatalog>('/api/v1/plugins/architecture')"))

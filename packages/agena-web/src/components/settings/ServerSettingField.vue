@@ -108,6 +108,7 @@ function normalizeLocal(value: JsonValue): string | number | boolean {
     return props.defaultValue === '' ? '' : props.defaultValue === true
   }
   if (props.kind === 'number') {
+    if (props.includeEmpty && (value === null || value === undefined || value === '')) return ''
     const numeric = typeof value === 'number' ? value : Number(value)
     return Number.isFinite(numeric) ? numeric : Number(props.defaultValue) || 0
   }
@@ -175,7 +176,7 @@ async function save() {
     // settings such as ui.tui.theme, so remove the selected layer entry.
     const clearSelectedValue =
       (props.kind === 'select' && props.includeEmpty && !String(localValue.value || '').trim()) ||
-      (props.kind === 'boolean' && props.includeEmpty && localValue.value === '')
+      ((props.kind === 'boolean' || props.kind === 'number') && props.includeEmpty && localValue.value === '')
     if (clearSelectedValue) {
       await deleteRuntimeSetting(path, { reload }, layer)
       if (identity !== fieldIdentity) return
@@ -245,7 +246,7 @@ function flushAutoSave() {
 
 function onNumberInput(event: Event) {
   const target = event.target as HTMLInputElement
-  localValue.value = target.value === '' ? 0 : Number(target.value)
+  localValue.value = target.value === '' ? (props.includeEmpty ? '' : 0) : Number(target.value)
   scheduleAutoSave()
 }
 

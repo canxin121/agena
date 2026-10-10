@@ -27,6 +27,12 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       description: () => st('Choose the default model and its optional execution modes.'),
       keywords: ['default', 'model', 'thinking', 'speed', 'verbosity'],
     },
+    {
+      id: 'approval-model',
+      label: () => st('Automatic approval model'),
+      description: () => st('Choose the model and execution modes used to review permission requests.'),
+      keywords: ['approval', 'permission', 'review', 'thinking', 'auto'],
+    },
   ],
   permissions: [
     {
@@ -57,10 +63,40 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     },
     {
       id: 'plugin-workbench',
-      label: () => st('Plugin Workbench'),
+      label: () => st('Plugin overview'),
       description: () =>
         st('Configure plugins, run tools and operations, and inspect capabilities, logs, and diagnostics.'),
       keywords: ['plugins', 'schema', 'config', 'tools', 'operations', 'logs'],
+    },
+    {
+      id: 'plugin-settings',
+      label: () => st('Plugin settings'),
+      description: () => st('Edit the selected plugin’s configuration.'),
+      keywords: ['plugin', 'configuration', 'schema', 'settings'],
+    },
+    {
+      id: 'plugin-commands',
+      label: () => st('Plugin commands'),
+      description: () => st('Run commands contributed by the selected plugin.'),
+      keywords: ['plugin', 'command', 'operation', 'invoke'],
+    },
+    {
+      id: 'plugin-tools',
+      label: () => st('Plugin tools'),
+      description: () => st('Inspect tools contributed by the selected plugin.'),
+      keywords: ['plugin', 'tool', 'registry', 'capability'],
+    },
+    {
+      id: 'plugin-logs',
+      label: () => st('Plugin logs'),
+      description: () => st('Read logs from the selected plugin.'),
+      keywords: ['plugin', 'log', 'trace'],
+    },
+    {
+      id: 'plugin-diagnostics',
+      label: () => st('Plugin diagnostics'),
+      description: () => st('Inspect the selected plugin’s lifecycle and diagnostics.'),
+      keywords: ['plugin', 'diagnostic', 'lifecycle', 'reload'],
     },
     {
       id: 'mcp-server',

@@ -30,12 +30,14 @@ async function refreshClientVersions() {
     refreshBusy.value = false
   }
 }
+defineProps<{ activePage: string }>()
 </script>
 
 <template>
   <SettingsSectionWorkbench
     section="runtime-session"
     :pages="pages"
+    :active-page="activePage"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['runtime-session']"
     v-slot="{ activePage }"
   >
@@ -106,10 +108,14 @@ async function refreshClientVersions() {
       <ServerSettingField
         path="session.compaction.reserved_tokens"
         :label="t('settings.tui.fields.reservedTokens')"
-        :description="t('settings.tui.fields.reservedTokensDescription')"
+        :description="
+          st(
+            'Leave empty to derive headroom from the model’s usable input budget. A value of 0 uses the entire input budget before compaction.',
+          )
+        "
         kind="number"
-        :default-value="12000"
-        placeholder="12000"
+        include-empty
+        :placeholder="st('Automatic')"
         compact
       />
     </section>

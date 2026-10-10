@@ -10,12 +10,14 @@ const MemoriesPanel = defineAsyncComponent(() => import('@/components/settings/M
 const UsagePanel = defineAsyncComponent(() => import('@/components/settings/UsagePanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('diagnostics'))
+defineProps<{ activePage: string }>()
 </script>
 
 <template>
   <SettingsSectionWorkbench
     section="diagnostics"
     :pages="pages"
+    :active-page="activePage"
     :default-page="SETTINGS_DEFAULT_SUBPAGE.diagnostics"
     v-slot="{ activePage }"
   >

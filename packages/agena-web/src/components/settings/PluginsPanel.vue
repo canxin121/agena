@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PluginSettingsTab } from '@/components/settings/pluginSettingsNavigation'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -13,7 +14,11 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import { settingsText as st } from '@/i18n/settingsText'
 import { apiJson } from '@/lib/api'
-import { localizePluginManifest, localizePluginSettings, type PluginDocumentationTranslation } from '@/lib/pluginDocumentation'
+import {
+  localizePluginManifest,
+  localizePluginSettings,
+  type PluginDocumentationTranslation,
+} from '@/lib/pluginDocumentation'
 import {
   clonePluginJson,
   type PluginHostEffect,
@@ -247,18 +252,10 @@ type PluginLog = {
 }
 
 type PluginLogsResponse = { plugin_id: string; logs?: PluginLog[] }
-type PanelTab = 'overview' | 'settings' | 'commands' | 'tools' | 'logs' | 'diagnostics'
+type PanelTab = PluginSettingsTab
 
-const PANEL_TABS = computed<Array<{ id: PanelTab; label: string }>>(() => [
-  { id: 'overview', label: st('Overview') },
-  { id: 'settings', label: st('Settings') },
-  { id: 'commands', label: st('Commands') },
-  { id: 'tools', label: st('Tools') },
-  { id: 'logs', label: st('Logs') },
-  { id: 'diagnostics', label: st('Diagnostics') },
-])
-
-const PANEL_TAB_IDS = new Set<PanelTab>(PANEL_TABS.value.map((tab) => tab.id))
+const props = defineProps<{ tab: PanelTab }>()
+const activeTab = computed(() => props.tab)
 
 const route = useRoute()
 const router = useRouter()
@@ -276,7 +273,6 @@ const selectedInspect = ref<PluginInspectResponse | null>(null)
 const logs = ref<PluginLog[]>([])
 const detailLoading = ref(false)
 const detailError = ref('')
-const activeTab = ref<PanelTab>('overview')
 const settingsState = ref<PluginSettingsState | null>(null)
 const settingsDraft = ref<JsonValue>({})
 const settingsSaving = ref(false)
@@ -325,7 +321,11 @@ const selectedManifest = computed(() => {
 })
 const localizedSettings = computed(() =>
   settingsState.value
-    ? localizePluginSettings(settingsState.value.contract, selectedPlugin.value?.manifest?.translations, String(locale.value || 'en-US'))
+    ? localizePluginSettings(
+        settingsState.value.contract,
+        selectedPlugin.value?.manifest?.translations,
+        String(locale.value || 'en-US'),
+      )
     : null,
 )
 const selectedActivation = computed(() => selectedPlugin.value?.activation || null)
@@ -414,11 +414,6 @@ watch(
   },
   { immediate: true },
 )
-
-function panelTabFromRequest(value: unknown): PanelTab | null {
-  const tab = String(value || '').trim() as PanelTab
-  return PANEL_TAB_IDS.has(tab) ? tab : null
-}
 
 function statusFailure(status: PluginStatus | null): string {
   return String(
@@ -618,26 +613,16 @@ async function refresh() {
 
 async function selectPlugin(pluginId: string) {
   selectedPluginId.value = pluginId
-  await router.replace({ query: { ...route.query, plugin: pluginId, pluginTab: activeTab.value } })
+  await router.push({ query: { ...route.query, plugin: pluginId } })
 }
 
-async function selectTab(tab: PanelTab) {
-  activeTab.value = tab
-  await router.replace({ query: { ...route.query, plugin: selectedPluginId.value, pluginTab: tab } })
-}
-
-watch(selectedPluginId, () => {
-  activeTab.value = panelTabFromRequest(route.query.pluginTab) || 'overview'
-  void loadSelectedPlugin()
-})
+watch(selectedPluginId, () => void loadSelectedPlugin())
 
 watch(
-  () => [route.query.plugin, route.query.pluginTab] as const,
-  ([plugin, tab]) => {
+  () => route.query.plugin,
+  (plugin) => {
     const requested = String(plugin || '').trim()
     if (requested && statuses.value.some((status) => status.plugin_id === requested)) selectedPluginId.value = requested
-    const requestedTab = panelTabFromRequest(tab)
-    if (requestedTab) activeTab.value = requestedTab
   },
 )
 
@@ -748,23 +733,6 @@ onMounted(() => void refresh())
               </div>
             </div>
           </header>
-
-          <div class="mt-5 flex gap-1 overflow-x-auto border-b border-border/60" role="tablist">
-            <button
-              v-for="tab in PANEL_TABS"
-              :key="tab.id"
-              type="button"
-              role="tab"
-              :aria-selected="activeTab === tab.id"
-              class="shrink-0 border-b-2 px-3 py-2 text-xs font-medium"
-              :class="
-                activeTab === tab.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground'
-              "
-              @click="selectTab(tab.id)"
-            >
-              {{ tab.label }}
-            </button>
-          </div>
 
           <div class="mt-5">
             <section v-if="activeTab === 'overview'" class="space-y-6">

@@ -2,7 +2,6 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
-import ApprovalModelPanel from '@/components/settings/ApprovalModelPanel.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
@@ -269,24 +268,17 @@ onMounted(() => void refresh())
       {{ error }}
     </div>
 
-    <nav class="flex flex-wrap gap-1 border-b border-border/60 pb-2" :aria-label="$st('Model default source')">
-      <button
-        v-for="option in scopeOptions"
-        :key="option.value"
-        type="button"
-        class="min-h-9 rounded-md border px-3 py-1.5 text-left text-xs"
-        :class="scope === option.value ? 'border-primary bg-primary/10' : 'border-border/60 hover:bg-muted/40'"
-        :aria-current="scope === option.value ? 'page' : undefined"
-        @click="scope = option.value"
-      >
-        <span class="font-medium">{{ option.label }}</span>
-        <span
-          class="ml-2 hidden max-w-[22rem] truncate align-bottom font-mono text-[10px] text-muted-foreground sm:inline"
-        >
-          {{ option.summary }}
-        </span>
-      </button>
-    </nav>
+    <label class="grid max-w-xl gap-1.5">
+      <span class="text-xs font-medium">{{ $st('Model default source') }}</span>
+      <OptionPicker
+        :model-value="scope"
+        :options="scopeOptions"
+        :title="$st('Model default source')"
+        :include-empty="false"
+        @update:model-value="scope = $event as ModelDefaultScope"
+      />
+      <span class="break-words font-mono text-xs text-muted-foreground">{{ activeScopeOption.summary }}</span>
+    </label>
     <div class="text-xs text-muted-foreground">{{ activeScopeOption.description }}</div>
 
     <section class="grid gap-4 rounded-lg border border-border/60 p-4">
@@ -396,7 +388,5 @@ onMounted(() => void refresh())
         </div>
       </div>
     </section>
-
-    <ApprovalModelPanel :scope="scope" />
   </div>
 </template>

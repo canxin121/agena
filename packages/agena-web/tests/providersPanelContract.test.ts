@@ -16,7 +16,12 @@ test('model defaults panel edits one layer-scoped default without model catalog 
   assert.ok(source.includes("'Effective default'"))
   assert.ok(source.includes("'Global default'"))
   assert.ok(source.includes("'Workspace default'"))
-  assert.ok(source.includes('<ApprovalModelPanel :scope="scope" />'))
+  assert.ok(!source.includes('<ApprovalModelPanel'))
+  const approval = readFileSync(
+    resolve(import.meta.dir, '../src/components/settings/ApprovalSettingsPanel.vue'),
+    'utf8',
+  )
+  assert.ok(approval.includes('<ApprovalModelPanel :scope="scope" />'))
   assert.ok(source.includes('Save default model'))
 })
 

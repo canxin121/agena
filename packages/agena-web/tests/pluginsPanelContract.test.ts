@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { PLUGIN_SETTINGS_VIEWS } from '../src/components/settings/pluginSettingsNavigation'
 
 test('plugin workbench consumes the neutral surface and server-owned command endpoints', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/components/settings/PluginsPanel.vue'), 'utf8')
@@ -24,14 +25,19 @@ test('plugin workbench consumes the neutral surface and server-owned command end
   assert.ok(!source.includes('<iframe'))
 })
 
-test('plugin deep links use fixed host-owned workbench tabs', () => {
+test('plugin contents are selected through fixed settings sidebar destinations', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/components/settings/PluginsPanel.vue'), 'utf8')
-  for (const tab of ['overview', 'settings', 'commands', 'tools', 'logs', 'diagnostics']) {
-    assert.ok(source.includes(`id: '${tab}'`), `missing fixed plugin tab ${tab}`)
-  }
-  assert.ok(source.includes('route.query.pluginTab'))
-  assert.ok(!source.includes("id: 'views'"))
-  assert.ok(!source.includes("id: 'controls'"))
+  assert.deepEqual(Object.values(PLUGIN_SETTINGS_VIEWS), [
+    'overview',
+    'settings',
+    'commands',
+    'tools',
+    'logs',
+    'diagnostics',
+  ])
+  assert.ok(source.includes('props.tab'))
+  assert.ok(!source.includes('role="tablist"'))
+  assert.ok(!source.includes('selectTab('))
 })
 
 test('plugin workbench prefers a plugin with a declared command', () => {

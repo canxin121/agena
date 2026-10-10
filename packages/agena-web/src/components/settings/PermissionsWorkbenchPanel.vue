@@ -7,12 +7,14 @@ const PermissionStudioPanel = defineAsyncComponent(() => import('@/components/se
 
 const pages = computed(() => buildSettingsSubpages('permissions'))
 const permissionScope = ref<'effective' | 'global' | 'workspace' | 'session'>('effective')
+defineProps<{ activePage: string }>()
 </script>
 
 <template>
   <SettingsSectionWorkbench
     section="permissions"
     :pages="pages"
+    :active-page="activePage"
     :default-page="SETTINGS_DEFAULT_SUBPAGE.permissions"
     v-slot="{ activePage }"
   >

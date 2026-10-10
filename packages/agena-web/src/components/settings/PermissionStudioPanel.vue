@@ -702,22 +702,19 @@ onMounted(() => void load())
     </div>
 
     <div class="grid gap-4">
-      <nav class="flex flex-wrap gap-1 border-b border-border/60 pb-2" :aria-label="$st('Permission source')">
-        <button
-          v-for="option in sourceOptions"
-          :key="option.value"
-          type="button"
-          class="min-h-9 rounded-md border px-3 py-1.5 text-left text-xs"
-          :class="
-            selectedSource === option.value ? 'border-primary bg-primary/10' : 'border-border/60 hover:bg-muted/40'
-          "
-          :aria-current="selectedSource === option.value ? 'page' : undefined"
-          @click="selectedSource = option.value as PermissionSource"
-        >
-          <span class="font-medium">{{ option.label }}</span>
-          <span class="ml-2 hidden text-[10px] text-muted-foreground sm:inline">{{ option.summary }}</span>
-        </button>
-      </nav>
+      <label class="grid max-w-xl gap-1.5">
+        <span class="text-xs font-medium">{{ $st('Permission source') }}</span>
+        <OptionPicker
+          :model-value="selectedSource"
+          :options="sourceOptions"
+          :title="$st('Permission source')"
+          :include-empty="false"
+          @update:model-value="selectedSource = $event as PermissionSource"
+        />
+        <span class="text-xs text-muted-foreground">{{
+          sourceOptions.find((option) => option.value === selectedSource)?.summary
+        }}</span>
+      </label>
       <div class="text-xs text-muted-foreground">
         {{ sourceOptions.find((option) => option.value === selectedSource)?.description }}
       </div>

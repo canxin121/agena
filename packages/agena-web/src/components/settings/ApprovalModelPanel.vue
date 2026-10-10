@@ -204,11 +204,7 @@ onMounted(() => void refresh())
       <div>
         <h3 class="text-sm font-semibold">{{ $st('Automatic approval model') }}</h3>
         <p class="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-          {{
-            $st(
-              'Used to classify permission requests in Auto mode. Clearing it makes the runtime fail closed to its normal approval fallback path.',
-            )
-          }}
+          {{ $st('Used to review permission requests in Auto mode. When unset, the session model reviews them.') }}
         </p>
       </div>
       <IconButton

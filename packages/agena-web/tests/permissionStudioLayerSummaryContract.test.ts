@@ -10,5 +10,6 @@ test('permission studio compares global, workspace, session, and effective layer
   assert.ok(source.includes('sessionConfigSnapshot'))
   assert.ok(source.includes('effectiveConfig'))
   assert.ok(source.includes('function permissionSummary'))
-  assert.ok(source.includes('{{ option.summary }}'))
+  assert.ok(source.includes(':options="sourceOptions"'))
+  assert.ok(source.includes('option.value === selectedSource)?.summary'))
 })

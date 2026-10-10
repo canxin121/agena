@@ -13,6 +13,8 @@ import type { AppLocale } from '@/i18n/locale'
 
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
+import { settingsQueryForDestination } from '@/components/settings/settingsDestination'
+import { normalizePluginSettingsView, pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import {
   resolveSettingsSubpage,
@@ -83,30 +85,51 @@ function readInitialSection(): SettingsTab {
   return DEFAULT_SECTION
 }
 
-const activeSection = ref<SettingsTab>(readInitialSection())
+const activeSection = computed<SettingsTab>(
+  () => settingsTabFromRouteValue(route.params.section) || readInitialSection(),
+)
+const activePages = computed(() => buildSettingsSubpages(activeSection.value))
+const activeView = computed(() => {
+  let remembered = ''
+  try {
+    remembered = localStorage.getItem(settingsSubpageStorageKey(activeSection.value)) || ''
+  } catch {}
+  const requested =
+    activeSection.value === 'plugins-tools' && (route.query.view || route.query.pluginTab)
+      ? normalizePluginSettingsView(route.query.view || 'plugin-workbench', route.query.pluginTab)
+      : route.query.view
+  return resolveSettingsSubpage(requested, remembered, activePages.value, SETTINGS_DEFAULT_SUBPAGE[activeSection.value])
+})
+
+watch(
+  () => [route.params.section, route.query.view, route.query.pluginTab, activeView.value] as const,
+  () => {
+    if (!settingsTabFromRouteValue(route.params.section)) return
+    try {
+      localStorage.setItem(settingsSubpageStorageKey(activeSection.value), activeView.value)
+    } catch {}
+    const { pluginTab: _legacyPluginTab, ...query } = route.query
+    const isPluginView = activeSection.value === 'plugins-tools' && pluginTabForSettingsView(activeView.value)
+    if (!isPluginView) delete query.plugin
+    if (
+      query.view === activeView.value &&
+      route.query.pluginTab === undefined &&
+      (isPluginView || route.query.plugin === undefined)
+    )
+      return
+    void router.replace({
+      path: settingsPathForTab(activeSection.value),
+      query: { ...query, view: activeView.value },
+      hash: route.hash,
+    })
+  },
+  { immediate: true },
+)
 const settingsRefreshNonce = ref(0)
 
 function goToSettingsDestination(destination: SettingsSidebarDestination) {
   const path = settingsPathForTab(destination.section)
-  // A plugin detail deep link remains attached only while staying on Plugin
-  // Workbench. Other destinations receive the shared workspace/window scope
-  // query without stale Settings routing state.
-  // Settings routing state (view/plugin/pluginTab) must not leak into other
-  // destinations, so the query is read as the open location-query record.
-  const rawQuery = route.query as Record<string, string | string[] | undefined>
-  const { view: _view, plugin, pluginTab, ...scopeQuery } = rawQuery
-  const query: Record<string, string | string[] | undefined> = {
-    ...scopeQuery,
-    view: destination.view,
-  }
-  if (
-    destination.section === 'plugins-tools' &&
-    destination.view === 'plugin-workbench' &&
-    activeSection.value === 'plugins-tools'
-  ) {
-    if (plugin !== undefined) query.plugin = plugin
-    if (pluginTab !== undefined) query.pluginTab = pluginTab
-  }
+  const query = settingsQueryForDestination(destination, activeSection.value, route.query)
   void router.push({ path, query, hash: route.hash })
   if (ui.isCompactLayout) ui.setSessionSwitcherOpen(false)
 }
@@ -155,7 +178,6 @@ watch(
   (value) => {
     const section = settingsTabFromRouteValue(value)
     if (section) {
-      activeSection.value = section
       try {
         localStorage.setItem(SETTINGS_LAST_SECTION_KEY, settingsPathForTab(activeSection.value))
       } catch {
@@ -198,7 +220,8 @@ function joinWindowTitle(parts: Array<string | null | undefined>) {
 const settingsWindowTitle = computed(() => {
   const base = String(t('settings.title'))
   const activeTabLabel = tabs.value.find((tab) => tab.id === activeSection.value)?.label || base
-  return joinWindowTitle([base, activeTabLabel])
+  const pageLabel = activePages.value.find((page) => page.id === activeView.value)?.label
+  return joinWindowTitle([base, activeTabLabel, pageLabel])
 })
 
 watch(
@@ -330,17 +353,7 @@ const toolCatalogError = ref('')
 const toolCatalogQuery = ref('')
 let toolCatalogLoaded = false
 let toolCatalogController: AbortController | undefined
-const needsChatToolCatalog = computed(() => {
-  if (activeSection.value !== 'interface') return false
-  let remembered = ''
-  try {
-    remembered = localStorage.getItem(settingsSubpageStorageKey('interface')) || ''
-  } catch {}
-  return (
-    resolveSettingsSubpage(route.query.view, remembered, interfacePages.value, SETTINGS_DEFAULT_SUBPAGE.interface) ===
-    'conversation'
-  )
-})
+const needsChatToolCatalog = computed(() => activeSection.value === 'interface' && activeView.value === 'conversation')
 
 async function loadChatToolCatalog() {
   if (!visible.value || !needsChatToolCatalog.value || toolCatalogLoading.value) return
@@ -481,7 +494,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
           <SettingsSidebar
             :tabs="tabs"
             :active-tab="activeSection"
-            :active-view="String(route.query.view || '')"
+            :active-view="activeView"
             :loading="settings.loading"
             :is-touch-pointer="ui.isTouchPointer"
             @refresh="refreshSettingsSidebar"
@@ -508,13 +521,8 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
             v-if="activeSection === 'interface'"
             :key="`interface-${settingsRefreshNonce}`"
             section="interface"
-            :title="String(t('settings.tabs.interface'))"
-            :description="
-              $st(
-                'Configure server-backed TUI behavior and browser-only Web appearance without mixing unrelated settings into one page.',
-              )
-            "
             :pages="interfacePages"
+            :active-page="activeView"
             :default-page="SETTINGS_DEFAULT_SUBPAGE.interface"
             v-slot="{ activePage }"
           >
@@ -817,29 +825,34 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
 
           <!-- Models & Providers -->
           <ModelsProvidersPanel
+            :active-page="activeView"
             v-else-if="activeSection === 'models-providers'"
             :key="`models-providers-${settingsRefreshNonce}`"
           />
 
           <!-- Permissions -->
           <PermissionsWorkbenchPanel
+            :active-page="activeView"
             v-else-if="activeSection === 'permissions'"
             :key="`permissions-${settingsRefreshNonce}`"
           />
 
           <!-- Plugins & Tools -->
           <PluginsToolsPanel
+            :active-page="activeView"
             v-else-if="activeSection === 'plugins-tools'"
             :key="`plugins-tools-${settingsRefreshNonce}`"
           />
 
           <!-- Runtime & Session -->
           <RuntimeSessionPanel
+            :active-page="activeView"
             v-else-if="activeSection === 'runtime-session'"
             :key="`runtime-session-${settingsRefreshNonce}`"
           />
 
           <DiagnosticsWorkbenchPanel
+            :active-page="activeView"
             v-else-if="activeSection === 'diagnostics'"
             :key="`diagnostics-${settingsRefreshNonce}`"
           />

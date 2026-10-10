@@ -1,94 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed } from 'vue'
+import { resolveSettingsSubpage, type SettingsSubpageDefinition } from './settingsSectionNavigation'
 
-import {
-  resolveSettingsSubpage,
-  settingsSubpageStorageKey,
-  type SettingsSubpageDefinition,
-} from './settingsSectionNavigation'
+const props = defineProps<{
+  section: string
+  pages: SettingsSubpageDefinition[]
+  defaultPage: string
+  activePage: string
+}>()
 
-const props = withDefaults(
-  defineProps<{
-    section: string
-    pages: SettingsSubpageDefinition[]
-    defaultPage: string
-  }>(),
-  {
-    pages: () => [],
-  },
-)
-
-const route = useRoute()
-const router = useRouter()
-
-function rememberedPage(): string {
-  try {
-    return localStorage.getItem(settingsSubpageStorageKey(props.section)) || ''
-  } catch {
-    return ''
-  }
-}
-
-const activePage = ref(resolveSettingsSubpage(route.query.view, rememberedPage(), props.pages, props.defaultPage))
-
-const activeDefinition = computed(
-  () => props.pages.find((page) => page.id === activePage.value) || props.pages[0] || null,
-)
-
-function remember(value: string) {
-  try {
-    localStorage.setItem(settingsSubpageStorageKey(props.section), value)
-  } catch {
-    // Browser storage can be unavailable in private or embedded contexts.
-  }
-}
-
-async function synchronizeRoute(value: string) {
-  const current = String(route.query.view || '').trim()
-  if (current === value) return
-  await router.replace({
-    path: route.path,
-    query: { ...route.query, view: value },
-    hash: route.hash,
-  })
-}
-
-watch(
-  () => route.query.view,
-  (value) => {
-    const resolved = resolveSettingsSubpage(value, rememberedPage(), props.pages, props.defaultPage)
-    if (resolved && resolved !== activePage.value) activePage.value = resolved
-  },
-)
-
-watch(
-  () => [props.section, props.defaultPage, props.pages.map((page) => page.id).join('|')] as const,
-  () => {
-    const resolved = resolveSettingsSubpage(route.query.view, rememberedPage(), props.pages, props.defaultPage)
-    if (resolved) activePage.value = resolved
-  },
-)
-
-watch(
-  activePage,
-  (value) => {
-    if (!value) return
-    remember(value)
-    void synchronizeRoute(value)
-  },
-  { immediate: true },
-)
-
-onMounted(() => {
-  if (!activePage.value) {
-    activePage.value = resolveSettingsSubpage('', rememberedPage(), props.pages, props.defaultPage)
-  }
-})
+// SettingsPage owns routing and remembered destinations for every section.
+const activePage = computed(() => resolveSettingsSubpage(props.activePage, '', props.pages, props.defaultPage))
+const activeDefinition = computed(() => props.pages.find((page) => page.id === activePage.value))
 </script>
 
 <template>
   <section class="grid min-w-0 gap-5">
+    <header v-if="activeDefinition" class="min-w-0 space-y-1">
+      <h1 class="text-lg font-semibold">{{ activeDefinition.label }}</h1>
+      <p v-if="activeDefinition.description" class="max-w-3xl text-sm text-muted-foreground">
+        {{ activeDefinition.description }}
+      </p>
+    </header>
     <div class="min-w-0">
       <slot :active-page="activePage" :active-definition="activeDefinition" />
     </div>

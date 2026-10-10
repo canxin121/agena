@@ -58,6 +58,7 @@ const indent = computed(() => (props.depth > 0 ? 28 + (props.depth - 1) * 16 : u
     class="gap-1.5"
     :class="branchActive && !active ? 'text-foreground' : ''"
     :aria-expanded="hasChildren ? expanded : undefined"
+    :aria-current="active ? 'page' : undefined"
     @click="emit('click', $event)"
   >
     <template #icon>

@@ -757,7 +757,13 @@ impl SessionManager {
                         == Some("compaction")
                     && session.active_window_parts().is_empty()
             });
-            let session_usage = self.session_usage_async(&session).await?;
+            let session_usage = self
+                .session_usage_for_run_options(
+                    &session,
+                    Some(current_options.clone()),
+                    state.clone(),
+                )
+                .await?;
             if state.config.auto_compaction.enabled
                 && !session.runtime.prompt_window.auto_compaction_disabled
                 && !already_auto_compacted_at_boundary
@@ -1467,41 +1473,24 @@ impl SessionManager {
                     session.id
                 )));
             }
-            let estimated_full_tokens = prompt_window::approximate_session_request_tokens(
-                &request_session,
-                Some(options.model.provider_id.as_ref()),
-                options.model.adapter_id.as_ref().map(AsRef::as_ref),
-                Some(options.model.model_id.as_ref()),
-                native_compaction_enabled,
-                request_system.as_deref(),
-                tool_api_functions.as_slice(),
-                prepared.provider_compaction.as_ref(),
-            )
-            .max(
-                prompt_window::approximate_request_tokens_from_runs_with_compaction(
-                    prepared.turns.as_slice(),
-                    request_system.as_deref(),
-                    tool_api_functions.as_slice(),
-                    prepared.provider_compaction.as_ref(),
-                ),
-            );
-            let metadata = provider_registry
-                .model_metadata(&options.model)
-                .unwrap_or_default();
-            let hard_input_tokens = agena_runtime::prompt_token_budget(
-                metadata.limits.context_window_tokens,
-                metadata.limits.max_input_tokens,
-                options
-                    .max_output_tokens
-                    .or(metadata.limits.max_output_tokens),
-            );
+            let usage = self
+                .session_usage_with_catalog(
+                    &session,
+                    state.as_ref(),
+                    &Some(options.clone()),
+                    native_compaction_enabled,
+                    tool_api_functions.clone(),
+                )
+                .await?;
+            let estimated_full_tokens = usage.current_tokens;
+            let hard_input_tokens = usage.input_limit_tokens;
             if let Some(limit) = hard_input_tokens
-                && estimated_full_tokens > u64::from(limit)
+                && estimated_full_tokens > limit
             {
                 return Err(AppError::PromptBudgetExceeded {
                     session_id: session.id,
                     estimated_tokens: estimated_full_tokens,
-                    limit_tokens: u64::from(limit),
+                    limit_tokens: limit,
                 });
             }
             if estimated_full_tokens > prompt_budget.max_prompt_tokens {
@@ -1585,6 +1574,21 @@ impl SessionManager {
                 input_notification_part_ids: prompt_window::provider_visible_notification_part_ids(
                     &session,
                 ),
+                prompt_tokens: Some(crate::session::model::PromptTokenRuntime {
+                    last_input_part_id: session
+                        .active_window_parts()
+                        .iter()
+                        .map(|part| part.part_id)
+                        .max(),
+                    prompt_window_generation: prepared.prompt_window_generation,
+                    model_context_window_tokens: prompt_budget.model_context_window_tokens,
+                    system_fingerprint: prepared.system_fingerprint.clone(),
+                    request_options_fingerprint: prepared.request_options_fingerprint.clone(),
+                    transcript_digest: prompt_window::prompt_transcript_digest(
+                        session.active_window_parts(),
+                    ),
+                    ..Default::default()
+                }),
                 part_ids: Default::default(),
                 next_call_id: session.next_call_id(),
                 // R2: the processor persists this turn's parts itself through
@@ -1661,16 +1665,18 @@ impl SessionManager {
                     let anchored_fingerprints = prompt_window::prompt_request_fingerprints(
                         &anchored_prompt_request_options,
                     );
-                    if let Some(usage) = result.usage.as_ref() {
-                        session.runtime.record_prompt_tokens(
-                            result.assistant_message_id,
-                            usage,
-                            prepared.prompt_window_generation,
-                            prompt_budget.model_context_window_tokens,
-                            anchored_fingerprints.system_fingerprint.clone(),
-                            anchored_fingerprints.request_options_fingerprint.clone(),
-                            transcript_digest.clone(),
-                        );
+                    if let Some(measurement) = result
+                        .run_marker
+                        .content
+                        .get("rounds")
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|rounds| rounds.last())
+                        .and_then(|round| round.get("prompt_usage"))
+                    {
+                        session.runtime.prompt_tokens = serde_json::from_value(measurement.clone())
+                            .map_err(|error| {
+                                AppError::Internal(format!("decode prompt usage: {error}"))
+                            })?;
                     }
                     if let Some(response_id) =
                         prompt_window::extract_response_id(result.provider_metadata.as_ref())
@@ -1842,9 +1848,7 @@ impl SessionManager {
         let max_prompt_chars = prompt_window::prompt_char_budget(
             context_window_tokens,
             metadata.limits.max_input_tokens,
-            options
-                .max_output_tokens
-                .or(metadata.limits.max_output_tokens),
+            options.max_output_tokens,
             fallback_budget,
             system,
             tool_api_functions,

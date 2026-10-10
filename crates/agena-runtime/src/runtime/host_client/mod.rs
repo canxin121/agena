@@ -820,6 +820,7 @@ impl HostClient for RuntimeHostClient {
             current_tokens: usage.current_tokens,
             measured_prompt_tokens: usage.measured_prompt_tokens,
             projected_tokens: usage.projected_tokens,
+            input_limit_tokens: usage.input_limit_tokens,
             limit_tokens: usage.limit_tokens,
             remaining_tokens: usage
                 .limit_tokens

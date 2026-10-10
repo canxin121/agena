@@ -5,6 +5,7 @@ import { i18n } from '@/i18n'
 import { formatCurrencyUSD, formatTimeHMS } from '@/i18n/intl'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
+import { formatTokensK, sessionContextUsage } from './contextUsage'
 import type { SessionState } from '@/types/chat'
 import type { CancellationOutcome } from '@/stores/chat/api'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
@@ -18,14 +19,6 @@ type ToastsStore = { push: (kind: 'success' | 'error', message: string) => void 
 type ModelMetaLike = {
   limit?: unknown
   [key: string]: unknown
-}
-
-/** The optional context-window limit carried by the runtime model metadata. */
-function contextLimitFromMeta(meta: ModelMetaLike | null | undefined): number {
-  const limit = meta?.limit
-  if (!limit || typeof limit !== 'object' || Array.isArray(limit)) return 0
-  const context = (limit as { context?: unknown }).context
-  return typeof context === 'number' && Number.isFinite(context) ? context : 0
 }
 
 type ModelSelectionForUsage = {
@@ -50,6 +43,7 @@ type SessionUsage = {
   tokensValue?: number | null
   tokensLabel: string
   percentUsed: number | null
+  capacityLabel?: string
   costLabel: string
   modelLabel?: string
 }
@@ -57,6 +51,7 @@ type SessionUsage = {
 type CanonicalSessionUsage = {
   current_tokens?: number
   projected_tokens?: number | null
+  input_limit_tokens?: number | null
   limit_tokens?: number | null
   model_context_window_tokens?: number | null
 }
@@ -120,26 +115,6 @@ function formatCountdown(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '0s'
   if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
   return `${Math.ceil(ms / 1000)}s`
-}
-
-// Keep the compact usage chip byte-for-byte compatible with the TUI's
-// session_status projection. In particular, percentages reserve the 12k
-// baseline and 5% safety margin; using a plain tokens/context ratio makes the
-// Web chip disagree with the TUI near the beginning and end of a context.
-function formatTokensK(tokens: number): string {
-  if (tokens <= 0) return '0k'
-  const value = tokens / 1_000
-  return value < 10 ? `${value.toFixed(1)}k` : `${value.toFixed(0)}k`
-}
-
-function contextUsagePercent(tokens: number, contextWindow: number): number {
-  if (contextWindow <= 0) return 0
-  const effectiveWindow = Math.floor((contextWindow * 95) / 100)
-  const baseline = 12_000
-  if (effectiveWindow <= baseline) return 100
-  const usableWindow = effectiveWindow - baseline
-  const used = Math.max(0, tokens - baseline)
-  return Math.max(0, Math.min(100, Math.round((used / usableWindow) * 100)))
 }
 
 function numberOrZero(v: number | null | undefined): number {
@@ -301,21 +276,8 @@ export function useChatRunUi(opts: {
     // parts are not loaded, which is precisely what the TUI does not do.
     const canonical = chat.selectedSessionUsage
     if (canonical) {
-      const tokens =
-        typeof canonical.projected_tokens === 'number' && Number.isFinite(canonical.projected_tokens)
-          ? canonical.projected_tokens
-          : typeof canonical.current_tokens === 'number' && Number.isFinite(canonical.current_tokens)
-            ? canonical.current_tokens
-            : null
-      const contextWindow =
-        typeof canonical.model_context_window_tokens === 'number' &&
-        Number.isFinite(canonical.model_context_window_tokens)
-          ? canonical.model_context_window_tokens
-          : null
       return {
-        tokensValue: tokens,
-        tokensLabel: tokens != null ? `${formatTokensK(tokens)} used` : '--',
-        percentUsed: tokens != null && contextWindow != null ? contextUsagePercent(tokens, contextWindow) : null,
+        ...sessionContextUsage(canonical),
         costLabel: formatCurrencyUSD(0),
       }
     }
@@ -357,20 +319,10 @@ export function useChatRunUi(opts: {
 
     const costLabel = formatCurrencyUSD(costTotal)
 
-    let percentUsed: number | null = null
-    if (tokenTotal != null && providerID && modelID) {
-      const meta = modelSelection.modelMetaFor(providerID, modelID)
-      const contextLimit = contextLimitFromMeta(meta)
-      const limit = contextLimit > 0 ? contextLimit : 0
-      if (limit > 0) {
-        percentUsed = contextUsagePercent(tokenTotal, limit)
-      }
-    }
-
     return {
       tokensValue: tokenTotal,
       tokensLabel: tokenTotal != null ? `${formatTokensK(tokenTotal)} used` : '--',
-      percentUsed,
+      percentUsed: null,
       costLabel,
       modelLabel: providerID && modelID ? `${providerID}/${modelID}` : undefined,
     }

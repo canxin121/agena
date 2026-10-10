@@ -353,6 +353,7 @@ impl AsRef<str> for PromptContinuationReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct PromptTokenEstimate {
     pub total_tokens: u64,
     pub delta_tokens: u64,
@@ -959,12 +960,14 @@ pub(crate) fn prompt_request_fingerprints(
     }
 }
 
-pub(crate) fn estimate_prompt_tokens_from_runtime(
+/// A matching provider measurement covers the prefix. Project only the new
+/// suffix so callers can apply the same tool rendering and bounds as a request.
+pub(crate) fn prompt_token_estimation_delta(
     session: &Session,
-    parts: &[Part],
+    request_session: &Session,
     system_fingerprint: &str,
     request_options_fingerprint: &str,
-) -> Option<PromptTokenEstimate> {
+) -> Option<(u64, Vec<CompletionInputRun>)> {
     let runtime = &session.runtime.prompt_tokens;
     if !runtime.matches_request(
         session.runtime.prompt_window.generation,
@@ -974,12 +977,42 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
         return None;
     }
 
-    let last_successful_prompt_tokens = runtime.prompt_tokens()?;
+    let last_successful_prompt_tokens = runtime.prompt_tokens().filter(|tokens| *tokens > 0)?;
+    let (parts, all_parts) = prompt_parts_without_failed_rounds(request_session);
+    if let Some(input_part_id) = runtime.last_input_part_id {
+        let prefix = session
+            .active_window_parts()
+            .iter()
+            .filter(|part| part.part_id <= input_part_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !prefix.iter().any(|part| part.part_id == input_part_id)
+            || prompt_transcript_digest(&prefix) != runtime.transcript_digest
+        {
+            return None;
+        }
+        let delta = parts
+            .iter()
+            .filter(|part| part.part_id > input_part_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let runs = prompt_runs_for_request(window_items_from_parts_with_parent_markers(
+            &delta,
+            all_parts.as_ref(),
+        ))
+        .into_iter()
+        .map(|item| item.run)
+        .collect();
+        return Some((last_successful_prompt_tokens, runs));
+    }
     let assistant_message_id = runtime.last_successful_assistant_message_id?;
-    let prompt_runs = prompt_runs_for_request(window_items_from_parts(parts));
+    let prompt_runs = prompt_runs_for_request(window_items_from_parts_with_parent_markers(
+        parts.as_ref(),
+        all_parts.as_ref(),
+    ));
     let anchor_index = prompt_runs
         .iter()
-        .position(|item| item.id == Some(assistant_message_id))?;
+        .rposition(|item| item.id == Some(assistant_message_id))?;
     if !runtime.transcript_digest.is_empty()
         && prompt_prefix_transcript_digest(prompt_runs.as_slice(), anchor_index)
             != runtime.transcript_digest
@@ -988,14 +1021,34 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
     }
     // The provider's previous response includes the request prefix, but not the
     // assistant output itself. Include the anchor response plus later deltas.
-    let delta_chars: usize = prompt_runs[anchor_index..]
-        .iter()
-        .map(|item| approximate_run_payload_chars(&item.run))
-        .sum();
+    let runs = prompt_runs
+        .into_iter()
+        .skip(anchor_index)
+        .map(|item| item.run)
+        .collect();
+    Some((last_successful_prompt_tokens, runs))
+}
+
+#[cfg(test)]
+fn estimate_prompt_tokens_from_runtime(
+    session: &Session,
+    parts: &[Part],
+    system_fingerprint: &str,
+    request_options_fingerprint: &str,
+) -> Option<PromptTokenEstimate> {
+    let mut request_session = session.clone();
+    request_session.install_projected_parts(parts.to_vec());
+    let (measured, runs) = prompt_token_estimation_delta(
+        session,
+        &request_session,
+        system_fingerprint,
+        request_options_fingerprint,
+    )?;
+    let delta_chars = runs.iter().map(approximate_run_payload_chars).sum();
     let delta_tokens = agena_runtime::estimate_prompt_tokens_from_chars(delta_chars);
 
     Some(PromptTokenEstimate {
-        total_tokens: last_successful_prompt_tokens.saturating_add(delta_tokens),
+        total_tokens: measured.saturating_add(delta_tokens),
         delta_tokens,
         delta_chars: delta_chars as u64,
     })
@@ -1287,6 +1340,7 @@ pub(crate) fn approximate_total_request_tokens_with_compaction(
 /// Estimate the complete provider-visible window, including the injected
 /// checkpoint summary and retained messages. `active_window_parts()` alone
 /// cannot account for either after compaction.
+#[cfg(test)]
 pub(crate) fn approximate_session_request_tokens(
     session: &Session,
     provider_id: Option<&str>,
@@ -1297,7 +1351,29 @@ pub(crate) fn approximate_session_request_tokens(
     tools: &[ToolApiBinding],
     provider_compaction: Option<&ProviderCompactionContext>,
 ) -> u64 {
-    let turns = prompt_window_items(
+    let turns = full_prompt_runs(
+        session,
+        provider_id,
+        adapter_id,
+        model_id,
+        native_compaction_enabled,
+    );
+    approximate_request_tokens_from_runs_with_compaction(
+        turns.as_slice(),
+        system,
+        tools,
+        provider_compaction,
+    )
+}
+
+pub(crate) fn full_prompt_runs(
+    session: &Session,
+    provider_id: Option<&str>,
+    adapter_id: Option<&str>,
+    model_id: Option<&str>,
+    native_compaction_enabled: bool,
+) -> Vec<CompletionInputRun> {
+    prompt_window_items(
         session,
         provider_id,
         adapter_id,
@@ -1307,13 +1383,7 @@ pub(crate) fn approximate_session_request_tokens(
     .into_iter()
     .filter(|item| run_has_visible_prompt_payload(&item.run))
     .map(|item| item.run)
-    .collect::<Vec<_>>();
-    approximate_request_tokens_from_runs_with_compaction(
-        turns.as_slice(),
-        system,
-        tools,
-        provider_compaction,
-    )
+    .collect()
 }
 
 /// Char/token estimate over an already-projected message list (e.g. a
@@ -2300,7 +2370,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
-fn approximate_run_payload_chars(run: &CompletionInputRun) -> usize {
+pub(crate) fn approximate_run_payload_chars(run: &CompletionInputRun) -> usize {
     run.parts
         .iter()
         .map(|part| match part {
@@ -2978,6 +3048,47 @@ mod compaction_tests {
             .expect("matching runtime estimate");
         assert!(estimate.delta_chars >= "old assistant".len() as u64);
         assert!(estimate.total_tokens > 100);
+    }
+
+    #[test]
+    fn runtime_cursor_does_not_recount_earlier_rounds_in_the_same_reply() {
+        let now = Utc::now();
+        let mut session = Session::new(7, 11, "multi-round measurement", now);
+        let mut parts = run_parts(1, PartRole::User, "user", "task", now);
+        parts[1].part_id = 2;
+        let mut first_round = run_parts(3, PartRole::Assistant, "tool", &"a".repeat(8_000), now);
+        first_round[1].part_id = 4;
+        first_round[0].content["rounds"] = serde_json::json!([{ "part_ids": [4] }]);
+        parts.extend(first_round);
+        session.install_projected_parts(parts.clone());
+        let digest = prompt_transcript_digest(&parts);
+        let mut last_output = parts.last().unwrap().clone();
+        last_output.part_id = 5;
+        last_output.content =
+            typed_content_to_value(&TypedContent::Text(text_content("done"))).unwrap();
+        parts[2].content["rounds"] = serde_json::json!([{ "part_ids": [4] }, { "part_ids": [5] }]);
+        parts.push(last_output);
+        session.install_projected_parts(parts);
+        session.runtime.record_prompt_tokens(
+            3,
+            &CompletionUsage {
+                input_tokens: 100,
+                ..Default::default()
+            },
+            0,
+            Some(10_000),
+            "system".to_owned(),
+            "options".to_owned(),
+            digest,
+        );
+        session.runtime.prompt_tokens.last_input_part_id = Some(4);
+        let estimate =
+            estimate_prompt_tokens_from_runtime(&session, session.parts(), "system", "options")
+                .unwrap();
+        assert_eq!(
+            estimate.total_tokens, 101,
+            "the previous 8k output is already in the measured request"
+        );
     }
 
     #[test]

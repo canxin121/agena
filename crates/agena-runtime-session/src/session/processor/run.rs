@@ -797,7 +797,6 @@ impl SessionProcessor {
                 },
                 follow_up_requested: false,
                 finish_reason: FinishReason::Stop,
-                usage: None,
             });
         }
 
@@ -837,6 +836,23 @@ impl SessionProcessor {
         );
         round_record["part_ids"] =
             serde_json::json!(parts.iter().map(|part| part.part_id).collect::<Vec<_>>());
+        if let (Some(mut measurement), Some(usage)) = (run.prompt_tokens.clone(), usage.as_ref()) {
+            measurement.record_success(
+                assistant_message_id,
+                usage,
+                measurement.prompt_window_generation,
+                measurement.model_context_window_tokens,
+                measurement.system_fingerprint.clone(),
+                measurement.request_options_fingerprint.clone(),
+                measurement.transcript_digest.clone(),
+            );
+            if measurement.prompt_tokens().is_some_and(|tokens| tokens > 0) {
+                round_record["prompt_usage"] =
+                    serde_json::to_value(measurement).map_err(|error| {
+                        AppError::Internal(format!("serialize prompt usage: {error}"))
+                    })?;
+            }
+        }
         let merged_content = merge_round_record(&run.marker_content, round_record)?;
         let run_marker = if all_parts_terminal {
             run.store
@@ -889,7 +905,6 @@ impl SessionProcessor {
             termination: SessionRunTermination::Completed,
             follow_up_requested,
             finish_reason: finish_reason_enum,
-            usage,
         })
     }
 }

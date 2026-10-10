@@ -179,12 +179,12 @@ pub(crate) use agena_runtime_session::run_session_maintenance;
 pub(crate) use agena_runtime_session::runtime_metrics_snapshot;
 pub(crate) use agena_runtime_session::{
     APPROX_CHARS_PER_TOKEN, MIN_PROMPT_BUDGET_TOKENS, estimate_prompt_tokens_from_chars,
-    prompt_token_budget,
+    prompt_token_budget, session_output_token_budget,
 };
 pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
 pub(crate) use agena_runtime_session::{
-    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_RUN_CHARS,
-    MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
+    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTION_OUTPUT_TOKENS,
+    MAX_COMPACTOR_RUN_CHARS, MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
 };
 pub(crate) use agena_runtime_session::{
     ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry,

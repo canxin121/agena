@@ -4,6 +4,7 @@
 //! `agena-storage` and `agena-storage-sqlite`; these tests prove the execution
 //! manager's adapter preserves that model at its boundary.
 
+mod context_usage;
 #[path = "task_output_tests.rs"]
 mod task_output_tests;
 
@@ -3154,6 +3155,7 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
         next_message_id: run_id,
         marker_content: run_marker_content("continue", None, None, None, None),
         input_notification_part_ids: Vec::new(),
+        prompt_tokens: None,
         part_ids: ProcessorPartIdAllocator,
         next_call_id: 0,
         store: manager.store.clone(),

@@ -190,7 +190,25 @@ impl SessionManager {
                 .then(|| effective_selection.verbosity.clone())
                 .flatten();
         }
-        self.apply_model_mode_requests(options)
+        self.apply_model_mode_requests(options)?;
+        let metadata = state
+            .provider_registry
+            .model_metadata(&options.model)
+            .unwrap_or_default();
+        let requested_output =
+            crate::prompt_budget::requested_output_tokens_from_override(&options.request_override)
+                .or(options.max_output_tokens);
+        let output_tokens = agena_runtime::session_output_token_budget(
+            metadata.limits.context_window_tokens,
+            metadata.limits.max_output_tokens,
+            requested_output,
+        );
+        options.max_output_tokens = Some(output_tokens);
+        crate::prompt_budget::align_output_token_overrides(
+            &mut options.request_override,
+            output_tokens,
+        );
+        Ok(())
     }
 
     pub(in crate::session::manager) fn apply_model_mode_requests(

@@ -398,14 +398,24 @@ impl SessionManager {
     }
 
     pub async fn session_usage_async(&self, session: &Session) -> Result<SessionUsage, AppError> {
-        let state = self.execution_state();
+        self.session_usage_for_run_options(session, None, self.execution_state())
+            .await
+    }
+
+    pub(in crate::session::manager) async fn session_usage_for_run_options(
+        &self,
+        session: &Session,
+        options: Option<SessionRunOptions>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<SessionUsage, AppError> {
         let scoped_executor = state
             .tool_executor
             .for_session_context_async(&session.runtime.execution)
             .await;
-        let options = self
-            .session_usage_run_options(session, state.as_ref(), &scoped_executor)
-            .ok();
+        let options = options.or_else(|| {
+            self.session_usage_run_options(session, state.as_ref(), &scoped_executor)
+                .ok()
+        });
         let native_compaction_enabled = options
             .as_ref()
             .map(|options| {
@@ -461,7 +471,7 @@ impl SessionManager {
         Ok(options)
     }
 
-    async fn session_usage_with_catalog(
+    pub(in crate::session::manager) async fn session_usage_with_catalog(
         &self,
         session: &Session,
         state: &SessionManagerState,
@@ -481,8 +491,13 @@ impl SessionManager {
         let max_input_tokens = metadata.limits.max_input_tokens;
         let max_output_tokens = options
             .as_ref()
-            .and_then(|options| options.max_output_tokens)
-            .or(metadata.limits.max_output_tokens);
+            .and_then(|options| options.max_output_tokens);
+        let input_limit_tokens = agena_runtime::prompt_token_budget(
+            context_window_tokens,
+            max_input_tokens,
+            max_output_tokens,
+        )
+        .map(u64::from);
         let reserved_tokens = agena_runtime::estimate_auto_compaction_reserve_tokens(
             context_window_tokens,
             max_input_tokens,
@@ -538,15 +553,36 @@ impl SessionManager {
                 },
             )
         });
-        let projected_tokens = prompt_fingerprints.as_ref().and_then(|fingerprints| {
-            prompt_window::estimate_prompt_tokens_from_runtime(
+        let request_session =
+            prompt_window::resolve_content_for_model(session, self.store.facade.contents()).await?;
+        let measurement_delta = prompt_fingerprints.as_ref().and_then(|fingerprints| {
+            prompt_window::prompt_token_estimation_delta(
                 session,
-                session.active_window_parts(),
+                &request_session,
                 fingerprints.system_fingerprint.as_str(),
                 fingerprints.request_options_fingerprint.as_str(),
             )
-            .map(|estimate| estimate.total_tokens)
         });
+        let projected_tokens = if let Some((measured, mut delta)) = measurement_delta {
+            prompt_window::render_session_tool_results_for_model(
+                &mut delta,
+                &request_session,
+                &state.tool_executor,
+            )
+            .await;
+            let delta = crate::session::prompt::bound_model_tool_outputs_async(delta).await?;
+            let delta_chars = delta
+                .iter()
+                .map(prompt_window::approximate_run_payload_chars)
+                .sum();
+            Some(
+                measured.saturating_add(agena_runtime::estimate_prompt_tokens_from_chars(
+                    delta_chars,
+                )),
+            )
+        } else {
+            None
+        };
         // A measurement from an earlier checkpoint generation or request
         // shape is historical usage, not the size of the next request.
         let measured_prompt_tokens = prompt_fingerprints.as_ref().and_then(|fingerprints| {
@@ -570,38 +606,50 @@ impl SessionManager {
                 native_compaction_enabled,
             )
         });
-        let approximate_tokens = prompt_window::approximate_session_request_tokens(
-            session,
-            options
-                .as_ref()
-                .map(|options| options.model.provider_id.as_ref()),
-            options
-                .as_ref()
-                .and_then(|options| options.model.adapter_id.as_ref().map(AsRef::as_ref)),
-            options
-                .as_ref()
-                .map(|options| options.model.model_id.as_ref()),
-            native_compaction_enabled,
-            request_system.as_deref(),
-            tool_api_functions.as_slice(),
-            provider_compaction.as_ref(),
-        );
-        let current_tokens = measured_prompt_tokens
-            .into_iter()
-            .chain(projected_tokens)
-            .chain(std::iter::once(approximate_tokens))
-            .max()
-            .unwrap_or_default();
+        let current_tokens = if let Some(projected) = projected_tokens {
+            projected
+        } else {
+            let mut turns = prompt_window::full_prompt_runs(
+                &request_session,
+                options
+                    .as_ref()
+                    .map(|options| options.model.provider_id.as_ref()),
+                options
+                    .as_ref()
+                    .and_then(|options| options.model.adapter_id.as_ref().map(AsRef::as_ref)),
+                options
+                    .as_ref()
+                    .map(|options| options.model.model_id.as_ref()),
+                native_compaction_enabled,
+            );
+            prompt_window::render_session_tool_results_for_model(
+                &mut turns,
+                &request_session,
+                &state.tool_executor,
+            )
+            .await;
+            turns = crate::session::prompt::bound_model_tool_outputs_async(turns).await?;
+            prompt_window::approximate_request_tokens_from_runs_with_compaction(
+                turns.as_slice(),
+                request_system.as_deref(),
+                tool_api_functions.as_slice(),
+                provider_compaction.as_ref(),
+            )
+        };
+        // A matching provider measurement already accounts for the prefix.
+        // Re-estimating that prefix and taking the maximum can reject requests
+        // that the model has measured as fitting comfortably in its window.
         Ok(SessionUsage {
             measured_prompt_tokens,
             current_tokens,
             projected_tokens,
+            input_limit_tokens,
             limit_tokens: auto_compact_limit_tokens,
             limit_basis,
             reserved_tokens,
             model_context_window_tokens: context_window_tokens,
             model_max_input_tokens: max_input_tokens,
-            model_max_output_tokens: max_output_tokens,
+            model_max_output_tokens: metadata.limits.max_output_tokens,
         })
     }
 

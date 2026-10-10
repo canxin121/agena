@@ -42,6 +42,7 @@ type AttentionLike = AttentionEvent | null
 type SessionUsageLike = {
   tokensLabel: string
   percentUsed: number | null
+  capacityLabel?: string
   costLabel?: string
   tokensValue?: number | null
 }

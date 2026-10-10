@@ -23,13 +23,12 @@ impl TokenUsageStatus {
 /// Projects raw usage scalars into the display status shown in the terminal.
 pub fn token_usage_status(
     current_tokens: u64,
-    projected_tokens: Option<u64>,
-    context_window_tokens: Option<u32>,
+    input_limit_tokens: Option<u64>,
 ) -> TokenUsageStatus {
-    let current_tokens = projected_tokens.unwrap_or(current_tokens);
-    context_window_tokens
-        .map(|window| {
-            TokenUsageStatus::PercentUsed(context_usage_percent_used(current_tokens, window))
+    input_limit_tokens
+        .filter(|limit| *limit > 0)
+        .map(|limit| {
+            TokenUsageStatus::PercentUsed(context_usage_percent_used(current_tokens, limit))
         })
         .unwrap_or(TokenUsageStatus::UsedTokens(current_tokens))
 }
@@ -75,22 +74,8 @@ pub fn format_tokens_k(tokens: u64) -> String {
     format!("{value:.0}k")
 }
 
-fn context_usage_percent_used(current_tokens: u64, context_window_tokens: u32) -> u64 {
-    const EFFECTIVE_CONTEXT_WINDOW_PERCENT: u64 = 95;
-    const CONTEXT_USAGE_BASELINE_TOKENS: u64 = 12_000;
-
-    let context_window_tokens = u64::from(context_window_tokens);
-    if context_window_tokens == 0 {
-        return 0;
-    }
-    let effective_window =
-        context_window_tokens.saturating_mul(EFFECTIVE_CONTEXT_WINDOW_PERCENT) / 100;
-    if effective_window <= CONTEXT_USAGE_BASELINE_TOKENS {
-        return 100;
-    }
-    let usable_window = effective_window.saturating_sub(CONTEXT_USAGE_BASELINE_TOKENS);
-    let used = current_tokens.saturating_sub(CONTEXT_USAGE_BASELINE_TOKENS);
-    (((used as f64 / usable_window as f64) * 100.0)
+fn context_usage_percent_used(current_tokens: u64, input_limit_tokens: u64) -> u64 {
+    (((current_tokens as f64 / input_limit_tokens as f64) * 100.0)
         .clamp(0.0, 100.0)
         .round()) as u64
 }
@@ -112,13 +97,25 @@ mod tests {
     }
 
     #[test]
-    fn usage_projection_prefers_projected_tokens_and_bounds_percentages() {
+    fn usage_projection_uses_the_admission_budget_and_bounds_percentages() {
         assert_eq!(
-            token_usage_status(1, Some(u64::MAX), Some(100_000)),
+            token_usage_status(616_620, Some(616_000)),
+            TokenUsageStatus::PercentUsed(100)
+        );
+        assert_eq!(
+            token_usage_status(616_620, Some(968_000)),
+            TokenUsageStatus::PercentUsed(64)
+        );
+        assert_eq!(
+            token_usage_status(1_000, Some(8_000)),
+            TokenUsageStatus::PercentUsed(13)
+        );
+        assert_eq!(
+            token_usage_status(u64::MAX, Some(100_000)),
             TokenUsageStatus::PercentUsed(100),
         );
         assert_eq!(
-            token_usage_status(1_500, None, None),
+            token_usage_status(1_500, None),
             TokenUsageStatus::UsedTokens(1_500),
         );
     }

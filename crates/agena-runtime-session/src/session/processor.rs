@@ -39,6 +39,8 @@ pub(crate) struct SessionRunRequest {
     /// delivery can prove model handling without confusing a concurrently
     /// arriving notification with output from an older in-flight request.
     pub input_notification_part_ids: Vec<i64>,
+    /// Request identity and input cursor for the usage committed with this round.
+    pub prompt_tokens: Option<super::model::PromptTokenRuntime>,
     pub part_ids: ProcessorPartIdAllocator,
     pub next_call_id: i64,
     /// The facade-backed store commits Part identities, resource references
@@ -74,9 +76,6 @@ pub(crate) struct SessionRunResult {
     /// Normalized terminal finish reason for the model turn. Defaults to
     /// `Stop` when the provider stream did not report a terminal reason.
     pub finish_reason: FinishReason,
-    /// Provider-reported usage for the turn, when the provider terminal event
-    /// carried one. Persisted through the runtime anchor, not on a part.
-    pub usage: Option<agena_provider::CompletionUsage>,
 }
 
 #[derive(Debug)]

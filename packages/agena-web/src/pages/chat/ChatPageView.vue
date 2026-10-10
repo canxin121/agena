@@ -739,7 +739,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     </template>
                     <template v-if="sessionUsage">
                       <span class="text-muted-foreground/50">|</span>
-                      <span class="text-muted-foreground">{{
+                      <span class="text-muted-foreground" :title="sessionUsage.capacityLabel">{{
                         sessionUsage.percentUsed !== null ? `${sessionUsage.percentUsed}%` : sessionUsage.tokensLabel
                       }}</span>
                     </template>

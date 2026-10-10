@@ -393,6 +393,7 @@ async fn session_usage_resource(
         measured_prompt_tokens: usage.measured_prompt_tokens,
         current_tokens: usage.current_tokens,
         projected_tokens: usage.projected_tokens,
+        input_limit_tokens: usage.input_limit_tokens,
         limit_tokens: usage.limit_tokens,
         limit_basis: usage.limit_basis.map(|basis| match basis {
             agena_domain::SessionUsageLimitBasis::ContextWindow => {

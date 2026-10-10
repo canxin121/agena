@@ -1260,6 +1260,8 @@ pub struct SessionUsageResource {
     pub current_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub projected_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_limit_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

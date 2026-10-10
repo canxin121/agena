@@ -663,6 +663,7 @@ impl SessionPlugin {
         let payload = serde_json::json!({
             "session_id": status.session_id,
             "current_tokens": status.current_tokens,
+            "input_limit_tokens": status.input_limit_tokens,
             "measured_prompt_tokens": status.measured_prompt_tokens,
             "projected_tokens": status.projected_tokens,
             "limit_tokens": status.limit_tokens,

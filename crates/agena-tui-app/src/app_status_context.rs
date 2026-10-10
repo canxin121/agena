@@ -416,8 +416,7 @@ impl App {
         if let Some(execution) = self.transcript.execution.as_ref() {
             let token_usage = agena_tui::session_status::token_usage_status(
                 execution.usage.current_tokens,
-                execution.usage.projected_tokens,
-                execution.usage.model_context_window_tokens,
+                execution.usage.input_limit_tokens,
             );
             parts.push(StatusRow::normal(
                 "session-token-usage",

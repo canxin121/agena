@@ -207,6 +207,7 @@ mod tests {
                 measured_prompt_tokens: None,
                 current_tokens: 0,
                 projected_tokens: None,
+                input_limit_tokens: None,
                 limit_tokens: None,
                 limit_basis: None,
                 reserved_tokens: None,

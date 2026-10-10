@@ -13,6 +13,8 @@ pub struct SessionUsage {
     pub measured_prompt_tokens: Option<u64>,
     pub current_tokens: u64,
     pub projected_tokens: Option<u64>,
+    /// Hard admission limit for the next request, after its output reservation.
+    pub input_limit_tokens: Option<u64>,
     pub limit_tokens: Option<u64>,
     pub limit_basis: Option<SessionUsageLimitBasis>,
     pub reserved_tokens: Option<u32>,

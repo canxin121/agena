@@ -135,6 +135,7 @@ export type AgenaExecutionState = {
     measured_prompt_tokens?: number | null
     current_tokens?: number
     projected_tokens?: number | null
+    input_limit_tokens?: number | null
     limit_tokens?: number | null
     limit_basis?: string | null
     reserved_tokens?: number | null

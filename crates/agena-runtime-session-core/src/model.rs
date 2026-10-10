@@ -344,6 +344,10 @@ pub struct PromptTokenRuntime {
     pub last_successful_usage: Option<PromptTokenUsageSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_assistant_message_id: Option<i64>,
+    /// Last durable part included in the measured request. One assistant run
+    /// can contain many provider rounds, so the run id alone is not a cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_input_part_id: Option<i64>,
     #[serde(default)]
     pub prompt_window_generation: u64,
     #[serde(default)]
@@ -360,6 +364,7 @@ impl PromptTokenRuntime {
     pub fn is_empty(&self) -> bool {
         self.last_successful_usage.is_none()
             && self.last_successful_assistant_message_id.is_none()
+            && self.last_input_part_id.is_none()
             && self.prompt_window_generation == 0
             && self.system_fingerprint.is_empty()
             && self.request_options_fingerprint.is_empty()
@@ -566,6 +571,9 @@ impl SessionRuntimeState {
             .as_mut()
         {
             rewrite_message(message_id);
+        }
+        if let Some(part_id) = self.prompt_tokens.last_input_part_id.as_mut() {
+            rewrite_part(part_id);
         }
         for anchor in self.provider_anchors.values_mut() {
             rewrite_message(&mut anchor.assistant_message_id);

@@ -764,7 +764,41 @@ pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> 
     session.bind_runtime_scope();
     restore_prompt_window_from_parts(&mut session.runtime, &parts, session.id)?;
     session.install_projected_parts(parts);
+    restore_prompt_tokens_from_parts(&mut session)?;
     Ok(session)
+}
+
+fn restore_prompt_tokens_from_parts(session: &mut Session) -> Result<(), AppError> {
+    let mut latest = None;
+    for round in session
+        .active_window_parts()
+        .iter()
+        .filter_map(|part| part.content.get("rounds").and_then(Value::as_array))
+        .flatten()
+    {
+        let Some(value) = round.get("prompt_usage") else {
+            continue;
+        };
+        let measurement: crate::session::model::PromptTokenRuntime =
+            serde_json::from_value(value.clone()).map_err(|error| {
+                AppError::Internal(format!("decode durable prompt usage: {error}"))
+            })?;
+        if measurement.prompt_window_generation != session.runtime.prompt_window.generation {
+            continue;
+        }
+        if latest
+            .as_ref()
+            .is_none_or(|previous: &crate::session::model::PromptTokenRuntime| {
+                measurement.last_input_part_id >= previous.last_input_part_id
+            })
+        {
+            latest = Some(measurement);
+        }
+    }
+    if let Some(measurement) = latest {
+        session.runtime.prompt_tokens = measurement;
+    }
+    Ok(())
 }
 
 /// Rebuild both full and narrow projections on the same admitted worker pool.
@@ -794,6 +828,23 @@ fn restore_prompt_window_from_parts(
         {
             continue;
         }
+        if let Some(value) = part
+            .content
+            .get("remote_compaction_disabled_models")
+            .or_else(|| {
+                part.content
+                    .pointer("/checkpoint/remote_compaction_disabled_models")
+            })
+        {
+            let models: std::collections::BTreeSet<String> = serde_json::from_value(value.clone())
+                .map_err(|error| {
+                    AppError::Internal(format!("decode compaction capability: {error}"))
+                })?;
+            runtime
+                .prompt_window
+                .remote_compaction_disabled_models
+                .extend(models);
+        }
         let has_checkpoint = part
             .content
             .get("checkpoint")
@@ -811,6 +862,11 @@ fn restore_prompt_window_from_parts(
             runtime.prompt_window.record_compaction_success();
         } else if part.state == PartState::Failed
             && part.content.get("attempt_failure").and_then(Value::as_bool) == Some(true)
+            && part
+                .content
+                .get("compaction_policy_version")
+                .and_then(Value::as_u64)
+                == Some(crate::COMPACTION_POLICY_VERSION)
         {
             runtime.prompt_window.record_compaction_failure();
         }

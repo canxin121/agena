@@ -158,7 +158,14 @@ test('history and reply paging are independent, empty fold pages advance, refres
     assert.equal(current.folds![0]!.nextCursor, 'before-9')
     assert.equal(current.folds![0]!.hiddenCount, 5)
     assert.equal(current.parts.filter((part) => part.agenaKind !== 'run').length, 10)
-    assert.equal(requests.find((url) => url.searchParams.get('cursor') === 'history')!.searchParams.get('limit'), '6')
+    // Entry and older pages are two messages, and every message loads only its
+    // newest five parts; the rest stays behind the reply's fold cursor.
+    const entry = requests.find((url) => !url.searchParams.has('run_ids') && !url.searchParams.has('cursor'))!
+    assert.equal(entry.searchParams.get('limit'), '2')
+    assert.equal(entry.searchParams.get('part_limit'), '5')
+    const olderPage = requests.find((url) => url.searchParams.get('cursor') === 'history')!
+    assert.equal(olderPage.searchParams.get('limit'), '2')
+    assert.equal(olderPage.searchParams.get('part_limit'), '5')
   } finally {
     close()
   }

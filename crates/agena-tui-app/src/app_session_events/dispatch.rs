@@ -705,7 +705,10 @@ impl App {
                         }
                     }
                 } else if let Some(execution) = refresh.execution_only {
-                    self.apply_transcript_execution(execution);
+                    // A no-change refresh answers with the execution shell, which
+                    // carries no parts. It updates run state and status without
+                    // replacing the transcript the user is reading.
+                    self.apply_transcript_execution_shell(execution);
                 }
                 if refresh.event_count > 0 {
                     self.sync_session_list_selection_to_current_execution();

@@ -30,8 +30,17 @@ use tokio::sync::mpsc;
 
 use super::{LiveEvent, SessionRefresh};
 
+/// Messages per transcript page: one page is a user message plus the AI reply
+/// that answers it, so opening a session and scrolling up always show both.
+/// The server counts a page in messages, so consecutive runs of one role (a
+/// multi-round reply, or a burst of user sends) are never split.
 pub(crate) const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 2;
-pub(crate) const OLDER_TRANSCRIPT_PAGE_SIZE: u64 = 6;
+pub(crate) const OLDER_TRANSCRIPT_PAGE_SIZE: u64 = 2;
+/// Parts loaded per message. A message renders only its newest
+/// `COLLAPSED_ACTIVITY_VISIBLE_COUNT` activities; everything older stays behind
+/// the fold control's explicit "load n"/"load all" request.
+pub(crate) const TRANSCRIPT_PART_PAGE_SIZE: u64 =
+    agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT as u64;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionTranscriptPage {
@@ -1902,7 +1911,7 @@ impl TuiBackend {
                 self.client().session_run_window(
                     session_id,
                     SESSION_TRANSCRIPT_PAGE_SIZE,
-                    32,
+                    TRANSCRIPT_PART_PAGE_SIZE,
                     None
                 ),
             )?;
@@ -1935,7 +1944,7 @@ impl TuiBackend {
     ) -> Result<SessionTranscriptPage> {
         let page_resource = self
             .client()
-            .session_run_window(session_id, limit, 32, Some(cursor))
+            .session_run_window(session_id, limit, TRANSCRIPT_PART_PAGE_SIZE, Some(cursor))
             .await?;
         let folds = agena_tui_transcript::folds_from_run_window(&page_resource);
         let mut page = SessionTranscriptPage {

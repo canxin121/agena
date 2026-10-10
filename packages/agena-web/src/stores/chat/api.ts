@@ -32,6 +32,7 @@ import type {
   SessionState,
 } from '../../types/chat'
 import { compareChatIds } from './messageIndex'
+import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE } from '@/pages/chat/transcriptPartPaging'
 
 // --- agena wire projections ------------------------------------------------
 
@@ -1006,9 +1007,14 @@ export async function listMessages(
   if (!sid) return { entries: [], hasMore: false, nextCursor: null, userMessageCount: 0 }
   const params = new URLSearchParams()
   params.set('limit', String(Math.max(1, Math.min(12, Math.floor(limit || 8)))))
-  if (typeof activityLimit === 'number' && Number.isFinite(activityLimit)) {
-    params.set('part_limit', String(Math.max(16, Math.min(128, Math.floor(activityLimit) + 1))))
-  }
+  // `part_limit` is the per-message tail: a message loads its newest parts and
+  // leaves the rest to its explicit "load n"/"load all" control. Never inflate
+  // it past the requested page size, or entry downloads parts it hides.
+  const partLimit =
+    typeof activityLimit === 'number' && Number.isFinite(activityLimit)
+      ? Math.floor(activityLimit)
+      : DEFAULT_TRANSCRIPT_PART_PAGE_SIZE
+  params.set('part_limit', String(Math.max(1, Math.min(128, partLimit))))
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const { value: parts, observation } = await conditionalJsonObserved<AgenaSessionParts>(
     `session:${sid}:parts`,

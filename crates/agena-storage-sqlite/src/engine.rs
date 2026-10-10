@@ -1084,6 +1084,84 @@ fn marker_part(
     }
 }
 
+/// Keyset page of run markers counted in messages rather than raw runs.
+///
+/// Consecutive runs of one role belong to the same message: an assistant reply
+/// continues over several runs, and a burst of user sends is not split either.
+/// The page therefore always ends on a role boundary, so a caller that asks for
+/// two messages receives one user-side and one assistant-side message instead
+/// of, for example, two rounds of the same reply.
+///
+/// Returns the markers newest-first plus `true` when an older message exists
+/// beyond the page.
+async fn load_run_markers_tx(
+    txn: &DatabaseTransaction,
+    session_id: i64,
+    before: Option<PartCursor>,
+    message_limit: usize,
+) -> Result<(Vec<Part>, bool), StoreError> {
+    async fn markers_before(
+        txn: &DatabaseTransaction,
+        session_id: i64,
+        before: Option<PartCursor>,
+        limit: usize,
+    ) -> Result<Vec<Part>, StoreError> {
+        let mut values = vec![session_id.into()];
+        let position = if let Some(before) = before {
+            values.extend([
+                before.created_at_ms.into(),
+                before.created_at_ms.into(),
+                before.part_id.into(),
+            ]);
+            " AND (p.created_at_ms < ? OR (p.created_at_ms = ? AND p.part_id < ?))"
+        } else {
+            ""
+        };
+        let rows = txn
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.kind = 'run' AND p.visibility IN ('both','user'){position} ORDER BY p.created_at_ms DESC, p.part_id DESC LIMIT {limit}"),
+                values,
+            ))
+            .await
+            .map_err(map_db_err)?;
+        decode_part_rows(rows).await
+    }
+
+    let message_limit = message_limit.clamp(1, 32);
+    let batch_limit = message_limit + 1;
+    let mut markers: Vec<Part> = Vec::new();
+    let mut messages = 0usize;
+    let mut current_role: Option<PartRole> = None;
+    let mut cursor = before;
+    loop {
+        let batch = markers_before(txn, session_id, cursor, batch_limit).await?;
+        if batch.is_empty() {
+            break;
+        }
+        let exhausted = batch.len() < batch_limit;
+        for marker in batch {
+            if current_role != Some(marker.role) {
+                if messages == message_limit {
+                    // This marker opens the message after the page.
+                    return Ok((markers, true));
+                }
+                messages += 1;
+                current_role = Some(marker.role);
+            }
+            cursor = Some(PartCursor {
+                created_at_ms: marker.created_at_ms,
+                part_id: marker.part_id,
+            });
+            markers.push(marker);
+        }
+        if exhausted {
+            break;
+        }
+    }
+    Ok((markers, false))
+}
+
 /// Build a content `Part` bound to `run_id`, ready for insertion.
 fn content_part(id: i64, session_id: i64, run_id: i64, new_part: NewPart, now_ms: i64) -> Part {
     Part {
@@ -1154,22 +1232,10 @@ impl PersistenceEngine for SqliteEngine {
         // Metadata, counts and child windows share one SQLite read snapshot.
         let txn = self.db().begin().await.map_err(map_db_err)?;
         let meta = session_meta_tx(&txn, session_id).await?;
-        let mut values = vec![session_id.into()];
-        let position = if let Some(before) = before {
-            values.extend([
-                before.created_at_ms.into(),
-                before.created_at_ms.into(),
-                before.part_id.into(),
-            ]);
-            " AND (p.created_at_ms < ? OR (p.created_at_ms = ? AND p.part_id < ?))"
-        } else {
-            ""
-        };
-        let rows = txn.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            format!("SELECT {PART_COLS} FROM agena_parts p JOIN agena_session_parts sp ON sp.part_id = p.part_id WHERE sp.session_id = ? AND p.kind = 'run' AND p.visibility IN ('both','user'){position} ORDER BY p.created_at_ms DESC, p.part_id DESC LIMIT {}", run_limit + 1), values)).await.map_err(map_db_err)?;
-        let mut markers = decode_part_rows(rows).await?;
-        let has_more = markers.len() > run_limit;
-        markers.truncate(run_limit);
+        // One page is counted in messages, never in raw runs: consecutive runs
+        // of one role belong to the same message, so the window always ends on
+        // a role boundary.
+        let (markers, has_more) = load_run_markers_tx(&txn, session_id, before, run_limit).await?;
         let next_cursor = markers.last().map(|p| PartCursor {
             created_at_ms: p.created_at_ms,
             part_id: p.part_id,

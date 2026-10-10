@@ -652,6 +652,10 @@ pub struct SessionPartPage {
 
 /// A bounded run window. Counts describe factual membership; no display
 /// grouping, folding, observer dimensions or client preferences are involved.
+///
+/// The page is counted in messages: consecutive runs of one role belong to one
+/// message, a page always ends on a role boundary, and `runs` therefore reports
+/// the run markers of the messages it covers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRunPage {
     pub meta: SessionMeta,

@@ -5,6 +5,7 @@ import test from 'node:test'
 
 test('chat opens with one recent page and delegates older loading to user scroll', () => {
   const store = readFileSync(resolve(import.meta.dir, '../src/stores/chat.ts'), 'utf8')
+  const api = readFileSync(resolve(import.meta.dir, '../src/stores/chat/api.ts'), 'utf8')
   const navigation = readFileSync(resolve(import.meta.dir, '../src/pages/chat/useChatScrollNav.ts'), 'utf8')
   const view = readFileSync(resolve(import.meta.dir, '../src/pages/chat/ChatPageView.vue'), 'utf8')
   const messageList = readFileSync(resolve(import.meta.dir, '../src/components/chat/MessageList.vue'), 'utf8')
@@ -17,6 +18,14 @@ test('chat opens with one recent page and delegates older loading to user scroll
   assert.match(store, /historyOlderLoadedBySession/)
   assert.match(store, /transcriptCacheGeneration/)
   assert.match(store, /const MESSAGE_PAGE_SIZE = 2/)
+  // Entry and every older page are two messages, so a page always carries a
+  // user message and the reply that answers it.
+  assert.match(store, /const OLDER_MESSAGE_PAGE_SIZE = 2/)
+  assert.match(store, /const MESSAGE_PAGE_SIZE = 2\nconst OLDER_MESSAGE_PAGE_SIZE = 2/)
+  // A transcript request asks for the per-message tail only; the server folds
+  // the rest behind the part controls instead of downloading hidden parts.
+  assert.match(api, /params\.set\('part_limit', String\(Math\.max\(1, Math\.min\(128, partLimit\)\)\)\)/)
+  assert.doesNotMatch(api, /Math\.max\(16/)
   assert.doesNotMatch(store, /pruneSessionMessages/)
   assert.doesNotMatch(store, /loadAllMessages/)
   assert.match(store, /userMessageCount/)

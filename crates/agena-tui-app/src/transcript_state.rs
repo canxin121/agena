@@ -639,12 +639,26 @@ impl TranscriptState {
     }
 
     pub(crate) fn apply_execution(&mut self, execution: SessionExecutionResource) {
+        self.apply_execution_with(execution, true)
+    }
+
+    /// Apply an execution shell (`GET /state`): session state, usage and run
+    /// status without a transcript window. The loaded pages must survive
+    /// untouched — a no-change refresh would otherwise empty a session the user
+    /// just opened.
+    pub(crate) fn apply_execution_shell(&mut self, execution: SessionExecutionResource) {
+        self.apply_execution_with(execution, false)
+    }
+
+    fn apply_execution_with(&mut self, execution: SessionExecutionResource, merge_parts: bool) {
         self.session_title = execution.session.title.clone();
         self.last_event_seq = execution.latest_event_seq;
-        if self.transcript_older_pages_loaded || !self.transcript_revealed_part_ids.is_empty() {
-            self.merge_recent_parts(execution.parts.clone());
-        } else {
-            self.merge_parts(execution.parts.clone());
+        if merge_parts {
+            if self.transcript_older_pages_loaded || !self.transcript_revealed_part_ids.is_empty() {
+                self.merge_recent_parts(execution.parts.clone());
+            } else {
+                self.merge_parts(execution.parts.clone());
+            }
         }
         let mut execution = execution;
         execution.parts = self.parts.clone();

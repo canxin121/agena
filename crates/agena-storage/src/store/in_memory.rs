@@ -457,8 +457,24 @@ impl PersistenceEngine for InMemoryEngine {
             })
             .collect::<Vec<_>>();
         markers.sort_unstable_by_key(|p| std::cmp::Reverse((p.created_at_ms, p.part_id)));
-        let has_more = markers.len() > run_limit;
-        markers.truncate(run_limit);
+        // A page is counted in messages, never in raw runs: consecutive runs of
+        // one role belong to the same message, so the window always ends on a
+        // role boundary and never splits a message.
+        let mut messages = 0usize;
+        let mut end = 0usize;
+        let mut current_role: Option<PartRole> = None;
+        while end < markers.len() {
+            if current_role != Some(markers[end].role) {
+                if messages == run_limit {
+                    break;
+                }
+                messages += 1;
+                current_role = Some(markers[end].role);
+            }
+            end += 1;
+        }
+        let has_more = end < markers.len();
+        markers.truncate(end);
         let next_cursor = markers.last().map(|p| PartCursor {
             created_at_ms: p.created_at_ms,
             part_id: p.part_id,

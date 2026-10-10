@@ -1,3 +1,12 @@
+/// Whether an incoming execution carries a transcript window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExecutionTranscript {
+    /// The newest bounded run window travels with the response.
+    Window,
+    /// An execution shell (`GET /state`): session state and status only.
+    Shell,
+}
+
 impl App {
     pub(crate) fn open_session(&mut self, session_id: i64, title: String) {
         self.btw_focus = None;
@@ -122,9 +131,27 @@ impl App {
         true
     }
 
+    /// Apply an execution snapshot that carries the newest run window.
     pub(crate) fn apply_transcript_execution(
         &mut self,
         execution: SessionExecutionResource,
+    ) -> bool {
+        self.apply_transcript_execution_with(execution, ExecutionTranscript::Window)
+    }
+
+    /// Apply an execution-only refresh. The shell carries no transcript window,
+    /// so the loaded messages stay exactly as they are.
+    pub(crate) fn apply_transcript_execution_shell(
+        &mut self,
+        execution: SessionExecutionResource,
+    ) -> bool {
+        self.apply_transcript_execution_with(execution, ExecutionTranscript::Shell)
+    }
+
+    fn apply_transcript_execution_with(
+        &mut self,
+        execution: SessionExecutionResource,
+        transcript: ExecutionTranscript,
     ) -> bool {
         if self.transcript.session_id != Some(execution.session.id) {
             return false;
@@ -152,7 +179,10 @@ impl App {
             .is_some_and(|current| current.session.state.active_execution().is_some());
         let session_id = execution.session.id;
         let sequence = execution.latest_event_seq;
-        self.transcript.apply_execution(execution);
+        match transcript {
+            ExecutionTranscript::Window => self.transcript.apply_execution(execution),
+            ExecutionTranscript::Shell => self.transcript.apply_execution_shell(execution),
+        }
         if is_terminal {
             // A terminal execution means no run is in flight for this
             // session. Clear any local run activity (submit/continue/

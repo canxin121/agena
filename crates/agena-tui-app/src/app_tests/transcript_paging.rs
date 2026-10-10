@@ -320,7 +320,7 @@ async fn refresh_preserves_the_remote_part_loading_control_through_http() {
                     _ => panic!("unexpected fold request: {path}"),
                 }
             } else {
-                assert_eq!(path, "/api/v1/sessions/7/runs?limit=2&part_limit=32");
+                assert_eq!(path, "/api/v1/sessions/7/runs?limit=2&part_limit=5");
                 transcript.to_string()
             };
             paths.push(path.to_owned());
@@ -523,6 +523,27 @@ async fn multi_round_reply_expansion_keeps_its_cursor_across_run_boundaries() {
             .iter()
             .any(|line| line.text.contains("final answer"))
     );
+}
+
+#[tokio::test]
+async fn a_state_only_refresh_keeps_the_transcript_the_session_was_opened_with() {
+    let mut app = app(TuiBackend::remote_mock());
+    app.handle_session_state_loaded(SESSION_ID, Ok(snapshot(12, 17, 1)));
+    assert_parts_visible(&mut app.transcript, 12..17);
+    // A no-change refresh answers with the execution shell: session state and
+    // usage without a transcript window. Applying it must not drop the messages
+    // the session was opened with.
+    app.handle_session_refreshed(
+        SESSION_ID,
+        Ok(crate::app_backend::SessionRefresh {
+            execution_only: Some(execution(Vec::new(), 1)),
+            reconciled_parts: None,
+            snapshot: None,
+            latest_event_seq: Some(1),
+            event_count: 0,
+        }),
+    );
+    assert_parts_visible(&mut app.transcript, 12..17);
 }
 
 #[tokio::test]

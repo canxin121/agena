@@ -1,5 +1,5 @@
 use agena_storage::store::{
-    InMemoryEngine, NewPart, PartDelta, PartRole, PartState, PersistenceEngine,
+    InMemoryEngine, NewPart, PartDelta, PartRole, PartState, PersistenceEngine, SessionRunPage,
 };
 use serde_json::json;
 
@@ -323,4 +323,99 @@ async fn exhausted_part_revision_returns_an_error_without_panicking_or_wrapping(
     let after = engine.load_session(session).await.unwrap();
     assert_eq!(after.parts, before.parts);
     assert_eq!(after.meta.version, before.meta.version);
+}
+
+/// A transcript page is counted in messages, never in raw runs. Consecutive
+/// runs of one role stay together, so the page a client opens with carries the
+/// user message and the whole reply that answers it — not, for example, two
+/// rounds of the same reply. Each message inside the page loads only its newest
+/// parts and keeps the rest behind its fold cursor.
+#[tokio::test]
+async fn both_backends_page_run_windows_by_message() {
+    for memory in [false, true] {
+        let (engine, session) = engine(memory).await;
+        // First message: one user send answered by one assistant round.
+        engine
+            .submit_user_run(session, vec![super::text_part("hello")], None, 1_000_000)
+            .await
+            .unwrap();
+        engine
+            .start_run(session, "continue", json!({}), None, 1_000_010)
+            .await
+            .unwrap();
+        // Second message: one user send answered over two assistant rounds.
+        engine
+            .submit_user_run(session, vec![super::text_part("again")], None, 1_000_100)
+            .await
+            .unwrap();
+        engine
+            .start_run(session, "continue", json!({}), None, 1_000_110)
+            .await
+            .unwrap();
+        let newest_run = engine
+            .start_run(session, "continue", json!({}), None, 1_000_120)
+            .await
+            .unwrap()
+            .run_id;
+        engine
+            .append_parts(
+                session,
+                newest_run,
+                (1..=7)
+                    .map(|index| {
+                        let mut part = super::completed_text_part(&format!("round {index}"));
+                        part.role = PartRole::Assistant;
+                        part
+                    })
+                    .collect(),
+                1_000_130,
+            )
+            .await
+            .unwrap();
+
+        let roles = |page: &SessionRunPage| {
+            page.parts
+                .iter()
+                .filter(|part| part.kind == "run")
+                .map(|part| part.role)
+                .collect::<Vec<_>>()
+        };
+
+        let newest = engine.load_run_window(session, None, 2, 5).await.unwrap();
+        assert_eq!(
+            roles(&newest),
+            vec![PartRole::User, PartRole::Assistant, PartRole::Assistant],
+            "the newest page is the newest message, both its rounds included: memory={memory}"
+        );
+        assert_eq!(newest.runs.len(), 3, "memory={memory}");
+        assert!(newest.has_more, "an older message exists: memory={memory}");
+        let reply = newest
+            .runs
+            .iter()
+            .find(|run| run.run_id == newest_run)
+            .expect("the newest reply is in the page");
+        assert_eq!(reply.part_count, 7, "memory={memory}");
+        assert_eq!(
+            reply.loaded_count, 5,
+            "only the newest five parts of a message load: memory={memory}"
+        );
+        assert!(
+            reply.next_cursor.is_some(),
+            "the hidden parts keep their fold cursor: memory={memory}"
+        );
+
+        let older = engine
+            .load_run_window(session, newest.next_cursor, 2, 5)
+            .await
+            .unwrap();
+        assert_eq!(
+            roles(&older),
+            vec![PartRole::User, PartRole::Assistant],
+            "the older page is the previous message: memory={memory}"
+        );
+        assert!(
+            !older.has_more,
+            "nothing is left beyond the oldest message: memory={memory}"
+        );
+    }
 }

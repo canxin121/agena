@@ -55,12 +55,13 @@ import { reconcileTranscriptFolds, transcriptFoldKey } from './chat/transcriptFo
 // ─── constants ──────────────────────────────────────────────────────────────
 
 const SESSION_PAGE_SIZE = 30
-// Keep session entry cheap. The transcript endpoint interprets this as a
-// two same-role pagination groups: one user-side group and one assistant-side
-// group. The server keeps consecutive runs of one role together so a burst of
-// user sends or assistant continuations is never split at a page boundary.
+// Keep session entry cheap: one transcript page is two messages, so opening a
+// session always shows a user message and the AI reply that answers it. A
+// message is one role group of runs (an assistant reply can continue over
+// several runs), and the server never splits a group at a page boundary, so a
+// page is never only half of one reply. Older pages use the same size.
 const MESSAGE_PAGE_SIZE = 2
-const OLDER_MESSAGE_PAGE_SIZE = 6
+const OLDER_MESSAGE_PAGE_SIZE = 2
 const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id'
 
 function isRecord(value: JsonValue): value is JsonObject {

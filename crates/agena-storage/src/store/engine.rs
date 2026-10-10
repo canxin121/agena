@@ -71,6 +71,10 @@ pub trait PersistenceEngine: Send + Sync {
     /// Read a keyset page of visible run markers and at most `part_limit`
     /// children per run, plus indexed membership counts. Backends must not
     /// decode omitted child bodies to compute counts.
+    ///
+    /// `run_limit` counts messages, not raw runs: consecutive runs of one role
+    /// belong to one message and a page always ends on a role boundary, so a
+    /// two-message page carries a user-side and an assistant-side message.
     async fn load_run_window(
         &self,
         session_id: i64,

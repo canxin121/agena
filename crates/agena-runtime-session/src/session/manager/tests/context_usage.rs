@@ -7,6 +7,8 @@ struct ContextProvider {
     requests: std::sync::Mutex<Vec<CompletionRequest>>,
     summaries: std::sync::Mutex<VecDeque<(&'static str, CompletionFinishReason)>>,
     native_attempts: AtomicUsize,
+    prompt_tokens: u64,
+    repaired: bool,
 }
 
 impl ContextProvider {
@@ -16,6 +18,8 @@ impl ContextProvider {
             requests: Default::default(),
             summaries: std::sync::Mutex::new(summaries.into()),
             native_attempts: AtomicUsize::new(0),
+            prompt_tokens: 320_000,
+            repaired: false,
         }
     }
 }
@@ -106,8 +110,15 @@ impl ModelRuntime for ContextProvider {
                 model: self.model.clone(),
                 finish_reason: Some(CompletionFinishReason::Stop),
                 usage: Some(CompletionUsage {
-                    input_tokens: 320_000,
+                    input_tokens: self.prompt_tokens * if self.repaired { 2 } else { 1 },
                     output_tokens: 1,
+                    request_usage: self.repaired.then_some(
+                        agena_domain::PromptTokenUsageSnapshot {
+                            input_tokens: self.prompt_tokens,
+                            output_tokens: 1,
+                            ..Default::default()
+                        },
+                    ),
                     ..Default::default()
                 }),
                 provider_metadata: None,
@@ -428,6 +439,7 @@ async fn repaired_compaction_policy_recovers_sessions_disabled_by_legacy_failure
                 "compaction",
                 serde_json::json!({
                     "summary": null, "checkpoint": null, "attempt_failure": true,
+                    "compaction_policy_version": 2,
                 }),
             )
             .await
@@ -466,6 +478,119 @@ async fn repaired_compaction_policy_recovers_sessions_disabled_by_legacy_failure
         loaded.runtime.prompt_window.auto_compaction_disabled,
         "the repaired strategy still bounds repeated failures"
     );
+}
+
+#[tokio::test]
+async fn measured_overflow_automatically_compacts_before_the_next_request() {
+    let mut fixture = ContextProvider::new(vec![(
+        "Keep the permission fix and finish verification.",
+        CompletionFinishReason::Stop,
+    )]);
+    fixture.prompt_tokens = 980_000;
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    manager
+        .continue_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            options(),
+        ))
+        .await
+        .unwrap();
+    let loaded = manager.get_session(session.id).await.unwrap();
+    assert!(
+        manager
+            .session_usage_async(&loaded)
+            .await
+            .unwrap()
+            .current_tokens
+            > 968_000
+    );
+    let compacted = manager
+        .continue_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            options(),
+        ))
+        .await
+        .unwrap();
+    let checkpoint = compacted.runtime.prompt_window.compaction.as_ref().unwrap();
+    assert_eq!(
+        checkpoint.trigger,
+        agena_domain::PromptCompactionTrigger::Auto
+    );
+    assert!(checkpoint.after_tokens < 968_000);
+    assert_eq!(provider.requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn old_aggregated_prompt_measurements_are_reestimated_on_reload() {
+    let provider = Arc::new(ContextProvider::new(Vec::new()));
+    let manager = manager_with_provider(provider).await;
+    let session = dense_history(&manager).await;
+    manager
+        .continue_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            options(),
+        ))
+        .await
+        .unwrap();
+    let loaded = manager.get_session(session.id).await.unwrap();
+    let marker = loaded
+        .parts()
+        .iter()
+        .rev()
+        .find(|part| part.is_run_marker())
+        .unwrap();
+    let mut content = marker.content.clone();
+    let measurement = &mut content["rounds"][0]["prompt_usage"];
+    measurement
+        .as_object_mut()
+        .unwrap()
+        .remove("accounting_version");
+    measurement["last_successful_usage"]["input_tokens"] = serde_json::json!(1_370_000);
+    manager
+        .store
+        .complete_run(
+            session.id,
+            marker.part_id,
+            agena_storage::store::RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: Some(content),
+                provider_state: None,
+            },
+        )
+        .await
+        .unwrap();
+    let loaded = manager.get_session(session.id).await.unwrap();
+    let usage = manager.session_usage_async(&loaded).await.unwrap();
+    assert!(usage.measured_prompt_tokens.is_none());
+    assert!(usage.current_tokens > 616_000 && usage.current_tokens < 968_000);
+}
+
+#[tokio::test]
+async fn protocol_repair_billing_does_not_double_the_persisted_context_usage() {
+    let mut fixture = ContextProvider::new(Vec::new());
+    fixture.prompt_tokens = 680_000;
+    fixture.repaired = true;
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    for _ in 0..2 {
+        manager
+            .continue_session(agena_runtime::SessionExecutionRequest::new(
+                session.id,
+                options(),
+            ))
+            .await
+            .unwrap();
+        let loaded = manager.get_session(session.id).await.unwrap();
+        let usage = manager.session_usage_async(&loaded).await.unwrap();
+        assert_eq!(usage.measured_prompt_tokens, Some(680_000));
+        assert_eq!(usage.current_tokens, 680_001);
+        assert!(loaded.runtime.prompt_window.compaction.is_none());
+    }
+    assert_eq!(provider.requests.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]

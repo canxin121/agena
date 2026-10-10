@@ -15,6 +15,6 @@ pub const DEFAULT_COMPACTION_OUTPUT_TOKENS: u32 = 32_000;
 pub const MAX_COMPACTION_OUTPUT_TOKENS: u32 = 64_000;
 /// Failure suppression belongs to a strategy, so repaired strategies can
 /// recover sessions disabled by an older implementation.
-pub const COMPACTION_POLICY_VERSION: u64 = 2;
+pub const COMPACTION_POLICY_VERSION: u64 = 3;
 /// Number of failed compaction attempts before the session disables retries.
 pub const MAX_COMPACTION_FAILURES: u8 = 3;

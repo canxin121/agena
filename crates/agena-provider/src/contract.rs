@@ -1297,6 +1297,12 @@ pub struct CompletionUsage {
     pub tool_use_tokens: u64,
     pub other_tokens: u64,
 
+    /// Tokens from the final physical request, before billing usage from
+    /// internal protocol-repair attempts is added. Context occupancy must use
+    /// one request even when the logical completion bills several requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_usage: Option<agena_domain::PromptTokenUsageSnapshot>,
+
     /// Explicit provider-reported cost and provenance. A recorded zero is
     /// distinguishable from a provider that returned no cost.
     pub recorded_cost: f64,
@@ -1313,6 +1319,18 @@ pub struct CompletionUsage {
 }
 
 impl CompletionUsage {
+    pub fn request_usage_snapshot(&self) -> agena_domain::PromptTokenUsageSnapshot {
+        self.request_usage
+            .clone()
+            .unwrap_or(agena_domain::PromptTokenUsageSnapshot {
+                input_tokens: self.input_tokens,
+                output_tokens: self.output_tokens,
+                reasoning_tokens: self.reasoning_tokens,
+                cache_write_tokens: self.cache_write_tokens,
+                cache_read_tokens: self.cache_read_tokens,
+            })
+    }
+
     pub fn own_total_tokens(&self) -> u64 {
         self.input_tokens
             .saturating_add(self.output_tokens)
@@ -1478,6 +1496,7 @@ impl CompletionUsage {
                 Vec::new()
             },
             attributed_usage,
+            request_usage: self.request_usage.clone(),
         }
     }
 }

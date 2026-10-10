@@ -325,21 +325,14 @@ mod prompt_window_runtime_tests {
     }
 }
 
-fn prompt_token_usage_snapshot(
-    value: &agena_provider::CompletionUsage,
-) -> agena_domain::PromptTokenUsageSnapshot {
-    agena_domain::PromptTokenUsageSnapshot {
-        input_tokens: value.input_tokens,
-        output_tokens: value.output_tokens,
-        reasoning_tokens: value.reasoning_tokens,
-        cache_write_tokens: value.cache_write_tokens,
-        cache_read_tokens: value.cache_read_tokens,
-    }
-}
+/// Older snapshots could contain the sum of several protocol-repair requests.
+pub const PROMPT_USAGE_ACCOUNTING_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Runtime state of prompt token accounting.
 pub struct PromptTokenRuntime {
+    #[serde(default)]
+    pub accounting_version: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_usage: Option<PromptTokenUsageSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -408,7 +401,8 @@ impl PromptTokenRuntime {
         request_options_fingerprint: String,
         transcript_digest: String,
     ) {
-        self.last_successful_usage = Some(prompt_token_usage_snapshot(usage));
+        self.accounting_version = PROMPT_USAGE_ACCOUNTING_VERSION;
+        self.last_successful_usage = Some(usage.request_usage_snapshot());
         self.last_successful_assistant_message_id = Some(assistant_message_id);
         self.prompt_window_generation = prompt_window_generation;
         self.model_context_window_tokens = model_context_window_tokens;

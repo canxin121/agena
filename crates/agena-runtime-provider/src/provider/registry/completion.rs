@@ -304,14 +304,19 @@ fn merge_completion_usage(
     target: &mut Option<CompletionUsage>,
     additional: Option<CompletionUsage>,
 ) {
-    let Some(additional) = additional else {
+    let Some(mut additional) = additional else {
         return;
     };
     let Some(target) = target.as_mut() else {
+        // No usage was reported for the final attempt. Retain the billable
+        // discarded attempts, but do not invent a prompt measurement for it.
+        additional.request_usage = Some(Default::default());
         *target = Some(additional);
         return;
     };
+    let request_usage = target.request_usage_snapshot();
     target.add_assign(&additional);
+    target.request_usage = Some(request_usage);
 }
 
 fn declared_tool_api_functions(request: &CompletionRequest) -> BTreeSet<String> {
@@ -1432,10 +1437,10 @@ impl ProviderRegistry {
                                     tool_api_error.get_or_insert(error);
                                 }
                                 if let Some(error) = tool_api_error.take() {
-                                    if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
-                                        merge_completion_usage(&mut discarded_usage, usage.take());
-                                    }
                                     if protocol_repair_count < MAX_TOOL_API_REPAIRS {
+                                        if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
+                                            merge_completion_usage(&mut discarded_usage, usage.take());
+                                        }
                                         let calls = stream_tool_api_calls(&tool_api_calls);
                                         append_tool_api_repair_turn(
                                             &mut request,
@@ -2638,7 +2643,9 @@ mod tool_api_function_validation_tests {
                 "input": { "file_path": "README.md" },
             })
         );
-        assert_eq!(response.usage.expect("aggregated usage").input_tokens, 2);
+        let usage = response.usage.expect("aggregated usage");
+        assert_eq!(usage.input_tokens, 2);
+        assert_eq!(usage.request_usage_snapshot().input_tokens, 1);
         let requests = provider.requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].system.as_deref(), Some("base system"));
@@ -2761,7 +2768,9 @@ mod tool_api_function_validation_tests {
             CompletionStreamEvent::Completed { usage, .. } => usage.as_ref(),
             _ => None,
         });
-        assert_eq!(usage.expect("completed usage").input_tokens, 2);
+        let usage = usage.expect("completed usage");
+        assert_eq!(usage.input_tokens, 2);
+        assert_eq!(usage.request_usage_snapshot().input_tokens, 1);
 
         let requests = provider.requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 2);

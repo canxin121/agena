@@ -783,7 +783,9 @@ fn restore_prompt_tokens_from_parts(session: &mut Session) -> Result<(), AppErro
             serde_json::from_value(value.clone()).map_err(|error| {
                 AppError::Internal(format!("decode durable prompt usage: {error}"))
             })?;
-        if measurement.prompt_window_generation != session.runtime.prompt_window.generation {
+        if measurement.accounting_version != crate::session::model::PROMPT_USAGE_ACCOUNTING_VERSION
+            || measurement.prompt_window_generation != session.runtime.prompt_window.generation
+        {
             continue;
         }
         if latest

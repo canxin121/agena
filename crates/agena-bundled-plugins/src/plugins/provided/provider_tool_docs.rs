@@ -653,7 +653,7 @@ fn localized(key: &str, locale: &str) -> &'static str {
         ("remote", "pt-BR") => {
             "Esta ferramenta roda na nuvem e envia somente as entradas informadas explicitamente. Arquivos locais não são enviados automaticamente e não há execução local alternativa. O ambiente é separado do workspace do Agena; consulte o esquema para ver as opções aceitas."
         }
-        _ => return "",
+        _ => "",
     }
 }
 

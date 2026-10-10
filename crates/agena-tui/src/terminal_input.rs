@@ -251,9 +251,7 @@ impl InputNormalizer {
             return;
         }
 
-        self.record_text_burst(
-            self.pending_chars > 1 || self.pending_text.chars().any(|ch| !ch.is_ascii()),
-        );
+        self.record_text_burst(self.pending_chars > 1 || !self.pending_text.is_ascii());
         if allow_paste && self.pending.len() >= LEGACY_PASTE_MIN_CHARS {
             let text = std::mem::take(&mut self.pending_text);
             self.finish_burst();

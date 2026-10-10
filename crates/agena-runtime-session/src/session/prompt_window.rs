@@ -1463,7 +1463,7 @@ pub(crate) fn build_prepared_prompt(
 /// plugin/tool's runtime model projection. Only the ephemeral request is
 /// mutated; the raw `Part` rows remain unchanged.
 pub(crate) async fn render_tool_results_for_model(
-    turns: &mut Vec<CompletionInputRun>,
+    turns: &mut [CompletionInputRun],
     parts: &[Part],
     executor: &crate::tool::ToolExecutor,
 ) {
@@ -1560,7 +1560,7 @@ pub(crate) async fn render_tool_results_for_model(
 /// an earlier successful round; that excluded call must not claim the earlier
 /// result's renderer slot.
 pub(crate) async fn render_session_tool_results_for_model(
-    turns: &mut Vec<CompletionInputRun>,
+    turns: &mut [CompletionInputRun],
     session: &Session,
     executor: &crate::tool::ToolExecutor,
 ) {

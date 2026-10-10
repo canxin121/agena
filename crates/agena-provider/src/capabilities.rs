@@ -320,7 +320,7 @@ fn anthropic_claude_capabilities() -> ModelCapabilities {
 
 fn gemini_default_capabilities() -> ModelCapabilities {
     ModelCapabilities {
-        tool_calling: CapabilitySupport::Unsupported,
+        tool_calling: CapabilitySupport::Supported,
         streaming: CapabilitySupport::Supported,
         structured_output: CapabilitySupport::Supported,
         reasoning: CapabilitySupport::Unsupported,
@@ -358,6 +358,26 @@ fn gitlab_default_capabilities() -> ModelCapabilities {
 #[cfg(test)]
 mod media_capability_tests {
     use super::*;
+
+    #[test]
+    fn unknown_model_names_in_every_family_assume_tool_support() {
+        let registry = CapabilityRegistry::default();
+        for family in [
+            CapabilityFamily::OpenAi,
+            CapabilityFamily::OpenAiCompatible,
+            CapabilityFamily::Anthropic,
+            CapabilityFamily::Gemini,
+            CapabilityFamily::Bedrock,
+            CapabilityFamily::Gitlab,
+        ] {
+            let capabilities = registry.capabilities_for_family(family, "unlisted-future-model");
+            assert_eq!(
+                capabilities.tool_calling,
+                CapabilitySupport::Supported,
+                "{family:?}"
+            );
+        }
+    }
 
     #[test]
     fn media_input_support_matches_conversation_model_families() {

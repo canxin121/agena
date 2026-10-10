@@ -317,6 +317,7 @@ pub(crate) fn provider_model_config_draft_from_overlay(
         enabled: overlay.enabled,
         native_compaction: overlay.native_compaction,
         agena_tool_mode: overlay.agena_tools.mode,
+        agena_tool_mode_configured: overlay.agena_tools.configured_mode().is_some(),
         display_name: definition.display_name.clone().unwrap_or_default(),
         lifecycle: definition
             .lifecycle
@@ -361,6 +362,22 @@ pub(crate) fn apply_provider_model_config_supported_modes(
     let Some(provider_model) = provider_model else {
         return;
     };
+    if !draft.agena_tool_mode_configured {
+        draft.agena_tool_mode = draft
+            .definition
+            .capabilities
+            .feature_support(agena_provider::ModelCapabilityFeature::ToolCalling)
+            .map(|support| AgenaToolMode::from_tool_calling_support(Some(support)))
+            .unwrap_or_else(|| {
+                if provider_model.capabilities.tool_calling
+                    == agena_api::resource::CapabilitySupportResource::Unsupported
+                {
+                    AgenaToolMode::Disabled
+                } else {
+                    AgenaToolMode::default()
+                }
+            });
+    }
     // Selectors come from `preset` when set, otherwise from the request
     // shape (effort name / `off`), matching the domain's `selector()`. Live
     // models (e.g. cpa's deepseek-v4) advertise effort modes with `preset`
@@ -432,8 +449,14 @@ pub(crate) fn provider_model_config_draft_to_model_value(
     let overlay = ResolvedProviderModelConfig {
         enabled: draft.enabled,
         native_compaction: draft.native_compaction,
-        agena_tools: AgenaToolsConfig {
-            mode: draft.agena_tool_mode,
+        agena_tools: if draft.agena_tool_mode_configured {
+            AgenaToolsConfig::from_mode(draft.agena_tool_mode)
+        } else {
+            AgenaToolsConfig::from_tool_calling_support(
+                definition
+                    .capabilities
+                    .feature_support(agena_provider::ModelCapabilityFeature::ToolCalling),
+            )
         },
         definition,
     };
@@ -578,6 +601,7 @@ pub(crate) fn commit_provider_model_config_field(
                 "disabled" => AgenaToolMode::Disabled,
                 other => return Err(format!("unsupported Agena tool mode `{other}`")),
             };
+            draft.agena_tool_mode_configured = true;
         }
         ProviderModelConfigField::DisplayName => draft.display_name = value,
         ProviderModelConfigField::Lifecycle => {
@@ -678,9 +702,7 @@ mod tests {
         let overlay = ResolvedProviderModelConfig {
             enabled: true,
             native_compaction: false,
-            agena_tools: AgenaToolsConfig {
-                mode: AgenaToolMode::Disabled,
-            },
+            agena_tools: AgenaToolsConfig::from_mode(AgenaToolMode::Disabled),
             definition: definition.clone(),
         };
 
@@ -707,6 +729,69 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_edits_preserve_inheritance_and_show_explicit_negative_capabilities() {
+        use agena_api::resource::CapabilitySupportResource;
+
+        for (config, support, expected) in [
+            (
+                serde_json::json!({}),
+                CapabilitySupportResource::Unknown,
+                AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                serde_json::json!({}),
+                CapabilitySupportResource::Unsupported,
+                AgenaToolMode::Disabled,
+            ),
+            (
+                serde_json::json!({"features": {"unsupported": ["tool_calling"]}}),
+                CapabilitySupportResource::Unknown,
+                AgenaToolMode::Disabled,
+            ),
+            (
+                serde_json::json!({"features": ["tool_calling"]}),
+                CapabilitySupportResource::Unsupported,
+                AgenaToolMode::ProviderProtocol,
+            ),
+        ] {
+            let mut draft = provider_model_config_draft_from_overlay(
+                "model-a",
+                serde_json::from_value(config).unwrap(),
+            );
+            let mut model =
+                agena_api::resource::ProviderModelResource::configured("adapter", "model-a");
+            model.capabilities.tool_calling = support;
+            apply_provider_model_config_supported_modes(Some(&model), &mut draft);
+            assert_eq!(draft.agena_tool_mode, expected);
+            commit_provider_model_config_field(
+                &mut draft,
+                ProviderModelConfigField::DisplayName,
+                "Edited name".to_owned(),
+            )
+            .unwrap();
+            let (_, value) = provider_model_config_draft_to_model_value(&draft).unwrap();
+            assert!(value.get("agena_tools").is_none());
+        }
+    }
+
+    #[test]
+    fn invalid_tool_mode_does_not_turn_inheritance_into_an_override() {
+        let mut draft = provider_model_config_draft_from_overlay(
+            "model-a",
+            ResolvedProviderModelConfig::default(),
+        );
+        assert!(
+            commit_provider_model_config_field(
+                &mut draft,
+                ProviderModelConfigField::AgenaToolMode,
+                "invalid".to_owned()
+            )
+            .is_err()
+        );
+        assert!(!draft.agena_tool_mode_configured);
+    }
+
+    #[test]
     fn all_agena_tool_modes_are_selectable_and_persisted() {
         for (token, expected) in [
             ("provider_protocol", AgenaToolMode::ProviderProtocol),
@@ -726,6 +811,7 @@ mod tests {
             let (_, value) = provider_model_config_draft_to_model_value(&draft).unwrap();
             let saved: ResolvedProviderModelConfig = serde_json::from_value(value).unwrap();
             assert_eq!(saved.agena_tools.mode, expected, "mode token: {token}");
+            assert_eq!(saved.agena_tools.configured_mode(), Some(expected));
         }
     }
 

@@ -29,17 +29,78 @@ impl AgenaToolMode {
     pub const fn is_disabled(&self) -> bool {
         matches!(self, Self::Disabled)
     }
+
+    /// Missing or unknown metadata assumes Tool API support. Only a declared
+    /// unsupported capability disables tools.
+    pub const fn from_tool_calling_support(support: Option<CapabilitySupport>) -> Self {
+        match support {
+            Some(CapabilitySupport::Unsupported) => Self::Disabled,
+            _ => Self::ProviderProtocol,
+        }
+    }
 }
 
 /// Provider-facing tool exposure configuration for one model route.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct AgenaToolsConfig {
-    #[serde(default)]
     pub mode: AgenaToolMode,
+    #[serde(skip)]
+    explicitly_configured: bool,
+}
+
+impl<'de> Deserialize<'de> for AgenaToolsConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        fn explicit_mode<'de, D>(deserializer: D) -> Result<Option<AgenaToolMode>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            AgenaToolMode::deserialize(deserializer).map(Some)
+        }
+
+        #[derive(Default, Deserialize)]
+        #[serde(default, deny_unknown_fields)]
+        struct Wire {
+            #[serde(deserialize_with = "explicit_mode")]
+            mode: Option<AgenaToolMode>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(wire.mode.map(Self::from_mode).unwrap_or_default())
+    }
 }
 
 impl AgenaToolsConfig {
+    /// A user-selected mode overrides capability metadata, including catalog
+    /// declarations. Inherited values must not become overrides on save.
+    pub const fn from_mode(mode: AgenaToolMode) -> Self {
+        Self {
+            mode,
+            explicitly_configured: true,
+        }
+    }
+
+    pub const fn from_tool_calling_support(support: Option<CapabilitySupport>) -> Self {
+        Self {
+            mode: AgenaToolMode::from_tool_calling_support(support),
+            explicitly_configured: false,
+        }
+    }
+
+    pub const fn configured_mode(&self) -> Option<AgenaToolMode> {
+        if self.explicitly_configured {
+            Some(self.mode)
+        } else {
+            None
+        }
+    }
+
+    pub const fn is_inherited(&self) -> bool {
+        !self.explicitly_configured
+    }
+
     pub fn is_default(&self) -> bool {
         self.mode == AgenaToolMode::default()
     }

@@ -1919,7 +1919,9 @@ mod tool_api_function_validation_tests {
     }
 
     struct ToolModeProbeProvider {
-        mode: AgenaToolMode,
+        mode: Option<AgenaToolMode>,
+        support: agena_domain::CapabilitySupport,
+        adapter_support: Option<agena_domain::CapabilitySupport>,
         model: ModelId,
         requests: Mutex<Vec<CompletionRequest>>,
     }
@@ -1927,7 +1929,9 @@ mod tool_api_function_validation_tests {
     impl ToolModeProbeProvider {
         fn new(mode: AgenaToolMode) -> Self {
             Self {
-                mode,
+                mode: Some(mode),
+                support: agena_domain::CapabilitySupport::Unknown,
+                adapter_support: None,
                 model: ModelId::new("test-model"),
                 requests: Mutex::new(Vec::new()),
             }
@@ -1944,8 +1948,29 @@ mod tool_api_function_validation_tests {
             &self.model
         }
 
-        fn agena_tool_mode(&self, _model: &ModelId) -> AgenaToolMode {
+        fn agena_tool_mode_override(&self, _model: &ModelId) -> Option<AgenaToolMode> {
             self.mode
+        }
+
+        fn model_capabilities(&self, _model: &ModelId) -> agena_domain::ModelCapabilities {
+            agena_domain::ModelCapabilities {
+                tool_calling: self.support,
+                ..Default::default()
+            }
+        }
+
+        fn model_capabilities_for_adapter(
+            &self,
+            adapter_id: Option<&agena_domain::AdapterId>,
+            model: &ModelId,
+        ) -> agena_domain::ModelCapabilities {
+            let mut capabilities = self.model_capabilities(model);
+            if adapter_id.is_some()
+                && let Some(support) = self.adapter_support
+            {
+                capabilities.tool_calling = support;
+            }
+            capabilities
         }
 
         async fn list_models(&self) -> Result<Vec<Model>, crate::ProviderError> {
@@ -1993,6 +2018,89 @@ mod tool_api_function_validation_tests {
             response_format: None,
             responses_api_metadata: None,
             request_override: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn bare_runtimes_assume_tools_unless_they_explicitly_declare_unsupported() {
+        use agena_domain::CapabilitySupport;
+
+        for (support, expected_tools) in [
+            (CapabilitySupport::Unknown, 5),
+            (CapabilitySupport::Supported, 5),
+            (CapabilitySupport::Unsupported, 0),
+        ] {
+            let provider = std::sync::Arc::new(ToolModeProbeProvider {
+                mode: None,
+                support,
+                ..ToolModeProbeProvider::new(AgenaToolMode::ProviderProtocol)
+            });
+            let mut registry = crate::provider::ProviderRegistry::new();
+            registry.register_arc(provider.clone());
+            let model = ModelRef::new("tool-mode-test", "test-model");
+            let mut request = tool_mode_probe_request();
+            request.tool_api_functions = all_tool_api_definitions();
+            registry.complete(&model, request.clone()).await.unwrap();
+            let mut events = registry.complete_stream(&model, request).await.unwrap();
+            while let Some(event) = events.next().await {
+                event.unwrap();
+            }
+            let recorded = provider.requests.lock().unwrap();
+            assert_eq!(recorded.len(), 2);
+            for request in recorded.iter() {
+                assert_eq!(
+                    request.tool_api_functions.len(),
+                    expected_tools,
+                    "{support:?}"
+                );
+                assert_eq!(
+                    request
+                        .system
+                        .as_deref()
+                        .unwrap()
+                        .contains("Agena tools are disabled"),
+                    support == CapabilitySupport::Unsupported,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adapter_tool_declarations_respect_explicit_user_overrides() {
+        use agena_domain::CapabilitySupport;
+        let model = ModelId::new("test-model");
+        let adapter = agena_domain::AdapterId::new("adapter");
+        for (mode, support, expected) in [
+            (
+                None,
+                CapabilitySupport::Unknown,
+                AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                None,
+                CapabilitySupport::Unsupported,
+                AgenaToolMode::Disabled,
+            ),
+            (
+                Some(AgenaToolMode::ProviderProtocol),
+                CapabilitySupport::Unsupported,
+                AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                Some(AgenaToolMode::Disabled),
+                CapabilitySupport::Supported,
+                AgenaToolMode::Disabled,
+            ),
+        ] {
+            let provider = ToolModeProbeProvider {
+                mode,
+                adapter_support: Some(support),
+                ..ToolModeProbeProvider::new(AgenaToolMode::ProviderProtocol)
+            };
+            assert_eq!(
+                provider.agena_tool_mode_for_adapter(Some(&adapter), &model),
+                expected
+            );
         }
     }
 

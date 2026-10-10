@@ -63,7 +63,7 @@ pub fn prepare_disabled_tool_request(request: &mut CompletionRequest) {
     // The shared identity can mention tools even on a route that explicitly
     // disables them. Without a matching availability instruction, reasoning
     // models can print their internal call syntax (for example DSML) as text.
-    const DISABLED_TOOLS_INSTRUCTION: &str = "# Tool availability for this request\n\nAgena tools are disabled for this model route. No Tool API functions are available. Do not attempt tool calls or write tool-call markup as your answer. Respond using the conversation and any supplied historical results. If the task requires a tool, explain that tools are disabled for the selected model.";
+    const DISABLED_TOOLS_INSTRUCTION: &str = "# Tool availability for this request\n\nAgena tools are disabled for this request. No Tool API functions are available. Do not attempt tool calls or write tool-call markup as your answer. Respond using the conversation and any supplied historical results. If the task requires a tool, explain that tools are unavailable for this request.";
     let system = request.system.get_or_insert_with(String::new);
     if !system.contains(DISABLED_TOOLS_INSTRUCTION) {
         if !system.is_empty() {

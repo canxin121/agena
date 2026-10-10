@@ -12,6 +12,7 @@ import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
 import { mutateModelConfiguration } from '@/lib/modelConfigurationApi'
+import { effectiveProviderToolMode } from '@/lib/providerToolMode'
 import { confirmAction } from '@/lib/appConfirm'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
@@ -1628,7 +1629,13 @@ function modelCapabilityValue(key: 'features' | 'input'): { supported: string[];
 
 function modelFieldValue(key: string): string {
   if (key === 'model_id') return editingModel.value?.modelId || ''
-  if (key === 'agena_tools.mode' && modelPathValue(key) === undefined) return 'provider_protocol'
+  if (key === 'agena_tools.mode' && modelPathValue(key) === undefined) {
+    const editing = editingModel.value
+    const model = adapterModels.value
+      .find((adapter) => adapter.adapter_id === editing?.adapterId)
+      ?.models.find((candidate) => candidate.id === editing?.modelId)
+    return effectiveProviderToolMode(modelValue.value, model?.capabilities?.tool_calling)
+  }
   if (key === 'features' || key === 'input') return modelCapabilityValue(key).supported.join(', ')
   if (key === 'thinking_modes' || key === 'speed_modes') {
     const value = modelPathValue(key)

@@ -3057,6 +3057,39 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
 }
 
 #[tokio::test]
+async fn unresolved_usage_model_still_budgets_tool_api_declarations() {
+    let manager = manager_with_tool_search_fixture(Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("model"),
+        deltas: Vec::new(),
+        thinking_deltas: Vec::new(),
+        finish_reason: None,
+    }))
+    .await;
+    let mut session = create(&manager, "usage without a resolved model").await;
+    session.runtime.set_model_override(
+        Some("missing-provider".to_owned()),
+        None,
+        Some("model".to_owned()),
+    );
+    let usage = manager.session_usage_async(&session).await.unwrap();
+    let without_tools = crate::session::prompt_window::approximate_session_request_tokens(
+        &session,
+        None,
+        None,
+        None,
+        false,
+        Some(&crate::identity::system_prompt()),
+        &[],
+        None,
+    );
+    assert!(
+        usage.current_tokens > without_tools,
+        "unresolved usage must retain Tool API schema overhead"
+    );
+}
+
+#[tokio::test]
 async fn processor_run_turn_streams_parts_through_the_facade_once() {
     // Model deltas update only the independent source, regardless of token count.
     let tokens: Vec<String> = (0..25).map(|i| format!("tok{i} ")).collect();

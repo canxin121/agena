@@ -140,11 +140,36 @@ impl ModelRuntime for CatalogedModelsProvider {
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
         fn provider_native_tools_config / provider_native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
+        fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
     }
 
     impl_model_runtime_target_methods! {
         fn native_compaction_enabled / native_compaction_enabled_for_adapter (&self, model: &ModelId) -> bool;
-        fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
+        fn agena_tool_mode_override / agena_tool_mode_override_for_adapter (&self, model: &ModelId) -> Option<AgenaToolMode>;
+    }
+
+    fn agena_tool_mode_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> AgenaToolMode {
+        if let Some(mode) = self
+            .target
+            .agena_tool_mode_override_for_adapter(adapter_id, model)
+        {
+            return mode;
+        }
+        let inherited = self.target.agena_tool_mode_for_adapter(adapter_id, model);
+        if inherited.is_disabled() {
+            return inherited;
+        }
+        self.using_configured_definition(model, inherited, |inherited, definition| {
+            definition
+                .capabilities
+                .feature_support(agena_provider::ModelCapabilityFeature::ToolCalling)
+                .map(|support| AgenaToolMode::from_tool_calling_support(Some(support)))
+                .unwrap_or(inherited)
+        })
     }
 
     fn validate_media_inputs_for_adapter(
@@ -246,6 +271,13 @@ impl ModelRuntime for CatalogedModelsProvider {
     ) -> Option<PromptCacheShape> {
         self.target
             .prompt_cache_shape_for_adapter(adapter_id, model)
+            .map(|mut shape| {
+                shape.insert_string(
+                    "agena.tools.mode",
+                    self.agena_tool_mode_for_adapter(adapter_id, model).as_str(),
+                );
+                shape
+            })
     }
 
     fn provider_native_tools_config_for_adapter(
@@ -462,6 +494,110 @@ mod tests {
         assert_eq!(metadata.limits.context_window_tokens, Some(1_000_000));
         assert_eq!(metadata.limits.max_input_tokens, Some(1_000_000));
         assert_eq!(metadata.limits.max_output_tokens, Some(384_000));
+    }
+
+    struct CapabilityToolModeRuntime {
+        model: ModelId,
+        support: CapabilitySupport,
+        mode: Option<AgenaToolMode>,
+    }
+
+    #[async_trait]
+    impl ModelRuntime for CapabilityToolModeRuntime {
+        fn id(&self) -> &str {
+            "capability-test"
+        }
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+        fn model_capabilities(&self, _model: &ModelId) -> ModelCapabilities {
+            ModelCapabilities {
+                tool_calling: self.support,
+                ..Default::default()
+            }
+        }
+        fn agena_tool_mode_override(&self, _model: &ModelId) -> Option<AgenaToolMode> {
+            self.mode
+        }
+        fn prompt_cache_shape(&self, _model: &ModelId) -> Option<PromptCacheShape> {
+            let mut shape = PromptCacheShape::default();
+            shape.insert_string("agena.tools.mode", self.mode.unwrap_or_default().as_str());
+            Some(shape)
+        }
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            unreachable!("metadata test does not complete")
+        }
+    }
+
+    #[test]
+    fn catalog_tool_declarations_apply_only_to_inherited_modes_and_update_cache_shape() {
+        for (mode, support, definition, expected) in [
+            (
+                None,
+                CapabilitySupport::Unknown,
+                serde_json::json!({}),
+                AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                None,
+                CapabilitySupport::Supported,
+                serde_json::json!({"features": {"unsupported": ["tool_calling"]}}),
+                AgenaToolMode::Disabled,
+            ),
+            (
+                None,
+                CapabilitySupport::Unsupported,
+                serde_json::json!({}),
+                AgenaToolMode::Disabled,
+            ),
+            (
+                Some(AgenaToolMode::ProviderProtocol),
+                CapabilitySupport::Unsupported,
+                serde_json::json!({"features": {"unsupported": ["tool_calling"]}}),
+                AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                Some(AgenaToolMode::Disabled),
+                CapabilitySupport::Supported,
+                serde_json::json!({"features": ["tool_calling"]}),
+                AgenaToolMode::Disabled,
+            ),
+        ] {
+            let model = ModelId::new("model");
+            let target = Arc::new(CapabilityToolModeRuntime {
+                model: model.clone(),
+                support,
+                mode,
+            });
+            let provider = CatalogedModelsProvider::new(
+                target,
+                ProviderModelCatalog {
+                    models: [(
+                        model.to_string(),
+                        serde_json::from_value(definition).unwrap(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    appendable_model_ids: Default::default(),
+                },
+            );
+            assert_eq!(provider.agena_tool_mode(&model), expected);
+            assert_eq!(
+                provider.agena_tool_mode_for_adapter(Some(&AdapterId::new("adapter")), &model),
+                expected
+            );
+            let shape = provider.prompt_cache_shape(&model).unwrap();
+            assert_eq!(
+                shape.fields.get("agena.tools.mode").map(String::as_str),
+                Some(expected.as_str())
+            );
+        }
     }
 
     struct ToolModeRuntime {

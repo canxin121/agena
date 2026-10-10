@@ -122,8 +122,26 @@ pub trait ModelRuntime: Send + Sync {
     }
 
     fn agena_tool_mode(&self, model: &ModelId) -> AgenaToolMode {
-        let _ = model;
-        AgenaToolMode::Disabled
+        self.agena_tool_mode_override(model).unwrap_or_else(|| {
+            AgenaToolMode::from_tool_calling_support(Some(
+                self.model_capabilities(model).tool_calling,
+            ))
+        })
+    }
+
+    /// Explicit route settings or capability declarations. Returning `None`
+    /// lets catalog metadata participate without treating a default as a
+    /// user-selected override.
+    fn agena_tool_mode_override(&self, _model: &ModelId) -> Option<AgenaToolMode> {
+        None
+    }
+
+    fn agena_tool_mode_override_for_adapter(
+        &self,
+        _adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<AgenaToolMode> {
+        self.agena_tool_mode_override(model)
     }
 
     fn agena_tool_mode_for_adapter(
@@ -131,8 +149,17 @@ pub trait ModelRuntime: Send + Sync {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> AgenaToolMode {
-        let _ = adapter_id;
-        self.agena_tool_mode(model)
+        if let Some(mode) = self.agena_tool_mode_override_for_adapter(adapter_id, model) {
+            return mode;
+        }
+        let inherited = self.agena_tool_mode(model);
+        if inherited.is_disabled() {
+            return inherited;
+        }
+        AgenaToolMode::from_tool_calling_support(Some(
+            self.model_capabilities_for_adapter(adapter_id, model)
+                .tool_calling,
+        ))
     }
 
     /// Whether this model route is allowed to attempt provider-native

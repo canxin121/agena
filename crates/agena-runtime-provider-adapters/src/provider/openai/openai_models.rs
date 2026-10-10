@@ -425,6 +425,22 @@ mod tests {
     use super::{OpenAiCodexModel, OpenAiCodexReasoningLevel};
 
     #[test]
+    fn missing_or_false_parallel_tool_support_does_not_disable_tool_calling() {
+        for flag in [None, Some(false), Some(true)] {
+            let value = flag.map_or_else(
+                || serde_json::json!({}),
+                |flag| serde_json::json!({"supports_parallel_tool_calls": flag}),
+            );
+            let model: OpenAiCodexModel = serde_json::from_value(value).unwrap();
+            let support = model.capabilities().tool_calling;
+            assert_eq!(
+                agena_provider::AgenaToolMode::from_tool_calling_support(Some(support)),
+                agena_provider::AgenaToolMode::ProviderProtocol
+            );
+        }
+    }
+
+    #[test]
     fn codex_default_reasoning_level_marks_the_matching_mode() {
         let model = OpenAiCodexModel {
             default_reasoning_level: Some("medium".to_owned()),

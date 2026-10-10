@@ -418,7 +418,7 @@ impl SessionManager {
         let agena_tool_mode = options
             .as_ref()
             .and_then(|options| state.provider_registry.agena_tool_mode(&options.model).ok())
-            .unwrap_or(agena_provider::AgenaToolMode::Disabled);
+            .unwrap_or_default();
         let tool_api_functions = if agena_tool_mode.is_disabled() {
             Vec::new()
         } else {

@@ -495,19 +495,15 @@ pub fn provider_model_overlay_from_definition(
 ) -> ResolvedProviderModelConfig {
     // Live gateways and new model IDs often have no tool capability metadata.
     // Only an explicitly unsupported capability disables a generated route.
-    let mode = if definition
-        .capabilities
-        .feature_support(crate::ModelCapabilityFeature::ToolCalling)
-        == Some(agena_domain::CapabilitySupport::Unsupported)
-    {
-        crate::AgenaToolMode::Disabled
-    } else {
-        crate::AgenaToolMode::default()
-    };
+    let agena_tools = crate::AgenaToolsConfig::from_tool_calling_support(
+        definition
+            .capabilities
+            .feature_support(crate::ModelCapabilityFeature::ToolCalling),
+    );
     ResolvedProviderModelConfig {
         enabled: true,
         native_compaction: true,
-        agena_tools: crate::AgenaToolsConfig { mode },
+        agena_tools,
         definition,
     }
 }

@@ -189,3 +189,38 @@ fn support_bool(value: Option<bool>) -> CapabilitySupport {
 fn clamp_u64_to_u32(value: u64) -> u32 {
     value.min(u32::MAX as u64) as u32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_tool_flags_are_unknown_and_only_false_is_explicitly_unsupported() {
+        for (value, expected) in [
+            (
+                serde_json::json!({}),
+                crate::AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                serde_json::json!({"capabilities": {"supports": {}}}),
+                crate::AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                serde_json::json!({"capabilities": {"supports": {"tool_calls": true}}}),
+                crate::AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                serde_json::json!({"capabilities": {"supports": {"tool_calls": false}}}),
+                crate::AgenaToolMode::Disabled,
+            ),
+        ] {
+            let model: CopilotModelExtension = serde_json::from_value(value).unwrap();
+            assert_eq!(
+                crate::AgenaToolMode::from_tool_calling_support(Some(
+                    model.capabilities().tool_calling
+                )),
+                expected
+            );
+        }
+    }
+}

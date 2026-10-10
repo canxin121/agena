@@ -19,7 +19,7 @@ pub struct ResolvedProviderModelConfig {
     #[serde(skip_serializing_if = "is_true")]
     pub native_compaction: bool,
     /// Transport mode for the fixed five-function Agena Tool API.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "AgenaToolsConfig::is_inherited")]
     pub agena_tools: AgenaToolsConfig,
     #[serde(flatten)]
     pub definition: ConfiguredModelDefinition,
@@ -80,12 +80,19 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             .transpose()
             .map_err(D::Error::custom)?
             .unwrap_or(true);
-        let agena_tools = match fields.remove("agena_tools") {
+        let mut agena_tools: AgenaToolsConfig = match fields.remove("agena_tools") {
             Some(value) => serde_json::from_value(value).map_err(D::Error::custom)?,
             None => AgenaToolsConfig::default(),
         };
-        let definition =
+        let definition: ConfiguredModelDefinition =
             serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
+        if agena_tools.is_inherited() {
+            agena_tools = AgenaToolsConfig::from_tool_calling_support(
+                definition
+                    .capabilities
+                    .feature_support(crate::ModelCapabilityFeature::ToolCalling),
+            );
+        }
         Ok(Self {
             enabled,
             native_compaction,
@@ -116,16 +123,12 @@ mod tests {
     use crate::AgenaToolMode;
 
     #[test]
-    fn a_bare_model_route_exposes_tools_and_an_explicit_disabled_route_stays_disabled() {
+    fn inherited_routes_assume_tools_and_preserve_inheritance_on_save() {
         for value in [
             serde_json::json!({}),
             serde_json::json!({"agena_tools": {}}),
             serde_json::json!({"features": ["tool_calling"]}),
-            serde_json::json!({"features": {"unsupported": ["tool_calling"]}}),
-            serde_json::json!({
-                "agena_tools": {"mode": "provider_protocol"},
-                "features": {"unsupported": ["tool_calling"]},
-            }),
+            serde_json::json!({"features": ["streaming"]}),
         ] {
             let default: ResolvedProviderModelConfig = serde_json::from_value(value).unwrap();
             assert_eq!(default.agena_tools.mode, AgenaToolMode::ProviderProtocol);
@@ -133,10 +136,28 @@ mod tests {
                 ResolvedProviderModelConfig::default().agena_tools,
                 default.agena_tools
             );
-            let reloaded: ResolvedProviderModelConfig =
-                serde_json::from_value(serde_json::to_value(default).unwrap()).unwrap();
+            let saved = serde_json::to_value(default).unwrap();
+            assert!(saved.get("agena_tools").is_none());
+            let reloaded: ResolvedProviderModelConfig = serde_json::from_value(saved).unwrap();
             assert_eq!(reloaded.agena_tools.mode, AgenaToolMode::ProviderProtocol);
+            assert!(reloaded.agena_tools.is_inherited());
         }
+    }
+
+    #[test]
+    fn explicit_negative_capability_disables_an_inherited_route() {
+        let value = serde_json::json!({"features": {"unsupported": ["tool_calling"]}});
+        let config: ResolvedProviderModelConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(config.agena_tools.mode, AgenaToolMode::Disabled);
+        assert!(config.agena_tools.is_inherited());
+        let saved = serde_json::to_value(config).unwrap();
+        assert_eq!(saved, value);
+        let reloaded: ResolvedProviderModelConfig = serde_json::from_value(saved).unwrap();
+        assert_eq!(reloaded.agena_tools.mode, AgenaToolMode::Disabled);
+    }
+
+    #[test]
+    fn explicit_user_mode_wins_over_capability_metadata_and_round_trips() {
         let disabled: ResolvedProviderModelConfig = serde_json::from_value(serde_json::json!({
             "agena_tools": {"mode": "disabled"},
             "features": ["tool_calling"],
@@ -147,5 +168,34 @@ mod tests {
             serde_json::to_value(disabled).unwrap()["agena_tools"]["mode"],
             "disabled"
         );
+        let enabled: ResolvedProviderModelConfig = serde_json::from_value(serde_json::json!({
+            "agena_tools": {"mode": "provider_protocol"},
+            "features": {"unsupported": ["tool_calling"]},
+        }))
+        .unwrap();
+        assert_eq!(enabled.agena_tools.mode, AgenaToolMode::ProviderProtocol);
+        assert_eq!(
+            enabled.agena_tools.configured_mode(),
+            Some(AgenaToolMode::ProviderProtocol)
+        );
+        let reloaded: ResolvedProviderModelConfig =
+            serde_json::from_value(serde_json::to_value(enabled.clone()).unwrap()).unwrap();
+        assert_eq!(reloaded, enabled);
+    }
+
+    #[test]
+    fn invalid_explicit_tool_modes_are_errors_instead_of_inherited_defaults() {
+        for tools in [
+            serde_json::json!({"mode": null}),
+            serde_json::json!({"mode": "unknown"}),
+            serde_json::json!({"mod": "disabled"}),
+        ] {
+            assert!(
+                serde_json::from_value::<ResolvedProviderModelConfig>(
+                    serde_json::json!({"agena_tools": tools})
+                )
+                .is_err()
+            );
+        }
     }
 }

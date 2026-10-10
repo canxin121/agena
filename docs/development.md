@@ -57,8 +57,19 @@ directories, and do not modify the parent process's environment.
 
 Model routes default to `agena_tools.mode = "provider_protocol"`, including a
 bare `{}` model configuration. An explicit `"disabled"` setting is preserved
-when configuration is saved. Capability metadata does not override the mode
-while loading a saved route or preparing a request.
+when configuration is saved. Missing or unknown capability metadata always
+assumes tool support, including bare runtimes, unresolved route metadata and
+session usage estimates. Only an explicit unsupported tool-calling declaration
+disables an inherited mode. A user-selected mode takes precedence over both
+configured and catalog capabilities.
+
+Inherited modes stay inherited when configuration is saved: loading `{}` and
+editing another field does not insert an explicit `provider_protocol` override.
+Web and TUI model editors display the effective inherited mode without pinning
+it until the user selects a mode. Raw `unknown` capability metadata still
+expresses uncertainty; it never means tools are unavailable. Request-scoped
+tool restrictions, such as the internal compaction summarizer, remain separate
+from model support.
 
 When Provider Studio generates a new route from catalog or discovery metadata,
 supported and unknown tool-calling capabilities use `provider_protocol`; only

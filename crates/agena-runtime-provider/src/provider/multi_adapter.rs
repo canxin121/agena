@@ -31,7 +31,8 @@ use agena_provider::{
 pub struct ProviderModelRoute {
     pub enabled: bool,
     pub native_compaction: bool,
-    pub agena_tool_mode: AgenaToolMode,
+    /// `None` inherits tool support instead of declaring an explicit mode.
+    pub agena_tool_mode: Option<AgenaToolMode>,
     pub provider_native_tools: ProviderNativeToolsConfig,
     pub definition: ConfiguredModelDefinition,
 }
@@ -113,20 +114,28 @@ impl MultiAdapterProvider {
                     self.id, model
                 )));
             }
+            let agena_tool_mode = self
+                .agena_tool_mode_override_for_adapter(Some(&adapter_id), model)
+                .unwrap_or(
+                    self.adapter(adapter_id.as_ref())?
+                        .agena_tool_mode(&target_model),
+                );
             return Ok((
                 adapter_id,
                 target_model,
-                route.agena_tool_mode,
+                agena_tool_mode,
                 route.provider_native_tools.clone(),
                 route.definition.clone(),
             ));
         }
 
-        self.adapter(adapter_id.as_ref())?;
+        let adapter_mode = self
+            .adapter(adapter_id.as_ref())?
+            .agena_tool_mode(&target_model);
         Ok((
             adapter_id,
             target_model,
-            AgenaToolMode::default(),
+            adapter_mode,
             ProviderNativeToolsConfig::default(),
             ConfiguredModelDefinition::default(),
         ))
@@ -281,6 +290,7 @@ impl ModelRuntime for MultiAdapterProvider {
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
         fn provider_native_tools_config / provider_native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
+        fn agena_tool_mode_override / agena_tool_mode_override_for_adapter (&self, model: &ModelId) -> Option<AgenaToolMode>;
     }
 
     fn model_capabilities_for_adapter(
@@ -399,7 +409,29 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> AgenaToolMode {
         self.resolve_route(adapter_id, model)
             .map(|(_, _, mode, _, _)| mode)
-            .unwrap_or(AgenaToolMode::Disabled)
+            .unwrap_or_else(|_| {
+                self.agena_tool_mode_override_for_adapter(adapter_id, model)
+                    .unwrap_or_default()
+            })
+    }
+
+    fn agena_tool_mode_override_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<AgenaToolMode> {
+        let adapter_id = self.selected_adapter(adapter_id, model);
+        self.routes
+            .get(&(adapter_id.to_string(), model.to_string()))
+            .and_then(|route| {
+                route.agena_tool_mode.or_else(|| {
+                    route
+                        .definition
+                        .capabilities
+                        .feature_support(agena_provider::ModelCapabilityFeature::ToolCalling)
+                        .map(|support| AgenaToolMode::from_tool_calling_support(Some(support)))
+                })
+            })
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -789,6 +821,7 @@ mod tests {
     use agena_provider::{CompletionFinishReason, CompletionToolCall};
     use agena_runtime_tools::tool::ToolApiBinding;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+    use futures_util::StreamExt;
 
     struct ProviderNativePromptAdapter {
         model: ModelId,
@@ -1063,7 +1096,7 @@ mod tests {
             ProviderModelRoute {
                 enabled: true,
                 native_compaction: true,
-                agena_tool_mode: mode,
+                agena_tool_mode: Some(mode),
                 provider_native_tools,
                 definition: Default::default(),
             },
@@ -1092,7 +1125,7 @@ mod tests {
                 ProviderModelRoute {
                     enabled: true,
                     native_compaction,
-                    agena_tool_mode: AgenaToolMode::Disabled,
+                    agena_tool_mode: Some(AgenaToolMode::Disabled),
                     provider_native_tools: Default::default(),
                     definition: Default::default(),
                 },
@@ -1211,6 +1244,131 @@ mod tests {
             .expect("adapter image request");
         assert_eq!(recorded.options.size.as_deref(), Some("1024x1024"));
         assert_eq!(recorded.options.quality.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn route_resolution_failures_keep_optimistic_metadata_without_masking_errors() {
+        for mode in [None, Some(AgenaToolMode::Disabled)] {
+            let provider = MultiAdapterProvider::new(
+                "provider",
+                "missing-adapter",
+                "model",
+                BTreeMap::new(),
+                BTreeMap::from([(
+                    ("missing-adapter".to_owned(), "model".to_owned()),
+                    ProviderModelRoute {
+                        enabled: false,
+                        native_compaction: true,
+                        agena_tool_mode: mode,
+                        provider_native_tools: Default::default(),
+                        definition: Default::default(),
+                    },
+                )]),
+                BTreeSet::new(),
+            );
+            assert_eq!(
+                provider.agena_tool_mode(&ModelId::new("model")),
+                mode.unwrap_or_default()
+            );
+            assert!(
+                provider
+                    .resolve_route(None, &ModelId::new("model"))
+                    .is_err()
+            );
+            assert_eq!(
+                provider.agena_tool_mode(&ModelId::new("unconfigured")),
+                AgenaToolMode::ProviderProtocol
+            );
+            assert!(
+                provider
+                    .resolve_route(None, &ModelId::new("unconfigured"))
+                    .is_err()
+            );
+            assert!(provider.complete(request()).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn inherited_routes_keep_tools_and_explicit_settings_override_capabilities() {
+        for (mode, definition, expected) in [
+            (None, serde_json::json!({}), AgenaToolMode::ProviderProtocol),
+            (
+                None,
+                serde_json::json!({"features": {"unsupported": ["tool_calling"]}}),
+                AgenaToolMode::Disabled,
+            ),
+            (
+                Some(AgenaToolMode::ProviderProtocol),
+                serde_json::json!({"features": {"unsupported": ["tool_calling"]}}),
+                AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                Some(AgenaToolMode::Disabled),
+                serde_json::json!({"features": ["tool_calling"]}),
+                AgenaToolMode::Disabled,
+            ),
+        ] {
+            let adapter = Arc::new(RecordingAdapter {
+                model: ModelId::new("model"),
+                request: Mutex::new(None),
+                compact_calls: AtomicUsize::new(0),
+            });
+            let provider = MultiAdapterProvider::new(
+                "provider",
+                "adapter",
+                "model",
+                BTreeMap::from([(
+                    "adapter".to_owned(),
+                    adapter.clone() as Arc<dyn ModelRuntime>,
+                )]),
+                BTreeMap::from([(
+                    ("adapter".to_owned(), "model".to_owned()),
+                    ProviderModelRoute {
+                        enabled: true,
+                        native_compaction: true,
+                        agena_tool_mode: mode,
+                        provider_native_tools: Default::default(),
+                        definition: serde_json::from_value(definition).unwrap(),
+                    },
+                )]),
+                BTreeSet::new(),
+            );
+            assert_eq!(provider.agena_tool_mode(&ModelId::new("model")), expected);
+            assert_eq!(
+                provider.agena_tool_mode(&ModelId::new("unlisted")),
+                AgenaToolMode::ProviderProtocol
+            );
+            let mut registry = crate::provider::ProviderRegistry::new();
+            registry.register_arc(Arc::new(provider));
+            let model = agena_domain::ModelRef::new("provider", "model");
+            registry.complete(&model, request()).await.unwrap();
+            assert_eq!(
+                adapter
+                    .request
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .tool_api_functions
+                    .is_empty(),
+                expected.is_disabled()
+            );
+            let mut stream = registry.complete_stream(&model, request()).await.unwrap();
+            while let Some(event) = stream.next().await {
+                event.unwrap();
+            }
+            assert_eq!(
+                adapter
+                    .request
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .tool_api_functions
+                    .is_empty(),
+                expected.is_disabled()
+            );
+        }
     }
 
     #[test]

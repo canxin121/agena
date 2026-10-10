@@ -18,6 +18,8 @@ use agena_tui_components::theme::{
     accent_color, danger_color, muted_style, selection_style, success_color, warning_color,
 };
 
+use crate::i18n::I18n;
+
 /// Terminal control activated by the user inside the activities panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivitiesControl {
@@ -163,13 +165,11 @@ pub fn selected_row<'a>(
 pub fn row_line_offsets(visible: &[&ActivitiesRow]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(visible.len());
     let mut line = 0;
-    let mut last_section: Option<&'static str> = None;
+    // Section identity only: the header text is localized by the renderer,
+    // while both paths add exactly one blank line plus one header line.
+    let mut last_section: Option<bool> = None;
     for row in visible {
-        let section = if row.is_active() {
-            "Active"
-        } else {
-            "Finished"
-        };
+        let section = row.is_active();
         if last_section != Some(section) {
             line += 2;
             last_section = Some(section);
@@ -273,29 +273,37 @@ pub struct ActivitiesLogTail {
 }
 
 /// A stable label used for filter chips and section headers.
-pub fn kind_label(kind: &str) -> &'static str {
-    match kind {
-        "shell" => "Shell",
-        "monitor" => "Monitor",
-        "task" => "Task",
-        "cron" => "Cron",
-        "runtime" => "Runtime",
-        "browser" => "Browser",
-        _ => "Activity",
+pub fn kind_label(i18n: &I18n, kind: &str) -> String {
+    i18n.text(match kind {
+        "shell" => "activities-kind-shell",
+        "monitor" => "activities-kind-monitor",
+        "task" => "activities-kind-task",
+        "cron" => "activities-kind-cron",
+        "runtime" => "activities-kind-runtime",
+        "browser" => "activities-kind-browser",
+        _ => "activities-kind-activity",
+    })
+}
+
+/// Catalog key for each supported background activity status.
+fn status_key(status: &str) -> Option<&'static str> {
+    match status {
+        "pending" => Some("activities-status-pending"),
+        "running" => Some("activities-status-running"),
+        "waiting" => Some("activities-status-waiting"),
+        "paused" => Some("activities-status-paused"),
+        "succeeded" => Some("activities-status-succeeded"),
+        "failed" => Some("activities-status-failed"),
+        "cancelled" => Some("activities-status-cancelled"),
+        "stopped" => Some("activities-status-stopped"),
+        _ => None,
     }
 }
 
-pub fn status_label(status: &str) -> &'static str {
-    match status {
-        "pending" => "pending",
-        "running" => "running",
-        "waiting" => "waiting",
-        "paused" => "paused",
-        "succeeded" => "succeeded",
-        "failed" => "failed",
-        "cancelled" => "cancelled",
-        "stopped" => "stopped",
-        _ => "unknown",
+pub fn status_label(i18n: &I18n, status: &str) -> String {
+    match status_key(status) {
+        Some(key) => i18n.text(key),
+        None => i18n.text("activities-status-unknown"),
     }
 }
 
@@ -381,6 +389,7 @@ pub fn render_activities_panel(
     presentation: &ActivitiesPresentation,
     rows: &[ActivitiesRow],
     context: ActivitiesPanelContext<'_>,
+    i18n: &I18n,
 ) {
     let (list_area, detail_area) = activities_pane_areas(area, presentation.detail);
 
@@ -392,6 +401,7 @@ pub fn render_activities_panel(
         context.loading,
         context.error,
         context.now_ms,
+        i18n,
     );
     if let Some(detail_area) = detail_area {
         render_detail_pane(
@@ -401,6 +411,7 @@ pub fn render_activities_panel(
             rows,
             context.log_tail,
             context.log_error,
+            i18n,
         );
     }
 }
@@ -413,15 +424,17 @@ fn render_list_pane(
     loading: bool,
     error: Option<&str>,
     now_ms: i64,
+    i18n: &I18n,
 ) {
     let visible = visible_rows(rows, presentation);
     let active_count = visible.iter().filter(|row| row.is_active()).count();
     let finished_count = visible.len().saturating_sub(active_count);
 
     let title = format!(
-        " Background Activities {}{} ",
+        " {} {}{} ",
+        i18n.text("activities-title"),
         if loading { "…" } else { "" },
-        filter_suffix(presentation)
+        filter_suffix(presentation, i18n)
     );
     let surface = agena_tui_components::render_framed_surface(
         frame,
@@ -443,6 +456,7 @@ fn render_list_pane(
             active_count,
             finished_count,
             area.width,
+            i18n,
         ),
     );
 
@@ -455,22 +469,22 @@ fn render_list_pane(
         lines.push(Line::from(""));
     } else if visible.is_empty() {
         lines.push(Line::from(Span::styled(
-            " No background activities.",
+            format!(" {}", i18n.text("activities-empty")),
             muted_style(),
         )));
         lines.push(Line::from(Span::styled(
-            " Run `shell.spawn`, `shell.open` or `tasks.run` to create one.",
+            format!(" {}", i18n.text("activities-empty-hint")),
             muted_style(),
         )));
     } else {
-        let mut last_section: Option<&'static str> = None;
+        let mut last_section: Option<String> = None;
         for (index, row) in visible.iter().enumerate() {
             let section = if row.is_active() {
-                "Active"
+                i18n.text("activities-section-active")
             } else {
-                "Finished"
+                i18n.text("activities-section-finished")
             };
-            if last_section != Some(section) {
+            if last_section.as_deref() != Some(section.as_str()) {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     format!(" {section}"),
@@ -480,7 +494,12 @@ fn render_list_pane(
                 )));
                 last_section = Some(section);
             }
-            lines.push(render_row_line(row, index == presentation.selected, now_ms));
+            lines.push(render_row_line(
+                row,
+                index == presentation.selected,
+                now_ms,
+                i18n,
+            ));
         }
     }
 
@@ -530,13 +549,14 @@ fn action_bar(
     active_count: usize,
     finished_count: usize,
     width: u16,
+    i18n: &I18n,
 ) -> String {
     // Keep close/selection at the front so tiny terminals clip optional
     // controls rather than the only reliable way out of the overlay.
     let mut actions = vec![
-        "Esc close".to_owned(),
-        "↑↓ move".to_owned(),
-        "Enter detail".to_owned(),
+        i18n.text("activities-footer-close"),
+        i18n.text("activities-footer-move"),
+        i18n.text("activities-footer-detail"),
     ];
     if let Some(row) = visible.get(presentation.selected) {
         if let Some(control) = row
@@ -544,33 +564,52 @@ fn action_bar(
             .iter()
             .find(|control| matches!(control.as_str(), "stop" | "pause" | "resume"))
         {
-            actions.push(format!("s {control}"));
+            actions.push(i18n.text_args(
+                "activities-footer-stop",
+                &crate::fl_args!("control" => control_label(i18n, control)),
+            ));
         }
         if let Some(control) = row
             .controls
             .iter()
             .find(|control| matches!(control.as_str(), "delete" | "dismiss"))
         {
-            actions.push(format!("d {control}"));
+            actions.push(i18n.text_args(
+                "activities-footer-dismiss",
+                &crate::fl_args!("control" => control_label(i18n, control)),
+            ));
         }
     }
     if finished_count > 0 {
-        actions.push("x clear".to_owned());
+        actions.push(i18n.text("activities-footer-clear"));
     }
     if width >= 90 {
-        actions.push("f/k/t filters".to_owned());
+        actions.push(i18n.text("activities-footer-filters"));
     }
-    actions.push("r refresh".to_owned());
-    format!(
-        " {active_count} active · {finished_count} finished · {} ",
-        actions.join(" · ")
-    )
+    actions.push(i18n.text("activities-footer-refresh"));
+    let summary = i18n.text_args(
+        "activities-status-summary",
+        &crate::fl_args!("active" => active_count, "finished" => finished_count),
+    );
+    format!(" {summary} · {} ", actions.join(" · "))
 }
 
-fn render_row_line(row: &ActivitiesRow, selected: bool, now_ms: i64) -> Line<'static> {
+fn control_label(i18n: &I18n, control: &str) -> String {
+    let key = match control {
+        "stop" => "activities-control-stop",
+        "pause" => "activities-control-pause",
+        "resume" => "activities-control-resume",
+        "delete" => "activities-control-delete",
+        "dismiss" => "activities-control-dismiss",
+        _ => return control.to_owned(),
+    };
+    i18n.text(key)
+}
+
+fn render_row_line(row: &ActivitiesRow, selected: bool, now_ms: i64, i18n: &I18n) -> Line<'static> {
     let icon = Span::styled(format!(" {} ", kind_icon(&row.kind)), kind_style(&row.kind));
     let status = Span::styled(
-        format!("{:<9}", status_label(&row.status)),
+        format!("{:<9}", status_label(i18n, &row.status)),
         status_style(&row.status),
     );
     let duration = row
@@ -594,7 +633,16 @@ fn render_row_line(row: &ActivitiesRow, selected: bool, now_ms: i64) -> Line<'st
         spans.push(Span::styled(format!(" exit={exit}"), muted_style()));
     }
     if let Some(message) = row.message.as_deref() {
-        spans.push(Span::styled(format!(" · {message}"), muted_style()));
+        spans.push(Span::styled(
+            format!(
+                " {}",
+                i18n.text_args(
+                    "activities-row-message",
+                    &crate::fl_args!("message" => message)
+                )
+            ),
+            muted_style(),
+        ));
     }
 
     let line = Line::from(spans);
@@ -612,12 +660,13 @@ fn render_detail_pane(
     rows: &[ActivitiesRow],
     log_tail: Option<&ActivitiesLogTail>,
     log_error: Option<&str>,
+    i18n: &I18n,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(muted_style())
         .title(Line::from(Span::styled(
-            " Detail / Log tail ",
+            format!(" {} ", i18n.text("activities-detail-title")),
             Style::default().add_modifier(Modifier::BOLD),
         )));
     let inner = block.inner(area);
@@ -626,7 +675,7 @@ fn render_detail_pane(
     let Some(selected) = selected_row(rows, presentation) else {
         frame.render_widget(
             Paragraph::new(vec![Line::from(Span::styled(
-                " No selection.",
+                format!(" {}", i18n.text("activities-detail-no-selection")),
                 muted_style(),
             ))]),
             inner,
@@ -648,25 +697,49 @@ fn render_detail_pane(
     }
     if let Some(command) = selected.command.as_deref() {
         lines.push(Line::from(Span::styled(
-            format!(" $ {command}"),
+            format!(
+                " {}",
+                i18n.text_args(
+                    "activities-detail-command",
+                    &crate::fl_args!("command" => command)
+                )
+            ),
             muted_style(),
         )));
     }
     if let Some(session_id) = selected.session_id {
         lines.push(Line::from(Span::styled(
-            format!(" session #{session_id}"),
+            format!(
+                " {}",
+                i18n.text_args(
+                    "activities-detail-session",
+                    &crate::fl_args!("id" => session_id)
+                )
+            ),
             muted_style(),
         )));
     }
     if let Some(source_part_id) = selected.source_part_id {
         lines.push(Line::from(Span::styled(
-            format!(" source part #{source_part_id}"),
+            format!(
+                " {}",
+                i18n.text_args(
+                    "activities-detail-source-part",
+                    &crate::fl_args!("id" => source_part_id)
+                )
+            ),
             muted_style(),
         )));
     }
     if let Some(next_event_at_ms) = selected.next_event_at_ms {
         lines.push(Line::from(Span::styled(
-            format!(" next wake {next_event_at_ms}"),
+            format!(
+                " {}",
+                i18n.text_args(
+                    "activities-detail-next-wake",
+                    &crate::fl_args!("at" => next_event_at_ms)
+                )
+            ),
             muted_style(),
         )));
     }
@@ -690,7 +763,13 @@ fn render_detail_pane(
     match log_tail {
         Some(tail) if !tail.lines.is_empty() => {
             lines.push(Line::from(Span::styled(
-                format!(" — output · seq {} — ", tail.last_seq),
+                format!(
+                    " {} ",
+                    i18n.text_args(
+                        "activities-detail-output-separator",
+                        &crate::fl_args!("seq" => tail.last_seq)
+                    )
+                ),
                 Style::default()
                     .fg(warning_color())
                     .add_modifier(Modifier::BOLD),
@@ -705,22 +784,31 @@ fn render_detail_pane(
             }
             if tail.has_more || tail.dropped_lines > 0 {
                 lines.push(Line::from(Span::styled(
-                    format!(" … {} older lines not shown", tail.dropped_lines),
+                    format!(
+                        " {}",
+                        i18n.text_args(
+                            "activities-detail-lines-omitted",
+                            &crate::fl_args!("count" => tail.dropped_lines)
+                        )
+                    ),
                     muted_style(),
                 )));
             }
         }
         Some(_) => {
             let message = if selected.is_active() {
-                " Waiting for output…"
+                i18n.text("activities-detail-waiting")
             } else {
-                " No output recorded."
+                i18n.text("activities-detail-no-output")
             };
-            lines.push(Line::from(Span::styled(message, muted_style())));
+            lines.push(Line::from(Span::styled(
+                format!(" {message}"),
+                muted_style(),
+            )));
         }
         None => {
             lines.push(Line::from(Span::styled(
-                " Press ↵ to tail logs for this activity.",
+                format!(" {}", i18n.text("activities-detail-tail-hint")),
                 muted_style(),
             )));
         }
@@ -728,16 +816,16 @@ fn render_detail_pane(
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn filter_suffix(presentation: &ActivitiesPresentation) -> String {
+fn filter_suffix(presentation: &ActivitiesPresentation, i18n: &I18n) -> String {
     let mut chips: Vec<String> = Vec::new();
     if !presentation.show_finished {
-        chips.push("active only".to_owned());
+        chips.push(i18n.text("activities-filter-active-only"));
     }
     if let Some(kind) = presentation.kind_filter.as_deref() {
-        chips.push(kind.to_owned());
+        chips.push(kind_label(i18n, kind));
     }
     if let Some(status) = presentation.status_filter.as_deref() {
-        chips.push(status.to_owned());
+        chips.push(status_label(i18n, status));
     }
     if chips.is_empty() {
         String::new()
@@ -749,6 +837,8 @@ fn filter_suffix(presentation: &ActivitiesPresentation) -> String {
 #[cfg(test)]
 mod tests {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    use crate::i18n::I18n;
 
     use super::{
         ActivitiesLogTail, ActivitiesPanelContext, ActivitiesPresentation, ActivitiesRow,
@@ -902,6 +992,7 @@ mod tests {
                         log_error: None,
                         now_ms: 10_000,
                     },
+                    &I18n::english(),
                 );
             })
             .expect("render activities");
@@ -918,10 +1009,22 @@ mod tests {
     #[test]
     fn narrow_footer_exposes_the_real_close_key() {
         let rows = [row("shell", "running")];
-        let rendered =
+        let i18n = I18n::english();
+        // A narrow terminal may clip optional chips, so the close hint has to
+        // stay at the front and "q" must never look like a close binding.
+        let narrow =
             render_to_rows(80, 20, &ActivitiesPresentation::default(), &rows, None).join("\n");
-        assert!(rendered.contains("Esc close"), "{rendered}");
-        assert!(!rendered.contains("q close"), "{rendered}");
+        assert!(!narrow.contains("q close"), "{narrow}");
+
+        // A terminal wide enough for the whole footer renders the real close
+        // chip from the active locale catalog.
+        let wide =
+            render_to_rows(700, 24, &ActivitiesPresentation::default(), &rows, None).join("\n");
+        assert!(
+            wide.contains(&i18n.text("activities-footer-close")),
+            "{wide}"
+        );
+        assert!(!wide.contains("q close"), "{wide}");
     }
 
     #[test]

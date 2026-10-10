@@ -405,10 +405,10 @@ pub fn render_content(
         let body_width = width.saturating_sub(6).max(1);
         let rows = match format {
             agena_domain::ContentFormat::Diff => {
-                crate::renderer::render_diff_document(&frame.text, body_width)
+                crate::renderer::render_diff_document_with_i18n(&frame.text, body_width, i18n)
             }
             agena_domain::ContentFormat::Markdown => {
-                crate::renderer::render_markdown_document(&frame.text, body_width)
+                crate::renderer::render_markdown_document_with_i18n(&frame.text, body_width, i18n)
             }
             _ => crate::sanitize_terminal_text(&frame.text)
                 .split('\n')

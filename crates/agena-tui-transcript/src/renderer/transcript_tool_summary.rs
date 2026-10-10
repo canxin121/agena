@@ -126,8 +126,9 @@ pub(crate) fn push_expanded_markdown(
     prefix: &str,
     text: &str,
     width: u16,
+    i18n: &I18n,
 ) {
-    push_markdown_document(out, prefix, text, width);
+    push_markdown_document(out, prefix, text, width, i18n);
 }
 
 pub(crate) fn tool_status_color(status: PartExecutionStatusResource) -> Color {
@@ -173,6 +174,7 @@ pub(crate) fn push_activity_headline(
     title: &str,
     summary: &str,
     width: u16,
+    i18n: &I18n,
 ) {
     let disclosure = if toggleable && expanded { "▾" } else { "▸" };
     let icon = activity_status_icon(status);
@@ -183,13 +185,13 @@ pub(crate) fn push_activity_headline(
 
     let title_style = Style::default().add_modifier(Modifier::BOLD);
     let summary_style = Style::default().fg(agena_tui_components::theme::muted_color());
-    let mut content_spans = markdown_inline_line(title.as_str(), title_style)
+    let mut content_spans = markdown_inline_line(title.as_str(), title_style, i18n)
         .map(|line| line.spans)
         .unwrap_or_else(|| vec![Span::styled(title.clone(), title_style)]);
     if !summary.is_empty() {
         content_spans.push(Span::styled(" · ", summary_style));
         content_spans.extend(
-            markdown_inline_line(summary.as_str(), summary_style)
+            markdown_inline_line(summary.as_str(), summary_style, i18n)
                 .map(|line| line.spans)
                 .unwrap_or_else(|| vec![Span::styled(summary.clone(), summary_style)]),
         );

@@ -1,5 +1,17 @@
 use super::*;
 
+/// Resolves the picker's own chrome through the active locale catalog.
+///
+/// The component never loads a Fluent catalog itself: the TUI passes its
+/// `I18n` through [`SearchPickerDialogSpec::with_text`] and keeps the
+/// `search-picker-*` keys translated. Callers that install no resolver keep
+/// the built-in English wording so the component stays usable on its own.
+pub trait SearchPickerText {
+    /// Looks `key` up in the active catalog. `args` carries the arguments the
+    /// message declares; plain messages pass an empty slice.
+    fn text(&self, key: &str, args: &[(&str, String)]) -> String;
+}
+
 #[derive(Debug, Clone)]
 /// View state of the search picker.
 pub enum SearchPickerViewState<'a, TItem> {
@@ -13,12 +25,13 @@ pub enum SearchPickerViewState<'a, TItem> {
 pub struct SearchPickerDialogSpec<'a> {
     loading_message: Cow<'a, str>,
     results_title: Cow<'a, str>,
-    preview_title: Cow<'a, str>,
+    preview_title: Option<Cow<'a, str>>,
     highlight_style: Style,
     highlight_symbol: Cow<'a, str>,
     checked_symbol: Cow<'a, str>,
     unchecked_symbol: Cow<'a, str>,
     search_label: Cow<'a, str>,
+    text: Option<&'a dyn SearchPickerText>,
 }
 
 impl<'a> SearchPickerDialogSpec<'a> {
@@ -26,18 +39,63 @@ impl<'a> SearchPickerDialogSpec<'a> {
         Self {
             loading_message,
             results_title,
-            preview_title: Cow::Borrowed("Preview"),
+            preview_title: None,
             highlight_style: theme::selection_style(),
             highlight_symbol: Cow::Borrowed(">> "),
             checked_symbol: Cow::Borrowed("[x] "),
             unchecked_symbol: Cow::Borrowed("[ ] "),
             search_label: Cow::Borrowed(""),
+            text: None,
         }
     }
 
     pub fn with_search_label(mut self, label: Cow<'a, str>) -> Self {
         self.search_label = label;
         self
+    }
+
+    /// Overrides the preview pane title. Without an override the title is the
+    /// `search-picker-preview-title` catalog message.
+    pub fn with_preview_title(mut self, title: Cow<'a, str>) -> Self {
+        self.preview_title = Some(title);
+        self
+    }
+
+    /// Routes the picker's own chrome through the active locale catalog. The
+    /// TUI passes its `I18n`; callers that do not localize keep the built-in
+    /// English wording.
+    pub fn with_text(mut self, text: &'a dyn SearchPickerText) -> Self {
+        self.text = Some(text);
+        self
+    }
+
+    /// Localized chrome for `key`, falling back to `english` when no catalog
+    /// is installed.
+    fn chrome(&self, key: &str, english: &str) -> String {
+        self.text
+            .map(|text| text.text(key, &[]))
+            .unwrap_or_else(|| english.to_owned())
+    }
+
+    /// Localized arg-bearing chrome. `english` uses `{name}` placeholders that
+    /// mirror the catalog argument names and is only rendered when no catalog
+    /// is installed.
+    fn chrome_args(&self, key: &str, english: &str, args: &[(&str, String)]) -> String {
+        self.text
+            .map(|text| text.text(key, args))
+            .unwrap_or_else(|| {
+                let mut rendered = english.to_owned();
+                for (name, value) in args {
+                    rendered = rendered.replace(&format!("{{{name}}}"), value);
+                }
+                rendered
+            })
+    }
+
+    fn preview_title(&self) -> Cow<'_, str> {
+        self.preview_title
+            .clone()
+            .unwrap_or_else(|| Cow::Owned(self.chrome("search-picker-preview-title", "Preview")))
     }
 }
 
@@ -108,7 +166,7 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
         area,
         SurfaceMode::Route,
         &FramedSurfaceSpec {
-            title: picker_title(picker, &normalize_text).into(),
+            title: picker_title(picker, spec, &normalize_text).into(),
             target_width: area.width,
             target_height: framed_sections_target_height(&sections),
         },
@@ -183,14 +241,17 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
                 crate::pointer::PointerAction::PickerPreview(3),
             )),
         );
-        let view_state = picker_view_state(picker, spec.loading_message.as_ref());
+        let search_failed = spec.chrome("search-picker-search-failed", "Search failed");
+        let empty_body = spec.chrome("search-picker-no-preview", "No preview available");
+        let view_state = picker_view_state(picker, spec.loading_message.as_ref(), &search_failed);
         let sections = build_preview(view_state);
         render_preview_sections(
             frame,
             preview_area,
             sections,
             picker.preview_scroll,
-            spec.preview_title.clone(),
+            spec.preview_title(),
+            empty_body,
         );
     }
     if footer_height > 0 {
@@ -222,6 +283,7 @@ pub fn search_picker_dialog_area(area: Rect) -> Rect {
 fn picker_view_state<'a, TItem, TCustom, TMeta>(
     picker: &'a SearchPicker<TItem, TCustom, TMeta, Editor>,
     loading_message: &'a str,
+    search_failed: &'a str,
 ) -> SearchPickerViewState<'a, TItem>
 where
     TItem: SearchPickerItem,
@@ -236,7 +298,7 @@ where
     } = picker.phase
     {
         SearchPickerViewState::Error {
-            message: picker.error_message.as_deref().unwrap_or("Search failed"),
+            message: picker.error_message.as_deref().unwrap_or(search_failed),
         }
     } else if let Some(item) = picker.selected_item() {
         SearchPickerViewState::Selected(item)
@@ -261,11 +323,17 @@ fn render_picker_results<TItem, TCustom, TMeta, F>(
     let page_size = area.height.saturating_sub(2).max(1) as usize;
     picker.set_visible_page_size(page_size);
     let block_title = format!(
-        " {} · {} · Page {}/{} ",
+        " {} · {} · {} ",
         normalize_text(spec.results_title.as_ref()),
         picker.result_count(),
-        picker.current_page() + 1,
-        picker.page_count(),
+        spec.chrome_args(
+            "search-picker-page",
+            "Page {current}/{total}",
+            &[
+                ("current", (picker.current_page() + 1).to_string()),
+                ("total", picker.page_count().to_string()),
+            ],
+        ),
     );
     let block = Block::default().borders(Borders::ALL).title(block_title);
     if picker.phase.hides_results() {
@@ -281,12 +349,14 @@ fn render_picker_results<TItem, TCustom, TMeta, F>(
         keep_results: false,
     } = picker.phase
     {
+        let message = picker
+            .error_message
+            .clone()
+            .unwrap_or_else(|| spec.chrome("search-picker-search-failed", "Search failed"));
         frame.render_widget(
-            Paragraph::new(normalize_text(
-                picker.error_message.as_deref().unwrap_or("Search failed"),
-            ))
-            .style(Style::default().fg(theme::danger_color()))
-            .block(block),
+            Paragraph::new(normalize_text(&message))
+                .style(Style::default().fg(theme::danger_color()))
+                .block(block),
             area,
         );
         return;
@@ -516,9 +586,10 @@ fn render_preview_sections(
     sections: Vec<PreviewSection<'static>>,
     scroll: u16,
     default_title: Cow<'_, str>,
+    empty_body: String,
 ) {
     if sections.is_empty() {
-        let empty = Text::from("No preview available");
+        let empty = Text::from(empty_body);
         render_text_panel(
             frame,
             area,
@@ -564,6 +635,7 @@ fn render_preview_sections(
 
 fn picker_title<TItem, TCustom, TMeta, F>(
     picker: &SearchPicker<TItem, TCustom, TMeta, Editor>,
+    spec: &SearchPickerDialogSpec<'_>,
     normalize_text: &F,
 ) -> String
 where
@@ -572,17 +644,21 @@ where
     F: for<'a> Fn(&'a str) -> String,
 {
     let status = match picker.phase {
-        SearchPickerPhase::Searching { .. } => "searching…".to_string(),
-        SearchPickerPhase::Appending => "loading more…".to_string(),
-        SearchPickerPhase::Error { .. } => "error".to_string(),
-        _ => format!("{} results", picker.result_count()),
+        SearchPickerPhase::Searching { .. } => spec.chrome("search-picker-searching", "searching…"),
+        SearchPickerPhase::Appending => spec.chrome("search-picker-loading-more", "loading more…"),
+        SearchPickerPhase::Error { .. } => spec.chrome("search-picker-error", "error"),
+        _ => spec.chrome_args(
+            "search-picker-results",
+            "{count} results",
+            &[("count", picker.result_count().to_string())],
+        ),
     };
     normalize_text(&format!("{} · {}", picker.title, status))
 }
 
 fn picker_footer<TItem, TCustom, TMeta, F>(
     picker: &SearchPicker<TItem, TCustom, TMeta, Editor>,
-    _spec: &SearchPickerDialogSpec<'_>,
+    spec: &SearchPickerDialogSpec<'_>,
     normalize_text: &F,
 ) -> String
 where
@@ -592,21 +668,30 @@ where
 {
     let mut parts = Vec::new();
     if picker.config.selection_mode == SearchPickerSelectionMode::Multiple {
-        parts.push(format!(
-            "Space toggle · {} selected",
-            picker.checked_keys.len()
+        parts.push(spec.chrome_args(
+            "search-picker-footer-space",
+            "Space toggle · {count} selected",
+            &[("count", picker.checked_keys.len().to_string())],
         ));
-        parts.push("Enter confirm".to_string());
+        parts.push(spec.chrome("search-picker-footer-enter", "Enter confirm"));
     }
     if picker.config.input_mode.is_visible() {
-        parts.push("↑/↓ navigate · ←/→ page".to_string());
+        parts.push(spec.chrome(
+            "search-picker-footer-navigate-page",
+            "↑/↓ navigate · ←/→ page",
+        ));
     } else {
-        parts.push("←/→ page".to_string());
+        parts.push(spec.chrome("search-picker-footer-page", "←/→ page"));
     }
     if !picker.footer.trim().is_empty() {
         parts.push(normalize_text(&picker.footer));
     } else {
-        parts.push("↑/↓ navigate · Enter select · Esc close".to_string());
+        parts.push(format!(
+            "{} · {} · {}",
+            spec.chrome("search-picker-footer-navigate", "↑/↓ navigate"),
+            spec.chrome("search-picker-footer-enter-select", "Enter select"),
+            spec.chrome("search-picker-footer-close", "Esc close"),
+        ));
     }
     parts.join(" · ")
 }

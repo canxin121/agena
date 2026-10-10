@@ -273,7 +273,10 @@ impl TuiActionDispatcher {
                 Self::run_command(app, command, "");
             }
             ActionTarget::Copy { text } => {
-                app.request_clipboard_copy(text.clone(), "Copied from notification.".to_owned());
+                app.request_clipboard_copy(
+                    text.clone(),
+                    app.i18n.text("flash-notification-copied"),
+                );
             }
         }
     }

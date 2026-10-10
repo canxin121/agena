@@ -28,8 +28,15 @@ mod transcript_tool_summary;
 /// Render a workspace patch with the same gutters, colors and wrapping as a
 /// file-edit operation in the transcript.
 pub fn render_diff_document(text: &str, width: u16) -> Vec<RenderedLine> {
+    render_diff_document_with_i18n(text, width, &I18n::english())
+}
+
+/// Render a workspace patch with one locale's catalog wording for the labels
+/// the renderer generates itself — currently the header of a patch that carries
+/// no file path.
+pub fn render_diff_document_with_i18n(text: &str, width: u16, i18n: &I18n) -> Vec<RenderedLine> {
     let mut out = Vec::new();
-    transcript_aux::push_expanded_diff_text(&mut out, "", text, width);
+    transcript_aux::push_expanded_diff_text(&mut out, "", text, width, i18n);
     out
 }
 
@@ -263,7 +270,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
                     // Keep the message header outside Markdown selections.  A selected code
                     // block or list should be exactly that block, both visually and on copy.
                     let start_line = lines.len();
-                    render_markdown_block(&mut lines, "  ", block, width);
+                    render_markdown_block(&mut lines, "  ", block, width, i18n);
                     if lines.len() > start_line {
                         let rendered_block = &lines[start_line..];
                         let semantic_unit_count = rendered_block
@@ -2815,7 +2822,10 @@ mod tests {
             .join("\n");
         assert!(text.to_lowercase().contains("attachments"), "{text}");
         assert_eq!(text.matches("pixel.png").count(), 1, "{text}");
-        assert!(text.contains("embedded image"), "{text}");
+        assert!(
+            text.contains(I18n::english().text("transcript-image-embedded").as_str()),
+            "{text}"
+        );
         assert!(!text.contains("iVBORw0"), "{text}");
     }
 
@@ -2881,7 +2891,10 @@ mod tests {
         assert!(text.contains("attachments"), "{text}");
         assert_eq!(text.matches("pixel.png").count(), 2, "{text}");
         assert!(text.contains("https://example.com/pixel.png"), "{text}");
-        assert!(!text.contains("embedded image"), "{text}");
+        assert!(
+            !text.contains(I18n::english().text("transcript-image-embedded").as_str()),
+            "{text}"
+        );
     }
 
     #[test]
@@ -3097,7 +3110,7 @@ mod tests {
             .pop()
             .expect("code block");
         let mut lines = Vec::new();
-        render_markdown_block(&mut lines, "  ", &block, 28);
+        render_markdown_block(&mut lines, "  ", &block, 28, &I18n::english());
 
         assert!(
             lines
@@ -3133,7 +3146,7 @@ mod tests {
             .pop()
             .expect("code block");
         let mut lines = Vec::new();
-        render_markdown_block(&mut lines, "", &block, 48);
+        render_markdown_block(&mut lines, "", &block, 48, &I18n::english());
 
         let label = lines
             .first()
@@ -3152,7 +3165,7 @@ mod tests {
             .pop()
             .expect("code block");
         let mut lines = Vec::new();
-        render_markdown_block(&mut lines, "", &block, 48);
+        render_markdown_block(&mut lines, "", &block, 48, &I18n::english());
 
         let label = lines
             .first()
@@ -3239,21 +3252,21 @@ mod tests {
     fn headings_quotes_lists_and_tables_have_distinct_terminal_chrome() {
         let mut heading = Vec::new();
         let heading_block = markdown_blocks("# Overview").pop().expect("heading block");
-        render_markdown_block(&mut heading, "  ", &heading_block, 36);
+        render_markdown_block(&mut heading, "  ", &heading_block, 36, &I18n::english());
         assert!(heading[0].text.contains("══ Overview"));
 
         let mut quote = Vec::new();
         let quote_block = markdown_blocks("> quoted context\n> remains visually distinct")
             .pop()
             .expect("quote block");
-        render_markdown_block(&mut quote, "  ", &quote_block, 36);
+        render_markdown_block(&mut quote, "  ", &quote_block, 36, &I18n::english());
         assert!(quote.iter().all(|line| line.text.starts_with("  │ ")));
 
         let mut list = Vec::new();
         let list_block = markdown_blocks("- [ ] pending\n  - nested\n- [x] complete")
             .pop()
             .expect("list block");
-        render_markdown_block(&mut list, "  ", &list_block, 36);
+        render_markdown_block(&mut list, "  ", &list_block, 36, &I18n::english());
         assert!(list.iter().any(|line| line.text.contains("○ pending")));
         assert!(list.iter().any(|line| line.text.contains("◦ nested")));
         assert!(list.iter().any(|line| line.text.contains("● complete")));
@@ -3262,7 +3275,7 @@ mod tests {
         let table_block = markdown_blocks("| key | value |\n| --- | ---: |\n| answer | 42 |")
             .pop()
             .expect("table block");
-        render_markdown_block(&mut table, "  ", &table_block, 36);
+        render_markdown_block(&mut table, "  ", &table_block, 36, &I18n::english());
         assert!(table.first().is_some_and(|line| line.text.contains('┌')));
         assert!(
             table
@@ -3279,7 +3292,7 @@ mod tests {
                 .pop()
                 .expect("table block");
         let mut table = Vec::new();
-        render_markdown_block(&mut table, "", &block, 40);
+        render_markdown_block(&mut table, "", &block, 40, &I18n::english());
 
         let rendered = table
             .iter()
@@ -3308,7 +3321,7 @@ mod tests {
         .pop()
         .expect("table block");
         let mut table = Vec::new();
-        render_markdown_block(&mut table, "  ", &block, 72);
+        render_markdown_block(&mut table, "  ", &block, 72, &I18n::english());
 
         assert_eq!(
             UnicodeWidthStr::width(table[0].text.as_str()),
@@ -3342,7 +3355,7 @@ mod tests {
             .pop()
             .expect("table block");
         let mut table = Vec::new();
-        render_markdown_block(&mut table, "", &block, 60);
+        render_markdown_block(&mut table, "", &block, 60, &I18n::english());
 
         let rendered = table
             .iter()
@@ -3377,7 +3390,7 @@ mod tests {
         .pop()
         .expect("quote block");
         let mut lines = Vec::new();
-        render_markdown_block(&mut lines, "  ", &block, 52);
+        render_markdown_block(&mut lines, "  ", &block, 52, &I18n::english());
 
         assert!(
             lines

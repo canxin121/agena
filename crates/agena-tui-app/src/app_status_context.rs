@@ -85,10 +85,10 @@ impl App {
         match self.command_tx.try_send(command) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                self.flash_error("UI backend command queue is full; wait for current operations")
+                self.flash_error(ui_text::t(&self.i18n, "flash-ui-backend-queue-full"))
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                self.flash_error("UI backend command actor is unavailable")
+                self.flash_error(ui_text::t(&self.i18n, "flash-ui-backend-unavailable"))
             }
         }
     }
@@ -465,7 +465,10 @@ async fn send_command_completion(
     let completion = match result {
         Ok(completion) => completion,
         Err(error) => Box::new(move |app: &mut App| {
-            app.flash_error(format!("UI backend command task failed: {error}"));
+            app.flash_error(app.i18n.text_args(
+                "flash-ui-backend-task-failed",
+                &agena_tui::fl_args!("error" => error.to_string()),
+            ));
         }) as crate::UiCompletion,
     };
     let _ = tx

@@ -15,6 +15,8 @@
 
 use std::collections::BTreeMap;
 
+use agena_tui::i18n::I18n;
+
 use crate::{
     ToolCallView, TranscriptActivityContent, TranscriptEntryPart, TranscriptPartContent,
     renderer::push_markdown_document,
@@ -372,7 +374,7 @@ pub fn classify_ask_user_page(
 pub fn interaction_plan_body_lines(body_markdown: &str, width: u16) -> usize {
     agena_tui_media::with_text_math_rendering(|| {
         let mut out = Vec::new();
-        push_markdown_document(&mut out, "    ", body_markdown, width);
+        push_markdown_document(&mut out, "    ", body_markdown, width, &I18n::english());
         out.len()
     })
 }

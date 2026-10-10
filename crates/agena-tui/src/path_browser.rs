@@ -205,7 +205,8 @@ pub fn render_overlay(
     let spec = SearchPickerDialogSpec::new(
         i18n.text("overlay-picker-loading").into(),
         i18n.text("overlay-path-browser-list-title").into(),
-    );
+    )
+    .with_text(i18n);
     render_search_picker_dialog(frame, area, dialog, &spec, sanitize_display_text);
 }
 

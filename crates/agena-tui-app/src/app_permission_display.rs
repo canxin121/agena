@@ -124,9 +124,13 @@ pub(crate) fn permission_rule_draft_from_request(
 pub(crate) fn permission_rule_label(i18n: &I18n, rule: &PermissionRuleResource) -> String {
     match rule.subject_kind.as_str() {
         "tool" => match (rule.tool_name.as_deref(), rule.qualifier.as_deref()) {
-            (Some(tool_name), Some(qualifier)) if !qualifier.trim().is_empty() => {
-                format!("{tool_name} · {qualifier}")
-            }
+            (Some(tool_name), Some(qualifier)) if !qualifier.trim().is_empty() => i18n.text_args(
+                "permission-rule-label",
+                &agena_tui::fl_args!(
+                    "tool" => tool_name.to_string(),
+                    "qualifier" => qualifier.to_string(),
+                ),
+            ),
             (Some(tool_name), _) => tool_name.to_string(),
             _ => rule.action_key.clone(),
         },
@@ -171,13 +175,24 @@ pub(crate) fn permission_rule_draft_label(i18n: &I18n, draft: &PermissionRuleDra
             if qualifier.is_empty() {
                 tool_name.to_string()
             } else {
-                format!("{tool_name} · {qualifier}")
+                i18n.text_args(
+                    "permission-rule-label",
+                    &agena_tui::fl_args!(
+                        "tool" => tool_name.to_string(),
+                        "qualifier" => qualifier.to_string(),
+                    ),
+                )
             }
         }
-        PermissionRuleSubjectKind::PathAccess => format!(
-            "{} · {}",
-            permission_rule_path_access_kind_display(i18n, draft.path_access_kind.trim()),
-            draft.target_path.trim()
+        PermissionRuleSubjectKind::PathAccess => i18n.text_args(
+            "permission-rule-label-path",
+            &agena_tui::fl_args!(
+                "access" => permission_rule_path_access_kind_display(
+                    i18n,
+                    draft.path_access_kind.trim(),
+                ),
+                "path" => draft.target_path.trim().to_string(),
+            ),
         ),
         PermissionRuleSubjectKind::NetworkAccess => {
             let target = draft.network_target.trim();
@@ -336,18 +351,21 @@ pub(crate) fn permission_rule_choice_overlay_spec(
             ui_text::t(i18n, "overlay-permission-rule-choice-scope-prompt"),
             Editor::from_text(draft.scope.clone()),
             vec![
-                choice_item(
+                choice_item_with_value(
+                    ui_text::t(i18n, "value-session"),
                     "session",
                     ui_text::t(i18n, "overlay-permission-rule-choice-scope-session-detail"),
                 ),
-                choice_item(
+                choice_item_with_value(
+                    ui_text::t(i18n, "value-workspace"),
                     "workspace",
                     ui_text::t(
                         i18n,
                         "overlay-permission-rule-choice-scope-workspace-detail",
                     ),
                 ),
-                choice_item(
+                choice_item_with_value(
+                    ui_text::t(i18n, "value-global"),
                     "global",
                     ui_text::t(i18n, "overlay-permission-rule-choice-scope-global-detail"),
                 ),
@@ -605,8 +623,8 @@ use crate::{
     PermissionRuleDraft, PermissionRuleResource, PermissionRuleStudioAction,
     PermissionRuleStudioChoiceField, PermissionRuleStudioEditField, PermissionRuleStudioItem,
     PermissionRuleStudioOverlay, PermissionRuleStudioPathField, PermissionRuleSubjectKind,
-    PermissionScope, SelectableListState, choice_item, format_key_value_segment,
-    join_inline_segments, permission_action_label, permission_mode_name,
+    PermissionScope, SelectableListState, choice_item, choice_item_with_value,
+    format_key_value_segment, join_inline_segments, permission_action_label, permission_mode_name,
     permission_related_actions_for_display, permission_requested_actions_for_display, ui_text,
 };
 

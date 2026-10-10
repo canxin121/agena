@@ -15,7 +15,8 @@ pub(crate) fn build_timeline_item(
         .summary
         .as_deref()
         .filter(|summary| !summary.trim().is_empty())
-        .unwrap_or(record.kind.as_str());
+        .map(str::to_owned)
+        .unwrap_or_else(|| timeline_kind_label(i18n, record.kind.as_str()));
     let summary = format!(
         "#{}  {}/{}  {}  {}",
         record.part_id, record.role, record.kind, record.state, label
@@ -23,19 +24,24 @@ pub(crate) fn build_timeline_item(
     let created_at = DateTime::<Utc>::from_timestamp_millis(record.created_at_ms)
         .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
     let mut detail_lines = vec![
-        app_detail_labeled_line("Part ID", record.part_id.to_string()),
+        timeline_detail_labeled_line(i18n, "timeline-label-part-id", record.part_id.to_string()),
         timeline_detail_labeled_line(i18n, "timeline-label-created", format_timestamp(created_at)),
-        app_detail_labeled_line("Kind", record.kind.clone()),
-        app_detail_labeled_line("Role", record.role.clone()),
-        app_detail_labeled_line("State", record.state.clone()),
-        app_detail_labeled_line("Revision", record.revision.to_string()),
+        timeline_detail_labeled_line(i18n, "timeline-label-kind", record.kind.clone()),
+        timeline_detail_labeled_line(i18n, "timeline-label-role", record.role.clone()),
+        timeline_detail_labeled_line(i18n, "timeline-label-state", record.state.clone()),
+        timeline_detail_labeled_line(i18n, "timeline-label-revision", record.revision.to_string()),
     ];
     if let Some(run_id) = record.run_id {
-        detail_lines.push(app_detail_labeled_line("Run", run_id.to_string()));
+        detail_lines.push(timeline_detail_labeled_line(
+            i18n,
+            "timeline-label-run",
+            run_id.to_string(),
+        ));
     }
     if let Some(parent_part_id) = record.parent_part_id {
-        detail_lines.push(app_detail_labeled_line(
-            "Parent part",
+        detail_lines.push(timeline_detail_labeled_line(
+            i18n,
+            "timeline-label-parent-part",
             parent_part_id.to_string(),
         ));
     }
@@ -75,6 +81,20 @@ fn timeline_detail_labeled_line(
     value: String,
 ) -> DetailTextLine<'static> {
     app_detail_labeled_line(ui_text::t(i18n, label_key), value)
+}
+
+/// Row text for a timeline part the server stored without a summary. The kind
+/// names a machine value (`run_started`, `message_part_checkpointed`, …), so a
+/// catalog may carry a human label under `timeline-summary-kind-{kind}`; an
+/// unnamed kind keeps its raw value instead of a placeholder.
+fn timeline_kind_label(i18n: &I18n, kind: &str) -> String {
+    let trimmed = kind.trim();
+    if trimmed.is_empty() {
+        return ui_text::t(i18n, "timeline-label-kind");
+    }
+    let key = format!("timeline-summary-kind-{}", trimmed.replace('_', "-"));
+    i18n.try_text(key.as_str())
+        .unwrap_or_else(|| trimmed.to_owned())
 }
 
 use crate::{

@@ -22,6 +22,7 @@ impl App {
                 log_error: state.log_error.as_deref(),
                 now_ms,
             },
+            &self.i18n,
         );
     }
 }

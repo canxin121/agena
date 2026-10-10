@@ -106,9 +106,9 @@ impl App {
             .application
             .workspace_path_metadata(resolved.as_path())
             .ok_or_else(|| {
-                crate::UiFailure::message(format!(
-                    "attachment path is not a regular server workspace file or directory: {}",
-                    resolved.display()
+                crate::UiFailure::message(self.i18n.text_args(
+                    "composer-error-attachment-path",
+                    &agena_tui::fl_args!("path" => resolved.display().to_string()),
                 ))
             })?;
         let is_directory = metadata.is_directory;
@@ -128,7 +128,10 @@ impl App {
         let relative = resolved
             .strip_prefix(self.application.workspace_root())
             .map_err(|_| {
-                crate::UiFailure::message("The attachment must be inside the active workspace.")
+                crate::UiFailure::message(ui_text::t(
+                    &self.i18n,
+                    "composer-error-attachment-outside-workspace",
+                ))
             })?;
         let name = resolved
             .file_name()
@@ -234,15 +237,13 @@ impl App {
 
     pub(crate) fn stage_long_paste_text_file(&mut self, text: String) {
         if text.len() > 1024 * 1024 {
-            self.flash_warning("Paste exceeds the 1 MiB text limit. The clipboard and current draft are unchanged.");
+            self.flash_warning(ui_text::t(&self.i18n, "composer-error-paste-limit"));
             return;
         }
         if self.remaining_resource_attachment_slots() == 0 {
             self.composer.insert_str(&text);
             self.after_composer_text_mutated();
-            self.flash_warning(
-                "Long paste was kept as text because the attachment limit was reached.",
-            );
+            self.flash_warning(ui_text::t(&self.i18n, "composer-notice-paste-as-text"));
             return;
         }
         let epoch = self.composer_media_epoch;
@@ -319,9 +320,9 @@ impl App {
             .application
             .workspace_path_metadata(resolved.as_path())
             .ok_or_else(|| {
-                crate::UiFailure::message(format!(
-                    "attachment path is no longer available on the server: {}",
-                    resolved.display()
+                crate::UiFailure::message(self.i18n.text_args(
+                    "composer-error-attachment-unavailable",
+                    &agena_tui::fl_args!("path" => resolved.display().to_string()),
                 ))
             })?;
         self.stage_resource_with_metadata(
@@ -415,9 +416,10 @@ impl App {
         if size_bytes > MAX_CLIPBOARD_UPLOAD_BYTES
             || existing_bytes.saturating_add(size_bytes) > MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES
         {
-            return Err(crate::UiFailure::message(
-                "attachment exceeds 20 MiB per file or 40 MiB total composer budget",
-            ));
+            return Err(crate::UiFailure::message(ui_text::t(
+                &self.i18n,
+                "composer-error-attachment-budget",
+            )));
         }
         if self.remaining_resource_attachment_slots() == 0 {
             return Err(crate::UiFailure::message(self.i18n.text_args(
@@ -646,7 +648,7 @@ impl App {
 
     pub(crate) fn restore_composer_draft(&mut self, draft: ComposerDraft) {
         if self.composer.text().trim().is_empty() && self.composer_items.is_empty() {
-            let (text, elements, items) = rebuild_placeholders(draft.document);
+            let (text, elements, items) = rebuild_placeholders(draft.document, &self.i18n);
             self.composer.set_text(text);
             self.composer.set_elements(elements);
             self.composer_items = items;
@@ -678,7 +680,7 @@ impl App {
             text: "\n\n".to_owned(),
         });
         document.0.extend(current.document.0);
-        let (text, mut elements, items) = rebuild_placeholders(document);
+        let (text, mut elements, items) = rebuild_placeholders(document, &self.i18n);
         for pending in self
             .composer_items
             .iter()
@@ -710,7 +712,7 @@ impl App {
                 self.composer_items.as_slice(),
             ),
         };
-        let existing_render = existing.render_text();
+        let existing_render = existing.render_text(&self.i18n);
         if !existing_render.is_empty() && !existing_render.ends_with('\n') {
             existing.document.0.push(agena_domain::ComposerNode::Text {
                 text: "
@@ -720,7 +722,7 @@ impl App {
             });
         }
         existing.document.0.extend(combined.document.0);
-        let (text, mut elements, items) = rebuild_placeholders(existing.document);
+        let (text, mut elements, items) = rebuild_placeholders(existing.document, &self.i18n);
         for pending in self
             .composer_items
             .iter()
@@ -772,7 +774,10 @@ impl App {
         draft: &ComposerDraft,
     ) -> UiResult<agena_domain::ComposerDocument> {
         if draft.document.is_empty() {
-            return Err(crate::UiFailure::message("The message is empty."));
+            return Err(crate::UiFailure::message(ui_text::t(
+                &self.i18n,
+                "composer-error-empty-message",
+            )));
         }
         Ok(draft.document.clone())
     }
@@ -852,7 +857,10 @@ impl App {
                         return Ok(());
                     }
                 }
-                Err(error) => failures.push(format!("clipboard files: {error}")),
+                Err(error) => failures.push(self.i18n.text_args(
+                    "composer-clipboard-files",
+                    &agena_tui::fl_args!("error" => error.to_string()),
+                )),
             }
         }
 
@@ -896,7 +904,10 @@ impl App {
                     return Ok(());
                 }
             }
-            Err(error) => failures.push(format!("clipboard image: {error}")),
+            Err(error) => failures.push(self.i18n.text_args(
+                "composer-clipboard-image",
+                &agena_tui::fl_args!("error" => error.to_string()),
+            )),
         }
 
         match get_clipboard_text(&context) {
@@ -904,8 +915,11 @@ impl App {
                 self.handle_paste(text);
                 return Ok(());
             }
-            Ok(_) => failures.push("clipboard text is empty".to_owned()),
-            Err(error) => failures.push(format!("clipboard text: {error}")),
+            Ok(_) => failures.push(ui_text::t(&self.i18n, "composer-clipboard-text-empty")),
+            Err(error) => failures.push(self.i18n.text_args(
+                "composer-clipboard-text",
+                &agena_tui::fl_args!("error" => error.to_string()),
+            )),
         }
 
         self.flash_warning(self.i18n.text_args(
@@ -980,6 +994,7 @@ impl App {
                 })
                 .sum::<u64>()
                 .min(40 * 1024 * 1024);
+        let i18n = self.i18n.clone();
         self.dispatch_backend_operation(
             move |application| async move {
                 let _cleanup=ClipboardUploadCleanup {files:cleanup_files,root:cleanup_root};
@@ -989,34 +1004,41 @@ impl App {
                     let upload = async {
                         let metadata = tokio::fs::metadata(candidate.path.as_path()).await?;
                         if !metadata.is_file() {
-                            anyhow::bail!(
-                                "clipboard attachment is not a regular file: {}",
-                                candidate.path.display()
-                            );
+                            anyhow::bail!(i18n.text_args(
+                                "composer-error-clipboard-attachment-not-file",
+                                &agena_tui::fl_args!(
+                                    "path" => candidate.path.display().to_string()
+                                ),
+                            ));
                         }
                         if metadata.len() > MAX_CLIPBOARD_UPLOAD_BYTES {
-                            anyhow::bail!(
-                                "clipboard attachment exceeds the 20 MiB upload limit: {}",
-                                candidate.path.display()
-                            );
+                            anyhow::bail!(i18n.text_args(
+                                "composer-error-clipboard-attachment-too-large",
+                                &agena_tui::fl_args!(
+                                    "path" => candidate.path.display().to_string()
+                                ),
+                            ));
                         }
                         if accepted_bytes.saturating_add(metadata.len())
                             > remaining_bytes
                         {
-                            anyhow::bail!(
-                                "clipboard attachments exceed the 40 MiB total upload limit"
-                            );
+                            anyhow::bail!(ui_text::t(
+                                &i18n,
+                                "composer-error-clipboard-attachments-budget",
+                            ));
                         }
                         use tokio::io::AsyncReadExt as _;
                         let file=tokio::fs::File::open(candidate.path.as_path()).await?;
                         let mut bytes=Vec::new();
                         file.take(MAX_CLIPBOARD_UPLOAD_BYTES+1).read_to_end(&mut bytes).await?;
-                        if bytes.len() as u64>MAX_CLIPBOARD_UPLOAD_BYTES || accepted_bytes.saturating_add(bytes.len() as u64)>remaining_bytes {anyhow::bail!("clipboard file changed or exceeded its bounded read budget");}
+                        if bytes.len() as u64>MAX_CLIPBOARD_UPLOAD_BYTES || accepted_bytes.saturating_add(bytes.len() as u64)>remaining_bytes {anyhow::bail!(ui_text::t(&i18n, "composer-error-clipboard-file-changed"));}
                         if bytes.is_empty() {
-                            anyhow::bail!(
-                                "clipboard attachment is empty: {}",
-                                candidate.path.display()
-                            );
+                            anyhow::bail!(i18n.text_args(
+                                "composer-error-clipboard-attachment-empty",
+                                &agena_tui::fl_args!(
+                                    "path" => candidate.path.display().to_string()
+                                ),
+                            ));
                         }
                         let filename = candidate
                             .path
@@ -1024,10 +1046,12 @@ impl App {
                             .and_then(|name| name.to_str())
                             .map(str::to_owned)
                             .ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "clipboard attachment has no usable filename: {}",
-                                    candidate.path.display()
-                                )
+                                anyhow::anyhow!(i18n.text_args(
+                                    "composer-error-clipboard-attachment-filename",
+                                    &agena_tui::fl_args!(
+                                        "path" => candidate.path.display().to_string()
+                                    ),
+                                ))
                             })?;
                         let mime = mime_guess::from_path(candidate.path.as_path())
                             .first_raw()
@@ -1160,7 +1184,7 @@ impl App {
         if providers.is_empty() {
             self.flash_warning(format!(
                 "No verified terminal download provider is available. {}",
-                context.diagnostic_summary()
+                context.diagnostic_summary(&self.i18n)
             ));
             return Ok(());
         }
@@ -1320,6 +1344,7 @@ fn composer_document_from_editor(
 /// literal body text on send.
 fn rebuild_placeholders(
     document: agena_domain::ComposerDocument,
+    i18n: &I18n,
 ) -> (String, Vec<std::ops::Range<usize>>, Vec<ComposerItem>) {
     let mut text = String::new();
     let mut items = Vec::new();
@@ -1329,9 +1354,11 @@ fn rebuild_placeholders(
         match node {
             agena_domain::ComposerNode::Text { text: value } => text.push_str(&value),
             agena_domain::ComposerNode::Activity { activity } => {
-                let base_placeholder =
-                    crate::composer_state_impls::composer_activity_presentation(&activity.payload)
-                        .0;
+                let base_placeholder = crate::composer_state_impls::composer_activity_presentation(
+                    &activity.payload,
+                    i18n,
+                )
+                .0;
                 let placeholder = unique_composer_placeholder_text(&base_placeholder, &mut used);
                 let start = text.len();
                 text.push_str(&placeholder);
@@ -1483,7 +1510,7 @@ mod tests {
             ComposerNode::activity(second.clone()),
         ]);
 
-        let (text, elements, items) = rebuild_placeholders(document);
+        let (text, elements, items) = rebuild_placeholders(document, &I18n::english());
         // Both artifacts survive with distinct placeholders so the editor never
         // degrades one of them into literal body text.
         assert_eq!(items.len(), 2);
@@ -1598,7 +1625,7 @@ mod tests {
 use crate::Result;
 use crate::{
     App, AttachmentKind, BTreeMap, ClipboardTextError, ComposerDraft, ComposerItem,
-    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, Instant, Overlay, Path, PathBuf,
+    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, I18n, Instant, Overlay, Path, PathBuf,
     PromptHistory, Route, RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
     attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
     download_providers, edit_text, find_placeholder_occurrence, normalize_pasted_path, open_path,

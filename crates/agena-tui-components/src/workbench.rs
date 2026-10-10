@@ -795,12 +795,7 @@ mod tests {
                         Default::default(),
                         ">> ".into(),
                     ),
-                    WorkbenchTextSection::new(
-                        "DetailsPanel".into(),
-                        Text::from("detail"),
-                        2,
-                        6,
-                    ),
+                    WorkbenchTextSection::new("DetailsPanel".into(), Text::from("detail"), 2, 6),
                 )
                 .target_width(100);
                 let spec = if show_overview {

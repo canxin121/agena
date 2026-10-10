@@ -216,13 +216,19 @@ impl App {
             .unwrap_or(JsonValue::Null);
         let choices = schema_type_selector_choices(schema.as_ref());
         if choices.is_empty() {
-            self.flash_warning(format!("{} has no selectable schema type", row.title));
+            self.flash_warning(self.i18n.text_args(
+                "plugin-workbench-error-no-selectable-schema-type",
+                &agena_tui::fl_args!("title" => row.title.clone()),
+            ));
             return;
         }
         if choices.len() == 1 {
             let choice = choices[0].clone();
             if value_matches_type(&current_value, choice.as_str()) {
-                self.flash_warning(format!("{} has a fixed schema type", row.title));
+                self.flash_warning(self.i18n.text_args(
+                    "plugin-workbench-error-fixed-schema-type",
+                    &agena_tui::fl_args!("title" => row.title.clone()),
+                ));
                 return;
             }
             let value = schema
@@ -498,7 +504,10 @@ impl App {
                 return;
             }
             ConfigRowEditor::ReadOnly => {
-                self.flash_warning(format!("{} is read-only", row.title));
+                self.flash_warning(self.i18n.text_args(
+                    "plugin-workbench-error-read-only",
+                    &agena_tui::fl_args!("title" => row.title.clone()),
+                ));
                 return;
             }
             ConfigRowEditor::NullableString { path } => {
@@ -524,9 +533,13 @@ impl App {
                         "workbench-editor-title-edit",
                         &agena_tui::fl_args!("title" => row.title),
                     ),
-                    format!(
-                        "Enter the two values for {}.\nFirst line: {}\nSecond line: {}",
-                        row.title, left_label, right_label
+                    self.i18n.text_args(
+                        "plugin-workbench-editor-pair-prompt",
+                        &agena_tui::fl_args!(
+                            "title" => row.title.clone(),
+                            "first" => left_label,
+                            "second" => right_label,
+                        ),
                     ),
                     editor_save_footer(&self.i18n, true),
                     true,

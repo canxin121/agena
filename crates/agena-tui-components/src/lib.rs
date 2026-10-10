@@ -106,8 +106,9 @@ pub use search_picker::{
     SearchPickerDialogSpec, SearchPickerFocus, SearchPickerInput, SearchPickerInputMode,
     SearchPickerInputResult, SearchPickerItem, SearchPickerNoCustom, SearchPickerPhase,
     SearchPickerPreviewMode, SearchPickerSearchMode, SearchPickerSelection,
-    SearchPickerSelectionMode, SearchPickerViewState, render_search_picker_dialog,
-    render_search_picker_dialog_with_preview, search_picker_dialog_area,
+    SearchPickerSelectionMode, SearchPickerText, SearchPickerViewState,
+    render_search_picker_dialog, render_search_picker_dialog_with_preview,
+    search_picker_dialog_area,
 };
 pub use sectioned_list::{SectionedListFocus, SectionedListSection, SectionedListState};
 pub use selectable_list::SelectableListState;

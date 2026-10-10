@@ -24,13 +24,17 @@ pub(crate) fn derive_session_title(i18n: &I18n, text: &str) -> String {
     truncate_display_width(first_line, 60)
 }
 
-pub(crate) fn draft_title_source(draft: &ComposerDraft) -> Option<String> {
+pub(crate) fn draft_title_source(i18n: &I18n, draft: &ComposerDraft) -> Option<String> {
     let mut preview = String::new();
     for node in &draft.document.0 {
         match node {
             agena_domain::ComposerNode::Text { text } => preview.push_str(text),
             agena_domain::ComposerNode::Activity { activity } => preview.push_str(
-                &crate::composer_state_impls::composer_activity_presentation(&activity.payload).1,
+                &crate::composer_state_impls::composer_activity_presentation(
+                    &activity.payload,
+                    i18n,
+                )
+                .1,
             ),
         }
     }

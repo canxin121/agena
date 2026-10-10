@@ -12,6 +12,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+use crate::i18n::I18n;
+
 /// Usage-dashboard data view selected by the terminal user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UsageDashboardView {
@@ -310,22 +312,22 @@ fn cycle_model_filter(
     presentation.model_filter = choices[next].clone();
 }
 
-pub fn usage_dashboard_view_label(view: UsageDashboardView) -> &'static str {
-    match view {
-        UsageDashboardView::Overview => "Overview",
-        UsageDashboardView::Daily => "Daily",
-        UsageDashboardView::Providers => "Providers",
-        UsageDashboardView::Models => "Models",
-        UsageDashboardView::Sessions => "Sessions",
-    }
+pub fn usage_dashboard_view_label(i18n: &I18n, view: UsageDashboardView) -> String {
+    i18n.text(match view {
+        UsageDashboardView::Overview => "usage-view-overview",
+        UsageDashboardView::Daily => "usage-view-daily",
+        UsageDashboardView::Providers => "usage-view-providers",
+        UsageDashboardView::Models => "usage-view-models",
+        UsageDashboardView::Sessions => "usage-view-sessions",
+    })
 }
 
-pub fn usage_dashboard_sort_label(sort: UsageDashboardSort) -> &'static str {
-    match sort {
-        UsageDashboardSort::Cost => "Cost",
-        UsageDashboardSort::Tokens => "Tokens",
-        UsageDashboardSort::Requests => "Requests",
-    }
+pub fn usage_dashboard_sort_label(i18n: &I18n, sort: UsageDashboardSort) -> String {
+    i18n.text(match sort {
+        UsageDashboardSort::Cost => "usage-sort-cost",
+        UsageDashboardSort::Tokens => "usage-sort-tokens",
+        UsageDashboardSort::Requests => "usage-sort-requests",
+    })
 }
 
 /// Renders the complete usage-dashboard presentation from the display-only
@@ -339,12 +341,13 @@ pub fn render_usage_dashboard(
     error: Option<&str>,
     presentation: &UsageDashboardPresentation,
     data: Option<&UsageDashboardData>,
+    i18n: &I18n,
 ) {
-    let title = if loading {
-        "Usage analytics · refreshing…"
+    let title = i18n.text(if loading {
+        "usage-title-refreshing"
     } else {
-        "Usage analytics"
-    };
+        "usage-title"
+    });
     let inner = agena_tui_components::render_framed_surface(
         frame,
         area,
@@ -358,8 +361,7 @@ pub fn render_usage_dashboard(
     .inner;
     if inner.width < 30 || inner.height < 10 {
         frame.render_widget(
-            Paragraph::new("Terminal is too small for usage analytics")
-                .alignment(Alignment::Center),
+            Paragraph::new(i18n.text("usage-to-small")).alignment(Alignment::Center),
             inner,
         );
         return;
@@ -374,10 +376,10 @@ pub fn render_usage_dashboard(
             Constraint::Length(2),
         ])
         .split(inner);
-    render_usage_header(frame, sections[0], period_label, presentation);
-    render_usage_metrics(frame, sections[1], data);
-    render_usage_content(frame, sections[2], presentation, data, error);
-    render_usage_footer(frame, sections[3], presentation, data);
+    render_usage_header(frame, sections[0], period_label, presentation, i18n);
+    render_usage_metrics(frame, sections[1], data, i18n);
+    render_usage_content(frame, sections[2], presentation, data, error, i18n);
+    render_usage_footer(frame, sections[3], presentation, data, i18n);
 }
 
 fn render_usage_header(
@@ -385,59 +387,114 @@ fn render_usage_header(
     area: Rect,
     period_label: &str,
     presentation: &UsageDashboardPresentation,
+    i18n: &I18n,
 ) {
     let palette = agena_tui_components::theme::active_palette();
-    let provider = presentation.provider_filter.as_deref().unwrap_or("All");
-    let model = presentation.model_filter.as_deref().unwrap_or("All");
-    let agents = if presentation.include_subagents {
-        "included"
+    let all = i18n.text("usage-filter-all");
+    let provider = presentation
+        .provider_filter
+        .clone()
+        .unwrap_or_else(|| all.clone());
+    let model = presentation.model_filter.clone().unwrap_or(all);
+    let agents = i18n.text(if presentation.include_subagents {
+        "usage-filter-subagents-included"
     } else {
-        "excluded"
-    };
+        "usage-filter-subagents-excluded"
+    });
     let shortcut = Style::default()
         .fg(palette.accent)
         .add_modifier(Modifier::BOLD);
     let value = Style::default().fg(palette.muted);
     let controls = vec![
         Span::styled("Ctrl+P", shortcut),
-        Span::styled(format!(" period {period_label}"), value),
+        Span::styled(
+            format!(
+                " {}",
+                i18n.text_args(
+                    "usage-filter-period",
+                    &crate::fl_args!("period" => period_label)
+                )
+            ),
+            value,
+        ),
         Span::raw("  ·  "),
         Span::styled("Ctrl+B", shortcut),
         Span::styled(
-            format!(" view {}", usage_dashboard_view_label(presentation.view)),
+            format!(
+                " {}",
+                i18n.text_args(
+                    "usage-filter-view",
+                    &crate::fl_args!("view" => usage_dashboard_view_label(i18n, presentation.view))
+                )
+            ),
             value,
         ),
         Span::raw("  ·  "),
         Span::styled("Ctrl+O", shortcut),
-        Span::styled(format!(" provider {provider}"), value),
+        Span::styled(
+            format!(
+                " {}",
+                i18n.text_args(
+                    "usage-filter-provider",
+                    &crate::fl_args!("provider" => provider)
+                )
+            ),
+            value,
+        ),
         Span::raw("  ·  "),
         Span::styled("Ctrl+L", shortcut),
-        Span::styled(format!(" model {model}"), value),
+        Span::styled(
+            format!(
+                " {}",
+                i18n.text_args("usage-filter-model", &crate::fl_args!("model" => model))
+            ),
+            value,
+        ),
         Span::raw("  ·  "),
         Span::styled("Ctrl+A", shortcut),
-        Span::styled(format!(" subagents {agents}"), value),
+        Span::styled(
+            format!(
+                " {}",
+                i18n.text_args(
+                    "usage-filter-subagents",
+                    &crate::fl_args!("state" => agents)
+                )
+            ),
+            value,
+        ),
         Span::raw("  ·  "),
         Span::styled("Ctrl+S", shortcut),
         Span::styled(
-            format!(" sort {}", usage_dashboard_sort_label(presentation.sort)),
+            format!(
+                " {}",
+                i18n.text_args(
+                    "usage-filter-sort",
+                    &crate::fl_args!("sort" => usage_dashboard_sort_label(i18n, presentation.sort))
+                )
+            ),
             value,
         ),
         Span::raw("  ·  "),
         Span::styled("Ctrl+R", shortcut),
-        Span::styled(" refresh", value),
+        Span::styled(format!(" {}", i18n.text("usage-filter-refresh")), value),
     ];
     let controls = agena_tui_components::line_plain_text(&Line::from(controls));
     agena_tui_components::render_shortcut_footer(
         frame,
         area,
-        &format!("{controls} · Enter open session · Esc close"),
+        &format!("{controls} · {}", i18n.text("usage-footer")),
     );
 }
 
-fn render_usage_metrics(frame: &mut Frame<'_>, area: Rect, data: Option<&UsageDashboardData>) {
+fn render_usage_metrics(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    data: Option<&UsageDashboardData>,
+    i18n: &I18n,
+) {
     let Some(data) = data else {
         frame.render_widget(
-            Paragraph::new("Loading usage statistics…")
+            Paragraph::new(i18n.text("usage-loading"))
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL)),
             area,
@@ -447,47 +504,59 @@ fn render_usage_metrics(frame: &mut Frame<'_>, area: Rect, data: Option<&UsageDa
     let totals = &data.totals;
     let values = [
         (
-            "Total cost",
+            i18n.text("usage-total-cost"),
             format_cost(totals.total_cost_usd),
-            format!(
-                "{} rec · {} est",
-                format_cost(totals.recorded_cost_usd),
-                format_cost(totals.estimated_cost_usd)
+            i18n.text_args(
+                "usage-cost-line",
+                &crate::fl_args!(
+                    "recorded" => format_cost(totals.recorded_cost_usd),
+                    "estimated" => format_cost(totals.estimated_cost_usd)
+                ),
             ),
             agena_tui_components::theme::warning_color(),
         ),
         (
-            "Tokens",
+            i18n.text("usage-tokens"),
             format_tokens(totals.total_tokens),
-            format!(
-                "{} in · {} out · {} reasoning",
-                format_tokens(totals.input_tokens),
-                format_tokens(totals.output_tokens),
-                format_tokens(totals.reasoning_tokens)
+            i18n.text_args(
+                "usage-tokens-line",
+                &crate::fl_args!(
+                    "input" => format_tokens(totals.input_tokens),
+                    "output" => format_tokens(totals.output_tokens),
+                    "reasoning" => format_tokens(totals.reasoning_tokens)
+                ),
             ),
             agena_tui_components::theme::accent_color(),
         ),
         (
-            "Requests",
+            i18n.text("usage-requests"),
             format_count(totals.requests),
-            format!("{} avg", format_cost(data.average_cost_per_request_usd)),
+            i18n.text_args(
+                "usage-average-cost",
+                &crate::fl_args!("cost" => format_cost(data.average_cost_per_request_usd)),
+            ),
             agena_tui_components::theme::info_color(),
         ),
         (
-            "Sessions",
+            i18n.text("usage-sessions"),
             format_count(totals.sessions),
-            format!("{} active days", data.active_days),
+            i18n.text_args(
+                "usage-active-days",
+                &crate::fl_args!("count" => data.active_days),
+            ),
             agena_tui_components::theme::special_color(),
         ),
         (
-            "Cache hit",
+            i18n.text("usage-cache-hit"),
             format_percent(totals.cache_hit_rate),
-            format!(
-                "{} read · {} write ({} 5m / {} 1h)",
-                format_tokens(totals.cache_read_tokens),
-                format_tokens(totals.cache_write_tokens),
-                format_tokens(totals.cache_write_5m_tokens),
-                format_tokens(totals.cache_write_1h_tokens)
+            i18n.text_args(
+                "usage-cache-line",
+                &crate::fl_args!(
+                    "read" => format_tokens(totals.cache_read_tokens),
+                    "write" => format_tokens(totals.cache_write_tokens),
+                    "write_5m" => format_tokens(totals.cache_write_5m_tokens),
+                    "write_1h" => format_tokens(totals.cache_write_1h_tokens)
+                ),
             ),
             agena_tui_components::theme::success_color(),
         ),
@@ -529,7 +598,7 @@ fn render_usage_metrics(frame: &mut Frame<'_>, area: Rect, data: Option<&UsageDa
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled(
-                    *label,
+                    label.clone(),
                     Style::default().fg(agena_tui_components::theme::muted_color()),
                 )),
                 Line::from(Span::styled(
@@ -554,22 +623,29 @@ fn render_usage_content(
     presentation: &UsageDashboardPresentation,
     data: Option<&UsageDashboardData>,
     error: Option<&str>,
+    i18n: &I18n,
 ) {
     if let Some(error) = error {
         frame.render_widget(
             Paragraph::new(format!(
-                "Unable to load usage statistics\n\n{error}\n\nPress Ctrl+R to refresh"
+                "{}\n\n{error}\n\n{}",
+                i18n.text("usage-error-body"),
+                i18n.text("usage-error-hint")
             ))
             .alignment(Alignment::Center)
             .style(Style::default().fg(agena_tui_components::theme::danger_color()))
-            .block(Block::default().title(" Error ").borders(Borders::ALL)),
+            .block(
+                Block::default()
+                    .title(format!(" {} ", i18n.text("usage-error-badge")))
+                    .borders(Borders::ALL),
+            ),
             area,
         );
         return;
     }
     let Some(data) = data else {
         frame.render_widget(
-            Paragraph::new("Collecting message usage…")
+            Paragraph::new(i18n.text("usage-collecting"))
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL)),
             area,
@@ -577,38 +653,65 @@ fn render_usage_content(
         return;
     };
     if presentation.view == UsageDashboardView::Overview {
-        render_usage_overview(frame, area, data);
+        render_usage_overview(frame, area, data, i18n);
     } else {
         let title = match presentation.view {
-            UsageDashboardView::Daily => " Daily breakdown ",
-            UsageDashboardView::Providers => " Provider breakdown ",
-            UsageDashboardView::Models => " Model breakdown ",
-            UsageDashboardView::Sessions => " Session breakdown ",
+            UsageDashboardView::Daily => i18n.text("usage-breakdown-daily"),
+            UsageDashboardView::Providers => i18n.text("usage-breakdown-provider"),
+            UsageDashboardView::Models => i18n.text("usage-breakdown-model"),
+            UsageDashboardView::Sessions => i18n.text("usage-breakdown-session"),
             UsageDashboardView::Overview => unreachable!(),
         };
         render_usage_table(
             frame,
             area,
-            title,
+            &format!(" {title} "),
             data.sorted_rows(presentation.view, presentation.sort)
                 .as_slice(),
             presentation,
+            i18n,
         );
     }
 }
 
-fn render_usage_overview(frame: &mut Frame<'_>, area: Rect, data: &UsageDashboardData) {
+fn render_usage_overview(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    data: &UsageDashboardData,
+    i18n: &I18n,
+) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(area);
-    render_overview_rows(frame, columns[0], " Daily activity ", &data.daily, true);
+    render_overview_rows(
+        frame,
+        columns[0],
+        &format!(" {} ", i18n.text("usage-daily-activity")),
+        &data.daily,
+        true,
+        i18n,
+    );
     let right = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(columns[1]);
-    render_overview_rows(frame, right[0], " By provider ", &data.providers, false);
-    render_overview_rows(frame, right[1], " By model ", &data.models, false);
+    render_overview_rows(
+        frame,
+        right[0],
+        &format!(" {} ", i18n.text("usage-by-provider")),
+        &data.providers,
+        false,
+        i18n,
+    );
+    render_overview_rows(
+        frame,
+        right[1],
+        &format!(" {} ", i18n.text("usage-by-model")),
+        &data.models,
+        false,
+        i18n,
+    );
 }
 
 fn render_overview_rows(
@@ -617,6 +720,7 @@ fn render_overview_rows(
     title: &str,
     rows: &[UsageDashboardRow],
     daily: bool,
+    i18n: &I18n,
 ) {
     let visible = if daily {
         rows.iter()
@@ -678,7 +782,7 @@ fn render_overview_rows(
         .collect::<Vec<_>>();
     frame.render_widget(
         Paragraph::new(if lines.is_empty() {
-            vec![Line::from("No usage")]
+            vec![Line::from(i18n.text("usage-empty"))]
         } else {
             lines
         })
@@ -693,6 +797,7 @@ fn render_usage_table(
     title: &str,
     rows: &[&UsageDashboardRow],
     presentation: &UsageDashboardPresentation,
+    i18n: &I18n,
 ) {
     let visible = area.height.saturating_sub(4) as usize;
     let start = presentation
@@ -711,7 +816,12 @@ fn render_usage_table(
     let mut lines = vec![Line::from(Span::styled(
         format!(
             "{:<name_width$} {:<bar_width$} {:>10} {:>10} {:>7} {:>7}",
-            "name", "", "cost", "tokens", "requests", "cache"
+            i18n.text("usage-column-name"),
+            "",
+            i18n.text("usage-column-cost"),
+            i18n.text("usage-column-tokens"),
+            i18n.text("usage-column-requests"),
+            i18n.text("usage-column-cache")
         ),
         Style::default().fg(agena_tui_components::theme::muted_color()),
     ))];
@@ -760,7 +870,7 @@ fn render_usage_table(
         )));
     }
     if rows.is_empty() {
-        lines.push(Line::from("No usage for the selected filters"));
+        lines.push(Line::from(i18n.text("usage-empty-filtered")));
     }
     frame.render_widget(
         Paragraph::new(lines).block(Block::default().title(title).borders(Borders::ALL)),
@@ -773,24 +883,31 @@ fn render_usage_footer(
     area: Rect,
     presentation: &UsageDashboardPresentation,
     data: Option<&UsageDashboardData>,
+    i18n: &I18n,
 ) {
-    let mut hints = "↑/↓ rows  Esc close".to_owned();
+    let mut hints = i18n.text("usage-footer-rows");
     if presentation.view == UsageDashboardView::Sessions {
-        hints.push_str("  Enter open session");
+        hints.push_str(&format!("  {}", i18n.text("usage-footer-open-session")));
     }
     let range = data
         .map(|data| {
-            let mut summary = format!(
-                "{} active days · {} avg/day · peak {} on {}",
-                data.active_days,
-                format_cost(data.average_cost_per_active_day_usd),
-                format_cost(data.peak_cost_usd),
-                data.peak_cost_date.as_deref().unwrap_or("—")
+            let mut summary = i18n.text_args(
+                "usage-days-summary",
+                &crate::fl_args!(
+                    "days" => data.active_days,
+                    "average" => format_cost(data.average_cost_per_active_day_usd),
+                    "peak" => format_cost(data.peak_cost_usd),
+                    "date" => data.peak_cost_date.as_deref().unwrap_or("—")
+                ),
             );
             if data.totals.unpriced_requests > 0 {
-                summary.push_str(
-                    format!(" · ⚠ {} unpriced requests", data.totals.unpriced_requests).as_str(),
-                );
+                summary.push_str(&format!(
+                    " · {}",
+                    i18n.text_args(
+                        "usage-unpriced-requests",
+                        &crate::fl_args!("count" => data.totals.unpriced_requests)
+                    )
+                ));
             }
             summary
         })
@@ -889,6 +1006,7 @@ mod tests {
         UsageDashboardSort, UsageDashboardTotals, UsageDashboardView, usage_dashboard_sort_label,
         usage_dashboard_view_label,
     };
+    use crate::i18n::I18n;
 
     #[test]
     fn views_cycle_in_presentation_order() {
@@ -904,18 +1022,19 @@ mod tests {
 
     #[test]
     fn sort_cycles_and_labels_are_stable() {
+        let i18n = I18n::english();
         assert_eq!(UsageDashboardSort::Cost.next(), UsageDashboardSort::Tokens);
         assert_eq!(
             UsageDashboardSort::Requests.next(),
             UsageDashboardSort::Cost
         );
         assert_eq!(
-            usage_dashboard_view_label(UsageDashboardView::Providers),
-            "Providers"
+            usage_dashboard_view_label(&i18n, UsageDashboardView::Providers),
+            i18n.text("usage-view-providers")
         );
         assert_eq!(
-            usage_dashboard_sort_label(UsageDashboardSort::Tokens),
-            "Tokens"
+            usage_dashboard_sort_label(&i18n, UsageDashboardSort::Tokens),
+            i18n.text("usage-sort-tokens")
         );
     }
 

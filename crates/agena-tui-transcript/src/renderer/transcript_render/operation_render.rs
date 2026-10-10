@@ -99,6 +99,7 @@ pub(crate) fn render_tool_execution_with_sections(
             label.as_str(),
             tool.summary(),
             width,
+            i18n,
         );
         return ToolExecutionRender {
             headline_end: out.len(),
@@ -119,6 +120,7 @@ pub(crate) fn render_tool_execution_with_sections(
         label.as_str(),
         tool.summary(),
         width,
+        i18n,
     );
     let headline_end = out.len();
     let details = render_tool_detail_sections_with_sections(
@@ -192,19 +194,22 @@ pub(crate) fn render_tool_detail_sections_with_sections(
     if let Some(error_message) = failure_text {
         push_section_heading(
             out,
-            "    › Error",
+            format!("    › {}", ui_text::t(i18n, "activity-section-error")).as_str(),
             Style::default()
                 .fg(agena_tui_components::theme::danger_color())
                 .add_modifier(Modifier::BOLD),
             width,
         );
         let error_start = out.len();
-        render_expanded_tool_text_block(out, "      ", error_message, width);
+        render_expanded_tool_text_block(out, "      ", error_message, width, i18n);
         patch_rendered_lines_style(
             &mut out[error_start..],
             Style::default().fg(agena_tui_components::theme::danger_color()),
         );
-        visible_copy_sections.push(format!("Error\n{error_message}"));
+        visible_copy_sections.push(format!(
+            "{}\n{error_message}",
+            ui_text::t(i18n, "activity-section-error")
+        ));
     }
 
     // Human output is the primary view. Only the technical sections live
@@ -253,14 +258,21 @@ pub(crate) fn render_tool_detail_sections_with_sections(
         &input_markdown,
         input_expanded,
         width,
+        i18n,
     );
     if input_expanded {
-        visible_copy_sections.push(format!("Input\n{input_markdown}"));
+        visible_copy_sections.push(format!(
+            "{}\n{input_markdown}",
+            ui_text::t(i18n, "activity-section-input")
+        ));
     }
 
     let output_json = serde_json::to_string_pretty(&tool.operation.output)
         .expect("raw tool output is JSON serializable");
-    let output_copy_text = format!("Output\n{output_json}");
+    let output_copy_text = format!(
+        "{}\n{output_json}",
+        ui_text::t(i18n, "activity-section-output")
+    );
     let output = render_detail_section_with_body(
         out,
         &ui_text::t(i18n, "tool-detail-output"),
@@ -384,6 +396,7 @@ fn render_markdown_detail_section(
     markdown: &str,
     expanded: bool,
     width: u16,
+    i18n: &I18n,
 ) -> ToolExecutionSectionRender {
     let copy_text = format!("{title}\n{markdown}");
     render_detail_section_with_body(
@@ -391,7 +404,7 @@ fn render_markdown_detail_section(
         title,
         expanded,
         width,
-        |body| push_expanded_markdown(body, "      ", markdown, width),
+        |body| push_expanded_markdown(body, "      ", markdown, width, i18n),
         copy_text,
     )
 }
@@ -409,7 +422,7 @@ fn render_tool_presentation_body(
     failure_text: Option<&str>,
 ) {
     if tool.presentation.blocks.is_empty() && !tool.presentation.summary.trim().is_empty() {
-        push_expanded_markdown(out, "    ", tool.presentation.summary.as_str(), width);
+        push_expanded_markdown(out, "    ", tool.presentation.summary.as_str(), width, i18n);
     }
     render_operation_blocks(
         human_tool_blocks(tool),
@@ -585,7 +598,7 @@ fn render_interaction_notification(
         width,
     );
     let model_text = tool.model_text();
-    push_expanded_markdown(out, "  │  ", model_text.as_str(), width);
+    push_expanded_markdown(out, "  │  ", model_text.as_str(), width, i18n);
     push_single_line(
         out,
         "  ╰─ ",
@@ -666,7 +679,7 @@ pub(crate) fn render_operation_blocks<'a>(
                     continue;
                 }
                 if expanded {
-                    render_expanded_tool_text_block(out, "    ", text, width);
+                    render_expanded_tool_text_block(out, "    ", text, width, i18n);
                 } else {
                     push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
                 }
@@ -676,7 +689,7 @@ pub(crate) fn render_operation_blocks<'a>(
                     continue;
                 }
                 if expanded {
-                    push_expanded_markdown(out, "    ", text, width);
+                    push_expanded_markdown(out, "    ", text, width, i18n);
                 } else {
                     push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
                 }
@@ -700,6 +713,7 @@ pub(crate) fn render_operation_blocks<'a>(
                     "    ",
                     &format!("{fence}sh\n{command}{separator}{fence}\n"),
                     width,
+                    i18n,
                 );
                 if !stdout.trim().is_empty() {
                     if expanded {
@@ -742,7 +756,7 @@ pub(crate) fn render_operation_blocks<'a>(
             }
             ViewBlock::Diff { diff, .. } => {
                 if expanded {
-                    push_expanded_diff_text(out, "    ", diff, width);
+                    push_expanded_diff_text(out, "    ", diff, width, i18n);
                 } else {
                     push_collapsible_text(
                         out,
@@ -806,7 +820,7 @@ pub(crate) fn render_operation_blocks<'a>(
             ViewBlock::Json { value, .. } => {
                 let text = json_value_to_markdown(value);
                 if expanded {
-                    push_expanded_markdown(out, "    ", &text, width);
+                    push_expanded_markdown(out, "    ", &text, width, i18n);
                 } else {
                     push_collapsible_text(
                         out,
@@ -839,7 +853,7 @@ pub(crate) fn render_operation_blocks<'a>(
                     table.push_str(&format!("| {cells} |\n"));
                 }
                 if expanded {
-                    push_expanded_markdown(out, "    ", table.as_str(), width);
+                    push_expanded_markdown(out, "    ", table.as_str(), width, i18n);
                 } else {
                     push_collapsible_text(
                         out,
@@ -883,7 +897,7 @@ pub(crate) fn render_operation_blocks<'a>(
                 if value.is_object() {
                     let text = json_value_to_markdown(&value);
                     if expanded {
-                        push_expanded_markdown(out, "    ", text.as_str(), width);
+                        push_expanded_markdown(out, "    ", text.as_str(), width, i18n);
                     } else {
                         push_collapsible_text(
                             out,
@@ -903,6 +917,7 @@ pub(crate) fn render_operation_blocks<'a>(
                             "    ",
                             format!("```json\n{text}\n```").as_str(),
                             width,
+                            i18n,
                         );
                     } else {
                         push_collapsible_text(

@@ -151,10 +151,12 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
             })
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::CommandReference(reference)) => {
-            reference
-                .commands
-                .first()
-                .map(|command| format!("Command: {}", command.name))
+            reference.commands.first().map(|command| {
+                i18n.text_args(
+                    "activity-command-reference-title",
+                    &agena_tui::fl_args!("name" => command.name.as_str()),
+                )
+            })
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Fold { .. }) => None,
     }

@@ -39,7 +39,12 @@ impl App {
             "tracing.filter" | "tracing.database" | "tracing.adapter" => Some(
                 ["off", "error", "warn", "info", "debug", "trace"]
                     .into_iter()
-                    .map(|level| choice_item(level, "log level"))
+                    .map(|level| {
+                        choice_item(
+                            level,
+                            ui_text::t(&self.i18n, "settings-choice-log-level-detail"),
+                        )
+                    })
                     .collect(),
             ),
             "session.compaction.auto" => Some(boolean_choice_items(

@@ -1585,6 +1585,123 @@ mod tests {
         assert!(rendered.contains("Models"), "{rendered}");
     }
 
+    /// Test double for the locale catalogs: echoes each resolved key (and its
+    /// arguments) so the dialog chrome can be asserted without loading a
+    /// Fluent bundle.
+    struct MarkerText;
+
+    impl super::SearchPickerText for MarkerText {
+        fn text(&self, key: &str, args: &[(&str, String)]) -> String {
+            let mut rendered = format!("[{key}");
+            for (name, value) in args {
+                rendered.push_str(&format!(" {name}={value}"));
+            }
+            rendered.push(']');
+            rendered
+        }
+    }
+
+    fn marker_picker() -> SearchPicker<Item, SearchPickerNoCustom, (), Editor> {
+        let mut picker = SearchPicker::<Item, SearchPickerNoCustom, (), Editor>::new(
+            "Models".into(),
+            String::new(),
+            String::new(),
+            "No models".into(),
+            Editor::from_text("claude".into()),
+            SearchPickerConfig {
+                preview_mode: SearchPickerPreviewMode::Responsive {
+                    min_total_width: 60,
+                    left_min_width: 40,
+                    right_min_width: 40,
+                },
+                ..SearchPickerConfig::searchable()
+            },
+            None,
+            (),
+        );
+        picker.replace_items(vec![Item {
+            key: "sonnet",
+            label: "Claude Sonnet",
+            detail: "balanced model",
+            pinned: false,
+        }]);
+        picker
+    }
+
+    #[test]
+    fn installed_text_resolver_carries_the_dialog_chrome() {
+        let spec =
+            SearchPickerDialogSpec::new("Loading…".into(), "Results".into()).with_text(&MarkerText);
+        let backend = TestBackend::new(160, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let picker = marker_picker();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_search_picker_dialog_with_preview(
+                    frame,
+                    area,
+                    &picker,
+                    &spec,
+                    str::to_owned,
+                    |_| Vec::new(),
+                );
+            })
+            .unwrap();
+        let rendered = rendered_buffer(terminal.backend());
+        assert!(
+            rendered.contains("[search-picker-results count=1]"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[search-picker-page current=1 total=1]"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[search-picker-preview-title]"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[search-picker-no-preview]"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[search-picker-footer-close]"),
+            "{rendered}"
+        );
+
+        let mut picker = marker_picker();
+        picker.phase = super::SearchPickerPhase::Appending;
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_search_picker_dialog(frame, area, &picker, &spec, str::to_owned);
+            })
+            .unwrap();
+        let rendered = rendered_buffer(terminal.backend());
+        assert!(
+            rendered.contains("[search-picker-loading-more]"),
+            "{rendered}"
+        );
+
+        picker.error_message = None;
+        picker.phase = super::SearchPickerPhase::Error {
+            keep_results: false,
+        };
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_search_picker_dialog(frame, area, &picker, &spec, str::to_owned);
+            })
+            .unwrap();
+        let rendered = rendered_buffer(terminal.backend());
+        assert!(
+            rendered.contains("[search-picker-search-failed]"),
+            "{rendered}"
+        );
+    }
+
     #[test]
     fn wrapped_input_renders_long_paths_over_multiple_rows() {
         let path = "/very/long/workspace/path/with/several/nested/directories/and/a/file.txt";

@@ -236,9 +236,7 @@ impl App {
                 return;
             }
             if text.len() > 1024 * 1024 {
-                self.flash_warning(
-                    "Paste exceeds the 1 MiB text limit; the draft was not changed.",
-                );
+                self.flash_warning(self.i18n.text("flash-paste-limit-draft-unchanged"));
                 return;
             }
             if paste_requires_workspace_text_file(text.as_str()) {

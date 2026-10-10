@@ -5,6 +5,8 @@
 //! the final application collects that evidence at its process boundary and
 //! supplies it to TUI feature code.
 
+use crate::i18n::I18n;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Support level of a terminal capability.
 pub enum Support {
@@ -16,13 +18,14 @@ pub enum Support {
 }
 
 impl Support {
-    pub const fn diagnostic_label(self) -> &'static str {
+    /// i18n key of the compact status word used inside capability labels.
+    pub const fn state_key(self) -> &'static str {
         match self {
-            Self::Supported => "confirmed",
-            Self::Forced => "forced",
-            Self::Profiled => "profiled",
-            Self::Unsupported => "no",
-            Self::Unknown => "unknown",
+            Self::Supported => "terminal-diagnostics-state-confirmed",
+            Self::Forced => "terminal-diagnostics-state-forced",
+            Self::Profiled => "terminal-diagnostics-state-profiled",
+            Self::Unsupported => "terminal-diagnostics-state-unsupported",
+            Self::Unknown => "terminal-diagnostics-state-unknown",
         }
     }
 
@@ -171,11 +174,18 @@ impl CapabilityEvidence {
         )
     }
 
-    pub fn diagnostic_label(self) -> String {
+    /// Localized `status (qualifiers)` label rendered by the terminal
+    /// diagnostics surfaces.
+    pub fn diagnostic_label(self, i18n: &I18n) -> String {
+        let status = i18n.text(self.support.state_key());
         let mut qualifiers = Vec::new();
         match self.path {
-            CapabilityPath::Unverified => qualifiers.push("path unverified"),
-            CapabilityPath::Blocked => qualifiers.push("path blocked"),
+            CapabilityPath::Unverified => {
+                qualifiers.push(i18n.text("terminal-diagnostics-state-path-unverified"))
+            }
+            CapabilityPath::Blocked => {
+                qualifiers.push(i18n.text("terminal-diagnostics-state-path-blocked"))
+            }
             CapabilityPath::Clear | CapabilityPath::UserForced => {}
         }
         if self.provider == ProviderReadiness::Missing
@@ -184,16 +194,12 @@ impl CapabilityEvidence {
                 Support::Supported | Support::Forced | Support::Profiled
             )
         {
-            qualifiers.push("provider unavailable");
+            qualifiers.push(i18n.text("terminal-diagnostics-state-provider-unavailable"));
         }
         if qualifiers.is_empty() {
-            self.support.diagnostic_label().to_owned()
+            status
         } else {
-            format!(
-                "{} ({})",
-                self.support.diagnostic_label(),
-                qualifiers.join("; ")
-            )
+            format!("{status} ({})", qualifiers.join("; "))
         }
     }
 }

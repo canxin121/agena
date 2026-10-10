@@ -63,7 +63,8 @@ pub fn render_overlay(frame: &mut Frame<'_>, area: Rect, dialog: &TimelineOverla
     let spec = SearchPickerDialogSpec::new(
         i18n.text("overlay-picker-loading").into(),
         i18n.text("overlay-timeline-events").into(),
-    );
+    )
+    .with_text(i18n);
     render_search_picker_dialog_with_preview(
         frame,
         area,

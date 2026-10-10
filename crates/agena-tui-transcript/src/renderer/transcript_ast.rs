@@ -928,6 +928,7 @@ fn markdown_node_kind(node: &MarkdownNode) -> TranscriptNodeKind {
 #[cfg(test)]
 mod tests {
     use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource};
+    use agena_tui::i18n::I18n;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
     use super::*;
@@ -1025,7 +1026,7 @@ mod tests {
     fn rich_table_cells_preserve_all_explicit_lines() {
         let blocks = parse_markdown_document("| value |\n| --- |\n| first<br>second |");
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 40);
+        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 40, &I18n::english());
         let text = rendered
             .iter()
             .map(|line| line.text.as_str())
@@ -1039,7 +1040,7 @@ mod tests {
     fn markdown_superscripts_and_subscripts_use_positional_unicode() {
         let blocks = parse_markdown_document("x^2^ and H~2~O");
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80);
+        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80, &I18n::english());
         let text = rendered
             .iter()
             .map(|line| line.text.as_str())
@@ -1326,7 +1327,7 @@ mod tests {
         ));
 
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 100);
+        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 100, &I18n::english());
         let text = rendered
             .iter()
             .map(|line| line.text.as_str())
@@ -1355,7 +1356,7 @@ mod tests {
         let blocks = parse_markdown_document(&format!("![Remote image]({source})"));
         let mut rendered = Vec::new();
         agena_tui_media::with_math_render_context(&context, || {
-            render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80);
+            render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80, &I18n::english());
         });
 
         let placements = rendered
@@ -1420,7 +1421,7 @@ mod tests {
 
         let mut rendered = Vec::new();
         for block in &blocks {
-            render_parsed_markdown_block(&mut rendered, "", block, 100);
+            render_parsed_markdown_block(&mut rendered, "", block, 100, &I18n::english());
         }
         let text = rendered
             .iter()
@@ -1442,12 +1443,15 @@ mod tests {
             "an unloaded image must not masquerade as a rendered card:\n{text}"
         );
 
+        // The placeholder wording now comes from the catalog, so assert against
+        // the same lookup the renderer performs instead of an English literal.
+        let i18n = I18n::english();
         assert_eq!(
-            markdown_image_source_label("data:image/png;base64,AAAA"),
-            "embedded image"
+            markdown_image_source_label("data:image/png;base64,AAAA", &i18n),
+            i18n.text("transcript-image-embedded")
         );
         assert_eq!(
-            markdown_image_caption("", "", "./assets/diagram.png?raw=1"),
+            markdown_image_caption("", "", "./assets/diagram.png?raw=1", &i18n),
             "diagram.png"
         );
     }
@@ -1482,7 +1486,7 @@ mod tests {
     fn rich_tables_and_math_keep_inline_styles() {
         let table = parse_markdown_document("| head |\n| --- |\n| *styled* |");
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "", &table[0], 80);
+        render_parsed_markdown_block(&mut rendered, "", &table[0], 80, &I18n::english());
         assert!(rendered.iter().any(|line| {
             line.rich_line.as_ref().is_some_and(|line| {
                 line.spans
@@ -1493,7 +1497,7 @@ mod tests {
 
         let math = parse_markdown_document("**value** \\(\\frac{a}{b}\\)");
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "", &math[0], 80);
+        render_parsed_markdown_block(&mut rendered, "", &math[0], 80, &I18n::english());
         assert!(!rendered.is_empty());
         assert!(rendered.iter().any(|line| {
             line.rich_line.as_ref().is_some_and(|line| {
@@ -1517,7 +1521,7 @@ mod tests {
             parse_markdown_document(r"**before** \(\begin{bmatrix}a\\b\\c\end{bmatrix}\) after");
         let mut rendered = Vec::new();
         agena_tui_media::with_math_render_context(&context, || {
-            render_parsed_markdown_block(&mut rendered, "", &blocks[0], 120);
+            render_parsed_markdown_block(&mut rendered, "", &blocks[0], 120, &I18n::english());
         });
 
         let text_row = rendered
@@ -1556,7 +1560,7 @@ mod tests {
         ));
         let mut rendered = Vec::new();
         agena_tui_media::with_math_render_context(&context, || {
-            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 120);
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 120, &I18n::english());
         });
 
         let placements = rendered
@@ -1608,7 +1612,7 @@ mod tests {
         let blocks =
             parse_markdown_document("- before $\\begin{bmatrix}a\\\\b\\end{bmatrix}$ after");
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80, &I18n::english());
 
         assert!(rendered.len() > 1, "fixture must use a multiline formula");
         assert_eq!(
@@ -1632,7 +1636,7 @@ mod tests {
             "- This deliberately long list item wraps onto several terminal rows without repeating its marker.",
         );
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 24);
+        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 24, &I18n::english());
 
         assert!(rendered.len() > 1, "fixture must wrap");
         assert_eq!(
@@ -1662,7 +1666,7 @@ mod tests {
         let blocks = parse_markdown_document("# before $\\frac{a+b}{c+d}$ after");
         let mut rendered = Vec::new();
         agena_tui_media::with_math_render_context(&context, || {
-            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80, &I18n::english());
         });
 
         let (top, placement) = rendered
@@ -1696,7 +1700,7 @@ mod tests {
         let blocks = parse_markdown_document(&format!("- before ![tall]({source}) after"));
         let mut rendered = Vec::new();
         agena_tui_media::with_math_render_context(&context, || {
-            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80, &I18n::english());
         });
 
         let (top, placement) = rendered
@@ -1737,7 +1741,7 @@ mod tests {
         let blocks = parse_markdown_document(&format!("- ![tall]({source})"));
         let mut rendered = Vec::new();
         agena_tui_media::with_math_render_context(&context, || {
-            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80, &I18n::english());
         });
 
         let (top, placement) = rendered
@@ -1777,7 +1781,7 @@ mod tests {
         );
         let mut rendered = Vec::new();
         agena_tui_media::with_math_render_context(&context, || {
-            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80, &I18n::english());
         });
 
         let (top, placement) = rendered
@@ -1800,7 +1804,7 @@ mod tests {
     fn fenced_code_block_at_list_start_emits_only_one_marker() {
         let blocks = parse_markdown_document("- ```text\n  alpha\n  beta\n  ```");
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80, &I18n::english());
 
         assert!(rendered.len() > 2, "fixture must render a multi-row card");
         assert_eq!(
@@ -1824,12 +1828,16 @@ mod tests {
                 if language == "mermaid" && literal.contains("A-->B")
         ));
         let mut rendered = Vec::new();
-        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80);
-        assert!(
-            rendered
-                .iter()
-                .any(|line| line.text.contains("Diagram · mermaid"))
+        let i18n = I18n::english();
+        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80, &i18n);
+        let expected_header = i18n.text_args(
+            "transcript-diagram-title",
+            &agena_tui::fl_args!("label" => "mermaid"),
         );
+        assert!(rendered.iter().any(|line| {
+            line.text
+                .contains(sanitize_terminal_text(&expected_header).as_str())
+        }));
         assert!(rendered.iter().any(|line| line.text.contains("A-->B")));
     }
 }

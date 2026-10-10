@@ -16,14 +16,14 @@ impl ComposerDraft {
         self.document.text()
     }
 
-    pub(crate) fn render_text(&self) -> String {
+    pub(crate) fn render_text(&self, i18n: &I18n) -> String {
         self.document
             .0
             .iter()
             .map(|node| match node {
                 ComposerNode::Text { text } => text.clone(),
                 ComposerNode::Activity { activity } => {
-                    composer_activity_presentation(&activity.payload).0
+                    composer_activity_presentation(&activity.payload, i18n).0
                 }
             })
             .collect::<Vec<_>>()
@@ -64,12 +64,15 @@ pub(crate) fn composer_item_label(item: &ComposerItem, i18n: &I18n) -> String {
             }
             label
         }
-        ActivityPayload::CommandReference(command) => format!("Command: {}", command.name),
+        ActivityPayload::CommandReference(command) => i18n.text_args(
+            "composer-command-line",
+            &agena_tui::fl_args!("name" => command.name.clone()),
+        ),
         ActivityPayload::TextArtifact(artifact) => crate::ui_text::text_artifact_display_label(
             artifact.text.as_str(),
             artifact.label.as_deref(),
         ),
-        _ => composer_activity_presentation(&item.activity.payload).1,
+        _ => composer_activity_presentation(&item.activity.payload, i18n).1,
     }
 }
 
@@ -108,22 +111,33 @@ impl ComposerItem {
     }
 }
 
-pub(crate) fn composer_activity_presentation(payload: &ActivityPayload) -> (String, String) {
+pub(crate) fn composer_activity_presentation(
+    payload: &ActivityPayload,
+    i18n: &I18n,
+) -> (String, String) {
     match payload {
         ActivityPayload::Resource(resource) => {
-            let noun = if resource.kind == agena_domain::ResourceKind::Directory {
-                "folder"
+            let chip_key = if resource.kind == agena_domain::ResourceKind::Directory {
+                "composer-chip-folder"
             } else {
-                "file"
+                "composer-chip-file"
             };
-            (
-                format!("[{noun}: {}]", resource.name),
-                format!("{noun}: {}", resource.name),
-            )
+            let chip = i18n.text_args(
+                chip_key,
+                &agena_tui::fl_args!("name" => resource.name.clone()),
+            );
+            let plain = strip_chip_brackets(chip.as_str());
+            (chip, plain)
         }
         ActivityPayload::CommandReference(command) => (
-            format!("[Command: {}]", command.name),
-            format!("Command: {}", command.name),
+            i18n.text_args(
+                "composer-chip-command",
+                &agena_tui::fl_args!("name" => command.name.clone()),
+            ),
+            i18n.text_args(
+                "composer-command-line",
+                &agena_tui::fl_args!("name" => command.name.clone()),
+            ),
         ),
         ActivityPayload::TextArtifact(artifact) => {
             let label = crate::ui_text::text_artifact_display_label(
@@ -134,6 +148,15 @@ pub(crate) fn composer_activity_presentation(payload: &ActivityPayload) -> (Stri
         }
         _ => ("[activity]".to_owned(), "activity".to_owned()),
     }
+}
+
+/// The bare label of a bracketed chip: `[file: a.txt]` becomes `file: a.txt`.
+/// A catalog that decorates the chip another way keeps its own wording.
+fn strip_chip_brackets(chip: &str) -> String {
+    chip.strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .map(str::to_owned)
+        .unwrap_or_else(|| chip.to_owned())
 }
 
 impl PersistentDraftStore {

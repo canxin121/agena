@@ -226,7 +226,7 @@ async fn run_app(
     let math_graphics = terminal.math_graphics();
     let math_protocol = math_graphics.protocol_name();
     let terminal_context = terminal.context().clone();
-    let terminal_summary = terminal_context.diagnostic_summary();
+    let terminal_summary = terminal_context.diagnostic_summary(&i18n);
     tracing::debug!(
         terminal = %terminal_summary,
         math_protocol,

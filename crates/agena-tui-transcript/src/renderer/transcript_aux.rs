@@ -3,6 +3,7 @@ pub(crate) fn push_expanded_diff_text(
     prefix: &str,
     text: &str,
     width: u16,
+    i18n: &I18n,
 ) {
     use super::{DiffRowKind, transcript_diff_files};
     let sanitized = sanitize_terminal_text(text);
@@ -12,7 +13,7 @@ pub(crate) fn push_expanded_diff_text(
         let path = if !file.old_path.is_empty() && file.old_path != file.path {
             format!("{} → {}", file.old_path, file.path)
         } else if file.path.is_empty() {
-            "Changes".to_owned()
+            ui_text::t(i18n, "transcript-diff-changes")
         } else {
             file.path.clone()
         };
@@ -223,9 +224,10 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::{
-    RenderedLine, push_wrapped_line, sanitize_terminal_text, syntax_highlight_lines,
+    I18n, RenderedLine, push_wrapped_line, sanitize_terminal_text, syntax_highlight_lines,
     truncate_display_width, wrap_rich_line,
 };
+use crate::ui_text;
 
 #[cfg(test)]
 mod tests {
@@ -236,7 +238,7 @@ mod tests {
     fn diff_renders_file_stats_numbers_colors_and_wrapped_copy_without_headers() {
         let diff = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -98,3 +98,3 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new 内容 and a long line\");\n }\n";
         let mut lines = Vec::new();
-        push_expanded_diff_text(&mut lines, "  ", diff, 40);
+        push_expanded_diff_text(&mut lines, "  ", diff, 40, &I18n::english());
         let text = lines
             .iter()
             .map(|line| line.text.as_str())
@@ -289,7 +291,13 @@ mod tests {
     #[test]
     fn legacy_add_diff_and_blank_lines_keep_visible_gutters() {
         let mut lines = Vec::new();
-        push_expanded_diff_text(&mut lines, "", "+++ b/新.txt\n@@\n+\n+你好\n", 12);
+        push_expanded_diff_text(
+            &mut lines,
+            "",
+            "+++ b/新.txt\n@@\n+\n+你好\n",
+            12,
+            &I18n::english(),
+        );
         assert!(lines.iter().any(|line| line.text.starts_with("1 +")));
         assert!(lines.iter().any(|line| line.text.contains("2 +你好")));
     }
@@ -304,7 +312,7 @@ diff --git a/old b/new\nsimilarity index 100%\nrename from old\nrename to new\n\
 diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n";
         for width in [32, 80] {
             let mut lines = Vec::new();
-            push_expanded_diff_text(&mut lines, "  ", diff, width);
+            push_expanded_diff_text(&mut lines, "  ", diff, width, &I18n::english());
             let rich = lines
                 .into_iter()
                 .map(|line| line.rich_line.unwrap())

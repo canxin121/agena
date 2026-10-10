@@ -222,7 +222,8 @@ pub fn render_overlay(frame: &mut Frame<'_>, area: Rect, dialog: &ChoicePresenta
     let spec = SearchPickerDialogSpec::new(
         i18n.text("overlay-picker-loading").into(),
         i18n.text("overlay-attach-matches").into(),
-    );
+    )
+    .with_text(i18n);
     render_search_picker_dialog(frame, area, dialog, &spec, sanitize_picker_text);
 }
 

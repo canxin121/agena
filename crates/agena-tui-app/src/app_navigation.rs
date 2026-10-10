@@ -145,24 +145,26 @@ impl App {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
+        let turn_label = self.i18n.text_args(
+            "rewind-turn-label",
+            &agena_tui::fl_args!("sequence" => target.sequence),
+        );
         let label = if normalized.is_empty() {
-            format!("Turn {}", target.sequence)
+            turn_label.clone()
         } else {
             normalized.chars().take(96).collect()
         };
-        let detail = format!(
-            "turn {} | {}",
-            target.sequence,
-            format_timestamp(
-                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(target.created_at_ms)
-                    .unwrap_or_default()
-            )
+        let detail = self.i18n.text_args(
+            "rewind-turn-detail",
+            &agena_tui::fl_args!(
+                "sequence" => target.sequence,
+                "time" => format_timestamp(
+                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(target.created_at_ms)
+                        .unwrap_or_default(),
+                ),
+            ),
         );
-        let target_text = format!(
-            "{} ({})",
-            label,
-            detail.split(" | ").next().unwrap_or_default()
-        );
+        let target_text = format!("{label} ({turn_label})");
         (
             agena_tui_session::session_navigation::SessionNavigationItem::new(
                 format!("message:{}", target.at_message_id),

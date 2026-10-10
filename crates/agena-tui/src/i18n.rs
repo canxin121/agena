@@ -65,6 +65,24 @@ impl I18n {
     }
 }
 
+/// The search-picker dialog keeps its own chrome keys; resolving them through
+/// [`I18n`] keeps every `search-picker-*` message in the shared catalog.
+impl agena_tui_components::SearchPickerText for I18n {
+    fn text(&self, key: &str, args: &[(&str, String)]) -> String {
+        if args.is_empty() {
+            return I18n::text(self, key);
+        }
+        let mut fluent = FluentArgs::new();
+        for (name, value) in args {
+            fluent.insert(
+                Cow::Owned((*name).to_owned()),
+                FluentValue::from(value.clone()),
+            );
+        }
+        I18n::text_args(self, key, &fluent)
+    }
+}
+
 pub const SUPPORTED_LOCALES: &[(&str, &str)] = &[
     ("en-US", "English (United States)"),
     ("zh-CN", "简体中文"),
@@ -299,6 +317,121 @@ mod tests {
                 "{locale} misses Settings keys: {missing:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_supported_locale_covers_the_localized_interface_chrome() {
+        let surface_keys = |resource| {
+            message_keys(resource)
+                .into_iter()
+                .filter(|key| {
+                    key.starts_with("activities-")
+                        || key.starts_with("activity-detail-")
+                        || key.starts_with("activity-command-reference-")
+                        || key.starts_with("activity-section-")
+                        || key.starts_with("composer-chip-")
+                        || key.starts_with("composer-error-")
+                        || key.starts_with("composer-clipboard-")
+                        || key.starts_with("composer-notice-")
+                        || key.starts_with("search-picker-")
+                        || key.starts_with("transcript-alert-")
+                        || key.starts_with("transcript-image-")
+                        || matches!(
+                            *key,
+                            "timeline-label-role"
+                                | "timeline-label-state"
+                                | "timeline-label-revision"
+                                | "timeline-label-run"
+                                | "timeline-label-parent-part"
+                        )
+                        || key.starts_with("help-diagnostics-kitty-")
+                        || key.starts_with("usage-")
+                        || key.starts_with("terminal-diagnostics-")
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        let english = surface_keys(RESOURCES[0].1);
+        for (locale, resource) in RESOURCES.iter().skip(1) {
+            let localized = surface_keys(resource);
+            let missing = english.difference(&localized).copied().collect::<Vec<_>>();
+            assert!(
+                missing.is_empty(),
+                "{locale} misses interface keys: {missing:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn interface_chrome_references_have_an_english_catalog_entry() {
+        // Inspect the presentation sources as well as the catalogs: checking
+        // locale parity alone misses a key absent from every locale.
+        let sources = [
+            include_str!("activities.rs"),
+            include_str!("usage.rs"),
+            include_str!("terminal_capabilities.rs"),
+            include_str!("../../agena-tui-components/src/search_picker/render.rs"),
+            include_str!("../../agena-tui-app/src/app_composer.rs"),
+            include_str!("../../agena-tui-app/src/app_composer_state.rs"),
+            include_str!("../../agena-tui-app/src/composer_state_impls.rs"),
+            include_str!("../../agena-tui-app/src/app_help.rs"),
+            include_str!("../../agena-tui-app/src/app_permission_display.rs"),
+            include_str!("../../agena-tui-app/src/app_permission_helpers/editor.rs"),
+            include_str!("../../agena-tui-app/src/app_status_context.rs"),
+            include_str!("../../agena-tui-app/src/app_session_interactive/execution.rs"),
+            include_str!("../../agena-tui-app/src/app_session_interactive/settings.rs"),
+            include_str!("../../agena-tui-app/src/app_settings_choices/fields.rs"),
+            include_str!("../../agena-tui-app/src/app_timeline_helpers.rs"),
+            include_str!("../../agena-tui-app/src/plugin_workbench/workbench_editor.rs"),
+            include_str!("../../agena-tui-app/src/plugin_workbench/workbench_input.rs"),
+            include_str!("../../agena-tui-app/src/plugin_workbench/workbench_navigation.rs"),
+            include_str!("../../agena-tui-transcript/src/text.rs"),
+            include_str!("../../agena-tui-transcript/src/renderer/transcript_ast/render.rs"),
+            include_str!("../../agena-tui-transcript/src/renderer/transcript_aux.rs"),
+            include_str!("../../agena-tui-transcript/src/renderer/transcript_text.rs"),
+            include_str!(
+                "../../agena-tui-transcript/src/renderer/transcript_render/message_render.rs"
+            ),
+            include_str!(
+                "../../agena-tui-transcript/src/renderer/transcript_render/operation_render.rs"
+            ),
+        ];
+        let prefixes = [
+            "activities-",
+            "activity-detail-",
+            "activity-section-",
+            "activity-title-",
+            "composer-",
+            "context-help-",
+            "flash-",
+            "help-diagnostics-",
+            "message-role-",
+            "overlay-permission-rule-",
+            "permission-studio-",
+            "plugin-workbench-",
+            "search-picker-",
+            "settings-choice-",
+            "terminal-diagnostics-",
+            "timeline-label-",
+            "transcript-",
+            "usage-",
+        ];
+        let english = message_keys(RESOURCES[0].1);
+        let referenced = sources
+            .iter()
+            .flat_map(|source| source.split('"'))
+            .filter(|key| {
+                prefixes.iter().any(|prefix| key.starts_with(prefix))
+                    && key
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                    && !key.ends_with('-')
+            })
+            .collect::<BTreeSet<_>>();
+        let missing = referenced.difference(&english).copied().collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "interface references unknown keys: {missing:?}"
+        );
     }
 
     #[test]

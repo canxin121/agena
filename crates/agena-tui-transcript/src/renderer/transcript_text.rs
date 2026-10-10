@@ -156,15 +156,16 @@ pub(crate) fn render_expanded_tool_text_block(
     prefix: &str,
     text: &str,
     width: u16,
+    i18n: &I18n,
 ) {
-    if tool_text_looks_like_markdown(text) {
-        push_expanded_markdown(out, prefix, text, width);
+    if tool_text_looks_like_markdown(text, i18n) {
+        push_expanded_markdown(out, prefix, text, width, i18n);
     } else {
         push_expanded_tool_text(out, prefix, text, Style::default(), width);
     }
 }
 
-pub(crate) fn tool_text_looks_like_markdown(text: &str) -> bool {
+pub(crate) fn tool_text_looks_like_markdown(text: &str, i18n: &I18n) -> bool {
     let normalized = normalized_tool_text(text);
     if normalized.is_empty() {
         return false;
@@ -183,7 +184,7 @@ pub(crate) fn tool_text_looks_like_markdown(text: &str) -> bool {
         if source.is_empty() {
             return false;
         }
-        markdown_inline_line(source, Style::default()).is_some_and(|rendered| {
+        markdown_inline_line(source, Style::default(), i18n).is_some_and(|rendered| {
             rendered
                 .spans
                 .iter()
@@ -397,6 +398,7 @@ pub(crate) fn push_markdown_document(
     prefix: &str,
     text: &str,
     width: u16,
+    i18n: &I18n,
 ) {
     let blocks = markdown_blocks(text);
     for (index, block) in blocks.iter().enumerate() {
@@ -406,7 +408,7 @@ pub(crate) fn push_markdown_document(
         // Paragraph boundaries remain in the parsed/copy model. A terminal
         // row is a full line of space, so do not add layout-only blank rows
         // between blocks; literal blank lines inside code/output still render.
-        render_markdown_block(out, prefix, block, width);
+        render_markdown_block(out, prefix, block, width, i18n);
     }
 }
 
@@ -417,8 +419,18 @@ pub(crate) fn push_markdown_document(
 /// highlighting) without owning a transcript node. The plan-approval overlay
 /// renders its plan body with the exact same styling as assistant prose.
 pub fn render_markdown_document(text: &str, width: u16) -> Vec<RenderedLine> {
+    render_markdown_document_with_i18n(text, width, &I18n::english())
+}
+
+/// Render a complete Markdown document with one locale's catalog wording for
+/// generated placeholders (alert titles, image captions, diagram titles).
+pub fn render_markdown_document_with_i18n(
+    text: &str,
+    width: u16,
+    i18n: &I18n,
+) -> Vec<RenderedLine> {
     let mut out = Vec::new();
-    push_markdown_document(&mut out, "", text, width);
+    push_markdown_document(&mut out, "", text, width, i18n);
     out
 }
 
@@ -451,8 +463,9 @@ pub fn render_markdown_block(
     prefix: &str,
     block: &MarkdownBlock,
     width: u16,
+    i18n: &I18n,
 ) {
-    render_parsed_markdown_block(out, prefix, block, width);
+    render_parsed_markdown_block(out, prefix, block, width, i18n);
 }
 
 pub(crate) fn should_suppress_markdown_block(blocks: &[MarkdownBlock], index: usize) -> bool {
@@ -485,6 +498,7 @@ pub(crate) fn push_markdown_code_block(
     prefix: &str,
     source: &str,
     width: u16,
+    i18n: &I18n,
 ) {
     let source_lines = source.lines().collect::<Vec<_>>();
     let opening = source_lines.first().copied().unwrap_or_default();
@@ -621,12 +635,18 @@ pub(crate) fn push_markdown_code_block(
         }
     }
     if code_lines.is_empty() {
+        let empty_label = format!("  {}", ui_text::t(i18n, "transcript-code-block-empty"));
         out.push(
             RenderedLine::rich(Line::from(vec![
                 Span::raw(prefix.to_string()),
                 Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
                 Span::styled(
-                    "  (empty)".to_string() + &" ".repeat(card_width.saturating_sub(11)),
+                    format!(
+                        "{empty_label}{}",
+                        " ".repeat(card_width.saturating_sub(
+                            UnicodeWidthStr::width(empty_label.as_str()).saturating_add(2)
+                        ))
+                    ),
                     Style::default().fg(palette.code_fg).bg(palette.code_bg),
                 ),
                 Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),

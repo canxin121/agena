@@ -476,23 +476,28 @@ impl App {
             && let Some(helper) = agena_tui_platform::kitty::helper()
         {
             provider_entries.push(HelpEntry {
-                keys: "Kitty helper".to_owned(),
-                description: format!(
-                    "{} · version={} · clipboard={} · transfer={}",
-                    diagnostic_path(helper.path.as_path()),
-                    helper.version.as_deref().unwrap_or("unknown"),
-                    helper.clipboard,
-                    helper.transfer,
+                keys: ui_text::t(&self.i18n, "help-diagnostics-kitty-helper"),
+                description: self.i18n.text_args(
+                    "help-diagnostics-kitty-line",
+                    &agena_tui::fl_args!(
+                        "path" => diagnostic_path(helper.path.as_path()),
+                        "version" => helper
+                            .version
+                            .clone()
+                            .unwrap_or_else(|| ui_text::t(&self.i18n, "value-unknown")),
+                        "clipboard" => ui_text::t(&self.i18n, if helper.clipboard { "value-yes" } else { "value-no" }),
+                        "transfer" => ui_text::t(&self.i18n, if helper.transfer { "value-yes" } else { "value-no" }),
+                    ),
                 ),
             });
         } else if identity.family == agena_tui_platform::terminal::TerminalFamily::Kitty {
             provider_entries.push(HelpEntry {
-                keys: "Kitty helper".to_owned(),
+                keys: ui_text::t(&self.i18n, "help-diagnostics-kitty-helper"),
                 description: text("terminal-diagnostics-helper-missing"),
             });
         } else {
             provider_entries.push(HelpEntry {
-                keys: "Kitty helper".to_owned(),
+                keys: ui_text::t(&self.i18n, "help-diagnostics-kitty-helper"),
                 description: text("terminal-diagnostics-helper-not-probed"),
             });
         }

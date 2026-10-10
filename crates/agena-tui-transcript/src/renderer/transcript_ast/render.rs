@@ -1,12 +1,22 @@
 use super::*;
+use agena_tui::i18n::I18n;
+
+use crate::ui_text;
+
+#[derive(Clone, Copy)]
+struct MarkdownRenderContext<'a> {
+    width: u16,
+    i18n: &'a I18n,
+}
 
 pub fn render_parsed_markdown_block(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     block: &MarkdownBlock,
     width: u16,
+    i18n: &I18n,
 ) {
-    render_markdown_node(out, prefix, &block.parsed, width);
+    render_markdown_node(out, prefix, &block.parsed, width, i18n);
 }
 
 fn render_markdown_node(
@@ -14,23 +24,24 @@ fn render_markdown_node(
     prefix: &str,
     node: &MarkdownNode,
     width: u16,
+    i18n: &I18n,
 ) {
     match node {
-        MarkdownNode::Paragraph(inlines) => render_paragraph(out, prefix, inlines, width),
+        MarkdownNode::Paragraph(inlines) => render_paragraph(out, prefix, inlines, width, i18n),
         MarkdownNode::Heading { level, content } => {
-            render_heading(out, prefix, usize::from(*level), content, width);
+            render_heading(out, prefix, usize::from(*level), content, width, i18n);
         }
         MarkdownNode::Quote(blocks) => {
             let quote_prefix = format!("{prefix}│ ");
             for block in blocks {
-                render_markdown_node(out, &quote_prefix, block, width);
+                render_markdown_node(out, &quote_prefix, block, width, i18n);
             }
         }
         MarkdownNode::Alert {
             kind,
             title,
             blocks,
-        } => render_alert(out, prefix, *kind, title.as_deref(), blocks, width),
+        } => render_alert(out, prefix, *kind, title.as_deref(), blocks, width, i18n),
         MarkdownNode::Code {
             language,
             literal,
@@ -42,11 +53,11 @@ fn render_markdown_node(
                 language.as_str()
             };
             let source = format!("```{language}\n{}\n```", literal.trim_end_matches('\n'));
-            push_markdown_code_block(out, prefix, &source, width);
+            push_markdown_code_block(out, prefix, &source, width, i18n);
         }
         MarkdownNode::Diagram { language, literal } => {
             let start = out.len();
-            render_diagram(out, prefix, language, literal, width);
+            render_diagram(out, prefix, language, literal, width, i18n);
             mark_rendered_semantic_unit(
                 out,
                 start,
@@ -59,7 +70,16 @@ fn render_markdown_node(
             delimiter,
             items,
             ..
-        } => render_list(out, prefix, *ordered, *start, *delimiter, items, width, 0),
+        } => render_list(
+            out,
+            prefix,
+            *ordered,
+            *start,
+            *delimiter,
+            items,
+            0,
+            MarkdownRenderContext { width, i18n },
+        ),
         MarkdownNode::DescriptionList(items) => {
             for item in items {
                 let term = inline_plain_text(&item.term);
@@ -74,12 +94,12 @@ fn render_markdown_node(
                 );
                 let detail_prefix = format!("{prefix}  │ ");
                 for detail in &item.details {
-                    render_markdown_node(out, &detail_prefix, detail, width);
+                    render_markdown_node(out, &detail_prefix, detail, width, i18n);
                 }
             }
         }
         MarkdownNode::Table { alignments, rows } => {
-            render_ast_table(out, prefix, alignments, rows, width)
+            render_ast_table(out, prefix, alignments, rows, width, i18n)
         }
         MarkdownNode::ThematicBreak => push_markdown_rule(out, prefix, width),
         MarkdownNode::Math { literal, display } => {
@@ -106,7 +126,7 @@ fn render_markdown_node(
                 title,
                 *dimensions,
                 link_url.as_deref(),
-                width,
+                MarkdownRenderContext { width, i18n },
             );
             let target = if title.is_empty() {
                 url.clone()
@@ -134,19 +154,20 @@ fn render_markdown_node(
             );
             let footnote_prefix = format!("{prefix}  ");
             for block in blocks {
-                render_markdown_node(out, &footnote_prefix, block, width);
+                render_markdown_node(out, &footnote_prefix, block, width, i18n);
             }
         }
         MarkdownNode::FrontMatter(front_matter) => {
             let source = format!("```yaml\n{}\n```", front_matter_body(front_matter));
-            push_markdown_code_block(out, prefix, &source, width);
+            push_markdown_code_block(out, prefix, &source, width, i18n);
         }
         MarkdownNode::Html(html) => {
             let source = format!("```html\n{}\n```", html.trim_end_matches('\n'));
-            push_markdown_code_block(out, prefix, &source, width);
+            push_markdown_code_block(out, prefix, &source, width, i18n);
         }
         MarkdownNode::Subtext(inlines) => {
-            for mut line in rich_inline_lines(inlines, Style::default().add_modifier(Modifier::DIM))
+            for mut line in
+                rich_inline_lines(inlines, Style::default().add_modifier(Modifier::DIM), i18n)
             {
                 line.spans.insert(0, Span::raw("⌞ "));
                 push_wrapped_rich_line(out, prefix, prefix, line, width);
@@ -164,7 +185,7 @@ fn render_markdown_node(
             );
             let body_prefix = format!("{prefix}│ ");
             for block in blocks {
-                render_markdown_node(out, &body_prefix, block, width);
+                render_markdown_node(out, &body_prefix, block, width, i18n);
             }
             push_single_line(
                 out,
@@ -182,8 +203,9 @@ fn render_paragraph(
     prefix: &str,
     inlines: &[MarkdownInline],
     width: u16,
+    i18n: &I18n,
 ) {
-    render_inline_flow(out, prefix, prefix, inlines, Style::default(), width);
+    render_inline_flow(out, prefix, prefix, inlines, Style::default(), width, i18n);
 }
 
 /// Parse one compact Markdown inline field into a rich terminal line.
@@ -192,7 +214,7 @@ fn render_paragraph(
 /// so block Markdown is rejected here instead of being flattened into a
 /// surprising headline. Callers can fall back to a plain span when this
 /// returns `None`.
-pub fn markdown_inline_line(source: &str, base_style: Style) -> Option<Line<'static>> {
+pub fn markdown_inline_line(source: &str, base_style: Style, i18n: &I18n) -> Option<Line<'static>> {
     let blocks = parse_markdown_document(source);
     let [block] = blocks.as_slice() else {
         return None;
@@ -200,7 +222,7 @@ pub fn markdown_inline_line(source: &str, base_style: Style) -> Option<Line<'sta
     let MarkdownNode::Paragraph(inlines) = &block.parsed else {
         return None;
     };
-    let mut lines = rich_inline_lines(inlines, base_style);
+    let mut lines = rich_inline_lines(inlines, base_style, i18n);
     (lines.len() == 1).then(|| lines.remove(0))
 }
 
@@ -217,6 +239,7 @@ fn render_inline_flow(
     inlines: &[MarkdownInline],
     style: Style,
     width: u16,
+    i18n: &I18n,
 ) {
     let rich_start = out.len();
     let sources = if layout_config().native_graphics && inlines_contain_rich_graphics(inlines) {
@@ -244,6 +267,7 @@ fn render_inline_flow(
             inlines,
             style,
             width,
+            i18n,
         )
     {
         mark_rendered_semantic_unit(out, rich_start, inline_plain_text(inlines));
@@ -253,7 +277,7 @@ fn render_inline_flow(
         return;
     }
     let mut first = true;
-    for line in rich_inline_lines(inlines, style) {
+    for line in rich_inline_lines(inlines, style, i18n) {
         let line_prefix = if first {
             initial_prefix
         } else {
@@ -286,6 +310,7 @@ fn render_heading(
     level: usize,
     inlines: &[MarkdownInline],
     width: u16,
+    i18n: &I18n,
 ) {
     let marker = match level {
         1 => "══",
@@ -301,7 +326,25 @@ fn render_heading(
         .add_modifier(Modifier::BOLD);
     let first_prefix = format!("{prefix}{marker} ");
     let continuation = format!("{prefix}{}", " ".repeat(UnicodeWidthStr::width(marker) + 1));
-    render_inline_flow(out, &first_prefix, &continuation, inlines, style, width);
+    render_inline_flow(
+        out,
+        &first_prefix,
+        &continuation,
+        inlines,
+        style,
+        width,
+        i18n,
+    );
+}
+
+/// Caption label for one inline image: the alt text when the author supplied
+/// one, otherwise the localized placeholder.
+fn image_placeholder_label(i18n: &I18n, alt: &str) -> String {
+    if alt.is_empty() {
+        ui_text::t(i18n, "transcript-image-placeholder")
+    } else {
+        alt.to_owned()
+    }
 }
 
 #[derive(Debug)]
@@ -322,6 +365,7 @@ fn push_rich_inline_graphics(
     inlines: &[MarkdownInline],
     base_style: Style,
     width: u16,
+    i18n: &I18n,
 ) -> bool {
     let mut atoms = Vec::new();
     if !append_rich_inline_atoms(&mut atoms, inlines, base_style) {
@@ -375,8 +419,8 @@ fn push_rich_inline_graphics(
                         height = height.max(size.height);
                         rendered.push((None, Some((artifact, size)), size.width));
                     } else {
-                        let text =
-                            format!("🖼 {} ({url})", if alt.is_empty() { "Image" } else { &alt });
+                        let label = image_placeholder_label(i18n, alt.as_str());
+                        let text = format!("🖼 {label} ({url})");
                         let span_width = u16::try_from(UnicodeWidthStr::width(text.as_str()))
                             .unwrap_or(u16::MAX);
                         total_width = total_width.saturating_add(span_width);
@@ -443,7 +487,7 @@ fn push_rich_inline_graphics(
                 })
                 .collect(),
             RichInlineAtom::Image { url, alt, .. } => vec![vec![Span::styled(
-                format!("🖼 {} ({url})", if alt.is_empty() { "Image" } else { &alt }),
+                format!("🖼 {} ({url})", image_placeholder_label(i18n, alt.as_str())),
                 Style::default().fg(agena_tui_components::theme::info_color()),
             )]],
         };
@@ -669,9 +713,10 @@ fn render_list(
     start: usize,
     delimiter: char,
     items: &[MarkdownListItem],
-    width: u16,
     depth: usize,
+    context: MarkdownRenderContext<'_>,
 ) {
+    let MarkdownRenderContext { width, i18n } = context;
     for (offset, item) in items.iter().enumerate() {
         let marker = if let Some(checked) = item.checked {
             if checked {
@@ -700,6 +745,7 @@ fn render_list(
                         inlines,
                         Style::default(),
                         width,
+                        i18n,
                     );
                 }
                 MarkdownNode::List {
@@ -715,13 +761,13 @@ fn render_list(
                     *start,
                     *delimiter,
                     items,
-                    width,
                     depth.saturating_add(1),
+                    context,
                 ),
                 _ if first => {
-                    render_first_list_block(out, &first_prefix, &continuation, block, width)
+                    render_first_list_block(out, &first_prefix, &continuation, block, width, i18n)
                 }
-                _ => render_markdown_node(out, &continuation, block, width),
+                _ => render_markdown_node(out, &continuation, block, width, i18n),
             }
             first = false;
         }
@@ -743,9 +789,10 @@ fn render_first_list_block(
     continuation_prefix: &str,
     block: &MarkdownNode,
     width: u16,
+    i18n: &I18n,
 ) {
     let start = out.len();
-    render_markdown_node(out, continuation_prefix, block, width);
+    render_markdown_node(out, continuation_prefix, block, width, i18n);
     let rendered = &out[start..];
     if rendered.is_empty() {
         return;
@@ -808,32 +855,55 @@ fn render_alert(
     title: Option<&str>,
     blocks: &[MarkdownNode],
     width: u16,
+    i18n: &I18n,
 ) {
-    let (icon, default_title, color) = match kind {
-        MarkdownAlertKind::Note => ("●", "Note", agena_tui_components::theme::info_color()),
-        MarkdownAlertKind::Tip => ("◆", "Tip", agena_tui_components::theme::success_color()),
+    let (icon, default_title_key, color) = match kind {
+        MarkdownAlertKind::Note => (
+            "●",
+            "transcript-alert-note",
+            agena_tui_components::theme::info_color(),
+        ),
+        MarkdownAlertKind::Tip => (
+            "◆",
+            "transcript-alert-tip",
+            agena_tui_components::theme::success_color(),
+        ),
         MarkdownAlertKind::Important => (
             "!",
-            "Important",
+            "transcript-alert-important",
             agena_tui_components::theme::accent_color(),
         ),
-        MarkdownAlertKind::Warning => {
-            ("▲", "Warning", agena_tui_components::theme::warning_color())
-        }
-        MarkdownAlertKind::Caution => ("■", "Caution", agena_tui_components::theme::danger_color()),
+        MarkdownAlertKind::Warning => (
+            "▲",
+            "transcript-alert-warning",
+            agena_tui_components::theme::warning_color(),
+        ),
+        MarkdownAlertKind::Caution => (
+            "■",
+            "transcript-alert-caution",
+            agena_tui_components::theme::danger_color(),
+        ),
     };
     push_single_line(
         out,
         prefix,
-        &format!("╭─ {icon} {}", title.unwrap_or(default_title)),
+        &format!("╭─ {icon} {}", alert_title(title, default_title_key, i18n)),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
         width,
     );
     let body_prefix = format!("{prefix}│ ");
     for block in blocks {
-        render_markdown_node(out, &body_prefix, block, width);
+        render_markdown_node(out, &body_prefix, block, width, i18n);
     }
     push_single_line(out, prefix, "╰─", Style::default().fg(color), width);
+}
+
+/// Title of one Markdown alert: the author's own title when present, otherwise
+/// the localized default for its kind.
+fn alert_title(title: Option<&str>, default_key: &str, i18n: &I18n) -> String {
+    title
+        .map(str::to_owned)
+        .unwrap_or_else(|| ui_text::t(i18n, default_key))
 }
 
 pub(super) fn is_diagram_language(language: &str) -> bool {
@@ -858,6 +928,7 @@ fn render_diagram(
     language: &str,
     literal: &str,
     width: u16,
+    i18n: &I18n,
 ) {
     if language == "svg"
         && layout_config().native_graphics
@@ -886,7 +957,10 @@ fn render_diagram(
         push_single_line(
             out,
             prefix,
-            "◇ SVG diagram",
+            &i18n.text_args(
+                "transcript-diagram-title",
+                &agena_tui::fl_args!("label" => "SVG"),
+            ),
             Style::default()
                 .fg(agena_tui_components::theme::accent_color())
                 .add_modifier(Modifier::BOLD),
@@ -905,14 +979,17 @@ fn render_diagram(
     push_single_line(
         out,
         prefix,
-        &format!("◇ Diagram · {label}"),
+        &i18n.text_args(
+            "transcript-diagram-title",
+            &agena_tui::fl_args!("label" => label),
+        ),
         Style::default()
             .fg(agena_tui_components::theme::accent_color())
             .add_modifier(Modifier::BOLD),
         width,
     );
     let source = format!("```{language}\n{}\n```", literal.trim_end_matches('\n'));
-    push_markdown_code_block(out, prefix, &source, width);
+    push_markdown_code_block(out, prefix, &source, width, i18n);
 }
 
 fn render_ast_table(
@@ -921,6 +998,7 @@ fn render_ast_table(
     alignments: &[MarkdownAlignment],
     rows: &[MarkdownTableRow],
     width: u16,
+    i18n: &I18n,
 ) {
     if rows.is_empty() {
         return;
@@ -944,7 +1022,7 @@ fn render_ast_table(
             rows.iter()
                 .filter_map(|row| row.cells.get(column))
                 .map(|cell| {
-                    rich_inline_lines(cell, Style::default())
+                    rich_inline_lines(cell, Style::default(), i18n)
                         .iter()
                         .map(|line| rich_spans_width(line.spans.as_slice()))
                         .max()
@@ -956,7 +1034,7 @@ fn render_ast_table(
         .collect::<Vec<_>>();
     let widths = fit_table_column_widths(natural_widths.as_slice(), budget);
     if widths.len() != column_count {
-        render_rich_table_fallback(out, prefix, rows, width);
+        render_rich_table_fallback(out, prefix, rows, width, i18n);
         return;
     }
     let table_alignments = (0..column_count)
@@ -976,7 +1054,7 @@ fn render_ast_table(
     push_table_border(out, prefix, &widths, "┌", "┬", "┐", border_style);
     for (row_index, row) in rows.iter().enumerate() {
         let navigation_unit = out.len();
-        render_rich_table_row(out, prefix, row, &widths, &table_alignments, width);
+        render_rich_table_row(out, prefix, row, &widths, &table_alignments, width, i18n);
         let navigation_copy_text = row
             .cells
             .iter()
@@ -1001,6 +1079,7 @@ fn render_rich_table_row(
     widths: &[usize],
     alignments: &[TableColumnAlignment],
     width: u16,
+    i18n: &I18n,
 ) {
     let base = if row.header {
         Style::default()
@@ -1016,7 +1095,7 @@ fn render_rich_table_row(
             let logical_lines = row
                 .cells
                 .get(index)
-                .map(|cell| rich_inline_lines(cell, base))
+                .map(|cell| rich_inline_lines(cell, base, i18n))
                 .unwrap_or_default();
             let mut wrapped = logical_lines
                 .into_iter()
@@ -1108,6 +1187,7 @@ fn render_rich_table_fallback(
     prefix: &str,
     rows: &[MarkdownTableRow],
     width: u16,
+    i18n: &I18n,
 ) {
     let border_style = Style::default().fg(agena_tui_components::theme::muted_color());
     for row in rows {
@@ -1128,7 +1208,7 @@ fn render_rich_table_fallback(
             if index > 0 {
                 spans.push(Span::styled(" │ ", border_style));
             }
-            for (line_index, line) in rich_inline_lines(cell, base).into_iter().enumerate() {
+            for (line_index, line) in rich_inline_lines(cell, base, i18n).into_iter().enumerate() {
                 if line_index > 0 {
                     spans.push(Span::raw(" "));
                 }
@@ -1155,7 +1235,7 @@ fn render_rich_table_fallback(
     }
 }
 
-pub(crate) fn render_image_block(
+fn render_image_block(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     alt: &str,
@@ -1163,9 +1243,10 @@ pub(crate) fn render_image_block(
     title: &str,
     dimensions: MarkdownImageDimensions,
     link_url: Option<&str>,
-    width: u16,
+    context: MarkdownRenderContext<'_>,
 ) {
-    let caption = markdown_image_caption(alt, title, url);
+    let MarkdownRenderContext { width, i18n } = context;
+    let caption = markdown_image_caption(alt, title, url, i18n);
     if layout_config().native_graphics
         && let Ok(artifact) = render_markdown_image(url)
     {
@@ -1219,7 +1300,13 @@ pub(crate) fn render_image_block(
         ]),
         width,
     );
-    push_image_source_line(out, prefix, "↳", markdown_image_source_label(url), width);
+    push_image_source_line(
+        out,
+        prefix,
+        "↳",
+        markdown_image_source_label(url, i18n).as_str(),
+        width,
+    );
     if let Some(link_url) = link_url {
         push_image_source_line(out, prefix, "↗", link_url, width);
     }
@@ -1262,6 +1349,7 @@ pub fn render_attachment_image(
     prefix: &str,
     item: &PartAttachment,
     width: u16,
+    i18n: &I18n,
 ) -> bool {
     if item.kind != PartAttachmentKind::Image {
         return false;
@@ -1273,16 +1361,17 @@ pub fn render_attachment_image(
         .filename
         .as_deref()
         .or(item.title.as_deref())
-        .unwrap_or("Image");
+        .unwrap_or_default();
+    let alt = image_placeholder_label(i18n, alt);
     render_image_block(
         out,
         prefix,
-        alt,
+        alt.as_str(),
         source.as_ref(),
         item.title.as_deref().unwrap_or_default(),
         MarkdownImageDimensions::default(),
         None,
-        width,
+        MarkdownRenderContext { width, i18n },
     );
     true
 }
@@ -1299,16 +1388,19 @@ pub(super) fn attachment_image_source(item: &PartAttachment) -> Option<Cow<'_, s
     }
 }
 
-pub(super) fn markdown_image_caption(alt: &str, title: &str, url: &str) -> String {
+/// Caption of one Markdown image: the alt text, or the source's file name when
+/// the alt text is empty, with the localized placeholder as the last resort.
+pub(super) fn markdown_image_caption(alt: &str, title: &str, url: &str, i18n: &I18n) -> String {
     let alt = alt.trim();
     let title = title.trim();
     let label = if alt.is_empty() {
-        markdown_image_filename(url).unwrap_or("Image")
+        markdown_image_filename(url).unwrap_or_default()
     } else {
         alt
     };
+    let label = image_placeholder_label(i18n, label);
     if title.is_empty() || title == label {
-        label.to_string()
+        label
     } else {
         format!("{label} — {title}")
     }
@@ -1323,11 +1415,13 @@ fn markdown_image_filename(source: &str) -> Option<&str> {
         .filter(|name| !name.is_empty() && !name.contains(':'))
 }
 
-pub(super) fn markdown_image_source_label(source: &str) -> &str {
+/// Source line of one Markdown image: data URLs are described by the localized
+/// embedded-image label instead of dumping their payload.
+pub(super) fn markdown_image_source_label(source: &str, i18n: &I18n) -> String {
     if source.trim_start().starts_with("data:") {
-        "embedded image"
+        ui_text::t(i18n, "transcript-image-embedded")
     } else {
-        source
+        source.to_owned()
     }
 }
 
@@ -1432,9 +1526,13 @@ fn link_suffix(url: &str, title: &str) -> String {
     }
 }
 
-fn rich_inline_lines(inlines: &[MarkdownInline], base_style: Style) -> Vec<Line<'static>> {
+fn rich_inline_lines(
+    inlines: &[MarkdownInline],
+    base_style: Style,
+    i18n: &I18n,
+) -> Vec<Line<'static>> {
     let mut rows = vec![Vec::new()];
-    append_inline_spans(&mut rows, inlines, base_style);
+    append_inline_spans(&mut rows, inlines, base_style, i18n);
     rows.into_iter().map(Line::from).collect()
 }
 
@@ -1442,6 +1540,7 @@ fn append_inline_spans(
     rows: &mut Vec<Vec<Span<'static>>>,
     inlines: &[MarkdownInline],
     style: Style,
+    i18n: &I18n,
 ) {
     for inline in inlines {
         match inline {
@@ -1460,16 +1559,24 @@ fn append_inline_spans(
                         .add_modifier(Modifier::BOLD),
                 )),
             MarkdownInline::Emphasis(children) => {
-                append_inline_spans(rows, children, style.add_modifier(Modifier::ITALIC))
+                append_inline_spans(rows, children, style.add_modifier(Modifier::ITALIC), i18n)
             }
             MarkdownInline::Strong(children) => {
-                append_inline_spans(rows, children, style.add_modifier(Modifier::BOLD))
+                append_inline_spans(rows, children, style.add_modifier(Modifier::BOLD), i18n)
             }
-            MarkdownInline::Strikethrough(children) => {
-                append_inline_spans(rows, children, style.add_modifier(Modifier::CROSSED_OUT))
-            }
+            MarkdownInline::Strikethrough(children) => append_inline_spans(
+                rows,
+                children,
+                style.add_modifier(Modifier::CROSSED_OUT),
+                i18n,
+            ),
             MarkdownInline::Underline(children) | MarkdownInline::Insert(children) => {
-                append_inline_spans(rows, children, style.add_modifier(Modifier::UNDERLINED))
+                append_inline_spans(
+                    rows,
+                    children,
+                    style.add_modifier(Modifier::UNDERLINED),
+                    i18n,
+                )
             }
             MarkdownInline::Highlight(children) => append_inline_spans(
                 rows,
@@ -1477,6 +1584,7 @@ fn append_inline_spans(
                 style
                     .fg(agena_tui_components::theme::warning_color())
                     .add_modifier(Modifier::BOLD),
+                i18n,
             ),
             MarkdownInline::Superscript(children) => {
                 if let Some(text) = positional_unicode(children, true) {
@@ -1484,7 +1592,7 @@ fn append_inline_spans(
                         .expect("inline rows are never empty")
                         .push(Span::styled(text, style));
                 } else {
-                    append_inline_spans(rows, children, style.add_modifier(Modifier::DIM));
+                    append_inline_spans(rows, children, style.add_modifier(Modifier::DIM), i18n);
                 }
             }
             MarkdownInline::Subscript(children) => {
@@ -1493,7 +1601,7 @@ fn append_inline_spans(
                         .expect("inline rows are never empty")
                         .push(Span::styled(text, style));
                 } else {
-                    append_inline_spans(rows, children, style.add_modifier(Modifier::DIM));
+                    append_inline_spans(rows, children, style.add_modifier(Modifier::DIM), i18n);
                 }
             }
             MarkdownInline::Spoiler(children) => append_inline_spans(
@@ -1502,6 +1610,7 @@ fn append_inline_spans(
                 style
                     .fg(agena_tui_components::theme::muted_color())
                     .add_modifier(Modifier::REVERSED),
+                i18n,
             ),
             MarkdownInline::Link { url, title, label } => {
                 append_inline_spans(
@@ -1510,6 +1619,7 @@ fn append_inline_spans(
                     style
                         .fg(agena_tui_components::theme::info_color())
                         .add_modifier(Modifier::UNDERLINED),
+                    i18n,
                 );
                 rows.last_mut()
                     .expect("inline rows are never empty")
@@ -1525,6 +1635,7 @@ fn append_inline_spans(
                     style
                         .fg(agena_tui_components::theme::info_color())
                         .add_modifier(Modifier::UNDERLINED),
+                    i18n,
                 );
                 rows.last_mut()
                     .expect("inline rows are never empty")
@@ -1537,7 +1648,7 @@ fn append_inline_spans(
                 .last_mut()
                 .expect("inline rows are never empty")
                 .push(Span::styled(
-                    format!("🖼 {} ({url})", if alt.is_empty() { "Image" } else { alt }),
+                    format!("🖼 {} ({url})", image_placeholder_label(i18n, alt.as_str())),
                     style.fg(agena_tui_components::theme::info_color()),
                 )),
             MarkdownInline::Math { literal, .. } => rows

@@ -2,6 +2,7 @@ use std::{fmt, io::IsTerminal};
 
 use crate::{iterm2, kitty};
 
+use agena_tui::i18n::I18n;
 use agena_tui::terminal::TerminalEnvironment;
 use agena_tui::terminal::TerminalFamily;
 use agena_tui::terminal::identity::{IdentitySource, TerminalIdentity};
@@ -334,7 +335,7 @@ impl TerminalContext {
         }
     }
 
-    pub fn diagnostic_summary(&self) -> String {
+    pub fn diagnostic_summary(&self, i18n: &I18n) -> String {
         let layers = if self.transport.is_empty() {
             "direct".to_owned()
         } else {
@@ -368,16 +369,28 @@ impl TerminalContext {
             self.is_remote(),
             self.in_multiplexer(),
             self.color_generation,
-            self.capabilities.keyboard_disambiguation.diagnostic_label(),
-            self.capabilities.mouse_capture.diagnostic_label(),
-            self.capabilities.clipboard_write_native.diagnostic_label(),
-            self.capabilities.clipboard_write_osc52.diagnostic_label(),
-            self.capabilities.clipboard_read_osc52.diagnostic_label(),
-            self.capabilities.kitty_rich_clipboard.diagnostic_label(),
+            self.capabilities
+                .keyboard_disambiguation
+                .diagnostic_label(i18n),
+            self.capabilities.mouse_capture.diagnostic_label(i18n),
+            self.capabilities
+                .clipboard_write_native
+                .diagnostic_label(i18n),
+            self.capabilities
+                .clipboard_write_osc52
+                .diagnostic_label(i18n),
+            self.capabilities
+                .clipboard_read_osc52
+                .diagnostic_label(i18n),
+            self.capabilities
+                .kitty_rich_clipboard
+                .diagnostic_label(i18n),
             file_transfer_label(&self.capabilities),
-            self.capabilities.window_title.diagnostic_label(),
-            self.capabilities.terminal_notifications.diagnostic_label(),
-            self.capabilities.terminal_progress.diagnostic_label(),
+            self.capabilities.window_title.diagnostic_label(i18n),
+            self.capabilities
+                .terminal_notifications
+                .diagnostic_label(i18n),
+            self.capabilities.terminal_progress.diagnostic_label(i18n),
             self.diagnostics.len(),
         )
     }
@@ -385,7 +398,7 @@ impl TerminalContext {
 
 impl fmt::Display for TerminalContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.diagnostic_summary())
+        formatter.write_str(&self.diagnostic_summary(&I18n::english()))
     }
 }
 
@@ -550,6 +563,10 @@ mod tests {
     use agena_tui::terminal_color::TerminalColorSource;
     use agena_tui_components::TerminalRgb;
 
+    fn english_summary(context: &TerminalContext) -> String {
+        context.diagnostic_summary(&I18n::english())
+    }
+
     fn detect(pairs: &[(&str, &str)]) -> TerminalContext {
         TerminalContext::detect_from(&TerminalEnvironment::from_pairs(pairs), true)
     }
@@ -602,8 +619,8 @@ mod tests {
     fn transport_is_evidence_not_claimed_topology() {
         let context = detect(&[("TERM_PROGRAM", "WezTerm"), ("ZELLIJ", "0")]);
         assert!(context.transport.contains(&TransportHop::Zellij));
-        assert!(context.diagnostic_summary().contains("order unknown"));
-        assert!(!context.diagnostic_summary().contains(" > "));
+        assert!(english_summary(&context).contains("order unknown"));
+        assert!(!english_summary(&context).contains(" > "));
     }
 
     #[test]
@@ -614,7 +631,7 @@ mod tests {
             source: TerminalColorSource::Iterm2Osc4,
         });
 
-        let summary = context.diagnostic_summary();
+        let summary = english_summary(&context);
         assert!(summary.contains("color=#FAFBFC/light (iTerm2 OSC 4;-2)/generation:1"));
     }
 
@@ -809,7 +826,7 @@ mod tests {
     #[test]
     fn diagnostic_summary_includes_title_and_notification_labels() {
         let context = detect(&[("TERM_PROGRAM", "iTerm.app")]);
-        let summary = context.diagnostic_summary();
+        let summary = english_summary(&context);
         assert!(summary.contains("title="));
         assert!(summary.contains("notifications="));
         assert!(summary.contains("progress="));

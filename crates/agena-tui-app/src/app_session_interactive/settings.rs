@@ -43,12 +43,12 @@ impl App {
     pub(crate) fn request_terminal_download(&mut self, raw_path: &str) {
         let raw_path = raw_path.trim();
         if raw_path.is_empty() {
-            self.flash_warning("Usage: /download <workspace-path>".to_string());
+            self.flash_warning(ui_text::t(&self.i18n, "flash-download-usage"));
             return;
         }
         let requested = Path::new(raw_path);
         if requested.is_absolute() {
-            self.flash_warning("Use a path relative to the current workspace.".to_string());
+            self.flash_warning(ui_text::t(&self.i18n, "flash-download-relative-path"));
             return;
         }
         if requested.components().any(|component| {
@@ -59,7 +59,7 @@ impl App {
                     | std::path::Component::Prefix(_)
             )
         }) {
-            self.flash_warning("Download paths cannot leave the current workspace.".to_string());
+            self.flash_warning(ui_text::t(&self.i18n, "flash-download-outside-workspace"));
             return;
         }
         let relative = requested.to_string_lossy().replace('\\', "/");

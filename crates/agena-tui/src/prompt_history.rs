@@ -110,7 +110,8 @@ pub fn render_overlay(
         i18n.text("overlay-picker-loading").into(),
         i18n.text("overlay-attach-matches").into(),
     )
-    .with_search_label(i18n.text("composer-prompt-history-label").into());
+    .with_search_label(i18n.text("composer-prompt-history-label").into())
+    .with_text(i18n);
     render_search_picker_dialog(frame, area, state, &spec, sanitize_picker_text);
 }
 

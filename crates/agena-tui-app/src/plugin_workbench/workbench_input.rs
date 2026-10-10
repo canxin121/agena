@@ -5,8 +5,12 @@ impl App {
             Some(tab) => match PluginDetailTab::from_id(tab) {
                 Some(tab) => tab,
                 None => {
-                    self.flash_warning(format!(
-                        "plugin `{plugin_id}` requested unsupported Workbench tab `{tab}`; opening Config"
+                    self.flash_warning(self.i18n.text_args(
+                        "plugin-workbench-error-unsupported-tab",
+                        &agena_tui::fl_args!(
+                            "plugin" => plugin_id.to_string(),
+                            "tab" => tab.to_string(),
+                        ),
                     ));
                     PluginDetailTab::Config
                 }
@@ -15,7 +19,10 @@ impl App {
         match self.build_plugin_workbench("") {
             Ok(mut workbench) => {
                 if !workbench.open_plugin_detail(plugin_id, detail_tab) {
-                    self.flash_warning(format!("plugin `{plugin_id}` is not available"));
+                    self.flash_warning(self.i18n.text_args(
+                        "plugin-workbench-error-plugin-unavailable",
+                        &agena_tui::fl_args!("plugin" => plugin_id.to_string()),
+                    ));
                     return;
                 }
                 self.current_route = Route::PluginWorkbench(Box::new(workbench));

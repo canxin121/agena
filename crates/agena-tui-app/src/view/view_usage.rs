@@ -22,6 +22,7 @@ impl App {
             state.error.as_deref(),
             &state.presentation,
             state.data.as_ref(),
+            &self.i18n,
         );
     }
 }

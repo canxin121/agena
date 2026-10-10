@@ -10,10 +10,28 @@ use agena_domain::PermissionReplyKind;
 use agena_plugin_sdk::AttachmentKind;
 use chrono::{DateTime, Local, Utc};
 
-use agena_tui::{fl_args, i18n::I18n};
+use agena_tui::{
+    fl_args,
+    i18n::{FluentArgs, FluentValue, I18n},
+};
 
 pub fn t(i18n: &I18n, key: &str) -> String {
     i18n.text(key)
+}
+
+/// Fluent arguments carrying one NUMBER, not a coerced string.
+///
+/// [`fl_args`] stringifies every value, which turns off Fluent's plural
+/// category matching. Catalog entries that select on a plural (`{ $count ->
+/// [one] … *[other] … }`) need a real number, so counts that feed such an
+/// entry go through this helper instead.
+pub fn count_args(key: &'static str, count: usize) -> FluentArgs {
+    let mut args = FluentArgs::new();
+    args.insert(
+        std::borrow::Cow::Borrowed(key),
+        FluentValue::from(count as i64),
+    );
+    args
 }
 
 /// Catalog key for one chrome-only activity headline.
@@ -248,7 +266,7 @@ pub fn role_label(i18n: &I18n, role: RunRole) -> String {
         RunRole::User => t(i18n, "message-role-user"),
         RunRole::Assistant => t(i18n, "message-role-assistant"),
         RunRole::System => t(i18n, "message-role-system"),
-        RunRole::Tool => "tool".to_string(),
+        RunRole::Tool => t(i18n, "message-role-tool"),
     }
 }
 
@@ -636,7 +654,7 @@ pub fn text_artifact_display_label(text: &str, label: Option<&str>) -> String {
         .map(str::trim)
         .filter(|label| !label.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| "pasted text".to_owned());
+        .unwrap_or_else(|| t(&I18n::english(), "activity-title-pasted-text"));
     let mut chars = base.chars();
     let mut truncated: String = chars.by_ref().take(MAX_PLACEHOLDER_CHARS).collect();
     if chars.next().is_some() {

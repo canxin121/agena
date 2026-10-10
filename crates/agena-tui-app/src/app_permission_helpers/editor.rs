@@ -95,7 +95,10 @@ pub(crate) fn permission_studio_sections(
                         .cloned();
                     vec![
                         PermissionStudioItem {
-                            label: format!("{pattern} · read"),
+                            label: i18n.text_args(
+                                "permission-studio-access-read",
+                                &agena_tui::fl_args!("pattern" => pattern.clone()),
+                            ),
                             value: permission_mode_input_text(
                                 modes.as_ref().and_then(|modes| modes.read),
                                 i18n,
@@ -107,7 +110,10 @@ pub(crate) fn permission_studio_sections(
                             ),
                         },
                         PermissionStudioItem {
-                            label: format!("{pattern} · write"),
+                            label: i18n.text_args(
+                                "permission-studio-access-write",
+                                &agena_tui::fl_args!("pattern" => pattern.clone()),
+                            ),
                             value: permission_mode_input_text(
                                 modes.as_ref().and_then(|modes| modes.write),
                                 i18n,
@@ -312,7 +318,13 @@ pub(crate) fn permission_studio_sections(
                                 .collect::<Vec<_>>();
                             if !wildcard {
                                 items.push(PermissionStudioItem {
-                                    label: format!("{tool_name} · + command pattern"),
+                                    label: format!(
+                                        "{tool_name} · {}",
+                                        ui_text::t(
+                                            i18n,
+                                            "permission-studio-command-pattern-suffix"
+                                        )
+                                    ),
                                     value: ui_text::t(i18n, "value-add"),
                                     action: PermissionStudioAction::AddToolCommandPattern {
                                         tool_name,
@@ -334,7 +346,13 @@ pub(crate) fn permission_studio_sections(
                                     ),
                                 },
                                 PermissionStudioItem {
-                                    label: format!("{tool_name} · + command pattern"),
+                                    label: format!(
+                                        "{tool_name} · {}",
+                                        ui_text::t(
+                                            i18n,
+                                            "permission-studio-command-pattern-suffix"
+                                        )
+                                    ),
                                     value: ui_text::t(i18n, "value-add"),
                                     action: PermissionStudioAction::AddToolCommandPattern {
                                         tool_name,
@@ -778,11 +796,20 @@ mod tests {
             .iter()
             .find(|section| section.id == PermissionStudioSectionId::PathRules)
             .expect("the path rules section is present");
+        // The row label composes the localized access word with the stored
+        // pattern, so compare against the same i18n source the row uses.
+        let access_read = |pattern: &str| {
+            i18n.text_args(
+                "permission-studio-access-read",
+                &agena_tui::fl_args!("pattern" => pattern.to_string()),
+            )
+        };
         assert!(
             rules
                 .items
                 .iter()
-                .any(|item| item.label.contains("/agena/projects")),
+                .any(|item| item.label == access_read("<home>/agena/projects")
+                    || item.label == access_read("<home>/agena/projects/**")),
             "the runtime state paths are `path.rules` entries"
         );
     }

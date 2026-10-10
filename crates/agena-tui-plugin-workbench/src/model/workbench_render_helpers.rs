@@ -497,7 +497,8 @@ pub(crate) fn render_plugin_config_selection_overlay(
         &agena_tui_components::SearchPickerDialogSpec::new(
             dialog.i18n.text("plugin-workbench-loading-choices").into(),
             dialog.i18n.text("plugin-workbench-choices").into(),
-        ),
+        )
+        .with_text(&dialog.i18n),
         |value| clean(value),
     );
 }
@@ -515,7 +516,8 @@ pub(crate) fn render_plugin_config_actions_overlay(
         &agena_tui_components::SearchPickerDialogSpec::new(
             dialog.i18n.text("plugin-workbench-loading-actions").into(),
             dialog.i18n.text("plugin-workbench-actions").into(),
-        ),
+        )
+        .with_text(&dialog.i18n),
         |value| clean(value),
     );
 }

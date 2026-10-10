@@ -243,7 +243,7 @@ impl App {
         success: String,
     ) {
         if method.is_unconfirmed_terminal_request() {
-            self.flash_info("Clipboard request sent to terminal (OSC 52).".to_string());
+            self.flash_info(ui_text::t(&self.i18n, "flash-clipboard-osc52-sent"));
         } else {
             self.flash_success(success);
         }

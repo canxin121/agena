@@ -2,9 +2,7 @@ impl App {
     pub(crate) fn composer_media_finished(&mut self, successful: bool) {
         if !successful {
             if self.session_composer.pending_submit.take().is_some() {
-                self.flash_warning(
-                    "An attachment could not be prepared; review the draft and send again.",
-                );
+                self.flash_warning(ui_text::t(&self.i18n, "flash-attachment-prepare-failed"));
             }
             return;
         }
@@ -20,7 +18,7 @@ impl App {
 
     fn defer_composer_submit(&mut self, mode: PendingComposerSubmit) {
         self.session_composer.pending_submit = Some(mode);
-        self.flash_info("Attachments are being prepared; the message will send when ready.");
+        self.flash_info(ui_text::t(&self.i18n, "flash-attachment-preparing"));
     }
 
     pub(crate) fn refresh_status_line_if_due(&mut self, now: Instant) {
@@ -58,7 +56,7 @@ impl App {
 
         let title = submit_draft
             .as_ref()
-            .and_then(draft_title_source)
+            .and_then(|draft| draft_title_source(&self.i18n, draft))
             .map(|text| derive_session_title(&self.i18n, text.as_str()))
             .unwrap_or_else(|| ui_text::default_session_title(&self.i18n));
 

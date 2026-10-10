@@ -49,7 +49,9 @@ impl App {
             PluginConfigEditAction::AddObjectField { plugin_id, path } => {
                 let key = input.trim();
                 if key.is_empty() {
-                    return Err(crate::UiFailure::message("field name cannot be empty"));
+                    return Err(crate::UiFailure::message(
+                        self.i18n.text("plugin-workbench-error-field-name-empty"),
+                    ));
                 }
                 let Some(plugin_index) = dialog
                     .plugins
@@ -66,8 +68,9 @@ impl App {
                         .and_then(JsonValue::as_object)
                         .is_some_and(|object| object.contains_key(key))
                     {
-                        return Err(crate::UiFailure::message(format!(
-                            "field `{key}` already exists"
+                        return Err(crate::UiFailure::message(self.i18n.text_args(
+                            "plugin-workbench-error-field-exists",
+                            &agena_tui::fl_args!("field" => key.to_string()),
                         )));
                     }
                     if let Some(reason) = object_add_field_block_reason(
@@ -107,7 +110,9 @@ impl App {
             PluginConfigEditAction::RenameObjectField { plugin_id, path } => {
                 let new_key = input.trim();
                 if new_key.is_empty() {
-                    return Err(crate::UiFailure::message("field name cannot be empty"));
+                    return Err(crate::UiFailure::message(
+                        self.i18n.text("plugin-workbench-error-field-name-empty"),
+                    ));
                 }
                 let Some(plugin_index) = dialog
                     .plugins
@@ -118,7 +123,8 @@ impl App {
                 };
                 let Some((parent_path, current_key)) = path_key_info(path.as_slice()) else {
                     return Err(crate::UiFailure::message(
-                        "selected row does not point to an object field",
+                        self.i18n
+                            .text("plugin-workbench-error-row-not-object-field"),
                     ));
                 };
                 if new_key == current_key {
@@ -131,8 +137,9 @@ impl App {
                         .and_then(JsonValue::as_object)
                         .is_some_and(|object| object.contains_key(new_key))
                     {
-                        return Err(crate::UiFailure::message(format!(
-                            "field `{new_key}` already exists"
+                        return Err(crate::UiFailure::message(self.i18n.text_args(
+                            "plugin-workbench-error-field-exists",
+                            &agena_tui::fl_args!("field" => new_key.to_string()),
                         )));
                     }
                     let child_schema = validate_new_object_field_key(
@@ -159,7 +166,7 @@ impl App {
                         )
                         .map_err(|error| {
                             crate::UiFailure::invalid_with_diagnostic(
-                                "The plugin configuration value does not match its schema.",
+                                self.i18n.text("plugin-workbench-error-schema-mismatch"),
                                 error,
                             )
                         })?;
@@ -169,7 +176,9 @@ impl App {
                         path.as_slice(),
                         new_key,
                     ) else {
-                        return Err(crate::UiFailure::message("failed to rename field"));
+                        return Err(crate::UiFailure::message(
+                            self.i18n.text("plugin-workbench-error-rename-failed"),
+                        ));
                     };
                     clear_branch_drafts_for_structural_change(plugin);
                     recompute_plugin_config_state(plugin);
@@ -190,15 +199,16 @@ impl App {
         let Some(overlay) = dialog.selection.clone() else {
             return Ok(());
         };
-        let selected_value = overlay
-            .values
-            .get(key.as_str())
-            .cloned()
-            .ok_or_else(|| crate::UiFailure::message("no selection available"))?;
+        let selected_value = overlay.values.get(key.as_str()).cloned().ok_or_else(|| {
+            crate::UiFailure::message(self.i18n.text("plugin-workbench-error-no-selection"))
+        })?;
         match overlay.action {
             PluginConfigSelectionAction::Type { plugin_id, path } => {
                 let PluginConfigSelectionValue::Named(selected) = selected_value else {
-                    return Err(crate::UiFailure::message("invalid type selection"));
+                    return Err(crate::UiFailure::message(
+                        self.i18n
+                            .text("plugin-workbench-error-invalid-type-selection"),
+                    ));
                 };
                 let Some(plugin) = dialog
                     .plugins
@@ -216,7 +226,10 @@ impl App {
             }
             PluginConfigSelectionAction::Branch { plugin_id, path } => {
                 let PluginConfigSelectionValue::Branch(branch) = selected_value else {
-                    return Err(crate::UiFailure::message("invalid branch selection"));
+                    return Err(crate::UiFailure::message(
+                        self.i18n
+                            .text("plugin-workbench-error-invalid-branch-selection"),
+                    ));
                 };
                 let Some(plugin) = dialog
                     .plugins
@@ -264,7 +277,10 @@ impl App {
             }
             PluginConfigSelectionAction::Enum { plugin_id, path } => {
                 let PluginConfigSelectionValue::Json(selected) = selected_value else {
-                    return Err(crate::UiFailure::message("invalid enum selection"));
+                    return Err(crate::UiFailure::message(
+                        self.i18n
+                            .text("plugin-workbench-error-invalid-enum-selection"),
+                    ));
                 };
                 self.try_set_config_value_at(dialog, plugin_id, path, selected)?;
             }

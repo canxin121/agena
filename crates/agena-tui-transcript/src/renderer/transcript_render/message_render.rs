@@ -360,7 +360,7 @@ fn canonical_activity_details(
     match payload {
         agena_domain::ActivityPayload::CommandReference(command) => {
             vec![CanonicalActivityDetail::section(
-                "Source",
+                ui_text::t(i18n, "activity-detail-source").as_str(),
                 format!("{} · {}", command.source, command.content_hash),
                 CanonicalActivityDetailFormat::Plain,
             )]
@@ -370,7 +370,7 @@ fn canonical_activity_details(
             .as_ref()
             .map(|detail| {
                 vec![CanonicalActivityDetail::section(
-                    "Notice",
+                    ui_text::t(i18n, "activity-detail-notice").as_str(),
                     detail.clone(),
                     CanonicalActivityDetailFormat::Plain,
                 )]
@@ -423,18 +423,29 @@ fn canonical_activity_details(
         agena_domain::ActivityPayload::Resource(resource) => {
             let mut details = Vec::new();
             if let Some(media_type) = resource.media_type.as_ref() {
-                details.push(format!("Type: {media_type}"));
+                details.push(i18n.text_args(
+                    "activity-detail-type",
+                    &agena_tui::fl_args!("media_type" => media_type.as_str()),
+                ));
             }
             if let Some(size) = resource.size_bytes {
-                details.push(format!("Size: {size} bytes"));
+                details.push(
+                    i18n.text_args("activity-detail-size", &agena_tui::fl_args!("size" => size)),
+                );
             }
             if let (Some(width), Some(height)) = (resource.width, resource.height) {
-                details.push(format!("Dimensions: {width}×{height}"));
+                details.push(i18n.text_args(
+                    "activity-detail-dimensions",
+                    &agena_tui::fl_args!(
+                        "width" => width,
+                        "height" => height,
+                    ),
+                ));
             }
             (!details.is_empty())
                 .then(|| {
                     CanonicalActivityDetail::section(
-                        "Details",
+                        ui_text::t(i18n, "activity-detail-details").as_str(),
                         details.join("\n"),
                         CanonicalActivityDetailFormat::Plain,
                     )
@@ -447,7 +458,7 @@ fn canonical_activity_details(
             .as_ref()
             .map(|language| {
                 CanonicalActivityDetail::section(
-                    "Language",
+                    ui_text::t(i18n, "activity-detail-language").as_str(),
                     language,
                     CanonicalActivityDetailFormat::Plain,
                 )
@@ -459,7 +470,7 @@ fn canonical_activity_details(
                 .ok()
                 .map(|interaction| {
                     CanonicalActivityDetail::section(
-                        "Request",
+                        ui_text::t(i18n, "activity-detail-request").as_str(),
                         interaction,
                         CanonicalActivityDetailFormat::Json,
                     )
@@ -624,6 +635,7 @@ fn render_canonical_activity_detail(
     width: u16,
     accent: Option<Style>,
     expanded: bool,
+    i18n: &I18n,
 ) {
     if detail.body.trim().is_empty() {
         return;
@@ -639,7 +651,7 @@ fn render_canonical_activity_detail(
             "›"
         };
         let preview = (!expanded)
-            .then(|| canonical_activity_detail_preview(detail))
+            .then(|| canonical_activity_detail_preview(detail, i18n))
             .flatten()
             .map(|preview| format!(" · {preview}"))
             .unwrap_or_default();
@@ -668,11 +680,11 @@ fn render_canonical_activity_detail(
     let body_start = out.len();
     match detail.format {
         CanonicalActivityDetailFormat::Auto => {
-            render_expanded_tool_text_block(out, body_prefix, detail.body.as_str(), width);
+            render_expanded_tool_text_block(out, body_prefix, detail.body.as_str(), width, i18n);
         }
         CanonicalActivityDetailFormat::Json => {
             let markdown = format!("```json\n{}\n```", detail.body.trim());
-            push_expanded_markdown(out, body_prefix, markdown.as_str(), width);
+            push_expanded_markdown(out, body_prefix, markdown.as_str(), width, i18n);
         }
         CanonicalActivityDetailFormat::Plain => {
             push_expanded_tool_text(
@@ -689,21 +701,22 @@ fn render_canonical_activity_detail(
     }
 }
 
-fn canonical_activity_detail_preview(detail: &CanonicalActivityDetail) -> Option<String> {
+fn canonical_activity_detail_preview(
+    detail: &CanonicalActivityDetail,
+    i18n: &I18n,
+) -> Option<String> {
     match detail.format {
         CanonicalActivityDetailFormat::Json => {
             serde_json::from_str::<serde_json::Value>(detail.body.as_str())
                 .ok()
                 .and_then(|value| match value {
-                    serde_json::Value::Object(fields) => Some(format!(
-                        "{} field{}",
-                        fields.len(),
-                        if fields.len() == 1 { "" } else { "s" }
+                    serde_json::Value::Object(fields) => Some(i18n.text_args(
+                        "activity-detail-preview-fields",
+                        &ui_text::count_args("count", fields.len()),
                     )),
-                    serde_json::Value::Array(items) => Some(format!(
-                        "{} item{}",
-                        items.len(),
-                        if items.len() == 1 { "" } else { "s" }
+                    serde_json::Value::Array(items) => Some(i18n.text_args(
+                        "activity-detail-preview-items",
+                        &ui_text::count_args("count", items.len()),
                     )),
                     _ => None,
                 })
@@ -712,7 +725,7 @@ fn canonical_activity_detail_preview(detail: &CanonicalActivityDetail) -> Option
             .body
             .lines()
             .find(|line| !line.trim().is_empty())
-            .map(canonical_activity_markdown_preview),
+            .map(|line| canonical_activity_markdown_preview(line, i18n)),
         CanonicalActivityDetailFormat::Plain => detail
             .body
             .lines()
@@ -721,7 +734,7 @@ fn canonical_activity_detail_preview(detail: &CanonicalActivityDetail) -> Option
     }
 }
 
-fn canonical_activity_markdown_preview(line: &str) -> String {
+fn canonical_activity_markdown_preview(line: &str, i18n: &I18n) -> String {
     let line = line.trim();
     let line = if line.starts_with('#') {
         line.trim_start_matches('#').trim_start()
@@ -731,7 +744,7 @@ fn canonical_activity_markdown_preview(line: &str) -> String {
             .find_map(|prefix| line.strip_prefix(prefix))
             .unwrap_or(line)
     };
-    let plain = markdown_inline_line(line, Style::default())
+    let plain = markdown_inline_line(line, Style::default(), i18n)
         .map(|line| {
             line.spans
                 .iter()
@@ -776,6 +789,7 @@ fn append_answer_markdown_blocks(
     width: u16,
     out: &mut Vec<RenderedLine>,
     children: &mut Vec<RenderedTranscriptNode>,
+    i18n: &I18n,
 ) {
     let blocks = markdown_blocks(text);
     for (block_index, block) in blocks.iter().enumerate() {
@@ -783,7 +797,7 @@ fn append_answer_markdown_blocks(
             continue;
         }
         let start_line = out.len();
-        render_markdown_block(out, "    ", block, width);
+        render_markdown_block(out, "    ", block, width, i18n);
         if out.len() > start_line {
             let semantic_unit_count = out[start_line..]
                 .iter()
@@ -1144,7 +1158,7 @@ pub(crate) fn render_part_node(
             }
         }
         TranscriptPartContent::Text(text) => {
-            push_markdown_document(out, "  ", text.text.as_str(), width);
+            push_markdown_document(out, "  ", text.text.as_str(), width, i18n);
             RenderedNodeDraft {
                 key: TranscriptNodeKey::Content {
                     entry_id: message.id,
@@ -1223,6 +1237,7 @@ pub(crate) fn render_part_node(
                 &ui_text::localized_activity_title(i18n, "Answer"),
                 answer.text.as_str(),
                 width,
+                i18n,
             );
             let headline_end = out.len();
             let mut children = Vec::new();
@@ -1234,6 +1249,7 @@ pub(crate) fn render_part_node(
                     width,
                     out,
                     &mut children,
+                    i18n,
                 );
             }
             RenderedNodeDraft {
@@ -1275,6 +1291,7 @@ pub(crate) fn render_part_node(
                 &ui_text::localized_activity_title(i18n, "Thinking"),
                 headline,
                 width,
+                i18n,
             );
             if expanded {
                 let body_start = out.len();
@@ -1645,7 +1662,16 @@ pub(crate) fn render_part_node(
                     }
                 },
             );
-            push_activity_headline(out, part.status, true, false, title.as_str(), "", width);
+            push_activity_headline(
+                out,
+                part.status,
+                true,
+                false,
+                title.as_str(),
+                "",
+                width,
+                i18n,
+            );
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
@@ -1682,6 +1708,7 @@ pub(crate) fn render_part_node(
                 ui_text::t(i18n, "message-input-activity-attachment").as_str(),
                 labels.join(", ").as_str(),
                 width,
+                i18n,
             );
             if expanded {
                 for item in &attachment.attachments {
@@ -1691,7 +1718,7 @@ pub(crate) fn render_part_node(
                         .or(item.filename.as_ref())
                         .cloned()
                         .unwrap_or_else(|| item.mime.clone());
-                    if !render_attachment_image(out, "    ", item, width) {
+                    if !render_attachment_image(out, "    ", item, width, i18n) {
                         push_label_value(out, "    - ", label.as_str(), Style::default(), width);
                     }
                 }
@@ -1730,6 +1757,7 @@ pub(crate) fn render_part_node(
                 ui_text::t(i18n, "message-input-activity-skill").as_str(),
                 labels.join(", ").as_str(),
                 width,
+                i18n,
             );
             if expanded {
                 for command in &reference.commands {
@@ -1743,17 +1771,19 @@ pub(crate) fn render_part_node(
                         width,
                         None,
                         true,
+                        i18n,
                     );
                     render_canonical_activity_detail(
                         out,
                         &CanonicalActivityDetail::section(
-                            "Source",
+                            ui_text::t(i18n, "activity-detail-source").as_str(),
                             format!("{} · {}", command.source, command.content_hash),
                             CanonicalActivityDetailFormat::Plain,
                         ),
                         width,
                         None,
                         true,
+                        i18n,
                     );
                 }
             }
@@ -1794,7 +1824,7 @@ fn render_pending_interaction_body(
     if crate::interaction_view::request_is_review_decision(request) {
         // Plan body: the standard transcript Markdown pipeline with the same
         // activity detail indent as every other expanded part.
-        push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
+        push_markdown_document(out, "    ", request.body_markdown.as_str(), width, i18n);
         push_markdown_rule(out, "    ", width);
         render_review_decision_rows(out, request, view, width, i18n);
     } else {
@@ -1833,21 +1863,32 @@ fn render_operation_user_input(
     let title = tool.operation.invocation.name.trim();
     let title = if title.is_empty() {
         // Malformed operation without an invocation name.
-        if request.kind == "review" {
-            "Plan review"
+        let key = if request.kind == "review" {
+            "activity-title-plan-review"
         } else {
-            "User input"
-        }
+            "activity-title-user-input"
+        };
+        ui_text::t(i18n, key)
     } else {
-        title
+        title.to_owned()
     };
+    let title = title.as_str();
     let summary = request
         .questions
         .first()
         .map(|question| question.question.as_str())
         .filter(|text| !text.trim().is_empty())
         .unwrap_or(request.title.as_str());
-    push_activity_headline(out, part.status, expanded, true, title, summary, width);
+    push_activity_headline(
+        out,
+        part.status,
+        expanded,
+        true,
+        title,
+        summary,
+        width,
+        i18n,
+    );
     if !expanded {
         return true;
     }
@@ -1878,7 +1919,7 @@ fn render_answered_user_input_body(
     i18n: &I18n,
 ) {
     if !request.body_markdown.trim().is_empty() {
-        push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
+        push_markdown_document(out, "    ", request.body_markdown.as_str(), width, i18n);
         push_markdown_rule(out, "    ", width);
     }
     let answers = reply.map(|reply| &reply.answers);
@@ -2154,7 +2195,7 @@ fn render_ask_user_body(
 ) {
     let page = view.question_page.min(request.questions.len());
     if page == 0 {
-        push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
+        push_markdown_document(out, "    ", request.body_markdown.as_str(), width, i18n);
     }
     push_markdown_rule(out, "    ", width);
     let summary = page == request.questions.len();
@@ -2397,6 +2438,7 @@ fn render_activity_canonical(
         title,
         headline_summary.as_str(),
         width,
+        i18n,
     );
     let headline_end = out.len();
     let mut children = Vec::new();
@@ -2405,7 +2447,7 @@ fn render_activity_canonical(
     let render_summary = expanded && error.is_none() && !summary.trim().is_empty();
     if render_summary {
         let summary_start = out.len();
-        render_expanded_tool_text_block(out, "    ", summary.as_str(), width);
+        render_expanded_tool_text_block(out, "    ", summary.as_str(), width, i18n);
         if !is_text_segment {
             patch_rendered_lines_style(
                 &mut out[summary_start..],
@@ -2445,7 +2487,7 @@ fn render_activity_canonical(
                     .unwrap_or(default_expanded)
             });
             let section_start = out.len();
-            render_canonical_activity_detail(out, detail, width, None, section_expanded);
+            render_canonical_activity_detail(out, detail, width, None, section_expanded, i18n);
             if let Some(child) = rendered_activity_section_node(
                 section_key,
                 section_start,
@@ -2464,7 +2506,7 @@ fn render_activity_canonical(
         if let agena_domain::ActivityPayload::Resource(resource) = payload {
             let section_start = out.len();
             let attachment = canonical_resource_attachment(resource);
-            let _ = render_attachment_image(out, "    ", &attachment, width);
+            let _ = render_attachment_image(out, "    ", &attachment, width, i18n);
             if let Some(child) = rendered_activity_section_node(
                 TranscriptNodeKey::ActivitySection {
                     entry_id: message.id,
@@ -2494,13 +2536,14 @@ fn render_activity_canonical(
         render_canonical_activity_detail(
             out,
             &CanonicalActivityDetail::section(
-                "Error",
+                ui_text::t(i18n, "activity-title-error").as_str(),
                 error_str,
                 CanonicalActivityDetailFormat::Auto,
             ),
             width,
             Some(Style::default().fg(agena_tui_components::theme::danger_color())),
             section_expanded,
+            i18n,
         );
         if let Some(child) = rendered_activity_section_node(
             section_key,

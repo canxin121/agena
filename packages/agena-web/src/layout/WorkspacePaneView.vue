@@ -16,10 +16,13 @@ import { mainTabFromPath, mainTabPath } from '@/app/navigation/mainTabs'
 import { workspacePaneContextKey } from '@/app/workspace/workspacePaneContext'
 import { useUiStore } from '@/stores/ui'
 
-const props = defineProps<{
-  windowId: string
-  visible?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    windowId: string
+    visible?: boolean
+  }>(),
+  { visible: true },
+)
 
 const ui = useUiStore()
 const globalRouter = useRouter()

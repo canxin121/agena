@@ -7,6 +7,17 @@ import AttachmentPicker from '@/components/chat/AttachmentPicker.vue'
 import type { AttachedFile, PendingAttachment } from '@/pages/chat/useChatAttachments'
 import type { ComposerInput, ComposerSegment } from '@/pages/chat/composerInput'
 import { composerDomSelection } from '@/pages/chat/composerDomSelection'
+import {
+  composerAttachmentIds,
+  createComposerHistory,
+  recordComposerHistoryStep,
+  redoComposerHistory,
+  resolveComposerHistoryCommand,
+  restorableComposerSegments,
+  undoComposerHistory,
+  type ComposerHistoryState,
+  type ComposerHistoryStep,
+} from '@/pages/chat/composerUndoHistory'
 
 const props = defineProps<{
   draft: string
@@ -41,6 +52,13 @@ let savedStart = 0
 let savedEnd = 0
 let reportedText: string | undefined
 let selectionCache: { startNode: Node; endNode: Node; start: number; end: number } | undefined
+
+// Undo belongs to this composer instance.  The browser's undo stack lives on the
+// document instead, and every workspace pane shares one document, so leaning on
+// it lets Cmd/Ctrl+Z typed in one pane revert the draft another pane owns.  While
+// a snapshot is being written back, the edit must not be recorded again.
+let undoHistory: ComposerHistoryState = createComposerHistory()
+let applyingHistory = false
 
 function readSegments(): ComposerSegment[] {
   const segments: ComposerSegment[] = []
@@ -208,6 +226,7 @@ function replaceRange(
   const cursor = selectionMode === 'start' ? start : start + replacement.length
   setSelectionRange(cursor, selectionMode === 'select' ? start + replacement.length : cursor)
   notifyInput()
+  recordUndoHistory(false)
 }
 const textareaEl: ComposerInput = {
   get element() {
@@ -296,6 +315,7 @@ function removeChipIds(ids: Set<string>) {
   }
   refreshChipLabels()
   setSelectionRange(savedStart, savedEnd)
+  recordUndoHistory(false)
 }
 function insertChip(id: string) {
   if (!editorEl.value) return
@@ -311,6 +331,7 @@ function insertChip(id: string) {
   setSelectionRange(end + 1, end + 1)
   refreshChipLabels()
   emit('update:draft', plainText())
+  recordUndoHistory(false)
 }
 function syncAttachments() {
   selectionCache = undefined
@@ -347,11 +368,14 @@ function replaceAttachmentWithText(id: string, text: string) {
     setSelectionRange(savedStart, savedEnd)
   }
   notifyInput(false)
+  recordUndoHistory(false)
 }
 function removeAttachmentNodes(ids: string[]) {
   removeChipIds(new Set(ids))
 }
-function restoreSegments(segments: ComposerSegment[]) {
+
+/** Write a snapshot into the editor without touching the history. */
+function applySegments(segments: readonly ComposerSegment[]) {
   const root = editorEl.value
   if (!root) return
   root.replaceChildren()
@@ -361,12 +385,94 @@ function restoreSegments(segments: ComposerSegment[]) {
   refreshChipLabels()
   emit('update:draft', plainText())
 }
+
+/**
+ * A document the user no longer sees (session switch, prompt recall, failed-draft
+ * recovery, rewind) starts a new baseline instead of undoing into the old one.
+ */
+function resetUndoHistory() {
+  undoHistory = createComposerHistory(readSegments())
+}
+
+/** `coalesce` is for typing, where one burst undoes as one step. */
+function recordUndoHistory(coalesce: boolean) {
+  if (applyingHistory) return
+  undoHistory = recordComposerHistoryStep(undoHistory, readSegments(), { coalesce, at: Date.now() })
+}
+
+function applyHistoryStep(step: ComposerHistoryStep | null): boolean {
+  if (!step) return false
+  undoHistory = step.state
+
+  const known = knownAttachmentIds()
+  const segments = restorableComposerSegments(step.segments, known)
+  applyingHistory = true
+  try {
+    applySegments(segments)
+  } finally {
+    applyingHistory = false
+  }
+
+  // The snapshot owns the staged attachments too: a file it does not contain has
+  // to leave the draft, not only the editor.  Its chip is already gone above, so
+  // this cannot be mistaken for an attachment the user is still holding.
+  const restored = composerAttachmentIds(segments)
+  for (const id of known) {
+    if (!restored.has(id)) emit('removeAttachment', id)
+  }
+  return true
+}
+
+function knownAttachmentIds(): Set<string> {
+  return new Set([...props.attachedFiles, ...props.pendingAttachments].map((file) => file.id))
+}
+
+function undoComposerEdit(): boolean {
+  return applyHistoryStep(undoComposerHistory(undoHistory))
+}
+
+function redoComposerEdit(): boolean {
+  return applyHistoryStep(redoComposerHistory(undoHistory))
+}
+
+function handleHistoryKeydown(event: KeyboardEvent): boolean {
+  const command = resolveComposerHistoryCommand(event)
+  if (!command) return false
+
+  // Claim the chord even when this history has nothing left to apply: letting it
+  // fall through hands the keystroke to the document-wide browser stack, which is
+  // the cross-pane behaviour this history exists to prevent.
+  event.preventDefault()
+  event.stopPropagation()
+  if (command === 'redo') redoComposerEdit()
+  else undoComposerEdit()
+  return true
+}
+
+function handleEditorKeydown(event: KeyboardEvent) {
+  if (handleHistoryKeydown(event)) return
+  emit('draftKeydown', event)
+}
+
+/** Replacement from outside the editor: new baseline, then the new document. */
+function restoreSegments(segments: ComposerSegment[]) {
+  applySegments(segments)
+  resetUndoHistory()
+}
 function insertText(text: string) {
   const [start, end] = selectionOffsets()
   replaceRange(start, end, text)
 }
 function handleBeforeInput(event: InputEvent) {
   if (event.isComposing) return
+  // Menu and context-menu undo arrives as an input event; it must not reach the
+  // browser's document-wide stack either.
+  if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
+    event.preventDefault()
+    if (event.inputType === 'historyRedo') redoComposerEdit()
+    else undoComposerEdit()
+    return
+  }
   if (event.inputType === 'insertParagraph' || event.inputType === 'insertLineBreak') {
     event.preventDefault()
     insertText('\n')
@@ -397,6 +503,7 @@ function handleInput() {
     editorEl.value.replaceChildren()
   selectionOffsets()
   notifyInput()
+  recordUndoHistory(true)
 }
 function rememberSelection() {
   if (document.activeElement === editorEl.value) selectionOffsets()
@@ -410,6 +517,7 @@ watch(
     editorEl.value.replaceChildren(...(text ? [document.createTextNode(text)] : []))
     savedStart = savedEnd = text.length
     syncAttachments()
+    resetUndoHistory()
   },
   { flush: 'sync' },
 )
@@ -418,6 +526,7 @@ onMounted(() => {
   editorEl.value?.replaceChildren(...(props.draft ? [document.createTextNode(props.draft)] : []))
   savedStart = savedEnd = props.draft.length
   syncAttachments()
+  resetUndoHistory()
   document.addEventListener('selectionchange', rememberSelection)
 })
 onBeforeUnmount(() => document.removeEventListener('selectionchange', rememberSelection))
@@ -503,7 +612,7 @@ defineExpose({
       @click="$emit('draftInput')"
       @keyup="$emit('draftInput')"
       @paste="$emit('paste', $event)"
-      @keydown="$emit('draftKeydown', $event)"
+      @keydown="handleEditorKeydown"
     />
     <AttachmentPicker ref="attachmentPickerRef" @filesSelected="$emit('filesSelected', $event)" />
     <slot name="controls" />

@@ -519,7 +519,13 @@ defineExpose({
 }
 .composer-editor :deep(.composer-attachment) {
   display: inline-block;
-  vertical-align: baseline;
+  /* `overflow: hidden` (kept for the ellipsis below) makes this inline-block's
+     baseline its bottom margin edge, so a plain `baseline` alignment floats the
+     label about 6.5-7px above the surrounding text. The gap is exactly the
+     chip's own border, vertical padding, half-leading and descent, which
+     measures 0.55em of the chip font for every bundled UI font, so the box is
+     lowered by that much and the label lands on the text baseline instead. */
+  vertical-align: -0.55em;
   max-width: min(24rem, 75%);
   margin: 0 0.15rem;
   padding: 0.08rem 0.45rem;

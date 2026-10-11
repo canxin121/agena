@@ -17,3 +17,11 @@ test('a long draft scrolls inside the composer editor instead of pushing the too
 test('the composer editor keeps an internal scroll container', () => {
   assert.match(composerSource, /overflow-y-auto/)
 })
+
+test('an attachment chip keeps its label on the surrounding text baseline', () => {
+  // `overflow: hidden` (kept for the ellipsis) makes the inline-block's baseline
+  // its bottom margin edge, which floated the label 6.5-7px above the text. The
+  // box is lowered by the measured correction (0.55em of the chip font) instead.
+  assert.match(composerSource, /vertical-align: -0\.55em;/)
+  assert.match(composerSource, /text-overflow: ellipsis;/)
+})

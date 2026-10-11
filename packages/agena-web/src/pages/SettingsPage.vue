@@ -20,7 +20,17 @@ import {
   resolveSettingsSubpage,
   settingsSubpageStorageKey,
 } from '@/components/settings/workbench/settingsSectionNavigation'
-import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
+import {
+  SETTINGS_DEFAULT_SUBPAGE,
+  buildSettingsSidebarNodes,
+  buildSettingsSubpages,
+} from '@/components/settings/settingsNavigationCatalog'
+import {
+  buildSettingsScopes,
+  findSettingsScope,
+  resolveSettingsScope,
+  settingsScopeStorageKey,
+} from '@/components/settings/settingsScopeCatalog'
 import {
   buildSettingsSidebarTabs,
   normalizeRememberedSettingsRoute,
@@ -102,6 +112,18 @@ const activeView = computed(() => {
   return resolveSettingsSubpage(requested, remembered, activePages.value, SETTINGS_DEFAULT_SUBPAGE[activeSection.value])
 })
 
+// The scope is the page's second dimension: every scoped page inside a section
+// resolves the same configuration layers, and the left navigation owns the
+// choice, so the content only reports which layer it is showing.
+const activeScopes = computed(() => buildSettingsScopes(activeSection.value, activeView.value))
+const activeScope = computed(() => {
+  let remembered = ''
+  try {
+    remembered = localStorage.getItem(settingsScopeStorageKey(activeSection.value)) || ''
+  } catch {}
+  return resolveSettingsScope(route.query.scope, remembered, activeScopes.value)
+})
+
 // The active subpage declares whether it owns the whole content area (dense
 // master/detail pages such as the Model Catalog do) or scrolls inside it like
 // every other settings page.
@@ -109,17 +131,28 @@ const activeSubpageDefinition = computed(() => activePages.value.find((page) => 
 const contentFillsViewport = computed(() => activeSubpageDefinition.value?.fillsViewport === true)
 
 watch(
-  () => [route.params.section, route.query.view, route.query.pluginTab, activeView.value] as const,
+  () =>
+    [
+      route.params.section,
+      route.query.view,
+      route.query.scope,
+      route.query.pluginTab,
+      activeView.value,
+      activeScope.value,
+    ] as const,
   () => {
     if (!settingsTabFromRouteValue(route.params.section)) return
     try {
       localStorage.setItem(settingsSubpageStorageKey(activeSection.value), activeView.value)
+      localStorage.setItem(settingsScopeStorageKey(activeSection.value), activeScope.value)
     } catch {}
-    const { pluginTab: _legacyPluginTab, ...query } = route.query
+    const { pluginTab: _legacyPluginTab, scope: _scope, ...query } = route.query
+    if (activeScope.value) query.scope = activeScope.value
     const isPluginView = activeSection.value === 'plugins-tools' && pluginTabForSettingsView(activeView.value)
     if (!isPluginView) delete query.plugin
     if (
       query.view === activeView.value &&
+      query.scope === (activeScope.value || undefined) &&
       route.query.pluginTab === undefined &&
       (isPluginView || route.query.plugin === undefined)
     )
@@ -160,7 +193,7 @@ const showSidebar = computed(() => {
 const tabs = computed(() =>
   buildSettingsSidebarTabs(
     (_id, labelKey) => String(t(labelKey)),
-    (section) => buildSettingsSubpages(section),
+    (section) => buildSettingsSidebarNodes(section),
   ),
 )
 
@@ -228,7 +261,8 @@ const settingsWindowTitle = computed(() => {
   const base = String(t('settings.title'))
   const activeTabLabel = tabs.value.find((tab) => tab.id === activeSection.value)?.label || base
   const pageLabel = activePages.value.find((page) => page.id === activeView.value)?.label
-  return joinWindowTitle([base, activeTabLabel, pageLabel])
+  const scopeLabel = findSettingsScope(activeSection.value, activeView.value, activeScope.value)?.label
+  return joinWindowTitle([base, activeTabLabel, pageLabel, scopeLabel])
 })
 
 watch(
@@ -502,6 +536,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
             :tabs="tabs"
             :active-tab="activeSection"
             :active-view="activeView"
+            :active-scope="activeScope"
             :loading="settings.loading"
             :is-touch-pointer="ui.isTouchPointer"
             @refresh="refreshSettingsSidebar"
@@ -842,6 +877,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
           <!-- Models & Providers -->
           <ModelsProvidersPanel
             :active-page="activeView"
+            :scope="activeScope"
             v-else-if="activeSection === 'models-providers'"
             :key="`models-providers-${settingsRefreshNonce}`"
           />
@@ -849,6 +885,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
           <!-- Permissions -->
           <PermissionsWorkbenchPanel
             :active-page="activeView"
+            :scope="activeScope"
             v-else-if="activeSection === 'permissions'"
             :key="`permissions-${settingsRefreshNonce}`"
           />
@@ -869,6 +906,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
 
           <DiagnosticsWorkbenchPanel
             :active-page="activeView"
+            :scope="activeScope"
             v-else-if="activeSection === 'diagnostics'"
             :key="`diagnostics-${settingsRefreshNonce}`"
           />

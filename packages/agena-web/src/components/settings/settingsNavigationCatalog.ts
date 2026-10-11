@@ -1,5 +1,6 @@
-import type { SettingsTab } from './sidebar/settingsSidebarNavigation'
+import type { SettingsSidebarNavigationNode, SettingsTab } from './sidebar/settingsSidebarNavigation'
 import type { SettingsSubpageDefinition } from './workbench/settingsSectionNavigation'
+import { buildSettingsScopes } from './settingsScopeCatalog'
 import { settingsText as st } from '../../i18n/settingsText'
 
 type SettingsSubpageSource = Omit<SettingsSubpageDefinition, 'label' | 'description'> & {
@@ -197,4 +198,30 @@ export function buildSettingsSubpages(section: SettingsTab): SettingsSubpageDefi
     description: page.description(),
     keywords: page.keywords ? [...page.keywords] : undefined,
   }))
+}
+
+/**
+ * The same catalog feeds the left navigation: each page becomes a row and, when
+ * the page resolves configuration layers, one child row per layer. Content and
+ * navigation therefore always describe the same destinations.
+ */
+export function buildSettingsSidebarNodes(section: SettingsTab): SettingsSidebarNavigationNode[] {
+  return buildSettingsSubpages(section).map((page) => {
+    const scopes = buildSettingsScopes(section, page.id)
+    return {
+      id: page.id,
+      label: page.label,
+      description: page.description,
+      keywords: page.keywords,
+      children: scopes.length
+        ? scopes.map((scope) => ({
+            id: scope.id,
+            label: scope.label,
+            description: scope.description,
+            view: page.id,
+            scope: scope.id,
+          }))
+        : undefined,
+    }
+  })
 }

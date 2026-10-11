@@ -25,6 +25,9 @@ export type SettingsSidebarNavigationNode = {
   description?: string
   keywords?: string[]
   view?: string
+  // A scope row selects one configuration layer of its parent page: it carries
+  // both the page view and the scope id, so the row is its own destination.
+  scope?: string
   children?: SettingsSidebarNavigationNode[]
 }
 
@@ -40,6 +43,7 @@ export type SettingsSidebarTab = {
 export type SettingsSidebarDestination = {
   section: SettingsTab
   view: string
+  scope?: string
 }
 
 export type SettingsSidebarTabRow = {
@@ -47,6 +51,7 @@ export type SettingsSidebarTabRow = {
   key: string
   section: SettingsTab
   view?: string
+  scope?: string
   label: string
   icon?: SettingsSidebarIconKey
   depth: number
@@ -198,9 +203,17 @@ function filterNavigationNode(
   }
 }
 
-function nodeContainsActiveView(node: SettingsSidebarNavigationNode, activeView: string): boolean {
-  if (node.view && normalizeSettingsSidebarQuery(node.view) === activeView) return true
-  return (node.children || []).some((child) => nodeContainsActiveView(child, activeView))
+// A row is the current destination only when both its page and its scope match,
+// so a permission layer row never lights up for another layer of the same page.
+function nodeContainsDestination(
+  node: SettingsSidebarNavigationNode,
+  activeView: string,
+  activeScope: string,
+): boolean {
+  if (node.view && normalizeSettingsSidebarQuery(node.view) === activeView) {
+    if (!node.scope || normalizeSettingsSidebarQuery(node.scope) === activeScope) return true
+  }
+  return (node.children || []).some((child) => nodeContainsDestination(child, activeView, activeScope))
 }
 
 function flattenNavigationNode(args: {
@@ -208,6 +221,7 @@ function flattenNavigationNode(args: {
   section: SettingsTab
   activeTab: SettingsTab
   activeView: string
+  activeScope: string
   expandedNodeKeys: ReadonlySet<string>
   forceExpanded: boolean
   key: string
@@ -216,18 +230,22 @@ function flattenNavigationNode(args: {
 }): SettingsSidebarTabRow[] {
   const children = args.node.children || []
   const hasChildren = children.length > 0
+  const scopeMatches = !args.node.scope || normalizeSettingsSidebarQuery(args.node.scope) === args.activeScope
   const branchActive =
     args.activeTab === args.section &&
     (args.node.view
-      ? normalizeSettingsSidebarQuery(args.node.view) === args.activeView
-      : nodeContainsActiveView(args.node, args.activeView))
-  const active = Boolean(args.node.view) && branchActive
+      ? normalizeSettingsSidebarQuery(args.node.view) === args.activeView && scopeMatches
+      : nodeContainsDestination(args.node, args.activeView, args.activeScope))
+  // A branch row is highlighted as an ancestor while its own scope child owns
+  // the active state.
+  const active = Boolean(args.node.view) && branchActive && !hasChildren
   const expanded = hasChildren && (args.forceExpanded || args.expandedNodeKeys.has(args.key))
   const row: SettingsSidebarTabRow = {
     kind: 'item',
     key: args.key,
     section: args.section,
     view: args.node.view,
+    scope: args.node.scope,
     label: args.node.label,
     icon: args.icon,
     depth: args.depth,
@@ -257,10 +275,12 @@ export function buildSettingsSidebarGroups(args: {
   tabs: SettingsSidebarTab[]
   activeTab: SettingsTab
   activeView?: string
+  activeScope?: string
   expandedNodeKeys?: ReadonlySet<string>
 }): SettingsSidebarRenderGroup[] {
   const query = normalizeSettingsSidebarQuery(args.query)
   const activeView = normalizeSettingsSidebarQuery(args.activeView || '')
+  const activeScope = normalizeSettingsSidebarQuery(args.activeScope || '')
   const expandedNodeKeys = args.expandedNodeKeys || new Set<string>()
   const groups = new Map<SettingsSidebarGroupId, SettingsSidebarTabRow[]>([
     ['core', []],
@@ -286,6 +306,7 @@ export function buildSettingsSidebarGroups(args: {
         section: tab.id,
         activeTab: args.activeTab,
         activeView,
+        activeScope,
         expandedNodeKeys,
         forceExpanded: Boolean(query),
         key: tab.id,

@@ -10,7 +10,8 @@ const MemoriesPanel = defineAsyncComponent(() => import('@/components/settings/M
 const UsagePanel = defineAsyncComponent(() => import('@/components/settings/UsagePanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('diagnostics'))
-defineProps<{ activePage: string }>()
+// The advanced editor writes one explicit layer, which the left navigation owns.
+defineProps<{ activePage: string; scope: string }>()
 </script>
 
 <template>
@@ -22,7 +23,7 @@ defineProps<{ activePage: string }>()
     v-slot="{ activePage }"
   >
     <DiagnosticsPanel v-if="activePage === 'runtime'" />
-    <AdvancedSettingsPanel v-else-if="activePage === 'advanced-settings'" />
+    <AdvancedSettingsPanel v-else-if="activePage === 'advanced-settings'" :scope="scope" />
     <ActivitiesPanel v-else-if="activePage === 'activities'" />
     <MemoriesPanel v-else-if="activePage === 'memories'" />
     <UsagePanel v-else />

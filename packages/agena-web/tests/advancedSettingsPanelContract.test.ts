@@ -11,6 +11,11 @@ test('advanced settings editor targets explicit layers and validates before writ
   assert.ok(source.includes('targetLayer.value'))
   assert.ok(source.includes('deleteRuntimeSetting'))
   assert.ok(source.includes('Copy effective'))
+  // The layer is chosen in the shared left navigation, so the editor follows the
+  // forwarded scope and never renders its own layer picker.
+  assert.ok(source.includes("props.scope === 'workspace' ? 'workspace' : 'global'"))
+  assert.equal(source.includes(':options="layerOptions"'), false)
+  assert.equal(source.includes('v-model="targetLayer"'), false)
 })
 
 test('diagnostics workbench exposes advanced settings as a real subpage', () => {
@@ -25,4 +30,8 @@ test('diagnostics workbench exposes advanced settings as a real subpage', () => 
   assert.ok(source.includes("buildSettingsSubpages('diagnostics')"))
   assert.ok(catalog.includes("id: 'advanced-settings'"))
   assert.ok(source.includes('<AdvancedSettingsPanel'))
+  assert.ok(
+    source.includes('<AdvancedSettingsPanel v-else-if="activePage === \'advanced-settings\'" :scope="scope" />'),
+  )
+  assert.ok(source.includes('defineProps<{ activePage: string; scope: string }>()'))
 })

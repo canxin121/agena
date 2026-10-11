@@ -52,8 +52,7 @@ type ToolCatalogResponse = { permission_tools?: Array<{ name?: string; summary?:
 const SHELL_LAUNCH_TOOLS = ['agena.shell.exec', 'agena.shell.spawn', 'agena.shell.watch', 'agena.shell.open'] as const
 const SHELL_CAPABLE_TOOLS = [...SHELL_LAUNCH_TOOLS, 'agena.shell.write'] as const
 
-const props = defineProps<{ section: string; scope: PermissionSource }>()
-const emit = defineEmits<{ (event: 'update:scope', value: PermissionSource): void }>()
+const props = defineProps<{ section: string; scope: string }>()
 const { t } = useI18n()
 const chat = useChatStore()
 const toasts = useToastsStore()
@@ -62,10 +61,13 @@ const PermissionsPanel = defineAsyncComponent(() => import('@/components/setting
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
-const selectedSource = computed({
-  get: () => props.scope,
-  set: (value: PermissionSource) => emit('update:scope', value),
-})
+// The permission source is chosen in the shared left navigation, so the panel
+// only normalizes the forwarded layer and never writes it back.
+const selectedSource = computed<PermissionSource>(() => normalizePermissionSource(props.scope))
+
+function normalizePermissionSource(value: unknown): PermissionSource {
+  return value === 'global' || value === 'workspace' || value === 'session' ? value : 'effective'
+}
 const selectedSection = computed<PermissionSection>(() => {
   if (props.section === 'network') return 'network'
   if (props.section === 'tools') return 'tools'
@@ -702,19 +704,17 @@ onMounted(() => void load())
     </div>
 
     <div class="grid gap-4">
-      <label class="grid max-w-xl gap-1.5">
+      <div class="grid max-w-xl gap-1.5">
         <span class="text-xs font-medium">{{ $st('Permission source') }}</span>
-        <OptionPicker
-          :model-value="selectedSource"
-          :options="sourceOptions"
-          :title="$st('Permission source')"
-          :include-empty="false"
-          @update:model-value="selectedSource = $event as PermissionSource"
-        />
-        <span class="text-xs text-muted-foreground">{{
-          sourceOptions.find((option) => option.value === selectedSource)?.summary
-        }}</span>
-      </label>
+        <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span class="text-sm font-medium">{{
+            sourceOptions.find((option) => option.value === selectedSource)?.label
+          }}</span>
+          <code class="break-all font-mono text-xs text-muted-foreground">{{
+            sourceOptions.find((option) => option.value === selectedSource)?.summary
+          }}</code>
+        </div>
+      </div>
       <div class="text-xs text-muted-foreground">
         {{ sourceOptions.find((option) => option.value === selectedSource)?.description }}
       </div>

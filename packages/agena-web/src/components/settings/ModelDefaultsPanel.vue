@@ -44,7 +44,15 @@ const DEFAULT_SELECTION_PATH = 'providers.default_selection'
 const toasts = useToastsStore()
 const modelSelectionCatalog = useModelSelectionCatalog()
 
-const scope = ref<ModelDefaultScope>('effective')
+// The layer choice lives in the left navigation, so the panel follows the
+// forwarded scope instead of holding its own picker state.
+const props = defineProps<{ scope: string }>()
+
+function normalizeModelDefaultScope(value: unknown): ModelDefaultScope {
+  return value === 'global' || value === 'workspace' ? value : 'effective'
+}
+
+const scope = computed<ModelDefaultScope>(() => normalizeModelDefaultScope(props.scope))
 const loading = ref(false)
 const error = ref('')
 const sources = ref<RuntimeSettingsReadBundle | null>(null)
@@ -268,18 +276,12 @@ onMounted(() => void refresh())
       {{ error }}
     </div>
 
-    <label class="grid max-w-xl gap-1.5">
+    <div class="grid max-w-xl gap-1">
       <span class="text-xs font-medium">{{ $st('Model default source') }}</span>
-      <OptionPicker
-        :model-value="scope"
-        :options="scopeOptions"
-        :title="$st('Model default source')"
-        :include-empty="false"
-        @update:model-value="scope = $event as ModelDefaultScope"
-      />
+      <span class="text-sm font-medium">{{ activeScopeOption.label }}</span>
       <span class="break-words font-mono text-xs text-muted-foreground">{{ activeScopeOption.summary }}</span>
-    </label>
-    <div class="text-xs text-muted-foreground">{{ activeScopeOption.description }}</div>
+      <span class="text-xs text-muted-foreground">{{ activeScopeOption.description }}</span>
+    </div>
 
     <section class="grid gap-4 rounded-lg border border-border/60 p-4">
       <div class="flex flex-wrap items-start justify-between gap-3">

@@ -45,6 +45,31 @@ test('settings navigation preserves workspace scope and clears unrelated deep-li
     settingsQueryForDestination({ section: 'plugins-tools', view: 'plugin-tools' }, 'interface', current).plugin,
     undefined,
   )
+  // A scope row names the configuration layer to open; any other destination
+  // drops it again, so a page without a layer choice cannot inherit one.
+  assert.deepEqual(
+    settingsQueryForDestination(
+      { section: 'permissions', view: 'filesystem', scope: 'workspace' },
+      'permissions',
+      current,
+    ),
+    { view: 'filesystem', scope: 'workspace', workspaceId: '42', windowId: 'settings', paneId: 'left' },
+  )
+  assert.equal(
+    settingsQueryForDestination({ section: 'interface', view: 'conversation' }, 'permissions', {
+      ...current,
+      view: 'filesystem',
+      scope: 'workspace',
+    }).scope,
+    undefined,
+  )
+  assert.equal(
+    settingsQueryForDestination({ section: 'diagnostics', view: 'advanced-settings', scope: 'global' }, 'permissions', {
+      view: 'filesystem',
+      scope: 'session',
+    }).scope,
+    'global',
+  )
 })
 
 test('old plugin tab links normalize to matching second-level destinations', () => {
@@ -64,6 +89,7 @@ test('settings sidebar and content share one normalized routing state', () => {
   assert.ok(source.includes('settingsQueryForDestination(destination, activeSection.value, route.query)'))
   assert.ok(source.includes('router.push({ path, query, hash: route.hash })'))
   assert.ok(source.includes(':active-view="activeView"'))
+  assert.ok(source.includes(':active-scope="activeScope"'))
   assert.ok(source.includes(':active-page="activeView"'))
   assert.ok(source.includes('normalizePluginSettingsView('))
 })

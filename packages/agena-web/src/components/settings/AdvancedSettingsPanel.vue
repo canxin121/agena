@@ -17,6 +17,7 @@ import {
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
+import { findSettingsScope } from '@/components/settings/settingsScopeCatalog'
 
 const COMMON_PATHS = computed(() => [
   {
@@ -56,17 +57,12 @@ const COMMON_PATHS = computed(() => [
   },
 ])
 
-const layerOptions = computed(() => [
-  { value: 'global', label: st('Global layer'), description: st('Writes the server-wide Agena configuration file.') },
-  {
-    value: 'workspace',
-    label: st('Workspace layer'),
-    description: st('Writes the current workspace configuration file.'),
-  },
-])
-
 const toasts = useToastsStore()
-const targetLayer = ref<RuntimeSettingsLayer>('global')
+// The write target is chosen in the left navigation; this editor only follows
+// the layer it was opened with.
+const props = defineProps<{ scope: string }>()
+const targetLayer = computed<RuntimeSettingsLayer>(() => (props.scope === 'workspace' ? 'workspace' : 'global'))
+const activeLayerScope = computed(() => findSettingsScope('diagnostics', 'advanced-settings', targetLayer.value))
 const settingPath = ref('')
 const loadedPath = ref('')
 const sources = ref<RuntimeSettingsReadBundle | null>(null)
@@ -248,16 +244,11 @@ onMounted(() => {
 
     <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-4">
       <div class="grid gap-3 lg:grid-cols-[13rem_minmax(0,1fr)_auto] lg:items-end">
-        <label class="grid gap-1.5">
+        <div class="grid gap-1.5">
           <span class="text-xs text-muted-foreground">{{ $st('Write target') }}</span>
-          <OptionPicker
-            v-model="targetLayer"
-            :options="layerOptions"
-            :include-empty="false"
-            :title="$st('Configuration layer')"
-            :disabled="busy"
-          />
-        </label>
+          <span class="text-sm font-medium">{{ activeLayerScope?.label }}</span>
+          <span class="text-[11px] leading-4 text-muted-foreground">{{ activeLayerScope?.description }}</span>
+        </div>
         <label class="grid min-w-0 gap-1.5">
           <span class="text-xs text-muted-foreground">{{ $st('JSON path') }}</span>
           <OptionPicker

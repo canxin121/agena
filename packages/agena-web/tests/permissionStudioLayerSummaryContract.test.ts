@@ -10,6 +10,9 @@ test('permission studio compares global, workspace, session, and effective layer
   assert.ok(source.includes('sessionConfigSnapshot'))
   assert.ok(source.includes('effectiveConfig'))
   assert.ok(source.includes('function permissionSummary'))
-  assert.ok(source.includes(':options="sourceOptions"'))
+  // The source is chosen in the shared left navigation, so the page reports the
+  // layer it was opened with instead of rendering a second picker.
+  assert.ok(source.includes('sourceOptions.find((option) => option.value === selectedSource)?.label'))
   assert.ok(source.includes('option.value === selectedSource)?.summary'))
+  assert.equal(source.includes(':options="sourceOptions"'), false)
 })

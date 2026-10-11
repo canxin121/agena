@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref } from 'vue'
+import { computed, defineAsyncComponent } from 'vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
 const PermissionStudioPanel = defineAsyncComponent(() => import('@/components/settings/PermissionStudioPanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('permissions'))
-const permissionScope = ref<'effective' | 'global' | 'workspace' | 'session'>('effective')
-defineProps<{ activePage: string }>()
+// The permission source belongs to the shared left navigation now, so this
+// workbench only forwards the layer the user selected there.
+defineProps<{ activePage: string; scope: string }>()
 </script>
 
 <template>
@@ -18,6 +19,6 @@ defineProps<{ activePage: string }>()
     :default-page="SETTINGS_DEFAULT_SUBPAGE.permissions"
     v-slot="{ activePage }"
   >
-    <PermissionStudioPanel v-model:scope="permissionScope" :section="activePage" />
+    <PermissionStudioPanel :scope="scope" :section="activePage" />
   </SettingsSectionWorkbench>
 </template>

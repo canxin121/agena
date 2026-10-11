@@ -66,8 +66,14 @@ test('permission tool rules follow the shared source scope without a second scop
   const studio = readFileSync(resolve(root, 'PermissionStudioPanel.vue'), 'utf8')
   const rules = readFileSync(resolve(root, 'PermissionsPanel.vue'), 'utf8')
 
-  assert.ok(workbench.includes('v-model:scope="permissionScope"'))
+  assert.ok(workbench.includes('defineProps<{ activePage: string; scope: string }>()'))
+  assert.ok(workbench.includes('<PermissionStudioPanel :scope="scope" :section="activePage" />'))
+  assert.equal(workbench.includes('v-model:scope'), false)
   assert.doesNotMatch(workbench, /PermissionsPanel/)
+  assert.ok(
+    studio.includes('const selectedSource = computed<PermissionSource>(() => normalizePermissionSource(props.scope))'),
+  )
+  assert.equal(studio.includes(':options="sourceOptions"'), false)
   assert.ok(studio.includes('<PermissionsPanel v-if="selectedSection === \'tools\'" :scope="selectedSource"'))
   assert.ok(rules.includes("props.scope === 'workspace' && activeWorkspaceId.value !== null"))
   assert.ok(
@@ -75,4 +81,34 @@ test('permission tool rules follow the shared source scope without a second scop
   )
   assert.ok(rules.includes('scope: props.scope'))
   assert.doesNotMatch(rules, /newScope|scopeOptions/)
+})
+
+test('every layer-aware settings page reads its scope from the shared navigation', () => {
+  const root = resolve(import.meta.dir, '../src/components/settings')
+  const page = readFileSync(resolve(import.meta.dir, '../src/pages/SettingsPage.vue'), 'utf8')
+  assert.ok(page.includes(':active-scope="activeScope"'))
+  assert.ok(page.includes('(section) => buildSettingsSidebarNodes(section)'))
+  assert.ok(page.includes('resolveSettingsScope(route.query.scope'))
+  assert.ok(page.includes('settingsScopeStorageKey(activeSection.value)'))
+  for (const section of ['models-providers', 'permissions', 'diagnostics']) {
+    assert.match(page, new RegExp(`:scope="activeScope"\\s+v-else-if="activeSection === '${section}'"`))
+  }
+
+  const models = readFileSync(resolve(root, 'ModelsProvidersPanel.vue'), 'utf8')
+  assert.ok(models.includes('<ApprovalSettingsPanel v-else-if="activePage === \'approval-model\'" :scope="scope" />'))
+  assert.ok(models.includes('<ModelDefaultsPanel v-else :scope="scope" />'))
+
+  // Content pages only report the layer they were opened with: none of them
+  // renders a scope picker of its own.
+  for (const file of [
+    'PermissionStudioPanel.vue',
+    'ModelDefaultsPanel.vue',
+    'ApprovalSettingsPanel.vue',
+    'AdvancedSettingsPanel.vue',
+  ]) {
+    const source = readFileSync(resolve(root, file), 'utf8')
+    for (const options of [':options="sourceOptions"', ':options="scopeOptions"', ':options="layerOptions"']) {
+      assert.equal(source.includes(options), false, `${file} must not render ${options}`)
+    }
+  }
 })

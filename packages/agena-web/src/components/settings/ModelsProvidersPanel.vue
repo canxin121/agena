@@ -9,7 +9,9 @@ const ApprovalSettingsPanel = defineAsyncComponent(() => import('@/components/se
 const ModelDefaultsPanel = defineAsyncComponent(() => import('@/components/settings/ModelDefaultsPanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('models-providers'))
-defineProps<{ activePage: string }>()
+// Model defaults and the approval model share one layer choice, which the left
+// navigation owns; the section only forwards the selected scope.
+defineProps<{ activePage: string; scope: string }>()
 </script>
 
 <template>
@@ -22,7 +24,7 @@ defineProps<{ activePage: string }>()
   >
     <ProviderStudioPanel v-if="activePage === 'provider-studio'" />
     <ModelCatalogPanel v-else-if="activePage === 'model-catalog'" />
-    <ApprovalSettingsPanel v-else-if="activePage === 'approval-model'" />
-    <ModelDefaultsPanel v-else />
+    <ApprovalSettingsPanel v-else-if="activePage === 'approval-model'" :scope="scope" />
+    <ModelDefaultsPanel v-else :scope="scope" />
   </SettingsSectionWorkbench>
 </template>

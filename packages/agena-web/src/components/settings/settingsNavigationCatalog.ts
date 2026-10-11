@@ -20,6 +20,9 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       label: () => st('Model Catalog'),
       description: () => st('Search the resolved model catalog and inspect capabilities, limits, modes, and pricing.'),
       keywords: ['catalog', 'metadata', 'pricing', 'capabilities', 'context window'],
+      // The catalog is a master/detail browser: the list and the inspection pane
+      // both scroll independently, so the page itself must not scroll.
+      fillsViewport: true,
     },
     {
       id: 'defaults',

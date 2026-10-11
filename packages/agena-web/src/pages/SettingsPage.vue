@@ -32,6 +32,7 @@ import {
 import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { apiJson } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { buildLocalePickerOptions } from '@/pages/loginLocaleOptions'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
@@ -100,6 +101,12 @@ const activeView = computed(() => {
       : route.query.view
   return resolveSettingsSubpage(requested, remembered, activePages.value, SETTINGS_DEFAULT_SUBPAGE[activeSection.value])
 })
+
+// The active subpage declares whether it owns the whole content area (dense
+// master/detail pages such as the Model Catalog do) or scrolls inside it like
+// every other settings page.
+const activeSubpageDefinition = computed(() => activePages.value.find((page) => page.id === activeView.value) || null)
+const contentFillsViewport = computed(() => activeSubpageDefinition.value?.fillsViewport === true)
 
 watch(
   () => [route.params.section, route.query.view, route.query.pluginTab, activeView.value] as const,
@@ -508,7 +515,16 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
         class="flex-1 min-w-0 overflow-y-auto bg-background"
         v-show="!ui.isCompactLayout || !ui.isSessionSwitcherOpen"
       >
-        <div class="mx-auto w-full max-w-6xl space-y-8 p-4 lg:p-8">
+        <div
+          :class="
+            cn(
+              'w-full',
+              contentFillsViewport
+                ? 'mx-auto flex max-w-6xl flex-col gap-4 p-4 lg:mx-0 lg:h-full lg:max-w-none lg:min-h-0 lg:gap-6 lg:p-6'
+                : 'mx-auto max-w-6xl space-y-8 p-4 lg:p-8',
+            )
+          "
+        >
           <div
             v-if="dirtyHint"
             class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive"

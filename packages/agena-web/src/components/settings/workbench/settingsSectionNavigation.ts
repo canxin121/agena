@@ -4,6 +4,10 @@ export type SettingsSubpageDefinition = {
   description: string
   keywords?: string[]
   badge?: string
+  // A dense master/detail page owns the whole settings content area instead of
+  // scrolling inside it: SettingsPage and the section workbench give such a page
+  // the viewport height and drop the centered content width cap.
+  fillsViewport?: boolean
 }
 
 export function normalizeSettingsSubpageId(value: unknown): string {

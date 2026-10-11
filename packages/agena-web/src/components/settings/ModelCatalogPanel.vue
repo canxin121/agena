@@ -316,24 +316,7 @@ onMounted(() => void load())
 </script>
 
 <template>
-  <div class="grid min-w-0 gap-5">
-    <div class="flex flex-wrap items-center justify-end gap-2">
-      <Button variant="outline" size="sm" :disabled="refreshing || loading" @click="refreshCatalog">
-        <RiRestartLine class="mr-2 h-4 w-4" :class="refreshing ? 'animate-spin' : ''" />
-        {{ $st('Refresh source') }}
-      </Button>
-      <IconButton
-        variant="outline"
-        size="md"
-        :disabled="loading"
-        :tooltip="loading ? $st('Loading catalog') : $st('Reload current page')"
-        :aria-label="$st('Reload Model Catalog page')"
-        @click="load()"
-      >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-    </div>
-
+  <div class="flex h-full min-h-0 min-w-0 flex-col gap-3">
     <div
       v-if="error"
       class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -347,22 +330,41 @@ onMounted(() => void load())
       {{ $st('Last refresh issue:') }} {{ failureText }}
     </div>
 
-    <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-4">
-      <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_16rem]">
+    <!-- The refresh controls share the search row so the list and the detail
+         pane keep every remaining pixel of the settings content area. -->
+    <section class="grid shrink-0 gap-2 rounded-lg border border-border/60 bg-muted/10 p-3">
+      <div class="flex flex-wrap items-center gap-2">
         <SearchInput
           v-model="query"
+          class="min-w-[16rem] flex-1"
           :placeholder="$st('Search model id, display name, origin, lifecycle, or description')"
           :input-aria-label="$st('Search Model Catalog')"
           @search="search"
           @clear="clearSearch"
         />
-        <OptionPicker
-          v-model="origin"
-          :options="originOptions"
-          :title="$st('Catalog origin')"
-          :empty-label="$st('All origins')"
-          :search-placeholder="$st('Search origins...')"
-        />
+        <div class="w-full sm:w-56">
+          <OptionPicker
+            v-model="origin"
+            :options="originOptions"
+            :title="$st('Catalog origin')"
+            :empty-label="$st('All origins')"
+            :search-placeholder="$st('Search origins...')"
+          />
+        </div>
+        <Button variant="outline" size="sm" :disabled="refreshing || loading" @click="refreshCatalog">
+          <RiRestartLine class="mr-2 h-4 w-4" :class="refreshing ? 'animate-spin' : ''" />
+          {{ $st('Refresh source') }}
+        </Button>
+        <IconButton
+          variant="outline"
+          size="md"
+          :disabled="loading"
+          :tooltip="loading ? $st('Loading catalog') : $st('Reload current page')"
+          :aria-label="$st('Reload Model Catalog page')"
+          @click="load()"
+        >
+          <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
+        </IconButton>
       </div>
       <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <span>
@@ -381,16 +383,16 @@ onMounted(() => void load())
     </section>
 
     <div
-      class="grid min-h-[38rem] min-w-0 overflow-hidden rounded-lg border border-border/60 lg:grid-cols-[22rem_minmax(0,1fr)]"
+      class="grid min-h-[24rem] min-w-0 overflow-hidden rounded-lg border border-border/60 lg:min-h-0 lg:flex-1 lg:grid-cols-[22rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]"
     >
-      <div class="min-w-0 border-b border-border/60 bg-muted/10 lg:border-b-0 lg:border-r">
+      <div class="flex min-w-0 flex-col border-b border-border/60 bg-muted/10 lg:min-h-0 lg:border-b-0 lg:border-r">
         <div
           class="flex items-center justify-between border-b border-border/60 px-3 py-2 text-xs text-muted-foreground"
         >
           <span>{{ $st('Page {page} of {pages}', { page: pageNumber, pages: pageCount }) }}</span>
           <span>{{ $st('{count} shown', { count: visibleItems.length }) }}</span>
         </div>
-        <div class="max-h-[43rem] overflow-y-auto p-2">
+        <div class="max-h-[43rem] overflow-y-auto p-2 lg:min-h-0 lg:max-h-none lg:flex-1">
           <button
             v-for="model in visibleItems"
             :key="model.model_id"
@@ -427,7 +429,7 @@ onMounted(() => void load())
         </div>
       </div>
 
-      <article v-if="selectedModel" class="min-w-0 overflow-y-auto p-4 lg:max-h-[47rem] lg:p-5">
+      <article v-if="selectedModel" class="min-w-0 overflow-y-auto p-4 lg:min-h-0 lg:p-5">
         <header class="border-b border-border/60 pb-4">
           <h3 class="break-words text-lg font-semibold">{{ selectedModel.display_name || selectedModel.model_id }}</h3>
           <code class="mt-1 block break-all font-mono text-xs text-muted-foreground">{{ selectedModel.model_id }}</code>
@@ -547,7 +549,7 @@ onMounted(() => void load())
           </details>
         </div>
       </article>
-      <div v-else class="flex min-h-[28rem] items-center justify-center p-8 text-sm text-muted-foreground">
+      <div v-else class="flex min-h-[28rem] items-center justify-center p-8 text-sm text-muted-foreground lg:min-h-0">
         {{ $st('Select a catalog model to inspect it.') }}
       </div>
     </div>

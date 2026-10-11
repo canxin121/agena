@@ -414,6 +414,7 @@
   "No plugins are loaded.": "कोई प्लगइन्स लोड नहीं हैं.",
   "No provider bound": "कोई प्रदाता बाध्य नहीं है",
   "No providers configured. Create one to get started.": "कोई प्रदाता कॉन्फ़िगर नहीं है। शुरू करने के लिए एक प्रदाता बनाएँ।",
+  "No providers match this search.": "इस खोज से कोई प्रदाता मेल नहीं खाता।",
   "No redirect URI": "कोई रीडायरेक्ट यूआरआई नहीं",
   "No restart reason; the transport is reusable.": "पुनः आरंभ करने का कोई कारण नहीं; परिवहन पुन: प्रयोज्य है.",
   "No service key env": "कोई सेवा कुंजी नहीं env",
@@ -632,6 +633,8 @@
   "Search plugin id, name, category, repository, or tags": "प्लगइन आईडी, नाम, श्रेणी, रिपॉजिटरी या टैग खोजें",
   "Search plugin marketplace": "प्लगइन मार्केटप्लेस खोजें",
   "Search plugins": "प्लगइन्स खोजें",
+  "Search providers": "प्रदाता खोजें",
+  "Search providers by ID, adapter, or configured model": "आईडी, एडाप्टर या कॉन्फ़िगर किए गए मॉडल से प्रदाता खोजें",
   "Search the resolved model catalog and inspect capabilities, limits, modes, and pricing.": "हल किए गए मॉडल कैटलॉग को खोजें और क्षमताओं, सीमाओं, मोड और मूल्य निर्धारण का निरीक्षण करें।",
   "Search tool plugins.": "खोज टूल प्लगइन्स.",
   "Secret access key": "गुप्त पहुंच कुंजी",
@@ -843,5 +846,6 @@
   "{total} catalog models": "{total} कैटलॉग मॉडल",
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} कोड: {suffix}",
+  "{visible} of {total} providers": "{total} प्रदाताओं में से {visible}",
   "· default": "· डिफ़ॉल्ट"
 }

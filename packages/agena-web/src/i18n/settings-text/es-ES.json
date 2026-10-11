@@ -414,6 +414,7 @@
   "No plugins are loaded.": "No se cargan complementos.",
   "No provider bound": "Sin límite de proveedor",
   "No providers configured. Create one to get started.": "No hay proveedores configurados. Crea uno para comenzar.",
+  "No providers match this search.": "Ningún proveedor coincide con esta búsqueda.",
   "No redirect URI": "Sin URI de redireccionamiento",
   "No restart reason; the transport is reusable.": "Sin motivo de reinicio; el transporte es reutilizable.",
   "No service key env": "Sin entorno de clave de servicio",
@@ -632,6 +633,8 @@
   "Search plugin id, name, category, repository, or tags": "Buscar ID, nombre, categoría, repositorio o etiquetas del complemento",
   "Search plugin marketplace": "Buscar en el Marketplace de plugins",
   "Search plugins": "Complementos de búsqueda",
+  "Search providers": "Buscar proveedores",
+  "Search providers by ID, adapter, or configured model": "Buscar proveedores por ID, adaptador o modelo configurado",
   "Search the resolved model catalog and inspect capabilities, limits, modes, and pricing.": "Busque en el catálogo de modelos resueltos e inspeccione capacidades, límites, modos y precios.",
   "Search tool plugins.": "Complementos de herramientas de búsqueda.",
   "Secret access key": "Clave de acceso secreta",
@@ -843,5 +846,6 @@
   "{total} catalog models": "{total} modelos del catálogo",
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} Código: {suffix}",
+  "{visible} of {total} providers": "{visible} de {total} proveedores",
   "· default": "· predeterminado"
 }

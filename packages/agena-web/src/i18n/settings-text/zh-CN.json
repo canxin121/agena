@@ -414,6 +414,7 @@
   "No plugins are loaded.": "没有已加载插件。",
   "No provider bound": "未绑定服务商",
   "No providers configured. Create one to get started.": "尚未配置服务商。请新建一个服务商。",
+  "No providers match this search.": "没有匹配此搜索的服务商。",
   "No redirect URI": "无重定向 URI",
   "No restart reason; the transport is reusable.": "无需重启；可复用当前传输连接。",
   "No service key env": "无服务密钥环境变量",
@@ -632,6 +633,8 @@
   "Search plugin id, name, category, repository, or tags": "搜索插件 ID、名称、类别、仓库或标签",
   "Search plugin marketplace": "搜索插件市场",
   "Search plugins": "搜索插件",
+  "Search providers": "搜索服务商",
+  "Search providers by ID, adapter, or configured model": "按服务商 ID、适配器或已配置的模型搜索",
   "Search the resolved model catalog and inspect capabilities, limits, modes, and pricing.": "搜索解析后的模型目录，并检查能力、限制、模式与定价。",
   "Search tool plugins.": "搜索工具插件。",
   "Secret access key": "秘密访问密钥",
@@ -843,5 +846,6 @@
   "{total} catalog models": "共 {total} 个目录模型",
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} 代码：{suffix}",
+  "{visible} of {total} providers": "{total} 个服务商中显示 {visible} 个",
   "· default": "· 默认"
 }

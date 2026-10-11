@@ -10,6 +10,7 @@ import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
 import { apiJson } from '@/lib/api'
 import { mutateModelConfiguration } from '@/lib/modelConfigurationApi'
 import { effectiveProviderToolMode } from '@/lib/providerToolMode'
@@ -100,6 +101,7 @@ const selectedAdapterIds = ref<Set<string>>(new Set())
 const selectedModelKeys = ref<Set<string>>(new Set())
 const listingModels = ref(false)
 const newModelId = ref('')
+const providerQuery = ref('')
 const manualModelAdapterId = ref('')
 const authMessage = ref('')
 
@@ -561,6 +563,41 @@ function providerRowSummary(row: ProviderRow): string {
   const adapters = row.summary?.adapters || []
   const enabled = adapters.filter((adapter) => adapter.enabled).length
   return st('{enabled} enabled · {total} adapters', { enabled: enabled, total: adapters.length })
+}
+
+// Provider create/read/update/delete is scoped by one query box, mirroring the
+// Model Catalog page: it filters the already loaded rows by provider id, their
+// adapters, and the models configured on the open provider. The open row stays
+// visible even when it does not match, so filtering can never hide the edits a
+// user is still making.
+function providerSearchText(row: ProviderRow): string {
+  if (row.isNew)
+    return String(draft.value?.provider_id || '')
+      .trim()
+      .toLowerCase()
+  const adapters = row.summary?.adapters || []
+  const openModels =
+    row.providerId === selectedProviderId.value
+      ? adapterModels.value.flatMap((adapter) => [
+          adapter.adapter_id,
+          ...adapter.models.flatMap((model) => [model.id, model.display_name || '']),
+        ])
+      : []
+  return [row.providerId, ...adapters.map((adapter) => adapter.adapter_id), ...openModels].join('\n').toLowerCase()
+}
+
+const filteredProviderRows = computed<ProviderRow[]>(() => {
+  const query = providerQuery.value.trim().toLowerCase()
+  if (!query) return providerRows.value
+  return providerRows.value.filter(
+    (row) => row.key === expandedProviderKey.value || providerSearchText(row).includes(query),
+  )
+})
+
+// Filtering is live, so the search button and Enter only normalize the box: a
+// stray leading or trailing space can never hide an exact provider id.
+function applyProviderSearch(value: string) {
+  providerQuery.value = value.trim()
 }
 
 function adapterRowSummary(adapter: AdapterModels): string {
@@ -1985,8 +2022,23 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
 </script>
 
 <template>
-  <section class="grid gap-4 rounded-lg border border-border/60 bg-background/30 p-4 lg:p-5">
-    <div class="flex flex-wrap justify-end gap-2">
+  <section class="grid min-w-0 gap-4">
+    <div class="flex flex-wrap items-center gap-2">
+      <SearchInput
+        v-model="providerQuery"
+        class="min-w-[16rem] flex-1"
+        :placeholder="$st('Search providers by ID, adapter, or configured model')"
+        :input-aria-label="$st('Search providers')"
+        @search="applyProviderSearch"
+      />
+      <span class="shrink-0 text-xs text-muted-foreground">
+        {{
+          $st('{visible} of {total} providers', {
+            visible: filteredProviderRows.length,
+            total: providerRows.length,
+          })
+        }}
+      </span>
       <Button variant="outline" size="sm" :disabled="loading || mutationBusy" @click="createProvider">
         <RiAddLine class="mr-2 h-4 w-4" />
         {{ $st('New provider') }}
@@ -2002,7 +2054,7 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
 
     <div class="grid gap-2">
       <SettingsDisclosureRow
-        v-for="row in providerRows"
+        v-for="row in filteredProviderRows"
         :key="row.key"
         :open="expandedProviderKey === row.key"
         :label="providerRowLabel(row)"
@@ -2615,6 +2667,12 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
         class="rounded-lg border border-dashed border-border/60 px-4 py-8 text-center text-sm text-muted-foreground"
       >
         {{ $st('No providers configured. Create one to get started.') }}
+      </div>
+      <div
+        v-else-if="filteredProviderRows.length === 0"
+        class="rounded-lg border border-dashed border-border/60 px-4 py-8 text-center text-sm text-muted-foreground"
+      >
+        {{ $st('No providers match this search.') }}
       </div>
     </div>
   </section>

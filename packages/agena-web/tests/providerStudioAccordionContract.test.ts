@@ -26,13 +26,27 @@ function extractFunctionSource(signature: string): string {
   throw new Error(`unterminated function block: ${signature}`)
 }
 
-test('provider studio renders providers and adapters as nested disclosure rows', () => {
-  assert.ok(providerSource.includes('v-for="row in providerRows"'))
+test('provider studio renders searchable providers and adapters as nested disclosure rows', () => {
+  assert.ok(providerSource.includes('v-for="row in filteredProviderRows"'))
   assert.ok(providerSource.includes('v-for="adapter in adapterRows"'))
   assert.ok(providerSource.includes('<SettingsDisclosureRow'))
   assert.ok(providerSource.includes('expandedProviderKey'))
   assert.ok(providerSource.includes('expandedAdapterIds'))
   assert.ok(providerSource.includes('NEW_PROVIDER_ROW_KEY'))
+})
+
+test('provider studio searches provider CRUD from one box and keeps its rows card-free', () => {
+  // Provider create/read/update/delete is scoped by one query box at the top of
+  // the page, mirroring the Model Catalog page. The panel itself must stay
+  // card-free: every provider row is already a SettingsDisclosureRow.
+  assert.ok(providerSource.includes('<SearchInput'))
+  assert.ok(providerSource.includes('v-model="providerQuery"'))
+  assert.ok(providerSource.includes('const filteredProviderRows = computed<ProviderRow[]>'))
+  assert.ok(providerSource.includes('providerSearchText(row).includes(query)'))
+  assert.ok(providerSource.includes('row.key === expandedProviderKey.value'))
+  assert.ok(providerSource.includes('No providers match this search.'))
+  assert.ok(providerSource.includes('{visible} of {total} providers'))
+  assert.ok(!providerSource.includes('<section class="grid gap-4 rounded-lg border border-border/60'))
 })
 
 test('adapter row headers own enable and destructive actions', () => {

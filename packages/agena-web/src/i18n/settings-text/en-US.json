@@ -414,6 +414,7 @@
   "No plugins are loaded.": "No plugins are loaded.",
   "No provider bound": "No provider bound",
   "No providers configured. Create one to get started.": "No providers configured. Create one to get started.",
+  "No providers match this search.": "No providers match this search.",
   "No redirect URI": "No redirect URI",
   "No restart reason; the transport is reusable.": "No restart reason; the transport is reusable.",
   "No service key env": "No service key env",
@@ -632,6 +633,8 @@
   "Search plugin id, name, category, repository, or tags": "Search plugin id, name, category, repository, or tags",
   "Search plugin marketplace": "Search plugin marketplace",
   "Search plugins": "Search plugins",
+  "Search providers": "Search providers",
+  "Search providers by ID, adapter, or configured model": "Search providers by ID, adapter, or configured model",
   "Search the resolved model catalog and inspect capabilities, limits, modes, and pricing.": "Search the resolved model catalog and inspect capabilities, limits, modes, and pricing.",
   "Search tool plugins.": "Search tool plugins.",
   "Secret access key": "Secret access key",
@@ -843,5 +846,6 @@
   "{total} catalog models": "{total} catalog models",
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} Code: {suffix}",
+  "{visible} of {total} providers": "{visible} of {total} providers",
   "· default": "· default"
 }

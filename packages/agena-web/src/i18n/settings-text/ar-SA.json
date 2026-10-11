@@ -414,6 +414,7 @@
   "No plugins are loaded.": "لم يتم تحميل أي مكونات إضافية.",
   "No provider bound": "لا يوجد مزود ملزمة",
   "No providers configured. Create one to get started.": "لا يوجد أي مزوّد خدمة مُعدّ. أنشئ مزوّدًا للبدء.",
+  "No providers match this search.": "لا يوجد مقدّم خدمة مطابق لهذا البحث.",
   "No redirect URI": "لا يوجد إعادة توجيه URI",
   "No restart reason; the transport is reusable.": "لا يوجد سبب لإعادة التشغيل؛ النقل قابل لإعادة الاستخدام.",
   "No service key env": "لا يوجد بيئة مفتاح الخدمة",
@@ -632,6 +633,8 @@
   "Search plugin id, name, category, repository, or tags": "ابحث عن معرف البرنامج المساعد أو الاسم أو الفئة أو المستودع أو العلامات",
   "Search plugin marketplace": "البحث في متجر الإضافات",
   "Search plugins": "البحث في الإضافات",
+  "Search providers": "البحث عن مقدّمي الخدمات",
+  "Search providers by ID, adapter, or configured model": "ابحث عن مقدّمي الخدمات بالمعرّف أو المهايئ أو النموذج المُهيّأ",
   "Search the resolved model catalog and inspect capabilities, limits, modes, and pricing.": "ابحث في كتالوج النماذج التي تم حلها وافحص القدرات والحدود والأوضاع والتسعير.",
   "Search tool plugins.": "ملحقات أداة البحث.",
   "Secret access key": "مفتاح الوصول السري",
@@ -843,5 +846,6 @@
   "{total} catalog models": "{total} نماذج في الفهرس",
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} الرمز: {suffix}",
+  "{visible} of {total} providers": "{visible} من {total} مقدّم خدمة",
   "· default": "· الافتراضي"
 }

@@ -98,8 +98,16 @@ test('every layer-aware settings page reads its scope from the shared navigation
   assert.ok(models.includes('<ApprovalSettingsPanel v-else-if="activePage === \'approval-model\'" :scope="scope" />'))
   assert.ok(models.includes('<ModelDefaultsPanel v-else :scope="scope" />'))
 
-  // Content pages only report the layer they were opened with: none of them
-  // renders a scope picker of its own.
+  // The section header names the active layer once, so the pages below it never
+  // repeat the layer or its per-option summary text.
+  const workbench = readFileSync(resolve(root, 'workbench/SettingsSectionWorkbench.vue'), 'utf8')
+  assert.ok(workbench.includes('findSettingsScope(props.section, activePage.value, props.activeScope)?.label'))
+  for (const file of ['PermissionsWorkbenchPanel.vue', 'ModelsProvidersPanel.vue', 'DiagnosticsWorkbenchPanel.vue']) {
+    assert.ok(
+      readFileSync(resolve(root, file), 'utf8').includes(':active-scope="scope"'),
+      `${file} must pass the scope`,
+    )
+  }
   for (const file of [
     'PermissionStudioPanel.vue',
     'ModelDefaultsPanel.vue',
@@ -107,8 +115,25 @@ test('every layer-aware settings page reads its scope from the shared navigation
     'AdvancedSettingsPanel.vue',
   ]) {
     const source = readFileSync(resolve(root, file), 'utf8')
-    for (const options of [':options="sourceOptions"', ':options="scopeOptions"', ':options="layerOptions"']) {
-      assert.equal(source.includes(options), false, `${file} must not render ${options}`)
+    for (const text of [
+      ':options="sourceOptions"',
+      ':options="scopeOptions"',
+      ':options="layerOptions"',
+      'Permission source',
+      'Model default source',
+      'Write target',
+      'activeScopeOption',
+    ]) {
+      assert.equal(source.includes(text), false, `${file} must not render ${text}`)
     }
   }
+})
+
+test('settings pages do not repeat the page description the header already shows', () => {
+  const root = resolve(import.meta.dir, '../src/components/settings')
+  const interfaceSettings = readFileSync(resolve(root, 'InterfaceSettingsPanel.vue'), 'utf8')
+  assert.equal(interfaceSettings.includes('interfaceDescription'), false)
+  const runtimeSession = readFileSync(resolve(root, 'RuntimeSessionPanel.vue'), 'utf8')
+  assert.equal(runtimeSession.includes('clientVersionsDescription'), false)
+  assert.equal(runtimeSession.includes('compactionDescription'), false)
 })

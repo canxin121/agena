@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { RiAddLine, RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
+import { findSettingsScope } from '@/components/settings/settingsScopeCatalog'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
@@ -74,10 +75,6 @@ const selectedSection = computed<PermissionSection>(() => {
   return 'path'
 })
 const config = ref<PermissionConfig>({})
-const globalConfig = ref<PermissionConfig>({})
-const workspaceConfig = ref<PermissionConfig>({})
-const sessionConfigSnapshot = ref<PermissionConfig>({})
-const effectiveConfig = ref<PermissionConfig>({})
 const rawJson = ref('{}')
 const rawJsonError = ref('')
 const toolCatalog = ref<Array<{ name: string; summary: string }>>([])
@@ -99,72 +96,6 @@ const activeSessionId = computed(() => {
 const canEdit = computed(
   () => selectedSource.value !== 'effective' && (selectedSource.value !== 'session' || Boolean(activeSessionId.value)),
 )
-function permissionSummary(value: PermissionConfig): string {
-  const pathDefaults = ['workspace', 'external'].reduce((total, scope) => {
-    const modes = value.path?.[scope as 'workspace' | 'external']
-    return total + Number(Boolean(modes?.read)) + Number(Boolean(modes?.write))
-  }, 0)
-  const pathRules = Object.keys(value.path?.rules || {}).length
-  const networkDefaults = ['internet', 'private', 'loopback'].filter((zone) =>
-    Boolean(value.network?.[zone as 'internet' | 'private' | 'loopback']),
-  ).length
-  const networkRules = Object.keys(value.network?.rules || {}).length
-  const names = Object.keys(value.tools?.names || {}).length
-  const commands = Object.values(value.tools?.rules || {}).reduce((total, rules) => {
-    if (isMode(rules)) return total + 1
-    return total + (rules && typeof rules === 'object' && !Array.isArray(rules) ? Object.keys(rules).length : 0)
-  }, 0)
-  // Only stored entries are counted; an omitted one is showing its built-in
-  // default rather than an override.
-  const parts = [
-    pathDefaults || pathRules
-      ? st('filesystem {pathDefaults} defaults / {pathRules} rules', {
-          pathDefaults: pathDefaults,
-          pathRules: pathRules,
-        })
-      : '',
-    networkDefaults || networkRules
-      ? st('network {networkDefaults} defaults / {networkRules} rules', {
-          networkDefaults: networkDefaults,
-          networkRules: networkRules,
-        })
-      : '',
-    value.tools?.default || names || commands
-      ? value.tools?.default
-        ? st('tools default + {names} names / {commands} commands', { names, commands })
-        : st('tools {names} names / {commands} commands', { names, commands })
-      : '',
-    value.approval_model ? st('approval model') : '',
-  ].filter(Boolean)
-  return parts.join(' · ') || 'No overrides'
-}
-
-const sourceOptions = computed(() => [
-  {
-    value: 'effective',
-    label: st('Effective Permission'),
-    description: st('Read-only merged policy.'),
-    summary: permissionSummary(effectiveConfig.value),
-  },
-  {
-    value: 'global',
-    label: st('Global Permission'),
-    description: st('Baseline for all sessions.'),
-    summary: permissionSummary(globalConfig.value),
-  },
-  {
-    value: 'workspace',
-    label: st('Workspace Permission'),
-    description: st('Overrides for this workspace.'),
-    summary: permissionSummary(workspaceConfig.value),
-  },
-  {
-    value: 'session',
-    label: st('Current Session Permission'),
-    description: st('Applies only to the selected session.'),
-    summary: activeSessionId.value ? permissionSummary(sessionConfigSnapshot.value) : st('No active session'),
-  },
-])
 const modeOptions = computed(() => [
   { value: 'allow', label: st('Allow'), description: st('Always permit matching access.') },
   { value: 'auto', label: st('Auto'), description: st('Let the approval model decide.') },
@@ -584,9 +515,6 @@ async function load() {
       apiJson<SettingsResponse>('/api/v1/settings/layers/workspace?path=permission'),
       apiJson<ToolCatalogResponse>('/api/v1/plugins/surface'),
     ])
-    globalConfig.value = asConfig(global?.value)
-    workspaceConfig.value = asConfig(workspace?.value)
-    effectiveConfig.value = asConfig(effective?.value)
     toolCatalog.value = (Array.isArray(toolResponse?.permission_tools) ? toolResponse.permission_tools : [])
       .map((item) => ({ name: String(item?.name || '').trim(), summary: String(item?.summary || '').trim() }))
       .filter((item) => item.name)
@@ -608,8 +536,6 @@ async function load() {
           session.execution?.context?.effective_permission,
       )
     }
-    sessionConfigSnapshot.value = sessionConfig
-    if (Object.keys(sessionEffective).length) effectiveConfig.value = sessionEffective
     const sourceValue =
       selectedSource.value === 'global'
         ? global?.value
@@ -621,7 +547,6 @@ async function load() {
               ? sessionEffective
               : effective?.value
     config.value = asConfig(sourceValue)
-    if (selectedSource.value === 'effective') effectiveConfig.value = asConfig(sourceValue)
     syncRaw()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
@@ -652,7 +577,7 @@ async function save() {
     toasts.push(
       'success',
       st('{scope} updated', {
-        scope: sourceOptions.value.find((item) => item.value === selectedSource.value)?.label || st('Permission'),
+        scope: findSettingsScope('permissions', props.section, selectedSource.value)?.label || st('Permission'),
       }),
     )
     await load()
@@ -704,20 +629,6 @@ onMounted(() => void load())
     </div>
 
     <div class="grid gap-4">
-      <div class="grid max-w-xl gap-1.5">
-        <span class="text-xs font-medium">{{ $st('Permission source') }}</span>
-        <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span class="text-sm font-medium">{{
-            sourceOptions.find((option) => option.value === selectedSource)?.label
-          }}</span>
-          <code class="break-all font-mono text-xs text-muted-foreground">{{
-            sourceOptions.find((option) => option.value === selectedSource)?.summary
-          }}</code>
-        </div>
-      </div>
-      <div class="text-xs text-muted-foreground">
-        {{ sourceOptions.find((option) => option.value === selectedSource)?.description }}
-      </div>
       <div
         v-if="selectedSource === 'session' && !activeSessionId"
         class="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground"

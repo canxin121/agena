@@ -16,6 +16,9 @@ test('advanced settings editor targets explicit layers and validates before writ
   assert.ok(source.includes("props.scope === 'workspace' ? 'workspace' : 'global'"))
   assert.equal(source.includes(':options="layerOptions"'), false)
   assert.equal(source.includes('v-model="targetLayer"'), false)
+  // The header names the layer, so the editor repeats neither it nor its text.
+  assert.equal(source.includes('activeLayerScope'), false)
+  assert.equal(source.includes('Write target'), false)
 })
 
 test('diagnostics workbench exposes advanced settings as a real subpage', () => {

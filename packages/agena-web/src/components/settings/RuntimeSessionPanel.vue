@@ -42,8 +42,8 @@ defineProps<{ activePage: string }>()
     v-slot="{ activePage }"
   >
     <section v-if="activePage === 'client-versions'" class="grid gap-4">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <p class="max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.clientVersionsDescription') }}</p>
+      <!-- The page header already describes this page; only the action remains. -->
+      <div class="flex flex-wrap items-center justify-end gap-3">
         <Button variant="outline" size="sm" :disabled="refreshBusy" @click="refreshClientVersions">
           <RiRefreshLine class="mr-2 h-4 w-4" :class="refreshBusy ? 'animate-spin' : ''" />
           {{ refreshBusy ? t('settings.tui.refreshing') : t('settings.tui.refreshFromNpm') }}
@@ -96,7 +96,6 @@ defineProps<{ activePage: string }>()
     </section>
 
     <section v-else class="grid gap-3">
-      <p class="max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.compactionDescription') }}</p>
       <ServerSettingField
         path="session.compaction.auto"
         :label="t('settings.tui.fields.autoCompaction')"

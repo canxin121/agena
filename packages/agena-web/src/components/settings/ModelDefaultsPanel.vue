@@ -80,38 +80,6 @@ const layerSelections = computed(() => ({
   workspace: asSelection(sources.value?.workspace?.value),
 }))
 
-function selectionLabel(selection: ModelSelectionValue): string {
-  const provider = String(selection.provider || '').trim()
-  const model = String(selection.model || '').trim()
-  if (!provider || !model) return st('Unset')
-  return [provider, String(selection.adapter || '').trim(), model].filter(Boolean).join(' / ')
-}
-
-const scopeOptions = computed(() => [
-  {
-    value: 'effective' as const,
-    label: st('Effective default'),
-    description: st('Read-only merged default.'),
-    summary: selectionLabel(layerSelections.value.effective),
-  },
-  {
-    value: 'global' as const,
-    label: st('Global default'),
-    description: st('Baseline for every workspace.'),
-    summary: selectionLabel(layerSelections.value.global),
-  },
-  {
-    value: 'workspace' as const,
-    label: st('Workspace default'),
-    description: st('Overrides the global default for this workspace.'),
-    summary: selectionLabel(layerSelections.value.workspace),
-  },
-])
-
-const activeScopeOption = computed(
-  () => scopeOptions.value.find((option) => option.value === scope.value) || scopeOptions.value[0],
-)
-
 const layerOverridePersisted = computed(() => {
   if (!editable.value) return false
   const response = scope.value === 'workspace' ? sources.value?.workspace : sources.value?.global
@@ -274,13 +242,6 @@ onMounted(() => void refresh())
       class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
     >
       {{ error }}
-    </div>
-
-    <div class="grid max-w-xl gap-1">
-      <span class="text-xs font-medium">{{ $st('Model default source') }}</span>
-      <span class="text-sm font-medium">{{ activeScopeOption.label }}</span>
-      <span class="break-words font-mono text-xs text-muted-foreground">{{ activeScopeOption.summary }}</span>
-      <span class="text-xs text-muted-foreground">{{ activeScopeOption.description }}</span>
     </div>
 
     <section class="grid gap-4 rounded-lg border border-border/60 p-4">

@@ -13,9 +13,14 @@ test('model defaults panel edits one layer-scoped default without model catalog 
   assert.ok(source.includes('readRuntimeSettingSources(DEFAULT_SELECTION_PATH)'))
   assert.ok(source.includes('setRuntimeSetting(DEFAULT_SELECTION_PATH'))
   assert.ok(source.includes('deleteRuntimeSetting(DEFAULT_SELECTION_PATH'))
-  assert.ok(source.includes("'Effective default'"))
-  assert.ok(source.includes("'Global default'"))
-  assert.ok(source.includes("'Workspace default'"))
+  // The layer labels live in the shared scope catalog, and the panel follows the
+  // scope the left navigation forwarded instead of listing the layers itself.
+  const scopes = readFileSync(resolve(import.meta.dir, '../src/components/settings/settingsScopeCatalog.ts'), 'utf8')
+  for (const label of ['Effective default', 'Global default', 'Workspace default']) {
+    assert.ok(scopes.includes(`st('${label}')`), `missing model default layer ${label}`)
+  }
+  assert.ok(source.includes("return value === 'global' || value === 'workspace' ? value : 'effective'"))
+  assert.equal(source.includes('scopeOptions'), false)
   assert.ok(!source.includes('<ApprovalModelPanel'))
   const approval = readFileSync(
     resolve(import.meta.dir, '../src/components/settings/ApprovalSettingsPanel.vue'),

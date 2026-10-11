@@ -19,6 +19,7 @@ defineProps<{ activePage: string; scope: string }>()
     section="models-providers"
     :pages="pages"
     :active-page="activePage"
+    :active-scope="scope"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['models-providers']"
     v-slot="{ activePage }"
   >

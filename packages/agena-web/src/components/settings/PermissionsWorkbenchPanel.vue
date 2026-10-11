@@ -16,6 +16,7 @@ defineProps<{ activePage: string; scope: string }>()
     section="permissions"
     :pages="pages"
     :active-page="activePage"
+    :active-scope="scope"
     :default-page="SETTINGS_DEFAULT_SUBPAGE.permissions"
     v-slot="{ activePage }"
   >

@@ -5,9 +5,13 @@ import test from 'node:test'
 
 test('Permission Studio covers every TUI policy layer and editable rule family', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/components/settings/PermissionStudioPanel.vue'), 'utf8')
-  for (const value of ['global', 'workspace', 'session', 'effective']) {
-    assert.ok(source.includes(`value: '${value}'`), `missing permission source ${value}`)
+  // Every TUI policy layer stays reachable: the shared navigation offers the four
+  // scope rows and the studio normalizes whichever one it was opened with.
+  const scopes = readFileSync(resolve(import.meta.dir, '../src/components/settings/settingsScopeCatalog.ts'), 'utf8')
+  for (const value of ['effective', 'global', 'workspace', 'session']) {
+    assert.ok(scopes.includes(`id: '${value}'`), `missing permission layer ${value}`)
   }
+  assert.ok(source.includes("value === 'global' || value === 'workspace' || value === 'session'"))
   for (const value of ['allow', 'auto', 'ask', 'deny']) {
     assert.ok(source.includes(`value: '${value}'`), `missing permission mode ${value}`)
   }

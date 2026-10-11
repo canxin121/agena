@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
-import { createSSRApp } from 'vue'
+import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 
 const vite = await createServer({
@@ -73,4 +73,39 @@ test('the settings sidebar renders one row per layer and highlights the selected
   assert.equal(plain.match(/padding-left:44px/g), null)
   assert.equal(plain.match(/aria-current="page"/g)?.length, 1)
   assert.equal(activeRowLabel(plain), 'Provider Studio')
+})
+
+test('the section header names the active layer once for the open page', async () => {
+  const { buildSettingsSubpages } = await vite.ssrLoadModule('/src/components/settings/settingsNavigationCatalog.ts')
+  const { i18n } = await vite.ssrLoadModule('/src/i18n/index.ts')
+  const { settingsText } = await vite.ssrLoadModule('/src/i18n/settingsText.ts')
+  const { default: SettingsSectionWorkbench } = await vite.ssrLoadModule(
+    '/src/components/settings/workbench/SettingsSectionWorkbench.vue',
+  )
+  i18n.global.locale.value = 'en-US'
+
+  async function render(section: string, activePage: string, activeScope: string) {
+    const pages = buildSettingsSubpages(section)
+    const app = createSSRApp({
+      render: () =>
+        h(
+          SettingsSectionWorkbench,
+          { section, pages, defaultPage: pages[0]?.id || '', activePage, activeScope },
+          { default: () => 'page body' },
+        ),
+    })
+    app.config.globalProperties.$st = settingsText
+    app.use(i18n)
+    return renderToString(app)
+  }
+
+  const scoped = await render('models-providers', 'defaults', 'workspace')
+  assert.ok(scoped.includes('Model defaults'))
+  assert.ok(scoped.includes('· Workspace default'))
+  // The layer is named by the header, not by a second block of page text.
+  assert.equal(scoped.match(/Workspace default/g)?.length, 1)
+
+  const unscoped = await render('models-providers', 'provider-studio', '')
+  assert.ok(unscoped.includes('Provider Studio'))
+  assert.equal(unscoped.includes('Workspace default'), false)
 })

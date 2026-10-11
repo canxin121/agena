@@ -131,9 +131,28 @@ test('every layer-aware settings page reads its scope from the shared navigation
 
 test('settings pages do not repeat the page description the header already shows', () => {
   const root = resolve(import.meta.dir, '../src/components/settings')
-  const interfaceSettings = readFileSync(resolve(root, 'InterfaceSettingsPanel.vue'), 'utf8')
-  assert.equal(interfaceSettings.includes('interfaceDescription'), false)
-  const runtimeSession = readFileSync(resolve(root, 'RuntimeSessionPanel.vue'), 'utf8')
-  assert.equal(runtimeSession.includes('clientVersionsDescription'), false)
-  assert.equal(runtimeSession.includes('compactionDescription'), false)
+  const sources: Record<string, string> = {
+    interfaceSettings: readFileSync(resolve(root, 'InterfaceSettingsPanel.vue'), 'utf8'),
+    runtimeSession: readFileSync(resolve(root, 'RuntimeSessionPanel.vue'), 'utf8'),
+    diagnostics: readFileSync(resolve(root, 'DiagnosticsPanel.vue'), 'utf8'),
+    marketplace: readFileSync(resolve(root, 'PluginMarketplacePanel.vue'), 'utf8'),
+    advanced: readFileSync(resolve(root, 'AdvancedSettingsPanel.vue'), 'utf8'),
+  }
+  // These panels used to open with a paragraph restating what the page header
+  // above already says; only their actions and unique warnings may remain.
+  for (const [file, marker] of [
+    ['interfaceSettings', 'interfaceDescription'],
+    ['runtimeSession', 'clientVersionsDescription'],
+    ['runtimeSession', 'compactionDescription'],
+    ['diagnostics', 'diagnosticsDescription'],
+    ['marketplace', 'Discover GitHub-hosted plugins'],
+    ['advanced', 'does not yet have a dedicated form'],
+  ] as const) {
+    assert.equal(sources[file]?.includes(marker), false, `${file} still repeats the page description`)
+  }
+  // The MCP panel keeps its own copy: it also explains that Web and TUI only
+  // control the one server-owned MCP surface.
+  assert.ok(
+    readFileSync(resolve(root, 'McpServerControlPanel.vue'), 'utf8').includes('they do not run a second MCP server'),
+  )
 })

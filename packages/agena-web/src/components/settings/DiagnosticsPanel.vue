@@ -114,8 +114,8 @@ onMounted(() => void refresh())
 
 <template>
   <div class="space-y-6">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div class="max-w-3xl text-sm text-muted-foreground">{{ t('settings.tui.diagnosticsDescription') }}</div>
+    <!-- The page header already describes this page; only the actions remain. -->
+    <div class="flex flex-wrap items-center justify-end gap-3">
       <div class="flex gap-2">
         <Button variant="outline" size="sm" :disabled="loading || actionBusy" @click="refresh"
           ><RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" /> {{ $st('Refresh') }}</Button

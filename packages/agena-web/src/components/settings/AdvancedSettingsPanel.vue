@@ -210,14 +210,8 @@ onMounted(() => {
 
 <template>
   <div class="grid min-w-0 gap-5">
-    <div class="flex flex-wrap items-center justify-between gap-3">
-      <p class="max-w-3xl text-sm leading-6 text-muted-foreground">
-        {{
-          $st(
-            'Edit any server configuration path that does not yet have a dedicated form. Writes always target an explicit Global or Workspace layer, run full composed-config validation, and request a runtime reload.',
-          )
-        }}
-      </p>
+    <!-- The page header already describes this page; only the action remains. -->
+    <div class="flex flex-wrap items-center justify-end gap-3">
       <IconButton
         variant="outline"
         size="md"

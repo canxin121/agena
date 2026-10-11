@@ -253,13 +253,6 @@ onMounted(() => void refresh())
 <template>
   <div class="grid min-w-0 gap-5">
     <header class="flex flex-wrap items-center justify-between gap-3">
-      <p class="max-w-3xl text-sm leading-6 text-muted-foreground">
-        {{
-          $st(
-            'Discover GitHub-hosted plugins, verify immutable release assets, and manage installed versions from one server-owned workflow.',
-          )
-        }}
-      </p>
       <IconButton
         variant="outline"
         size="md"

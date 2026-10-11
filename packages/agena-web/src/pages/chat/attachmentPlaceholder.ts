@@ -12,18 +12,24 @@
 export const ATTACHMENT_PLACEHOLDER_MAX_CHARS = 24
 
 /**
- * `[<label>]`, truncated by code point so a long pasted-text preview cannot
- * push the rest of the message around. An empty label and fallback produce an
- * empty string: an unlabeled attachment must not leave a bare `[]` in the
- * submitted text.
+ * One label for one attachment everywhere: the text placeholder and the
+ * transcript's attachment row must name the same attachment the same way, or a
+ * message with several files all called `image.png` cannot be read.
+ *
+ * The ordinal is the attachment's 1-based position in the message. It leads the
+ * label because the label itself is clipped by the chip's ellipsis and by the
+ * placeholder limit: a trailing `#2` would disappear for long pasted-text
+ * previews, and the number is the part that must never be lost.
  */
-export function attachmentPlaceholder(label: string, fallback = ''): string {
-  const value = String(label || '').trim() || String(fallback || '').trim()
-  if (!value) return ''
+export function attachmentPlaceholder(label: string, options: { fallback?: string; ordinal?: number } = {}): string {
+  const value = String(label || '').trim() || String(options.fallback || '').trim()
+  const ordinal = Number.isFinite(options.ordinal) ? Math.floor(Number(options.ordinal)) : 0
+  const badge = ordinal > 0 ? `#${ordinal} ` : ''
+  if (!value) return badge ? `[${badge.trim()}]` : ''
   const characters = Array.from(value)
   const compact =
     characters.length > ATTACHMENT_PLACEHOLDER_MAX_CHARS
       ? `${characters.slice(0, ATTACHMENT_PLACEHOLDER_MAX_CHARS).join('')}…`
       : value
-  return `[${compact}]`
+  return `[${badge}${compact}]`
 }

@@ -235,11 +235,27 @@ const textareaEl: ComposerInput = {
   setSelectionRange,
   setRangeText: (replacement, start, end, selectionMode) => replaceRange(start, end, replacement, selectionMode),
 }
+// One attachment has one label everywhere. The chip carries the same 1-based
+// number the submitted text (`[#2 image.png]`) and the transcript's attachment
+// row use, so several `image.png` chips stay distinguishable while editing and
+// after sending. The number leads because the label is clipped by the chip's
+// own ellipsis.
+function chipOrdinal(chip: HTMLSpanElement): number {
+  const chips = editorEl.value?.querySelectorAll<HTMLSpanElement>('[data-attachment-id]')
+  return chips ? [...chips].indexOf(chip) + 1 : 0
+}
+
+function refreshChipLabels() {
+  for (const chip of editorEl.value?.querySelectorAll<HTMLSpanElement>('[data-attachment-id]') ?? []) updateChip(chip)
+}
+
 function updateChip(chip: HTMLSpanElement) {
   const id = chip.dataset.attachmentId
   const file =
     props.attachedFiles.find((item) => item.id === id) ?? props.pendingAttachments.find((item) => item.id === id)
-  const label = file?.pastePreview ?? file?.filename ?? String(t('chat.attachments.title'))
+  const baseLabel = file?.pastePreview ?? file?.filename ?? String(t('chat.attachments.title'))
+  const ordinal = chipOrdinal(chip)
+  const label = ordinal > 0 ? `#${ordinal} ${baseLabel}` : baseLabel
   chip.textContent = label
   chip.title = label
   chip.setAttribute('aria-label', `${t('chat.attachments.title')}: ${label}`)
@@ -278,6 +294,7 @@ function removeChipIds(ids: Set<string>) {
     if (savedStart > position) savedStart -= 1
     if (savedEnd > position) savedEnd -= 1
   }
+  refreshChipLabels()
   setSelectionRange(savedStart, savedEnd)
 }
 function insertChip(id: string) {
@@ -292,6 +309,7 @@ function insertChip(id: string) {
   range.setEnd(at.node, at.offset)
   range.insertNode(createChip(id))
   setSelectionRange(end + 1, end + 1)
+  refreshChipLabels()
   emit('update:draft', plainText())
 }
 function syncAttachments() {
@@ -313,6 +331,7 @@ function syncAttachments() {
     insertChip(file.id)
     present.add(file.id)
   }
+  refreshChipLabels()
 }
 function replaceAttachmentWithText(id: string, text: string) {
   const chip = [...(editorEl.value?.querySelectorAll<HTMLSpanElement>('[data-attachment-id]') ?? [])].find(
@@ -339,6 +358,7 @@ function restoreSegments(segments: ComposerSegment[]) {
   for (const segment of segments)
     root.append(segment.type === 'text' ? document.createTextNode(segment.text) : createChip(segment.id))
   setSelectionRange(editorValue().length, editorValue().length)
+  refreshChipLabels()
   emit('update:draft', plainText())
 }
 function insertText(text: string) {

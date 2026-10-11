@@ -1603,7 +1603,13 @@ function composeOutgoingText(
     const file = filesById.get(segment.id)
     if (!file) continue
     attachmentIds.push(file.id)
-    text += attachmentPlaceholder(file.pastePreview ?? file.filename, fileFallbackLabel)
+    // The ordinal is the attachment's 1-based position in this message; the
+    // transcript numbers its attachment rows by the same rule, so `#2` in the
+    // text and `#2` above it always mean the same attachment.
+    text += attachmentPlaceholder(file.pastePreview ?? file.filename, {
+      fallback: fileFallbackLabel,
+      ordinal: attachmentIds.length,
+    })
   }
   return { text, typedText, attachmentIds }
 }
@@ -2111,12 +2117,18 @@ async function sendReady(sid: string | null) {
     String(t('chat.messageItem.fileFallback')).trim(),
   )
 
+  // The optimistic rows must be numbered like the submitted text, so they
+  // follow the same composer order instead of the staging order of the files.
+  const optimisticFiles = composed.attachmentIds
+    .map((id) => filesSnapshot.find((file) => file.id === id))
+    .filter((file): file is AttachedFile => Boolean(file))
+
   beginOptimisticSend({
     sessionId: sid,
     text: composed.typedText ? composed.text : '',
     fileFallbackLabel: String(t('chat.messageItem.fileFallback')).trim(),
     attachmentTitle: String(t('chat.attachments.rowTitle')).trim(),
-    files: filesSnapshot.map((f) => ({
+    files: optimisticFiles.map((f) => ({
       id: f.id,
       filename: f.filename,
       size: f.size,

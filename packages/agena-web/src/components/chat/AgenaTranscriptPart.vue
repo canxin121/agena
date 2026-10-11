@@ -27,6 +27,12 @@ const props = defineProps<{
   streaming?: boolean
   sourcePath?: string
   sessionId?: string | null
+  /**
+   * A user message's attachments keep the 1-based position they occupy in the
+   * submitted text (`[#2 image.png]`), so the row is the attachment the text
+   * points at even when several files share the same name.
+   */
+  ordinal?: number
 }>()
 
 const emit = defineEmits<{
@@ -128,6 +134,12 @@ function openAttachment(path: string, url: string) {
         :title="status.label"
         aria-hidden="true"
         >{{ status.icon }}</span
+      >
+      <span
+        v-if="ordinal"
+        class="shrink-0 rounded bg-muted/60 px-1 font-mono text-[11px] text-muted-foreground"
+        data-part-ordinal="true"
+        >#{{ ordinal }}</span
       >
       <span
         class="min-w-0 flex-1 truncate text-[13px] font-semibold"

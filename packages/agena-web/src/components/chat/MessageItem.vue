@@ -129,14 +129,23 @@ watch(
 )
 
 type TranscriptRow =
-  | { kind: 'part'; key: string; part: TranscriptDisplayPart }
+  | { kind: 'part'; key: string; part: TranscriptDisplayPart; ordinal?: number }
   | { kind: 'summary'; key: string; hiddenCount: number; fold: MessageFold | null }
 
 const transcriptRows = computed<TranscriptRow[]>(() => {
   if (role.value !== 'assistant') {
     // A user message submits its attachments as their own parts and keeps their
     // positions in the text, so render those parts together above that text.
-    return userInputOrder(props.displayParts).map((part) => ({ kind: 'part' as const, key: part.key, part }))
+    // Their 1-based position in this message is the same number the submitted
+    // text carries (`[#2 image.png]`), which is what tells several same-named
+    // attachments apart.
+    let attachmentOrdinal = 0
+    return userInputOrder(props.displayParts).map((part) => ({
+      kind: 'part' as const,
+      key: part.key,
+      part,
+      ordinal: part.kind === 'resource' ? ++attachmentOrdinal : undefined,
+    }))
   }
   const rows: TranscriptRow[] = []
   const key = summaryKey.value
@@ -524,6 +533,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
           :streaming="isStreaming && row.part.kind === 'answer'"
           :source-path="sourcePath"
           :session-id="sessionId"
+          :ordinal="row.ordinal"
           @toggle="togglePart(row.part)"
           @select="$emit('nodeSelect', row.part.key)"
         />

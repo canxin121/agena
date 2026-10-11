@@ -6,8 +6,6 @@ use super::{
     OpenAiTransportOptions, ProviderError, append_query_param, normalize_domain, utils,
 };
 use crate::provider::chat_wire::ChatCompletionResponse;
-use agena_domain::ModelThinkingMode;
-use std::collections::BTreeMap;
 
 impl From<OpenAiResponsesAdapterOptions> for OpenAiTransportOptions {
     fn from(options: OpenAiResponsesAdapterOptions) -> Self {
@@ -391,64 +389,6 @@ impl OpenAiTransport {
                 }
             }
         }
-    }
-
-    pub(super) fn dashscope_thinking_modes(model: &ModelId) -> Vec<ModelThinkingMode> {
-        let mut modes = Vec::new();
-        match Self::dashscope_reasoning_profile(model.as_ref()) {
-            Some(DashscopeReasoningProfile::Toggleable) => {
-                modes.push(ModelThinkingMode {
-                    is_default: false,
-                    preset: None,
-                    display_name: Some("Off".to_string()),
-                    description: None,
-                    thinking: Some(agena_domain::ThinkingRequest::Disabled),
-                    request_override: agena_domain::ModelSpeedModeRequestOverride {
-                        headers: BTreeMap::new(),
-                        body_patch: BTreeMap::from([(
-                            "enable_thinking".to_owned(),
-                            serde_json::Value::Bool(false),
-                        )]),
-                    },
-                    adapter_overrides: BTreeMap::new(),
-                });
-
-                modes.push(ModelThinkingMode {
-                    is_default: false,
-                    preset: Some("enabled".to_owned()),
-                    display_name: Some("Think".to_string()),
-                    description: Some("Enable DashScope reasoning output".to_string()),
-                    thinking: None,
-                    request_override: agena_domain::ModelSpeedModeRequestOverride {
-                        headers: BTreeMap::new(),
-                        body_patch: BTreeMap::from([(
-                            "enable_thinking".to_owned(),
-                            serde_json::Value::Bool(true),
-                        )]),
-                    },
-                    adapter_overrides: BTreeMap::new(),
-                });
-            }
-            Some(DashscopeReasoningProfile::AlwaysOn) => {
-                modes.push(ModelThinkingMode {
-                    is_default: false,
-                    preset: Some("enabled".to_owned()),
-                    display_name: Some("Think".to_string()),
-                    description: Some("Use the model's built-in reasoning output".to_string()),
-                    thinking: None,
-                    request_override: agena_domain::ModelSpeedModeRequestOverride {
-                        headers: BTreeMap::new(),
-                        body_patch: BTreeMap::from([(
-                            "enable_thinking".to_owned(),
-                            serde_json::Value::Bool(true),
-                        )]),
-                    },
-                    adapter_overrides: BTreeMap::new(),
-                });
-            }
-            None => {}
-        }
-        modes
     }
 
     pub(super) fn backend_key(&self) -> &'static str {

@@ -100,21 +100,6 @@ impl CatalogedModelsProvider {
         }
     }
 
-    fn synthesize_thinking_modes_from_metadata(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> Vec<ModelThinkingMode> {
-        let Some(family) = self.target.capability_family() else {
-            return Vec::new();
-        };
-        agena_provider::default_model_mode_registry().thinking_modes_for_family(
-            family,
-            adapter_id,
-            model.as_ref(),
-            &self.model_metadata_for_adapter(adapter_id, model),
-        )
-    }
 }
 
 #[async_trait]
@@ -224,20 +209,9 @@ impl ModelRuntime for CatalogedModelsProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> Vec<ModelThinkingMode> {
-        let mut modes = self
+        let modes = self
             .target
             .model_thinking_modes_for_adapter(adapter_id, model);
-        for mode in self.synthesize_thinking_modes_from_metadata(adapter_id, model) {
-            let selector = mode.selector().map(|selector| selector.into_owned());
-            if selector.is_some_and(|selector| {
-                modes
-                    .iter()
-                    .any(|existing| existing.selector().as_deref() == Some(selector.as_str()))
-            }) {
-                continue;
-            }
-            modes.push(mode);
-        }
         self.using_configured_definition(model, modes, |modes, configured| {
             merge_catalog_baseline_thinking_modes(modes, &configured.thinking_modes)
         })
@@ -494,6 +468,57 @@ mod tests {
         assert_eq!(metadata.limits.context_window_tokens, Some(1_000_000));
         assert_eq!(metadata.limits.max_input_tokens, Some(1_000_000));
         assert_eq!(metadata.limits.max_output_tokens, Some(384_000));
+    }
+
+    #[tokio::test]
+    async fn configured_thinking_modes_cover_a_model_the_catalog_does_not_know() {
+        let model = ModelId::new("zeta-9");
+        let target: Arc<dyn ModelRuntime> = Arc::new(ListedModelRuntime {
+            model: model.clone(),
+        });
+        let configured: ConfiguredModelDefinition = serde_json::from_value(serde_json::json!({
+            "thinking_modes": {
+                "low": { "display_name": "Think Low", "strategy": "effort", "effort": "low" },
+                "high": { "display_name": "Think High", "strategy": "effort", "effort": "high" }
+            }
+        }))
+        .expect("configured model definition");
+        let provider = CatalogedModelsProvider::new(
+            target,
+            ProviderModelCatalog {
+                models: [("zeta-9".to_owned(), configured)].into_iter().collect(),
+                appendable_model_ids: Default::default(),
+            },
+        );
+
+        let mut selectors: Vec<String> = provider
+            .model_thinking_modes_for_adapter(None, &model)
+            .iter()
+            .filter_map(|mode| mode.selector())
+            .map(|selector| selector.into_owned())
+            .collect();
+        selectors.sort();
+        assert_eq!(selectors, ["high", "low"]);
+    }
+
+    #[tokio::test]
+    async fn an_undeclared_model_gets_no_thinking_modes() {
+        let model = ModelId::new("zeta-9");
+        let target: Arc<dyn ModelRuntime> = Arc::new(ListedModelRuntime {
+            model: model.clone(),
+        });
+        let provider = CatalogedModelsProvider::new(
+            target,
+            ProviderModelCatalog {
+                models: [("zeta-9".to_owned(), ConfiguredModelDefinition::default())]
+                    .into_iter()
+                    .collect(),
+                appendable_model_ids: Default::default(),
+            },
+        );
+
+        assert!(provider.model_thinking_modes_for_adapter(None, &model).is_empty());
+        assert!(provider.model_thinking_modes(&model).is_empty());
     }
 
     struct CapabilityToolModeRuntime {

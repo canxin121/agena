@@ -851,6 +851,9 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id.as_ref(), "gpt-5.6-terra");
         assert_eq!(models[0].display_name.as_deref(), Some("GPT 5.6 Terra"));
-        assert!(!models[0].thinking_modes.is_empty());
+        // Thinking modes are declared by the catalog and by provider/model
+        // configuration; this fixture has neither, so the adapter must not
+        // invent a family ladder from the model id.
+        assert!(models[0].thinking_modes.is_empty());
     }
 }

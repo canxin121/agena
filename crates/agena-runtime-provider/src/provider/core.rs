@@ -221,34 +221,20 @@ pub trait ModelRuntime: Send + Sync {
         self.model_metadata(model)
     }
 
+    /// Thinking modes this model can offer. The model catalog and the
+    /// provider/model configuration declare them; the runtime never infers
+    /// them from a model id, so an undeclared model simply has no thinking
+    /// selector.
     fn model_thinking_modes(&self, model: &ModelId) -> Vec<ModelThinkingMode> {
-        match self.capability_family() {
-            Some(family) => agena_provider::default_model_mode_registry()
-                .thinking_modes_for_family(
-                    family,
-                    None,
-                    model.as_ref(),
-                    &self.model_metadata(model),
-                ),
-            None => Vec::new(),
-        }
+        self.model_thinking_modes_for_adapter(None, model)
     }
 
     fn model_thinking_modes_for_adapter(
         &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
+        _adapter_id: Option<&AdapterId>,
+        _model: &ModelId,
     ) -> Vec<ModelThinkingMode> {
-        match self.capability_family() {
-            Some(family) => agena_provider::default_model_mode_registry()
-                .thinking_modes_for_family(
-                    family,
-                    adapter_id,
-                    model.as_ref(),
-                    &self.model_metadata_for_adapter(adapter_id, model),
-                ),
-            None => self.model_thinking_modes(model),
-        }
+        Vec::new()
     }
 
     fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {

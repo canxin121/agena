@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use super::{
     CHAT_COMPLETIONS_ADAPTER_KIND, CapabilitySupport, CompletionFinishReason, CompletionRequest,
     CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelCapabilities, ModelId,
-    ModelRuntime, ModelThinkingMode, OpenAiChatCompletionsAdapter, OpenAiInputContent,
+    ModelRuntime, OpenAiChatCompletionsAdapter, OpenAiInputContent,
     OpenAiInputMessage, OpenAiModelListResponse, OpenAiProfile, OpenAiResponsesAdapter,
     OpenAiResponsesBackend, OpenAiResponsesCompactResponse, OpenAiResponsesInputItem,
     OpenAiResponsesRequest, OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage, ProviderError,
@@ -172,23 +172,6 @@ impl ModelRuntime for OpenAiResponsesAdapter {
     ) -> ModelCapabilities {
         let _ = adapter_id;
         self.runtime_model_capabilities(model)
-    }
-
-    fn model_thinking_modes_for_adapter(
-        &self,
-        adapter_id: Option<&agena_domain::AdapterId>,
-        model: &ModelId,
-    ) -> Vec<ModelThinkingMode> {
-        let modes = agena_provider::default_model_mode_registry().thinking_modes_for_family(
-            self.capability_family,
-            adapter_id,
-            model.as_ref(),
-            &self.model_metadata_for_adapter(adapter_id, model),
-        );
-        if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
-            return OpenAiTransport::dashscope_thinking_modes(model);
-        }
-        modes
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -977,23 +960,6 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
         model: &ModelId,
     ) -> ModelCapabilities {
         self.runtime_model_capabilities(model)
-    }
-
-    fn model_thinking_modes_for_adapter(
-        &self,
-        adapter_id: Option<&agena_domain::AdapterId>,
-        model: &ModelId,
-    ) -> Vec<ModelThinkingMode> {
-        let modes = agena_provider::default_model_mode_registry().thinking_modes_for_family(
-            self.capability_family,
-            adapter_id,
-            model.as_ref(),
-            &self.model_metadata_for_adapter(adapter_id, model),
-        );
-        if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
-            return OpenAiTransport::dashscope_thinking_modes(model);
-        }
-        modes
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {

@@ -28,7 +28,7 @@ use std::{
 };
 
 use agena_domain::{
-    AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
+    CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
     ModelLifecycle, ModelMetadata, ModelPricing, ModelRef, ModelSpeedMode,
     ModelSpeedModeRequestOverride, ModelThinkingMode, ProviderId, ReasoningEffort, ThinkingDisplay,
     ThinkingRequest,
@@ -162,8 +162,6 @@ mod model_metadata;
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
 mod capabilities;
 pub use capabilities::{CapabilityRegistry, default_capability_registry};
-mod model_modes;
-pub use model_modes::{ModelModeRegistry, default_model_mode_registry};
 mod configured_models;
 pub use configured_models::{
     apply_configured_modes, apply_configured_thinking_modes, configured_thinking_mode_selector,
@@ -249,12 +247,6 @@ pub use catalog_merge::{
 mod catalog_public_merge;
 pub use catalog_public_merge::{
     merge_public_source_catalog_definition, merge_public_source_catalog_document,
-};
-mod catalog_thinking_modes;
-pub use catalog_thinking_modes::{
-    catalog_thinking_mode_for_effort, enrich_catalog_document_thinking_modes,
-    inferred_catalog_thinking_modes, insert_catalog_thinking_effort,
-    openai_catalog_reasoning_efforts,
 };
 mod catalog_collector;
 pub use catalog_collector::collect_live_provider_models;

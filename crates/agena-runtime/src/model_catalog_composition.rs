@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
 use agena_provider::{
-    CatalogModelDefinition, ModelCatalogDocument, enrich_catalog_document_thinking_modes,
-    merge_live_provider_catalog_document,
+    CatalogModelDefinition, ModelCatalogDocument, merge_live_provider_catalog_document,
 };
 
 use crate::{
@@ -72,12 +71,11 @@ pub fn compose_model_catalog_document(
     let merged = ModelCatalogDocument {
         models: merged_models,
     };
-    let mut document = if has_live_provider_models {
+    let document = if has_live_provider_models {
         curate_live_catalog_document(merged)?
     } else {
         curate_catalog_document(merged)?
     };
-    enrich_catalog_document_thinking_modes(&mut document);
     Ok((
         document,
         (!warnings.is_empty()).then(|| warnings.join("; ")),

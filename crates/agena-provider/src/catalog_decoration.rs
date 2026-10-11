@@ -268,10 +268,61 @@ pub fn merge_catalog_baseline_speed_modes(
 
 #[cfg(test)]
 mod tests {
-    use super::apply_configured_definition_as_baseline;
+    use super::{apply_catalog_definition_as_baseline, apply_configured_definition_as_baseline};
     use agena_domain::Model;
 
-    use crate::ConfiguredModelDefinition;
+    use crate::{CatalogModelDefinition, ConfiguredModelDefinition};
+
+    fn selectors(model: &Model) -> Vec<String> {
+        let mut selectors: Vec<String> = model
+            .thinking_modes
+            .iter()
+            .filter_map(|mode| mode.selector())
+            .map(|selector| selector.into_owned())
+            .collect();
+        selectors.sort();
+        selectors
+    }
+
+    #[test]
+    fn catalog_thinking_modes_are_the_only_source_for_a_catalogued_model() {
+        // Shape copied from the published catalog entry of a real model: the
+        // effort values OpenAI publishes, and nothing else.
+        let definition: CatalogModelDefinition = serde_json::from_value(serde_json::json!({
+            "thinking_modes": {
+                "low": { "display_name": "Think Low", "strategy": "effort", "effort": "low" },
+                "medium": { "display_name": "Think Medium", "strategy": "effort", "effort": "medium" },
+                "high": { "display_name": "Think High", "strategy": "effort", "effort": "high" },
+                "xhigh": { "display_name": "Think Xhigh", "strategy": "effort", "effort": "xhigh" },
+                "max": { "display_name": "Think Max", "strategy": "effort", "effort": "max" }
+            }
+        }))
+        .expect("catalog definition");
+
+        let decorated = apply_catalog_definition_as_baseline(
+            &definition,
+            &Default::default(),
+            &Default::default(),
+            Model::new("openai", "gpt-6.1-sol"),
+        );
+
+        assert_eq!(
+            selectors(&decorated),
+            ["high", "low", "max", "medium", "xhigh"]
+        );
+    }
+
+    #[test]
+    fn a_model_id_alone_never_adds_thinking_modes() {
+        let decorated = apply_catalog_definition_as_baseline(
+            &CatalogModelDefinition::default(),
+            &Default::default(),
+            &Default::default(),
+            Model::new("openai", "gpt-6.1-sol"),
+        );
+
+        assert!(decorated.thinking_modes.is_empty());
+    }
 
     #[test]
     fn configured_definition_fills_missing_model_metadata_without_overwriting_primary() {

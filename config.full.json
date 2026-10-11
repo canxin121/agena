@@ -249,6 +249,18 @@
             "gpt-5.5": {
               "agena_tools": {
                 "mode": "provider_protocol"
+              },
+              "thinking_modes": {
+                "low": {
+                  "display_name": "Think Low",
+                  "strategy": "effort",
+                  "effort": "low"
+                },
+                "high": {
+                  "display_name": "Think High",
+                  "strategy": "effort",
+                  "effort": "high"
+                }
               }
             }
           }

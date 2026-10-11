@@ -431,17 +431,6 @@ pub trait CapabilityResolver: Send + Sync {
     ) -> agena_domain::ModelCapabilities;
 }
 
-/// Provider-facing model-thinking-mode lookup contract.
-pub trait ModelModeResolver: Send + Sync {
-    fn thinking_modes_for_family(
-        &self,
-        family: CapabilityFamily,
-        adapter_id: Option<&AdapterId>,
-        model: &str,
-        metadata: &ModelMetadata,
-    ) -> Vec<ModelThinkingMode>;
-}
-
 /// Provider-facing capability dimensions used by model catalog/configuration values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

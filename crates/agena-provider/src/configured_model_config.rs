@@ -11,6 +11,11 @@ use crate::{AgenaToolsConfig, ConfiguredModelDefinition};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 /// Resolved configuration of one provider model.
+///
+/// `thinking_modes` / `speed_modes` are the declared selectors of this model
+/// route. The model catalog is the primary source; declare them here for a
+/// model the catalog does not cover (or to override its entry), because the
+/// runtime never infers modes from a model id.
 pub struct ResolvedProviderModelConfig {
     #[serde(skip_serializing_if = "is_true")]
     pub enabled: bool,

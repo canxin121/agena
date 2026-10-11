@@ -17,7 +17,11 @@ import {
   type ActivityVisibility,
 } from '@/pages/chat/transcriptActivityFolding'
 import { transcriptPartNavigationText } from '@/pages/chat/transcriptNavigation'
-import { partHasPendingInteraction, partPendingInteractionRequestIds } from '@/pages/chat/transcriptProjection'
+import {
+  partHasPendingInteraction,
+  partPendingInteractionRequestIds,
+  userInputOrder,
+} from '@/pages/chat/transcriptProjection'
 import { focusTranscriptPartControl } from '@/pages/chat/transcriptControls'
 import { partStatusPresentation } from '@/pages/chat/transcriptPartPresentation'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, normalizeTranscriptPartPageSize } from '@/pages/chat/transcriptPartPaging'
@@ -130,7 +134,9 @@ type TranscriptRow =
 
 const transcriptRows = computed<TranscriptRow[]>(() => {
   if (role.value !== 'assistant') {
-    return props.displayParts.map((part) => ({ kind: 'part' as const, key: part.key, part }))
+    // A user message submits its attachments as their own parts and keeps their
+    // positions in the text, so render those parts together above that text.
+    return userInputOrder(props.displayParts).map((part) => ({ kind: 'part' as const, key: part.key, part }))
   }
   const rows: TranscriptRow[] = []
   const key = summaryKey.value

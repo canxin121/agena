@@ -288,6 +288,21 @@ export function optimisticUserParts(args: {
   return parts
 }
 
+/**
+ * A user message keeps its submitted text intact.
+ *
+ * Inline attachments are submitted as their own parts and the text already
+ * carries one placeholder per attachment, so the transcript shows those parts
+ * together above that text (the placement the TUI gives input activities)
+ * instead of splitting the text again. Attachments keep their submitted order,
+ * and a message without attachments is returned unchanged.
+ */
+export function userInputOrder(parts: TranscriptDisplayPart[]): TranscriptDisplayPart[] {
+  const attachments = parts.filter((part) => part.kind === 'resource')
+  if (attachments.length === 0) return parts
+  return [...attachments, ...parts.filter((part) => part.kind !== 'resource')]
+}
+
 function commandLabels(part: MessagePartLike): string[] {
   const content = durablePartContent(part)
   const raw = Array.isArray(content.commands) ? content.commands : content.skills

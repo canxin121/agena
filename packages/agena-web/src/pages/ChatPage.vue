@@ -25,6 +25,7 @@ import { useToastsStore } from '@/stores/toasts'
 import { useMessageStreaming } from '@/composables/chat/useMessageStreaming'
 import { useChatAttachments, type AttachedFile } from './chat/useChatAttachments'
 import { getComposerInput, type ComposerExpose, type ComposerInput, type ComposerSegment } from './chat/composerInput'
+import { attachmentPlaceholder } from './chat/attachmentPlaceholder'
 import { useChatScrollNav } from './chat/useChatScrollNav'
 import { useChatComposerLayout } from './chat/useChatComposerLayout'
 import { useChatModelSelection } from './chat/useChatModelSelection'
@@ -1563,6 +1564,50 @@ function attachmentResourceKind(mime: string, filename: string): 'file' | 'image
   return 'file'
 }
 
+/**
+ * Build the submitted body from the composer document.
+ *
+ * Every inline attachment keeps its text position as a bracketed placeholder
+ * (the same bracket vocabulary the TUI composer document uses) and is submitted
+ * as its own part instead of splitting the surrounding text, so the message the
+ * transcript renders is the text the user typed. Only outer whitespace is
+ * trimmed, matching the previous plain-text composer behavior, and attachments
+ * the editor has not rendered as a chip yet are still included - their part and
+ * their placeholder follow the same order.
+ */
+function composeOutgoingText(
+  segments: ComposerSegment[],
+  files: AttachedFile[],
+  fileFallbackLabel: string,
+): { text: string; typedText: string; attachmentIds: string[] } {
+  const ordered: ComposerSegment[] = segments.map((part) => ({ ...part }))
+  const filesById = new Map(files.map((file) => [file.id, file]))
+  for (const file of files) {
+    if (!ordered.some((part) => part.type === 'attachment' && part.id === file.id)) {
+      ordered.push({ type: 'attachment', id: file.id })
+    }
+  }
+  const first = ordered[0]
+  const last = ordered[ordered.length - 1]
+  if (first?.type === 'text') first.text = first.text.trimStart()
+  if (last?.type === 'text') last.text = last.text.trimEnd()
+  const attachmentIds: string[] = []
+  let text = ''
+  let typedText = ''
+  for (const segment of ordered) {
+    if (segment.type === 'text') {
+      text += segment.text
+      typedText += segment.text
+      continue
+    }
+    const file = filesById.get(segment.id)
+    if (!file) continue
+    attachmentIds.push(file.id)
+    text += attachmentPlaceholder(file.pastePreview ?? file.filename, fileFallbackLabel)
+  }
+  return { text, typedText, attachmentIds }
+}
+
 function resourceComposerNode(input: {
   sha256?: string
   delivery?: 'reference' | 'model_input'
@@ -2054,9 +2099,21 @@ async function sendReady(sid: string | null) {
     closeEditorFullscreen()
   }
 
+  // The editor document is what reaches the provider, so derive the submitted
+  // body from it and keep the optimistic preview identical to the acknowledged
+  // message: one text part with a placeholder per inline attachment, plus the
+  // attachments as their own parts.
+  const composed = composeOutgoingText(
+    outgoingSegments.some((part) => part.type === 'text' && part.text.trim()) || !text
+      ? outgoingSegments
+      : [{ type: 'text', text } as ComposerSegment, ...outgoingSegments],
+    filesSnapshot,
+    String(t('chat.messageItem.fileFallback')).trim(),
+  )
+
   beginOptimisticSend({
     sessionId: sid,
-    text,
+    text: composed.typedText ? composed.text : '',
     fileFallbackLabel: String(t('chat.messageItem.fileFallback')).trim(),
     attachmentTitle: String(t('chat.attachments.rowTitle')).trim(),
     files: filesSnapshot.map((f) => ({
@@ -2082,33 +2139,15 @@ async function sendReady(sid: string | null) {
   await nextTick()
   scrollToBottom('smooth')
   try {
+    // One text part plus the attachments as their own parts: the text keeps one
+    // placeholder per inline attachment, so the transcript renders the
+    // attachments together above the text the user actually typed.
     const parts: OutgoingMessagePart[] = []
     const workspace = filesSnapshot.length > 0 ? await chat.resolveSessionWorkspace(sid) : null
     const filesById = new Map(filesSnapshot.map((file) => [file.id, file]))
-    const orderedSegments: ComposerSegment[] = outgoingSegments.map((part) => ({ ...part }))
-    // Attachments below are force-included even when the editor has not
-    // rendered their chip yet. Mirror that guarantee for the body text: a
-    // message must never be submitted without the text the user sees.
-    if (text && !orderedSegments.some((part) => part.type === 'text' && part.text.trim())) {
-      orderedSegments.unshift({ type: 'text', text })
-    }
-    for (const file of filesSnapshot) {
-      if (!orderedSegments.some((part) => part.type === 'attachment' && part.id === file.id)) {
-        orderedSegments.push({ type: 'attachment', id: file.id })
-      }
-    }
-    // Preserve text around each inline attachment. Only outer whitespace is
-    // trimmed, matching the previous plain-text composer behavior.
-    const first = orderedSegments[0]
-    const last = orderedSegments[orderedSegments.length - 1]
-    if (first?.type === 'text') first.text = first.text.trimStart()
-    if (last?.type === 'text') last.text = last.text.trimEnd()
-    for (const segment of orderedSegments) {
-      if (segment.type === 'text') {
-        if (segment.text) parts.push({ type: 'text', text: segment.text })
-        continue
-      }
-      const f = filesById.get(segment.id)
+    if (composed.typedText) parts.push({ type: 'text', text: composed.text })
+    for (const id of composed.attachmentIds) {
+      const f = filesById.get(id)
       if (!f) continue
       let path = ''
       let sha256: string | undefined

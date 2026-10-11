@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { MessageLike, MessagePartLike } from '../src/components/chat/messageList.types'
-import { durablePartKind, optimisticUserParts, projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
+import {
+  durablePartKind,
+  optimisticUserParts,
+  projectTranscriptBlocks,
+  userInputOrder,
+} from '../src/pages/chat/transcriptProjection'
 
 function part(id: string, kind: string, content: Record<string, unknown>, state = 'completed'): MessagePartLike {
   return {
@@ -322,5 +327,31 @@ describe('TUI-parity transcript projection', () => {
     expect(
       blocks[0]?.displayParts.filter((part) => part.kind === 'operation').map((part) => part.defaultExpanded),
     ).toEqual([true, true, true, false])
+  })
+})
+
+describe('user input ordering', () => {
+  test('attachments are shown above the text that already carries their placeholders', () => {
+    const textPart = part('1', 'text', { text: '1. [image.png] 有一段额外的 card 包裹需要移除掉' })
+    const filePart: MessagePartLike = {
+      id: '2',
+      type: 'file',
+      partState: 'completed',
+      agenaKind: 'file_ref',
+      agenaRole: 'user',
+      agenaContent: { name: 'image.png', mime: 'image/png' },
+    }
+    const blocks = projectTranscriptBlocks([message('1', 'user', [textPart, filePart])])
+    const displayParts = blocks[0]?.displayParts ?? []
+    expect(displayParts.map((entry) => entry.kind)).toEqual(['text', 'resource'])
+    expect(userInputOrder(displayParts).map((entry) => entry.kind)).toEqual(['resource', 'text'])
+  })
+
+  test('a message without attachments keeps its part order', () => {
+    const first = part('1', 'text', { text: 'first line' })
+    const second = part('2', 'text', { text: 'second line' })
+    const blocks = projectTranscriptBlocks([message('1', 'user', [first, second])])
+    const displayParts = blocks[0]?.displayParts ?? []
+    expect(userInputOrder(displayParts).map((entry) => entry.id)).toEqual(displayParts.map((entry) => entry.id))
   })
 })

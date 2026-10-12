@@ -261,6 +261,47 @@ mod tests {
             .collect()
     }
 
+    fn is_likely_untranslated_english(value: &str) -> bool {
+        const ENGLISH_WORDS: &[&str] = &[
+            "the", "and", "to", "for", "with", "your", "you", "are", "is", "will", "can", "cannot",
+            "please", "this", "that", "from", "when", "while", "after", "before", "enter",
+            "select", "choose", "open", "close", "save", "delete", "search", "loading", "failed",
+            "continue",
+        ];
+        let mut visible = String::with_capacity(value.len());
+        let mut inside_interpolation = false;
+        for character in value.chars() {
+            match character {
+                '{' => inside_interpolation = true,
+                '}' => inside_interpolation = false,
+                _ if !inside_interpolation => visible.push(character),
+                _ => {}
+            }
+        }
+        visible.len() > 24
+            && visible
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .any(|word| {
+                    ENGLISH_WORDS
+                        .iter()
+                        .any(|english| word.eq_ignore_ascii_case(english))
+                })
+    }
+
+    fn fluent_arguments(value: &str) -> BTreeSet<String> {
+        value
+            .split('$')
+            .skip(1)
+            .filter_map(|suffix| {
+                let name = suffix
+                    .chars()
+                    .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+                    .collect::<String>();
+                (!name.is_empty()).then_some(name)
+            })
+            .collect()
+    }
+
     fn settings_keys(resource: &str) -> BTreeSet<&str> {
         message_keys(resource)
             .into_iter()
@@ -303,6 +344,60 @@ mod tests {
                 !resource.contains("<ph") && !resource.contains("< ph"),
                 "{locale} contains an unrestored translation placeholder"
             );
+        }
+    }
+
+    #[test]
+    fn every_supported_locale_covers_the_full_catalog_and_fluent_arguments() {
+        let english = message_values(RESOURCES[0].1);
+        for (locale, resource) in RESOURCES.iter().skip(1) {
+            let localized = message_values(resource);
+            let missing = english
+                .keys()
+                .filter(|key| !localized.contains_key(**key))
+                .copied()
+                .collect::<Vec<_>>();
+            assert!(
+                missing.is_empty(),
+                "{locale} misses {} full-catalog keys: {:?}",
+                missing.len(),
+                missing.iter().take(40).collect::<Vec<_>>()
+            );
+            let extra = localized
+                .keys()
+                .filter(|key| !english.contains_key(**key))
+                .copied()
+                .collect::<Vec<_>>();
+            assert!(
+                extra.is_empty(),
+                "{locale} has {} unknown full-catalog keys: {:?}",
+                extra.len(),
+                extra.iter().take(40).collect::<Vec<_>>()
+            );
+            for (key, source) in &english {
+                let value = localized[key];
+                assert_eq!(
+                    fluent_arguments(source),
+                    fluent_arguments(value),
+                    "{locale} has Fluent argument mismatch for `{key}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_english_catalogs_do_not_copy_complete_english_sentences() {
+        let english = message_values(RESOURCES[0].1);
+        for (locale, resource) in RESOURCES.iter().skip(1) {
+            let localized = message_values(resource);
+            for (key, source) in &english {
+                if let Some(value) = localized.get(key) {
+                    assert!(
+                        value != source || !is_likely_untranslated_english(value),
+                        "{locale} copies English user-facing sentence `{key}`: {value}"
+                    );
+                }
+            }
         }
     }
 

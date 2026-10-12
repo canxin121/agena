@@ -153,7 +153,6 @@ flash-terminal-event-error = Terminalereignisfehler: {$error}
 flash-created-session = Sitzung erstellt {$title}
 flash-permission-reply-sent = Berechtigungsantwort gesendet: {$label}
 flash-user-input-reply-sent = Benutzereingabeantwort gesendet
-flash-large-paste-staged = Grosse Einfuegung in der Eingabe vorgemerkt
 flash-attached = {$path} angehaengt
 flash-composer-updated = Eingabe aus externem Editor aktualisiert
 flash-prompt-history-empty = Prompt-Verlauf ist leer
@@ -200,7 +199,7 @@ message-error = Fehler [{$code}]: {$message}
 message-attachments = Anhaenge
 message-awaiting-user-input = Warten auf Benutzereingabe: {$request_id}
 message-user-input-replied = beantwortete Benutzereingabe: {$request_id}
-message-question-line = - {$question} ({$id})
+message-question-line = - {$question}
 message-part-detail-unavailable = Teildetails nicht verfuegbar
 message-tool-pending = wartet: {$label}
 message-tool-running = laeuft: {$label}
@@ -208,6 +207,10 @@ message-tool-done = fertig: {$label}
 message-tool-failed = fehlgeschlagen: {$label}
 message-tool-cancelled = abgebrochen: {$label}
 message-tool-result-blocks = {$count} Ergebnisbloecke
+message-permission = Berechtigung
+message-tool-summary = [Werkzeug] {$status} | {$label}
+message-tool-output-collapsed =     … {$lines} weitere
+message-activity-run-collapsed = Enter: 5 laden · n Enter · Ctrl+Shift+Enter: alle laden · … {$count} ältere Teile ausgeblendet
 
 todo-status-pending = pending
 todo-status-in-progress = in_progress
@@ -253,9 +256,6 @@ bytes-mb = {$value} MB
 bytes-kb = {$value} KB
 bytes-b = {$value} B
 
-paste-label = Einfuegung mit {$count} Zeichen
-paste-label-append = Einfuegung mit {$count} Zeichen, beim Senden anhaengen
-paste-placeholder = [Einfuegung mit {$count} Zeichen]
 
 permission-label-allow-once = einmal erlauben
 permission-label-allow-always = immer erlauben
@@ -1228,6 +1228,43 @@ settings-field-session-compaction-reserved-tokens-description = Im Kontextfenste
 settings-client-versions-refresh-description = Rufen Sie die neuesten kompatiblen Paketversionen von npm ab, behalten Sie alle drei genauen Werte bei und laden Sie die Laufzeit neu.
 settings-client-versions-entry-detail = Öffnen Sie die genauen Kompatibilitätsversionen, die in den Headern der Anbieteranforderungsidentität verwendet werden.
 settings-client-versions-section-description = Genaue Kompatibilitätsversionen, die in den Headern der Anbieteranforderungsidentität verwendet werden. Bearbeiten Sie jeden Wert oder drücken Sie Ctrl+R, um von npm zu aktualisieren.
+
+provider-field-api-key = API-Schlüssel
+provider-issuer-atomgit-label = atomgit
+provider-issuer-atomgit-detail = AtomGit-Anmeldedaten
+provider-field-api-key-env = API-Schlüssel-Umgebungsvariable
+provider-field-username = Benutzername
+provider-field-display-name = Anzeigename
+provider-field-email = E-Mail-Adresse
+provider-field-avatar-url = Avatar-URL
+provider-model-field-catalog-template = Katalogvorlage
+provider-model-catalog-selection-note = Mit Enter eine Vorlage auswählen. Beim Speichern werden ihre Felder übernommen, nicht ihre Katalog-ID.
+provider-adapter-rule-none-ollama-detail = Ollama-Adapter; Authentifizierungsfelder bleiben leer und der Endpunkt wird am Adapter festgelegt.
+provider-adapter-rule-api-openai-detail = Expliziter OpenAI-Responses- oder Chat-Completions-Adapter; verwendet die providerseitige Authentifizierungsoption base_url und unterstützt das Auflisten von Modellen im Entwurf.
+provider-adapter-rule-api-anthropic-detail = Anthropic-HTTP-Adapter; verwendet die providerseitige Authentifizierungsoption base_url und unterstützt das Auflisten von Modellen im Entwurf.
+provider-adapter-rule-api-gemini-detail = Gemini-HTTP-Adapter; verwendet die providerseitige Authentifizierungsoption base_url und unterstützt das Auflisten von Modellen im Entwurf.
+provider-adapter-rule-cline-api-openai-detail = Cline API über den openai_chat_completions-Adapter; base_url und Modellerkennung bleiben auf den gehosteten Cline-Endpunkt festgelegt.
+provider-adapter-rule-gitlab-auth-openai-detail = GitLab-Gateway über den ausgewählten OpenAI-Responses- oder Chat-Completions-Adapter.
+provider-adapter-rule-gitlab-auth-anthropic-detail = GitLab-Gateway über den anthropic-Adapter.
+provider-adapter-rule-openai-chatgpt-openai-detail = openai_responses-Adapter mit dem offiziellen ChatGPT-Codex-Backend; Anmeldedaten stammen aus der lokalen OpenAI-Sitzung.
+provider-adapter-rule-github-copilot-openai-detail = Copilot-Token über den ausgewählten OpenAI-Responses- oder Chat-Completions-Adapter.
+provider-adapter-rule-github-copilot-anthropic-detail = Copilot-Token über den anthropic-Adapter.
+provider-adapter-rule-gitlab-credential-openai-detail = GitLab-OAuth-Anmeldedaten über den ausgewählten OpenAI-Responses- oder Chat-Completions-Adapter.
+provider-adapter-rule-gitlab-credential-anthropic-detail = GitLab-OAuth-Anmeldedaten über den anthropic-Adapter.
+provider-adapter-rule-google-adc-openai-detail = OpenAI-Chat-Completions-Adapter im Vertex-Stil mit capability_family=gemini; erfordert die providerseitige Authentifizierungsoption base_url.
+provider-adapter-rule-sap-ai-core-openai-detail = SAP-AI-Core-openai_chat_completions-Adapter; erfordert die providerseitigen Authentifizierungsoptionen base_url und service_key_env.
+provider-adapter-rule-bedrock-sigv4-amazon-bedrock-detail = Amazon-Bedrock-Adapter, signiert mit AWS SigV4.
+provider-redirect-local-studio-detail = Localhost-Rückruf-URL passend zur Studio-Webroute
+provider-profile-choice-detail = AWS-Profil aus der gemeinsamen Konfiguration
+provider-profile-default-detail = AWS-Standardprofil
+provider-api-key-env-openai-detail = Umgebungsvariable für einen OpenAI-kompatiblen API-Schlüssel
+provider-api-key-env-anthropic-detail = Umgebungsvariable für einen Anthropic-API-Schlüssel
+provider-api-key-env-gemini-detail = Umgebungsvariable für einen Gemini-API-Schlüssel
+provider-api-key-env-gitlab-detail = Umgebungsvariable für ein GitLab-Token
+provider-api-key-env-vertex-detail = Umgebungsvariable für ein Google-Vertex-Zugriffstoken
+provider-api-key-env-shared-gateway-detail = Umgebungsvariable für einen gemeinsamen Gateway-API-Schlüssel
+provider-api-key-env-opencode-detail = Umgebungsvariable für einen Opencode-API-Schlüssel
+provider-service-key-env-detail = Standard-Umgebungsvariable für den SAP-AI-Core-Dienstschlüssel
 settings-provider-workbench-detail = Öffnen Sie die durchsuchbare Anbieterliste, bevor Sie Authentifizierung, Adapter, Modellrouting oder neue Anbieter konfigurieren.
 settings-provider-new-detail = Erstellen Sie einen neuen Anbieter, listen Sie Live-Adaptermodelle auf und bearbeiten Sie die Konfiguration des Anbieteradapters. Wählen Sie das Modell separat aus.
 settings-model-catalog-open-detail = Überprüfen Sie die Metadaten des aufgelösten Modells und aktualisieren Sie den Cache des lokalen Modellkatalogs.
@@ -1361,7 +1398,6 @@ provider-issuer-sap-ai-core-detail = Authentifizierung des SAP AI Core-Dienstsch
 provider-instance-url-gitlab-detail = GitLab.com-Browser-OAuth-Endpunkt
 provider-redirect-local-copy-detail = Localhost-Rückruf-URL zum Kopieren/Einfügen von OAuth-Weiterleitungen
 provider-region-choice-detail = AWS-Region
-provider-service-key-env-detail = Standardumgebungsvariable des SAP AI Core-Dienstschlüssels
 overlay-model-catalog-field-model-id = Modell-ID
 overlay-model-catalog-field-display = Anzeige
 overlay-model-catalog-field-origin = Herkunft
@@ -1438,6 +1474,7 @@ permission-rule-error-network-target-required = Netzwerkregeln erfordern ein Net
 permission-rule-error-session-id-required = Der Sitzungsbereich erfordert eine Sitzungs-ID
 flash-server-config-edit-in-settings = Die Konfigurationsdatei gehört zum Server. Bearbeiten Sie die Werte in den Einstellungen, anstatt einen lokalen Clientpfad zu öffnen.
 flash-command-requires-session = Für diese Aktion ist eine offene Sitzung erforderlich
+
 flash-session-busy = Die Sitzung ist beschäftigt
 flash-provider-not-found = Anbieter nicht gefunden: { $provider }
 flash-permission-approval-model-updated = Automatisches Genehmigungsmodell aktualisiert: { $provider }/{ $model }
@@ -1488,6 +1525,45 @@ flash-provider-save-error-credential-base-url = Der Aussteller der Anmeldeinform
 flash-provider-save-error-credential-service-key-env = Der Aussteller der Anmeldeinformationen `{ $issuer }` erfordert service_key_env
 flash-provider-save-error-bedrock-key-pair = bedrock_sigv4 erfordert access_key_id und Secret_access_key zusammen
 flash-provider-save-error-select-model = Wählen Sie mindestens ein Modell aus, bevor Sie den Anbieter speichern
+
+value-reset = zurücksetzen
+value-selected = ausgewählt
+value-inactive = inaktiv
+value-unrestricted = uneingeschränkt
+value-inherit = übernehmen
+value-inherits-runtime-defaults = übernimmt Laufzeitvorgaben
+value-default-true = standardmäßig aktiviert
+value-tools = Werkzeuge
+value-plugin-tools = Plugin-Werkzeuge
+value-inherit-off = Übernahme deaktiviert: { $sections }
+value-path-summary = Pfad: { $detail }
+value-network-summary = Netzwerk: { $detail }
+value-plugin-override-count = { $count } Plugin-Überschreibungen
+value-tools-summary = Werkzeuge: { $detail }
+value-char-count = { $count } Zeichen
+value-item-count = { $count } Elemente
+value-on = an
+value-off = aus
+value-enabled = aktiviert
+value-disabled = deaktiviert
+value-unknown = unbekannt
+value-hidden = ausgeblendet
+value-visible = sichtbar
+value-config-owned = von der Konfiguration verwaltet
+value-file-backed = dateigestützt
+value-editable = bearbeitbar
+value-read-only = schreibgeschützt
+value-built-in = integriert
+value-built-in-defaults = integrierte Standardwerte
+value-config-backed = konfigurationsgestützt
+value-markdown-backed = Markdown-gestützt
+value-runtime-registered = zur Laufzeit registriert
+value-edit = bearbeiten
+value-rename = umbenennen
+value-duplicate = duplizieren
+value-delete = löschen
+value-runtime-config = Laufzeitkonfiguration
+value-runtime-config-file = Laufzeitkonfiguration (agena.json)
 flash-provider-save-error-adapter-object = Der Anbieteradapter `{ $adapter }` muss ein JSON-Objekt sein
 flash-provider-save-error-model-object = Die Anbietermodellkonfiguration muss ein JSON-Objekt sein
 flash-provider-save-error-configured-adapter-object = Die konfigurierten Provider-Adaptereinstellungen müssen ein JSON-Objekt sein
@@ -1988,11 +2064,6 @@ terminal-diagnostics-state-forced = erzwungen
 terminal-diagnostics-state-profiled = aus Profil abgeleitet
 terminal-diagnostics-state-unsupported = nicht unterstützt
 terminal-diagnostics-state-unknown = unbekannt
-timeline-label-role = Rolle
-timeline-label-state = Status
-timeline-label-revision = Revision
-timeline-label-run = Ausführung
-timeline-label-parent-part = Übergeordneter Teil
 transcript-alert-note = Hinweis
 transcript-alert-tip = Tipp
 transcript-alert-important = Wichtig
@@ -2012,3 +2083,1018 @@ usage-filter-subagents-excluded = ausgeschlossen
 search-picker-custom-value-label = Eingegebenen Wert verwenden
 search-picker-custom-value-detail = Genau {$value} anwenden
 search-picker-custom-path-label = Eingegebenen Pfad verwenden
+
+command-activities-summary = Hintergrundaktivitäten öffnen
+
+command-allow-always-summary = Erste ausstehende Berechtigungsanfrage immer zulassen
+
+command-allow-summary = Erste ausstehende Berechtigungsanfrage einmalig zulassen
+
+command-attach-summary = Datei über die interaktive Auswahl anhängen
+
+command-btw-summary = Separat fragen, während das Hauptgespräch weiterläuft. Nur lesende Tools; keine Änderungen am Hauptgespräch.
+
+command-children-summary = Auswahl untergeordneter Sitzungen öffnen
+
+command-commands-summary = Befehlspalette öffnen
+
+command-commit-summary = Commit aus vorgemerkten Änderungen erstellen
+
+command-compact-summary = Sitzungskontext zu einer Zusammenfassung verdichten
+
+command-continue-summary = Aktuelle blockierte oder ausstehende Sitzung fortsetzen
+
+command-copy-message-summary = Letzte Assistentennachricht kopieren
+
+command-copy-summary = Geladenes Transkript kopieren
+
+command-copy-visible-summary = Sichtbaren Transkriptbereich kopieren
+
+command-deny-always-summary = Erste ausstehende Berechtigungsanfrage immer ablehnen
+
+command-deny-summary = Erste ausstehende Berechtigungsanfrage einmalig ablehnen
+
+command-diagnostics-summary = Bereinigte Diagnosezusammenfassung für Feedback anzeigen
+
+command-download-summary = Arbeitsbereichsdatei über den aktiven Terminal-Übertragungsanbieter herunterladen
+
+command-editor-summary = Externen Editor für das Eingabefeld öffnen
+
+command-export-summary = Geladenes Transkript als Markdown exportieren und im Editor öffnen
+
+command-favorite-summary = Aktuelle oder ausgewählte Sitzung zu den Favoriten hinzufügen oder daraus entfernen
+
+command-fork-summary = Abzweigung der aktuellen Sitzung mit vollständigem Verlauf öffnen
+
+command-help-summary = Hilfe zur aktuellen Oberfläche anzeigen
+
+command-image-summary = Bild über die interaktive Auswahl anhängen
+
+command-lineage-summary = Auswahl des Sitzungsverlaufs für die aktuelle Sitzung öffnen
+
+command-model-summary = Modellauswahl der Sitzung für Anbieter/Adapter/Modell öffnen
+
+command-new-summary = Neue Sitzung erstellen
+
+command-pager-summary = Geladenes Transkript in einem Terminal-Pager öffnen
+
+command-parent-summary = Zur übergeordneten Sitzung springen
+
+command-paste-summary = Dateien, Bilder oder Text aus der Zwischenablage in das Eingabefeld einfügen
+
+command-plan-summary = Planansicht für die aktuelle Sitzung öffnen
+
+command-pr-summary = Pull Request mit minimalen gh-Optionen erstellen
+
+command-rename-summary = Aktuelle oder ausgewählte Sitzung umbenennen
+
+command-rewind-summary = Benutzernachricht und alle folgenden Nachrichten in einen neuen Zweig zurücknehmen
+
+command-sessions-summary = Sitzungsumschalter öffnen
+
+command-side-summary = Abgezweigtes Nebengespräch öffnen, ohne den aktuellen Lauf zu unterbrechen
+
+command-status-summary = Aktuellen Sitzungs-, Ausführungs-, Arbeitsbereichs- und Oberflächenstatus anzeigen
+
+command-timeline-summary = Durchsuchbare Ereigniszeitleiste für die aktuelle oder ausgewählte Sitzung öffnen
+
+command-usage-summary = Interaktive Token- und Kostenanalyse öffnen
+
+command-user-input-summary = Erste ausstehende Benutzereingabe beantworten
+
+context-help-summary-sessions = Geladene Sitzungen durchsuchen und die aktive Unterhaltung auswählen.
+
+context-help-summary-transcript = Die aktuelle Unterhaltung lesen, durchsuchen, erweitern, durchgehen und kopieren.
+
+context-help-summary-composer = Nachricht verfassen, vorgemerkte Elemente verwalten und an die aktive Sitzung senden.
+
+context-help-summary-composer-items = Anhänge und eingefügte Elemente prüfen, öffnen, fokussieren, neu anordnen oder entfernen.
+
+context-help-summary-history = Frühere Eingaben von neu nach alt durchsuchen, ohne den Eingabebereich zu verlassen.
+
+context-help-summary-suggestions = Einen passenden Befehl oder Dateiverweis für die aktuelle Suche auswählen.
+
+context-help-summary-editor = Einen Wert bearbeiten und speichern oder abbrechen.
+
+context-help-summary-editor-multiline = Mehrzeiligen Text bearbeiten und anschließend vollständig speichern.
+
+context-help-summary-search-picker = Verfügbare Optionen durchsuchen und ein passendes Ergebnis auswählen.
+
+context-help-summary-choice-list = Eine sichtbare Option auswählen, ohne den Suchtext zu ändern.
+
+context-help-summary-timeline = Sitzungsereignisse durchsuchen und zur zugehörigen Nachricht springen.
+
+context-help-summary-permission = Anfrage prüfen, Details ansehen und eine klare Entscheidung treffen.
+
+context-help-summary-details = Aktuelle Details lesen und zur vorherigen Entscheidungsseite zurückkehren.
+
+context-help-summary-user-input = Die aktuelle Frage beantworten und mit den übrigen Punkten fortfahren.
+
+context-help-summary-user-input-editor = Eine eigene Antwort eingeben und übernehmen oder zu den Optionen zurückkehren.
+
+context-help-summary-user-input-review = Alle Antworten prüfen, bevor die vollständige Antwort gesendet wird.
+
+context-help-summary-user-input-decision-review = Abschließende Entscheidung treffen und Begründungsdetails unabhängig davon durchgehen.
+
+context-help-summary-confirm = Angezeigten Vorgang bestätigen oder unverändert lassen.
+
+context-help-summary-usage = Nutzungsdaten prüfen und Dashboard-Filter sowie Aktualisierung direkt aufrufen.
+
+context-help-summary-model-catalog = Modellkatalog durchsuchen und Suche, Aktualisierung sowie Seitenwechsel direkt aufrufen.
+
+context-help-summary-list = Sichtbare Zeilen durchgehen und das ausgewählte Element öffnen.
+
+context-help-summary-panes = Zwischen sichtbaren Bereichen wechseln und die ausgewählte Zeile oder Steuerung bedienen.
+
+context-help-summary-action-pane = Berechtigungsinhalte durchgehen und Regelaktionen direkt aufrufen.
+
+context-help-summary-provider = Anbieterfelder, Adapter, Modelle und sichtbare Speicheraktionen konfigurieren.
+
+context-help-summary-plugin-list = Plugins filtern, sichtbare Filter anpassen und ein Plugin öffnen.
+
+context-help-summary-plugin-detail = Zwischen Detailreitern wechseln und den ausgewählten Reiter durchgehen.
+
+context-help-summary-plugin-config = Im Konfigurationsbereich navigieren und seitenweite Aktionen direkt aufrufen.
+
+context-help-summary-plugin-actions = Eine Aktion für den ausgewählten Konfigurationswert auswählen.
+
+context-help-summary-plugin-selection = Einen oder mehrere zulässige Werte auswählen und übernehmen.
+
+context-help-summary-plugin-drilldown = Verschachtelte Konfigurationszeilen durchgehen und die ausgewählte Zelle öffnen.
+
+context-help-summary-plugin-diff = Ausstehende Konfigurationsänderungen prüfen und zurückkehren.
+
+context-help-summary-session-work = Dateien, Hintergrundaufgaben und Wiederholungsstatus dieser Sitzung.
+
+context-help-key-toggle-favorite = Ausgewählte Sitzung zu den Favoriten hinzufügen oder daraus entfernen.
+
+context-help-section-actions = Aktionen
+
+context-help-section-editing = Bearbeiten
+
+context-help-section-navigation = Navigation
+
+context-help-section-search = Suche und Auswahl
+
+context-help-section-selection = Auswahl
+
+context-help-section-workflow = Arbeitsablauf
+
+context-help-tip-ctrl-h = Ctrl+H öffnet immer die Hilfe für die gerade verwendete Oberfläche.
+
+message-input-activity-attachment = Anhang
+
+message-input-activity-skill = Befehl
+
+message-activity-response-running = Antwort wird generiert
+
+message-activity-response-completed = Antwort abgeschlossen
+
+message-activity-response-failed = Antwort fehlgeschlagen
+
+message-activity-response-cancelled = Antwort abgebrochen
+
+message-activity-continue-running = Antwort wird fortgesetzt
+
+message-activity-continue-completed = Fortsetzung abgeschlossen
+
+message-activity-continue-failed = Fortsetzung fehlgeschlagen
+
+message-activity-continue-cancelled = Fortsetzung abgebrochen
+
+message-activity-compact-running = Kontext wird komprimiert
+
+message-activity-compact-completed = Kontext komprimiert
+
+message-activity-compact-failed = Kontextkomprimierung fehlgeschlagen
+
+message-activity-compact-cancelled = Kontextkomprimierung abgebrochen
+
+message-activity-permission-running = Berechtigungsantwort wird angewendet
+
+message-activity-permission-completed = Berechtigungsantwort angewendet
+
+message-activity-permission-failed = Berechtigungsantwort fehlgeschlagen
+
+message-activity-permission-cancelled = Berechtigungsantwort abgebrochen
+
+message-activity-input-running = Benutzereingabe wird übermittelt
+
+message-activity-input-completed = Benutzereingabe übermittelt
+
+message-activity-input-failed = Übermittlung der Benutzereingabe fehlgeschlagen
+
+message-activity-input-cancelled = Übermittlung der Benutzereingabe abgebrochen
+
+message-compaction-title-manual = Kontext komprimiert
+
+message-compaction-title-auto = Kontext automatisch komprimiert
+
+message-compaction-title-reactive = Kontext nach Überschreitung des Kontextlimits komprimiert
+
+message-compaction-token-summary = {$before} → {$after} Tokens · {$percent}% Reduktion
+
+message-compaction-strategy-local = lokale Zusammenfassung
+
+message-compaction-strategy-native = nativer Checkpoint des Anbieters
+
+message-compaction-strategy-line = Strategie: {$strategy}
+
+message-compaction-generation-line = Generation {$generation}
+
+transcript-footer-pending = wird gesendet, sobald der aktive Durchlauf beendet ist
+
+transcript-footer-pending-preview = als Nächstes gesendet: {$preview}
+
+transcript-footer-plugin-block = {$label}: {$body}
+
+transcript-export-path-is-directory = Der Exportpfad ist ein Verzeichnis: {$path}
+
+transcript-export-title = Agena-Transkript-Export
+
+transcript-export-session-id = - Sitzungs-ID: {$id}
+
+transcript-export-exported-at = - Exportiert am: {$time}
+
+transcript-export-messages-loaded = - Geladene Nachrichten: {$count}
+
+transcript-export-older-messages-omitted = - Ausgelassene ältere Nachrichten: {$value}
+
+transcript-export-parent-session = - Übergeordnete Sitzung: #{$id}
+
+transcript-export-child-sessions = - Untergeordnete Sitzungen: {$count}
+
+transcript-export-empty = _In dieser Sitzung wurden keine Nachrichten geladen._
+
+transcript-node-kind-message = Nachricht
+
+transcript-node-kind-markdown = Markdown-Block
+
+transcript-node-kind-heading = Überschrift
+
+transcript-node-kind-quote = Zitat
+
+transcript-node-kind-alert = Hinweis
+
+transcript-node-kind-code = Codeblock
+
+transcript-node-kind-list = Liste
+
+transcript-node-kind-table = Tabelle
+
+transcript-node-kind-math = Formel
+
+transcript-node-kind-image = Bild
+
+transcript-node-kind-footnote = Fußnote
+
+transcript-node-kind-diagram = Diagramm
+
+transcript-node-kind-activity = Aktivitätsblöcke
+
+transcript-footer-side-active = Nebengespräch · mit /parent oder über die Navigation verlassen
+
+transcript-footer-side-return = Nebengespräch geöffnet · zum Zurückkehren wechseln
+
+transcript-history-more = ↑ Ältere Nachrichten laden · nach oben scrollen oder hier klicken
+
+transcript-history-loading = … Ältere Nachrichten werden geladen
+
+transcript-history-start = Anfang des Gesprächs
+
+transcript-history-error = ↑ Erneut versuchen, den Verlauf zu laden · { $error }
+
+transcript-history-stalled = Der Verlaufscursor ist unverändert. Erneut laden.
+
+transcript-fold-loading = … Frühere Antwortteile werden geladen
+
+transcript-fold-error = Laden fehlgeschlagen · zum Wiederholen Enter drücken · { $error }
+
+overlay-snapshot-title = Momentaufnahme
+overlay-rename-title = Sitzung umbenennen
+overlay-rename-prompt = Sitzungstitel bearbeiten
+overlay-choice-footer = Enter auswählen · Esc schließen
+overlay-choice-footer-select = Enter auswählen · Esc schließen
+overlay-help-footer = Pfeiltasten blättern · Esc schließen
+overlay-attach-image-title = Bild anhängen
+overlay-attach-image-prompt = Bildpfad oder Suchbegriff eingeben. Enter hängt das ausgewählte Bild an.
+overlay-attach-image-no-match = Keine passenden Bilder
+overlay-attach-browser-prompt = Aktuellen Pfad durchsuchen. Datei- oder Ordnernamen zum Filtern eingeben oder den Pfad bearbeiten, um das Verzeichnis zu wechseln.
+overlay-attach-image-browser-prompt = Bilder im aktuellen Pfad durchsuchen. Bild- oder Ordnernamen zum Filtern eingeben oder den Pfad bearbeiten, um das Verzeichnis zu wechseln.
+overlay-attach-browser-footer = ↓ auswählen · Rechts Ordner öffnen · Links übergeordneten Ordner · Enter anhängen · Esc schließen
+overlay-path-browser-list-title = Dateibrowser
+overlay-plan-approval-title = Planfreigabe
+overlay-plan-approval-summary = Aktiven Plan prüfen, bevor die Umsetzung fortgesetzt wird.
+overlay-plan-approval-footer = a einmalig genehmigen | s Sitzung genehmigen | d ablehnen
+overlay-plan-slug = Plan={$slug}
+overlay-plan-path = Pfad: {$path}
+overlay-plan-steps = Schritte={$steps}
+overlay-plan-preview-heading = Vorschau
+overlay-permission-request-id = Anforderungs-ID: {$request_id}
+overlay-permission-reason = Grund: {$reason}
+overlay-permission-explanation = Erläuterung: {$explanation}
+overlay-permission-session = Sitzung: #{$session}
+overlay-permission-requested-actions = Angeforderte Aktionen
+overlay-permission-related-actions = Zugehörige Aktionen
+overlay-permission-fact-source = Quelle={$value}
+overlay-permission-fact-scope = Geltungsbereich={$value}
+overlay-permission-fact-operator = Angefordert von={$value}
+overlay-permission-footer = a einmalig erlauben | s für Sitzung erlauben | d ablehnen
+overlay-permission-footer-edit-rule = {$footer} | e Regel bearbeiten
+overlay-permission-footer-action = ↑/↓ auswählen | Enter ausführen | Esc schließen
+overlay-permission-footer-scope = ↑/↓ auswählen | Enter ausführen | Esc zurück
+overlay-permission-footer-details = Esc zurück
+overlay-permission-decision-heading = Wie soll mit dieser Anfrage verfahren werden?
+overlay-permission-scope-heading = Diese Entscheidung gilt für
+overlay-permission-choice-allow = Erlauben…
+overlay-permission-choice-deny = Ablehnen…
+overlay-permission-choice-edit-rule = Präzise Regel erstellen…
+overlay-permission-choice-auto-approve-busy = Automatische Freigabe läuft…
+overlay-permission-choice-once = Nur dieses Mal
+overlay-permission-choice-session = Aktuelle Sitzung
+overlay-permission-choice-workspace = Aktueller Arbeitsbereich
+overlay-permission-choice-global = Global
+overlay-permission-choice-allow-always-session = Immer erlauben (Sitzung)
+overlay-permission-choice-allow-always-workspace = Immer erlauben (Arbeitsbereich)
+overlay-permission-choice-allow-always-global = Immer erlauben (global)
+overlay-permission-choice-deny-always-session = Immer ablehnen (Sitzung)
+overlay-permission-choice-deny-always-workspace = Immer ablehnen (Arbeitsbereich)
+overlay-permission-choice-deny-always-global = Immer ablehnen (global)
+overlay-permission-rule-fields = Regelfelder
+overlay-permission-rule-empty-detail = Zum Bearbeiten ein Berechtigungsfeld auswählen.
+overlay-permission-rule-item-browse-target-path = Zielpfad durchsuchen
+overlay-permission-rule-item-browse-target-path-detail = Datei oder Ordner im Arbeitsbereich oder Dateisystem auswählen.
+overlay-permission-rule-item-browse-workspace-root = Arbeitsbereichsverzeichnis durchsuchen
+overlay-permission-rule-item-browse-workspace-root-detail = Verzeichnis für workspace_root auswählen.
+overlay-permission-rule-item-browser-value = Browser öffnen
+overlay-permission-rule-item-save = Regel speichern
+overlay-permission-rule-item-save-detail = Den aktuellen Entwurf prüfen und speichern.
+overlay-permission-rule-item-revoke = Regel widerrufen
+overlay-permission-rule-item-revoke-detail = Die gespeicherte Regel widerrufen.
+overlay-permission-rule-detail-browse-workspace-root = Verzeichnisbrowser öffnen und einen Ordner für workspace_root auswählen.
+overlay-permission-rule-detail-browse-target-path = Dateisystembrowser öffnen und eine Datei oder einen Ordner als Vorbelegung für target_path auswählen.
+overlay-permission-rule-detail-revoke = Beim Widerruf wird die gespeicherte Regel deaktiviert, ihr Verlauf bleibt erhalten.
+overlay-permission-rule-preview-heading = Vorschau
+overlay-permission-rule-preview-label = Bezeichnung: {$label}
+overlay-permission-rule-preview-mode = Modus: {$mode}
+overlay-permission-rule-preview-scope = Geltungsbereich: {$scope}
+overlay-permission-rule-preview-subject-tool = Regelziel: Werkzeug ({$tool})
+overlay-permission-rule-preview-subject-path = Regelziel: Dateizugriff ({$access})
+overlay-permission-rule-preview-subject-network = Regelziel: Netzwerkzugriff
+overlay-permission-rule-preview-qualifier = Einschränkung: {$qualifier}
+overlay-permission-rule-preview-target = Ziel: {$target}
+overlay-permission-rule-preview-workspace-root = Arbeitsbereichsverzeichnis: {$path}
+overlay-permission-rule-preview-session-id = Sitzungs-ID: {$session}
+overlay-permission-rule-preview-invalid = Ungültige Regel: {$error}
+overlay-workbench-overview = Übersicht
+overlay-permission-studio-footer = Links/Rechts oder Tab/Umschalt+Tab wechselt Bereiche · Pfeile wählen aus · Enter bearbeitet · Esc zurück
+overlay-permission-studio-sections = Berechtigungsbereiche
+overlay-permission-studio-nav = Navigation
+overlay-detail-current-value = Aktueller Wert
+overlay-choice-current-unavailable-detail = Aktueller Wert; nicht unter den verfügbaren Optionen
+overlay-choice-clear-runtime-detail = Überschreibung der aktuellen Sitzung für {$field} entfernen.
+overlay-choice-clear-provider-detail = {$field} im Entwurf leeren.
+overlay-choice-clear-permission-subject = Regelziel auf die Standard-Werkzeugregel zurücksetzen.
+overlay-choice-clear-permission-access-kind = Überschreibung der Dateizugriffsart entfernen.
+overlay-choice-clear-permission-scope = Regelgeltungsbereich auf Arbeitsbereich zurücksetzen.
+overlay-choice-clear-permission-mode = Regelmodus auf Nachfragen zurücksetzen.
+overlay-choice-clear-permission-override-detail = Aktuelle Überschreibung für {$field} entfernen.
+overlay-client-versions-title = Client-Versionen der Anbieter
+overlay-insert-content-title = Inhalt einfügen
+overlay-insert-content-prompt = Inhalt zum Einfügen an der Cursorposition im Eingabefeld auswählen
+overlay-resume-title = Sitzung fortsetzen
+overlay-resume-prompt = Sitzungen nach Titel, ID oder Verlauf filtern
+overlay-resume-empty = Keine passenden Sitzungen
+overlay-session-search-scope-all = alle
+overlay-session-search-scope-roots = Wurzeln
+overlay-session-search-scope-subtree = Teilbaum
+overlay-session-search-tail-more = weitere
+overlay-session-search-tail-end = Ende
+overlay-session-search-footer-local = Bereich {$scope} · {$total} Ergebnisse
+overlay-session-search-footer-remote = Bereich {$scope} · {$loaded} geladen · {$tail}
+overlay-lineage-empty = Keine zugehörigen Sitzungszweige gefunden
+overlay-rewind-empty = Keine abgeschlossenen Benutzernachrichten zum Zurücknehmen
+overlay-rewind-confirm-title = Zurücksetzen bestätigen
+overlay-rewind-confirm-keep = {$target} und alle folgenden Nachrichten zurücknehmen
+overlay-rewind-confirm-warning = Ein neuer Zweig enthält nur den Verlauf vor dieser Benutzernachricht.
+overlay-rewind-confirm-draft = Die zurückgenommene Benutzernachricht wird im Eingabefeld des neuen Zweigs wiederhergestellt; der aktuelle Entwurf bleibt in der ursprünglichen Sitzung.
+overlay-confirm-footer = Y bestätigen
+overlay-snapshot-remove-title = Entfernen der Momentaufnahme bestätigen
+overlay-snapshot-remove-body = Aktive Momentaufnahme entfernen und aktuelle Sitzung verlassen?
+overlay-snapshot-remove-force = Beim erzwungenen Entfernen gehen nicht übernommene Änderungen der Momentaufnahme verloren.
+overlay-model-providers-title = Modellanbieter
+overlay-model-providers-prompt = Vor der Modellauswahl einen Anbieter auswählen
+overlay-models-title = Modelle [{$provider}]
+overlay-models-prompt = Modell für Anbieter {$provider} auswählen
+overlay-session-model-title = Sitzungsmodell
+overlay-session-model-prompt = Modelle suchen
+overlay-session-model-list-title = Modelle
+overlay-session-model-footer = Zum Filtern tippen
+overlay-model-catalog-title = Modellkatalog
+overlay-model-catalog-footer = Ctrl+F suchen · Ctrl+R aktualisieren · Links/Rechts vorherige/nächste Seite · Oben/Unten auswählen · Esc schließen
+overlay-model-catalog-search-title = Modellkatalog durchsuchen
+overlay-model-catalog-search-prompt = Modellkatalog nach ID, Anzeigename, Herkunft oder Beschreibung filtern
+overlay-model-catalog-entries = Modelle
+overlay-model-catalog-detail = Details
+overlay-model-catalog-query-all = <alle>
+overlay-model-catalog-summary = Abfrage {$query} · Seite {$start}-{$end} / {$total} · {$count} Modelle
+overlay-permission-rule-overview-draft = Entwurf
+overlay-permission-rule-overview-mode = Modus
+overlay-permission-rule-overview-scope = Geltungsbereich
+overlay-permission-rule-overview-session = Sitzung
+overlay-permission-rule-overview-workspace-root = Arbeitsbereichsverzeichnis
+overlay-children-title = Untergeordnete Sitzungen [#{$session}]
+overlay-children-prompt = Untergeordnete Sitzung zum Öffnen auswählen
+overlay-children-empty = Keine untergeordneten Sitzungen gefunden
+overlay-timeline-title = Zeitleiste [#{$session}]
+overlay-timeline-prompt = Nach Ereignistyp, Befehl oder Nachrichtenmetadaten filtern
+overlay-timeline-empty = Keine passenden Ereignisse
+overlay-timeline-footer = Zum Filtern tippen · Pfeiltasten wählen aus · Enter öffnet verknüpfte Nachricht · Esc schließen
+overlay-timeline-detail = Details
+
+context-help-key-move = Aktuelle Auswahl um ein Element verschieben.
+context-help-key-page = Um eine sichtbare Seite weiterschalten.
+context-help-key-half-page = Um eine halbe sichtbare Transkriptseite weiterschalten.
+context-help-key-scroll-line = Ansichtsbereich um eine Zeile scrollen, ohne den Cursor zu bewegen.
+context-help-key-jump-history = Zwischen den letzten Cursorpositionen vor- und zurückspringen.
+context-help-key-first-last = Zum ersten oder letzten Element springen.
+context-help-key-open = Ausgewähltes Element öffnen.
+context-help-key-session-scope = Sitzungsbereich „Alle“, „Wurzeln“ oder „Teilbaum“ auswählen.
+context-help-key-session-cycle = Sitzungsbereich durchschalten.
+context-help-key-transcript-vertical = Eine gerenderte Zeile bewegen und dabei die Zielspalte beibehalten.
+context-help-key-transcript-horizontal = Zwischen vollständigen Nachrichten springen.
+context-help-key-visual-select = Zeichen-, Zeilen- oder Blockauswahl im Visual-Modus starten; o/O wechseln die Endpunkte, gv stellt die Auswahl wieder her, y kopiert sie und Esc bricht ab.
+context-help-key-count = Die folgende Vim-Bewegung wiederholen.
+context-help-key-insert-mode = Eingabefeld im INSERT-Modus öffnen.
+context-help-key-toggle = Ausgewählten Wert oder aufklappbaren Block umschalten.
+context-help-key-expand-all = Alle Transkriptteile laden, ohne deren Details zu ändern.
+context-help-key-collapse-parts = Diese Antwort (zc) oder alle Antworten (zC) auf die neuesten 5 Teile und ausstehende Interaktionen reduzieren; einzelne Detailauswahlen beibehalten.
+context-help-key-copy = Visuelle Auswahl, Vim-Bewegung, aktuelle Zeile, Markdown-Block oder vollständige Nachricht kopieren.
+context-help-key-search-transcript = Transkript durchsuchen und Treffer durchgehen.
+context-help-key-word = Wort-, WORD- oder zeilenweise zum Anfang, ersten Nicht-Leerzeichen oder Ende bewegen.
+context-help-key-find = Zum nächsten oder vorherigen Vorkommen eines eingegebenen Zeichens (f/F/t/T) springen; mit ; oder , wiederholen.
+context-help-key-text-object = Wort, Absatz, Markdown-Block oder vollständige Nachricht als Textobjekt auswählen.
+context-help-key-mouse = Scrollen, klicken, doppelklicken oder ziehen, um Transkriptinhalt auszuwählen; Sitzungs-Kopfzeile, Modellstatuszeile oder Eingabefeld ziehen, um Text auszuwählen, dann mit Ctrl+Y (oder y im Ansichtsmodus) kopieren.
+context-help-key-line-start-end = Zum ersten, ersten Nicht-Leerzeichen oder letzten Zeichen der gerenderten Zeile springen.
+context-help-key-count-prefix = Vor einer Vim-Bewegung eine Zahl eingeben, um sie mehrfach anzuwenden (z. B. 5j, 3w, 10G).
+context-help-key-viewport = Zur obersten, mittleren oder untersten sichtbaren Zeile springen.
+context-help-key-scroll-viewport = Ansichtsbereich so scrollen, dass der Cursor oben, mittig oder unten steht.
+context-help-key-visual-endpoints = Beim Erweitern einer visuellen Auswahl den aktiven Endpunkt wechseln.
+context-help-key-visual-restore = Letzte visuelle Auswahl wiederherstellen.
+context-help-key-cancel-selection = Visuelle Auswahl oder Maus-Textauswahl abbrechen.
+context-help-key-copy-line = Aktuelle Zeile kopieren.
+context-help-key-copy-motion = Vom Cursor bis zum Zeilenende oder entlang einer Vim-Bewegung kopieren.
+context-help-key-copy-text-object = Wort, Absatz, Markdown-Block oder vollständige Nachricht kopieren.
+context-help-key-send = Aktuelle Nachricht aus dem Eingabefeld senden.
+context-help-key-send-now = Lauf unterbrechen und diese Nachricht sofort senden.
+context-help-key-newline = Zeilenumbruch einfügen, ohne zu senden.
+context-help-key-view-mode = Zum VIEW-Modus des Transkripts zurückkehren.
+context-help-key-editor-move = Textcursor zeichen-, zeilen- oder wortweise bewegen.
+context-help-key-editor-edit = Text mit Shell-ähnlichen Bearbeitungsfunktionen löschen, entfernen oder wiederherstellen.
+context-help-key-history = Durchsuchbaren Verlauf des Eingabefelds öffnen.
+context-help-key-recover = Ausstehende Nachricht im Eingabefeld bearbeiten.
+context-help-key-cancel-pending = Noch nicht zugestellte Nachricht abbrechen.
+context-help-key-clear-composer = Eingabefeld und alle vorgemerkten Eingaben leeren.
+context-help-key-items = Vorgemerkte Elemente des Eingabefelds öffnen.
+context-help-key-commands = Slash-Befehle öffnen oder eingeben.
+context-help-key-attach = Datei anhängen.
+context-help-key-insert-content = Bereich zum Einfügen lokaler Pfade und Anhänge öffnen.
+context-help-key-external-editor = Eingabefeld im konfigurierten externen Editor bearbeiten.
+context-help-key-image = Dateien, Bilder oder Text aus der Zwischenablage einfügen.
+context-help-key-pending-requests = Ausstehende Benutzereingabe- oder Berechtigungsanfrage öffnen.
+context-help-key-next = Zum nächsten Element wechseln.
+context-help-key-previous = Zum vorherigen Element wechseln.
+context-help-key-close = Diese Oberfläche schließen.
+context-help-key-older = Älteren Verlaufseintrag auswählen.
+context-help-key-newer = Neueren Verlaufseintrag auswählen.
+context-help-key-newer-stay = Neueren Eintrag auswählen, ohne den Verlauf am neuesten Eintrag zu schließen.
+context-help-key-accept = Aktuelle Auswahl übernehmen.
+context-help-key-filter = Tippen, um sichtbare Ergebnisse zu filtern.
+context-help-key-fill = Ausgewählten Vorschlag in das Eingabefeld übernehmen.
+context-help-key-edit-text = Aktuellen Wert eingeben und bearbeiten.
+context-help-key-submit = Aktuellen Wert absenden.
+context-help-key-cancel = Abbrechen, ohne Änderungen anzuwenden.
+context-help-key-save = Vollständig bearbeiteten Wert speichern.
+context-help-key-refresh = Aktuelle Daten aktualisieren.
+context-help-key-provider-add-model = Dem ausgewählten Anbieteradapter ein Modell hinzufügen.
+context-help-key-provider-save-adapter = Ausgewählten Anbieteradapter speichern.
+context-help-key-usage-period = Berichtszeitraum durchschalten.
+context-help-key-usage-view = Dashboard-Ansicht durchschalten.
+context-help-key-usage-provider = Anbieterfilter durchschalten.
+context-help-key-usage-model = Modellfilter durchschalten.
+context-help-key-usage-subagents = Subagenten ein- oder ausschließen.
+context-help-key-usage-sort = Sortierreihenfolge durchschalten.
+context-help-key-model-catalog-search = Suchanfrage im Modellkatalog bearbeiten.
+context-help-key-model-catalog-page = Vorherige oder nächste Katalogseite laden.
+context-help-key-plugin-transport = Transportfilter durchschalten.
+context-help-key-plugin-config-filter = Filter für den Konfigurationsstatus durchschalten.
+context-help-key-plugin-validate = Aktuelle Plugin-Konfiguration validieren.
+context-help-key-plugin-reset = Aktuelle Plugin-Konfiguration auf Standardwerte zurücksetzen.
+context-help-key-plugin-diff = Ausstehende Konfigurationsunterschiede ein- oder ausblenden.
+context-help-key-permission-add = Im aktuellen Berechtigungsbereich eine Regel hinzufügen.
+context-help-key-permission-rename = Ausgewählte Berechtigungsregel umbenennen.
+context-help-key-permission-browse = Ausgewähltes Pfadfeld durchsuchen.
+context-help-key-activate = Ausgewählte Zeile, Steuerung oder Aktion aktivieren.
+context-help-key-jump-message = Zur zugehörigen Nachricht des Ereignisses springen.
+context-help-key-back = Zur vorherigen Ebene zurückkehren.
+context-help-key-next-question = Zwischen Fragen und Übersichtsseite vor- oder zurückgehen.
+context-help-key-custom-answer = Eigene Antwort bearbeiten.
+context-help-key-clear = Ausgewählte Überschreibung oder Antwort leeren.
+context-help-key-cancel-request = Gesamte Anfrage schließen oder abbrechen.
+context-help-key-edit-answer = Ausgewählte Antwort erneut bearbeiten.
+context-help-key-scroll-body = Unabhängigen Übersichtsbereich scrollen.
+context-help-key-submit-all = Alle geprüften Antworten absenden.
+context-help-key-confirm = Angezeigten Vorgang bestätigen.
+context-help-key-focus-next = Fokus vor- oder rückwärts durch sichtbare Bereiche und Steuerelemente bewegen.
+context-help-key-pane-horizontal = Direkt zum linken oder rechten Bereich wechseln.
+context-help-key-horizontal = Zwischen sichtbaren Spalten, Zellen oder Aktionen wechseln.
+context-help-key-next-tab = Zwischen Detailreitern vor- oder zurückwechseln.
+context-help-key-scroll = Aktuellen Detailinhalt scrollen.
+context-help-key-work-toggle = Arbeitsbereichsbereich ein- oder ausklappen.
+context-help-key-work-tabs = Zwischen Dateien / Aufgaben / Status wechseln.
+context-help-key-work-staged = Zwischen vorgemerkten und Arbeitsänderungen wechseln.
+context-help-key-work-more = Weitere Diff-Inhalte laden.
+context-help-key-work-control = Verfügbare Aktion der ausgewählten Aufgabe ausführen.
+context-help-key-work-leave = Zum Eingabefeld zurückkehren.
+context-help-key-answer-next = Antwort auswählen und zur nächsten Seite wechseln.
+context-help-key-summary-action = Antwort bearbeiten, zurückgehen, absenden oder ausgewählte Übersichtszeile abbrechen.
+
+
+
+timeline-summary-permission-requested = Berechtigung angefordert [{$risk}]: {$reason}
+timeline-summary-permission-replied = Berechtigung beantwortet: {$kind}
+timeline-summary-permission-rule-created = Berechtigungsregel #{$id} erstellt
+timeline-summary-permission-rule-updated = Berechtigungsregel #{$id} aktualisiert
+timeline-summary-permission-rule-revoked = Berechtigungsregel #{$id} widerrufen
+timeline-detail-permission-session-id = session_id: {$id}
+timeline-detail-permission-request-id = request_id: {$id}
+timeline-detail-permission-reason = Grund: {$reason}
+timeline-detail-permission-risk = Risiko: {$risk}
+timeline-detail-permission-explanation = Erläuterung: {$explanation}
+timeline-detail-permission-source = Quelle: {$source}
+timeline-detail-permission-scope = Geltungsbereich: {$scope}
+timeline-detail-permission-operator = Anwender: {$operator}
+timeline-detail-permission-reply-kind = Antwortart: {$kind}
+timeline-detail-permission-rule-id = rule_id: {$id}
+timeline-detail-permission-rule-action-key = action_key: {$action}
+timeline-detail-permission-rule-mode = Modus: {$mode}
+timeline-detail-permission-rule-scope = Geltungsbereich: {$scope}
+timeline-detail-permission-rule-source = Quelle: {$source}
+timeline-type-execution-started = Ausführung gestartet
+timeline-type-execution-completed = Ausführung abgeschlossen
+timeline-type-execution-cancelled = Ausführung abgebrochen
+timeline-type-execution-failed = Ausführung fehlgeschlagen
+timeline-type-compaction-completed = Kontextkomprimierung abgeschlossen
+timeline-type-subtask-status-changed = Status der Teilaufgabe geändert
+timeline-type-stream-error = Datenstromfehler
+timeline-type-message-part-checkpointed = Nachrichtenteil gespeichert
+timeline-type-message-part-delta = Nachrichtenteil geändert
+timeline-type-command-begin = Befehlsstart
+timeline-type-command-output-delta = Befehlsausgabe geändert
+timeline-type-command-end = Befehlsende
+timeline-type-permission-requested = Berechtigung angefordert
+timeline-type-permission-replied = Berechtigung beantwortet
+timeline-type-permission-rule-created = Berechtigungsregel erstellt
+timeline-type-permission-rule-updated = Berechtigungsregel aktualisiert
+timeline-type-permission-rule-revoked = Berechtigungsregel widerrufen
+timeline-type-session-goal-updated = Sitzungsziel aktualisiert
+timeline-type-run-started = Durchlauf gestartet
+timeline-type-run-completed = Durchlauf abgeschlossen
+timeline-type-run-aborted = Durchlauf abgebrochen
+timeline-type-user-message-appended = Benutzernachricht hinzugefügt
+timeline-type-assistant-message-completed = Assistentennachricht abgeschlossen
+timeline-type-tool-call-issued = Werkzeugaufruf ausgelöst
+timeline-type-tool-call-completed = Werkzeugaufruf abgeschlossen
+timeline-type-plugin-event = Plugin-Ereignis
+timeline-summary-execution-started = Sitzung #{$id}
+timeline-summary-message-part-checkpointed = Nachricht #{$message_id}, Teil #{$part_id} gespeichert ({$kind})
+timeline-summary-message-part-delta = Nachricht #{$message_id}, Teil #{$part_id}: {$field} (+{$count} Zeichen)
+timeline-summary-command-output-bytes = {$count} Byte
+timeline-summary-command-output-delta = {$stream} {$preview}
+timeline-summary-command-end = {$status}, Exit-Code {$exit_code} ({$duration_ms} ms)
+timeline-summary-session-goal-updated = Ziel aktualisiert: {$status} · {$objective}
+timeline-summary-run-started = Durchlauf {$id}
+timeline-summary-run-completed = Durchlauf {$id} ({$finish})
+timeline-summary-run-aborted = Durchlauf {$id} abgebrochen ({$reason})
+timeline-summary-user-message-appended = Nutzer #{$id}
+timeline-summary-assistant-message-completed = Assistent #{$id} ({$finish})
+timeline-summary-tool-call-issued = Werkzeug {$name}, Aufruf={$call_id}
+timeline-summary-tool-call-completed = Werkzeugaufruf {$call_id} abgeschlossen
+timeline-summary-system-notice-appended = System #{$message_id}: {$kind}
+timeline-summary-plugin-event = Plugin {$plugin_id}/{$kind_label}
+timeline-label-seq = Sequenz
+timeline-label-created = Erstellt
+timeline-label-type = Typ
+timeline-label-event-id = Ereignis-ID
+timeline-label-causation-id = Ursachen-ID
+timeline-label-correlation-id = Korrelations-ID
+timeline-label-session-id = Sitzungs-ID
+timeline-label-error-code = Fehlercode
+timeline-label-outcome = Ergebnis
+timeline-label-error-message = Fehlermeldung
+timeline-label-message-id = Nachrichten-ID
+timeline-label-part-id = Teil-ID
+timeline-label-part-kind = Teiltyp
+timeline-label-status = Status
+timeline-label-summary = Zusammenfassung
+timeline-label-field = Feld
+timeline-label-delta = Änderung
+timeline-label-call-id = Aufruf-ID
+timeline-label-command = Befehl
+timeline-label-cwd = Arbeitsverzeichnis
+timeline-label-stream = Datenstrom
+timeline-label-bytes = Byte
+timeline-label-preview = Vorschau
+timeline-label-exit-code = Exit-Code
+timeline-label-duration-ms = Dauer (ms)
+timeline-label-request-id = Anfrage-ID
+timeline-label-reason = Grund
+timeline-label-risk = Risiko
+timeline-label-explanation = Erläuterung
+timeline-label-source = Quelle
+timeline-label-scope = Geltungsbereich
+timeline-label-operator = Anwender
+timeline-label-requested-actions = Angeforderte Aktionen
+timeline-label-related-actions = Zugehörige Aktionen
+timeline-label-reply-kind = Antwortart
+timeline-label-rule-id = Regel-ID
+timeline-label-action-key = Aktionsschlüssel
+timeline-label-mode = Modus
+timeline-label-goal-id = Ziel-ID
+timeline-label-objective = Ziel
+timeline-label-completed-at = Abgeschlossen am
+timeline-label-run-id = Durchlauf-ID
+timeline-label-model = Modell
+timeline-label-finish = Abschluss
+timeline-label-message = Nachricht
+timeline-label-name = Name
+timeline-label-kind = Art
+timeline-label-text = Text
+timeline-label-plugin-id = Plugin-ID
+timeline-label-kind-label = Artbezeichnung
+timeline-label-payload = Nutzdaten
+timeline-label-trace = Trace
+timeline-label-role = Rolle
+timeline-label-state = Status
+timeline-label-revision = Revision
+timeline-label-run = Durchlauf
+timeline-label-parent-part = Übergeordneter Teil
+
+flash-session-view-mode = Sitzungsansicht: {$mode}
+flash-session-title-empty = Der Sitzungstitel darf nicht leer sein.
+flash-session-renamed = Sitzung in „{$title}“ umbenannt
+flash-session-favorited = „{$title}“ zu den Favoriten hinzugefügt
+flash-session-unfavorited = „{$title}“ aus den Favoriten entfernt
+flash-session-compacted = Sitzungskontext zusammengefasst
+flash-session-rewound = Zweig erstellt, nachdem {$target} zurückgenommen wurde; Nachricht im Eingabefeld wiederhergestellt
+flash-large-paste-no-file-view = Große eingefügte Textblöcke können entfernt werden, haben aber keine Dateiansicht.
+flash-quit-confirm = Zum Beenden Ctrl+C erneut drücken
+flash-run-cancelling-quit = Lauf wird abgebrochen; zum Beenden Ctrl+C erneut drücken
+flash-config-dir-prepare-failed = Konfigurationsverzeichnis {$path} konnte nicht vorbereitet werden: {$error}
+flash-config-file-create-failed = Konfigurationsdatei {$path} konnte nicht erstellt werden: {$error}
+flash-clipboard-paste-failed = Einfügen aus der Zwischenablage fehlgeschlagen: {$error}
+flash-clipboard-attachments-truncated = Die Zwischenablage enthält mehr Ressourcen, als diese Nachricht aufnehmen kann; die ersten {$count} wurden angehängt.
+flash-attachment-count-limit = Eine Nachricht kann höchstens {$count} Ressourcen anhängen.
+flash-attach-images-only = Über die Bildauswahl können nur Bilddateien angehängt werden.
+flash-composer-drafts-load-failed = Entwürfe des Eingabefelds konnten nicht geladen werden: {$error}
+flash-composer-drafts-save-failed = Entwürfe des Eingabefelds konnten nicht gespeichert werden: {$error}
+flash-prompt-history-load-failed = Verlauf der Eingaben konnte nicht geladen werden: {$error}
+flash-prompt-history-save-failed = Verlauf der Eingaben konnte nicht gespeichert werden: {$error}
+flash-copied-mouse-selection = Mausauswahl in die Zwischenablage kopiert
+flash-transcript-line-copied = Ausgewählte Transkriptzeile in die Zwischenablage kopiert
+flash-transcript-no-selection = Wählen Sie zuerst sichtbaren Transkriptinhalt durch Klicken oder mit einer Navigationstaste aus.
+flash-transcript-exported = Transkript nach {$path} exportiert
+flash-transcript-export-failed = Transkript konnte nicht exportiert werden: {$error}
+flash-transcript-pager-failed = Transkript-Pager fehlgeschlagen: {$error}
+flash-timeline-event-copied = Ausgewähltes Zeitleistenereignis kopiert
+flash-transcript-node-expanded = {$kind} aufgeklappt
+flash-transcript-node-collapsed = {$kind} eingeklappt
+flash-transcript-parts-revealed = Bis zu {$count} weitere Teile werden geladen
+flash-transcript-node-copied = Aktuellen {$kind} kopiert
+flash-plan-viewer-requires-session = Für die Planansicht muss eine Sitzung geöffnet sein.
+flash-plan-viewer-no-plan = Für diese Sitzung ist kein Plan geladen.
+flash-snapshot-ready = Momentaufnahme bereit: {$path} ({$branch})
+flash-snapshot-attached = Momentaufnahme angehängt: {$path} ({$branch})
+flash-snapshot-exited = Momentaufnahme {$action}: {$path}
+flash-commit-created = Commit erstellt: {$sha} {$summary}
+flash-pr-created = Pull Request erstellt: {$url}
+flash-attachment-inspect-failed = Anhang {$path} konnte nicht geprüft werden: {$error}
+flash-session-awaiting-approval = Sitzung wartet auf eine Freigabe
+flash-session-awaiting-plan-approval = Sitzung wartet auf die Planfreigabe
+flash-session-awaiting-user-input = Sitzung wartet auf eine Benutzereingabe
+flash-no-permission-request = Keine ausstehende Berechtigungsanfrage
+flash-no-user-input-request = Keine ausstehende Benutzereingabe
+flash-plugins-enabled = Plugins aktiviert
+flash-plugins-disabled = Plugins deaktiviert
+flash-plugin-config-not-object = Die Plugin-Konfiguration {$plugin_id} ist kein JSON-Objekt und kann nicht neu geschrieben werden.
+flash-plugin-config-enabled = Plugin {$plugin_id} aktiviert; Konfiguration beibehalten und Laufzeit neu geladen
+flash-plugin-config-disabled = Plugin {$plugin_id} deaktiviert; Konfiguration beibehalten und Laufzeit neu geladen
+flash-tool-description-mode-set = Beschreibungsmodus der Werkzeuge auf {$mode} gesetzt
+flash-plugin-ui-display-mode-set = Anzeigemodus der Plugin-Oberfläche auf {$mode} gesetzt
+flash-model-selected = Modell ausgewählt: {$model}
+flash-model-cleared = Modellüberschreibung entfernt
+flash-model-provider-required = Anbieter erforderlich; wählen Sie zuerst einen Anbieter oder verwenden Sie anbieter/modell.
+flash-provider-studio-catalog-template-applied = Modellfelder aus {$model} übernommen; zum Beibehalten der Werte speichern
+flash-thinking-mode-set = Denkmodus auf {$mode} gesetzt
+flash-thinking-mode-cleared = Überschreibung des Denkmodus entfernt
+flash-thinking-mode-required = Denkmodus muss ausgewählt werden
+flash-speed-mode-set = Geschwindigkeitsmodus auf {$mode} gesetzt
+flash-speed-mode-cleared = Überschreibung des Geschwindigkeitsmodus entfernt
+flash-speed-mode-required = Name des Geschwindigkeitsmodus erforderlich
+flash-parent-session-missing = Die aktuelle Sitzung hat keine übergeordnete Sitzung.
+flash-command-usage = Verwendung: {$usage}
+flash-command-does-not-support-attachments = Slash-Befehle unterstützen keine vorgemerkten Anhänge.
+flash-send-in-flight = Die vorherige Nachricht wird noch gesendet; die neue Nachricht bleibt im Eingabefeld.
+flash-answer-pending-request = Beantworten Sie zuerst die ausstehende Anfrage; die Nachricht bleibt im Eingabefeld.
+flash-message-queued = Nachricht vorgemerkt — wird gesendet, sobald der aktuelle Lauf beendet ist
+flash-message-replaced = Es war bereits eine Nachricht vorgemerkt — sie wurde ersetzt
+flash-steer-sent = Nachricht in den laufenden Vorgang eingebracht
+flash-steer-failed-fallback-queue = Der laufende Vorgang ließ sich nicht steuern; die Nachricht bleibt vorgemerkt.
+flash-run-cancelled = Lauf abgebrochen
+flash-cancel-failed = Abbrechen fehlgeschlagen
+flash-user-command-empty = Der Inhalt des Benutzerbefehls ist leer.
+flash-side-requires-session = Öffnen Sie eine Sitzung, bevor Sie ein Nebengespräch starten.
+flash-side-already-open = Es ist bereits ein Nebengespräch geöffnet.
+flash-memory-forgotten = Erinnerung entfernt: {$name}
+flash-no-pending-message = Keine ausstehende Nachricht
+flash-pending-cancelled = Ausstehende Nachricht abgebrochen
+flash-command-prefill-requires-empty-composer = Leeren Sie das Eingabefeld, bevor Sie einen Befehl vorab einfügen.
+flash-temperature-set = Temperatur auf {$value} gesetzt
+flash-temperature-cleared = Temperaturüberschreibung entfernt
+flash-temperature-invalid = Ungültiger Temperaturwert
+flash-verbosity-set = Ausführlichkeit auf {$value} gesetzt
+flash-verbosity-cleared = Überschreibung der Ausführlichkeit entfernt
+flash-parallel-tool-calls-set = Parallele Werkzeugaufrufe auf {$value} gesetzt
+flash-parallel-tool-calls-cleared = Überschreibung paralleler Werkzeugaufrufe entfernt
+flash-max-output-set = Maximale Ausgabetokenzahl auf {$value} gesetzt
+flash-max-output-cleared = Überschreibung der maximalen Ausgabetokenzahl entfernt
+flash-max-output-invalid = Ungültige maximale Ausgabetokenzahl
+flash-system-set = System-Prompt-Überschreibung aktualisiert
+flash-system-cleared = System-Prompt-Überschreibung entfernt
+flash-runtime-status = Sitzungsstatus: {$summary}
+flash-diagnostics-summary = Diagnose: cwd={$cwd} Sitzung={$session} Warteschlange={$queue} Laufzeit={$runtime}
+flash-session-permission-updated = Sitzungsberechtigung aktualisiert.
+session-view-all = alle
+session-view-roots = Wurzeln
+session-view-subtree = Teilbaum
+session-view-subtree-root = Teilbaum #{$id}
+session-awaiting-approval = wartet auf Freigabe
+session-awaiting-plan-approval = wartet auf Planfreigabe
+session-awaiting-user-input = wartet auf Eingabe
+session-awaiting-model = wartet auf Modell
+session-idle = inaktiv
+session-tag-parent = übergeordnet
+session-tag-child = untergeordnet
+session-tag-current = aktuell
+session-tag-ancestor = Vorfahr
+session-tag-sibling = Geschwister
+session-tag-leaf = Blatt
+session-summary-root = Wurzel #{$id}
+session-summary-depth = Tiefe {$depth}
+session-summary-side-branches = {$count} Zweige
+session-summary-descendants = {$count} Nachfolger
+session-summary-parent = übergeordnet #{$id}
+session-summary-children = {$count} untergeordnete Sitzung
+session-status-plan = Plan {$slug}
+session-status-plan-with-steps = Plan {$slug} · {$steps} Schritte
+session-status-thinking = {$value}
+session-status-speed = {$value}
+session-work-tasks = Aufgaben
+session-work-files = Dateien
+session-work-requests = Anfragen
+session-work-waiting = Wartet auf Werkzeuge
+session-work-status = Ausführungsstatus
+session-work-workspace = In der Sitzung aufgezeichnete Änderungen · wörtliche Werkzeugpfade
+session-work-ready = Bereit
+session-work-back = Zurück
+session-work-switch = Wechseln →
+session-work-staged = Vorgemerkt ⇄
+session-work-working = Arbeitsbaum ⇄
+session-work-stop = Stoppen
+session-work-pause = Pausieren
+session-work-resume = Fortsetzen
+session-work-delete = Löschen
+session-work-dismiss = Schließen
+session-work-log-tail = Letzte 200 Zeilen / 128 KiB
+session-work-empty = Keine Inhalte in dieser Ansicht
+session-work-footer = Zur Eingabe zurückkehren
+session-work-more-diff = Weitere Diff-Inhalte laden
+session-work-status-pending = In Warteschlange
+session-work-status-running = Läuft
+session-work-status-waiting = Wartet
+session-work-status-paused = Pausiert
+session-work-status-succeeded = Abgeschlossen
+session-work-status-failed = Fehlgeschlagen
+session-work-status-cancelled = Abgebrochen
+session-work-status-stopped = Angehalten
+session-work-next-wake = Nächstes Aufwachen:
+session-work-title = Sitzung
+session-work-loading = Dateien werden geladen
+session-work-previous = ‹ Zurück
+session-work-next = Weiter ›
+session-work-recording-incomplete = Aufzeichnung möglicherweise unvollständig (Shell-Schreibvorgänge sind Deklarationen)
+session-work-operation-history = Vorgangsverlauf, kein Netto-Diff der Sitzung (keine vollständige Basis).
+session-work-operation-diff = Gesamter Diff des Patch-Vorgangs (kann andere Dateien enthalten).
+session-work-recorded-truncated = Diff gekürzt; nur gespeicherte Inhalte können geladen werden.
+session-work-no-recorded-diff = Kein aufgezeichneter Text-Diff.
+
+workbench-action-add-field = Feld hinzufügen
+workbench-action-add-field-desc = Neues Feld in { $title } hinzufügen.
+workbench-action-add-item = Element hinzufügen
+workbench-action-add-item-desc = Neues Standardelement an { $title } anhängen.
+workbench-action-duplicate-item = Element duplizieren
+workbench-action-duplicate-item-desc = { $title } innerhalb dieses Arrays duplizieren.
+workbench-action-field = Feldaktionen
+workbench-action-insert-after = Danach einfügen
+workbench-action-insert-after-desc = Nach diesem Array-Element ein neues Standardelement einfügen.
+workbench-action-insert-before = Davor einfügen
+workbench-action-insert-before-desc = Vor diesem Array-Element ein neues Standardelement einfügen.
+workbench-action-more = Weitere Aktionen
+workbench-action-move-down = Nach unten verschieben
+workbench-action-move-down-desc = Dieses Array-Element um eine Position nach hinten verschieben.
+workbench-action-move-up = Nach oben verschieben
+workbench-action-move-up-desc = Dieses Array-Element um eine Position nach vorne verschieben.
+workbench-action-remove-item = Element entfernen
+workbench-action-remove-item-desc = { $title } aus diesem Array entfernen.
+workbench-action-rename-field = Feld umbenennen
+workbench-action-rename-field-desc = Schlüssel für { $title } umbenennen.
+workbench-action-reset-field = Feld zurücksetzen
+workbench-action-reset-field-desc = { $title } auf den Plugin-Standardwert zurücksetzen.
+workbench-action-reset-group = Gruppe zurücksetzen
+workbench-action-reset-group-desc = Alle Felder in { $title } auf die Plugin-Standardwerte zurücksetzen.
+workbench-action-switch-shape-desc = Aktive Form für { $title } wechseln.
+workbench-action-switch-type-desc = Aktiven Typ für { $title } wechseln.
+workbench-editor-placeholder-type-to-edit = Zum Bearbeiten tippen
+workbench-editor-prompt-add-field = Feldnamen für { $path } eingeben. Erlaubt das Schema mehrere Werttypen oder Formen, fragt der Editor nach dem Erstellen danach.
+workbench-editor-prompt-new-field-name = Neuen Feldnamen eingeben.
+workbench-editor-title-add-field = Feld hinzufügen
+workbench-editor-title-edit = { $title } bearbeiten
+workbench-editor-title-edit-with-label = { $title } bearbeiten · { $label }
+workbench-editor-title-rename = { $title } umbenennen
+workbench-error-append-array-item = Array-Element konnte nicht angehängt werden
+workbench-error-args-invalid-json = Die Tool-Argumente sind kein gültiges JSON.
+workbench-error-args-not-object = Plugin-Tool-Argumente müssen ein JSON-Objekt sein
+workbench-error-args-schema-mismatch = Die Tool-Argumente entsprechen nicht dem Plugin-Schema.
+workbench-error-config-update = Die Plugin-Konfiguration konnte nicht aktualisiert werden.
+workbench-error-tool-input-prepare = Die Plugin-Tool-Eingabe konnte nicht vorbereitet werden. Diagnoseprotokoll prüfen und erneut versuchen.
+workbench-error-tool-requires-session = Das Plugin-Tool benötigt eine aktive Sitzung.
+workbench-error-tool-unavailable = Das Plugin-Tool ist nicht mehr verfügbar.
+workbench-picker-choose-many = Einen oder mehrere Werte auswählen
+workbench-picker-choose-one = Einen Wert auswählen
+workbench-picker-no-actions = Keine Aktionen verfügbar
+workbench-picker-no-choices = Keine Auswahlmöglichkeiten verfügbar
+workbench-picker-space-toggle = Leertaste: umschalten
+workbench-picker-title-select = { $title } auswählen
+workbench-select-branch-prompt = Schemaform auswählen
+workbench-select-branch-title = Zweig auswählen
+workbench-select-type-prompt = JSON-Typ für { $path } auswählen
+workbench-select-type-title = Typ auswählen
+workbench-tool-completed = Plugin-Tool abgeschlossen
+workbench-tool-completed-no-output = Tool erfolgreich ohne Ausgabe abgeschlossen.
+workbench-tool-default-run = Dieses Plugin-Tool ausführen.
+workbench-tool-editor-description = { $summary } Tags: { $tags }. JSON-Argumente unten bearbeiten. Das Absenden genehmigt einmalig genau diesen Tool-Aufruf; gespeicherte Ablehnungsregeln gelten weiterhin.
+workbench-tool-editor-placeholder = Ctrl+S: prüfen und ausführen · Esc: abbrechen · Enter: Zeilenumbruch
+workbench-tool-editor-title = { $plugin } / { $tool } ausführen
+workbench-tool-tags-none = keine angegeben
+workbench-warning-add-requires-object-or-array = „Hinzufügen“ ist für Objekt- und Array-Knoten verfügbar
+workbench-warning-cannot-add-item = An dieser Array-Position kann kein weiteres Element hinzugefügt werden
+workbench-warning-cannot-duplicate-item = Dieses Array-Element kann nicht dupliziert werden
+workbench-warning-cannot-insert-item = An dieser Array-Position kann kein Element eingefügt werden
+workbench-warning-cannot-remove-item = Dieses Array-Element kann nicht entfernt werden
+workbench-warning-no-tools = Dieses Plugin stellt keine Tools bereit
+workbench-warning-root-config-not-deletable = Die Stammkonfiguration kann nicht gelöscht werden
+workbench-warning-row-not-object-field = Die ausgewählte Zeile verweist nicht auf ein Objektfeld
+
+hub-action-favorite = Als Favorit markieren
+hub-action-unfavorite = Aus Favoriten entfernen
+hub-section-favorites = Favoriten
+composer-status-pending-user-input = {$count} Eingaben ausstehend (Ctrl+R)
+composer-status-pending-approval = {$count} Genehmigungen ausstehend (Ctrl+L)
+composer-status-hidden-pending-dialog = Dialog mit ausstehender Eingabe während des Schreibens ausgeblendet
+composer-status-selected-item = Element {$current}/{$total} {$label}
+composer-status-history = Verlauf {$current}/{$total}
+composer-status-history-query = Verlauf {$current}/{$total} Suche={$query}
+composer-status-mention = Erwähnung {$query}
+composer-status-slash = Befehl {$query}
+surface-mode-insert = EINFÜGEN
+surface-mode-navigate = NAVIGIEREN
+surface-mode-select = AUSWÄHLEN
+runtime-status-keys = Tasten Warteschlange={$queue} Senden={$send}
+runtime-status-display = Anzeige {$value}
+runtime-status-display-default = Standard
+runtime-status-display-plugin = Plugin
+runtime-status-tui-blocks = TUI-Blöcke {$count}
+runtime-status-theme = Design {$value}
+run-options-summary-thinking = Denken {$value}
+run-options-summary-speed = Geschwindigkeit {$value}
+run-options-summary-verbosity = Ausführlichkeit {$value}
+run-options-summary-parallel-tools = Parallele Werkzeuge {$value}
+help-sessions-line-4 = /rename, /timeline und /lineage verwalten die ausgewählte Sitzung
+help-sessions-line-5 = Mit den Steuerelementen des Sitzungswechslers zwischen den Bereichen Alle, Stamm und Teilbaum wechseln
+help-transcript-line-8 = /rename, /timeline, /lineage, /settings, /export oder /pager für Sitzungsaktionen und Einstellungen verwenden
+help-composer-line-11 = Ctrl+G öffnet verfügbare Inline-Elemente; Schrägstrichbefehle wie /model oder /rewind lassen sich im Eingabefeld ausführen
+help-section-user-commands = Benutzerbefehle
+plan-viewer-refresh = Aktualisieren
+plan-viewer-title = Plan
+plan-inline-footer = Tab/Esc Eingabe · j/k blättern · r aktualisieren · f erweitern
+plan-viewer-empty = Noch kein Plan vorhanden.
+plan-viewer-loading = Plan wird geladen
+plan-viewer-footer = ↑/↓/PgUp/PgDn blättern · r aktualisieren · a automatisch ausführen · q schließen
+plan-viewer-autorun-on = automatische Ausführung: an
+plan-viewer-autorun-off = automatische Ausführung: aus
+runtime-setting-choice-parallel-detail = Eine Überschreibung für parallele Werkzeugaufrufe anwenden
+runtime-setting-summary-override-value = Überschreibung {$value}
+runtime-setting-apply-cleared = {$field} zurückgesetzt
+runtime-setting-apply-updated = {$field} aktualisiert
+runtime-setting-error-bool = {$field} erwartet true/false, on/off, yes/no oder 1/0
+runtime-setting-error-number = {$field} erwartet einen Zahlenwert
+runtime-setting-error-finite = {$field} erwartet eine endliche Zahl
+runtime-setting-error-positive-int = {$field} erwartet eine positive Ganzzahl
+composer-prompt-history-label = Verlauf>
+composer-prompt-history-no-matches =   Kein passender Eingabeverlauf
+insert-content-file-label = Datei
+insert-content-file-detail = Eine Datei oder einen Ordner aus dem Arbeitsbereich anhängen.
+provider-field-auth-status = Authentifizierungsstatus
+overlay-timeline-events = Ereignisse
+status-part-workspace = Arbeitsbereich {$value}
+status-part-state = Status={$value}
+status-part-agent = Agent={$value}
+status-part-task = Aufgabe={$value}
+status-part-model = Modell={$value}
+status-part-thinking = Denken={$value}
+status-part-speed = Geschwindigkeit={$value}
+status-part-verbosity = Ausführlichkeit={$value}
+status-part-parallel-tools = parallele_Werkzeuge={$value}
+status-part-cwd = Arbeitsverzeichnis={$value}
+status-part-tools = Werkzeuge={$count}
+status-part-permission = Berechtigung={$value}
+status-part-permissions = Berechtigungen={$count}
+status-part-user-input = Eingaben={$count}
+inline-fact-provider = Anbieter
+inline-fact-adapter = Adapter
+inline-fact-model = Modell
+inline-fact-thinking = Denken
+inline-fact-speed = Geschwindigkeit
+inline-fact-verbosity = Ausführlichkeit
+inline-fact-parallel-tools = parallele Werkzeuge
+permission-rule-error-session-token-required = Der Sitzungsbereich erfordert session=<id>
+permission-rule-error-invalid-shell-args = Ungültige Argumente im Shell-Format
+permission-rule-error-expected-structured = Eine strukturierte Regel erwartet, die mit tool/path beginnt und mit allow|ask|deny endet
+permission-rule-error-unknown-option = Unbekannte Berechtigungsregeloption: {$key}
+permission-rule-error-invalid-subject = Das Regelziel muss mit `tool`, `path` oder `network` beginnen
+permission-rule-error-invalid-mode = Der Berechtigungsmodus muss allow, ask oder deny sein
+permission-rule-error-invalid-scope = Der Geltungsbereich muss session, workspace oder global sein
+permission-rule-error-invalid-option-format = Schlüssel=Wert-Option erwartet, erhalten: `{$token}`
+operation-search-heading = Suche: {$query}
+operation-search-results-heading = Suchergebnisse
+operation-command-exit-code = Beendigungscode {$code}
+operation-diff-summary = Diff: {$count} Zeilen
+operation-diff-summary-detailed-one = Diff: 1 Datei, +{$added} -{$deleted}
+operation-diff-summary-detailed-one-rename = Diff: 1 Datei, +{$added} -{$deleted}, {$renamed} umbenannt
+operation-diff-summary-detailed = Diff: {$files} Dateien, +{$added} -{$deleted}
+operation-diff-summary-detailed-renames = Diff: {$files} Dateien, +{$added} -{$deleted}, {$renamed} umbenannt
+operation-nested-task-summary = {$title} ({$status})
+snapshot-action-keep = behalten
+snapshot-action-remove = entfernt
+snapshot-action-exit = beendet
+composer-placeholder-range-invalid = Ungültiger Platzhalterbereich im Eingabefeld
+composer-placeholder-out-of-sync = Platzhalterstatus im Eingabefeld ist nicht synchron
+composer-missing-staged-item = Bereitgestelltes Element für {$placeholder} fehlt
+runtime-status-default = Sitzungsvorgaben
+file-change-moved = verschoben
+permission-label-auto-approve = automatisch genehmigen
+failure-detail-section-title = Fehlerdetails
+terminal-title-working = Wird ausgeführt
+terminal-title-permission = Genehmigung ausstehend
+terminal-title-user-input = Eingabe ausstehend
+terminal-title-interrupted = Unterbrochen
+terminal-notification-working = Wird ausgeführt
+terminal-notification-permission = Genehmigung ausstehend
+terminal-notification-user-input = Eingabe ausstehend
+terminal-notification-interrupted = Unterbrochen
+hub-section-directories = Verzeichnisse
+hub-section-pinned = Angeheftet
+hub-action-directory = Verzeichnis einklappen
+hub-action-pin = Anheften/ lösen
+hub-directory-more = + Weitere Sitzungen anzeigen ({ $count } verbleibend)
+tool-technical-details = Technische Details
+tool-presentation-data = Darstellungsdaten
+tool-detail-input = Eingabe
+tool-detail-output = Ausgabe
+tool-detail-metadata = Metadaten
+hub-section-search = Suchergebnisse
+hub-page-next = → Nächste Seite ({ $page })
+hub-page-previous = ← Vorherige Seite ({ $page })
+btw-title = BTW · separate Frage ohne Änderungen
+btw-description = Stelle eine separate Frage, während das Hauptgespräch weiterläuft. Nur lesende Werkzeuge; keine Änderungen am Hauptgespräch.
+btw-send = Fragen
+btw-stop = Anhalten
+btw-loading = Antwort wird erstellt…
+side-return = Nebenansicht · zum übergeordneten Gespräch zurückkehren
+btw-footer = Enter fragen · PgUp/PgDn blättern · Ctrl+C anhalten · Tab/Esc zum Gespräch zurückkehren
+btw-input = BTW-Frage · Enter senden · Shift+Enter neue Zeile
+btw-clear = Leeren
+btw-copy = Kopieren
+btw-copied = BTW-Antwort kopiert
+btw-leave = Zurück zum Gespräch
+btw-stopped = Angehalten · Teilantwort bleibt erhalten

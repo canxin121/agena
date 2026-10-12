@@ -22,6 +22,15 @@ const mutation = ref('')
 const mutationError = ref('')
 const limit = ref(20)
 const activities = computed(() => chat.sessionBackgroundActivities(props.sessionId))
+const summary = computed(() =>
+  [
+    activities.value.length ? t('chat.sessionWork.activeTasks', { count: activities.value.length }) : '',
+    props.retry ? t('chat.sessionWork.retry', { attempt: props.retry.attempt }) : '',
+    props.retry && props.countdown ? props.countdown : '',
+  ]
+    .filter(Boolean)
+    .join(' · '),
+)
 const logKey = computed(() => (expanded.value && selected.value ? `${props.sessionId}/${selected.value.id}` : ''))
 const logs = useActivityLogs(logKey, () => selected.value)
 watch(
@@ -57,26 +66,17 @@ async function control(activity: SessionActivity, action: string) {
 </script>
 
 <template>
-  <div
-    v-if="retry"
-    class="rounded-lg border border-border/60 px-3 py-2 text-xs"
-    data-transcript-chrome="true"
-    aria-live="polite"
-  >
-    <p class="font-medium">
-      {{ t('chat.sessionWork.retry', { attempt: retry.attempt })
-      }}<template v-if="countdown"> · {{ countdown }}</template>
-    </p>
-    <p v-if="retry.message" class="mt-1 line-clamp-3 break-words text-muted-foreground">{{ retry.message }}</p>
-  </div>
   <SessionSection
-    v-if="activities.length || selected"
+    v-if="activities.length || selected || retry"
     docked
     v-model:expanded="expanded"
     :title="t('chat.sessionWork.tasks')"
-    :summary="t('chat.sessionWork.activeTasks', { count: activities.length })"
+    :summary="summary"
   >
     <div class="max-h-[min(45dvh,28rem)] space-y-2 overflow-auto overscroll-contain">
+      <p v-if="retry?.message" class="line-clamp-3 break-words text-xs text-muted-foreground">
+        {{ retry.message }}
+      </p>
       <p v-if="mutationError" role="alert" class="text-xs text-destructive">{{ mutationError }}</p>
       <div
         v-for="activity in activities.slice(0, limit)"

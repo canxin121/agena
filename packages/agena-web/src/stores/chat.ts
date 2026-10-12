@@ -30,7 +30,7 @@ import { isRunTerminal } from '../lib/chatRunState'
 import { setLocalJson, getLocalJson } from '../lib/persist'
 import { localStorageKeys } from '../lib/persistence/storageKeys'
 import { useToastsStore } from './toasts'
-import { useDirectoryStore } from './directory'
+import { useDirectoryStoreUnscoped } from './directory'
 import { i18n } from '../i18n'
 import { normalizeSessionState, sessionStateExecution, sessionStateRequests } from '../types/chat'
 import type { SseEvent } from '../lib/sse'
@@ -96,7 +96,10 @@ function loadStoredTranscriptPartPageSize(): number {
 
 const useChatStoreDefinition = defineStore('chat', () => {
   const toasts = useToastsStore()
-  const directoryStore = useDirectoryStore()
+  // A store is created once for the whole app, so this must be the raw store:
+  // a pane-scoped view captured here would bind every consumer to that pane's
+  // window scope.
+  const directoryStore = useDirectoryStoreUnscoped()
 
   // ─── sessions ─────────────────────────────────────────────────────────────
   const sessions = ref<Session[]>([])
@@ -2360,3 +2363,13 @@ export const useChatStore = Object.assign(
   },
   { $id: useChatStoreDefinition.$id },
 ) as typeof useChatStoreDefinition
+
+/**
+ * The raw store, without the pane-scoped view.  Singleton store setups (for
+ * example the directory-session sidebar store) must use this one: a Pinia store
+ * is created once, so a scoped proxy captured there would freeze one pane's
+ * window scope into every consumer afterwards.
+ */
+export function useChatStoreUnscoped(...args: Parameters<typeof useChatStoreDefinition>): ChatStore {
+  return useChatStoreDefinition(...args)
+}

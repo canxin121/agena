@@ -192,7 +192,6 @@ const useDirectoryStoreDefinition = defineStore('directory', () => {
       setDirectoryForWindow(scopeId, fromMap)
       return
     }
-
   }
 
   watch(currentDirectoryByWindow, (map) => {
@@ -260,3 +259,12 @@ export const useDirectoryStore = Object.assign(
   },
   { $id: useDirectoryStoreDefinition.$id },
 ) as typeof useDirectoryStoreDefinition
+
+/**
+ * The raw store, without the pane-scoped view.  Singleton store setups must use
+ * this one: a Pinia store is created once, so a scoped view captured there would
+ * freeze one pane's window scope into every later consumer.
+ */
+export function useDirectoryStoreUnscoped(...args: Parameters<typeof useDirectoryStoreDefinition>): DirectoryStore {
+  return useDirectoryStoreDefinition(...args)
+}

@@ -24,7 +24,7 @@ import { loadExpandedTree } from '@/features/sessions/model/expandedTree'
 import { sessionStateKind, type Session } from '@/types/chat'
 import type { SseEvent } from '@/lib/sse'
 import { defaultChatSidebarUiPrefs, patchChatSidebarUiPrefs, type ChatSidebarUiPrefs } from '@/data/chatSidebarUiPrefs'
-import { useChatStore } from './chat'
+import { useChatStoreUnscoped } from './chat'
 
 import {
   sessionStateIsActive,
@@ -784,7 +784,10 @@ function applyPersistentStateQueryOverrides(
 }
 
 export const useDirectorySessionStore = defineStore('directorySession', () => {
-  const chat = useChatStore()
+  // This store is created once for the whole app, so it must read the raw chat
+  // store: a pane-scoped proxy captured here would bind every consumer to the
+  // window scope of whichever pane happened to create it first.
+  const chat = useChatStoreUnscoped()
   const directoriesById = ref<Record<string, DirectoryEntry>>({})
   const directoryOrder = ref<string[]>([])
   const stateBySessionId = ref<Record<string, SessionStateSnapshot>>({})

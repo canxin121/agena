@@ -23,6 +23,7 @@ import {
   transcriptScrollBoundary,
 } from './transcriptNavigation'
 import { resolveTranscriptVimAction, type TranscriptVimAction, type TranscriptVimMode } from './transcriptVim'
+import { copySelectionBelongsToRoot } from './transcriptCopyOwnership'
 import {
   collectTranscriptSearchMatches,
   nextTranscriptSearchMatchIndex,
@@ -1301,8 +1302,18 @@ export function useChatTranscriptVim(opts: {
     scheduleCursorPlacement()
   }
 
+  /**
+   * The listener below is on the document, and a mouse selection stays in the
+   * pane that made it.  A copy anywhere else - the other pane's transcript, the
+   * composer - must not be answered with this pane's stale selection.
+   */
+  function ownsDocumentCopy(): boolean {
+    return copySelectionBelongsToRoot(opts.scrollEl.value, window.getSelection())
+  }
+
   function onTranscriptCopy(event: ClipboardEvent) {
     if (!mouseSelection) return
+    if (!ownsDocumentCopy()) return
     const text = mouseSelectionText()
     if (!text) return
     event.preventDefault()

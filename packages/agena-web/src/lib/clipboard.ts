@@ -42,6 +42,10 @@ export async function copyTextToClipboard(text: string | Promise<string>): Promi
   // Fallback for non-secure contexts / older browsers.
   try {
     if (typeof document === 'undefined') return false
+    // Selecting the temporary field moves focus into it and removing the field
+    // afterwards leaves focus on the body, which would drop the caret out of a
+    // pane the user is typing in.  Put focus back where it was.
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const textarea = document.createElement('textarea')
     textarea.value = value
     textarea.setAttribute('readonly', '')
@@ -54,6 +58,13 @@ export async function copyTextToClipboard(text: string | Promise<string>): Promi
     textarea.setSelectionRange(0, textarea.value.length)
     const ok = document.execCommand('copy')
     document.body.removeChild(textarea)
+    if (previous && previous.isConnected && previous !== textarea) {
+      try {
+        previous.focus({ preventScroll: true })
+      } catch {
+        // ignore
+      }
+    }
     return ok
   } catch {
     return false

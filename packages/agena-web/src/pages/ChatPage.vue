@@ -107,6 +107,14 @@ watch(
 )
 
 const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
+
+// Global selections are stored per workspace window.  This pane records its own
+// session and message ids, so the scope has to be this pane's window: the active
+// window is whichever pane is focused, which is not necessarily the one writing.
+function paneWindowScope(): { windowId?: string } {
+  const windowId = String(workspacePane?.windowId.value || '').trim()
+  return windowId ? { windowId } : {}
+}
 const directoryStore = useDirectoryStore()
 const directorySessions = useDirectorySessionStore()
 const activity = useSessionActivityStore()
@@ -403,6 +411,7 @@ function setCommandQuery(value: string) {
 function handleDraftInput() {
   handleDraftInputBase()
   ui.setGlobalSelection('chat-input', chat.selectedSessionId || 'composer', {
+    ...paneWindowScope(),
     meta: { source: 'chat-composer-input' },
   })
 }
@@ -634,6 +643,7 @@ function applyPromptHistoryText(text: string | null) {
   // recalling a prompt must not unexpectedly open another palette.
   draft.value = text
   ui.setGlobalSelection('chat-input', chat.selectedSessionId || 'composer', {
+    ...paneWindowScope(),
     meta: { source: 'chat-prompt-history-recall' },
   })
   setComposerCaret(text.length)
@@ -1471,6 +1481,7 @@ watch(
     const selectedSid = String(sid || '').trim()
     if (selectedSid) {
       ui.setGlobalSelection('chat-session', selectedSid, {
+        ...paneWindowScope(),
         meta: { source: 'chat-page-session-watch' },
       })
     }
@@ -2329,6 +2340,7 @@ onMounted(async () => {
 
     if (element.closest('[data-chat-input="true"]')) {
       ui.setGlobalSelection('chat-input', String(chat.selectedSessionId || 'composer').trim() || 'composer', {
+        ...paneWindowScope(),
         meta: { source: 'chat-composer-focus' },
       })
       return
@@ -2337,6 +2349,7 @@ onMounted(async () => {
     const messageId = resolveMessageIdFromTarget(element)
     if (messageId) {
       ui.setGlobalSelection('chat-message', messageId, {
+        ...paneWindowScope(),
         meta: { source: 'chat-message-focus' },
       })
     }
@@ -2349,6 +2362,7 @@ onMounted(async () => {
     const messageId = resolveMessageIdFromTarget(target)
     if (messageId) {
       ui.setGlobalSelection('chat-message', messageId, {
+        ...paneWindowScope(),
         meta: { source: 'chat-message-pointerup' },
       })
     }
@@ -2357,6 +2371,7 @@ onMounted(async () => {
       const sid = String(chat.selectedSessionId || '').trim()
       const token = sid ? `${sid}:${Date.now()}` : `selection:${Date.now()}`
       ui.setGlobalSelection('chat-text', token, {
+        ...paneWindowScope(),
         meta: {
           source: 'chat-text-selection',
           ...(messageId ? { messageId } : {}),

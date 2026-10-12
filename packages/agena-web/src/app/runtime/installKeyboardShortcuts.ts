@@ -5,6 +5,7 @@ import { useUiStore } from '@/stores/ui'
 import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
 import { i18n } from '@/i18n'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
+import { pickComposerFocusTarget } from '@/app/runtime/composerFocus'
 
 function hasModifier(e: KeyboardEvent): boolean {
   // Treat Meta on macOS, Ctrl elsewhere.
@@ -22,6 +23,23 @@ export function installKeyboardShortcuts(): () => void {
   const workspaceNavigation = useWorkspaceNavigation()
 
   const isOnSettingsPage = () => router.currentRoute.value.path.startsWith('/settings')
+
+  /**
+   * Cmd+I belongs to the pane the user is working in.  Every workspace pane keeps
+   * its own composer in the same document, and background tabs keep theirs mounted
+   * but hidden, so a plain document query focuses the first composer - or nothing
+   * at all when that one cannot take focus.
+   */
+  function focusFocusedPaneComposer() {
+    const target = pickComposerFocusTarget({
+      windowId: ui.focusedWorkspaceWindowId,
+      queryAll: (selector) => document.querySelectorAll<HTMLElement>(selector),
+      // A background tab keeps its editor mounted; focusing a hidden element would
+      // silently do nothing, so keep looking for a visible one.
+      isVisible: (element) => element.getClientRects().length > 0,
+    })
+    target?.focus()
+  }
 
   const onKeyDown = (e: KeyboardEvent) => {
     // TUI parity: Ctrl+H is contextual help from every main-surface mode.
@@ -64,7 +82,7 @@ export function installKeyboardShortcuts(): () => void {
     // focus, matching the TUI keymap.
     if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && keyLower(e) === 'i') {
       e.preventDefault()
-      document.querySelector<HTMLElement>('[data-chat-input="true"]')?.focus()
+      focusFocusedPaneComposer()
       return
     }
 

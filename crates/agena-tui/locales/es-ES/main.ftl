@@ -116,6 +116,33 @@ overlay-attach-matches = Coincidencias
 overlay-attach-footer = Tab rellena la ruta seleccionada
 
 overlay-user-input-title = Entrada de usuario pendiente
+overlay-user-input-questions = Preguntas
+overlay-user-input-summary = Resumen
+overlay-user-input-detail = Detalles
+overlay-user-input-prompt-panel = Instrucción
+overlay-user-input-choices = Opciones
+overlay-user-input-auto-resolve = Continuación automática en {$remaining}
+overlay-user-input-choice-single-short = Una opción
+overlay-user-input-choice-multiple-short = Varias opciones
+overlay-user-input-custom-input = Entrada personalizada
+overlay-user-input-custom-input-hint = Entrada personalizada (e / pegar)
+overlay-user-input-submit = Enviar
+overlay-user-input-review-intro = Revisa tus respuestas antes de enviarlas.
+overlay-user-input-no-questions = No hay preguntas.
+overlay-user-input-other = Otro
+overlay-user-input-unanswered = sin responder
+overlay-user-input-custom-empty = Pulsa Espacio para escribir una respuesta personalizada
+overlay-user-input-review-feedback = Comentarios para el agente
+overlay-user-input-review-feedback-empty = Pulsa Enter o e para escribir comentarios, o elige una decisión
+overlay-user-input-review-footer-hint = Enter sobre una opción = enviar · Enter sobre el título = contraer/expandir
+overlay-user-input-missing-answer = Falta responder {$label}
+overlay-user-input-footer-review = j/k ↑/↓ mover | Enter elegir | e editar | Ctrl+Y/Ctrl+E desplazar línea | PgUp/PgDn páginas | Ctrl+X cancelar
+overlay-user-input-footer-question = Tab/Shift+Tab páginas | Espacio alternar | Ctrl+D borrar | Ctrl+Y/Ctrl+E desplazar línea | PgUp/PgDn páginas | Ctrl+X cancelar
+overlay-user-input-wizard-keys = ←→ páginas · Espacio seleccionar · Enter siguiente / confirmar resumen
+overlay-user-input-page = Pregunta { $current } / { $total }
+overlay-user-input-previous = Anterior
+overlay-user-input-next = Siguiente
+overlay-user-input-cancel = Cancelar
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = valor personalizado permitido
 overlay-user-input-reply-format = Formato de respuesta: 0=value;1=value1,value2

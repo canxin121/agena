@@ -116,6 +116,33 @@ overlay-attach-matches = 일치 결과
 overlay-attach-footer = Tab 선택 경로 채우기
 
 overlay-user-input-title = 대기 중인 사용자 입력
+overlay-user-input-questions = 질문
+overlay-user-input-summary = 요약
+overlay-user-input-detail = 세부 정보
+overlay-user-input-prompt-panel = 프롬프트
+overlay-user-input-choices = 선택 항목
+overlay-user-input-auto-resolve = {$remaining} 후 자동 계속
+overlay-user-input-choice-single-short = 단일 선택
+overlay-user-input-choice-multiple-short = 다중 선택
+overlay-user-input-custom-input = 사용자 지정 입력
+overlay-user-input-custom-input-hint = 사용자 지정 입력 (e / 붙여넣기)
+overlay-user-input-submit = 제출
+overlay-user-input-review-intro = 제출하기 전에 답변을 확인하세요.
+overlay-user-input-no-questions = 질문이 없습니다.
+overlay-user-input-other = 기타
+overlay-user-input-unanswered = 미응답
+overlay-user-input-custom-empty = Space를 눌러 사용자 지정 답변 입력
+overlay-user-input-review-feedback = 에이전트에게 보낼 피드백
+overlay-user-input-review-feedback-empty = Enter 또는 e를 눌러 피드백을 입력하거나 결정을 선택하세요
+overlay-user-input-review-footer-hint = 선택 항목에서 Enter = 제출 · 제목에서 Enter = 접기/펼치기
+overlay-user-input-missing-answer = {$label} 답변이 없습니다
+overlay-user-input-footer-review = j/k ↑/↓ 이동 | Enter 선택 | e 편집 | Ctrl+Y/Ctrl+E 줄 스크롤 | PgUp/PgDn 페이지 | Ctrl+X 취소
+overlay-user-input-footer-question = Tab/Shift+Tab 페이지 | Space 전환 | Ctrl+D 지우기 | Ctrl+Y/Ctrl+E 줄 스크롤 | PgUp/PgDn 페이지 | Ctrl+X 취소
+overlay-user-input-wizard-keys = ←→ 페이지 · Space 선택 · Enter 다음 / 요약 확인
+overlay-user-input-page = 질문 { $current } / { $total }
+overlay-user-input-previous = 이전
+overlay-user-input-next = 다음
+overlay-user-input-cancel = 취소
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = 사용자 정의 값 허용
 overlay-user-input-reply-format = 답변 형식: 0=value;1=value1,value2

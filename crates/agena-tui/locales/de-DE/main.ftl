@@ -116,6 +116,33 @@ overlay-attach-matches = Treffer
 overlay-attach-footer = Tab uebernimmt den Pfad
 
 overlay-user-input-title = Ausstehende Benutzereingabe
+overlay-user-input-questions = Fragen
+overlay-user-input-summary = Zusammenfassung
+overlay-user-input-detail = Details
+overlay-user-input-prompt-panel = Eingabe
+overlay-user-input-choices = Auswahl
+overlay-user-input-auto-resolve = Automatische Fortsetzung in {$remaining}
+overlay-user-input-choice-single-short = Einzelauswahl
+overlay-user-input-choice-multiple-short = Mehrfachauswahl
+overlay-user-input-custom-input = Eigene Eingabe
+overlay-user-input-custom-input-hint = Eigene Eingabe (e / einfügen)
+overlay-user-input-submit = Absenden
+overlay-user-input-review-intro = Prüfen Sie Ihre Antworten, bevor Sie sie absenden.
+overlay-user-input-no-questions = Keine Fragen.
+overlay-user-input-other = Sonstiges
+overlay-user-input-unanswered = unbeantwortet
+overlay-user-input-custom-empty = Leertaste drücken, um eine eigene Antwort einzugeben
+overlay-user-input-review-feedback = Rückmeldung an den Agenten
+overlay-user-input-review-feedback-empty = Enter oder e drücken, um Rückmeldung einzugeben oder eine Entscheidung auszuwählen
+overlay-user-input-review-footer-hint = Enter auf einer Option = absenden · Enter auf dem Titel = ein-/ausklappen
+overlay-user-input-missing-answer = Antwort für {$label} fehlt
+overlay-user-input-footer-review = j/k ↑/↓ bewegen | Enter auswählen | e bearbeiten | Ctrl+Y/Ctrl+E zeilenweise scrollen | PgUp/PgDn blättern | Ctrl+X abbrechen
+overlay-user-input-footer-question = Tab/Shift+Tab Seiten | Leertaste umschalten | Ctrl+D löschen | Ctrl+Y/Ctrl+E zeilenweise scrollen | PgUp/PgDn blättern | Ctrl+X abbrechen
+overlay-user-input-wizard-keys = ←→ Seiten · Leertaste auswählen · Enter weiter / Zusammenfassung bestätigen
+overlay-user-input-page = Frage { $current } / { $total }
+overlay-user-input-previous = Zurück
+overlay-user-input-next = Weiter
+overlay-user-input-cancel = Abbrechen
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = benutzerdefinierter Wert erlaubt
 overlay-user-input-reply-format = Antwortformat: 0=value;1=value1,value2

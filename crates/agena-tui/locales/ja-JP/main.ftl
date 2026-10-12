@@ -116,6 +116,33 @@ overlay-attach-matches = 一致結果
 overlay-attach-footer = Tab で選択パスを入力
 
 overlay-user-input-title = 保留中のユーザー入力
+overlay-user-input-questions = 質問
+overlay-user-input-summary = 要約
+overlay-user-input-detail = 詳細
+overlay-user-input-prompt-panel = プロンプト
+overlay-user-input-choices = 選択肢
+overlay-user-input-auto-resolve = {$remaining} 後に自動続行
+overlay-user-input-choice-single-short = 単一選択
+overlay-user-input-choice-multiple-short = 複数選択
+overlay-user-input-custom-input = カスタム入力
+overlay-user-input-custom-input-hint = カスタム入力 (e / 貼り付け)
+overlay-user-input-submit = 送信
+overlay-user-input-review-intro = 送信前に回答を確認してください。
+overlay-user-input-no-questions = 質問はありません。
+overlay-user-input-other = その他
+overlay-user-input-unanswered = 未回答
+overlay-user-input-custom-empty = Space キーでカスタム回答を入力
+overlay-user-input-review-feedback = エージェントへのフィードバック
+overlay-user-input-review-feedback-empty = Enter または e でフィードバックを入力するか、判断を選択してください
+overlay-user-input-review-footer-hint = 選択肢で Enter = 送信 · タイトルで Enter = 折りたたみ/展開
+overlay-user-input-missing-answer = {$label} の回答がありません
+overlay-user-input-footer-review = j/k ↑/↓ 移動 | Enter 選択 | e 編集 | Ctrl+Y/Ctrl+E 行スクロール | PgUp/PgDn ページ | Ctrl+X キャンセル
+overlay-user-input-footer-question = Tab/Shift+Tab ページ | Space 切替 | Ctrl+D 消去 | Ctrl+Y/Ctrl+E 行スクロール | PgUp/PgDn ページ | Ctrl+X キャンセル
+overlay-user-input-wizard-keys = ←→ ページ · Space 選択 · Enter 次へ / 要約を確定
+overlay-user-input-page = 質問 { $current } / { $total }
+overlay-user-input-previous = 前へ
+overlay-user-input-next = 次へ
+overlay-user-input-cancel = キャンセル
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = カスタム値を許可
 overlay-user-input-reply-format = 返信形式: 0=value;1=value1,value2

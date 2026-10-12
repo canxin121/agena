@@ -326,7 +326,9 @@ mod tests {
                 .into_iter()
                 .filter(|key| {
                     key.starts_with("activities-")
+                        || key.starts_with("activity-title-")
                         || key.starts_with("activity-detail-")
+                        || key.starts_with("overlay-user-input-")
                         || key.starts_with("activity-command-reference-")
                         || key.starts_with("activity-section-")
                         || key.starts_with("composer-chip-")
@@ -397,7 +399,9 @@ mod tests {
         ];
         let prefixes = [
             "activities-",
+            "activity-title-",
             "activity-detail-",
+            "overlay-user-input-",
             "activity-section-",
             "activity-title-",
             "composer-",
@@ -432,6 +436,45 @@ mod tests {
             missing.is_empty(),
             "interface references unknown keys: {missing:?}"
         );
+    }
+
+    #[test]
+    fn every_non_english_locale_translates_user_input_review_chrome() {
+        let english = message_values(RESOURCES[0].1);
+        let translated_keys = [
+            "overlay-user-input-title",
+            "overlay-user-input-submit",
+            "overlay-user-input-review-intro",
+            "overlay-user-input-footer-review",
+            "overlay-user-input-footer-question",
+            "activity-title-plan-review",
+        ];
+        for (locale, resource) in RESOURCES.iter().skip(1) {
+            let localized = message_values(resource);
+            for key in translated_keys {
+                assert_ne!(
+                    localized.get(key),
+                    english.get(key),
+                    "{locale} leaves user-input/review label `{key}` in English"
+                );
+            }
+            for (key, args) in [
+                ("overlay-user-input-auto-resolve", &["remaining"][..]),
+                ("overlay-user-input-missing-answer", &["label"][..]),
+                ("overlay-user-input-page", &["current", "total"][..]),
+            ] {
+                let value = localized
+                    .get(key)
+                    .unwrap_or_else(|| panic!("{locale} misses `{key}`"));
+                for arg in args {
+                    assert!(
+                        value.contains(&format!("{{ ${arg} }}"))
+                            || value.contains(&format!("{{${arg}}}")),
+                        "{locale} `{key}` is missing Fluent argument `${arg}`: {value}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

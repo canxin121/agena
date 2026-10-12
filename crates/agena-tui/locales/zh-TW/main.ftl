@@ -116,6 +116,33 @@ overlay-attach-matches = 相符結果
 overlay-attach-footer = Tab 填入選中路徑
 
 overlay-user-input-title = 待處理使用者輸入
+overlay-user-input-questions = 問題
+overlay-user-input-summary = 摘要
+overlay-user-input-detail = 詳細資料
+overlay-user-input-prompt-panel = 提示
+overlay-user-input-choices = 選項
+overlay-user-input-auto-resolve = {$remaining} 後自動繼續
+overlay-user-input-choice-single-short = 單選
+overlay-user-input-choice-multiple-short = 多選
+overlay-user-input-custom-input = 自訂輸入
+overlay-user-input-custom-input-hint = 自訂輸入 (e / 貼上)
+overlay-user-input-submit = 送出
+overlay-user-input-review-intro = 送出前請先檢查你的回答。
+overlay-user-input-no-questions = 沒有問題。
+overlay-user-input-other = 其他
+overlay-user-input-unanswered = 尚未回答
+overlay-user-input-custom-empty = 按 Space 輸入自訂回答
+overlay-user-input-review-feedback = 給代理的回饋
+overlay-user-input-review-feedback-empty = 按 Enter 或 e 輸入回饋，或選擇一項決定
+overlay-user-input-review-footer-hint = 在選項上按 Enter = 送出 · 在標題上按 Enter = 收合/展開
+overlay-user-input-missing-answer = {$label} 尚未回答
+overlay-user-input-footer-review = j/k ↑/↓ 移動 | Enter 選擇 | e 編輯 | Ctrl+Y/Ctrl+E 逐行捲動 | PgUp/PgDn 翻頁 | Ctrl+X 取消
+overlay-user-input-footer-question = Tab/Shift+Tab 換頁 | Space 切換 | Ctrl+D 清除 | Ctrl+Y/Ctrl+E 逐行捲動 | PgUp/PgDn 翻頁 | Ctrl+X 取消
+overlay-user-input-wizard-keys = ←→ 換頁 · Space 選擇 · Enter 下一步 / 確認摘要
+overlay-user-input-page = 問題 { $current } / { $total }
+overlay-user-input-previous = 上一頁
+overlay-user-input-next = 下一頁
+overlay-user-input-cancel = 取消
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = 允許自訂值
 overlay-user-input-reply-format = 回覆格式：0=value;1=value1,value2

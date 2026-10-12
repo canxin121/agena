@@ -116,6 +116,33 @@ overlay-attach-matches = Correspondances
 overlay-attach-footer = Tab remplit le chemin
 
 overlay-user-input-title = Entree utilisateur en attente
+overlay-user-input-questions = Questions
+overlay-user-input-summary = Résumé
+overlay-user-input-detail = Détails
+overlay-user-input-prompt-panel = Demande
+overlay-user-input-choices = Choix
+overlay-user-input-auto-resolve = Continuation automatique dans {$remaining}
+overlay-user-input-choice-single-short = Choix unique
+overlay-user-input-choice-multiple-short = Choix multiples
+overlay-user-input-custom-input = Saisie personnalisée
+overlay-user-input-custom-input-hint = Saisie personnalisée (e / coller)
+overlay-user-input-submit = Envoyer
+overlay-user-input-review-intro = Vérifiez vos réponses avant de les envoyer.
+overlay-user-input-no-questions = Aucune question.
+overlay-user-input-other = Autre
+overlay-user-input-unanswered = sans réponse
+overlay-user-input-custom-empty = Appuyez sur Espace pour saisir une réponse personnalisée
+overlay-user-input-review-feedback = Commentaire pour l’agent
+overlay-user-input-review-feedback-empty = Appuyez sur Entrée ou e pour saisir un commentaire, ou choisissez une décision
+overlay-user-input-review-footer-hint = Entrée sur une option = envoyer · Entrée sur le titre = réduire/développer
+overlay-user-input-missing-answer = Réponse manquante pour {$label}
+overlay-user-input-footer-review = j/k ↑/↓ déplacer | Entrée choisir | e modifier | Ctrl+Y/Ctrl+E défiler par ligne | PgUp/PgDn pages | Ctrl+X annuler
+overlay-user-input-footer-question = Tab/Shift+Tab pages | Espace basculer | Ctrl+D effacer | Ctrl+Y/Ctrl+E défiler par ligne | PgUp/PgDn pages | Ctrl+X annuler
+overlay-user-input-wizard-keys = ←→ pages · Espace sélectionner · Entrée suivant / confirmer le résumé
+overlay-user-input-page = Question { $current } / { $total }
+overlay-user-input-previous = Précédent
+overlay-user-input-next = Suivant
+overlay-user-input-cancel = Annuler
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = valeur personnalisee autorisee
 overlay-user-input-reply-format = Format de reponse : 0=value;1=value1,value2

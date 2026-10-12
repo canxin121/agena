@@ -103,14 +103,6 @@ macro_rules! impl_mode_default {
 
 impl_mode_default!(ModelThinkingMode);
 
-pub fn configured_thinking_mode_selector(
-    name: &str,
-    _mode: &ConfiguredModelThinkingMode,
-) -> Option<String> {
-    let name = name.trim();
-    (!name.is_empty()).then(|| name.to_owned())
-}
-
 pub fn configured_thinking_mode_to_model(
     name: &str,
     mode: &ConfiguredModelThinkingMode,

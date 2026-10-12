@@ -164,8 +164,7 @@ mod capabilities;
 pub use capabilities::{CapabilityRegistry, default_capability_registry};
 mod configured_models;
 pub use configured_models::{
-    apply_configured_modes, apply_configured_thinking_modes, configured_thinking_mode_selector,
-    configured_thinking_mode_to_model,
+    apply_configured_modes, apply_configured_thinking_modes, configured_thinking_mode_to_model,
 };
 mod configured_model_config;
 pub use configured_model_config::ResolvedProviderModelConfig;

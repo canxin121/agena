@@ -314,14 +314,6 @@ impl SessionManager {
             temperature: Some(0.0),
             max_output_tokens: Some(default_output_tokens),
         };
-        if let Some(parallel_tool_calls) = selection
-            .as_ref()
-            .and_then(|selection| selection.parallel_tool_calls)
-        {
-            options
-                .request_override
-                .set_parallel_tool_calls(Some(parallel_tool_calls));
-        }
         if let Err(error) = self.apply_model_mode_requests(&mut options) {
             return fail_all(
                 candidates,

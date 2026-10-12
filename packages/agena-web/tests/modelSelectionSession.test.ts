@@ -19,7 +19,6 @@ test('readSessionRunConfigSelection trims Agena model and mode fields', () => {
       thinkingMode: ' high ',
       speedMode: ' fast ',
       verbosity: ' compact ',
-      parallelToolCalls: false,
       at: 1,
     }),
     {
@@ -29,7 +28,6 @@ test('readSessionRunConfigSelection trims Agena model and mode fields', () => {
       thinkingMode: 'high',
       speedMode: 'fast',
       verbosity: 'compact',
-      parallelToolCalls: false,
     },
   )
 })

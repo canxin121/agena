@@ -4,6 +4,18 @@ import { resolve } from 'node:path'
 import test from 'node:test'
 
 const source = readFileSync(resolve(import.meta.dir, '../src/components/settings/ModelCatalogPanel.vue'), 'utf8')
+const providerStudioSource = readFileSync(
+  resolve(import.meta.dir, '../src/components/settings/ProviderStudioPanel.vue'),
+  'utf8',
+)
+const defaultModelSource = readFileSync(
+  resolve(import.meta.dir, '../src/components/settings/ModelDefaultsPanel.vue'),
+  'utf8',
+)
+const approvalModelSource = readFileSync(
+  resolve(import.meta.dir, '../src/components/settings/ApprovalModelPanel.vue'),
+  'utf8',
+)
 
 test('Model Catalog workbench supports server search, origin filtering, paging, refresh, and full details', () => {
   assert.ok(source.includes("params.set('q'"))
@@ -47,4 +59,12 @@ test('Model Catalog fills the settings content area instead of scrolling inside 
   assert.ok(source.includes('lg:min-h-0 lg:p-5'))
   assert.equal(source.includes('min-h-[38rem]'), false)
   assert.equal(source.includes('lg:max-h-[47rem]'), false)
+})
+
+test('parallel tool support is edited as model metadata, never as a default/approval selection option', () => {
+  assert.ok(providerStudioSource.includes("key: 'supports_parallel_tool_calls'"))
+  assert.equal(defaultModelSource.includes('Parallel tool calls'), false)
+  assert.equal(approvalModelSource.includes('Parallel tool calls'), false)
+  assert.equal(defaultModelSource.includes('parallel_tool_calls'), false)
+  assert.equal(approvalModelSource.includes('parallel_tool_calls'), false)
 })

@@ -485,9 +485,6 @@ fn global_default_selection_summary(i18n: &I18n, value: &JsonValue) -> String {
     if let Some(value) = selection.verbosity.as_deref() {
         variants.push(format!("verbosity={value}"));
     }
-    if let Some(value) = selection.parallel_tool_calls {
-        variants.push(format!("parallel={value}"));
-    }
     if !variants.is_empty() {
         route.push(variants.join(", "));
     }

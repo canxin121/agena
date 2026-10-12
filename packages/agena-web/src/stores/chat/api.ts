@@ -158,7 +158,6 @@ export type RunOptionsPayload = {
   thinking_mode?: string
   speed_mode?: string
   verbosity?: string
-  parallel_tool_calls?: boolean
   system?: string
   temperature?: number
   max_output_tokens?: number
@@ -1157,7 +1156,6 @@ export function buildRunRequestBody(options?: RunOptionsPayload): JsonObject {
     const value = source[key]
     if (typeof value === 'string' && value.trim()) body[key] = key === 'system' ? value : value.trim()
   }
-  if (typeof source.parallel_tool_calls === 'boolean') body.parallel_tool_calls = source.parallel_tool_calls
   if (typeof source.temperature === 'number' && Number.isFinite(source.temperature))
     body.temperature = source.temperature
   if (

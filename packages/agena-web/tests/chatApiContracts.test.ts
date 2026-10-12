@@ -29,7 +29,6 @@ test('message request flattens Agena RunOptions beside the document', () => {
     thinking_mode: 'high',
     speed_mode: 'fast',
     verbosity: 'medium',
-    parallel_tool_calls: true,
   })
 
   assert.deepEqual(body, {
@@ -42,7 +41,6 @@ test('message request flattens Agena RunOptions beside the document', () => {
     thinking_mode: 'high',
     speed_mode: 'fast',
     verbosity: 'medium',
-    parallel_tool_calls: true,
   })
   assert.equal(Object.prototype.hasOwnProperty.call(body, 'options'), false)
 })

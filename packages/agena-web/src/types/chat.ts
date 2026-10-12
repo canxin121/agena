@@ -314,7 +314,6 @@ export type SessionRunConfig = {
   thinkingMode?: string
   speedMode?: string
   verbosity?: string
-  parallelToolCalls?: boolean
   at: number
 }
 

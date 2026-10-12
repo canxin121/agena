@@ -474,11 +474,6 @@ impl SessionManager {
             temperature: None,
             max_output_tokens: None,
         };
-        options.request_override.set_parallel_tool_calls(
-            requested_selection
-                .parallel_tool_calls
-                .or_else(|| inherited.and_then(|value| value.parallel_tool_calls)),
-        );
         self.apply_model_mode_requests(&mut options)?;
         Ok(options)
     }

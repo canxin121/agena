@@ -11,7 +11,6 @@ export type EffectiveModelDefaults = {
   thinkingMode: string
   speedMode: string
   verbosity: string
-  parallelToolCalls?: boolean
 }
 
 function clean(value: unknown): string {
@@ -64,6 +63,5 @@ export function resolveEffectiveDefaults(input: {
     thinkingMode: clean(runtime?.thinkingMode),
     speedMode: clean(runtime?.speedMode),
     verbosity: clean(runtime?.verbosity),
-    ...(typeof runtime?.parallelToolCalls === 'boolean' ? { parallelToolCalls: runtime.parallelToolCalls } : {}),
   }
 }

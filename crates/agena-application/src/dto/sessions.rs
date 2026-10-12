@@ -201,11 +201,9 @@ mod tests {
     fn standalone_run_body_rejects_unknown_fields() {
         let valid = serde_json::from_value::<SessionRunRequestBody>(serde_json::json!({
             "temperature": 0.25,
-            "parallel_tool_calls": false,
         }))
         .expect("current run options must decode");
         assert_eq!(valid.options.temperature, Some(0.25));
-        assert_eq!(valid.options.parallel_tool_calls, Some(false));
         let error = serde_json::from_value::<SessionRunRequestBody>(serde_json::json!({
             "obsolete": true
         }))

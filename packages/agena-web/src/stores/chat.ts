@@ -1193,9 +1193,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
       if (thinkingMode) patch.thinkingMode = thinkingMode
       if (speedMode) patch.speedMode = speedMode
       if (verbosity) patch.verbosity = verbosity
-      if (typeof execution.model_parallel_tool_calls === 'boolean') {
-        patch.parallelToolCalls = execution.model_parallel_tool_calls
-      }
       if (Object.keys(patch).length) upsertSessionRunConfig(sid, patch)
     }
 
@@ -1668,7 +1665,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     thinkingMode?: string
     speedMode?: string
     verbosity?: string
-    parallelToolCalls?: boolean
   }): chatApi.RunOptionsPayload {
     const providerID = (opts.providerID || '').trim()
     const adapterID = (opts.adapterID || '').trim()
@@ -1688,7 +1684,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (thinkingMode) options.thinking_mode = thinkingMode
     if (speedMode) options.speed_mode = speedMode
     if (verbosity) options.verbosity = verbosity
-    if (typeof opts.parallelToolCalls === 'boolean') options.parallel_tool_calls = opts.parallelToolCalls
     return options
   }
 
@@ -1703,7 +1698,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
       thinkingMode?: string
       speedMode?: string
       verbosity?: string
-      parallelToolCalls?: boolean
     },
   ) {
     const sid = (sessionId || '').trim()

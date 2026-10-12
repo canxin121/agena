@@ -16,7 +16,6 @@ export type SessionSelection = {
   thinkingMode: string
   speedMode: string
   verbosity: string
-  parallelToolCalls?: boolean
 }
 
 function text(value: unknown): string {
@@ -31,7 +30,6 @@ export function readSessionRunConfigSelection(runConfig: SessionRunConfig | null
     thinkingMode: text(runConfig?.thinkingMode),
     speedMode: text(runConfig?.speedMode),
     verbosity: text(runConfig?.verbosity),
-    ...(typeof runConfig?.parallelToolCalls === 'boolean' ? { parallelToolCalls: runConfig.parallelToolCalls } : {}),
   }
 }
 

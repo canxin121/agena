@@ -90,12 +90,6 @@ impl ApplicationService {
         let mut requested_verbosity =
             non_empty(request.verbosity.as_deref()).map(|value| value.trim().to_ascii_lowercase());
         let global_selection = provider_catalog.default_selection();
-        let requested_parallel_tool_calls = request.parallel_tool_calls.or_else(|| {
-            uses_global_default
-                .then_some(global_selection.parallel_tool_calls)
-                .flatten()
-        });
-
         let provider_options = provider_catalog
             .model_execution_options(&model)
             .map_err(provider_catalog_error)?;
@@ -183,16 +177,14 @@ impl ApplicationService {
                 .map(str::to_ascii_lowercase);
         }
         let mut request_override = thinking_request_override.merged_with(&speed_request_override);
-        request_override.set_parallel_tool_calls(requested_parallel_tool_calls);
         let metadata = provider_options.metadata;
-        if requested_parallel_tool_calls.is_some()
-            && !metadata.supports_parallel_tool_calls_for_model()
-        {
-            return Err(ApplicationError::bad_request_with_diagnostic(
-                "This model does not support parallel tool calls.",
-                format!("model `{}` does not support parallel tool calls", model),
-            ));
-        }
+        // Parallel tool calling is a model capability, not a per-run or
+        // default-selection preference. Always derive the protocol hint from
+        // the resolved model metadata; absent capability is conservatively
+        // treated as unsupported.
+        request_override.set_parallel_tool_calls(Some(
+            metadata.supports_parallel_tool_calls_for_model(),
+        ));
         let supported_verbosity_levels =
             metadata.supported_verbosity_levels_for_model(&model.model_id);
         if let Some(verbosity) = requested_verbosity.as_deref()
@@ -831,7 +823,6 @@ pub fn permission_config_resource_from_domain(
                 thinking_mode: model.thinking_mode.clone(),
                 speed_mode: model.speed_mode.clone(),
                 verbosity: model.verbosity.clone(),
-                parallel_tool_calls: model.parallel_tool_calls,
             }
         }),
     }

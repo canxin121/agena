@@ -60,7 +60,6 @@ export type RuntimeDefaultSelection = {
   thinkingMode: string
   speedMode: string
   verbosity: string
-  parallelToolCalls?: boolean
 }
 
 export type ModelMetaRecord = ProviderModel
@@ -85,7 +84,6 @@ type RuntimeStatus = {
     thinking_mode?: string | null
     speed_mode?: string | null
     verbosity?: string | null
-    parallel_tool_calls?: boolean | null
   } | null
 }
 
@@ -297,9 +295,6 @@ export function useModelSelectionCatalog() {
           thinkingMode: readString(selection?.thinking_mode),
           speedMode: readString(selection?.speed_mode),
           verbosity: readString(selection?.verbosity),
-          ...(typeof selection?.parallel_tool_calls === 'boolean'
-            ? { parallelToolCalls: selection.parallel_tool_calls }
-            : {}),
         }
 
         if (

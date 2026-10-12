@@ -266,6 +266,11 @@ const modelFields = computed<ModelField[]>(() => [
   { key: 'enabled', label: st('Enabled'), kind: 'boolean' },
   { key: 'native_compaction', label: st('Native compaction'), kind: 'boolean' },
   {
+    key: 'supports_parallel_tool_calls',
+    label: st('Parallel tools'),
+    kind: 'boolean',
+  },
+  {
     key: 'manual_overrides',
     label: st('Manual overrides'),
     kind: 'boolean',

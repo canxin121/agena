@@ -37,7 +37,6 @@ test('resolveEffectiveDefaults prefers the runtime-wide default and keeps its mo
         thinkingMode: 'high',
         speedMode: 'fast',
         verbosity: 'compact',
-        parallelToolCalls: true,
       },
       fallback: { provider: 'fallback', model: 'fallback-model' },
     }),
@@ -48,7 +47,6 @@ test('resolveEffectiveDefaults prefers the runtime-wide default and keeps its mo
       thinkingMode: 'high',
       speedMode: 'fast',
       verbosity: 'compact',
-      parallelToolCalls: true,
     },
   )
 })

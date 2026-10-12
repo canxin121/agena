@@ -16,7 +16,6 @@ import {
 import {
   defaultModeValue,
   speedModeOptionsForModel,
-  supportsParallelToolCallsForModel,
   thinkingModeOptionsForModel,
   useModelSelectionCatalog,
   verbosityOptionsForModel,
@@ -46,7 +45,6 @@ const modelKey = ref('')
 const thinkingMode = ref('')
 const speedMode = ref('')
 const verbosity = ref('')
-const parallelToolCalls = ref(false)
 
 const editable = computed(() => props.scope !== 'effective')
 const selectedLayer = computed<'global' | 'workspace' | null>(() =>
@@ -98,7 +96,6 @@ const speedOptions = computed(() => withSelectedMode(speedModeOptionsForModel(se
 const verbosityOptions = computed(() =>
   withSelectedMode(verbosityOptionsForModel(selectedModel.value), verbosity.value),
 )
-const supportsParallelTools = computed(() => supportsParallelToolCallsForModel(selectedModel.value))
 
 function chooseModel(value: string) {
   modelKey.value = value
@@ -107,7 +104,6 @@ function chooseModel(value: string) {
   thinkingMode.value = defaultModeValue(thinkingModeOptionsForModel(model))
   speedMode.value = defaultModeValue(speedModeOptionsForModel(model))
   verbosity.value = defaultModeValue(verbosityOptionsForModel(model))
-  parallelToolCalls.value = false
   error.value = ''
 }
 
@@ -121,7 +117,6 @@ function syncEditor() {
   thinkingMode.value = String(record.thinking_mode || '').trim()
   speedMode.value = String(record.speed_mode || '').trim()
   verbosity.value = String(record.verbosity || '').trim()
-  parallelToolCalls.value = record.parallel_tool_calls === true
   error.value = ''
 }
 
@@ -150,7 +145,6 @@ async function save() {
   const desiredThinking = hasSelection ? thinkingMode.value.trim() : ''
   const desiredSpeed = hasSelection ? speedMode.value.trim() : ''
   const desiredVerbosity = hasSelection ? verbosity.value.trim() : ''
-  const desiredParallel = hasSelection && supportsParallelTools.value ? parallelToolCalls.value : undefined
   saving.value = true
   error.value = ''
   try {
@@ -169,7 +163,6 @@ async function save() {
         ...(desiredThinking ? { thinking_mode: desiredThinking } : {}),
         ...(desiredSpeed ? { speed_mode: desiredSpeed } : {}),
         ...(desiredVerbosity ? { verbosity: desiredVerbosity } : {}),
-        ...(typeof desiredParallel === 'boolean' ? { parallel_tool_calls: desiredParallel } : {}),
       }
       await setRuntimeSetting(APPROVAL_MODEL_PATH, selection, { reload: true }, layer)
     }
@@ -263,19 +256,6 @@ onMounted(() => void refresh())
           :empty-label="$st('Model default')"
           :disabled="loading || saving || !editable || !modelKey || verbosityOptions.length === 0"
         />
-      </label>
-      <label class="flex min-h-9 items-center gap-2 rounded-md border border-border/60 px-3 text-sm">
-        <input
-          v-model="parallelToolCalls"
-          type="checkbox"
-          :disabled="loading || saving || !editable || !supportsParallelTools"
-        />
-        <span>
-          {{ $st('Parallel tool calls') }}
-          <span v-if="!supportsParallelTools" class="ml-1 text-xs text-muted-foreground">
-            {{ $st('not supported') }}
-          </span>
-        </span>
       </label>
     </div>
 

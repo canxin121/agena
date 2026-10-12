@@ -31,7 +31,6 @@ impl RunOptionsState {
             thinking_mode: self.thinking_mode.clone(),
             speed_mode: self.speed_mode.clone(),
             verbosity: self.verbosity.clone(),
-            parallel_tool_calls: self.parallel_tool_calls,
             ..RunOptions::default()
         }
     }
@@ -81,7 +80,6 @@ impl RunOptionsState {
             thinking_mode: self.thinking_mode.clone(),
             speed_mode: self.speed_mode.clone(),
             verbosity: self.verbosity.clone(),
-            parallel_tool_calls: self.parallel_tool_calls,
             ..RunOptions::default()
         }
     }
@@ -107,21 +105,6 @@ impl RunOptionsState {
             parts.push(i18n.text_args(
                 "run-options-summary-verbosity",
                 &agena_tui::fl_args!("value" => verbosity),
-            ));
-        }
-        if let Some(parallel_tool_calls) = self.parallel_tool_calls {
-            parts.push(i18n.text_args(
-                "run-options-summary-parallel-tools",
-                &agena_tui::fl_args!(
-                    "value" => ui_text::t(
-                        i18n,
-                        if parallel_tool_calls {
-                            "value-on"
-                        } else {
-                            "value-off"
-                        },
-                    )
-                ),
             ));
         }
         (!parts.is_empty()).then(|| parts.join(" | "))
@@ -184,6 +167,5 @@ mod tests {
         assert_eq!(request.thinking_mode.as_deref(), Some("low"));
         assert_eq!(request.speed_mode, state.speed_mode);
         assert_eq!(request.verbosity, state.verbosity);
-        assert_eq!(request.parallel_tool_calls, state.parallel_tool_calls);
     }
 }

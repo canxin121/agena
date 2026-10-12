@@ -13,7 +13,7 @@ test('global default model patch writes only providers.default_selection', () =>
   assert.deepEqual(
     buildDefaultModelSettingsPatch(
       { provider: 'openai', adapter: 'responses', model: 'gpt-5' },
-      { thinkingMode: 'high', speedMode: 'fast', verbosity: 'compact', parallelToolCalls: true },
+      { thinkingMode: 'high', speedMode: 'fast', verbosity: 'compact' },
     ),
     {
       path: 'providers',
@@ -25,7 +25,6 @@ test('global default model patch writes only providers.default_selection', () =>
           thinking_mode: 'high',
           speed_mode: 'fast',
           verbosity: 'compact',
-          parallel_tool_calls: true,
         },
       },
       dry_run: false,
@@ -81,7 +80,6 @@ test('settings read-back normalizes approval model identity and modes', () => {
         thinkingMode: 'high',
         speedMode: 'fast',
         verbosity: 'compact',
-        parallelToolCalls: true,
       },
     },
   )

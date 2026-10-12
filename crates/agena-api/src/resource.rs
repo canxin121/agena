@@ -380,8 +380,6 @@ pub struct DefaultSelectionResource {
     pub speed_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
 }
 
 /// The effective default execution selection the runtime applies when a
@@ -1333,8 +1331,6 @@ pub struct RunOptions {
     #[serde(default)]
     pub verbosity: Option<String>,
     #[serde(default)]
-    pub parallel_tool_calls: Option<bool>,
-    #[serde(default)]
     pub system: Option<String>,
     #[serde(default)]
     pub temperature: Option<f32>,
@@ -1677,8 +1673,6 @@ pub struct ApprovalModelSelectionResource {
     pub speed_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
 }
 
 /// Path permission configuration of a session.

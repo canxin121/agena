@@ -876,7 +876,6 @@ impl Application {
             thinking_mode: selection.thinking_mode,
             speed_mode: selection.speed_mode,
             verbosity: selection.verbosity,
-            parallel_tool_calls: selection.parallel_tool_calls,
         });
         let model_catalog = ModelCatalogResponse {
             refreshing: status.model_catalog_refreshing,

@@ -16,7 +16,6 @@ import {
 import {
   defaultModeValue,
   speedModeOptionsForModel,
-  supportsParallelToolCallsForModel,
   thinkingModeOptionsForModel,
   useModelSelectionCatalog,
   verbosityOptionsForModel,
@@ -36,7 +35,6 @@ type ModelSelectionValue = {
   thinking_mode?: string | null
   speed_mode?: string | null
   verbosity?: string | null
-  parallel_tool_calls?: boolean | null
 }
 
 const DEFAULT_SELECTION_PATH = 'providers.default_selection'
@@ -60,7 +58,6 @@ const modelKey = ref('')
 const thinkingMode = ref('')
 const speedMode = ref('')
 const verbosity = ref('')
-const parallelToolCalls = ref(false)
 const saveBusy = ref(false)
 const saveError = ref('')
 
@@ -128,7 +125,6 @@ const defaultSpeedOptions = computed(() =>
 const defaultVerbosityOptions = computed(() =>
   withSelectedMode(verbosityOptionsForModel(selectedDefaultModel.value), verbosity.value),
 )
-const selectedSupportsParallelTools = computed(() => supportsParallelToolCallsForModel(selectedDefaultModel.value))
 
 function syncEditor() {
   const selection = layerSelections.value[scope.value]
@@ -140,7 +136,6 @@ function syncEditor() {
   thinkingMode.value = String(selection.thinking_mode || '').trim()
   speedMode.value = String(selection.speed_mode || '').trim()
   verbosity.value = String(selection.verbosity || '').trim()
-  parallelToolCalls.value = selection.parallel_tool_calls === true
   saveError.value = ''
 }
 
@@ -151,7 +146,6 @@ function chooseDefaultModel(value: string) {
   thinkingMode.value = defaultModeValue(thinkingModeOptionsForModel(model))
   speedMode.value = defaultModeValue(speedModeOptionsForModel(model))
   verbosity.value = defaultModeValue(verbosityOptionsForModel(model))
-  parallelToolCalls.value = false
   saveError.value = ''
 }
 
@@ -191,7 +185,6 @@ async function saveDefaultSelection() {
     ...(device.thinking_mode ? { thinking_mode: device.thinking_mode } : {}),
     ...(device.speed_mode ? { speed_mode: device.speed_mode } : {}),
     ...(verbosity.value.trim() ? { verbosity: verbosity.value.trim() } : {}),
-    ...(selectedSupportsParallelTools.value ? { parallel_tool_calls: parallelToolCalls.value } : {}),
   }
   try {
     await setRuntimeSetting(DEFAULT_SELECTION_PATH, selection, { reload: true }, layer)
@@ -311,19 +304,6 @@ onMounted(() => void refresh())
             :empty-label="$st('Model default')"
             :disabled="loading || saveBusy || !editable || !modelKey || defaultVerbosityOptions.length === 0"
           />
-        </label>
-        <label class="flex min-h-9 items-center gap-2 rounded-md border border-border/60 px-3 text-sm">
-          <input
-            v-model="parallelToolCalls"
-            type="checkbox"
-            :disabled="loading || saveBusy || !editable || !selectedSupportsParallelTools"
-          />
-          <span>
-            {{ $st('Parallel tool calls') }}
-            <span v-if="!selectedSupportsParallelTools" class="ml-1 text-xs text-muted-foreground">
-              {{ $st('not supported') }}
-            </span>
-          </span>
         </label>
       </div>
       <div class="flex flex-wrap items-center justify-between gap-3">

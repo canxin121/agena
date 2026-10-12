@@ -2389,7 +2389,7 @@ impl TuiBackend {
                 thinking_mode: selection.thinking_mode,
                 speed_mode: selection.speed_mode,
                 verbosity: selection.verbosity,
-                parallel_tool_calls: selection.parallel_tool_calls,
+                parallel_tool_calls: None,
             });
         }
         self.config_sources().and_then(|sources| {

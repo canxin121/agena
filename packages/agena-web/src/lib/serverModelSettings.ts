@@ -21,7 +21,6 @@ export type ServerModelModes = {
   thinkingMode?: string
   speedMode?: string
   verbosity?: string
-  parallelToolCalls?: boolean
 }
 
 function text(value: unknown): string {
@@ -78,7 +77,6 @@ function modelSelectionValue(identity: ServerModelIdentity, modes?: ServerModelM
     ...(thinkingMode ? { thinking_mode: thinkingMode } : {}),
     ...(speedMode ? { speed_mode: speedMode } : {}),
     ...(verbosity ? { verbosity } : {}),
-    ...(typeof modes?.parallelToolCalls === 'boolean' ? { parallel_tool_calls: modes.parallelToolCalls } : {}),
   }
 }
 
@@ -109,9 +107,6 @@ export function buildApprovalModelSettingsPatch(
       ...(selection.thinking_mode ? { thinking_mode: selection.thinking_mode } : {}),
       ...(selection.speed_mode ? { speed_mode: selection.speed_mode } : {}),
       ...(selection.verbosity ? { verbosity: selection.verbosity } : {}),
-      ...(typeof selection.parallel_tool_calls === 'boolean'
-        ? { parallel_tool_calls: selection.parallel_tool_calls }
-        : {}),
     }
   }
   return {
@@ -139,7 +134,6 @@ export function approvalModelFromSettingsResponse(payload: JsonValue): {
       ...(thinkingMode ? { thinkingMode } : {}),
       ...(speedMode ? { speedMode } : {}),
       ...(verbosity ? { verbosity } : {}),
-      ...(typeof value?.parallel_tool_calls === 'boolean' ? { parallelToolCalls: value.parallel_tool_calls } : {}),
     },
   }
 }

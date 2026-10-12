@@ -151,6 +151,12 @@ mod tests {
 
     #[test]
     fn serializes_explicit_parallel_tool_call_policy_without_forcing_a_default() {
+        let enabled = serde_json::to_value(request(Some(true))).expect("serialize request");
+        assert_eq!(
+            enabled.get("parallel_tool_calls"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
         let disabled = serde_json::to_value(request(Some(false))).expect("serialize request");
         assert_eq!(
             disabled.get("parallel_tool_calls"),
@@ -455,6 +461,7 @@ mod tests {
 
         let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
             &agena_provider::CompletionRequest {
+                model_supports_parallel_tool_calls: None,
                 model: agena_domain::ModelId::new("test-model"),
                 system: None,
                 turns: vec![source.clone()],
@@ -546,6 +553,7 @@ mod tests {
 
         let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
             &agena_provider::CompletionRequest {
+                model_supports_parallel_tool_calls: None,
                 model: agena_domain::ModelId::new("test-model"),
                 system: None,
                 turns: vec![source],
@@ -623,6 +631,7 @@ mod tests {
 
         let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
             &agena_provider::CompletionRequest {
+                model_supports_parallel_tool_calls: None,
                 model: agena_domain::ModelId::new("test-model"),
                 system: None,
                 turns: vec![source],
@@ -704,6 +713,7 @@ mod tests {
 
         let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
             &agena_provider::CompletionRequest {
+                model_supports_parallel_tool_calls: None,
                 model: agena_domain::ModelId::new("test-model"),
                 system: None,
                 turns: vec![source],

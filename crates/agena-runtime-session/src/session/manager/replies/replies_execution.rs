@@ -10,8 +10,7 @@ use super::{
     pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
     permission_request_id, plugin_user_input_request_id, push_unique_permission_action,
     requested_background_kind, reserve_background_external_id, resolve_pending_tool,
-    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
-    update_resolved_tool_message,
+    responses_api_request_metadata, run_abort_reason, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -535,13 +534,9 @@ impl SessionManager {
                 // embedded in the provider-loop future and overflowing a
                 // normal Tokio worker stack when a permission continuation
                 // reaches the tool batch immediately.
-                session = Box::pin(self.resolve_pending_tools(
-                    session,
-                    pending_tools,
-                    &current_options,
-                    state.clone(),
-                ))
-                .await?;
+                session =
+                    Box::pin(self.resolve_pending_tools(session, pending_tools, state.clone()))
+                        .await?;
                 session.refresh_derived();
                 // Drain and record hook runs observed while the tool batch
                 // executed (command.before/after, and any hook the tool itself
@@ -1864,26 +1859,18 @@ impl SessionManager {
         &self,
         mut session: Session,
         pending_tools: Vec<SessionPendingTool>,
-        options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        // `parallel_tool_calls: false` is a model-request contract, not just
-        // a provider hint. Keep provider-emitted calls in their transcript
-        // order even when every individual tool is otherwise safe to fan out.
-        // Protocol `tools_call` invocations are safe to fan out too.
-        // Host-side interactive requests serialize only their short
-        // load-and-persist section, keyed by call id, rather than serializing
-        // complete tool executions around user approval.
-        if !should_execute_pending_tools_concurrently(&options.request_override) {
+        // Local execution safety is independent of whether the provider
+        // protocol can ask for multiple calls. Only a batch whose every
+        // invocation is explicitly safe may share a local parallel wave.
+        if pending_tools.len() <= 1 {
             if let Some(tool) = session.next_pending_tool() {
                 return Box::pin(self.resolve_pending_tool(session, tool, state)).await;
             }
             return Ok(session);
         }
 
-        let mut ready_tools = Vec::new();
-        let mut permission_requests = Vec::new();
-        let mut sequential_tools = Vec::new();
         let batch_executor = state
             .tool_executor
             .for_session_context_async(&session.runtime.execution)
@@ -1896,6 +1883,30 @@ impl SessionManager {
                 state.as_ref(),
                 &session.runtime.execution.selection,
             ));
+        let parallel_safe_batch = pending_tools.iter().all(|pending_tool| {
+            let Ok(resolved) = resolve_pending_tool(&session, pending_tool) else {
+                return false;
+            };
+            requested_background_kind(&resolved.invocation).is_none()
+                && !batch_executor.invocation_requires_streaming(&resolved.invocation)
+                && !matches!(
+                    resolved.invocation.name.as_str(),
+                    "agena.tasks.followup" | "tasks.followup" | "agena_tasks_followup"
+                )
+                && batch_executor.invocation_supports_parallel_execution(&resolved.invocation)
+        });
+        if !parallel_safe_batch {
+            // Preserve transcript order and avoid preflight side effects being
+            // repeated when any member is not safe to fan out.
+            if let Some(tool) = session.next_pending_tool() {
+                return Box::pin(self.resolve_pending_tool(session, tool, state)).await;
+            }
+            return Ok(session);
+        }
+
+        let mut ready_tools = Vec::new();
+        let mut permission_requests = Vec::new();
+        let mut sequential_tools = Vec::new();
         for pending_tool in pending_tools {
             match Box::pin(self.prepare_pending_tool_batch_member(
                 &mut session,

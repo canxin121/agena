@@ -4,6 +4,7 @@
 //! `agena-storage` and `agena-storage-sqlite`; these tests prove the execution
 //! manager's adapter preserves that model at its boundary.
 
+mod concurrent_batch;
 mod context_usage;
 #[path = "task_output_tests.rs"]
 mod task_output_tests;
@@ -1071,6 +1072,7 @@ async fn session_model_selection_survives_a_store_reload() {
         .update_session_selection(
             session.id,
             agena_runtime::SessionRunOptions {
+                model_supports_parallel_tool_calls: None,
                 model: ModelRef::new("acme", "acme-fast"),
                 thinking_mode: None,
                 speed_mode: None,
@@ -3130,6 +3132,7 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
         session_id: session.id,
         model: ModelRef::new("fake", "fake-model"),
         completion: CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: ModelId::new("fake-model"),
             system: None,
             turns: Vec::new(),
@@ -3261,6 +3264,7 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
     let request = SessionUserRunRequest::new(
         session.id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
             model: ModelRef::new("tool-loop", "tool-loop-model"),
             thinking_mode: None,
             speed_mode: None,
@@ -3400,17 +3404,16 @@ async fn stable_run_continues_after_mixed_failed_and_completed_parallel_tool_bat
     let provider = Arc::new(MixedToolHelpBatchProvider::new());
     let manager = manager_with_tool_search_fixture(provider.clone()).await;
     let session = create(&manager, "mixed Tool API batch").await;
-    let mut request_override = agena_domain::ModelSpeedModeRequestOverride::default();
-    request_override.set_parallel_tool_calls(Some(true));
     let request = SessionUserRunRequest::new(
         session.id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
             model: ModelRef::new("mixed-tool-help", "mixed-tool-help-model"),
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
             thinking: None,
-            request_override,
+            request_override: Default::default(),
             system: Some("Inspect both tool contracts, then finish.".to_owned()),
             temperature: Some(0.0),
             max_output_tokens: Some(256),
@@ -3752,6 +3755,7 @@ async fn provider_native_completion_preserves_started_identity_and_context() {
             SessionUserRunRequest::new(
                 session.id,
                 agena_runtime::SessionRunOptions {
+                    model_supports_parallel_tool_calls: None,
                     model: ModelRef::new("provider-native-fixture", "provider-native-model"),
                     thinking_mode: None,
                     speed_mode: None,
@@ -3828,6 +3832,7 @@ async fn unfinished_provider_native_call_fails_instead_of_wedging_the_run() {
             SessionUserRunRequest::new(
                 session.id,
                 agena_runtime::SessionRunOptions {
+                    model_supports_parallel_tool_calls: None,
                     model: ModelRef::new("provider-native-fixture", "provider-native-model"),
                     thinking_mode: None,
                     speed_mode: None,
@@ -3892,6 +3897,7 @@ async fn provider_startup_failure_persists_expandable_error_part() {
     let request = SessionUserRunRequest::new(
         session.id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
             model: ModelRef::new("startup-failure", "failure-model"),
             thinking_mode: None,
             speed_mode: None,
@@ -4278,6 +4284,7 @@ async fn non_host_user_input_reply_persists_on_tool_call() {
         manager.reply_user_input(SessionExecutionReplyRequest::new(
             session.id,
             agena_runtime::SessionRunOptions {
+                model_supports_parallel_tool_calls: None,
                 model: ModelRef::new("fake", "fake-model"),
                 thinking_mode: None,
                 speed_mode: None,
@@ -4443,6 +4450,7 @@ async fn host_ask_user_tool_call_born_in_progress_and_reply_completes() {
     let reply_request = agena_runtime::SessionExecutionReplyRequest::new(
         session_id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
             model: ModelRef::new("fake", "fake-model"),
             thinking_mode: None,
             speed_mode: None,
@@ -4669,6 +4677,7 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
         agena_runtime::SessionExecutionReplyRequest::new(
             session_id,
             agena_runtime::SessionRunOptions {
+                model_supports_parallel_tool_calls: None,
                 model: ModelRef::new("fake", "fake-model"),
                 thinking_mode: None,
                 speed_mode: None,
@@ -5265,6 +5274,7 @@ async fn assistant_hook_mid_model_part_waits_for_the_boundary_and_keeps_the_turn
     let request = SessionUserRunRequest::new(
         session_id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
             model: ModelRef::new("assistant-hook-boundary", "assistant-hook-boundary-model"),
             thinking_mode: None,
             speed_mode: None,
@@ -5503,6 +5513,7 @@ async fn assistant_hook_after_a_terminal_text_part_opens_a_clean_follow_up_run()
     let request = SessionUserRunRequest::new(
         session_id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
             model: ModelRef::new("assistant-hook-boundary", "assistant-hook-boundary-model"),
             thinking_mode: None,
             speed_mode: None,

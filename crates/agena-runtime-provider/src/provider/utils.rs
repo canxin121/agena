@@ -211,6 +211,15 @@ pub fn serialize_request_body_with_patch(
     patch: &BTreeMap<String, serde_json::Value>,
 ) -> Result<serde_json::Value, ProviderError> {
     let mut value = serde_json::to_value(body).map_err(ProviderError::from)?;
+    // `parallel_tool_calls` is a typed protocol capability, not a generic JSON
+    // body override. Prevent stale/custom mode patches from leaking it into
+    // protocols whose wire contract does not define that field or overriding
+    // the model-resolved value on protocols that do.
+    let mut patch = patch.clone();
+    patch.remove("parallel_tool_calls");
+    for value in patch.values_mut() {
+        remove_parallel_tool_calls_keys(value);
+    }
     if patch.is_empty() {
         return Ok(value);
     }
@@ -221,8 +230,25 @@ pub fn serialize_request_body_with_patch(
         ));
     };
 
-    merge_json_object_patch_map(target, patch);
+    merge_json_object_patch_map(target, &patch);
     Ok(value)
+}
+
+fn remove_parallel_tool_calls_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.remove("parallel_tool_calls");
+            for value in object.values_mut() {
+                remove_parallel_tool_calls_keys(value);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                remove_parallel_tool_calls_keys(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Owned wire body, encoded once before credential retries. Bytes clones are
@@ -1841,6 +1867,20 @@ mod tests {
             ProviderError::ProviderClassified { message, .. } => message,
             other => panic!("expected classified provider error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn generic_body_patches_cannot_smuggle_parallel_protocol_flags_nested() {
+        let patch = BTreeMap::from([(
+            "options".to_owned(),
+            json!({"parallel_tool_calls": true, "temperature": 0.2}),
+        )]);
+        let body = serialize_request_body_with_patch(&json!({"model": "test"}), &patch)
+            .expect("serialize body patch");
+        assert_eq!(
+            body,
+            json!({"model": "test", "options": {"temperature": 0.2}})
+        );
     }
 
     #[test]

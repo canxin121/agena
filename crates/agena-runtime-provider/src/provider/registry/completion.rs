@@ -2002,6 +2002,7 @@ mod tool_api_function_validation_tests {
 
     fn tool_mode_probe_request() -> CompletionRequest {
         CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: ModelId::new("test-model"),
             system: Some("base system".to_owned()),
             turns: Vec::new(),
@@ -2283,6 +2284,7 @@ mod tool_api_function_validation_tests {
 
     fn repair_request() -> CompletionRequest {
         CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: ModelId::new("test-model"),
             system: Some("base system".to_owned()),
             turns: vec![
@@ -2959,6 +2961,7 @@ mod replay_tests {
 
     fn replay_request() -> CompletionRequest {
         CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: ModelId::new("test-model"),
             system: Some("base system".to_owned()),
             turns: vec![crate::provider::project_completion_input(&[Part {

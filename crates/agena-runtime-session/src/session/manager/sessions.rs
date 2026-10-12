@@ -456,6 +456,7 @@ impl SessionManager {
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
+            model_supports_parallel_tool_calls: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -671,6 +672,7 @@ impl SessionManager {
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
+            model_supports_parallel_tool_calls: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -685,7 +687,7 @@ impl SessionManager {
             thinking_mode: options.thinking_mode,
             speed_mode: options.speed_mode,
             verbosity: options.verbosity,
-            parallel_tool_calls: options.request_override.parallel_tool_calls(),
+            parallel_tool_calls: options.model_supports_parallel_tool_calls,
         })
     }
 

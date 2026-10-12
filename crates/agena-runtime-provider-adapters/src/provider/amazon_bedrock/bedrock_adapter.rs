@@ -1412,7 +1412,7 @@ impl AmazonBedrockAdapter {
                 reasoning_effort: None,
                 verbosity: None,
                 prompt_cache_key: prompt_cache_key.clone(),
-                parallel_tool_calls: request.request_override.parallel_tool_calls(),
+                parallel_tool_calls: request.model_supports_parallel_tool_calls,
             };
             let body_json =
                 utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
@@ -1509,7 +1509,7 @@ impl AmazonBedrockAdapter {
                 reasoning_effort: None,
                 verbosity: None,
                 prompt_cache_key: prompt_cache_key.clone(),
-                parallel_tool_calls: request.request_override.parallel_tool_calls(),
+                parallel_tool_calls: request.model_supports_parallel_tool_calls,
             };
             let body_json =
                 utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;

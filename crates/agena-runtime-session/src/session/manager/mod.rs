@@ -91,6 +91,7 @@ fn completion_request(
     prompt_window_generation: Option<u64>,
 ) -> agena_provider::CompletionRequest {
     agena_provider::CompletionRequest {
+        model_supports_parallel_tool_calls: options.model_supports_parallel_tool_calls,
         model: options.model.model_id.clone(),
         system,
         turns,

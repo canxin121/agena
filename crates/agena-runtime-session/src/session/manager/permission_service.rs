@@ -289,6 +289,7 @@ impl SessionManager {
             .provider_registry
             .model_metadata(&model)
             .unwrap_or_default();
+        let model_supports_parallel_tool_calls = metadata.supports_parallel_tool_calls_for_model();
         let default_output_tokens = metadata
             .limits
             .max_output_tokens
@@ -298,6 +299,7 @@ impl SessionManager {
             });
 
         let mut options = SessionRunOptions {
+            model_supports_parallel_tool_calls: Some(model_supports_parallel_tool_calls),
             model: model.clone(),
             thinking_mode: selection
                 .as_ref()
@@ -471,6 +473,7 @@ impl SessionManager {
                         });
                     }
                     let mut request = agena_provider::CompletionRequest {
+                        model_supports_parallel_tool_calls: Some(model_supports_parallel_tool_calls),
                         model: model_ref.model_id.clone(),
                         system: Some(system_prompt.clone()),
                         turns,

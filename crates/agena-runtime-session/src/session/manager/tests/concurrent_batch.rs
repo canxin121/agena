@@ -10,6 +10,7 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const BATCH_LABELS: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
+const SERIAL_LABELS: [&str; 2] = ["serial_alpha", "serial_beta"];
 
 struct ConcurrentBatchState {
     in_flight: AtomicUsize,
@@ -38,36 +39,81 @@ struct ConcurrentBatchFixture {
     summary = "Concurrent batch regression fixture"
 )]
 impl ConcurrentBatchFixture {
-    #[tool(name = "alpha", summary = "First batch member.", tags(mutate))]
+    #[tool(
+        name = "alpha",
+        summary = "First batch member.",
+        tags(mutate, parallel_safe)
+    )]
     async fn alpha(
         &self,
     ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
         self.rendezvous("alpha").await
     }
 
-    #[tool(name = "beta", summary = "Second batch member.", tags(mutate))]
+    #[tool(
+        name = "beta",
+        summary = "Second batch member.",
+        tags(mutate, parallel_safe)
+    )]
     async fn beta(
         &self,
     ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
         self.rendezvous("beta").await
     }
 
-    #[tool(name = "gamma", summary = "Third batch member.", tags(mutate))]
+    #[tool(
+        name = "gamma",
+        summary = "Third batch member.",
+        tags(mutate, parallel_safe)
+    )]
     async fn gamma(
         &self,
     ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
         self.rendezvous("gamma").await
     }
 
-    #[tool(name = "delta", summary = "Fourth batch member.", tags(mutate))]
+    #[tool(
+        name = "delta",
+        summary = "Fourth batch member.",
+        tags(mutate, parallel_safe)
+    )]
     async fn delta(
         &self,
     ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
         self.rendezvous("delta").await
     }
+
+    #[tool(name = "serial_alpha", summary = "Unsafe serial member.", tags(mutate))]
+    async fn serial_alpha(
+        &self,
+    ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
+        self.serial_work("serial_alpha").await
+    }
+
+    #[tool(name = "serial_beta", summary = "Unsafe serial member.", tags(mutate))]
+    async fn serial_beta(
+        &self,
+    ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
+        self.serial_work("serial_beta").await
+    }
 }
 
 impl ConcurrentBatchFixture {
+    async fn serial_work(
+        &self,
+        label: &str,
+    ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
+        let in_flight = self.state.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.state
+            .max_in_flight
+            .fetch_max(in_flight, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        self.state.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(agena_plugin_host::sdk::ToolInvokeOutput::text(format!(
+            "{label} completed"
+        )))
+    }
+
     /// Block until every batch member is executing, then report success. A
     /// member that never sees its peers fails instead of hanging the suite.
     async fn rendezvous(
@@ -98,6 +144,7 @@ impl ConcurrentBatchFixture {
 struct ConcurrentBatchProvider {
     model: ModelId,
     requests: std::sync::Mutex<Vec<CompletionRequest>>,
+    labels: &'static [&'static str],
 }
 
 impl ConcurrentBatchProvider {
@@ -105,6 +152,15 @@ impl ConcurrentBatchProvider {
         Self {
             model: ModelId::new("conc-batch-model"),
             requests: std::sync::Mutex::new(Vec::new()),
+            labels: &BATCH_LABELS,
+        }
+    }
+
+    fn serial() -> Self {
+        Self {
+            model: ModelId::new("conc-batch-model"),
+            requests: std::sync::Mutex::new(Vec::new()),
+            labels: &SERIAL_LABELS,
         }
     }
 
@@ -165,7 +221,7 @@ impl ModelRuntime for ConcurrentBatchProvider {
         let mut events = Vec::new();
         match index {
             0 => {
-                for (position, label) in BATCH_LABELS.iter().enumerate() {
+                for (position, label) in self.labels.iter().enumerate() {
                     events.push(Ok(CompletionStreamEvent::ToolCallSnapshot {
                         provider_id: provider_id.clone(),
                         model: model.clone(),
@@ -274,17 +330,16 @@ async fn one_reply_hands_the_whole_batch_to_concurrent_execution() {
     let provider = Arc::new(ConcurrentBatchProvider::new());
     let manager = manager_with_concurrent_batch_fixture(provider.clone(), Arc::clone(&state)).await;
     let session = create(&manager, "concurrent tool batch").await;
-    let mut request_override = agena_domain::ModelSpeedModeRequestOverride::default();
-    request_override.set_parallel_tool_calls(Some(true));
     let request = SessionUserRunRequest::new(
         session.id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
             model: ModelRef::new("conc-batch", "conc-batch-model"),
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
             thinking: None,
-            request_override,
+            request_override: Default::default(),
             system: Some("Run every batch member, then finish.".to_owned()),
             temperature: Some(0.0),
             max_output_tokens: Some(256),
@@ -379,9 +434,42 @@ async fn one_reply_hands_the_whole_batch_to_concurrent_execution() {
             replayed_tool_turn.parts
         );
     }
-    assert!(completed.parts().iter().any(|part| {
-        part.kind == "text"
-            && part.content.get("text").and_then(serde_json::Value::as_str)
-                == Some("CONCURRENT_BATCH_OK")
-    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unsafe_mutating_batch_stays_serial_even_when_protocol_allows_parallel_calls() {
+    let state = Arc::new(ConcurrentBatchState::new());
+    let provider = Arc::new(ConcurrentBatchProvider::serial());
+    let manager = manager_with_concurrent_batch_fixture(provider.clone(), Arc::clone(&state)).await;
+    let session = create(&manager, "serial unsafe tool batch").await;
+    let request = SessionUserRunRequest::new(
+        session.id,
+        agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: Some(true),
+            model: ModelRef::new("conc-batch", "conc-batch-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: Some("Run the two mutating tools in transcript order.".to_owned()),
+            temperature: Some(0.0),
+            max_output_tokens: Some(256),
+        },
+        vec![TypedContent::Text(text_content(
+            "Run both serial fixture tools.",
+        ))],
+    );
+
+    let completed = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        manager.submit_subtask_user_message(request, None),
+    )
+    .await
+    .expect("the serial tool batch must complete")
+    .expect("the run continues after returning results to the model");
+
+    assert_eq!(state.max_in_flight.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.request_count(), 2);
+    assert!(completed.pending_tools().is_empty());
 }

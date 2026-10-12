@@ -259,6 +259,32 @@ async fn rendering_executor(behavior: RenderBehavior) -> ToolExecutor {
     )
 }
 
+#[tokio::test]
+async fn unregistered_invocations_fail_closed_for_parallel_execution() {
+    let workspace_root = std::env::current_dir().expect("resolve test workspace");
+    let plugins = empty_test_plugin_host(&workspace_root).await;
+    let executor = ToolExecutor::new(
+        workspace_root,
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        plugins,
+        None,
+        None,
+    );
+    let invocation = ToolInvocation::new("not.registered", StructuredObject::default());
+
+    assert!(!executor.invocation_supports_parallel_execution(&invocation));
+}
+
+#[tokio::test]
+async fn registered_read_only_invocations_are_parallel_safe() {
+    let executor = rendering_executor(RenderBehavior::Project).await;
+
+    assert!(executor.invocation_supports_parallel_execution(&rendering_invocation()));
+}
+
 fn rendering_invocation() -> ToolInvocation {
     ToolInvocation::new(
         "test.renderer.render",

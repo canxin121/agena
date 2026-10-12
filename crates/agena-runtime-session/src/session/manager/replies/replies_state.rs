@@ -105,7 +105,7 @@ impl SessionManager {
         let next_thinking_mode = options.thinking_mode.clone();
         let next_speed_mode = options.speed_mode.clone();
         let next_verbosity = options.verbosity.clone();
-        let next_parallel_tool_calls = options.request_override.parallel_tool_calls();
+        let next_parallel_tool_calls = options.model_supports_parallel_tool_calls;
         let changed = session.runtime.execution.selection.provider.as_deref()
             != Some(next_model_provider_id.as_str())
             || session.runtime.execution.selection.adapter.as_deref()
@@ -178,13 +178,6 @@ impl SessionManager {
                 .then(|| effective_selection.speed_mode.clone())
                 .flatten();
         }
-        if options.request_override.parallel_tool_calls().is_none() {
-            options.request_override.set_parallel_tool_calls(
-                modes_belong_to_options_model
-                    .then_some(effective_selection.parallel_tool_calls)
-                    .flatten(),
-            );
-        }
         if options.verbosity.is_none() {
             options.verbosity = modes_belong_to_options_model
                 .then(|| effective_selection.verbosity.clone())
@@ -219,9 +212,8 @@ impl SessionManager {
         let provider_registry = &execution.provider_registry;
         let resolved_adapter_id = options.model.adapter_id.clone();
 
-        let requested_parallel_tool_calls = options.request_override.parallel_tool_calls();
         let mut merged_override = options.request_override.clone();
-        merged_override.set_parallel_tool_calls(None);
+        merged_override.remove_legacy_parallel_tool_calls_patch();
         let thinking_modes = provider_registry.model_thinking_modes(&options.model)?;
         if options.thinking_mode.is_none() {
             options.thinking_mode = thinking_modes.iter().find_map(|mode| {
@@ -267,9 +259,13 @@ impl SessionManager {
                 resolved_adapter_id.as_ref(),
             ));
         }
-        if requested_parallel_tool_calls.is_some() {
-            merged_override.set_parallel_tool_calls(requested_parallel_tool_calls);
-        }
+        merged_override.remove_legacy_parallel_tool_calls_patch();
+        options.model_supports_parallel_tool_calls = Some(
+            provider_registry
+                .model_metadata(&options.model)
+                .unwrap_or_default()
+                .supports_parallel_tool_calls_for_model(),
+        );
         options.request_override = merged_override;
         Ok(())
     }
@@ -372,6 +368,7 @@ impl SessionManager {
                 thinking_mode: None,
                 speed_mode: None,
                 verbosity: None,
+                model_supports_parallel_tool_calls: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,
@@ -468,6 +465,7 @@ impl SessionManager {
                 .or_else(|| inherited.and_then(|value| value.speed_mode.clone())),
             verbosity: requested_mode(&requested_selection.verbosity)
                 .or_else(|| inherited.and_then(|value| value.verbosity.clone())),
+            model_supports_parallel_tool_calls: None,
             thinking: None,
             request_override: Default::default(),
             system: None,

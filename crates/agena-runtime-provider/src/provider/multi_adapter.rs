@@ -1037,6 +1037,7 @@ mod tests {
 
     fn request() -> CompletionRequest {
         CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: ModelId::new("model"),
             system: Some("base system".to_owned()),
             turns: vec![crate::provider::project_completion_input(&[Part {

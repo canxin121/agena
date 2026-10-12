@@ -148,10 +148,7 @@ impl OpenAiTransport {
     }
 
     pub(super) fn responses_parallel_tool_calls(request: &CompletionRequest) -> bool {
-        request
-            .request_override
-            .parallel_tool_calls()
-            .unwrap_or(false)
+        request.model_supports_parallel_tool_calls.unwrap_or(false)
     }
 
     pub(super) fn responses_request_max_output_tokens(
@@ -973,6 +970,46 @@ mod tool_api_history_tests {
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use serde_json::Value;
 
+    fn request_with_parallel_capability(capability: Option<bool>) -> CompletionRequest {
+        CompletionRequest {
+            model: agena_domain::ModelId::new("test-model"),
+            system: None,
+            turns: Vec::new(),
+            tool_api_functions: Vec::new(),
+            provider_native_tools: Default::default(),
+            disable_tools: false,
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            provider_compaction: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            model_supports_parallel_tool_calls: capability,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        }
+    }
+
+    #[test]
+    fn responses_parallel_wire_flag_uses_only_typed_model_capability() {
+        assert!(OpenAiTransport::responses_parallel_tool_calls(
+            &request_with_parallel_capability(Some(true))
+        ));
+        assert!(!OpenAiTransport::responses_parallel_tool_calls(
+            &request_with_parallel_capability(Some(false))
+        ));
+        assert!(!OpenAiTransport::responses_parallel_tool_calls(
+            &request_with_parallel_capability(None)
+        ));
+    }
+
     fn part(kind: &str, role: PartRole, state: PartState, content: Value) -> Part {
         Part {
             part_id: 1,
@@ -1413,6 +1450,7 @@ mod tool_api_history_tests {
             "content": [{ "type": "reasoning_text", "text": "prior reasoning" }]
         });
         let request = CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: agena_domain::ModelId::new("deepseek-v4-flash"),
             system: None,
             turns: vec![CompletionInputRun {
@@ -1658,6 +1696,7 @@ mod tool_api_history_tests {
 
         // The failing request had previous_response_id cleared (Restart).
         let mut request = CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: agena_domain::ModelId::new("deepseek-v4-flash"),
             system: None,
             turns,

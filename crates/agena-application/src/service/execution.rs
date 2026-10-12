@@ -178,13 +178,7 @@ impl ApplicationService {
         }
         let mut request_override = thinking_request_override.merged_with(&speed_request_override);
         let metadata = provider_options.metadata;
-        // Parallel tool calling is a model capability, not a per-run or
-        // default-selection preference. Always derive the protocol hint from
-        // the resolved model metadata; absent capability is conservatively
-        // treated as unsupported.
-        request_override.set_parallel_tool_calls(Some(
-            metadata.supports_parallel_tool_calls_for_model(),
-        ));
+        request_override.remove_legacy_parallel_tool_calls_patch();
         let supported_verbosity_levels =
             metadata.supported_verbosity_levels_for_model(&model.model_id);
         if let Some(verbosity) = requested_verbosity.as_deref()
@@ -220,6 +214,9 @@ impl ApplicationService {
             thinking_mode,
             speed_mode,
             verbosity,
+            model_supports_parallel_tool_calls: Some(
+                metadata.supports_parallel_tool_calls_for_model(),
+            ),
             thinking,
             request_override,
             system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),

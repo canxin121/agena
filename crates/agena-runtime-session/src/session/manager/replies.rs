@@ -431,12 +431,6 @@ fn mode_request_override_for_adapter(
     merged
 }
 
-fn should_execute_pending_tools_concurrently(
-    request_override: &ModelSpeedModeRequestOverride,
-) -> bool {
-    request_override.parallel_tool_calls() != Some(false)
-}
-
 pub(super) fn matching_model_turn_id(
     session: &Session,
     model_turn_id: i64,
@@ -1684,10 +1678,10 @@ async fn responses_api_request_metadata(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{matching_model_turn_id, should_execute_pending_tools_concurrently};
+    use super::matching_model_turn_id;
     use crate::session::Session;
     use crate::session::store::run_marker_content;
-    use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
+    use agena_domain::ModelRef;
     use agena_runtime::SessionRunOptions;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
 
@@ -1697,6 +1691,7 @@ mod tests {
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
+            model_supports_parallel_tool_calls: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -1736,23 +1731,6 @@ mod tests {
             provider_state: None,
         }]);
         session
-    }
-
-    #[test]
-    fn explicit_parallel_false_serializes_pending_tool_execution() {
-        let mut disabled = ModelSpeedModeRequestOverride::default();
-        disabled.set_parallel_tool_calls(Some(false));
-        assert!(!should_execute_pending_tools_concurrently(&disabled));
-
-        let enabled = {
-            let mut request_override = ModelSpeedModeRequestOverride::default();
-            request_override.set_parallel_tool_calls(Some(true));
-            request_override
-        };
-        assert!(should_execute_pending_tools_concurrently(&enabled));
-        assert!(should_execute_pending_tools_concurrently(
-            &ModelSpeedModeRequestOverride::default()
-        ));
     }
 
     #[test]

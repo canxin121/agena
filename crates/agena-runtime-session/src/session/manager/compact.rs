@@ -529,6 +529,7 @@ impl SessionManager {
             ),
         );
         let mut request = CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: options.model.model_id.clone(),
             system: Some(COMPACTION_SYSTEM_PROMPT.to_owned()),
             turns: historical_turns,

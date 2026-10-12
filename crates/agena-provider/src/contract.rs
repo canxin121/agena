@@ -1968,6 +1968,10 @@ pub struct CompletionRequest {
     pub thinking: Option<ThinkingRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<String>,
+    /// Model capability for adapters whose wire protocol supports requesting
+    /// multiple tool calls. It is not a local execution policy.
+    #[serde(skip)]
+    pub model_supports_parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -16,23 +16,12 @@ impl ModelSpeedModeRequestOverride {
         self.headers.is_empty() && self.body_patch.is_empty()
     }
 
-    pub fn parallel_tool_calls(&self) -> Option<bool> {
-        self.body_patch
-            .get("parallel_tool_calls")
-            .and_then(serde_json::Value::as_bool)
-    }
-
-    pub fn set_parallel_tool_calls(&mut self, enabled: Option<bool>) {
-        match enabled {
-            Some(enabled) => {
-                self.body_patch.insert(
-                    "parallel_tool_calls".to_owned(),
-                    serde_json::Value::Bool(enabled),
-                );
-            }
-            None => {
-                self.body_patch.remove("parallel_tool_calls");
-            }
+    /// Remove the legacy protocol field from generic JSON body patches. The
+    /// typed model capability is serialized only by adapters that support it.
+    pub fn remove_legacy_parallel_tool_calls_patch(&mut self) {
+        self.body_patch.remove("parallel_tool_calls");
+        for value in self.body_patch.values_mut() {
+            remove_parallel_tool_calls_keys(value);
         }
     }
 
@@ -42,7 +31,25 @@ impl ModelSpeedModeRequestOverride {
             merged.headers.insert(key.clone(), value.clone());
         }
         merge_json_patch_maps(&mut merged.body_patch, &other.body_patch);
+        merged.remove_legacy_parallel_tool_calls_patch();
         merged
+    }
+}
+
+fn remove_parallel_tool_calls_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.remove("parallel_tool_calls");
+            for value in object.values_mut() {
+                remove_parallel_tool_calls_keys(value);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                remove_parallel_tool_calls_keys(value);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -90,10 +97,10 @@ mod tests {
         };
         let patch = ModelSpeedModeRequestOverride {
             headers: BTreeMap::from([("x-mode".to_owned(), "fast".to_owned())]),
-            body_patch: BTreeMap::from([
-                ("options".to_owned(), serde_json::json!({"b": true})),
-                ("parallel_tool_calls".to_owned(), serde_json::json!(true)),
-            ]),
+            body_patch: BTreeMap::from([(
+                "options".to_owned(),
+                serde_json::json!({"b": true, "parallel_tool_calls": true}),
+            )]),
         };
 
         let merged = base.merged_with(&patch);
@@ -102,6 +109,6 @@ mod tests {
             merged.body_patch["options"],
             serde_json::json!({"a": 1, "b": true})
         );
-        assert_eq!(merged.parallel_tool_calls(), Some(true));
+        assert!(merged.body_patch.get("parallel_tool_calls").is_none());
     }
 }

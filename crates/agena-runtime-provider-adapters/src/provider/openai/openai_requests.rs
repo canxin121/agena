@@ -105,7 +105,7 @@ impl OpenAiTransport {
                         .supports_top_level_prompt_cache()
                         .then(prompt_cache::PromptCacheControl::ephemeral),
                     prompt_cache_key: prompt_cache_key.clone(),
-                    parallel_tool_calls: request.request_override.parallel_tool_calls(),
+                    parallel_tool_calls: request.model_supports_parallel_tool_calls,
                     stream: false,
                     stream_options: None,
                     stop: request.stop_sequences.clone(),
@@ -241,7 +241,7 @@ impl OpenAiTransport {
                         .supports_top_level_prompt_cache()
                         .then(prompt_cache::PromptCacheControl::ephemeral),
                     prompt_cache_key: prompt_cache_key.clone(),
-                    parallel_tool_calls: request.request_override.parallel_tool_calls(),
+                    parallel_tool_calls: request.model_supports_parallel_tool_calls,
                     stream: true,
                     stream_options: stream_usage_requested.then_some(ChatStreamOptions {
                         include_usage: true,

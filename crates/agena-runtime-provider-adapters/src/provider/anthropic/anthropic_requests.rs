@@ -624,6 +624,7 @@ mod tests {
             "required": ["thinking", "shouldBlock", "reason"]
         });
         let mut request = CompletionRequest {
+            model_supports_parallel_tool_calls: None,
             model: ModelId::new("claude-test"),
             system: None,
             turns: Vec::new(),

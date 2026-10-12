@@ -14,6 +14,7 @@ async fn active_session(fixture: &Fixture, runtime: &AgenaRuntime) -> i64 {
         crate::SessionUserRunRequest::new(
             session.id,
             crate::SessionRunOptions {
+                model_supports_parallel_tool_calls: None,
                 model: agena_domain::ModelRef::new("fixture", "held-before-provider"),
                 thinking_mode: None,
                 speed_mode: None,

@@ -63,6 +63,7 @@ async fn retry_transcript_case(fail: bool) {
     let request = SessionUserRunRequest::new(
         session.id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
             model: ModelRef::new("retry-fixture", "retry-model"),
             thinking_mode: None,
             speed_mode: None,

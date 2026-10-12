@@ -142,6 +142,7 @@ impl ModelRuntime for ContextProvider {
 
 fn options() -> agena_runtime::SessionRunOptions {
     agena_runtime::SessionRunOptions {
+        model_supports_parallel_tool_calls: None,
         model: ModelRef::new("context-fixture", "large-context"),
         thinking_mode: None,
         speed_mode: None,

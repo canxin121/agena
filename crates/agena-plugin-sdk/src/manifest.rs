@@ -164,6 +164,10 @@ pub enum ToolTag {
     /// Declared read-only: the tool only reads. Used for the read-only builtin
     /// profile, the `tools.rules."*".read-only` class default, and discovery.
     ReadOnly,
+    /// The tool explicitly promises that separate invocations are safe to
+    /// execute concurrently. This is a scheduler hint only; it grants no
+    /// permission and never affects provider protocol request fields.
+    ParallelSafe,
     /// Operates on files/paths in the workspace.
     Filesystem,
     /// Talks to remote services (web, APIs, network targets).
@@ -227,6 +231,18 @@ impl ToolTag {
             && !Self::is_mutating(tags)
             && !Self::is_task(tags)
     }
+
+    /// Whether independent invocations may share a local scheduler wave.
+    /// Read-only tools are safe by default; stateful tools must explicitly
+    /// declare `parallel_safe`. Interactive and task tools stay serial even
+    /// when that tag is present because they own external lifecycles. Shell
+    /// tools may opt in explicitly when their command contract is safe.
+    pub fn is_parallel_safe(tags: &[Self]) -> bool {
+        if Self::is_interactive(tags) || Self::is_task(tags) {
+            return false;
+        }
+        Self::is_read_only(tags) || tags.contains(&Self::ParallelSafe)
+    }
 }
 
 impl ToolTag {
@@ -244,6 +260,7 @@ impl ToolTag {
             "shell" => Self::Shell,
             "task" => Self::Task,
             "read_only" | "read-only" | "readonly" => Self::ReadOnly,
+            "parallel_safe" | "parallel-safe" => Self::ParallelSafe,
             "filesystem" => Self::Filesystem,
             "network" => Self::Network,
             "fetch" => Self::Fetch,
@@ -267,6 +284,7 @@ impl ToolTag {
             Self::Shell => "shell",
             Self::Task => "task",
             Self::ReadOnly => "read_only",
+            Self::ParallelSafe => "parallel_safe",
             Self::Filesystem => "filesystem",
             Self::Network => "network",
             Self::Fetch => "fetch",
@@ -379,11 +397,10 @@ pub struct ToolDocs {
 #[serde(deny_unknown_fields)]
 /// Runtime behavior policy of a tool.
 ///
-/// Nothing about a tool's output belongs here. Concurrency is not declared:
-/// the host fans every actionable tool in a model batch out at once, and each
-/// tool is responsible for its own safety under concurrent execution. Output
-/// length is not declared either: the session bounds every model-facing tool
-/// result in one place.
+/// Nothing about a tool's output belongs here. Local parallel-safety is
+/// declared separately with the `read_only` or `parallel_safe` tool tag; a
+/// provider's ability to return multiple calls does not make a tool safe to
+/// execute concurrently. Output length is bounded by the session layer.
 pub struct ToolRuntimePolicy {
     #[serde(default)]
     pub streaming: ToolStreamingMode,
@@ -1120,6 +1137,45 @@ impl PluginManifest {
                 .to_owned()
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod parallel_safety_tests {
+    use super::ToolTag;
+
+    #[test]
+    fn read_only_or_explicit_tag_controls_local_parallel_safety() {
+        assert!(ToolTag::is_parallel_safe(&[ToolTag::ReadOnly]));
+        assert!(!ToolTag::is_parallel_safe(&[ToolTag::Mutate]));
+        assert!(ToolTag::is_parallel_safe(&[
+            ToolTag::Mutate,
+            ToolTag::ParallelSafe,
+        ]));
+        assert!(!ToolTag::is_parallel_safe(&[
+            ToolTag::ParallelSafe,
+            ToolTag::Interactive,
+        ]));
+        assert!(!ToolTag::is_parallel_safe(&[ToolTag::Shell]));
+        assert!(ToolTag::is_parallel_safe(&[
+            ToolTag::ParallelSafe,
+            ToolTag::Shell,
+        ]));
+        assert!(!ToolTag::is_parallel_safe(&[
+            ToolTag::ParallelSafe,
+            ToolTag::Task,
+        ]));
+    }
+
+    #[test]
+    fn parallel_safe_tag_has_a_stable_manifest_spelling() {
+        let tag = ToolTag::from_tag("parallel_safe").expect("parse tag");
+        assert_eq!(tag, ToolTag::ParallelSafe);
+        assert_eq!(serde_json::to_string(&tag).unwrap(), "\"parallel_safe\"");
+        assert_eq!(
+            serde_json::from_str::<ToolTag>("\"parallel_safe\"").unwrap(),
+            ToolTag::ParallelSafe
+        );
     }
 }
 

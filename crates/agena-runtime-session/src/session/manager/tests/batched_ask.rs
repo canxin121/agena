@@ -413,17 +413,16 @@ async fn two_asks_in_one_batch_project_their_own_answers() {
     host_client.attach(&manager);
     let session = create(&manager, "batched ask projection").await;
 
-    let mut request_override = agena_domain::ModelSpeedModeRequestOverride::default();
-    request_override.set_parallel_tool_calls(Some(true));
     let request = SessionUserRunRequest::new(
         session.id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: Some(true),
             model: ModelRef::new("batched-ask", "batched-ask-model"),
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
             thinking: None,
-            request_override,
+            request_override: Default::default(),
             system: Some("Ask both questions, then finish.".to_owned()),
             temperature: Some(0.0),
             max_output_tokens: Some(256),
@@ -472,6 +471,7 @@ async fn two_asks_in_one_batch_project_their_own_answers() {
         crate::SessionExecutionReplyRequest::new(
             session.id,
             agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: None,
                 model: ModelRef::new("batched-ask", "batched-ask-model"),
                 thinking_mode: None,
                 speed_mode: None,

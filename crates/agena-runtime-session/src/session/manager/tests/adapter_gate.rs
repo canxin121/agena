@@ -219,17 +219,16 @@ async fn run_family(adapter: &str, parallel: bool, expected_calls: usize, family
         RuntimeSessionManagerConfig::default(),
     );
     let session = create(&manager, "adapter gate actual model loop").await;
-    let mut request_override = agena_domain::ModelSpeedModeRequestOverride::default();
-    request_override.set_parallel_tool_calls(Some(parallel));
     let request = SessionUserRunRequest::new(
         session.id,
         agena_runtime::SessionRunOptions {
+            model_supports_parallel_tool_calls: Some(parallel),
             model: ModelRef::new(provider.id(), provider.model.as_ref()),
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
             thinking: None,
-            request_override,
+            request_override: Default::default(),
             system: None,
             temperature: None,
             max_output_tokens: Some(256),

@@ -14,6 +14,9 @@ pub struct SessionRunOptions {
     pub thinking_mode: Option<String>,
     pub speed_mode: Option<String>,
     pub verbosity: Option<String>,
+    /// Model capability used only to construct protocol-specific request flags.
+    /// Local tool execution is governed by the session scheduler.
+    pub model_supports_parallel_tool_calls: Option<bool>,
     pub thinking: Option<agena_domain::ThinkingRequest>,
     pub request_override: agena_domain::ModelSpeedModeRequestOverride,
     pub system: Option<String>,

@@ -5,10 +5,12 @@ import { useI18n } from 'vue-i18n'
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'radix-vue'
 
 import Button from '@/components/ui/Button.vue'
+import { escapeBelongsToPanel } from '@/components/chat/attachmentsPanelScope'
 import IconButton from '@/components/ui/IconButton.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 type DesktopAnchorLike =
   | HTMLElement
@@ -46,6 +48,7 @@ const props = withDefaults(
 
 const { t } = useI18n()
 const ui = useUiStore()
+const workspacePane = useWorkspacePaneContext()
 
 const effectiveTitle = computed(() => String(props.title || '').trim() || String(t('chat.attachments.title')))
 
@@ -297,7 +300,22 @@ function onDocumentClick(event: MouseEvent) {
 function onDocumentKeydown(event: KeyboardEvent) {
   if (!props.open || isMobileSheet.value) return
   if (event.key !== 'Escape') return
+  if (!escapeBelongsToThisPane(event.target as Node | null)) return
   close()
+}
+
+/**
+ * Every pane keeps its own panel in the same document, so Escape may only close
+ * the one the user is working in.  Without a pane wrapper (compact layout) the
+ * previous behaviour stands.
+ */
+function escapeBelongsToThisPane(target: Node | null): boolean {
+  const element = target instanceof Element ? target : target instanceof Node ? target.parentElement : null
+  return escapeBelongsToPanel({
+    panel: panelEl.value,
+    target: element,
+    paneFocused: !workspacePane || workspacePane.isFocused.value,
+  })
 }
 
 function onMobileDialogOpenChange(next: boolean) {

@@ -1281,6 +1281,12 @@ export default {
       noParentSession: '该会话没有父会话。',
       openSessionBeforeDownload: '下载工作区文件前请先打开会话。',
       selectModelBeforeSending: '发送前请选择模型',
+      modelHints: {
+        runtimeDefault: '使用运行时默认模型：{model}',
+        sessionModel: '使用会话模型：{model}',
+        thinkingMode: '使用思考模式：{mode}',
+        speedMode: '使用速度模式：{mode}',
+      },
     },
     selectedModelFallback: '已选模型',
     errors: {
@@ -1375,6 +1381,7 @@ export default {
         unanswered: '尚未回答',
         editAnswer: '修改',
         questionPager: '问题 {current} / {total}',
+        numberedQuestion: '问题 {count}',
         multiple: '多选',
         single: '单选',
         custom: '自定义',

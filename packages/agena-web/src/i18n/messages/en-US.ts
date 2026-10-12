@@ -1288,6 +1288,12 @@ export default {
       noParentSession: 'This session has no parent session.',
       openSessionBeforeDownload: 'Open a session before downloading a workspace file.',
       selectModelBeforeSending: 'Select a model before sending',
+      modelHints: {
+        runtimeDefault: 'Using runtime default: {model}',
+        sessionModel: 'Using session model: {model}',
+        thinkingMode: 'Using thinking mode: {mode}',
+        speedMode: 'Using speed mode: {mode}',
+      },
     },
     selectedModelFallback: 'selected model',
     errors: {
@@ -1382,6 +1388,7 @@ export default {
         unanswered: 'Unanswered',
         editAnswer: 'Edit',
         questionPager: 'Question {current} / {total}',
+        numberedQuestion: 'Question {count}',
         multiple: 'multiple',
         single: 'single',
         custom: 'Custom',

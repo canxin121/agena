@@ -46,15 +46,20 @@ const hasBody = computed(() => Boolean(interaction.value?.bodyMarkdown?.trim()))
 const isPendingInteraction = computed(() => Boolean(permission.value?.pending || interaction.value?.pending))
 const permissionStatusLabel = computed(() => {
   const status = permission.value?.status || ''
-  const known: Record<string, string> = {
-    'Allowed once': 'chat.attention.ui.permissionStatus.allowedOnce',
-    'Allowed persistently': 'chat.attention.ui.permissionStatus.allowedPersistently',
-    'Approved automatically': 'chat.attention.ui.permissionStatus.approvedAutomatically',
-    'Denied once': 'chat.attention.ui.permissionStatus.deniedOnce',
-    'Denied persistently': 'chat.attention.ui.permissionStatus.deniedPersistently',
-    'Awaiting user approval': 'chat.attention.ui.permissionStatus.awaitingApproval',
+  switch (status) {
+    case 'Allowed once':
+      return t('chat.attention.ui.permissionStatus.allowedOnce')
+    case 'Allowed persistently':
+      return t('chat.attention.ui.permissionStatus.allowedPersistently')
+    case 'Approved automatically':
+      return t('chat.attention.ui.permissionStatus.approvedAutomatically')
+    case 'Denied once':
+      return t('chat.attention.ui.permissionStatus.deniedOnce')
+    case 'Denied persistently':
+      return t('chat.attention.ui.permissionStatus.deniedPersistently')
+    case 'Awaiting user approval':
+      return t('chat.attention.ui.permissionStatus.awaitingApproval')
   }
-  if (known[status]) return t(known[status])
   if (status.startsWith('Replied (') && status.endsWith(')')) {
     return t('chat.attention.ui.permissionStatus.replied', { kind: status.slice(9, -1) })
   }

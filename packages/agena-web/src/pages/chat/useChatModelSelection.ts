@@ -1,4 +1,5 @@
 import { computed, ref, watch, type Ref } from 'vue'
+import { i18n } from '@/i18n'
 
 import {
   defaultModeValue,
@@ -203,7 +204,7 @@ export function useChatModelSelection(opts: {
     const provider = selectedProviderId.value
     const adapter = selectedAdapterId.value
     const model = selectedModelId.value
-    if (!provider || !model) return 'Model'
+    if (!provider || !model) return String(i18n.global.t('chat.composer.picker.modelTitle'))
     return adapter ? `${provider}/${adapter}/${model}` : `${provider}/${model}`
   })
   // The TUI's composer status uses the provider catalog display name and
@@ -212,12 +213,14 @@ export function useChatModelSelection(opts: {
   const modelStatusLabel = computed(() => {
     const displayName = text(selectedModelMeta.value?.display_name)
     if (displayName) return displayName
-    return selectedModelId.value || 'Model'
+    return selectedModelId.value || String(i18n.global.t('chat.composer.picker.modelTitle'))
   })
-  const modelChipLabelMobile = computed(() => selectedModelId.value || 'Model')
+  const modelChipLabelMobile = computed(
+    () => selectedModelId.value || String(i18n.global.t('chat.composer.picker.modelTitle')),
+  )
   const thinkingModeChipLabel = computed(() => {
     const selected = selectedThinkingMode.value
-    return statusThinkingMode(selected) || 'Thinking'
+    return statusThinkingMode(selected) || String(i18n.global.t('chat.composer.picker.thinkingTitle'))
   })
   const speedModeChipLabel = computed(() => {
     const selected = selectedSpeedMode.value
@@ -227,24 +230,26 @@ export function useChatModelSelection(opts: {
   })
 
   const modelHint = computed(() => {
-    if (!selectedProviderId.value || !selectedModelId.value) return 'Select a model before sending'
+    if (!selectedProviderId.value || !selectedModelId.value)
+      return String(i18n.global.t('chat.toasts.selectModelBeforeSending'))
     if (modelSource.value === 'manual') return ''
-    if (modelSource.value === 'default') return `Using runtime default: ${modelChipLabel.value}`
-    return `Using session model: ${modelChipLabel.value}`
+    if (modelSource.value === 'default') {
+      return String(i18n.global.t('chat.toasts.modelHints.runtimeDefault', { model: modelChipLabel.value }))
+    }
+    return String(i18n.global.t('chat.toasts.modelHints.sessionModel', { model: modelChipLabel.value }))
   })
   const thinkingModeHint = computed(() =>
     thinkingModeSource.value === 'manual' || !selectedThinkingMode.value
       ? ''
-      : `Using thinking mode: ${selectedThinkingMode.value}`,
+      : String(i18n.global.t('chat.toasts.modelHints.thinkingMode', { mode: selectedThinkingMode.value })),
   )
-  const speedModeHint = computed(() =>
-    speedModeSource.value === 'manual' || !selectedSpeedMode.value
-      ? ''
-      : `Using speed mode: ${
-          modeOptionDisplayLabel(speedModeOptionsForModel(selectedModelMeta.value), selectedSpeedMode.value) ||
-          statusSpeedMode(selectedSpeedMode.value)
-        }`,
-  )
+  const speedModeHint = computed(() => {
+    if (speedModeSource.value === 'manual' || !selectedSpeedMode.value) return ''
+    const mode =
+      modeOptionDisplayLabel(speedModeOptionsForModel(selectedModelMeta.value), selectedSpeedMode.value) ||
+      statusSpeedMode(selectedSpeedMode.value)
+    return String(i18n.global.t('chat.toasts.modelHints.speedMode', { mode }))
+  })
 
   const picker = useModelSelectionPickerUi({
     composerPickerOpen,

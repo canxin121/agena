@@ -1241,15 +1241,20 @@ const useChatStoreDefinition = defineStore('chat', () => {
       // while input_kind controls the inline transcript layout.
       const isUserInput = outerKind === 'user_input' || Boolean(inputKind) || Array.isArray(rec.questions)
       if (isUserInput) {
-        const title = readString(rec.title as JsonValue) || 'Question'
+        const title = readString(rec.title as JsonValue) || String(i18n.global.t('chat.attention.title.question'))
         const body = readString(rec.body_markdown as JsonValue)
         const rawQuestions = rec.questions
         const questions = Array.isArray(rawQuestions)
           ? rawQuestions
               .map((q, index) => {
                 const qr = asRecord(q)
-                const header = readString(qr.header as JsonValue) || title || `Question ${index + 1}`
-                const question = readString(qr.question as JsonValue) || `Question ${index + 1}`
+                const header =
+                  readString(qr.header as JsonValue) ||
+                  title ||
+                  String(i18n.global.t('chat.attention.ui.numberedQuestion', { count: index + 1 }))
+                const question =
+                  readString(qr.question as JsonValue) ||
+                  String(i18n.global.t('chat.attention.ui.numberedQuestion', { count: index + 1 }))
                 const options = Array.isArray(qr.options)
                   ? qr.options
                       .map((o) => {

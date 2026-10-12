@@ -416,10 +416,19 @@ fn resolve_mode_request_override(
     resolved_adapter_id: Option<&AdapterId>,
 ) -> ModelSpeedModeRequestOverride {
     let mut merged = request_override.clone();
-    if let Some(adapter_id) = resolved_adapter_id.map(AsRef::<str>::as_ref)
-        && let Some(adapter_override) = adapter_overrides.get(adapter_id)
-    {
-        merged = merged.merged_with(adapter_override);
+    if let Some(adapter_id) = resolved_adapter_id.map(AsRef::<str>::as_ref) {
+        // Catalog data may key an override by the vendor shortcut (`openai`)
+        // instead of the concrete adapter id (`openai_responses`,
+        // `openai_chat_completions`), so accept both spellings. The concrete
+        // key is applied last so it wins over the shortcut.
+        let vendor_shortcut = adapter_id.split_once('_').map(|(vendor, _)| vendor);
+        for key in [vendor_shortcut, Some(adapter_id)] {
+            if let Some(key) = key
+                && let Some(adapter_override) = adapter_overrides.get(key)
+            {
+                merged = merged.merged_with(adapter_override);
+            }
+        }
     }
     merged
 }
@@ -944,5 +953,91 @@ mod pending_interactive_projection_tests {
             panic!("expected the permission wire variant");
         };
         assert_eq!(request.request_id, "permission-1");
+    }
+}
+
+#[cfg(test)]
+mod mode_request_override_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn service_tier_override(tier: &str) -> ModelSpeedModeRequestOverride {
+        ModelSpeedModeRequestOverride {
+            headers: BTreeMap::new(),
+            body_patch: BTreeMap::from([(
+                "service_tier".to_owned(),
+                serde_json::json!(tier),
+            )]),
+        }
+    }
+
+    #[test]
+    fn vendor_shortcut_key_applies_to_every_openai_adapter() {
+        let adapter_overrides = BTreeMap::from([(
+            "openai".to_owned(),
+            service_tier_override("priority"),
+        )]);
+        for adapter in ["openai_responses", "openai_chat_completions"] {
+            let adapter_id = AdapterId::new(adapter);
+            let resolved = resolve_mode_request_override(
+                &ModelSpeedModeRequestOverride::default(),
+                &adapter_overrides,
+                Some(&adapter_id),
+            );
+            assert_eq!(
+                resolved.body_patch.get("service_tier"),
+                Some(&serde_json::json!("priority")),
+                "{adapter} must honour the vendor shortcut key"
+            );
+        }
+    }
+
+    #[test]
+    fn other_adapters_never_receive_the_openai_shortcut() {
+        let adapter_overrides = BTreeMap::from([(
+            "openai".to_owned(),
+            service_tier_override("priority"),
+        )]);
+        let adapter_id = AdapterId::new("anthropic");
+        let resolved = resolve_mode_request_override(
+            &ModelSpeedModeRequestOverride::default(),
+            &adapter_overrides,
+            Some(&adapter_id),
+        );
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn a_concrete_adapter_key_wins_over_the_vendor_shortcut() {
+        let adapter_overrides = BTreeMap::from([
+            ("openai".to_owned(), service_tier_override("priority")),
+            (
+                "openai_responses".to_owned(),
+                service_tier_override("flex"),
+            ),
+        ]);
+        let adapter_id = AdapterId::new("openai_responses");
+        let resolved = resolve_mode_request_override(
+            &ModelSpeedModeRequestOverride::default(),
+            &adapter_overrides,
+            Some(&adapter_id),
+        );
+        assert_eq!(
+            resolved.body_patch.get("service_tier"),
+            Some(&serde_json::json!("flex"))
+        );
+    }
+
+    #[test]
+    fn a_mode_without_overrides_sends_nothing() {
+        // The catalog's explicit `standard` (Default) entry declares no
+        // override, so selecting it must not change the request at all.
+        let adapter_id = AdapterId::new("openai_responses");
+        let resolved = resolve_mode_request_override(
+            &ModelSpeedModeRequestOverride::default(),
+            &BTreeMap::new(),
+            Some(&adapter_id),
+        );
+        assert!(resolved.is_empty());
     }
 }

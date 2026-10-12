@@ -542,7 +542,7 @@ export default {
         sessionsFetchFailed: 'Failed to load preview sessions / 加载预览会话失败。Detail: {detail}',
         sessionsFetchFailedNoDetail: 'No additional details / 无更多详情',
         proxyHttpError:
-          'Preview proxy returned an error (HTTP {status}) / 预览代理返回错误（HTTP {status}）。Detail: {detail}',
+          'Preview proxy returned an error (HTTP {status}). Detail: {detail}',
         proxyHttpErrorNoDetail: 'No additional details from proxy / 代理未返回更多信息',
         proxyRequestFailed: 'Cannot reach preview proxy / 无法访问预览代理，请检查服务状态。',
       },
@@ -1358,6 +1358,15 @@ export default {
         blocksUntilRespond: 'This run waits until you respond.',
       },
       ui: {
+        permissionStatus: {
+          allowedOnce: 'Allowed once',
+          allowedPersistently: 'Allowed persistently',
+          approvedAutomatically: 'Approved automatically',
+          deniedOnce: 'Denied once',
+          deniedPersistently: 'Denied persistently',
+          awaitingApproval: 'Awaiting user approval',
+          replied: 'Replied ({kind})',
+        },
         rejectPermission: 'Reject permission',
         allowOnce: 'Allow once',
         alwaysAllow: 'Always allow',

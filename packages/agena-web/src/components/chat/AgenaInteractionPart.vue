@@ -44,6 +44,22 @@ const isReview = computed(() => (interaction.value?.kind || '').trim().toLowerCa
 const questions = computed(() => interaction.value?.questions || [])
 const hasBody = computed(() => Boolean(interaction.value?.bodyMarkdown?.trim()))
 const isPendingInteraction = computed(() => Boolean(permission.value?.pending || interaction.value?.pending))
+const permissionStatusLabel = computed(() => {
+  const status = permission.value?.status || ''
+  const known: Record<string, string> = {
+    'Allowed once': 'chat.attention.ui.permissionStatus.allowedOnce',
+    'Allowed persistently': 'chat.attention.ui.permissionStatus.allowedPersistently',
+    'Approved automatically': 'chat.attention.ui.permissionStatus.approvedAutomatically',
+    'Denied once': 'chat.attention.ui.permissionStatus.deniedOnce',
+    'Denied persistently': 'chat.attention.ui.permissionStatus.deniedPersistently',
+    'Awaiting user approval': 'chat.attention.ui.permissionStatus.awaitingApproval',
+  }
+  if (known[status]) return t(known[status])
+  if (status.startsWith('Replied (') && status.endsWith(')')) {
+    return t('chat.attention.ui.permissionStatus.replied', { kind: status.slice(9, -1) })
+  }
+  return status
+})
 const hasKeyboardControls = computed(() => isPendingInteraction.value)
 // Keep the Web layout in lockstep with the TUI: only a single, single-choice
 // question with options is the compact plan-review decision surface. Other
@@ -636,7 +652,7 @@ onMounted(focusPendingInteraction)
           class="shrink-0 font-mono text-[10px]"
           :class="isPendingPermission ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
         >
-          {{ permission.status }}
+          {{ permissionStatusLabel }}
         </span>
       </div>
       <div v-if="permission.reason" class="mt-2 text-xs text-muted-foreground">{{ permission.reason }}</div>

@@ -642,7 +642,7 @@ export function interactionPresentationFromAttention(
   const presentation = userInputPresentationFromRequest(
     { ...request, request_id: requestId },
     null,
-    firstString(request, ['title']) || 'Question',
+    firstString(request, ['title']) || String(i18n.global.t('chat.attention.title.question')),
   )
   return presentation.questions.length ? presentation : null
 }

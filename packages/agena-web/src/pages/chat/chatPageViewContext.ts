@@ -110,6 +110,7 @@ export type ChatPageViewContext = {
   sessionEnded: MaybeRef<boolean>
   retryStatus: MaybeRef<RetryStatusLike>
   currentPhase: MaybeRef<string>
+  compactingSessionId: MaybeRef<string | null>
   awaitingAssistant: MaybeRef<boolean>
   showAssistantPlaceholder: MaybeRef<boolean>
   optimisticUser: MaybeRef<OptimisticUserMessage | null>

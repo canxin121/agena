@@ -1,5 +1,5 @@
 import { i18n } from '@/i18n'
-import { computed, type ComputedRef, ref, type Ref } from 'vue'
+import { computed, type ComputedRef, ref, type Ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { formatTranscript } from '@/lib/transcript'
@@ -23,6 +23,7 @@ type ChatLike = {
   renameSession: (sessionId: string, title: string) => Promise<JsonValue>
   forkSession: (sessionId: string) => Promise<JsonValue>
   compactSession: (sessionId: string) => Promise<JsonValue>
+  getSessionState: (sessionId: string) => { kind: string }
 }
 
 export function useChatSessionActions(opts: {
@@ -47,6 +48,21 @@ export function useChatSessionActions(opts: {
 
   const forkBusy = ref(false)
   const compactBusy = ref(false)
+  const compactingSessionId = ref<string | null>(null)
+  let compactionWasObservedRunning = false
+  watch(compactingSessionId, (sessionId, _previous, onCleanup) => {
+    compactionWasObservedRunning = false
+    if (!sessionId) return
+    const stop = watch(
+      () => opts.chat.getSessionState(sessionId).kind,
+      (kind) => {
+        if (kind === 'running') compactionWasObservedRunning = true
+        else if (compactionWasObservedRunning) compactingSessionId.value = null
+      },
+      { immediate: true },
+    )
+    onCleanup(stop)
+  })
   const transcriptBusy = ref(false)
 
   function openRenameDialog() {
@@ -177,10 +193,13 @@ export function useChatSessionActions(opts: {
     const sid = chat.selectedSessionId
     if (!sid) return
     compactBusy.value = true
+    compactingSessionId.value = sid
     try {
       await chat.compactSession(sid)
+      if (chat.getSessionState(sid).kind !== 'running') compactingSessionId.value = null
       toasts.push('success', t('chat.toasts.compactionStarted'))
     } catch (err) {
+      if (compactingSessionId.value === sid) compactingSessionId.value = null
       toasts.push('error', err instanceof Error ? err.message : String(err))
     } finally {
       compactBusy.value = false
@@ -193,6 +212,7 @@ export function useChatSessionActions(opts: {
     renameBusy,
     forkBusy,
     compactBusy,
+    compactingSessionId,
     openRenameDialog,
     saveRename,
     copyTranscript,

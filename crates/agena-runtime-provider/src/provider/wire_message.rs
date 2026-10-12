@@ -2417,6 +2417,20 @@ mod tests {
     }
 
     #[test]
+    fn error_parts_are_never_projected_to_provider_requests() {
+        let error = part(
+            "error",
+            PartRole::Assistant,
+            PartState::Failed,
+            serde_json::json!({ "message": "private user-facing diagnostic" }),
+        );
+
+        assert!(project_persisted(std::slice::from_ref(&error)).is_empty());
+        let input = project_completion_input(std::slice::from_ref(&error));
+        assert!(input.parts.is_empty());
+    }
+
+    #[test]
     fn reasoning_parts_survive_projection_for_replay() {
         // A persisted assistant reasoning part must project into a dedicated
         // Reasoning wire part (and CompletionInputPart::Reasoning) so providers

@@ -87,6 +87,7 @@ const {
   sessionEnded,
   retryStatus,
   currentPhase,
+  compactingSessionId,
   awaitingAssistant,
   showAssistantPlaceholder,
   optimisticUser,
@@ -498,6 +499,8 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   :show-assistant-placeholder="showAssistantPlaceholder"
                   :session-ended="sessionEnded"
                   :retry-status="retryStatus"
+                  :retry-countdown="retryCountdownLabel"
+                  :is-compacting="compactingSessionId === chat.selectedSessionId"
                   :current-phase="currentPhase"
                   :awaiting-assistant="awaitingAssistant"
                   :activity-collapse-signal="activityCollapseSignal"
@@ -717,8 +720,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       v-if="chat.selectedSessionId"
                       :key="chat.selectedSessionId"
                       :session-id="chat.selectedSessionId"
-                      :retry="retryStatus"
-                      :countdown="retryCountdownLabel"
                     />
                     <BtwSection
                       v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"

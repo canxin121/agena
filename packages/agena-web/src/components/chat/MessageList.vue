@@ -43,7 +43,9 @@ const props = defineProps<{
   showAssistantPlaceholder: boolean
   sessionEnded: boolean
   retryStatus: RetryStatusLike
+  retryCountdown?: string
   currentPhase: string
+  isCompacting?: boolean
   awaitingAssistant: boolean
   activityCollapseSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
@@ -150,6 +152,44 @@ const assistantPlaceholderPart = computed<TranscriptDisplayPart>(() => {
       agenaContent: { state: 'in_progress' },
     },
     'assistant',
+  )
+})
+
+const compactionPart = computed<TranscriptDisplayPart | null>(() => {
+  if (!props.isCompacting) return null
+  return projectLocalPart(
+    {
+      id: `compaction:active:${props.selectedSessionId || 'session'}`,
+      type: 'tool',
+      partState: 'in_progress',
+      agenaKind: 'compaction',
+      agenaRole: 'runtime',
+      agenaContent: { state: 'in_progress' },
+      agenaPresentation: {
+        title: String(t('chat.partTitles.compaction')),
+        summary: String(t('chat.partTitles.responseRunning')),
+      },
+    },
+    'runtime',
+  )
+})
+
+const retryPart = computed<TranscriptDisplayPart | null>(() => {
+  const retry = props.retryStatus
+  if (!retry) return null
+  const attempt = Number(retry.attempt || 0)
+  const body = [String(retry.message || '').trim(), props.retryCountdown || ''].filter(Boolean).join(' · ')
+  return projectLocalPart(
+    {
+      id: `provider-retry:${attempt}:${Number(retry.next || 0)}`,
+      type: 'tool',
+      partState: 'in_progress',
+      agenaKind: 'notice',
+      agenaRole: 'runtime',
+      agenaContent: { category: 'provider_retry', attempt, next_at_ms: retry.next || null },
+      agenaPresentation: { title: String(t('chat.sessionWork.retry', { attempt })), summary: body },
+    },
+    'runtime',
   )
 })
 
@@ -350,6 +390,46 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         </div>
       </article>
     </div>
+
+    <article
+      v-if="compactionPart"
+      class="mt-3 px-1 py-2"
+      data-transcript-node="part"
+      :data-transcript-key="compactionPart.key"
+      data-part-kind="compaction"
+    >
+      <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+        <span class="font-semibold">system</span>
+      </header>
+      <div class="min-w-0 px-1 text-sm">
+        <AgenaTranscriptPart
+          :part="compactionPart"
+          :expanded="true"
+          :collapse-signal="activityCollapseSignal"
+          :session-id="selectedSessionId"
+        />
+      </div>
+    </article>
+
+    <article
+      v-if="retryPart"
+      class="mt-3 px-1 py-2"
+      data-transcript-node="part"
+      :data-transcript-key="retryPart.key"
+      data-part-kind="notice"
+    >
+      <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+        <span class="font-semibold">system</span>
+      </header>
+      <div class="min-w-0 px-1 text-sm">
+        <AgenaTranscriptPart
+          :part="retryPart"
+          :expanded="true"
+          :collapse-signal="activityCollapseSignal"
+          :session-id="selectedSessionId"
+        />
+      </div>
+    </article>
 
     <article v-if="sessionError" class="mt-3 px-1 py-2">
       <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">

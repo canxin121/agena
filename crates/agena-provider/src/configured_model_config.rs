@@ -66,6 +66,7 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             "speed_modes",
             "input",
             "features",
+            "manual_overrides",
         ];
         if let Some(unknown) = fields
             .keys()

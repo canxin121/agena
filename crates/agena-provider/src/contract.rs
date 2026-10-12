@@ -907,6 +907,11 @@ pub struct ConfiguredModelDefinition {
     pub speed_modes: ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
+    /// When true this route keeps its own definition values instead of taking
+    /// the refreshed model catalog values; absent (the default) means the model
+    /// follows the catalog, so a catalog refresh needs no manual re-apply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_overrides: bool,
 }
 
 impl ConfiguredModelDefinition {

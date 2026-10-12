@@ -251,9 +251,9 @@ mod catalog_collector;
 pub use catalog_collector::collect_live_provider_models;
 mod catalog_decoration;
 pub use catalog_decoration::{
-    apply_catalog_definition_as_baseline, apply_configured_definition_as_baseline,
-    catalog_definition_to_provider_definition, merge_catalog_baseline_speed_modes,
-    merge_catalog_baseline_thinking_modes,
+    apply_catalog_definition_as_authority, apply_catalog_definition_as_baseline,
+    apply_configured_definition_as_baseline, catalog_definition_to_provider_definition,
+    merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
 };
 mod catalog_model_decoration;
 pub use catalog_model_decoration::{CatalogModelDecorationSource, decorate_provider_models};

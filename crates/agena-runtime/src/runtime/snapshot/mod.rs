@@ -417,6 +417,25 @@ impl RuntimeSnapshot {
         self.state.services().lsp_registry.clone()
     }
 
+    /// Model ids whose configured route opted out of following the model
+    /// catalog (`manual_overrides`); those routes keep their own values.
+    fn manual_override_model_ids(
+        provider_config: Option<&ResolvedProviderConfig>,
+    ) -> std::collections::BTreeSet<String> {
+        let Some(configured) = provider_config else {
+            return std::collections::BTreeSet::new();
+        };
+        configured
+            .models
+            .iter()
+            .filter(|(_, model)| model.definition.manual_overrides)
+            .map(|(key, _)| {
+                key.split_once('/')
+                    .map_or_else(|| key.clone(), |(_, model_id)| model_id.to_owned())
+            })
+            .collect()
+    }
+
     pub(crate) fn configured_local_models(
         &self,
         provider_id: &str,
@@ -445,6 +464,7 @@ impl RuntimeSnapshot {
         Ok(decorate_provider_models(
             &catalog_decoration_source(provider.as_ref()),
             &local_provider_record,
+            &Self::manual_override_model_ids(Some(configured)),
             models,
         ))
     }
@@ -481,6 +501,7 @@ impl RuntimeSnapshot {
         Ok(decorate_provider_models(
             &catalog_decoration_source(provider.as_ref()),
             &provider_record,
+            &Self::manual_override_model_ids(self.provider_configs().get(provider_id)),
             models,
         ))
     }

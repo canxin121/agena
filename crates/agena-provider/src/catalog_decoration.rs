@@ -34,6 +34,45 @@ pub fn apply_catalog_definition_as_baseline(
     )
 }
 
+/// Apply a catalog definition as the authority for a route that follows the
+/// catalog: every field the catalog defines wins over the route's own values and
+/// the route only contributes what the catalog leaves undefined. Mode maps are
+/// still unioned so a route may add selectors the catalog does not list.
+///
+/// This is the opposite precedence of [`apply_catalog_definition_as_baseline`]
+/// and is what makes a catalog refresh take effect on the next model listing
+/// without re-applying the catalog entry by hand.
+pub fn apply_catalog_definition_as_authority(
+    definition: &CatalogModelDefinition,
+    capability_fallback: &ModelCapabilities,
+    metadata_fallback: &ModelMetadata,
+    mut model: Model,
+) -> Model {
+    let configured = catalog_definition_to_provider_definition(definition);
+    let catalog_capabilities = configured.capabilities.apply_to(ModelCapabilities::default());
+    let route_capabilities = model
+        .capabilities
+        .clone()
+        .merged_with_fallbacks_from(capability_fallback);
+    model.capabilities = catalog_capabilities.merged_with_fallbacks_from(&route_capabilities);
+
+    let catalog_metadata = configured.metadata();
+    let route_metadata = model
+        .metadata
+        .clone()
+        .merged_with_fallbacks_from(metadata_fallback);
+    model.metadata = catalog_metadata.merged_with_fallbacks_from(&route_metadata);
+
+    if let Some(display_name) = configured.display_name.clone() {
+        model.display_name = Some(display_name);
+    }
+    model.thinking_modes =
+        merge_catalog_baseline_thinking_modes(model.thinking_modes, &configured.thinking_modes);
+    model.speed_modes =
+        merge_catalog_baseline_speed_modes(model.speed_modes, &configured.speed_modes);
+    model
+}
+
 pub fn apply_configured_definition_as_baseline(
     configured: &ConfiguredModelDefinition,
     capability_fallback: &ModelCapabilities,
@@ -268,7 +307,10 @@ pub fn merge_catalog_baseline_speed_modes(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_catalog_definition_as_baseline, apply_configured_definition_as_baseline};
+    use super::{
+        apply_catalog_definition_as_authority, apply_catalog_definition_as_baseline,
+        apply_configured_definition_as_baseline,
+    };
     use agena_domain::Model;
 
     use crate::{CatalogModelDefinition, ConfiguredModelDefinition};
@@ -322,6 +364,57 @@ mod tests {
         );
 
         assert!(decorated.thinking_modes.is_empty());
+    }
+
+    #[test]
+    fn catalog_authority_replaces_a_stale_route_copy() {
+        // The route still carries the values copied when the catalog entry was
+        // applied by hand; a catalog refresh must win, not the old copy.
+        let definition: CatalogModelDefinition = serde_json::from_value(serde_json::json!({
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "display_name": "GPT-6.1 Sol",
+            "thinking_modes": {
+                "max": { "display_name": "Think Max", "strategy": "effort", "effort": "max" }
+            }
+        }))
+        .expect("catalog definition");
+        let mut model = Model::new("openai", "gpt-6.1-sol");
+        model.metadata.limits.context_window_tokens = Some(900_000);
+        model.metadata.limits.max_output_tokens = Some(64_000);
+        model.display_name = Some("Old name".to_owned());
+
+        let decorated = apply_catalog_definition_as_authority(
+            &definition,
+            &Default::default(),
+            &Default::default(),
+            model,
+        );
+
+        assert_eq!(decorated.metadata.limits.context_window_tokens, Some(1_050_000));
+        assert_eq!(decorated.metadata.limits.max_output_tokens, Some(128_000));
+        assert_eq!(decorated.display_name.as_deref(), Some("GPT-6.1 Sol"));
+        assert_eq!(selectors(&decorated), ["max"]);
+    }
+
+    #[test]
+    fn catalog_authority_keeps_route_values_the_catalog_leaves_open() {
+        let definition: CatalogModelDefinition = serde_json::from_value(serde_json::json!({
+            "context_window_tokens": 1_050_000
+        }))
+        .expect("catalog definition");
+        let mut model = Model::new("openai", "gpt-6.1-sol");
+        model.metadata.limits.max_output_tokens = Some(64_000);
+
+        let decorated = apply_catalog_definition_as_authority(
+            &definition,
+            &Default::default(),
+            &Default::default(),
+            model,
+        );
+
+        assert_eq!(decorated.metadata.limits.context_window_tokens, Some(1_050_000));
+        assert_eq!(decorated.metadata.limits.max_output_tokens, Some(64_000));
     }
 
     #[test]

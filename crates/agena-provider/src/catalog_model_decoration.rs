@@ -8,9 +8,9 @@ use agena_domain::{
 };
 
 use crate::{
-    CatalogModelDefinition, ModelCatalogProviderRecord, apply_catalog_definition_as_baseline,
-    catalog_definition_to_provider_definition, merge_catalog_baseline_speed_modes,
-    merge_catalog_baseline_thinking_modes,
+    CatalogModelDefinition, ModelCatalogProviderRecord, apply_catalog_definition_as_authority,
+    apply_catalog_definition_as_baseline, catalog_definition_to_provider_definition,
+    merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
 };
 
 /// The small provider-specific read view required by catalog decoration.
@@ -46,9 +46,14 @@ pub trait CatalogModelDecorationSource: Send + Sync {
 }
 
 /// Merge configured catalog baselines into models returned by a provider.
+///
+/// Routes that follow the catalog (the default) take every value the catalog
+/// defines, so a catalog refresh lands on the next listing. A route listed in
+/// `manual_overrides` keeps its own values and the catalog only fills gaps.
 pub fn decorate_provider_models(
     provider: &dyn CatalogModelDecorationSource,
     provider_record: &ModelCatalogProviderRecord,
+    manual_overrides: &BTreeSet<String>,
     mut models: Vec<Model>,
 ) -> Vec<Model> {
     let mut listed = BTreeSet::new();
@@ -59,8 +64,13 @@ pub fn decorate_provider_models(
             listed_catalog_ids.insert(catalog_model_id.clone());
             model.catalog_model_id = Some(ModelId::new(catalog_model_id));
         }
-        *model =
-            decorate_provider_model(provider, provider_record, model.id.clone(), model.clone());
+        *model = decorate_provider_model(
+            provider,
+            provider_record,
+            manual_overrides,
+            model.id.clone(),
+            model.clone(),
+        );
     }
     for model_id in &provider_record.appendable_model_ids {
         if listed.contains(model_id.as_str())
@@ -94,6 +104,7 @@ pub fn decorate_provider_models(
         models.push(decorate_provider_model(
             provider,
             provider_record,
+            manual_overrides,
             model_id,
             base,
         ));
@@ -104,6 +115,7 @@ pub fn decorate_provider_models(
 fn decorate_provider_model(
     provider: &dyn CatalogModelDecorationSource,
     provider_record: &ModelCatalogProviderRecord,
+    manual_overrides: &BTreeSet<String>,
     model_id: ModelId,
     mut model: Model,
 ) -> Model {
@@ -115,12 +127,18 @@ fn decorate_provider_model(
     {
         apply_catalog_display_name_as_fallback(&mut model, definition);
         let adapter_id = model.adapter_id.clone();
-        apply_catalog_definition_as_baseline(
-            definition,
-            &provider.model_capabilities_for_adapter(adapter_id.as_ref(), &model_id),
-            &provider.model_metadata_for_adapter(adapter_id.as_ref(), &model_id),
-            model,
-        )
+        let capabilities = provider.model_capabilities_for_adapter(adapter_id.as_ref(), &model_id);
+        let metadata = provider.model_metadata_for_adapter(adapter_id.as_ref(), &model_id);
+        if manual_overrides.contains(model_id.as_ref())
+            || model
+                .catalog_model_id
+                .as_ref()
+                .is_some_and(|id| manual_overrides.contains(id.as_ref()))
+        {
+            apply_catalog_definition_as_baseline(definition, &capabilities, &metadata, model)
+        } else {
+            apply_catalog_definition_as_authority(definition, &capabilities, &metadata, model)
+        }
     } else {
         model
     }
@@ -182,8 +200,114 @@ fn catalog_definition_for_model_id<'a>(
 #[cfg(test)]
 mod tests {
     use super::apply_catalog_display_name_as_fallback;
-    use crate::CatalogModelDefinition;
-    use agena_domain::Model;
+    use crate::{CatalogModelDefinition, ModelCatalogProviderRecord, decorate_provider_models};
+    use agena_domain::{
+        AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode,
+        ModelThinkingMode,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    struct StubSource;
+
+    impl crate::CatalogModelDecorationSource for StubSource {
+        fn provider_id(&self) -> &str {
+            "openai"
+        }
+
+        fn catalog_model_id_for_raw(&self, raw_model_id: &str) -> Option<String> {
+            Some(raw_model_id.to_owned())
+        }
+
+        fn native_compaction_enabled_for_adapter(
+            &self,
+            _adapter_id: Option<&AdapterId>,
+            _model: &ModelId,
+        ) -> bool {
+            true
+        }
+
+        fn model_capabilities_for_adapter(
+            &self,
+            _adapter_id: Option<&AdapterId>,
+            _model: &ModelId,
+        ) -> ModelCapabilities {
+            ModelCapabilities::default()
+        }
+
+        fn model_metadata_for_adapter(
+            &self,
+            _adapter_id: Option<&AdapterId>,
+            _model: &ModelId,
+        ) -> ModelMetadata {
+            let mut metadata = ModelMetadata::default();
+            metadata.limits.context_window_tokens = Some(900_000);
+            metadata
+        }
+
+        fn model_thinking_modes_for_adapter(
+            &self,
+            _adapter_id: Option<&AdapterId>,
+            _model: &ModelId,
+        ) -> Vec<ModelThinkingMode> {
+            Vec::new()
+        }
+
+        fn model_speed_modes_for_adapter(
+            &self,
+            _adapter_id: Option<&AdapterId>,
+            _model: &ModelId,
+        ) -> BTreeMap<String, ModelSpeedMode> {
+            BTreeMap::new()
+        }
+    }
+
+    fn catalog_record() -> ModelCatalogProviderRecord {
+        ModelCatalogProviderRecord {
+            models: BTreeMap::from([(
+                "gpt-6.1-sol".to_owned(),
+                CatalogModelDefinition {
+                    context_window_tokens: Some(1_050_000),
+                    ..Default::default()
+                },
+            )]),
+            appendable_model_ids: Default::default(),
+        }
+    }
+
+    fn route_model() -> Model {
+        let mut model = Model::new("openai", "gpt-6.1-sol");
+        model.metadata.limits.context_window_tokens = Some(900_000);
+        model
+    }
+
+    #[test]
+    fn a_listed_route_takes_the_refreshed_catalog_values() {
+        let decorated = decorate_provider_models(
+            &StubSource,
+            &catalog_record(),
+            &BTreeSet::new(),
+            vec![route_model()],
+        );
+
+        assert_eq!(
+            decorated[0].metadata.limits.context_window_tokens,
+            Some(1_050_000),
+            "a route that follows the catalog must pick up catalog updates"
+        );
+    }
+
+    #[test]
+    fn a_manual_route_keeps_its_own_values() {
+        let manual = BTreeSet::from(["gpt-6.1-sol".to_owned()]);
+        let decorated =
+            decorate_provider_models(&StubSource, &catalog_record(), &manual, vec![route_model()]);
+
+        assert_eq!(
+            decorated[0].metadata.limits.context_window_tokens,
+            Some(900_000),
+            "manual_overrides must keep the route's own value"
+        );
+    }
 
     #[test]
     fn catalog_name_replaces_raw_id_placeholder_but_keeps_provider_name() {

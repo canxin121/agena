@@ -511,6 +511,16 @@ pub(crate) fn provider_model_draft_value(
     let model_id =
         required_trimmed(model_id, "model_id").map_err(crate::ApplicationError::internal)?;
     let model_id = canonical_provider_model_id(adapter_id, model_id);
+    let catalog_lookup_ids = [model_id.clone()]
+        .into_iter()
+        .chain(
+            provider_model
+                .map(provider_model_catalog_lookup_candidates)
+                .into_iter()
+                .flatten(),
+        )
+        .collect::<Vec<_>>();
+    let catalog_entries = app.lookup_model_catalog_models(&catalog_lookup_ids);
     if let Some(provider_id) = draft.source_provider_id.as_deref() {
         let path = provider_model_settings_path(provider_id, adapter_id, model_id.as_str());
         let configured = app
@@ -526,20 +536,30 @@ pub(crate) fn provider_model_draft_value(
             })?
             .value;
         if !configured.is_null() {
+            // A route that follows the catalog (the default) is edited against
+            // the refreshed catalog values; only the route's own policy fields
+            // come from the stored value.
+            if let Ok(parsed) =
+                serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(configured.clone())
+                && !parsed.definition.manual_overrides
+                && let Some(catalog_model) =
+                    preferred_catalog_model_for_lookup_ids(&catalog_entries, &catalog_lookup_ids)
+            {
+                return crate::provider_studio::apply_catalog_template_to_model_value(
+                    configured,
+                    catalog_model,
+                )
+                .map_err(|error| {
+                    crate::ApplicationError::internal_error_with_context(
+                        "failed to refresh the model from the catalog",
+                        &error,
+                    )
+                });
+            }
             return Ok(configured);
         }
     }
 
-    let catalog_lookup_ids = [model_id.clone()]
-        .into_iter()
-        .chain(
-            provider_model
-                .map(provider_model_catalog_lookup_candidates)
-                .into_iter()
-                .flatten(),
-        )
-        .collect::<Vec<_>>();
-    let catalog_entries = app.lookup_model_catalog_models(&catalog_lookup_ids);
     provider_model_json_for_model_id(&catalog_entries, model_id.as_str(), provider_model).map_err(
         |error| {
             crate::ApplicationError::internal_error_with_context(

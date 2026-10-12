@@ -19,6 +19,16 @@ import { isDocumentVisible } from '@/lib/backgroundReads'
 import { noteResourceVersion } from '@/lib/resourceSync'
 import { createRevalidator } from '@/lib/revalidation'
 import { connectSse, type SseClient } from '@/lib/sse'
+import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import {
+  clearPreviewSessionId,
+  prunePreviewSessionScope,
+  readPreviewSessionId,
+  renamePreviewSessionId,
+  scopeHoldsPreviewSession,
+  writePreviewSessionId,
+  type PreviewSessionScope,
+} from '@/stores/previewSessionScope'
 
 const STORAGE_PREVIEW_ACTIVE_SESSION_ID = localStorageKeys.ui.workspacePreviewActiveSessionId
 const STORAGE_PREVIEW_SIDEBAR_QUERY = localStorageKeys.ui.workspacePreviewSidebarQuery
@@ -135,9 +145,16 @@ function previewSessionDisplayName(session: WorkspacePreviewSession): string {
   )
 }
 
-export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
+const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () => {
   const sessions = ref<WorkspacePreviewSession[]>([])
   const activeSessionId = ref(getLocalString(STORAGE_PREVIEW_ACTIVE_SESSION_ID).trim())
+  /**
+   * Active preview session per workspace window.  Every pane shows its own
+   * preview document, so one pane selecting a session must not re-point another
+   * pane's iframe.  `activeSessionId` stays the persisted default scope, and a
+   * pane that has not chosen yet inherits it.
+   */
+  const activeSessionIdByWindow = ref<Record<string, string>>({})
 
   const sidebarQuery = ref(getLocalString(STORAGE_PREVIEW_SIDEBAR_QUERY))
   const sidebarPage = ref(Math.max(0, Number.parseInt(getLocalString(STORAGE_PREVIEW_SIDEBAR_PAGE).trim(), 10) || 0))
@@ -160,6 +177,44 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
   const refreshToken = ref(0)
 
   const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value) || null)
+
+  function readScope(): PreviewSessionScope {
+    return { defaultId: String(activeSessionId.value || '').trim(), byWindow: activeSessionIdByWindow.value }
+  }
+
+  function applyScope(next: PreviewSessionScope) {
+    if (String(activeSessionId.value || '').trim() !== next.defaultId) activeSessionId.value = next.defaultId
+    if (next.byWindow !== activeSessionIdByWindow.value) activeSessionIdByWindow.value = next.byWindow
+  }
+
+  function readActiveSessionIdForWindow(windowId?: string | null): string {
+    return readPreviewSessionId(readScope(), windowId)
+  }
+
+  function activeSessionForWindow(windowId?: string | null): WorkspacePreviewSession | null {
+    const id = readActiveSessionIdForWindow(windowId)
+    return sessions.value.find((session) => session.id === id) || null
+  }
+
+  function selectSessionForWindow(windowId: string | null | undefined, sessionId: string): void {
+    applyScope(writePreviewSessionId(readScope(), windowId, sessionId))
+    ensureActiveSession()
+  }
+
+  function isActiveSession(sessionId: string): boolean {
+    return scopeHoldsPreviewSession(readScope(), sessionId)
+  }
+
+  function clearActiveSessionId(sessionId: string): void {
+    applyScope(clearPreviewSessionId(readScope(), sessionId))
+  }
+
+  function replaceActiveSessionId(previousId: string, nextId: string): boolean {
+    const renamed = renamePreviewSessionId(readScope(), previousId, nextId)
+    if (!renamed.replaced) return false
+    applyScope(renamed.scope)
+    return true
+  }
 
   function sessionLabel(session: WorkspacePreviewSession): string {
     return previewSessionDisplayName(session)
@@ -274,10 +329,12 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
   })
 
   function ensureActiveSession() {
-    const active = String(activeSessionId.value || '').trim()
-    if (!active) return
-    if (sessions.value.some((session) => session.id === active)) return
-    activeSessionId.value = ''
+    applyScope(
+      prunePreviewSessionScope(
+        readScope(),
+        sessions.value.map((session) => session.id),
+      ),
+    )
   }
 
   function ensureSidebarPageInRange() {
@@ -286,8 +343,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
   }
 
   function selectSession(sessionId: string) {
-    activeSessionId.value = String(sessionId || '').trim()
-    ensureActiveSession()
+    selectSessionForWindow(null, sessionId)
   }
 
   function setViewport(value: WorkspacePreviewViewport) {
@@ -499,23 +555,21 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
   ) {
     const session = await updateWorkspacePreviewSession(sessionId, patch)
     applySessionChanges([session])
-    if (activeSessionId.value === session.id) bumpRefreshToken()
+    if (isActiveSession(session.id)) bumpRefreshToken()
     return session
   }
 
   async function deleteSession(sessionId: string) {
     await deleteWorkspacePreviewSession(sessionId)
-    if (activeSessionId.value === sessionId) activeSessionId.value = ''
+    // Drop the id from every pane that had selected it, not only the default.
+    clearActiveSessionId(sessionId)
     applySessionChanges([], [sessionId])
     bumpRefreshToken()
   }
 
   async function renameSession(sessionId: string, newId: string) {
     const updated = await renameWorkspacePreviewSession(sessionId, newId)
-    if (activeSessionId.value === sessionId) {
-      activeSessionId.value = updated.id
-      bumpRefreshToken()
-    }
+    if (replaceActiveSessionId(sessionId, updated.id)) bumpRefreshToken()
     applySessionChanges([updated], [sessionId])
     return updated
   }
@@ -523,14 +577,14 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
   async function startSession(sessionId: string) {
     const updated = await startWorkspacePreviewSession(sessionId)
     applySessionChanges([updated])
-    if (activeSessionId.value === updated.id) bumpRefreshToken()
+    if (isActiveSession(updated.id)) bumpRefreshToken()
     return updated
   }
 
   async function stopSession(sessionId: string) {
     const updated = await stopWorkspacePreviewSession(sessionId)
     applySessionChanges([updated])
-    if (activeSessionId.value === updated.id) bumpRefreshToken()
+    if (isActiveSession(updated.id)) bumpRefreshToken()
     return updated
   }
 
@@ -538,6 +592,9 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
     sessions,
     activeSessionId,
     activeSession,
+    readActiveSessionIdForWindow,
+    activeSessionForWindow,
+    selectSessionForWindow,
     sidebarQuery,
     sidebarPage,
     sidebarPageCount,
@@ -568,3 +625,58 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
     retainLiveSessions,
   }
 })
+
+type WorkspacePreviewStore = ReturnType<typeof useWorkspacePreviewStoreDefinition>
+
+/**
+ * A pane shows its own preview document.  Reading and writing the active session
+ * through this pane's window scope is what keeps two preview panes from following
+ * each other's selection.
+ */
+function scopedPreview(store: WorkspacePreviewStore, pane: WorkspacePaneContext): WorkspacePreviewStore {
+  function windowId(): string {
+    return String(pane.windowId.value || '').trim()
+  }
+
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      if (property === 'activeSessionId') return target.readActiveSessionIdForWindow(windowId())
+      if (property === 'activeSession') return target.activeSessionForWindow(windowId())
+      if (property === 'selectSession') {
+        return (sessionId: string) => target.selectSessionForWindow(windowId(), sessionId)
+      }
+      if (property === 'createSession') {
+        return async (input: Parameters<WorkspacePreviewStore['createSession']>[0]) => {
+          // The store selects its own (default) scope, so the pane has to claim a
+          // newly created session for itself.
+          const session = await target.createSession({ ...input, select: false })
+          if (input.select !== false) {
+            target.selectSessionForWindow(windowId(), session.id)
+            target.bumpRefreshToken()
+          }
+          return session
+        }
+      }
+      return Reflect.get(target, property, receiver)
+    },
+  })
+}
+
+export const useWorkspacePreviewStore = Object.assign(
+  (...args: Parameters<typeof useWorkspacePreviewStoreDefinition>) => {
+    const store = useWorkspacePreviewStoreDefinition(...args)
+    const pane = useWorkspacePaneContext()
+    return pane ? scopedPreview(store, pane) : store
+  },
+  { $id: useWorkspacePreviewStoreDefinition.$id },
+) as typeof useWorkspacePreviewStoreDefinition
+
+/**
+ * The raw store, without the pane-scoped view, for callers that are not a pane -
+ * and for singleton store setups, which must never capture one pane's scope.
+ */
+export function useWorkspacePreviewStoreUnscoped(
+  ...args: Parameters<typeof useWorkspacePreviewStoreDefinition>
+): WorkspacePreviewStore {
+  return useWorkspacePreviewStoreDefinition(...args)
+}

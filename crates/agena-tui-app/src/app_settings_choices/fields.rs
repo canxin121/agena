@@ -274,6 +274,9 @@ impl App {
             ProviderModelConfigField::NativeCompaction => Some(boolean_choice_items(
                 ui_text::t(&self.i18n, "provider-model-native-compaction-detail").as_str(),
             )),
+            ProviderModelConfigField::ManualOverrides => Some(boolean_choice_items(
+                ui_text::t(&self.i18n, "provider-model-manual-overrides-detail").as_str(),
+            )),
             ProviderModelConfigField::AgenaToolMode => Some(vec![
                 choice_item_with_value(
                     ui_text::t(&self.i18n, "agena-tool-mode-provider-protocol-label"),
@@ -324,6 +327,7 @@ impl App {
         match field {
             ProviderModelConfigField::Enabled
             | ProviderModelConfigField::NativeCompaction
+            | ProviderModelConfigField::ManualOverrides
             | ProviderModelConfigField::AgenaToolMode => {
                 agena_tui::choice::ChoicePresentationStyle::SelectOnly
             }

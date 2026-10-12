@@ -495,6 +495,7 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) model_id: String,
     pub(crate) enabled: bool,
     pub(crate) native_compaction: bool,
+    pub(crate) manual_overrides: bool,
     pub(crate) agena_tool_mode: AgenaToolMode,
     pub(crate) agena_tool_mode_configured: bool,
     pub(crate) display_name: String,

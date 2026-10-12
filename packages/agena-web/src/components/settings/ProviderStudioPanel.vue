@@ -265,6 +265,12 @@ const modelFields = computed<ModelField[]>(() => [
   },
   { key: 'enabled', label: st('Enabled'), kind: 'boolean' },
   { key: 'native_compaction', label: st('Native compaction'), kind: 'boolean' },
+  {
+    key: 'manual_overrides',
+    label: st('Manual overrides'),
+    kind: 'boolean',
+    help: st('Keep this route own values instead of the refreshed catalog values.'),
+  },
   { key: 'agena_tools.mode', label: st('Agena tool mode'), kind: 'select', options: modelToolModeOptions.value },
   {
     key: 'display_name',
@@ -1536,6 +1542,7 @@ function addManualModel() {
     adapter_id: adapterId,
     id: modelId,
     native_compaction: true,
+    manual_overrides: false,
     capabilities: {},
     metadata: {},
     thinking_modes: [],
@@ -1690,7 +1697,11 @@ function modelFieldValue(key: string): string {
 }
 
 function modelFieldBooleanValue(key: string): boolean {
-  return modelPathValue(key) !== false
+  const current = modelPathValue(key)
+  // A route follows the catalog unless it explicitly opts out, so the
+  // manual-overrides switch is off when the field is absent.
+  if (key === 'manual_overrides') return current === true
+  return current !== false
 }
 
 function csvTokens(value: string): string[] {
@@ -1800,7 +1811,10 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
   modelValue.value = next
   modelJsonDirty.value = false
   scheduleModelJsonSync()
-  stageCurrentModelValue(next, key === 'display_name' || key === 'native_compaction')
+  stageCurrentModelValue(
+    next,
+    key === 'display_name' || key === 'native_compaction' || key === 'manual_overrides',
+  )
   modelError.value = ''
 }
 
@@ -1844,6 +1858,7 @@ function updateModelRowFromValue(adapterId: string, modelId: string, value: Loos
         if (typeof value.display_name === 'string') next.display_name = value.display_name
         else if (value.display_name === null) next.display_name = null
         if (typeof value.native_compaction === 'boolean') next.native_compaction = value.native_compaction
+        if (typeof value.manual_overrides === 'boolean') next.manual_overrides = value.manual_overrides
         return next
       }),
     }

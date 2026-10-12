@@ -836,5 +836,7 @@
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} الرمز: {suffix}",
   "{visible} of {total} providers": "{visible} من {total} مقدّم خدمة",
-  "· default": "· الافتراضي"
+  "· default": "· الافتراضي",
+  "Manual overrides": "تجاوزات يدوية",
+  "Keep this route own values instead of the refreshed catalog values.": "الاحتفاظ بقيم هذا المسار بدلاً من قيم الكتالوج المحدث."
 }

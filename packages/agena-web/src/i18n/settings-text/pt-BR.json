@@ -836,5 +836,7 @@
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} Código: {suffix}",
   "{visible} of {total} providers": "{visible} de {total} provedores",
-  "· default": "· padrão"
+  "· default": "· padrão",
+  "Manual overrides": "Substituições manuais",
+  "Keep this route own values instead of the refreshed catalog values.": "Manter os valores próprios desta rota em vez dos valores do catálogo atualizado."
 }

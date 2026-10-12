@@ -90,6 +90,7 @@ impl App {
                 field,
                 ProviderModelConfigField::Enabled
                     | ProviderModelConfigField::NativeCompaction
+                    | ProviderModelConfigField::ManualOverrides
                     | ProviderModelConfigField::AgenaToolMode
             );
             let current_value = if allow_clear && current.trim().is_empty() {

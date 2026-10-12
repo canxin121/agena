@@ -836,5 +836,7 @@
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} कोड: {suffix}",
   "{visible} of {total} providers": "{total} प्रदाताओं में से {visible}",
-  "· default": "· डिफ़ॉल्ट"
+  "· default": "· डिफ़ॉल्ट",
+  "Manual overrides": "मैन्युअल ओवरराइड",
+  "Keep this route own values instead of the refreshed catalog values.": "अद्यतन कैटलॉग मानों के बजाय इस रूट के अपने मान रखें।"
 }

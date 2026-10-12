@@ -1062,6 +1062,7 @@ provider-model-field-catalog-template = Catalog template
 provider-model-catalog-selection-note = Enter to choose a template. Save writes its fields, not its catalog ID.
 provider-model-field-enabled = Enabled
 provider-model-field-native-compaction = Native Compaction
+provider-model-field-manual-overrides = Manual overrides
 provider-model-field-agena-tool-mode = Tool Mode (agena_tools.mode)
 agena-tool-mode-provider-protocol-label = provider_protocol
 agena-tool-mode-provider-protocol-detail = Transport Agena-managed tool definitions and calls through the provider API's tool protocol.
@@ -1080,6 +1081,7 @@ provider-model-field-speed-modes = Speed Modes
 provider-model-field-description = Description
 provider-model-enabled-detail = Whether this model route is enabled.
 provider-model-native-compaction-detail = Try this provider's native conversation compaction endpoint before falling back to Agena's text summarizer.
+provider-model-manual-overrides-detail = On: keep this route's own values instead of the catalog's. Off: follow the catalog and pick up its updates on the next listing.
 provider-model-lifecycle-detail = Model lifecycle value.
 
 provider-studio-auth-status-pending = pending

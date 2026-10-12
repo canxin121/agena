@@ -13,6 +13,7 @@ pub enum ProviderModelConfigField {
     ModelId,
     Enabled,
     NativeCompaction,
+    ManualOverrides,
     AgenaToolMode,
     DisplayName,
     Lifecycle,

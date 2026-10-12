@@ -537,11 +537,11 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                of the transcript behind the messages. -->
           <div
             ref="sessionSectionsDockRef"
-            class="flex min-h-0 max-h-[45%] shrink-0 flex-col overflow-hidden bg-background/85"
+            class="relative z-40 flex shrink-0 flex-col bg-background/85"
             :style="{ paddingInlineEnd: `${scrollbarGutter}px` }"
             data-session-sections-dock="true"
           >
-            <div class="chat-column flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain py-1">
+            <div class="chat-column flex min-w-0 flex-row flex-wrap items-center gap-1.5 overflow-visible py-1">
               <SessionWorkSection
                 v-if="chat.selectedSessionId"
                 :key="chat.selectedSessionId"

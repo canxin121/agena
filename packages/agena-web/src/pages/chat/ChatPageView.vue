@@ -204,6 +204,7 @@ const {
   speedModeHint,
   speedModeChipLabel,
   composerBottomLeftStatus,
+  composerBottomRightStatus,
   composerStatusExtra,
 
   // Usage + primary action.
@@ -275,9 +276,14 @@ function handleAttachProjectFromPanel() {
 // A classic scrollbar reserves space in the transcript. Reserve that same
 // space beside the composer so their shared column aligns on every platform.
 const scrollbarGutter = ref(0)
+const sessionSectionsDockRef = ref<HTMLElement | null>(null)
+const sessionSectionsDockHeight = ref(0)
 useResizeObserver(scrollEl, () => {
   const element = scrollEl.value
   scrollbarGutter.value = element ? Math.max(0, element.offsetWidth - element.clientWidth) : 0
+})
+useResizeObserver(sessionSectionsDockRef, () => {
+  sessionSectionsDockHeight.value = sessionSectionsDockRef.value?.getBoundingClientRect().height ?? 0
 })
 
 // Resolve popover anchors to the trigger button element.
@@ -529,6 +535,41 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
             </div>
           </div>
 
+          <!-- Every session section docks above the composer: the plan and the
+               background work stay in one place instead of drifting to the end
+               of the transcript behind the messages. -->
+          <div
+            ref="sessionSectionsDockRef"
+            class="relative z-40 flex shrink-0 flex-col bg-background/85"
+            :style="{ paddingInlineEnd: `${scrollbarGutter}px` }"
+            data-session-sections-dock="true"
+          >
+            <div class="chat-column flex min-w-0 flex-row flex-wrap items-center gap-1.5 overflow-visible py-1">
+              <SessionWorkSection
+                v-if="chat.selectedSessionId"
+                :key="chat.selectedSessionId"
+                :session-id="chat.selectedSessionId"
+              />
+              <PlanSection
+                v-if="ctx.planVisible.value"
+                v-model:expanded="ctx.planViewerOpen.value"
+                :state="ctx.planViewer"
+              />
+              <BtwSection
+                v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
+                :key="chat.selectedSessionId"
+                :session-id="chat.selectedSessionId"
+              />
+              <WorkspaceChangesSection
+                v-if="chat.selectedSessionId"
+                :key="chat.selectedSessionId + ':files'"
+                :session-id="chat.selectedSessionId"
+                :directory="sessionDirectory || ''"
+                :busy="currentPhase !== 'idle'"
+              />
+            </div>
+          </div>
+
           <!-- Floating message navigation (user messages only) -->
           <div
             v-if="
@@ -539,7 +580,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                 (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted))
             "
             class="pointer-events-none absolute right-3 z-20 flex flex-col items-center gap-2"
-            :style="{ bottom: '12px' }"
+            :style="{ bottom: `${sessionSectionsDockHeight + 12}px` }"
           >
             <IconButton
               v-if="
@@ -710,33 +751,18 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   </span>
                 </template>
                 <template #bottomLeft>
-                  <div class="pointer-events-auto flex min-w-0 items-center gap-1.5">
-                    <PlanSection
-                      v-if="ctx.planVisible.value"
-                      v-model:expanded="ctx.planViewerOpen.value"
-                      :state="ctx.planViewer"
-                    />
-                    <SessionWorkSection
-                      v-if="chat.selectedSessionId"
-                      :key="chat.selectedSessionId"
-                      :session-id="chat.selectedSessionId"
-                    />
-                    <BtwSection
-                      v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
-                      :key="chat.selectedSessionId + ':btw'"
-                      :session-id="chat.selectedSessionId"
-                    />
-                    <WorkspaceChangesSection
-                      v-if="chat.selectedSessionId"
-                      :key="chat.selectedSessionId + ':files'"
-                      :session-id="chat.selectedSessionId"
-                      :directory="sessionDirectory || ''"
-                      :busy="currentPhase !== 'idle'"
-                    />
-                    <span v-if="composerBottomLeftStatus" class="max-w-40 truncate text-muted-foreground">{{
-                      composerBottomLeftStatus
-                    }}</span>
-                  </div>
+                  <button
+                    v-if="composerBottomRightStatus"
+                    type="button"
+                    class="pointer-events-auto inline-flex min-h-7 items-center rounded px-1.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :aria-label="t('chat.planViewer.title')"
+                    @click="ctx.openPlanViewer"
+                  >
+                    {{ composerBottomRightStatus }}
+                  </button>
+                  <span v-if="composerBottomLeftStatus" class="truncate text-muted-foreground">{{
+                    composerBottomLeftStatus
+                  }}</span>
                 </template>
                 <template #overlay>
                   <PromptHistoryPalette

@@ -57,11 +57,10 @@ test('a chip panel is portalled and bounded so the composer cannot clip it', () 
 
 test('one edited file is one row with a git-style merged line stat', () => {
   const source = sectionSources.workspaceChanges
-  // A file lists once. Its merged stat replaces the per-operation count, which
-  // stays only as the fallback when no changed line could be counted.
-  assert.match(source, /v-for="row in rows"/)
-  assert.match(source, /:key="row\.file\.path"/)
-  assert.match(source, /\+\{\{ row\.stat\.added \}\}/)
-  assert.match(source, /−\{\{ row\.stat\.removed \}\}/)
-  assert.match(source, /row\.file\.operation_count \}\}×/)
+  // A file lists once and shows +added/−removed instead of a per-operation count.
+  assert.match(source, /v-for="file in files"/)
+  assert.match(source, /:key="file\.path"/)
+  assert.match(source, /\+\{\{ file\.added \}\}/)
+  assert.match(source, /−\{\{ file\.removed \}\}/)
+  assert.doesNotMatch(source, /operation_count/)
 })

@@ -32,6 +32,17 @@ const {
   moreDiffAvailable,
 } = useWorkspaceChanges({ sessionId, busy: computed(() => props.busy) })
 const detail = computed(() => visibleDiff.value?.files[0])
+/**
+ * One merged stat per file. A server that predates the merged stat, or a file
+ * whose recorded diff has no changed line, falls back to its operation count.
+ */
+const rows = computed(() =>
+  files.value.map((file) => {
+    const added = file.added ?? 0
+    const removed = file.removed ?? 0
+    return { file, stat: added + removed > 0 ? { added, removed } : null }
+  }),
+)
 // The chip stays a number; the full sentence lives in the tooltip and panel.
 const count = computed(() => (total.value === null ? '' : String(total.value)))
 const summary = computed(() => {
@@ -89,18 +100,19 @@ watch(
         <template v-if="!selected">
           <div class="flex flex-col items-stretch gap-0.5">
             <button
-              v-for="file in files"
-              :key="file.path"
+              v-for="row in rows"
+              :key="row.file.path"
               type="button"
               class="flex min-h-8 min-w-0 items-center gap-2 rounded px-2 text-left font-mono text-xs hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring"
-              :title="file.path"
-              @click="select(file)"
+              :title="row.file.path"
+              @click="select(row.file)"
             >
-              <span class="flex shrink-0 items-center gap-1 font-mono">
-                <span class="text-emerald-700 dark:text-emerald-400">+{{ file.added }}</span>
-                <span class="text-rose-700 dark:text-rose-400">−{{ file.removed }}</span>
+              <span v-if="row.stat" class="flex shrink-0 items-center gap-1 font-mono">
+                <span class="text-emerald-700 dark:text-emerald-400">+{{ row.stat.added }}</span>
+                <span class="text-rose-700 dark:text-rose-400">−{{ row.stat.removed }}</span>
               </span>
-              <span class="min-w-0 flex-1 truncate">{{ file.path }}</span>
+              <span v-else class="shrink-0 text-muted-foreground">{{ row.file.operation_count }}×</span>
+              <span class="min-w-0 flex-1 truncate">{{ row.file.path }}</span>
             </button>
           </div>
           <div v-if="page || current?.has_more" class="my-2 flex flex-wrap items-center gap-2">

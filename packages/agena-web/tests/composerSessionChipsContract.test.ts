@@ -41,11 +41,21 @@ test('the footer chips stay short: an icon, a number, and a tooltip', () => {
   assert.match(chipSource, /data-session-chip/)
   assert.match(chipSource, /max-w-32 truncate/)
   assert.match(chipSource, /:title="hint \|\| title"/)
+  // Each chip owns a boundary, so two neighbouring chips never read as one button.
+  assert.match(chipSource, /rounded-md border border-border\/60 bg-background/)
   for (const [name, source] of Object.entries(sectionSources)) {
     assert.match(source, /<SessionChip/, `${name} must render through the shared chip`)
     assert.doesNotMatch(source, /SessionSection/, `${name} must not use the removed docked section`)
     assert.match(source, /<template #icon>/, `${name} must render a chip icon`)
   }
+})
+
+test('the composer footer keeps its chips apart', () => {
+  const composerSource = readFileSync(resolve(import.meta.dir, '../src/components/chat/Composer.vue'), 'utf8')
+  const at = composerSource.indexOf('$slots.bottomLeft')
+  assert.notEqual(at, -1, 'the composer must declare its footer chip slot')
+  const footer = composerSource.slice(at, at + 400)
+  assert.match(footer, /gap-2/, 'the footer row must space adjacent chips')
 })
 
 test('a chip panel is portalled and bounded so the composer cannot clip it', () => {

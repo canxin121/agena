@@ -3,7 +3,7 @@
 // chip only inspects the durable plan and controls its autorun setting.
 import { computed, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiFileListLine, RiRefreshLine } from '@remixicon/vue'
+import { RiCheckboxMultipleLine, RiRefreshLine } from '@remixicon/vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SessionChip from './SessionChip.vue'
 import type { usePlanViewer } from '@/pages/chat/usePlanViewer'
@@ -31,7 +31,7 @@ const hint = computed(() => {
     @update:open="$emit('update:open', $event)"
   >
     <template #icon>
-      <RiFileListLine class="h-3.5 w-3.5 shrink-0" />
+      <RiCheckboxMultipleLine class="h-3.5 w-3.5 shrink-0" />
     </template>
     <template #actions>
       <IconButton

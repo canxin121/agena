@@ -1,4 +1,4 @@
-cli-about = Agena 終端聊天應用
+cli-about = Agena 終端聊天應用程式
 
 pane-sessions = 工作階段
 pane-sessions-search = 工作階段 [{$query}]
@@ -450,11 +450,11 @@ permission-studio-new-rule-label = + 新建規則
 
 permission-studio-new-rule-value = 建立
 
-permission-studio-catalog-tags-title = 添加工具標籤規則
+permission-studio-catalog-tags-title = 新增工具標籤規則
 
-permission-studio-catalog-names-title = 添加工具訪問規則
+permission-studio-catalog-names-title = 新增工具訪問規則
 
-permission-studio-catalog-prompt = 搜索目前實時工具目錄。可多選已有條目，也可選擇“自定義規則”填寫尚未註冊的值。
+permission-studio-catalog-prompt = 搜尋目前即時工具目錄。可多選已有條目，也可選擇“自定義規則”填寫尚未註冊的值。
 
 permission-studio-catalog-footer = 向下進入結果 · Space 切換 · Enter 選擇模式 · Esc 取消
 
@@ -462,7 +462,7 @@ permission-studio-catalog-tag-detail = 目前有 {$count} 個已註冊工具使�
 
 permission-studio-catalog-custom-label = + 自定義規則…
 
-permission-studio-catalog-custom-detail = 添加目前實時目錄中不存在的標籤或工具名稱。
+permission-studio-catalog-custom-detail = 新增目前即時目錄中不存在的標籤或工具名稱。
 
 permission-studio-catalog-custom-search = 自定義 新建 手動 標籤 工具 名稱
 
@@ -476,7 +476,7 @@ overlay-settings-options = 選項
 
 overlay-settings-group-core = 核心
 
-overlay-settings-group-application = 應用
+overlay-settings-group-application = 應用程式
 
 overlay-settings-group-session = 工作階段
 
@@ -504,7 +504,7 @@ overlay-settings-edit-file-value = 檔案覆蓋值：{$value}
 
 overlay-settings-edit-effective-value = 生效值：{$value}
 
-overlay-settings-help-string = 輸入文本。留空或輸入 `clear` 可移除檔案覆蓋值。
+overlay-settings-help-string = 輸入文字。留空或輸入 `clear` 可移除檔案覆蓋值。
 
 overlay-settings-help-bool = 輸入 true/false、on/off、yes/no 或 1/0。留空或輸入 `clear` 可移除檔案覆蓋值。
 
@@ -514,7 +514,7 @@ overlay-settings-help-float = 輸入數字。留空或輸入 `clear` 可移除�
 
 overlay-choice-clear-settings-detail = 移除 {$field} 的檔案覆蓋值。
 
-overlay-settings-section-plugins-label = 插件與工具
+overlay-settings-section-plugins-label = 外掛與工具
 
 overlay-settings-section-plugins-summary = 外掛設定、工具與診斷
 
@@ -522,9 +522,9 @@ overlay-settings-section-plugins-description = 設定外掛，並查看工具與
 
 overlay-settings-section-providers-label = 模型與服務商
 
-overlay-settings-section-providers-summary = {$count} 個已配置服務商
+overlay-settings-section-providers-summary = {$count} 個已設定服務商
 
-overlay-settings-section-providers-description = 配置服務商及其網絡行為，並查看模型目錄。
+overlay-settings-section-providers-description = 設定服務商及其網路行為，並查看模型目錄。
 
 overlay-settings-section-model-catalog-label = 模型目錄
 
@@ -536,23 +536,23 @@ overlay-settings-section-permissions-label = 權限
 
 overlay-settings-section-permissions-summary = {$count} 條持久化權限規則
 
-overlay-settings-section-permissions-description = 分別編輯全局、工作區與目前工作階段的權限。
+overlay-settings-section-permissions-description = 分別編輯全域、工作區與目前工作階段的權限。
 
 overlay-settings-section-tracing-summary = 日誌過濾與診斷
 
 overlay-settings-section-ui-label = 外觀
 
-overlay-settings-section-ui-summary = 語言與界面偏好
+overlay-settings-section-ui-summary = 語言與介面偏好
 
 overlay-settings-section-ui-description = 持久化的語言、配色、圖形與主題設定。
 
 overlay-settings-section-runtime-session-label = 執行階段與工作階段
 
-overlay-settings-section-runtime-session-summary = Provider 客戶端身份與上下文壓縮
+overlay-settings-section-runtime-session-summary = Provider 用戶端身份與上下文壓縮
 
-overlay-settings-section-runtime-session-description = 配置兼容客戶端版本，以及工作階段自動壓縮行為。
+overlay-settings-section-runtime-session-description = 設定兼容用戶端版本，以及工作階段自動壓縮行為。
 
-settings-permission-global-label = 全局權限
+settings-permission-global-label = 全域權限
 
 settings-permission-global-detail = 所有工作階段的預設基線。
 
@@ -566,11 +566,11 @@ settings-permission-current-detail = 僅覆蓋目前工作階段。
 
 settings-permission-effective-label = 實際生效權限
 
-settings-permission-effective-detail = 只讀 · 全局/工作區/工作階段合併結果。
+settings-permission-effective-detail = 只讀 · 全域/工作區/工作階段合併結果。
 
 settings-permission-effective-read-only = 實際生效權限是隻讀結果；請改 session、workspace 或 global 來源。
 
-settings-permission-layer-global = 全局
+settings-permission-layer-global = 全域
 
 settings-permission-layer-workspace = 工作區
 
@@ -598,15 +598,15 @@ settings-workspace-approval-model-description = 目前工作區專案設定中�
 
 settings-field-ui-locale-label = 語言
 
-settings-field-ui-locale-description = 界面語言
+settings-field-ui-locale-description = 介面語言
 
 settings-field-tui-color-scheme-label = 終端機配色模式
 
 settings-field-tui-color-scheme-description = 自動檢測終端機背景，或強制使用亮色/暗色配色
 
-settings-field-tui-theme-label = TUI 插件主題
+settings-field-tui-theme-label = TUI 外掛主題
 
-settings-field-tui-theme-description = 可選的插件語義色主題
+settings-field-tui-theme-description = 可選的外掛語義色主題
 
 settings-choice-tui-color-scheme-auto = 自動檢測終端機背景
 
@@ -616,17 +616,17 @@ settings-choice-tui-color-scheme-light = 針對亮色終端機背景優化
 
 settings-field-tui-graphics-label = 豐富終端機圖形
 
-settings-field-tui-graphics-description = 在支持的終端機中通過 Kitty、Sixel 或 iTerm2 顯示圖片和排版公式；重啟 TUI 後生效
+settings-field-tui-graphics-description = 在支援的終端機中通過 Kitty、Sixel 或 iTerm2 顯示圖片和排版公式；重啟 TUI 後生效
 
-settings-choice-tui-graphics-auto = 自動協商原生圖形，不支持時安全回退到 Unicode（推薦）
+settings-choice-tui-graphics-auto = 自動協商原生圖形，不支援時安全回退到 Unicode（推薦）
 
-settings-choice-tui-graphics-native = 為已由專家配置好的終端機鏈路強制協商原生圖形
+settings-choice-tui-graphics-native = 為已由專家設定好的終端機鏈路強制協商原生圖形
 
-settings-choice-tui-graphics-unicode = 關閉原生圖形，使用確定性的 Unicode/文本渲染
+settings-choice-tui-graphics-unicode = 關閉原生圖形，使用確定性的 Unicode/文字渲染
 
 settings-field-activity-default-expanded-label = 預設展開活動
 
-settings-field-activity-default-expanded-description = 未單獨配置種類的活動的預設展開狀態。推理（reasoning）預設展開，除非單獨設定其種類。
+settings-field-activity-default-expanded-description = 未單獨設定種類的活動的預設展開狀態。推理（reasoning）預設展開，除非單獨設定其種類。
 
 settings-field-activity-kind-description = 該活動種類的預設展開狀態。
 
@@ -664,13 +664,13 @@ settings-activity-kind-error-description = 失敗操作與終端機故障。
 
 settings-activity-kind-notice-label = 通知
 
-settings-activity-kind-notice-description = 後臺通知與信息行。
+settings-activity-kind-notice-description = 後臺通知與資訊行。
 
-settings-activity-kind-text-label = 文本
+settings-activity-kind-text-label = 文字
 
-settings-activity-kind-text-description = 純文本與文本工件內容。
+settings-activity-kind-text-description = 純文字與文字工件內容。
 
-settings-field-tracing-filter-label = 應用程式日誌層級
+settings-field-tracing-filter-label = 應用程式程式日誌層級
 
 settings-field-tracing-filter-description = 預設 tracing 日誌級別
 
@@ -686,7 +686,7 @@ settings-config-open-file-detail = 打開 agena.json 查看或編輯這個路徑
 
 settings-source-unset = 未設定
 
-settings-source-configured = 已配置：{$value}
+settings-source-configured = 已設定：{$value}
 
 settings-source-effective = 生效：{$value}
 
@@ -696,9 +696,9 @@ settings-source-file-found = {$path}（已找到）
 
 settings-source-file-missing = {$path}（儲存時建立）
 
-settings-source-row-config-file = 配置檔案
+settings-source-row-config-file = 設定檔案
 
-settings-source-row-workspace-config-file = 工作區配置檔案
+settings-source-row-workspace-config-file = 工作區設定檔案
 
 settings-source-row-file-value = 檔案值
 
@@ -720,7 +720,7 @@ settings-detail-sources-heading = 來源
 
 settings-detail-action-readonly = 打開只讀的實際生效視圖。
 
-settings-detail-action-file = 打開背後的配置檔案。
+settings-detail-action-file = 打開背後的設定檔案。
 
 
 
@@ -733,9 +733,9 @@ settings-field-parse-float = {$field} 需要數值
 
 settings-choice-adapter-fallback = 適配器
 
-settings-plugin-workbench-label = 插件設定工作台
+settings-plugin-workbench-label = 外掛設定工作台
 
-settings-plugin-workbench-detail = 打開結構化插件工作台，查看運行時狀態、配置、工具、命令、日誌和診斷。
+settings-plugin-workbench-detail = 打開結構化外掛工作台，查看運行時狀態、設定、工具、命令、日誌和診斷。
 
 settings-mcp-server-label = Agena MCP 伺服器
 
@@ -751,7 +751,7 @@ settings-mcp-ready = 就緒
 
 settings-mcp-needs-attention = 需要處理
 
-settings-mcp-server-detail = 切換 Agena 實時 HTTP MCP 能力；實際運行者始終是所連接的 Agena server 進程。
+settings-mcp-server-detail = 切換 Agena 即時 HTTP MCP 能力；實際運行者始終是所連接的 Agena server 進程。
 
 settings-mcp-auth-label = MCP 鑑權
 
@@ -769,9 +769,9 @@ settings-mcp-anonymous-access-none = 無（推薦）
 
 settings-mcp-anonymous-access-read-only = 權限契約確認的只讀工具
 
-settings-mcp-anonymous-access-none-detail = 安全預設值：沒有工具調用可匿名執行；ChatGPT 仍可在登錄前完成初始化並發現工具目錄。
+settings-mcp-anonymous-access-none-detail = 安全預設值：沒有工具調用可匿名執行；ChatGPT 仍可在登入前完成初始化並發現工具目錄。
 
-settings-mcp-anonymous-access-read-only-detail = 高風險選項：只讀工具可匿名執行，仍可能洩露私有工作區、檔案系統、配置或診斷數據。
+settings-mcp-anonymous-access-read-only-detail = 高風險選項：只讀工具可匿名執行，仍可能洩露私有工作區、檔案系統、設定或診斷數據。
 
 settings-mcp-anonymous-access-inactive-detail = 此策略僅用於混合鑑權模式；先將鑑權切換為混合模式。
 
@@ -785,7 +785,7 @@ settings-mcp-public-url-value = 編輯
 
 settings-mcp-public-url-auto = 監聽器本地回退地址
 
-settings-mcp-public-url-detail = 設定規範 HTTPS MCP resource URL。Secure MCP Tunnel 可以保留完整 /v1/mcp/tunnel_id 路徑；絕不信任轉發請求頭來定義 OAuth 身份。
+settings-mcp-public-url-detail = 設定規範 HTTPS MCP resource URL。Secure MCP Tunnel 可保留完整 /v1/mcp/tunnel_id 路徑；絕不信任轉發請求頭來定義 OAuth 身份。
 
 settings-mcp-oauth-issuer-label = OAuth 簽發者 URL
 
@@ -797,19 +797,19 @@ settings-mcp-oauth-password-label = MCP OAuth 密碼
 
 settings-mcp-oauth-password-value = 設定或替換
 
-settings-mcp-oauth-password-configured = 已配置 MCP 專用密碼
+settings-mcp-oauth-password-configured = 已設定 MCP 專用密碼
 
 settings-mcp-oauth-password-ui-fallback = 使用 UI 密碼回退
 
-settings-mcp-oauth-password-not-configured = 未配置
+settings-mcp-oauth-password-not-configured = 未設定
 
 settings-mcp-oauth-password-detail = 設定 Agena OAuth 授權頁面使用的密碼；密碼由 server 以 Argon2 哈希儲存。
 
 settings-mcp-oauth-password-clear-label = 清除 MCP OAuth 密碼
 
-settings-mcp-oauth-password-clear-detail = 刪除 MCP 專用密碼；如果配置了 UI 密碼，則回退到 UI 密碼。
+settings-mcp-oauth-password-clear-detail = 刪除 MCP 專用密碼；如果設定了 UI 密碼，則回退到 UI 密碼。
 
-settings-field-runtime-codex-version-label = Codex 客戶端版本
+settings-field-runtime-codex-version-label = Codex 用戶端版本
 
 settings-field-runtime-codex-version-description = Provider 請求身份 Header 使用的 @openai/codex 精確兼容版本。
 
@@ -823,25 +823,25 @@ settings-field-runtime-gemini-version-description = Provider 請求身份 Header
 
 settings-field-session-compaction-auto-label = 自動壓縮
 
-settings-field-session-compaction-auto-description = 工作階段接近上下文窗口上限時自動壓縮。
+settings-field-session-compaction-auto-description = 工作階段接近上下文視窗上限時自動壓縮。
 
 settings-field-session-compaction-reserved-tokens-label = 壓縮保留 Token
 
-settings-field-session-compaction-reserved-tokens-description = 判斷壓縮時從上下文窗口中預留的 Token 數；清除後使用自動計算值。
+settings-field-session-compaction-reserved-tokens-description = 判斷壓縮時從上下文視窗中預留的 Token 數；清除後使用自動計算值。
 
-settings-client-versions-refresh-label = 重新整理客戶端版本
+settings-client-versions-refresh-label = 重新整理用戶端版本
 
 settings-client-versions-refresh-value = 獲取最新版本
 
 settings-client-versions-refresh-description = 從 npm 獲取最新兼容包版本，持久化三個精確版本值，並重載運行時。
 
-settings-client-versions-entry-label = Provider 客戶端版本
+settings-client-versions-entry-label = Provider 用戶端版本
 
 settings-client-versions-entry-value = codex · claude · gemini
 
 settings-client-versions-entry-detail = 打開 Provider 請求身份 Header 使用的三個精確兼容版本。
 
-settings-client-versions-section-label = 客戶端版本
+settings-client-versions-section-label = 用戶端版本
 
 settings-client-versions-section-summary = 運行時身份版本
 
@@ -851,7 +851,7 @@ settings-provider-workbench-label = 服務商列表
 
 settings-provider-workbench-value = {$count} 個服務商
 
-settings-provider-workbench-detail = 先打開可搜索的服務商列表，再配置認證、adapter、模型路由或新建服務商。
+settings-provider-workbench-detail = 先打開可搜尋的服務商列表，再設定認證、adapter、模型路由或新建服務商。
 
 settings-global-default-model-label = 全域預設模型
 
@@ -863,9 +863,9 @@ settings-model-default-mode-inherit-detail = 使用所選 model 的原生預設�
 
 settings-provider-new-label = + 新建 provider
 
-settings-provider-new-detail = 建立新 provider，列出 live adapter models，並編輯 provider adapter 配置；模型需單獨選擇。
+settings-provider-new-detail = 建立新 provider，列出 live adapter models，並編輯 provider adapter 設定；模型需單獨選擇。
 
-settings-provider-existing-detail = 已配置 {$count} 個 adapter
+settings-provider-existing-detail = 已設定 {$count} 個 adapter
 
 settings-model-catalog-open-label = 打開 Model Catalog
 
@@ -883,9 +883,9 @@ permission-studio-field-path-external = 路徑外部預設值
 
 permission-studio-field-path-rules = 路徑規則
 
-permission-studio-field-network-defaults = 網絡預設值
+permission-studio-field-network-defaults = 網路預設值
 
-permission-studio-field-network-rules = 網絡規則
+permission-studio-field-network-rules = 網路規則
 
 permission-studio-field-tool-names = 工具名稱
 
@@ -907,7 +907,7 @@ permission-studio-detail-editable = Enter 會為這一段權限打開多行 JSON
 
 permission-studio-detail-read-only = 這個權限文檔在這裡是只讀的。
 
-permission-studio-detail-mode-editable = Enter 會為這個字段打開 mode 選擇器。
+permission-studio-detail-mode-editable = Enter 會為這個欄位打開 mode 選擇器。
 
 permission-studio-detail-text-editable = Enter 會編輯這一個 key 或 pattern。
 
@@ -937,7 +937,7 @@ permission-studio-section-rules = 規則
 
 permission-studio-section-defaults = 預設值
 
-permission-studio-source-global = 全局
+permission-studio-source-global = 全域
 
 permission-studio-source-workspace = 工作區
 
@@ -963,11 +963,11 @@ permission-studio-page-path-defaults = 檔案系統 / 預設區域
 
 permission-studio-page-path-rules = 檔案系統 / 路徑規則
 
-permission-studio-page-network = 網絡
+permission-studio-page-network = 網路
 
-permission-studio-page-network-zones = 網絡 / 網絡區域
+permission-studio-page-network-zones = 網路 / 網路區域
 
-permission-studio-page-network-rules = 網絡 / 域名規則
+permission-studio-page-network-rules = 網路 / 域名規則
 
 permission-studio-page-tools = 工具
 
@@ -1023,13 +1023,13 @@ permission-studio-tool-default = 工具預設值
 
 permission-studio-tool-default-summary = 預設 {$value}
 
-permission-studio-add-path-rule = 添加路徑規則
+permission-studio-add-path-rule = 新增路徑規則
 
-permission-studio-add-network-rule = 添加網絡目標
+permission-studio-add-network-rule = 新增網路目標
 
-permission-studio-add-name = 添加名稱
+permission-studio-add-name = 新增名稱
 
-permission-studio-add-tool-rule = 添加工具規則
+permission-studio-add-tool-rule = 新增工具規則
 
 permission-studio-rule-key = 鍵
 
@@ -1045,11 +1045,11 @@ permission-studio-error-empty-value = {$field} 不能為空。
 
 overlay-providers-title = Provider 列表
 
-overlay-providers-prompt = 選擇一個 provider 進行配置
+overlay-providers-prompt = 選擇一個 provider 進行設定
 
 overlay-provider-list-title = Provider 列表
 
-overlay-provider-list-prompt = 搜索已配置的 provider
+overlay-provider-list-prompt = 搜尋已設定的 provider
 
 overlay-provider-list-footer = 選擇“新建 Provider”或已有 Provider，然後按 Enter
 
@@ -1057,11 +1057,11 @@ overlay-provider-list-create-label = + 新建 Provider
 
 overlay-provider-list-create-detail = 建立服務商草稿，然後設定認證、適配器與模型。
 
-overlay-provider-list-row-detail-no-model = {$adapter} · 已配置 {$count} 個 adapters
+overlay-provider-list-row-detail-no-model = {$adapter} · 已設定 {$count} 個 adapters
 
-overlay-provider-studio-title = Provider 配置
+overlay-provider-studio-title = Provider 設定
 
-overlay-provider-studio-header = Provider 配置
+overlay-provider-studio-header = Provider 設定
 
 overlay-provider-studio-footer = Tab/Shift+Tab 切換面板 · 方向鍵選擇 · Space 切換 · Enter 編輯 · Ctrl+D 刪除選中項 · Ctrl+R 重新整理 · Ctrl+N 新增模型 · Ctrl+A 儲存 Adapter · Ctrl+S 儲存 Provider · Esc 關閉
 
@@ -1076,10 +1076,10 @@ overlay-provider-studio-models = 模型
 overlay-provider-studio-catalog = 模型 Catalog
 overlay-provider-studio-catalog-picker-title = 選擇目錄範本
 overlay-provider-studio-catalog-picker-footer = 上下鍵選擇 · Ctrl+F 搜尋 · 左右鍵翻頁 · Enter 預填模型欄位 · Esc 返回
-overlay-provider-studio-catalog-match = 目錄匹配：{$model}
+overlay-provider-studio-catalog-match = 目錄符合：{$model}
 overlay-provider-studio-catalog-selected = 已選目錄：{$model}
-overlay-provider-studio-catalog-loading = 正在查找目錄匹配…
-overlay-provider-studio-catalog-no-match = 未匹配目錄 · 可在模型設定中選擇
+overlay-provider-studio-catalog-loading = 正在搜尋目錄符合…
+overlay-provider-studio-catalog-no-match = 未符合目錄 · 可在模型設定中選擇
 
 overlay-provider-studio-detail = 詳情
 
@@ -1089,11 +1089,11 @@ overlay-provider-studio-adapter-models-empty = 先選擇 adapter，再列出 liv
 
 overlay-provider-studio-models-empty = 目前沒有可用的適配器模型
 
-overlay-provider-studio-catalog-empty = 目前查詢沒有匹配的 catalog 條目
+overlay-provider-studio-catalog-empty = 目前查詢沒有相符的 catalog 條目
 
 overlay-provider-studio-new-provider-detail = 空的 provider 草稿
 
-overlay-provider-studio-provider-row-detail-no-model = {$adapter} · 已配置 {$count} 個 adapters
+overlay-provider-studio-provider-row-detail-no-model = {$adapter} · 已設定 {$count} 個 adapters
 
 overlay-provider-studio-model-count = {$count} 個模型
 
@@ -1101,25 +1101,25 @@ overlay-provider-studio-loaded = 已載入
 
 overlay-provider-studio-error = 錯誤
 
-overlay-provider-studio-configured = 已配置
+overlay-provider-studio-configured = 已設定
 
-overlay-provider-studio-live-list = 實時列表
+overlay-provider-studio-live-list = 即時列表
 
-overlay-provider-studio-configured-disk = 已在磁盤中配置，但不屬於目前認證契約
+overlay-provider-studio-configured-disk = 已在磁盤中設定，但不屬於目前認證契約
 
 overlay-provider-studio-not-listed = 未列出
 
-overlay-provider-studio-not-supported = 目前認證契約不支持
+overlay-provider-studio-not-supported = 目前認證契約不支援
 
-overlay-provider-studio-edit-title = 編輯字段
+overlay-provider-studio-edit-title = 編輯欄位
 
 overlay-provider-studio-edit-prompt = 更新 {$field}
 
 overlay-provider-studio-edit-footer = 輸入以編輯
 
-overlay-provider-studio-model-edit-footer = Ctrl+S 儲存模型配置
+overlay-provider-studio-model-edit-footer = Ctrl+S 儲存模型設定
 
-overlay-provider-studio-model-json-title = 模型配置 · {$adapter}/{$model}
+overlay-provider-studio-model-json-title = 模型設定 · {$adapter}/{$model}
 
 overlay-provider-studio-model-json-prompt = 編輯持久化的 provider model JSON。
 
@@ -1141,19 +1141,19 @@ overlay-provider-delete-model-title = 刪除模型
 
 overlay-provider-delete-model-body = 刪除已設定的模型 {$provider}/{$adapter}/{$model}？
 
-overlay-provider-studio-model-edit-title = 編輯模型字段
+overlay-provider-studio-model-edit-title = 編輯模型欄位
 
 overlay-provider-studio-model-field-prompt = 更新 {$field}
 
-overlay-provider-studio-new-model-title = 添加模型
+overlay-provider-studio-new-model-title = 新增模型
 
-overlay-provider-studio-new-model-prompt = 輸入要添加到目前 adapter 下的 model id。
+overlay-provider-studio-new-model-prompt = 輸入要新增到目前 adapter 下的 model id。
 
 overlay-provider-studio-edit-auth-mode-prompt = 更新 auth mode（none | api | credential）
 
 overlay-provider-studio-edit-auth-subtype-prompt = 更新 auth subtype（api：custom | cline_api | gitlab_api | bedrock_sigv4；credential：openai_chatgpt | github_copilot | gitlab | google_adc | sap_ai_core）
 
-overlay-provider-studio-edit-auth-login-method-prompt = 更新登錄方式（device | browser）
+overlay-provider-studio-edit-auth-login-method-prompt = 更新登入方式（device | browser）
 
 provider-studio-auth-status-pending = 待完成
 
@@ -1165,7 +1165,7 @@ provider-studio-auth-status-select-subtype = 選擇子類
 
 provider-studio-auth-status-select-issuer = 選擇子類
 
-provider-studio-auth-status-configured = 已配置
+provider-studio-auth-status-configured = 已設定
 
 provider-studio-auth-status-partial = 部分已填
 
@@ -1197,7 +1197,7 @@ provider-studio-summary-keys-set = 已設定密鑰
 
 provider-studio-summary-set-field = 設定 {$field}
 
-provider-studio-summary-review-fields = 查看認證字段
+provider-studio-summary-review-fields = 查看認證欄位
 
 provider-studio-summary-start-browser = 開始瀏覽器 OAuth
 
@@ -1205,9 +1205,9 @@ provider-studio-summary-restart-browser = 重新開始瀏覽器 OAuth
 
 provider-studio-summary-open-authorize = 打開授權 URL
 
-provider-studio-summary-start-device = 開始設備登錄
+provider-studio-summary-start-device = 開始設備登入
 
-provider-studio-summary-restart-device = 重新開始設備登錄
+provider-studio-summary-restart-device = 重新開始設備登入
 
 provider-studio-summary-open-verify = 打開驗證 URL
 
@@ -1225,7 +1225,7 @@ provider-studio-summary-poll-browser = 輪詢瀏覽器結果
 
 provider-studio-auth-openai-ready = 瀏覽器 OAuth 已就緒，打開下面的授權 URL
 
-provider-studio-auth-openai-device-ready = OpenAI 設備登錄已就緒，打開下面的驗證 URL 並輸入 {$code}
+provider-studio-auth-openai-device-ready = OpenAI 設備登入已就緒，打開下面的驗證 URL 並輸入 {$code}
 
 provider-studio-auth-authorize = 授權 {$url}
 
@@ -1233,7 +1233,7 @@ provider-studio-auth-redirect = 重定向 {$url}
 
 provider-studio-auth-paste-callback = 將跳轉後的 URL 粘貼到 Callback URL，然後按 p · 狀態 {$state}
 
-provider-studio-auth-copilot-ready = 設備登錄已就緒，打開下面的驗證 URL 並輸入 {$code}
+provider-studio-auth-copilot-ready = 設備登入已就緒，打開下面的驗證 URL 並輸入 {$code}
 
 provider-studio-auth-verify = 驗證 {$url}
 
@@ -1245,7 +1245,7 @@ provider-studio-auth-atomgit-ready = AtomGit 瀏覽器工作階段已就緒，�
 
 provider-studio-auth-finish-browser = 完成瀏覽器流程後按 p · 狀態 {$state}
 
-flash-server-config-edit-in-settings = 配置檔案位於服務端。請直接在“設定”中編輯配置值，不能將服務端路徑作為客戶端本地檔案打開。
+flash-server-config-edit-in-settings = 設定檔案位於服務端。請直接在“設定”中編輯設定值，不能將服務端路徑作為用戶端本地檔案打開。
 
 flash-settings-updated = 已更新 {$path}
 
@@ -1253,7 +1253,7 @@ flash-settings-cleared = 已清空 {$path}
 
 flash-provider-save-error-settings-object = 現有 provider settings 必須是一個 JSON object
 
-command-settings-summary = 打開統一設定工作台，管理模型、權限、插件、運行時、工作階段、界面與診斷
+command-settings-summary = 打開統一設定工作台，管理模型、權限、外掛、運行時、工作階段、介面與診斷
 command-side-summary = 開啟分支對話，不影響目前執行中的工作
 command-commit-summary = 將已暫存的變更建立為提交
 command-pr-summary = 使用精簡的 gh 選項建立合併請求
@@ -1314,11 +1314,11 @@ permission-studio-command-pattern-title = {$tool_name} 命令模式
 
 permission-studio-command-pattern-help = 輸入 Shell 命令 glob，例如 `git status` 或 `git push *`。
 
-permission-studio-rename-unsupported = 此條目無法重命名；請刪除後重新創建。
+permission-studio-rename-unsupported = 此條目無法重新命名；請刪除後重新創建。
 
 settings-tool-api-list-description = 枚舉執行工具。
 
-settings-tool-api-search-description = 搜索執行工具。
+settings-tool-api-search-description = 搜尋執行工具。
 
 settings-tool-api-help-description = 查看執行工具契約。
 
@@ -1326,11 +1326,11 @@ settings-tool-api-tags-description = 列出執行工具標籤。
 
 settings-tool-api-call-description = 調用執行工具。
 
-settings-tool-api-plugins-list-description = 枚舉工具插件。
+settings-tool-api-plugins-list-description = 枚舉工具外掛。
 
-settings-tool-api-plugins-search-description = 搜索工具插件。
+settings-tool-api-plugins-search-description = 搜尋工具外掛。
 
-settings-tool-api-plugins-tags-description = 列出工具插件標籤。
+settings-tool-api-plugins-tags-description = 列出工具外掛標籤。
 
 # Settings, provider, permission, catalog, MCP, and diagnostics completion
 overlay-editor-footer-single-line = 輸入要編輯的內容
@@ -1351,15 +1351,15 @@ context-help-context-suggestions = 建議
 context-help-context-usage = 使用情況儀表板
 context-help-context-plan-viewer = 計劃查看器
 context-help-context-user-input = 使用者輸入請求
-context-help-context-plugin-list = 插件工作台·列表
-context-help-context-plugin-detail = 插件工作台·詳情
-context-help-context-plugin-config = 插件工作台·配置
-context-help-context-plugin-actions = 插件配置 · 操作
-context-help-context-plugin-selection = 插件配置·選擇
-context-help-context-plugin-drilldown = 插件配置·深入分析
-context-help-context-plugin-diff = 插件配置·差異
+context-help-context-plugin-list = 外掛工作台·列表
+context-help-context-plugin-detail = 外掛工作台·詳情
+context-help-context-plugin-config = 外掛工作台·設定
+context-help-context-plugin-actions = 外掛設定 · 操作
+context-help-context-plugin-selection = 外掛設定·選擇
+context-help-context-plugin-drilldown = 外掛設定·深入分析
+context-help-context-plugin-diff = 外掛設定·差異
 context-help-key-delete = 刪除所選項目。
-context-help-key-plugin-restart = 如果支持，請重新啟動選定的插件。
+context-help-key-plugin-restart = 如果支援，請重新啟動選定的外掛。
 overlay-permission-title = 許可請求
 overlay-permission-details-title = 詳情
 overlay-permission-action-tool = 工具：{ $tool }
@@ -1369,7 +1369,7 @@ overlay-permission-field-tool = 工具
 overlay-permission-field-target = 命令或目標
 overlay-permission-field-access = 訪問
 overlay-permission-field-path = 路徑
-overlay-permission-field-workspace = 工作空間
+overlay-permission-field-workspace = 工作區
 overlay-permission-field-network = URL 或網路目標
 overlay-permission-field-host = 主持人
 overlay-permission-field-reason = 為什麼需要批准
@@ -1388,12 +1388,12 @@ overlay-permission-rule-studio-footer-return = 箭頭選擇 · 進入編輯 · C
 flash-permission-rule-browse-path-selection = 瀏覽之前選擇目標路徑或工作區根目錄。
 overlay-permission-rule-choice-subject-title = 選擇主題類型
 overlay-permission-rule-choice-subject-prompt = 選擇規則主題類型。
-overlay-permission-rule-choice-subject-tool-detail = 匹配工具或運行時工具
-overlay-permission-rule-choice-subject-path-access-detail = 匹配檔案系統訪問
-overlay-permission-rule-choice-subject-network-access-detail = 匹配網路訪問
+overlay-permission-rule-choice-subject-tool-detail = 符合工具或運行時工具
+overlay-permission-rule-choice-subject-path-access-detail = 符合檔案系統訪問
+overlay-permission-rule-choice-subject-network-access-detail = 符合網路訪問
 overlay-permission-rule-choice-access-title = 選擇路徑存取類型
 overlay-permission-rule-choice-access-prompt = 選擇檔案系統存取模式。
-overlay-permission-rule-choice-access-read-detail = 允許文件只讀
+overlay-permission-rule-choice-access-read-detail = 允許檔案只讀
 overlay-permission-rule-choice-access-write-detail = 只允許檔案寫入
 overlay-permission-rule-choice-access-read-write-detail = 允許讀取和寫入
 overlay-permission-rule-choice-scope-title = 選擇規則範圍
@@ -1403,10 +1403,10 @@ overlay-permission-rule-choice-scope-workspace-detail = 此工作區中的所有
 overlay-permission-rule-choice-scope-global-detail = 所有工作區
 overlay-permission-rule-choice-mode-title = 選擇規則模式
 overlay-permission-rule-choice-mode-prompt = 選擇允許、詢問或拒絕。
-overlay-permission-rule-choice-mode-allow-detail = 始終允許匹配的操作
-overlay-permission-rule-choice-mode-auto-detail = 讓配置的審批模型決定；不可用時退回到提示
-overlay-permission-rule-choice-mode-ask-detail = 在允許匹配操作之前提示
-overlay-permission-rule-choice-mode-deny-detail = 始終拒絕匹配的操作
+overlay-permission-rule-choice-mode-allow-detail = 始終允許相符的操作
+overlay-permission-rule-choice-mode-auto-detail = 讓設定的審批模型決定；不可用時退回到提示
+overlay-permission-rule-choice-mode-ask-detail = 在允許符合操作之前提示
+overlay-permission-rule-choice-mode-deny-detail = 始終拒絕相符的操作
 overlay-permission-rule-editor-footer = 輸入要編輯的內容
 overlay-permission-rule-editor-tool-name-title = 編輯工具名稱
 overlay-permission-rule-editor-tool-name-prompt = 輸入準確的工具名稱。
@@ -1420,7 +1420,7 @@ overlay-permission-rule-editor-network-target-title = 編輯網路目標
 overlay-permission-rule-editor-network-target-prompt = 輸入主機、主機:連接埠或 URL。
 overlay-permission-rule-editor-session-id-title = 編輯會話 ID
 overlay-permission-rule-editor-session-id-prompt = 輸入目標會話 ID。
-overlay-permission-rule-browser-workspace-root-title = 選擇工作空間根目錄
+overlay-permission-rule-browser-workspace-root-title = 選擇工作區根目錄
 overlay-permission-rule-browser-workspace-root-prompt = 瀏覽目錄並按 Enter 鍵選擇一個。
 overlay-permission-rule-browser-target-path-title = 選擇目標路徑
 overlay-permission-rule-browser-target-path-prompt = 瀏覽檔案或目錄並按 Enter 鍵選擇一個。
@@ -1442,18 +1442,18 @@ overlay-permission-rule-item-access-kind = 訪問類型
 overlay-permission-rule-item-access-kind-detail = 選擇讀、寫或read_write。
 overlay-permission-rule-item-target-path = 目標路徑
 overlay-permission-rule-item-target-path-detail = 要保護的路徑模式或確切路徑。
-overlay-permission-rule-item-workspace-root = 工作空間根目錄
+overlay-permission-rule-item-workspace-root = 工作區根目錄
 overlay-permission-rule-item-workspace-root-detail = 用於解釋相對目標路徑的可選基底目錄。
 overlay-permission-rule-item-network-target = 網路目標
-overlay-permission-rule-item-network-target-detail = 要匹配的主機、主機:連接埠或 URL 目標。
-overlay-permission-rule-detail-subject-kind = 工具規則按工具名稱和可選限定符進行比對。路徑規則匹配檔案系統存取。網路規則符合主機或 URL 存取。
+overlay-permission-rule-item-network-target-detail = 要相符的主機、主機:連接埠或 URL 目標。
+overlay-permission-rule-detail-subject-kind = 工具規則按工具名稱和可選限定符進行比對。路徑規則符合檔案系統存取。網路規則符合主機或 URL 存取。
 overlay-permission-rule-detail-tool-name = 工具規則需要準確的工具名稱，例如 `shell`、`read` 或 `web_search`。
-overlay-permission-rule-detail-qualifier = 限定符是可選的。將其保留為空，除非工具或操作需要更窄的匹配。
+overlay-permission-rule-detail-qualifier = 限定符是可選的。將其保留為空，除非工具或操作需要更窄的符合。
 overlay-permission-rule-detail-path-access-kind = 根據您要符合的檔案系統存取權限，使用 `read`、`write` 或 `read_write`。
-overlay-permission-rule-detail-workspace-root = 將workspace_root 留空以繼承執行階段工作空間根。當受保護的路徑位於其他地方時明確設定它。
+overlay-permission-rule-detail-workspace-root = 將workspace_root 留空以繼承執行階段工作區根。當受保護的路徑位於其他地方時明確設定它。
 overlay-permission-rule-detail-target-path = 輸入路徑或模式。相對路徑在設定時根據workspace_root 進行解釋。
 overlay-permission-rule-detail-network-target = 輸入主機、`host:port` 或完整 URL，取決於規則的具體程度。
-overlay-permission-rule-detail-scope = 會話範圍最適合臨時覆蓋。工作空間和全域作用域持續時間較長。
+overlay-permission-rule-detail-scope = 會話範圍最適合臨時覆蓋。工作區和全域作用域持續時間較長。
 overlay-permission-rule-detail-session-id = 會話範圍的規則需要具體的會話 ID。
 overlay-permission-rule-detail-mode = 「允許」允許操作通過，要求提示批准，「拒絕」則阻止操作。
 overlay-permission-choice-allow = 允許…
@@ -1542,7 +1542,7 @@ overlay-lineage-prompt = 探索目前分支樹並跳到祖先、兄弟或子會�
 overlay-rewind-title = 回放會議 [#{ $session }]
 overlay-rewind-prompt = 選擇要撤回的用戶訊息及其後的所有內容
 overlay-picker-loading = 加載中...
-overlay-picker-empty = 沒有匹配的項目
+overlay-picker-empty = 沒有相符的項目
 overlay-picker-footer = Tab 填入選定的標籤
 session-model-context-window = { $value } ctx
 session-model-max-output = 出 { $value }
@@ -1559,7 +1559,7 @@ provider-field-api-key-source = API金鑰來源
 provider-field-api-key-value = API鍵值
 provider-field-redirect-uri = 重定向URI
 provider-field-callback-url = 回呼地址
-provider-field-refresh-token = 刷新令牌
+provider-field-refresh-token = 重新整理令牌
 provider-field-access-token = 訪問令牌
 provider-field-expires-at-ms = 過期時間（毫秒）
 provider-field-account-id = 帳戶ID
@@ -1605,7 +1605,7 @@ provider-auth-mode-api-detail = API 風格的身份驗證，具有用於自訂 H
 provider-auth-mode-credential-detail = 由本機頒發者解析的憑證支援的身份驗證，在身份驗證子類型欄位中選擇
 provider-auth-kind-unset = 未設定
 provider-auth-kind-none = 無
-provider-auth-kind-api = 應用程式介面
+provider-auth-kind-api = 應用程式程式介面
 provider-auth-kind-cline = cline_api
 provider-auth-kind-gitlab = gitlab_api
 provider-auth-kind-credential = 憑證
@@ -1614,7 +1614,7 @@ provider-auth-kind-bedrock = bedrock_sigv4
 provider-auth-subtype-custom-label = 客製化
 provider-auth-subtype-custom-detail = 適用於 OpenAI 相容、Anthropic 或 Gemini HTTP 提供者的通用 API 金鑰 + 基本 URL 驗證
 provider-auth-subtype-cline-api-detail = 修正了 Cline API 端點；只需要輸入API金鑰，模型發現使用Cline推薦的模型
-provider-api-key-source-inline-detail = 將 API 金鑰內聯儲存在提供者配置中
+provider-api-key-source-inline-detail = 將 API 金鑰內聯儲存在提供者設定中
 provider-api-key-source-env-detail = 從環境變數中讀取 API 金鑰
 provider-auth-subtype-gitlab-api-detail = 透過 openai 或人類適配器路由的 GitLab 令牌身份驗證
 provider-auth-subtype-bedrock-detail = AWS Bedrock SigV4 簽名
@@ -1630,7 +1630,7 @@ provider-issuer-sap-ai-core-label = sap_ai_core
 provider-issuer-openai-chatgpt-detail = OpenAI ChatGPT 憑證
 provider-issuer-github-copilot-detail = GitHub Copilot 憑證
 provider-issuer-gitlab-detail = 亞搏體育appGitLab OAuth憑證
-provider-issuer-google-adc-detail = Google 應用程式預設憑證
+provider-issuer-google-adc-detail = Google 應用程式程式預設憑證
 provider-issuer-sap-ai-core-detail = SAP AI Core 服務金鑰驗證
 provider-instance-url-gitlab-detail = GitLab.com 瀏覽器 OAuth 端點
 provider-redirect-local-copy-detail = 用於複製/貼上 OAuth 重定向的本機回呼 URL
@@ -1692,7 +1692,7 @@ value-yes = 是的
 value-no = 不
 value-session = 會議
 value-global = 全球
-value-add = 添加
+value-add = 新增
 value-runtime-default = 運行時預設值
 value-permission-rule-subject-tool = 工具
 value-permission-rule-subject-path-access = 路徑訪問
@@ -1703,7 +1703,7 @@ inline-fact-operator = 操作員
 flash-permission-rule-saved = 已儲存的權限規則：{ $name }
 flash-permission-rule-revoked = 已撤銷的權限規則：{ $name }
 flash-permission-rule-context-lost = 權限規則工作室上下文遺失
-flash-provider-studio-context-lost = 提供者配置上下文遺失
+flash-provider-studio-context-lost = 提供者設定上下文遺失
 permission-rule-error-session-id-integer = 會話 ID 必須是整數
 permission-rule-error-tool-name-required = 工具規則需要工具名稱
 permission-rule-error-path-access-kind-required = 路徑規則需要path_access_kind
@@ -1722,7 +1722,7 @@ flash-provider-studio-adapter-not-enabled = 新增型號之前檢查所選適配
 flash-provider-studio-adapter-unavailable = 目前的身份驗證模式不允許選擇此適配器
 flash-provider-studio-model-required = 首先選擇列出的型號
 flash-provider-studio-model-id-required = 型號 ID 為必填項
-flash-provider-studio-no-auth-details = 當前身份驗證模式沒有可用的身份驗證詳細信息
+flash-provider-studio-no-auth-details = 當前身份驗證模式沒有可用的身份驗證詳細資料
 flash-provider-studio-catalog-refreshed = 更新的模型目錄
 flash-provider-studio-catalog-template-applied = 已從 {$model} 預填模型欄位；儲存後生效
 flash-provider-studio-invalid-model-json = 無效模型 JSON：{ $error }
@@ -1732,12 +1732,12 @@ flash-provider-studio-listing-auth-required = 列出適配器模型需要目前�
 flash-provider-studio-invalid-auth-login-method = 無效的身份驗證登入方法
 flash-provider-auth-openai-browser-started = OpenAI 瀏覽器身份驗證已啟動。開啟對話方塊中顯示的授權 URL，然後將重新導向的 URL 貼到回呼 URL 中並按 p。
 flash-provider-auth-openai-device-started = OpenAI設備登入開始。開啟對話方塊中顯示的驗證 URL，輸入代碼 { $code }，然後按 p。
-flash-provider-auth-copilot-device-started = 副駕駛設備登入開始。開啟對話方塊中顯示的驗證 URL，輸入代碼 { $code }，然後按 p。
+flash-provider-auth-copilot-device-started = Copilot設備登入開始。開啟對話方塊中顯示的驗證 URL，輸入代碼 { $code }，然後按 p。
 flash-provider-auth-gitlab-browser-started = GitLab 瀏覽器驗證已啟動。開啟對話方塊中顯示的授權 URL，然後將重新導向的 URL 貼到回呼 URL 中並按 p。
-flash-provider-auth-atomgit-browser-started = AtomGit 瀏覽器身份驗證已啟動。開啟對話方塊中顯示的授權 URL，完成登錄，然後按 p 進行輪詢。
+flash-provider-auth-atomgit-browser-started = AtomGit 瀏覽器身份驗證已啟動。開啟對話方塊中顯示的授權 URL，完成登入，然後按 p 進行輪詢。
 flash-provider-auth-openai-captured = OpenAI OAuth 憑證會擷取到草稿中。
 flash-provider-auth-openai-pending = OpenAI 設備登入仍待處理。完成驗證步驟，然後再按 p。
-flash-provider-auth-copilot-pending = 副駕駛設備登入仍待處理。完成瀏覽器批准，然後再次按 p。
+flash-provider-auth-copilot-pending = Copilot設備登入仍待處理。完成瀏覽器批准，然後再次按 p。
 flash-provider-auth-copilot-captured = Copilot OAuth 憑證會擷取到草稿中。
 flash-provider-auth-gitlab-captured = GitLab OAuth 憑證會擷取到草稿中。
 flash-provider-auth-atomgit-pending = AtomGit 瀏覽器登入仍有待處理。完成瀏覽器流程，然後再按 p。
@@ -1747,12 +1747,12 @@ flash-provider-auth-error-start-browser-first = 首先使用 Start Auth 或 o �
 flash-provider-auth-error-start-device-first = 首先使用 Start Auth 或 o 啟動裝置驗證
 flash-provider-auth-error-required-field = { $field } 是必要的
 flash-provider-save-draft = 已儲存提供者 { $provider } 和適配器 { $adapter }。
-flash-provider-save-adapter-matches = 使用 { $listed } 列出的模型保存了 { $provider }/{ $adapter } ； { $matched } 目錄匹配。
+flash-provider-save-adapter-matches = 使用 { $listed } 列出的模型儲存了 { $provider }/{ $adapter } ； { $matched } 目錄符合。
 flash-provider-save-model = 已儲存{ $provider }/{ $adapter }/{ $model }。
 flash-provider-save-configured-model = 已儲存組態模型 { $provider }/{ $adapter }/{ $model }。
 flash-provider-delete-provider = 已刪除提供者 { $provider }。
-flash-provider-delete-adapter = 刪除了配置的適配器 { $provider }/{ $adapter } 並刪除了 { $count } 模型。
-flash-provider-delete-model = 刪除了配置的模型 { $provider }/{ $adapter }/{ $model }。
+flash-provider-delete-adapter = 刪除了設定的適配器 { $provider }/{ $adapter } 並刪除了 { $count } 模型。
+flash-provider-delete-model = 刪除了設定的模型 { $provider }/{ $adapter }/{ $model }。
 flash-provider-studio-adapter-delete-empty = 未選擇要刪除的適配器設定。
 flash-provider-save-error-required-field = { $field } 是必要的
 flash-provider-save-error-unsupported-adapters = auth { $auth } 不支援適配器：{ $adapters }；應為 { $supported } 之一
@@ -1761,19 +1761,19 @@ flash-provider-save-error-gitlab-token = gitlab_api auth 需要 API 金鑰來源
 flash-provider-save-error-credential-base-url = 憑證頒發者 `{ $issuer }` 需要 base_url
 flash-provider-save-error-credential-service-key-env = 憑證頒發者 `{ $issuer }` 需要 service_key_env
 flash-provider-save-error-bedrock-key-pair = bedrock_sigv4需要同時使用access_key_id和secret_access_key
-flash-provider-save-error-select-model = 在保存提供者之前至少選擇一種模型
+flash-provider-save-error-select-model = 在儲存提供者之前至少選擇一種模型
 flash-provider-save-error-adapter-object = 提供者適配器 `{ $adapter }` 必須是 JSON 對象
-flash-provider-save-error-model-object = 提供者模型配置必須是 JSON 對象
-flash-provider-save-error-configured-adapter-object = 配置的提供者適配器設定必須是 JSON 對象
-flash-provider-save-error-configured-models-object = 配置的提供者適配器模型必須是 JSON 對象
-flash-provider-client-versions-refreshed = 更新的客戶端版本：Codex { $codex }、Claude { $claude }、Gemini { $gemini }
+flash-provider-save-error-model-object = 提供者模型設定必須是 JSON 對象
+flash-provider-save-error-configured-adapter-object = 設定的提供者適配器設定必須是 JSON 對象
+flash-provider-save-error-configured-models-object = 設定的提供者適配器模型必須是 JSON 對象
+flash-provider-client-versions-refreshed = 更新的用戶端版本：Codex { $codex }、Claude { $claude }、Gemini { $gemini }
 terminal-diagnostics-title = 終端診斷
 terminal-diagnostics-eyebrow = 相容性和協議證據
 terminal-diagnostics-footer = ↑/↓ 捲動 · c/y 複製報告 · Esc 關閉
 terminal-diagnostics-tip = 產品標識和環境層是基於證據的；通用SSH無法證明真實的端點終端。
 terminal-diagnostics-copied = 終端診斷已複製
 terminal-diagnostics-unavailable = 終端診斷在此運作時不可用。
-terminal-diagnostics-summary = 有證據支持的終端報告 · 終點置信度 { $confidence }
+terminal-diagnostics-summary = 有證據支援的終端報告 · 終點置信度 { $confidence }
 terminal-diagnostics-none = 無
 terminal-diagnostics-unknown = 未知
 terminal-diagnostics-unavailable-value = 不可用
@@ -1792,7 +1792,7 @@ terminal-diagnostics-field-confidence = 信心
 terminal-diagnostics-field-source = 選定的來源
 terminal-diagnostics-field-evidence = 證據
 terminal-diagnostics-field-conflicts = 衝突
-terminal-diagnostics-color-configured = 配置模式
+terminal-diagnostics-color-configured = 設定模式
 terminal-diagnostics-color-detected-background = 偵測到背景
 terminal-diagnostics-color-detected-appearance = 檢測到的外觀
 terminal-diagnostics-color-source = 檢測來源
@@ -1815,12 +1815,12 @@ terminal-diagnostics-color-source-colorfgbg = COLORFGBG 環境回退
 terminal-diagnostics-color-source-term-background = TERM_BACKGROUND 環境回退
 terminal-diagnostics-color-source-vscode-theme = VSCODE_THEME_KIND 環境回退
 terminal-diagnostics-color-source-unavailable = 沒有可用的終端或環境證據
-terminal-diagnostics-color-refresh-live = 关于焦点恢复和终端恢复；失败的刷新保留最后已知的颜色
-terminal-diagnostics-color-refresh-startup-only = 仅限启动；终端没有回答可刷新颜色查询
+terminal-diagnostics-color-refresh-live = 关于焦點恢复和終端機恢复；失敗的重新整理保留最后已知的颜色
+terminal-diagnostics-color-refresh-startup-only = 仅限啟動；終端機沒有回答可重新整理颜色查询
 terminal-diagnostics-color-formula-background-transparent = 透明；只有公式字形顏色遵循外觀
-terminal-diagnostics-color-background-images-not-sampled = 未取样；透明公式像素保留终端背景或下面的背景图像
+terminal-diagnostics-color-background-images-not-sampled = 未取样；透明公式像素保留終端機背景或下面的背景图像
 terminal-diagnostics-direct = 直接
-terminal-diagnostics-direct-description = 未检测到 SSH、Mosh、多路复用器或 WSL 证据。
+terminal-diagnostics-direct-description = 未偵測到 SSH、Mosh、多路复用器或 WSL 证据。
 terminal-diagnostics-layer-description = 從 { $source } 偵測到。層順序和嵌套深度未知。
 terminal-diagnostics-capability-description = 端點 = { $status } · 來源 = { $source } · 路徑 = { $path } · 提供者 = { $provider }
 terminal-diagnostics-path-clear = 清晰
@@ -2416,7 +2416,7 @@ flash-session-favorited = 已將 {$title} 加入收藏
 flash-session-unfavorited = 已將 {$title} 從收藏移除
 flash-session-compacted = 已壓縮工作階段上下文
 flash-session-rewound = 已撤回 {$target} 並建立分支；訊息已還原至編輯區
-flash-large-paste-no-file-view = 大型貼上片段可以移除，但沒有檔案檢視
+flash-large-paste-no-file-view = 大型貼上片段可移除，但沒有檔案檢視
 flash-quit-confirm = 再按一次 Ctrl+C 即可結束
 flash-run-cancelling-quit = 正在取消執行中的工作；再按一次 Ctrl+C 即可結束
 flash-config-dir-prepare-failed = 無法準備設定目錄 {$path}：{$error}
@@ -2538,7 +2538,7 @@ session-work-next = 下一頁 ›
 session-work-recording-incomplete = 記錄可能不完整（shell 寫入僅為宣告）
 session-work-operation-history = 操作歷史記錄，並非工作階段差異總覽（缺少完整基準）。
 session-work-operation-diff = 完整修補操作差異（可能包含其他檔案）。
-session-work-recorded-truncated = 差異內容已截斷；只能載入已保存的內容。
+session-work-recorded-truncated = 差異內容已截斷；只能載入已儲存的內容。
 session-work-no-recorded-diff = 沒有記錄到文字差異。
 
 workbench-editor-title-add-field = 新增欄位
@@ -2717,10 +2717,10 @@ hub-action-unfavorite = 取消收藏
 hub-section-favorites = 收藏
 composer-status-pending-user-input = {$count} 个使用者輸入待处理 (Ctrl+R)
 composer-status-pending-approval = {$count} 个權限待处理 (Ctrl+L)
-composer-status-hidden-pending-dialog = 輸入時暂時隐藏待处理弹窗
+composer-status-hidden-pending-dialog = 輸入時暂時隱藏待处理弹窗
 composer-status-selected-item = 項目 {$current}/{$total} {$label}
-composer-status-history = 历史 {$current}/{$total}
-composer-status-history-query = 历史 {$current}/{$total} query={$query}
+composer-status-history = 歷史 {$current}/{$total}
+composer-status-history-query = 歷史 {$current}/{$total} query={$query}
 composer-status-mention = 引用 {$query}
 composer-status-slash = 命令 {$query}
 surface-mode-insert = 插入
@@ -2737,20 +2737,20 @@ run-options-summary-speed = speed {$value}
 run-options-summary-verbosity = verbosity {$value}
 run-options-summary-parallel-tools = parallel-tools {$value}
 
-help-sessions-line-4 = 使用 /rename、/timeline 和 /lineage 管理所選會话
-help-sessions-line-5 = 用切換器内的控件在全部、根會话和子树作用域之间切換
-help-transcript-line-8 = 使用 /rename、/timeline、/lineage、/settings、/export 或 /pager 執行會话操作和設定
+help-sessions-line-4 = 使用 /rename、/timeline 和 /lineage 管理所選工作階段
+help-sessions-line-5 = 用切換器内的控件在全部、根工作階段和子树作用域之间切換
+help-transcript-line-8 = 使用 /rename、/timeline、/lineage、/settings、/export 或 /pager 執行工作階段操作和設定
 help-composer-line-11 = Ctrl+G 在可用時打開内联項目列表，/model、/rewind 這類 slash 命令可直接在輸入框執行
 help-section-user-commands = 使用者命令
 plan-viewer-refresh = 重新整理
 plan-viewer-title = 计划
 plan-inline-footer = Tab/Esc 返回輸入 · j/k 滚動 · r 重新整理 · f 全屏
-plan-viewer-empty = 暂无计划。
-plan-viewer-loading = 正在加载计划
-plan-viewer-footer = ↑/↓/PgUp/PgDn 滚動 · r 重新整理 · a 自動运行 · q 關闭
-plan-viewer-autorun-on = 自動运行：開
-plan-viewer-autorun-off = 自動运行：關
-runtime-setting-choice-parallel-detail = 應用 parallel-tool-calls 覆盖值
+plan-viewer-empty = 暂無计划。
+plan-viewer-loading = 正在載入计划
+plan-viewer-footer = ↑/↓/PgUp/PgDn 滚動 · r 重新整理 · a 自動執行 · q 關闭
+plan-viewer-autorun-on = 自動執行：開
+plan-viewer-autorun-off = 自動執行：關
+runtime-setting-choice-parallel-detail = 應用程式 parallel-tool-calls 覆盖值
 runtime-setting-summary-override-value = 覆盖 {$value}
 runtime-setting-apply-cleared = 已清空 {$field}
 runtime-setting-apply-updated = 已更新 {$field}
@@ -2763,7 +2763,7 @@ value-selected = 已選中
 value-inactive = 未激活
 value-unrestricted = 不限制
 value-inherit = 继承
-value-inherits-runtime-defaults = 继承运行時默認值
+value-inherits-runtime-defaults = 继承執行時默認值
 value-default-true = 默認（true）
 value-tools = 工具
 value-plugin-tools = 外掛工具
@@ -2779,7 +2779,7 @@ value-off = 關
 value-enabled = 已啟用
 value-disabled = 已禁用
 composer-prompt-history-label = 歷史>
-composer-prompt-history-no-matches =   沒有匹配的提示历史
+composer-prompt-history-no-matches =   沒有相符的提示歷史
 
 insert-content-file-label = 檔案
 insert-content-file-detail = 附加工作区檔案或檔案夹路径。
@@ -2805,12 +2805,12 @@ timeline-detail-permission-rule-source = source: {$source}
 timeline-type-execution-started = 執行開始
 timeline-type-execution-completed = 執行完成
 timeline-type-execution-cancelled = 執行已取消
-timeline-type-execution-failed = 執行失败
+timeline-type-execution-failed = 執行失敗
 timeline-type-compaction-completed = 上下文压缩完成
 timeline-type-subtask-status-changed = 子任務狀態已更新
 timeline-type-stream-error = 流錯誤
-timeline-type-message-part-checkpointed = 消息分段检查点
-timeline-type-message-part-delta = 消息分段增量
+timeline-type-message-part-checkpointed = 訊息分段检查点
+timeline-type-message-part-delta = 訊息分段增量
 timeline-type-command-begin = 命令開始
 timeline-type-command-output-delta = 命令輸出增量
 timeline-type-command-end = 命令结束
@@ -2819,49 +2819,49 @@ timeline-type-permission-replied = 權限回複
 timeline-type-permission-rule-created = 權限规则創建
 timeline-type-permission-rule-updated = 權限规则更新
 timeline-type-permission-rule-revoked = 權限规则撤销
-timeline-type-session-goal-updated = 會话目標更新
-timeline-type-run-started = 运行開始
-timeline-type-run-completed = 运行完成
-timeline-type-run-aborted = 运行中止
-timeline-type-user-message-appended = 使用者消息追加
-timeline-type-assistant-message-completed = 助手消息完成
-timeline-type-tool-call-issued = 工具调用發起
-timeline-type-tool-call-completed = 工具调用完成
+timeline-type-session-goal-updated = 工作階段目標更新
+timeline-type-run-started = 執行開始
+timeline-type-run-completed = 執行完成
+timeline-type-run-aborted = 執行中止
+timeline-type-user-message-appended = 使用者訊息追加
+timeline-type-assistant-message-completed = 助手訊息完成
+timeline-type-tool-call-issued = 工具呼叫發起
+timeline-type-tool-call-completed = 工具呼叫完成
 timeline-type-plugin-event = 外掛事件
-timeline-summary-execution-started = 會话 #{$id}
-timeline-summary-message-part-checkpointed = 消息 #{$message_id} 分段 #{$part_id} 已写入检查点（{$kind}）
-timeline-summary-message-part-delta = 消息 #{$message_id} 分段 #{$part_id} {$field}（+{$count} 字符）
+timeline-summary-execution-started = 工作階段 #{$id}
+timeline-summary-message-part-checkpointed = 訊息 #{$message_id} 分段 #{$part_id} 已写入检查点（{$kind}）
+timeline-summary-message-part-delta = 訊息 #{$message_id} 分段 #{$part_id} {$field}（+{$count} 字符）
 timeline-summary-command-output-bytes = {$count} 字节
 timeline-summary-command-output-delta = {$stream} {$preview}
 timeline-summary-command-end = {$status} exit={$exit_code}（{$duration_ms} ms）
 timeline-summary-session-goal-updated = 目標已更新：{$status} · {$objective}
-timeline-summary-run-started = 运行 {$id}
-timeline-summary-run-completed = 运行 {$id}（{$finish}）
-timeline-summary-run-aborted = 运行 {$id} 已中止（{$reason}）
+timeline-summary-run-started = 執行 {$id}
+timeline-summary-run-completed = 執行 {$id}（{$finish}）
+timeline-summary-run-aborted = 執行 {$id} 已中止（{$reason}）
 timeline-summary-user-message-appended = 使用者 #{$id}
 timeline-summary-assistant-message-completed = 助手 #{$id}（{$finish}）
-timeline-summary-tool-call-issued = 工具 {$name} 调用={$call_id}
-timeline-summary-tool-call-completed = 工具调用 {$call_id} 已完成
+timeline-summary-tool-call-issued = 工具 {$name} 呼叫={$call_id}
+timeline-summary-tool-call-completed = 工具呼叫 {$call_id} 已完成
 timeline-summary-system-notice-appended = 系统 #{$message_id}：{$kind}
 timeline-summary-plugin-event = 外掛 {$plugin_id}/{$kind_label}
-timeline-label-seq = 序号
+timeline-label-seq = 序號
 timeline-label-created = 創建時间
 timeline-label-type = 事件類型
 timeline-label-event-id = 事件 ID
 timeline-label-causation-id = 因果 ID
 timeline-label-correlation-id = 關联 ID
-timeline-label-session-id = 會话 ID
+timeline-label-session-id = 工作階段 ID
 timeline-label-error-code = 錯誤代码
-timeline-label-outcome = 结果
-timeline-label-error-message = 錯誤消息
-timeline-label-message-id = 消息 ID
+timeline-label-outcome = 結果
+timeline-label-error-message = 錯誤訊息
+timeline-label-message-id = 訊息 ID
 timeline-label-part-id = 分段 ID
 timeline-label-part-kind = 分段類型
 timeline-label-status = 狀態
 timeline-label-summary = 摘要
-timeline-label-field = 字段
+timeline-label-field = 欄位
 timeline-label-delta = 增量
-timeline-label-call-id = 调用 ID
+timeline-label-call-id = 呼叫 ID
 timeline-label-command = 命令
 timeline-label-cwd = 工作目錄
 timeline-label-stream = 流
@@ -2877,7 +2877,7 @@ timeline-label-source = 来源
 timeline-label-scope = 范围
 timeline-label-operator = 操作者
 timeline-label-requested-actions = 本次確認将覆盖
-timeline-label-related-actions = 同一次工具调用還涉及
+timeline-label-related-actions = 同一次工具呼叫還涉及
 timeline-label-reply-kind = 回複類型
 timeline-label-rule-id = 规则 ID
 timeline-label-action-key = 動作键
@@ -2885,35 +2885,35 @@ timeline-label-mode = 模式
 timeline-label-goal-id = 目標 ID
 timeline-label-objective = 目標内容
 timeline-label-completed-at = 完成時间
-timeline-label-run-id = 运行 ID
+timeline-label-run-id = 執行 ID
 timeline-label-model = 模型
 timeline-label-finish = 结束原因
-timeline-label-message = 消息
+timeline-label-message = 訊息
 timeline-label-name = 名称
 timeline-label-kind = 類型
-timeline-label-text = 文本
+timeline-label-text = 文字
 timeline-label-plugin-id = 外掛 ID
 timeline-label-kind-label = 种類標籤
 timeline-label-payload = 载荷
 timeline-label-trace = 判定轨迹
 value-unknown = 未知
-value-hidden = 隐藏
+value-hidden = 隱藏
 value-visible = 可见
 value-config-owned = 設定拥有
 value-file-backed = 檔案承载
 value-editable = 可編輯
-value-read-only = 只读
+value-read-only = 唯讀
 value-built-in = 内置
 value-built-in-defaults = 内置默認值
 value-config-backed = 設定承载
 value-markdown-backed = markdown 承载
-value-runtime-registered = 运行時注册
+value-runtime-registered = 執行時注册
 value-edit = 編輯
-value-rename = 重命名
+value-rename = 重新命名
 value-duplicate = 複制
 value-delete = 刪除
-value-runtime-config = 运行時設定
-value-runtime-config-file = 运行時設定 (agena.json)
+value-runtime-config = 執行時設定
+value-runtime-config-file = 執行時設定 (agena.json)
 status-part-workspace = 工作区 {$value}
 status-part-state = 狀態={$value}
 status-part-agent = agent={$value}
@@ -2936,7 +2936,7 @@ inline-fact-speed = speed
 inline-fact-verbosity = verbosity
 inline-fact-parallel-tools = parallel_tools
 permission-rule-error-session-token-required = session 作用域必须提供 session=<id>
-permission-rule-error-invalid-shell-args = shell 风格参數无效
+permission-rule-error-invalid-shell-args = shell 风格参數無效
 permission-rule-error-expected-structured = 需要一个结构化规则：以 tool/path 開头，并以 allow|ask|deny 结尾
 permission-rule-error-unknown-option = 未知的權限规则選項：{$key}
 permission-rule-error-invalid-subject = 规则對象必须以 `tool`、`path` 或 `network` 開头
@@ -2944,21 +2944,21 @@ permission-rule-error-invalid-mode = 權限模式必须是 allow、ask 或 deny
 permission-rule-error-invalid-scope = scope 必须是 session、workspace 或 global
 permission-rule-error-invalid-option-format = 需要 key=value 形式的選項，收到 `{$token}`
 operation-search-heading = 搜尋：{$query}
-operation-search-results-heading = 搜尋结果
+operation-search-results-heading = 搜尋結果
 operation-command-exit-code = exit {$code}
 operation-diff-summary = diff：{$count} 行
 operation-diff-summary-detailed-one = diff：1 个檔案，+{$added} / -{$deleted}
-operation-diff-summary-detailed-one-rename = diff：1 个檔案，+{$added} / -{$deleted}，重命名 {$renamed} 个
+operation-diff-summary-detailed-one-rename = diff：1 个檔案，+{$added} / -{$deleted}，重新命名 {$renamed} 个
 operation-diff-summary-detailed = diff：{$files} 个檔案，+{$added} / -{$deleted}
-operation-diff-summary-detailed-renames = diff：{$files} 个檔案，+{$added} / -{$deleted}，重命名 {$renamed} 个
+operation-diff-summary-detailed-renames = diff：{$files} 个檔案，+{$added} / -{$deleted}，重新命名 {$renamed} 个
 operation-nested-task-summary = {$title}（{$status}）
 snapshot-action-keep = 已退出
 snapshot-action-remove = 已移除
 snapshot-action-exit = 已退出
-composer-placeholder-range-invalid = composer 占位符范围无效
+composer-placeholder-range-invalid = composer 占位符范围無效
 composer-placeholder-out-of-sync = composer 占位符狀態不同步
 composer-missing-staged-item = 缺少對應的暂存項目：{$placeholder}
-runtime-status-default = 使用會话默認設置
+runtime-status-default = 使用工作階段默認設置
 
 file-change-moved = 移動
 
@@ -2978,7 +2978,7 @@ hub-section-directories = 工作目錄
 hub-section-pinned = 置顶
 hub-action-directory = 展開/收起目錄
 hub-action-pin = 置顶/取消
-hub-directory-more = + 顯示更多會话（剩余 { $count } 个）
+hub-directory-more = + 顯示更多工作階段（剩余 { $count } 个）
 
 tool-technical-details = 技术详情
 tool-presentation-data = 展示數據
@@ -2986,20 +2986,20 @@ tool-detail-input = 輸入
 tool-detail-output = 輸出
 tool-detail-metadata = 元數據
 
-hub-section-search = 搜尋结果
+hub-section-search = 搜尋結果
 hub-page-next = → 下一頁（第 { $page } 頁）
 hub-page-previous = ← 上一頁（第 { $page } 頁）
 
-btw-title = BTW · 临時只读问答
-btw-description = 主會话继续运行。可只读查詢，结果单独顯示，不写入主會话。
+btw-title = BTW · 临時唯讀问答
+btw-description = 主工作階段繼續執行。可唯讀查詢，結果单独顯示，不写入主工作階段。
 btw-send = 提问
 btw-stop = 停止
 btw-loading = 正在回答…
-side-return = Side · 返回原會话
-btw-footer = Enter 提问 · PgUp/PgDn 滚動 · Ctrl+C 停止 · Tab/Esc 返回會话
+side-return = Side · 返回原工作階段
+btw-footer = Enter 提问 · PgUp/PgDn 滚動 · Ctrl+C 停止 · Tab/Esc 返回工作階段
 btw-input = BTW 问題 · Enter 發送 · Shift+Enter 換行
 btw-clear = 清除
 btw-copy = 複制
 btw-copied = 已複制 BTW 回答
-btw-leave = 返回會话
+btw-leave = 返回工作階段
 btw-stopped = 已停止 · 已保留部分回答

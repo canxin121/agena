@@ -36,6 +36,7 @@ test('Keyboard tap markers stay limited to allowed controls', async () => {
   const expected = [
     'components/TerminalKeybar.vue',
     'components/chat/Composer.vue',
+    'components/chat/SessionChip.vue',
     'components/ui/OptionMenu.vue',
     'pages/chat/ChatPageView.vue',
   ].sort()
@@ -49,4 +50,7 @@ test('Keyboard tap markers stay limited to allowed controls', async () => {
   assert.match(optionMenu, /data-oc-keyboard-tap=("|')keep\1/)
   const chatView = await readFile(path.join(srcDir, 'pages/chat/ChatPageView.vue'), 'utf8')
   assert.match(chatView, /data-oc-keyboard-tap=("|')blur\1/)
+  // A footer chip dismisses the soft keyboard so its panel is readable.
+  const sessionChip = await readFile(path.join(srcDir, 'components/chat/SessionChip.vue'), 'utf8')
+  assert.match(sessionChip, /data-oc-keyboard-tap=("|')blur\1/)
 })

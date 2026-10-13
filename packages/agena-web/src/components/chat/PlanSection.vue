@@ -1,48 +1,50 @@
 <script setup lang="ts">
 // Plan approval decisions belong to operation-owned interaction parts. This
-// section only inspects the durable plan and controls its autorun setting.
+// chip only inspects the durable plan and controls its autorun setting.
 import { computed, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiRefreshLine } from '@remixicon/vue'
+import { RiFileListLine, RiRefreshLine } from '@remixicon/vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import SessionSection from './SessionSection.vue'
+import SessionChip from './SessionChip.vue'
 import type { usePlanViewer } from '@/pages/chat/usePlanViewer'
 
 const MarkdownRenderer = defineAsyncComponent(() => import('@/components/markdown/MarkdownRenderer.vue'))
-const props = defineProps<{ state: ReturnType<typeof usePlanViewer>; expanded: boolean }>()
-defineEmits<{ (event: 'update:expanded', value: boolean): void }>()
+const props = defineProps<{ state: ReturnType<typeof usePlanViewer>; label: string; open: boolean }>()
+defineEmits<{ (event: 'update:open', value: boolean): void }>()
 const { t } = useI18n()
-const summary = computed(() => {
+const busy = computed(() => props.state.loading.value || props.state.toggling.value)
+const hint = computed(() => {
   const plan = props.state.snapshot.value
-  return plan ? [plan.progress, plan.currentStep || plan.title].filter(Boolean).join(' · ') : ''
+  const step = plan ? plan.currentStep || plan.title : ''
+  return [t('chat.planViewer.title'), props.label, step].filter(Boolean).join(' · ')
 })
 </script>
 
 <template>
-  <SessionSection
+  <SessionChip
     data-plan-state-viewer="true"
-    docked
     :title="t('chat.planViewer.title')"
-    :expanded="expanded"
-    :summary="summary"
-    :busy="state.loading.value || state.toggling.value"
-    @update:expanded="$emit('update:expanded', $event)"
+    :label="label"
+    :hint="hint"
+    :open="open"
+    :busy="busy"
+    @update:open="$emit('update:open', $event)"
   >
+    <template #icon>
+      <RiFileListLine class="h-3 w-3 shrink-0" />
+    </template>
     <template #actions>
       <IconButton
-        class="h-8 w-8"
+        class="h-7 w-7"
         :tooltip="t('chat.planViewer.refresh')"
         :aria-label="t('chat.planViewer.refresh')"
-        :disabled="state.loading.value || state.toggling.value"
+        :disabled="busy"
         @click="state.refresh"
       >
         <RiRefreshLine class="h-3.5 w-3.5" />
       </IconButton>
     </template>
-    <div
-      class="max-h-[min(45dvh,28rem)] min-w-0 overflow-auto overscroll-contain"
-      :aria-busy="state.loading.value || state.toggling.value"
-    >
+    <div class="min-w-0" :aria-busy="busy">
       <label
         v-if="state.autorun.value !== null"
         class="mb-1 inline-flex min-h-7 cursor-pointer items-center gap-2 text-xs"
@@ -50,7 +52,7 @@ const summary = computed(() => {
         <input
           type="checkbox"
           :checked="state.autorun.value"
-          :disabled="state.loading.value || state.toggling.value"
+          :disabled="busy"
           class="h-4 w-4"
           @change="state.toggleAutorun"
         />
@@ -64,5 +66,5 @@ const summary = computed(() => {
         {{ t(state.loading.value ? 'chat.planViewer.loading' : 'chat.planViewer.empty') }}
       </p>
     </div>
-  </SessionSection>
+  </SessionChip>
 </template>

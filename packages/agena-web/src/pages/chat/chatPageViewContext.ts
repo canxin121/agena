@@ -240,7 +240,6 @@ export type ChatPageViewContext = {
   composerBottomRightStatus: MaybeRef<string>
   returnFromSide: () => void
   sideParentId: ComputedRef<string | null>
-  openPlanViewer: () => void
   planViewer: ReturnType<typeof usePlanViewer>
   planViewerOpen: Ref<boolean>
   planVisible: ComputedRef<boolean>

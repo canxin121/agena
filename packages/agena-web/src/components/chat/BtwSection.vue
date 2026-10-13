@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFileCopyLine } from '@remixicon/vue'
+import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFileCopyLine, RiQuestionLine } from '@remixicon/vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useBtwStore } from '@/stores/btw'
-import SessionSection from './SessionSection.vue'
+import SessionChip from './SessionChip.vue'
 
 const MarkdownRenderer = defineAsyncComponent(() => import('@/components/markdown/MarkdownRenderer.vue'))
 const props = defineProps<{ sessionId: string }>()
@@ -39,14 +39,18 @@ function handleKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <SessionSection
+  <SessionChip
     v-if="state"
-    docked
     :title="t('chat.btw.sectionTitle')"
-    v-model:expanded="state.expanded"
-    :summary="[t('chat.btw.inlineHint'), state.exchanges.length || ''].filter(Boolean).join(' · ')"
+    :label="state.exchanges.length ? String(state.exchanges.length) : ''"
+    :hint="t('chat.btw.inlineHint')"
+    :open="state.expanded"
     :busy="loading"
+    @update:open="state.expanded = $event"
   >
+    <template #icon>
+      <RiQuestionLine class="h-3 w-3 shrink-0" />
+    </template>
     <template #actions>
       <IconButton
         class="h-7 w-7"
@@ -57,7 +61,7 @@ function handleKeydown(event: KeyboardEvent) {
         <RiCloseLine class="h-3.5 w-3.5" />
       </IconButton>
     </template>
-    <div class="max-h-[min(45dvh,28rem)] space-y-1.5 overflow-auto overscroll-contain">
+    <div class="space-y-1.5">
       <article v-for="entry in state.exchanges" :key="entry.id" class="min-w-0">
         <div class="flex items-start gap-2">
           <button
@@ -121,5 +125,5 @@ function handleKeydown(event: KeyboardEvent) {
         }}</Button>
       </form>
     </div>
-  </SessionSection>
+  </SessionChip>
 </template>

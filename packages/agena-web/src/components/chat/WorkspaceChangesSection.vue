@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiArrowLeftLine, RiRefreshLine } from '@remixicon/vue'
+import { RiArrowLeftLine, RiFileEditLine, RiRefreshLine } from '@remixicon/vue'
 import { useWorkspaceChanges } from '@/pages/chat/useWorkspaceChanges'
-import SessionSection from './SessionSection.vue'
+import SessionChip from './SessionChip.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 
@@ -32,6 +32,8 @@ const {
   moreDiffAvailable,
 } = useWorkspaceChanges({ sessionId, busy: computed(() => props.busy) })
 const detail = computed(() => visibleDiff.value?.files[0])
+// The chip stays a number; the full sentence lives in the tooltip and panel.
+const count = computed(() => (total.value === null ? '' : String(total.value)))
 const summary = computed(() => {
   if (status.error.value) return t('chat.sessionWork.loadFailed')
   if (recordingIncomplete.value && total.value === 0) return t('chat.sessionWork.recordingIncomplete')
@@ -49,17 +51,21 @@ watch(
 </script>
 
 <template>
-  <SessionSection
+  <SessionChip
     v-if="hasChanges"
-    docked
-    v-model:expanded="expanded"
     :title="t('chat.sessionWork.changes')"
-    :summary="summary"
+    :label="count"
+    :hint="summary"
+    :open="expanded"
     :busy="statusPending"
+    @update:open="expanded = $event"
   >
+    <template #icon>
+      <RiFileEditLine class="h-3 w-3 shrink-0" />
+    </template>
     <template #actions>
       <IconButton
-        class="h-8 w-8"
+        class="h-7 w-7"
         :tooltip="t('chat.sessionWork.refresh')"
         :aria-label="t('chat.sessionWork.refresh')"
         :disabled="statusPending || diffPending"
@@ -68,7 +74,7 @@ watch(
         <RiRefreshLine class="h-3.5 w-3.5" />
       </IconButton>
     </template>
-    <div ref="bodyRef" class="min-h-0 min-w-0 overflow-auto overscroll-contain" :aria-busy="statusPending">
+    <div ref="bodyRef" class="min-h-0 min-w-0" :aria-busy="statusPending">
       <div class="mb-2 text-xs text-muted-foreground">
         <p>{{ t('chat.sessionWork.workspaceScope') }}</p>
         <p v-if="recordingIncomplete" class="mt-1">{{ t('chat.sessionWork.recordingIncomplete') }}</p>
@@ -160,5 +166,5 @@ watch(
         </div>
       </template>
     </div>
-  </SessionSection>
+  </SessionChip>
 </template>

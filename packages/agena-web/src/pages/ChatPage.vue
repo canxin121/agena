@@ -2565,7 +2565,6 @@ const viewCtx = {
   composerBottomRightStatus,
   returnFromSide,
   sideParentId,
-  openPlanViewer,
   planViewer,
   planViewerOpen,
   planVisible,

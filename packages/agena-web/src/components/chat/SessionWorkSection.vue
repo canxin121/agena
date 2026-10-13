@@ -5,14 +5,15 @@ import { useChatStore } from '@/stores/chat'
 import { controlActivity } from '@/lib/activityApi'
 import { activityLogText, type SessionActivity } from '@/types/activity'
 import { useActivityLogs } from '@/composables/useActivityLogs'
-import SessionSection from './SessionSection.vue'
+import { RiTaskLine } from '@remixicon/vue'
+import SessionChip from './SessionChip.vue'
 import Button from '@/components/ui/Button.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
 
 const props = defineProps<{
   sessionId: string
-  retry?: { attempt: number; message: string; next: number } | null
-  countdown?: string
+  /** Composer status text (activity kinds) shown beside the icon. */
+  label?: string
 }>()
 const { t } = useI18n()
 const chat = useChatStore()
@@ -22,15 +23,8 @@ const mutation = ref('')
 const mutationError = ref('')
 const limit = ref(20)
 const activities = computed(() => chat.sessionBackgroundActivities(props.sessionId))
-const summary = computed(() =>
-  [
-    activities.value.length ? t('chat.sessionWork.activeTasks', { count: activities.value.length }) : '',
-    props.retry ? t('chat.sessionWork.retry', { attempt: props.retry.attempt }) : '',
-    props.retry && props.countdown ? props.countdown : '',
-  ]
-    .filter(Boolean)
-    .join(' · '),
-)
+const label = computed(() => props.label || String(activities.value.length))
+const hint = computed(() => t('chat.sessionWork.activeTasks', { count: activities.value.length }))
 const logKey = computed(() => (expanded.value && selected.value ? `${props.sessionId}/${selected.value.id}` : ''))
 const logs = useActivityLogs(logKey, () => selected.value)
 watch(
@@ -66,17 +60,18 @@ async function control(activity: SessionActivity, action: string) {
 </script>
 
 <template>
-  <SessionSection
-    v-if="activities.length || selected || retry"
-    docked
-    v-model:expanded="expanded"
+  <SessionChip
+    v-if="activities.length || selected"
     :title="t('chat.sessionWork.tasks')"
-    :summary="summary"
+    :label="label"
+    :hint="hint"
+    :open="expanded"
+    @update:open="expanded = $event"
   >
-    <div class="max-h-[min(45dvh,28rem)] space-y-2 overflow-auto overscroll-contain">
-      <p v-if="retry?.message" class="line-clamp-3 break-words text-xs text-muted-foreground">
-        {{ retry.message }}
-      </p>
+    <template #icon>
+      <RiTaskLine class="h-3 w-3 shrink-0" />
+    </template>
+    <div class="space-y-2">
       <p v-if="mutationError" role="alert" class="text-xs text-destructive">{{ mutationError }}</p>
       <div
         v-for="activity in activities.slice(0, limit)"
@@ -151,5 +146,5 @@ async function control(activity: SessionActivity, action: string) {
         </p>
       </div>
     </div>
-  </SessionSection>
+  </SessionChip>
 </template>

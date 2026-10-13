@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import test from 'node:test'
+
+const viewSource = readFileSync(resolve(import.meta.dir, '../src/pages/chat/ChatPageView.vue'), 'utf8')
+const chipSource = readFileSync(resolve(import.meta.dir, '../src/components/chat/SessionChip.vue'), 'utf8')
+const sectionSources = {
+  sessionWork: readFileSync(resolve(import.meta.dir, '../src/components/chat/SessionWorkSection.vue'), 'utf8'),
+  plan: readFileSync(resolve(import.meta.dir, '../src/components/chat/PlanSection.vue'), 'utf8'),
+  btw: readFileSync(resolve(import.meta.dir, '../src/components/chat/BtwSection.vue'), 'utf8'),
+  workspaceChanges: readFileSync(
+    resolve(import.meta.dir, '../src/components/chat/WorkspaceChangesSection.vue'),
+    'utf8',
+  ),
+}
+
+test('no session section docks above the composer any more', () => {
+  // The emerald band above the composer is gone: it stole transcript height and
+  // its chips overflowed the composer once they showed long summaries.
+  assert.doesNotMatch(viewSource, /data-session-sections/)
+  assert.doesNotMatch(viewSource, /sessionSectionsDock/)
+})
+
+test('every session section renders inside the composer footer', () => {
+  const composerStart = viewSource.indexOf('<Composer')
+  assert.notEqual(composerStart, -1, 'the composer must render')
+  const footerStart = viewSource.indexOf('#bottomLeft', composerStart)
+  assert.notEqual(footerStart, -1, 'the composer footer must own a bottom-left row')
+  for (const tag of ['<PlanSection', '<WorkspaceChangesSection', '<SessionWorkSection', '<BtwSection']) {
+    const at = viewSource.indexOf(tag, composerStart)
+    assert.ok(at > footerStart, `${tag} must render inside the composer footer`)
+  }
+  const transcript = viewSource.slice(0, composerStart)
+  for (const tag of ['<PlanSection', '<SessionWorkSection', '<BtwSection', '<WorkspaceChangesSection']) {
+    assert.ok(!transcript.includes(tag), `${tag} must not render inside the transcript`)
+  }
+})
+
+test('the footer chips stay short: an icon, a number, and a tooltip', () => {
+  assert.match(chipSource, /data-session-chip/)
+  assert.match(chipSource, /max-w-32 truncate/)
+  assert.match(chipSource, /:title="hint \|\| title"/)
+  for (const [name, source] of Object.entries(sectionSources)) {
+    assert.match(source, /<SessionChip/, `${name} must render through the shared chip`)
+    assert.doesNotMatch(source, /SessionSection/, `${name} must not use the removed docked section`)
+    assert.match(source, /<template #icon>/, `${name} must render a chip icon`)
+  }
+})
+
+test('a chip panel is portalled and bounded so the composer cannot clip it', () => {
+  assert.match(chipSource, /<PopoverPortal>/)
+  assert.match(chipSource, /side="top"/)
+  assert.match(chipSource, /max-h-\[min\(70dvh,40rem\)\]/)
+  assert.match(chipSource, /overflow-auto/)
+})

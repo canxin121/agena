@@ -532,6 +532,23 @@ async fn measured_overflow_automatically_compacts_before_the_next_request() {
         agena_domain::PromptCompactionTrigger::Auto
     );
     assert!(checkpoint.after_tokens < 968_000);
+    let checkpoint_part = compacted
+        .parts()
+        .iter()
+        .find(|part| {
+            part.kind == "run"
+                && part
+                    .content
+                    .get("run_kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("compaction")
+        })
+        .expect("automatic compaction persists a durable checkpoint part");
+    assert_eq!(checkpoint_part.state, PartState::Completed);
+    assert_eq!(
+        checkpoint_part.content["checkpoint"]["trigger"], "auto",
+        "the durable part records the automatic trigger"
+    );
     assert_eq!(provider.requests.lock().unwrap().len(), 3);
 }
 
@@ -728,6 +745,20 @@ async fn compactor_recovers_provider_overflow_by_reducing_history_once() {
         .await
         .unwrap();
     assert!(compacted.runtime.prompt_window.compaction.is_some());
+    let checkpoint_part = compacted
+        .parts()
+        .iter()
+        .find(|part| {
+            part.kind == "run"
+                && part
+                    .content
+                    .get("run_kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("compaction")
+        })
+        .expect("manual compaction persists a durable checkpoint part");
+    assert_eq!(checkpoint_part.state, PartState::Completed);
+    assert_eq!(checkpoint_part.content["checkpoint"]["trigger"], "manual");
     let requests = provider.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(

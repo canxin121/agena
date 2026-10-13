@@ -1158,7 +1158,6 @@ export default {
       activeTasks: '{count} 项进行中',
       changes: '会话编辑',
       files: '{count} 个文件',
-      workspaceScope: '当前会话已记录编辑 · 路径按工具记录显示；不是当前 Git 状态',
       recordingIncomplete: '记录可能不完整（例如 Shell writes 只是声明，未纳入已修改文件）。',
       operationHistory: '操作历史，不是会话净差异（缺少完整基线）。',
       operationDiff: '整个补丁操作的差异，可能包含其他文件。',

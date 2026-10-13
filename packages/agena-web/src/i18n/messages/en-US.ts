@@ -1163,7 +1163,6 @@ export default {
       activeTasks: '{count} active',
       changes: 'Session edits',
       files: '{count} files',
-      workspaceScope: 'Recorded edits from this session · literal tool paths; not current Git status',
       recordingIncomplete:
         'Recording may be incomplete (e.g. shell writes are declarations, not confirmed file edits).',
       operationHistory: 'Operation history, not a session net diff (no complete baseline).',

@@ -769,7 +769,6 @@ export default {
       activeTasks: '{count} actives',
       changes: 'Modifications de la session',
       files: '{count} fichiers',
-      workspaceScope: 'Modifications enregistrées de cette session · chemins d’outils littéraux ; pas l’état Git actuel',
       recordingIncomplete: 'L’enregistrement peut être incomplet (par ex. les écritures shell sont des déclarations, pas des modifications de fichiers confirmées).',
       operationHistory: 'Historique des opérations, et non différences nettes de la session (aucune référence complète).',
       operationDiff: 'Différence de l’opération de patch entière ; peut inclure d’autres fichiers.',

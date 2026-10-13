@@ -1262,7 +1262,6 @@ export default {
       "activeTasks": "{count} ativas",
       "changes": "Alterações da sessão",
       "files": "{count} arquivos",
-      "workspaceScope": "Alterações registradas nesta sessão · caminhos literais das ferramentas; não representam o status atual do Git",
       "recordingIncomplete": "O registro pode estar incompleto (por exemplo, gravações via shell são declarações, não edições de arquivo confirmadas).",
       "operationHistory": "Histórico de operações, não um diff consolidado da sessão (não há uma linha de base completa).",
       "operationDiff": "Diff da operação de patch inteira; pode incluir outros arquivos.",

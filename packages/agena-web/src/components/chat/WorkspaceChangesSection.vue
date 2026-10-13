@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiArrowLeftLine, RiFileEditLine, RiRefreshLine } from '@remixicon/vue'
+import { RiArrowLeftLine, RiFileTextLine, RiRefreshLine } from '@remixicon/vue'
 import { useWorkspaceChanges } from '@/pages/chat/useWorkspaceChanges'
 import SessionChip from './SessionChip.vue'
 import Button from '@/components/ui/Button.vue'
@@ -61,7 +61,7 @@ watch(
     @update:open="expanded = $event"
   >
     <template #icon>
-      <RiFileEditLine class="h-3 w-3 shrink-0" />
+      <RiFileTextLine class="h-3.5 w-3.5 shrink-0" />
     </template>
     <template #actions>
       <IconButton
@@ -75,10 +75,6 @@ watch(
       </IconButton>
     </template>
     <div ref="bodyRef" class="min-h-0 min-w-0" :aria-busy="statusPending">
-      <div class="mb-2 text-xs text-muted-foreground">
-        <p>{{ t('chat.sessionWork.workspaceScope') }}</p>
-        <p v-if="recordingIncomplete" class="mt-1">{{ t('chat.sessionWork.recordingIncomplete') }}</p>
-      </div>
       <p v-if="status.error.value" role="alert" class="text-xs text-destructive [overflow-wrap:anywhere]">
         {{ status.error.value }}
       </p>

@@ -1615,7 +1615,6 @@ export default {
       "activeTasks": "{count} activas",
       "changes": "Cambios de la sesión",
       "files": "{count} archivos",
-      "workspaceScope": "Cambios registrados en esta sesión · rutas literales de herramientas; no es el estado actual de Git",
       "recordingIncomplete": "El registro puede estar incompleto (p. ej., las escrituras de shell son declaraciones, no cambios de archivo confirmados).",
       "operationHistory": "Historial de operaciones, no diferencias netas de la sesión (no hay una línea base completa).",
       "operationDiff": "Diferencias de toda la operación de parche; puede incluir otros archivos.",

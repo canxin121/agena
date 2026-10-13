@@ -79,6 +79,30 @@ pub fn search_tools(
         return Vec::new();
     }
 
+    // A whitespace-separated list of explicit tool identifiers is a batch
+    // lookup, not a single natural-language phrase whose terms must all occur
+    // on one document. Keep ordinary prose on the ranked path below, but
+    // recognize identifier-shaped chunks and union their exact matches.
+    let identifier_chunks = query.split_whitespace().collect::<Vec<_>>();
+    if identifier_chunks.len() > 1
+        && identifier_chunks
+            .iter()
+            .all(|chunk| chunk.chars().any(|character| !character.is_alphanumeric()))
+    {
+        let mut matches = Vec::new();
+        for chunk in identifier_chunks {
+            for document in search_tools(documents, chunk, limit) {
+                if !matches
+                    .iter()
+                    .any(|matched: &ToolSearchDocument| matched.id == document.id)
+                {
+                    matches.push(document);
+                }
+            }
+        }
+        return matches.into_iter().take(limit).collect();
+    }
+
     let normalized_query = normalize_search_text(query);
     let exact = documents
         .iter()
@@ -484,6 +508,26 @@ mod tests {
             tags.iter().map(|tag| tag.to_string()).collect(),
             None,
         )
+    }
+
+    #[test]
+    fn whitespace_separated_tool_identifiers_are_searched_as_a_batch() {
+        let docs = vec![
+            doc("shell.exec", "Run a foreground command", &["shell"]),
+            doc("tasks.list", "List current tasks", &["tasks"]),
+            doc("session.rename", "Rename the current session", &["session"]),
+            doc("fs.read", "Read a workspace file", &["filesystem"]),
+        ];
+
+        let results = search_tools(&docs, "shell.exec tasks.list session.rename", 10);
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|doc| doc.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["shell.exec", "tasks.list", "session.rename"]
+        );
     }
 
     #[test]

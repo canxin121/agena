@@ -2132,7 +2132,15 @@ impl PersistenceEngine for InMemoryEngine {
             .get(&run_id)
             .cloned()
             .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
-        if !run.is_run_marker() || !run.state.is_in_flight() {
+        // A final user-facing error may be appended after the failed run was
+        // terminalized, once the orchestration layer has exhausted recovery.
+        // No other content may be added to a terminal run.
+        let final_error_only = run.state == PartState::Failed
+            && !parts.is_empty()
+            && parts
+                .iter()
+                .all(|part| part.kind == "error" && part.state == PartState::Failed);
+        if !run.is_run_marker() || !(run.state.is_in_flight() || final_error_only) {
             return Err(StoreError::InvalidState(format!(
                 "run {run_id} is not an in-flight run marker"
             )));

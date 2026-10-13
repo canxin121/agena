@@ -3199,7 +3199,15 @@ impl PersistenceEngine for SqliteEngine {
                 let run = load_part_control(txn, run_id)
                     .await?
                     .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
-                if !run.is_run_marker() || !run.state.is_in_flight() {
+                // Permit only a final error projection to be attached after
+                // the orchestration layer has exhausted recovery and failed
+                // the marker. All other terminal-run appends remain invalid.
+                let final_error_only = run.state == PartState::Failed
+                    && !parts.is_empty()
+                    && parts.iter().all(|part| {
+                        part.part.kind == "error" && part.part.state == PartState::Failed
+                    });
+                if !run.is_run_marker() || !(run.state.is_in_flight() || final_error_only) {
                     return Err(StoreError::InvalidState(format!(
                         "run {run_id} is not an in-flight run marker"
                     )));

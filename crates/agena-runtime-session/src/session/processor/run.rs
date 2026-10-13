@@ -745,14 +745,10 @@ impl SessionProcessor {
             for part_id in durable_part_ids {
                 self.persist_part_state(&run, &mut parts, part_id).await?;
             }
+            // Keep the failure diagnostic in memory while the session
+            // orchestrator decides whether this failed turn will be retried.
+            // It appends the durable error part only if recovery is exhausted.
             let failure = (!cancelled).then(|| err.failure());
-            if let Some(failure) = failure.as_ref() {
-                parts.push(
-                    run.store
-                        .append_failure_part(run.session_id, assistant_message_id, failure)
-                        .await?,
-                );
-            }
             let marker = if cancelled {
                 // `cancel_run` cancels the marker and its in-flight children.
                 run.store

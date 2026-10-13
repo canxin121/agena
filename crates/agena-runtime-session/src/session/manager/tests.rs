@@ -564,18 +564,20 @@ async fn prompt_preparation_error_terminalizes_its_empty_assistant_run() {
         )
         .await
         .expect("start model run before preflight");
+    let failure = crate::AppError::PromptBudgetExceeded {
+        session_id: session.id,
+        estimated_tokens: 2_000,
+        limit_tokens: 1_000,
+    };
     manager
-        .terminalize_unfinished_model_run(
-            session.id,
-            marker_id,
-            &crate::AppError::PromptBudgetExceeded {
-                session_id: session.id,
-                estimated_tokens: 2_000,
-                limit_tokens: 1_000,
-            },
-        )
+        .terminalize_unfinished_model_run(session.id, marker_id, &failure)
         .await
         .expect("terminalize over-budget run");
+    manager
+        .store
+        .append_failure_part(session.id, marker_id, &failure.failure())
+        .await
+        .expect("persist the final failure after terminalization");
     let reloaded = manager
         .store
         .load_session(session.id)

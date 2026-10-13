@@ -970,6 +970,9 @@ impl SessionManager {
                         }
                     }
                     if matches!(err, AppError::PromptBudgetExceeded { .. }) {
+                        self.store
+                            .append_failure_part(session_id, marker_run_id, &err.failure())
+                            .await?;
                         return Err(err);
                     }
                     // A failed model turn is retryable when an agent.stop
@@ -988,6 +991,9 @@ impl SessionManager {
                                 retries = direct_plan_failure_retries,
                                 "stopping plan autorun after repeated provider failures"
                             );
+                            self.store
+                                .append_failure_part(session_id, marker_run_id, &err.failure())
+                                .await?;
                             return Err(err);
                         }
                         direct_plan_failure_retries += 1;
@@ -1025,6 +1031,9 @@ impl SessionManager {
                         model_requested = true;
                         continue;
                     }
+                    self.store
+                        .append_failure_part(session_id, marker_run_id, &err.failure())
+                        .await?;
                     return Err(err);
                 }
             }
@@ -1053,9 +1062,6 @@ impl SessionManager {
         if matches!(error, AppError::Cancelled) {
             self.store.cancel_run(session_id, marker_run_id).await?;
         } else {
-            self.store
-                .append_failure_part(session_id, marker_run_id, &error.failure())
-                .await?;
             self.store
                 .complete_run(
                     session_id,
@@ -1788,17 +1794,6 @@ impl SessionManager {
                                 Ok::<(), AppError>(())
                             })?;
                     } else {
-                        if let Err(error) = self
-                            .store
-                            .append_failure_part(session_id, marker_run_id, &failure)
-                            .await
-                        {
-                            tracing::warn!(
-                                target: "agena::session::run",
-                                session_id,
-                                "failed to persist interrupted run detail: {error}"
-                            );
-                        }
                         self.store
                             .complete_run(
                                 session_id,

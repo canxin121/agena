@@ -145,6 +145,51 @@ impl FileChangesProjectionCache {
 fn string(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_owned)
 }
+/// Count `+`/`-` body lines of one diff. File headers and hunk headers never
+/// count, but write/replace diffs carry no hunk header, so a header line cannot
+/// be a precondition for counting.
+fn count_changed_lines(diff: &str) -> (usize, usize) {
+    let mut added = 0;
+    let mut removed = 0;
+    for line in diff.lines() {
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if line.starts_with('+') {
+            added += 1;
+        } else if line.starts_with('-') {
+            removed += 1;
+        }
+    }
+    (added, removed)
+}
+
+/// One merged addition/removal pair per file: every recorded operation of the
+/// path contributes, and a patch operation contributes only this file's part.
+fn changed_lines(path: &str, operations: &[RecordedFileEdit]) -> (usize, usize) {
+    let mut added = 0;
+    let mut removed = 0;
+    for operation in operations {
+        let Some((diff, _)) = &operation.diff else {
+            continue;
+        };
+        // A patch diff covers every file of the operation, so an unlocatable
+        // section counts nothing instead of borrowing another file's lines.
+        let scoped = if operation.diff_scope == "operation" {
+            patch_file_diff(diff, path, operation.from_path.as_deref())
+        } else {
+            Some(&**diff)
+        };
+        let Some(scoped) = scoped else {
+            continue;
+        };
+        let (plus, minus) = count_changed_lines(scoped);
+        added += plus;
+        removed += minus;
+    }
+    (added, removed)
+}
+
 fn has_delta(diff: &str) -> bool {
     let mut in_hunk = false;
     for line in diff.lines() {
@@ -528,6 +573,7 @@ fn project_facts(
                 operations.hash(&mut hasher);
                 let revision = format!("{:016x}", hasher.finish());
                 let operation_count = operations.len();
+                let (added, removed) = changed_lines(path, operations);
                 let operations = if query.path.is_none() {
                     Vec::new()
                 } else {
@@ -551,6 +597,8 @@ fn project_facts(
                 SessionFileChangeResource {
                     path: path.clone(),
                     revision,
+                    added,
+                    removed,
                     operation_count,
                     operation_history: operation_count > 1,
                     operations,
@@ -739,6 +787,41 @@ mod tests {
         assert_eq!(unknown.total_files, 1);
         assert_eq!(unknown.files[0].operations.len(), 2);
         assert!(unknown.files[0].operation_history);
+    }
+
+    #[test]
+    fn changed_lines_merge_every_recorded_operation_of_one_file() {
+        let result = project(1, &[replace(1, "a", "b"), replace(2, "b", "c")], &detail());
+        assert_eq!(result.total_files, 1);
+        assert_eq!(result.files[0].operation_count, 2);
+        // Each recorded operation shows one removal and one addition.
+        assert_eq!(result.files[0].added, 2);
+        assert_eq!(result.files[0].removed, 2);
+        let summary = project(
+            1,
+            &[replace(1, "a", "b")],
+            &FileChangesQuery {
+                summary: true,
+                ..Default::default()
+            },
+        );
+        assert!(summary.files.is_empty());
+    }
+
+    #[test]
+    fn patch_operations_count_only_this_path_section() {
+        let diff = "diff --git a/a.txt b/a.txt\n@@ -1 +1,2 @@\n old\n+added\n+more\ndiff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-gone\n+b-new\n";
+        let patch = part(
+            1,
+            "fs.apply_patch",
+            json!({"changes":[{"path":"a.txt","kind":"updated"},{"path":"b.txt","kind":"updated"}],"diff":diff}),
+        );
+        let listed = project(1, &[patch], &Default::default());
+        assert_eq!(listed.total_files, 2);
+        assert_eq!(listed.files[0].added, 2);
+        assert_eq!(listed.files[0].removed, 0);
+        assert_eq!(listed.files[1].added, 1);
+        assert_eq!(listed.files[1].removed, 1);
     }
 
     #[test]

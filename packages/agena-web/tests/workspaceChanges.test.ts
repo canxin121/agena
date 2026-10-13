@@ -62,6 +62,8 @@ type Call = {
 }
 const file = (path: string): SessionFileChange => ({
   path,
+  added: 1,
+  removed: 1,
   operation_count: 1,
   operation_history: false,
   operations: [],
@@ -202,7 +204,7 @@ test('session reads stay lazy and discard stale membership when switching sessio
     expect(calls.at(-1)!.path).toBe('/api/v1/sessions/8/file-changes')
   }))
 
-test('empty recorded edits close the dock, but incomplete shell recording remains visible', async () =>
+test('empty recorded edits close the panel; an incomplete shell declaration never opens it', async () =>
   withPanel(async ({ state, calls, advance, settle }) => {
     calls[0]!.resolve(snapshot([], 1))
     await settle()
@@ -222,7 +224,7 @@ test('empty recorded edits close the dock, but incomplete shell recording remain
     await advance(30_000)
     calls.at(-1)!.resolve({ ...snapshot([], 0), recording_incomplete: true })
     await settle()
-    expect(state.hasChanges.value).toBe(true)
+    expect(state.hasChanges.value).toBe(false)
     expect(state.recordingIncomplete.value).toBe(true)
   }))
 

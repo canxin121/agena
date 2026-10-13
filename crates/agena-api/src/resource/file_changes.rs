@@ -19,6 +19,13 @@ pub struct SessionFileChangeResource {
     /// files. Clients use it to keep an already displayed diff unchanged.
     #[serde(default)]
     pub revision: String,
+    /// Lines this path's recorded operations add and remove, merged into one
+    /// pair per file. Recorded operation diffs are aggregated; this is never a
+    /// synthesized net diff of the session.
+    #[serde(default)]
+    pub added: usize,
+    #[serde(default)]
+    pub removed: usize,
     pub operation_count: usize,
     /// Multiple edits without a complete baseline are an operation history,
     /// never a synthesized session net diff.

@@ -230,10 +230,10 @@ Agena 仍需要与真实外部生态交互，因此保留：
 
 正常 `agent.stop` 只在当前执行没有待处理输入、没有未被 provider 完整观察的后台通知、没有仍可唤醒会话的后台操作或定时任务时派发。后台等待会释放当前 execution，让 durable 通知可以唤醒会话；它不会发出正常完成 hook。正常停止决策与通知提交通过同一会话 mutation lane 排序，该决策之后的新到达事件由后续唤醒处理。已暂停、删除或完成的定时任务不阻止停止；周期任务只要还有下一次触发，仍属于等待。已完成 provider round 的一次性定时通知可以证明本次触发已被处理，不依赖必须等 execution 释放的 scheduler ack。失败仍携带 `run_error` 到达 stop hook；终端 Done 提醒只在所有 stop 决策 hook 同意停止后发出。
 
-`GET /api/v1/sessions/{id}/file-changes` 使用会话 membership 内归属本会话的工具记录投影编辑。SQLite 在查询和反序列化前限制 `origin_session_id` 与 kind，不加载普通文本、run 或 fork 继承的工具内容；存储 facade 仍合并适用的流式 overlay。只接受成功完成的 `fs.write`、`fs.replace`、实际应用的 `code.rewrite_ast` 和 `fs.apply_patch` 结果。fork 继承的编辑、预览、失败和可证明的 no-op 不计入新会话。连续且完整的 before/after SHA 链回到起始 revision 时可以消除净零变更；缺少基线或存在断开的链时展示记录的操作历史。该 API 支持摘要、文件分页和单文件详情，diff 返回预算上限为 2 MiB。
+`GET /api/v1/sessions/{id}/file-changes` 使用会话 membership 内归属本会话的工具记录投影编辑。SQLite 在查询和反序列化前限制 `origin_session_id` 与 kind，不加载普通文本、run 或 fork 继承的工具内容；存储 facade 仍合并适用的流式 overlay。只接受成功完成的 `fs.write`、`fs.replace`、实际应用的 `code.rewrite_ast` 和 `fs.apply_patch` 结果。fork 继承的编辑、预览、失败和可证明的 no-op 不计入新会话。连续且完整的 before/after SHA 链回到起始 revision 时可以消除净零变更；缺少基线或存在断开的链时展示记录的操作历史。该 API 支持摘要、文件分页和单文件详情，diff 返回预算上限为 2 MiB。一个文件只占据一行：该行合并此路径所有已记录操作的新增/删除行数，`fs.apply_patch` 只按本文件段落计数，整体缺基线时不补造净差异。
 
 每个文件摘要携带由该路径完整编辑事实计算的 fingerprint，不依赖其他文件或当前 diff 截断预算。已选 diff 只在其自身 fingerprint 变化时自动读取，其他文件的变化只更新文件列表；同一 fingerprint 在隐藏恢复和重新展开时复用当前保留的 diff。服务端为了计算净 SHA 链仍读取本会话工具记录，并未实现持久化的逐文件增量索引。
 
 文件资源时钟使用和 API 投影一致的编辑事实，而不是整个 part 的更新时间。无关工具、metadata、重复的写入声明和同一编辑结果的重复更新不会推进 files 版本。首次读取只在有界 memo 中登记缺失的基线，结果解析在资源时钟锁外完成；期间的修改或删除拥有更新的基线，迟到的登记不能覆盖它。
 
-会话编辑面板不读取 Git 工作树。Shell 的 `writes` 声明只能说明执行者预期写入的范围，不能证明某个文件确实发生编辑；未记录实际编辑结果时返回 `recording_incomplete`，由客户端明确显示记录不完整。不能根据当前仓库状态补造会话 diff，也不能把不完整记录解释成工作区没有变更。
+会话编辑面板不读取 Git 工作树。Shell 的 `writes` 声明只能说明执行者预期写入的范围，不能证明某个文件确实发生编辑；未记录实际编辑结果时返回 `recording_incomplete`。客户端只在确实记录了文件编辑时才显示会话编辑入口，`recording_incomplete` 不单独构成显示条件；入口存在时该状态通过入口文本说明。不能根据当前仓库状态补造会话 diff，也不能把不完整记录解释成工作区没有变更。

@@ -438,7 +438,8 @@ test.each([0, 1500])(
                     session_id: 99904,
                     version: 1,
                     parts: [],
-                    runs: [], user_message_count: 0,
+                    runs: [],
+                    user_message_count: 0,
                     page: { has_more: false },
                   }),
                 ),
@@ -647,7 +648,8 @@ test('metadata, deletion and execution writes reconcile mounted lists without SS
           session_id: own.id,
           version: own.version,
           parts: [],
-          runs: [], user_message_count: 0,
+          runs: [],
+          user_message_count: 0,
           page: { has_more: false },
         })
       if (init?.method === 'POST' && (url.pathname.endsWith('/fork') || url.pathname.endsWith('/rewind'))) {
@@ -831,6 +833,8 @@ test('a selected file keeps its diff through other-file changes, eviction, hide/
         .map((path) => ({
           path,
           revision: path === 'a.ts' ? a : b,
+          added: 1,
+          removed: 0,
           operation_count: 1,
           operation_history: false,
           operations: path
@@ -956,7 +960,8 @@ test('unchanged mounted conversations and activity list recover with revisions a
           session_id: sid,
           version: 1,
           parts: [],
-          runs: [], user_message_count: 0,
+          runs: [],
+          user_message_count: 0,
           page: { has_more: false },
         })
       if (url.pathname.endsWith('/state'))

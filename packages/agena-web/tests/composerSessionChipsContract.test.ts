@@ -54,3 +54,13 @@ test('a chip panel is portalled and bounded so the composer cannot clip it', () 
   assert.match(chipSource, /max-h-\[min\(70dvh,40rem\)\]/)
   assert.match(chipSource, /overflow-auto/)
 })
+
+test('one edited file is one row with a git-style merged line stat', () => {
+  const source = sectionSources.workspaceChanges
+  // A file lists once and shows +added/−removed instead of a per-operation count.
+  assert.match(source, /v-for="file in files"/)
+  assert.match(source, /:key="file\.path"/)
+  assert.match(source, /\+\{\{ file\.added \}\}/)
+  assert.match(source, /−\{\{ file\.removed \}\}/)
+  assert.doesNotMatch(source, /operation_count/)
+})

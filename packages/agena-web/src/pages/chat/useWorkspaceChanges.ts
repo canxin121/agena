@@ -74,7 +74,9 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
   const files = computed(() => (status.error.value ? [] : (current.value?.files ?? [])))
   const total = computed(() => snapshot.value?.total_files ?? null)
   const recordingIncomplete = computed(() => snapshot.value?.recording_incomplete ?? false)
-  const hasChanges = computed(() => (total.value ?? 0) > 0 || recordingIncomplete.value)
+  // Only a recorded file edit opens the panel: a shell write declaration on its
+  // own is not evidence that any file changed.
+  const hasChanges = computed(() => (total.value ?? 0) > 0)
   const statusPending = computed(
     () => Boolean(options.sessionId.value) && (status.loading.value || (!current.value && !status.error.value)),
   )
@@ -83,7 +85,7 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
     (value) => {
       if (!value) return
       snapshot.value = value
-      if (!value.total_files && !value.recording_incomplete) {
+      if (!value.total_files) {
         selected.value = null
         expanded.value = false
         page.value = 0

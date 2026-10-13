@@ -36,9 +36,14 @@ const detail = computed(() => visibleDiff.value?.files[0])
 const count = computed(() => (total.value === null ? '' : String(total.value)))
 const summary = computed(() => {
   if (status.error.value) return t('chat.sessionWork.loadFailed')
-  if (recordingIncomplete.value && total.value === 0) return t('chat.sessionWork.recordingIncomplete')
-  if (total.value === null) return t('chat.sessionWork.loading')
-  return total.value === 0 ? t('chat.sessionWork.clean') : t('chat.sessionWork.files', { count: total.value })
+  const recorded =
+    total.value === null
+      ? t('chat.sessionWork.loading')
+      : total.value === 0
+        ? t('chat.sessionWork.clean')
+        : t('chat.sessionWork.files', { count: total.value })
+  // The chip only exists for recorded edits; the caveat rides its tooltip.
+  return recordingIncomplete.value ? `${recorded} · ${t('chat.sessionWork.recordingIncomplete')}` : recorded
 })
 const bodyRef = ref<HTMLElement | null>(null)
 watch(
@@ -91,7 +96,10 @@ watch(
               :title="file.path"
               @click="select(file)"
             >
-              <span class="shrink-0 text-primary">{{ file.operation_count }}×</span>
+              <span class="flex shrink-0 items-center gap-1 font-mono">
+                <span class="text-emerald-700 dark:text-emerald-400">+{{ file.added }}</span>
+                <span class="text-rose-700 dark:text-rose-400">−{{ file.removed }}</span>
+              </span>
               <span class="min-w-0 flex-1 truncate">{{ file.path }}</span>
             </button>
           </div>

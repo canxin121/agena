@@ -14,6 +14,9 @@ export interface SessionFileEdit {
 export interface SessionFileChange {
   path: string
   revision?: string
+  /** Lines every recorded operation of this path adds and removes, merged. */
+  added: number
+  removed: number
   operation_count: number
   operation_history: boolean
   operations: SessionFileEdit[]

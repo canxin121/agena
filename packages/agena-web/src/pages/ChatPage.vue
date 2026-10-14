@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { createFailedAttachmentDraftSlot } from './chat/failedAttachmentDrafts'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { RiScissorsLine } from '@remixicon/vue'
 
 import ChatPageView from './chat/ChatPageView.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
@@ -65,8 +64,6 @@ import type { MessageFold } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginCommandResult } from '@/lib/pluginOperations'
 import { useTranscriptPreferencesStore } from '@/stores/transcriptPreferences'
-
-type ComposerActionItem = { id: string; label: string; description?: string; icon?: Component; disabled?: boolean }
 
 type OptionMenuExpose = {
   containsTarget?: (target: Node | null) => boolean
@@ -225,40 +222,7 @@ watch(
 const editorFullscreen = ref(false)
 const editorClosing = ref(false)
 
-const sessionActionsMenuRef = ref<OptionMenuExpose | null>(null)
-
-const composerActionMenuOpen = ref(false)
-const composerActionMenuQuery = ref('')
-const composerActionMenuAnchorRef = ref<HTMLElement | null>(null)
 const attachmentsPanelOpen = ref(false)
-
-const composerActionItems = computed<ComposerActionItem[]>(() => [
-  {
-    id: 'compact',
-    label: String(t('chat.composer.actions.compact.label')),
-    description: String(t('chat.composer.actions.compact.description')),
-    icon: RiScissorsLine,
-    disabled: !chat.selectedSessionId || compactBusy.value,
-  },
-])
-
-const filteredComposerActionItems = computed<ComposerActionItem[]>(() => {
-  const q = composerActionMenuQuery.value.trim().toLowerCase()
-  const list = composerActionItems.value
-  if (!q) return list
-  return list.filter((item) => {
-    const label = item.label.toLowerCase()
-    const desc = String(item.description || '').toLowerCase()
-    return label.includes(q) || desc.includes(q) || item.id.includes(q)
-  })
-})
-
-const composerActionMenuGroups = computed<OptionMenuGroup[]>(() => [
-  {
-    id: 'composer-actions',
-    items: filteredComposerActionItems.value as OptionMenuItem[],
-  },
-])
 
 const sessionDirectory = computed(() => chat.selectedSessionDirectory || directoryStore.currentDirectory || '')
 const composerFullscreenActive = computed(() => editorFullscreen.value || editorClosing.value)
@@ -424,7 +388,6 @@ modelSelection = useChatModelSelection({
     closePromptHistory()
     openComposerInputMenu('picker', {
       closeAttachments: closeAttachmentsPanel,
-      closeActions: closeComposerActionMenu,
       closePicker: closeComposerPickerMenu,
     })
   },
@@ -668,7 +631,6 @@ function tryOpenPromptHistory(): boolean {
   }
   closeCommandPalette()
   closeComposerPickerMenu()
-  closeComposerActionMenu()
   closeAttachmentsPanel()
   return true
 }
@@ -736,7 +698,6 @@ async function setAttachmentsPanelOpen(next: boolean) {
   closePromptHistory()
   openComposerInputMenu('attachments', {
     closeAttachments: closeAttachmentsPanel,
-    closeActions: closeComposerActionMenu,
     closePicker: closeComposerPickerMenu,
   })
   await nextTick()
@@ -1135,42 +1096,6 @@ function restoreCancelledComposer(outcome: chatApi.CancellationOutcome) {
     })) ?? restoredComposerFiles(document)
   draft.value = text
   attachedFiles.value = files
-}
-
-function closeComposerActionMenu() {
-  composerActionMenuOpen.value = false
-  composerActionMenuAnchorRef.value = null
-  composerActionMenuQuery.value = ''
-}
-
-async function toggleComposerActionMenu(event?: MouseEvent | PointerEvent) {
-  if (composerActionMenuOpen.value) {
-    closeComposerActionMenu()
-    return
-  }
-  closePromptHistory()
-  openComposerInputMenu('actions', {
-    closeAttachments: closeAttachmentsPanel,
-    closeActions: closeComposerActionMenu,
-    closePicker: closeComposerPickerMenu,
-  })
-  await nextTick()
-  composerActionMenuOpen.value = true
-  composerActionMenuAnchorRef.value = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
-  composerActionMenuQuery.value = ''
-  commandOpen.value = false
-  commandQuery.value = ''
-  commandIndex.value = 0
-  // Desktop: focus search for quick filtering. Mobile: don't auto-focus (avoid IME popup).
-  if (!ui.isTouchPointer) {
-    void nextTick(() => sessionActionsMenuRef.value?.focusSearch?.())
-  }
-}
-
-function runComposerActionMenu(item: ComposerActionItem | OptionMenuItem) {
-  if (item.disabled) return
-  closeComposerActionMenu()
-  handleSessionActionRequest(item.id)
 }
 
 async function copyToClipboard(text: string | Promise<string>) {
@@ -2309,12 +2234,6 @@ onMounted(async () => {
     const target = event.target as Node | null
     if (!target) return
 
-    if (composerActionMenuOpen.value) {
-      if (sessionActionsMenuRef.value?.containsTarget?.(target)) return
-      if (composerActionMenuAnchorRef.value && composerActionMenuAnchorRef.value.contains(target)) return
-      closeComposerActionMenu()
-    }
-
     // Keep menus open when interacting within them.
     if (composerPickerRef.value?.containsTarget?.(target)) return
     if (composerControlsRef.value && composerControlsRef.value.contains(target)) return
@@ -2412,7 +2331,6 @@ const viewCtx = {
   modelTriggerRef,
   thinkingTriggerRef,
   speedTriggerRef,
-  sessionActionsMenuRef,
 
   // Composer + attachments.
   failedAttachmentDraft,
@@ -2536,14 +2454,6 @@ const viewCtx = {
   navPrev,
   navNext,
   scrollToBottom,
-
-  // Composer action menu.
-  composerActionMenuOpen,
-  composerActionMenuQuery,
-  composerActionMenuGroups,
-  toggleComposerActionMenu,
-  closeComposerActionMenu,
-  runComposerActionMenu,
 
   // Model, thinking mode, and speed mode selection.
   composerPickerTitle,

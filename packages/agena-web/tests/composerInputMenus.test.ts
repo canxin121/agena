@@ -9,32 +9,25 @@ function makeClosers() {
     calls,
     closers: {
       closeAttachments: () => calls.push('attachments'),
-      closeActions: () => calls.push('actions'),
       closePicker: () => calls.push('picker'),
     },
   }
 }
 
-test('openComposerInputMenu closes actions and picker when opening attachments', () => {
+test('opening attachments closes the picker', () => {
   const { calls, closers } = makeClosers()
   openComposerInputMenu('attachments', closers)
-  assert.deepEqual(calls, ['actions', 'picker'])
+  assert.deepEqual(calls, ['picker'])
 })
 
-test('openComposerInputMenu closes attachments and picker when opening actions', () => {
-  const { calls, closers } = makeClosers()
-  openComposerInputMenu('actions', closers)
-  assert.deepEqual(calls, ['attachments', 'picker'])
-})
-
-test('openComposerInputMenu closes attachments and actions when opening picker', () => {
+test('opening the picker closes attachments', () => {
   const { calls, closers } = makeClosers()
   openComposerInputMenu('picker', closers)
-  assert.deepEqual(calls, ['attachments', 'actions'])
+  assert.deepEqual(calls, ['attachments'])
 })
 
-test('closeAllComposerInputMenus closes every input menu', () => {
+test('closeAllComposerInputMenus closes every remaining input menu', () => {
   const { calls, closers } = makeClosers()
   closeAllComposerInputMenus(closers)
-  assert.deepEqual(calls, ['attachments', 'actions', 'picker'])
+  assert.deepEqual(calls, ['attachments', 'picker'])
 })

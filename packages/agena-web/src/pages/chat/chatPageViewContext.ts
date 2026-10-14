@@ -70,7 +70,6 @@ export type ChatPageViewContext = {
   modelTriggerRef: Ref<HTMLElement | null>
   thinkingTriggerRef: Ref<HTMLElement | null>
   speedTriggerRef: Ref<HTMLElement | null>
-  sessionActionsMenuRef: Ref<ContainsTargetExpose | null>
   transcriptSearchInputRef: Ref<HTMLInputElement | null>
 
   chat: {
@@ -202,13 +201,6 @@ export type ChatPageViewContext = {
   retryCountdownLabel: MaybeRef<string>
   retryNextLabel: MaybeRef<string>
   abortRun: () => void | Promise<void>
-
-  composerActionMenuOpen: MaybeRef<boolean>
-  composerActionMenuQuery: MaybeRef<string>
-  composerActionMenuGroups: MaybeRef<OptionMenuGroup[]>
-  toggleComposerActionMenu: (event?: MouseEvent | PointerEvent) => void | Promise<void>
-  closeComposerActionMenu: () => void
-  runComposerActionMenu: (item: OptionMenuItem) => void | Promise<void>
 
   composerPickerOpen: MaybeRef<null | 'model' | 'thinking' | 'speed'>
   composerPickerTitle: MaybeRef<string>

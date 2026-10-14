@@ -8,7 +8,6 @@ import {
   RiArrowUpLine,
   RiAttachmentLine,
   RiLoader4Line,
-  RiMore2Line,
   RiSendPlane2Line,
   RiStackLine,
   RiStopCircleLine,
@@ -62,7 +61,6 @@ const {
   modelTriggerRef,
   thinkingTriggerRef,
   speedTriggerRef,
-  sessionActionsMenuRef,
 
   // Stores / state.
   chat,
@@ -169,14 +167,6 @@ const {
   // Retry notice.
   retryCountdownLabel,
 
-  // Composer action menu.
-  composerActionMenuOpen,
-  composerActionMenuQuery,
-  composerActionMenuGroups,
-  toggleComposerActionMenu,
-  closeComposerActionMenu,
-  runComposerActionMenu,
-
   // Model and run mode picker.
   composerPickerOpen,
   composerPickerTitle,
@@ -239,7 +229,6 @@ const {
 type TooltipAnchorLike = { triggerEl?: unknown; $el?: unknown } | HTMLElement | null
 
 const attachmentsTriggerRef = ref<TooltipAnchorLike>(null)
-const actionsTriggerRef = ref<TooltipAnchorLike>(null)
 const { width: viewportWidth } = useWindowSize()
 const COMPOSER_DESKTOP_MENU_GAP_PX = 16
 const COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX = 8
@@ -319,7 +308,6 @@ const activePickerAnchor = computed(() => {
 })
 
 const activeAttachmentsAnchor = computed(() => resolveAnchorEl(unref(attachmentsTriggerRef) as TooltipAnchorLike))
-const activeActionsAnchor = computed(() => resolveAnchorEl(unref(actionsTriggerRef) as TooltipAnchorLike))
 
 const timelineSessionError = computed(() => {
   if (!chat.selectedSessionError) return null
@@ -344,7 +332,6 @@ void composerPickerRef
 void modelTriggerRef
 void thinkingTriggerRef
 void speedTriggerRef
-void sessionActionsMenuRef
 const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 </script>
 
@@ -850,43 +837,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                             {{ attachmentsCountLabel }}
                           </span>
                         </ToolbarChipButton>
-
-                        <IconButton
-                          ref="actionsTriggerRef"
-                          class="text-muted-foreground hover:text-foreground hover:bg-secondary/40"
-                          :class="[composerActionMenuOpen ? 'bg-secondary/60 text-foreground' : '']"
-                          :tooltip="t('chat.page.tools')"
-                          :is-touch-pointer="ui.isTouchPointer"
-                          :title="t('chat.page.tools')"
-                          :aria-label="t('chat.page.tools')"
-                          @mousedown.prevent
-                          @click.stop="toggleComposerActionMenu($event)"
-                        >
-                          <RiMore2Line class="h-4 w-4" />
-                        </IconButton>
-
-                        <OptionMenu
-                          ref="sessionActionsMenuRef"
-                          :open="composerActionMenuOpen"
-                          v-model:query="composerActionMenuQuery"
-                          :groups="composerActionMenuGroups"
-                          :title="t('chat.page.tools')"
-                          :mobile-title="t('chat.page.tools')"
-                          :searchable="true"
-                          :search-placeholder="t('common.searchActions')"
-                          :empty-text="t('common.noActionsFound')"
-                          :is-compact-touch="ui.isCompactTouch"
-                          :desktop-fixed="true"
-                          :desktop-anchor-el="activeActionsAnchor"
-                          :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
-                          :desktop-viewport-margin-px="COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX"
-                          desktop-placement="top-start"
-                          desktop-class="w-64"
-                          filter-mode="external"
-                          @update:open="(v) => (!v ? closeComposerActionMenu() : undefined)"
-                          @close="closeComposerActionMenu"
-                          @select="runComposerActionMenu"
-                        />
                       </div>
 
                       <!-- Region 3: Stop & Send Actions -->

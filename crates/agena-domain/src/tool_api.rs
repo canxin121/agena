@@ -11,8 +11,6 @@ use serde::{Deserialize, Serialize};
 pub enum ToolApiFunction {
     #[serde(rename = "tools_list")]
     List,
-    #[serde(rename = "tools_search")]
-    Search,
     #[serde(rename = "tools_help")]
     Help,
     #[serde(rename = "tools_tags")]
@@ -21,8 +19,6 @@ pub enum ToolApiFunction {
     Call,
     #[serde(rename = "plugins_list")]
     PluginsList,
-    #[serde(rename = "plugins_search")]
-    PluginsSearch,
     #[serde(rename = "plugins_tags")]
     PluginsTags,
 }
@@ -74,14 +70,12 @@ pub const fn is_control_function_name(name: &str) -> bool {
 
 impl ToolApiFunction {
     /// All Tool API function kinds.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 6] = [
         Self::List,
-        Self::Search,
         Self::Help,
         Self::Tags,
         Self::Call,
         Self::PluginsList,
-        Self::PluginsSearch,
         Self::PluginsTags,
     ];
 
@@ -89,12 +83,10 @@ impl ToolApiFunction {
     pub const fn function_name(self) -> &'static str {
         match self {
             Self::List => "tools_list",
-            Self::Search => "tools_search",
             Self::Help => "tools_help",
             Self::Tags => "tools_tags",
             Self::Call => "tools_call",
             Self::PluginsList => "plugins_list",
-            Self::PluginsSearch => "plugins_search",
             Self::PluginsTags => "plugins_tags",
         }
     }
@@ -102,12 +94,10 @@ impl ToolApiFunction {
     pub fn from_function_name(name: &str) -> Option<Self> {
         match name {
             "tools_list" => Some(Self::List),
-            "tools_search" => Some(Self::Search),
             "tools_help" => Some(Self::Help),
             "tools_tags" => Some(Self::Tags),
             "tools_call" => Some(Self::Call),
             "plugins_list" => Some(Self::PluginsList),
-            "plugins_search" => Some(Self::PluginsSearch),
             "plugins_tags" => Some(Self::PluginsTags),
             _ => None,
         }

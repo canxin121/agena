@@ -616,11 +616,6 @@ impl ToolApiFixture {
         String::new()
     }
 
-    #[tool(name = "search", summary = "Search tools.")]
-    async fn search(&self, _input: &crate::part::AskUserToolInput) -> String {
-        String::new()
-    }
-
     #[tool(name = "help", summary = "Describe a tool.")]
     async fn help(&self, _input: &crate::part::AskUserToolInput) -> String {
         String::new()
@@ -1036,14 +1031,14 @@ async fn only_fixture_gateways_and_synthesized_call_are_provider_visible() {
     );
 
     let bindings = executor.available_tool_api_bindings();
-    assert_eq!(bindings.len(), 5);
-    let search_description = bindings
+    assert_eq!(bindings.len(), 4);
+    let list_description = bindings
         .iter()
-        .find(|binding| binding.function() == agena_domain::ToolApiFunction::Search)
-        .expect("tools_search binding")
+        .find(|binding| binding.function() == agena_domain::ToolApiFunction::List)
+        .expect("tools_list binding")
         .definition()
         .description;
-    assert!(search_description.contains("search instead of choosing a suggestion"));
+    assert!(list_description.contains("enumerate plugins_list first"));
     let call_description = bindings
         .iter()
         .find(|binding| binding.function() == agena_domain::ToolApiFunction::Call)

@@ -41,7 +41,6 @@ pub(crate) struct WorkflowPluginConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ToolDiscoveryConfig {
     pub(crate) list: ToolListConfig,
-    pub(crate) search: ToolSearchConfig,
     pub(crate) tags: ToolTagsConfig,
 }
 
@@ -56,24 +55,6 @@ impl Default for ToolListConfig {
     fn default() -> Self {
         Self {
             default_limit: 20,
-            max_summary_chars: 160,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct ToolSearchConfig {
-    pub(crate) default_limit: u32,
-    pub(crate) max_query_length: u32,
-    pub(crate) max_summary_chars: u32,
-}
-
-impl Default for ToolSearchConfig {
-    fn default() -> Self {
-        Self {
-            default_limit: 5,
-            max_query_length: 512,
             max_summary_chars: 160,
         }
     }
@@ -119,7 +100,7 @@ pub(crate) use planning_tools::{
 };
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
 pub(crate) use tool_api_inputs::{
-    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiStringBatch, ToolApiTagsInput,
+    ToolApiHelpInput, ToolApiListInput, ToolApiStringBatch, ToolApiTagsInput,
 };
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
@@ -334,9 +315,6 @@ fn validate_tool_discovery_config(config: &ToolDiscoveryConfig) -> SdkResult<()>
     for (path, value) in [
         ("list.default_limit", config.list.default_limit),
         ("list.max_summary_chars", config.list.max_summary_chars),
-        ("search.default_limit", config.search.default_limit),
-        ("search.max_query_length", config.search.max_query_length),
-        ("search.max_summary_chars", config.search.max_summary_chars),
         ("tags.default_limit", config.tags.default_limit),
     ] {
         if value == 0 {
@@ -371,8 +349,6 @@ mod tests {
         let config = ToolDiscoveryConfig::default();
         assert_eq!(config.list.default_limit, 20);
         assert_eq!(config.list.max_summary_chars, 160);
-        assert_eq!(config.search.default_limit, 5);
-        assert_eq!(config.search.max_summary_chars, 160);
         assert_eq!(config.tags.default_limit, 20);
         validate_tool_discovery_config(&config).expect("valid discovery defaults");
     }
@@ -577,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_tool_requires_search_and_help_instead_of_suggestion_guessing() {
+    fn unknown_tool_requires_enumeration_and_help_instead_of_suggestion_guessing() {
         let tools = vec![
             ToolDescriptor {
                 name: "shell.exec".to_string(),
@@ -610,7 +586,7 @@ mod tests {
                 .contains("suggestions are not proof")
         );
         assert!(error.diagnostic.message.contains("Do not guess"));
-        assert!(error.diagnostic.message.contains("`tools_search`"));
+        assert!(error.diagnostic.message.contains("`plugins_list`"));
         assert!(error.diagnostic.message.contains("`tools_help`"));
         let data = error
             .diagnostic
@@ -623,15 +599,20 @@ mod tests {
         assert_eq!(
             data.pointer("/recovery/0/function")
                 .and_then(serde_json::Value::as_str),
-            Some("tools_search")
+            Some("plugins_list")
         );
         assert_eq!(
             data.pointer("/recovery/1/function")
                 .and_then(serde_json::Value::as_str),
-            Some("tools_help")
+            Some("tools_list")
         );
         assert_eq!(
             data.pointer("/recovery/2/function")
+                .and_then(serde_json::Value::as_str),
+            Some("tools_help")
+        );
+        assert_eq!(
+            data.pointer("/recovery/3/function")
                 .and_then(serde_json::Value::as_str),
             Some("tools_call")
         );

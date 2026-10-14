@@ -911,7 +911,7 @@ mod tests {
                 "tool_call",
                 "assistant",
                 serde_json::json!({
-                    "name": "tools_search",
+                    "name": "tools_list",
                     "input": {},
                     "call_id": 4,
                     "state": "completed",
@@ -983,7 +983,7 @@ mod tests {
                 4,
                 "tool_call",
                 "assistant",
-                serde_json::json!({ "name": "tools_search", "operation": {} }),
+                serde_json::json!({ "name": "tools_list", "operation": {} }),
             ),
             run(5, "assistant", "failed"),
             run(7, "assistant", "completed"),
@@ -1157,7 +1157,7 @@ mod tests {
                 4,
                 "tool_call",
                 "assistant",
-                serde_json::json!({ "name": "tools_search", "operation": {} }),
+                serde_json::json!({ "name": "tools_list", "operation": {} }),
             ),
             run(5, "assistant", "in_progress"),
             run(7, "assistant", "completed"),
@@ -1312,14 +1312,14 @@ mod tests {
             "tool_call",
             "assistant",
             serde_json::json!({
-                "name": "tools_search",
-                "input": { "query": "model" },
+                "name": "tools_list",
+                "input": { "plugin": "agena.fs" },
                 "tool_api_call": {
-                    "function": "tools_search",
+                    "function": "tools_list",
                     "arguments": {
                         "fields": [{
-                            "name": "query",
-                            "value": { "kind": "text", "value": "model" }
+                            "name": "plugin",
+                            "value": { "kind": "text", "value": "agena.fs" }
                         }]
                     }
                 },
@@ -1330,12 +1330,13 @@ mod tests {
             }),
         );
         tool.presentation = Some(agena_domain::PartDocument {
-            title: "Search tools".to_owned(),
-            summary: "Returned 3 matching tools.".to_owned(),
+            title: "List tools".to_owned(),
+            summary: "Returned 3 of 12 tools.".to_owned(),
             blocks: vec![agena_domain::ViewBlock::Log {
                 id: Some("result".to_owned()),
                 stream: agena_domain::CommandOutputStream::Stdout,
-                text: "Matching tools for model:\n- session.model".to_owned(),
+                text: "Available tools: returned 3 of 12 starting at offset 0.\n- fs.read"
+                    .to_owned(),
             }],
         });
         let parts = vec![run(1, "assistant", "completed"), tool];
@@ -1353,12 +1354,12 @@ mod tests {
                 .tool_api_call
                 .as_ref()
                 .map(|call| call.function),
-            Some(agena_domain::ToolApiFunction::Search)
+            Some(agena_domain::ToolApiFunction::List)
         );
         assert_eq!(operation.model_text(), "raw result");
         assert_eq!(operation.presentation.blocks.len(), 1);
-        assert_eq!(operation.title(), "Search tools");
-        assert_eq!(operation.summary(), "Returned 3 matching tools.");
+        assert_eq!(operation.title(), "List tools");
+        assert_eq!(operation.summary(), "Returned 3 of 12 tools.");
     }
 
     #[test]

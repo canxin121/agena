@@ -4,8 +4,8 @@ use serde_json::json;
 
 use super::{
     Harness, PendingReply, SuiteReport, TOOLS_CALL_HANDLER_KEY, TOOLS_HELP_HANDLER_KEY,
-    TOOLS_LIST_HANDLER_KEY, TOOLS_SEARCH_HANDLER_KEY, TOOLS_TAGS_HANDLER_KEY, assert_contains,
-    baseline_permission, operations_since, transcript_since,
+    TOOLS_LIST_HANDLER_KEY, TOOLS_TAGS_HANDLER_KEY, assert_contains, baseline_permission,
+    operations_since, transcript_since,
 };
 
 pub(crate) async fn run_tool_api_meta_suite(
@@ -35,27 +35,6 @@ pub(crate) async fn run_tool_api_meta_suite(
             "tools.list did not return a tools payload"
         );
         report.pass("tools.list");
-    }
-    if harness.selector.enabled("tools.search") {
-        let session = harness
-            .create_session(
-                "dsv4f tools.search",
-                &[TOOLS_SEARCH_HANDLER_KEY],
-                baseline_permission(PermissionMode::Allow),
-            )
-            .await?;
-        let outcome = harness
-            .run_native_tool_api_function(
-                session,
-                "tools.search",
-                "tools_search",
-                TOOLS_SEARCH_HANDLER_KEY,
-                json!({"query": "schema_lab", "offset": 0, "limit": 5}),
-                None,
-            )
-            .await?;
-        assert_contains(&outcome, "schema_lab")?;
-        report.pass("tools.search");
     }
     if harness.selector.enabled("tools.tags") {
         let session = harness

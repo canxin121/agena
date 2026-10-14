@@ -197,7 +197,7 @@ describe('TUI-parity transcript projection', () => {
   test('folds consecutive assistant rounds but preserves runtime and user boundaries', () => {
     const blocks = projectTranscriptBlocks(
       [
-        message('10', 'assistant', [part('11', 'tool_call', { name: 'tools_search' })], 'in_progress'),
+        message('10', 'assistant', [part('11', 'tool_call', { name: 'tools_list' })], 'in_progress'),
         message('12', 'assistant', [part('13', 'text', { text: 'done' })]),
         message('14', 'system', [part('15', 'notice', { summary: 'boundary' })]),
         message('16', 'assistant', [part('17', 'text', { text: 'after boundary' })]),

@@ -169,7 +169,7 @@ async fn run_family(adapter: &str, parallel: bool, expected_calls: usize, family
     }
     let plugins = PluginHost::new(PluginHostBuildConfig {
         static_plugins: vec![
-            StaticPluginRegistration::new("agena.tools".parse().unwrap(), ToolSearchFixture),
+            StaticPluginRegistration::new("agena.tools".parse().unwrap(), ToolListFixture),
             match family {
                 "chatgpt" => StaticPluginRegistration::new(
                     plugin_id.parse().unwrap(),

@@ -33,14 +33,14 @@ Inspect before assuming, ground conclusions in evidence, and preserve unrelated 
 
 Only the declared Tool API gateway functions are direct function calls. Execution-tool names such as `fs.read` are values passed to the gateway, never direct function names. A known tool needs no discovery: read its live contract with `tools_help` before first use unless the complete current contract is already in context, then invoke it with `tools_call`. A name in this prompt is not a schema or proof that the tool is enabled. Reuse established contracts and results.
 
-For unknown tools, search by task with `tools_search`, using a `plugin` or `tags` filter when known. Use declared `plugins_search` or tag functions to find an unfamiliar owner; broaden only when focused searches miss. Use `tools_list` when the user asks for available capabilities or an inventory is needed. Do not enumerate the whole catalog by default or invent names. An empty result is a reason to revise the search, not select an unrelated tool.
+There is no search function: to find a capability, enumerate the plugin inventory with `plugins_list` (paginated), then enumerate the owning plugin's tools with `tools_list` and its `plugin` selector (paginated); `tools_tags` and `plugins_tags` narrow either inventory by tag. Read the exact returned names with `tools_help` before calling them. Never answer an inventory question from memory and never invent a name.
 
 # Correct tool usage
 
-- Batch independent discovery/help: `query: ["...", "..."]`, `tool: ["fs.read", "fs.grep"]`, or `plugin: ["agena.fs", "agena.code"]`. Plugin selectors use OR; tags use AND.
+- Batch independent discovery/help: `tool: ["fs.read", "fs.grep"]` or `plugin: ["agena.fs", "agena.code"]`. Plugin selectors use OR; tags use AND.
 - Each `tools_call` takes exactly `tool` (execution-tool name) and `input` (its argument object). Pass an object, not JSON encoded as a string or an extra wrapper. Minimal example: `tools_help({"tool":"fs.read"})`, then, after reading that help, `tools_call({"tool":"fs.read","input":{"file_path":"src/main.rs"}})` for the requested file.
 - Emit independent `tools_call` invocations together, one execution target per call. Order dependent or conflicting actions. Never put gateway functions inside `tools_call`.
-- Match the live schema exactly: valid complete JSON, declared names/types/values. For an unknown/unavailable tool, return to discovery or choose an available alternative. For invalid input, use the returned correction/embedded help and repair the call; fetch help if still unclear. After an ambiguous mutation timeout, inspect the resulting state before retrying.
+- Match the live schema exactly: valid complete JSON, declared names/types/values. For an unknown/unavailable tool, keep paging the plugin and tool inventories or choose an available alternative. For invalid input, use the returned correction/embedded help and repair the call; fetch help if still unclear. After an ambiguous mutation timeout, inspect the resulting state before retrying.
 - Inspect only needed session facts: `session.get` for identity, `session.environment` for workspace/Git/shell/platform and host CLIs, `session.model` for model/limits, `session.tokens` for budget. Batch their help and independent calls; refresh mutable facts when relevant. Compaction is internal and has no execution action.
 
 # Choosing tools
@@ -118,6 +118,8 @@ mod tests {
             "live contract",
             "tools_help",
             "tools_call",
+            "plugins_list",
+            "tools_list",
             "gateway functions",
             "one execution target per call",
             "Batch independent",
@@ -144,6 +146,12 @@ mod tests {
             !prompt.contains("Start with plugin tags"),
             "discovery must not impose a fixed multi-call chain"
         );
+        for removed in ["tools_search", "plugins_search"] {
+            assert!(
+                !prompt.contains(removed),
+                "the prompt must not advertise the removed search function: {removed}"
+            );
+        }
         assert!(
             !prompt.contains("*** Begin Patch"),
             "tool schemas/help belong outside the system prompt"

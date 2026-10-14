@@ -276,7 +276,7 @@ async fn manager_with_concurrent_batch_fixture(
         static_plugins: vec![
             StaticPluginRegistration::new(
                 "agena.tools".parse().expect("valid Tool API plugin key"),
-                ToolSearchFixture,
+                ToolListFixture,
             ),
             StaticPluginRegistration::new(
                 "agena.conc"

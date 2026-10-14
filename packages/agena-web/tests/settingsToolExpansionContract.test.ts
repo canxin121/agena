@@ -14,12 +14,10 @@ test('appearance settings enumerate Agena tools and persist exact expansion over
   assert.ok(preferences.includes('ui.transcript'))
   for (const functionName of [
     'tools_list',
-    'tools_search',
     'tools_help',
     'tools_tags',
     'tools_call',
     'plugins_list',
-    'plugins_search',
     'plugins_tags',
   ]) {
     assert.ok(source.includes(`id: '${functionName}'`), `missing Tool API function ${functionName}`)

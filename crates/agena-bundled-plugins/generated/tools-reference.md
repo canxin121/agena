@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 144 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 142 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
@@ -34,7 +34,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (11 tools)
 - [`agena.tasks`](#agenatasks) — Delegated subtask orchestration tools. (7 tools)
-- [`agena.tools`](#agenatools) — Tool API discovery functions. The runtime resolves tools_call directly to its execution target. (7 tools)
+- [`agena.tools`](#agenatools) — Tool API discovery functions. The runtime resolves tools_call directly to its execution target. (5 tools)
 - [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (16 tools)
 
 ## agena.chatgpt
@@ -8708,7 +8708,7 @@ Delegated subtask orchestration tools.
 
 ## agena.tools
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.0` · **Tools** 5
 
 Tool API discovery functions. The runtime resolves tools_call directly to its execution target.
 
@@ -8723,7 +8723,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `tool` | `ToolApiStringBatch` | ✓ | — | One exact execution-tool name, or a non-empty array of exact names, to<br>inspect. Use exact names known from the prompt/context or returned by<br>`tools_list` or `tools_search`; known names need no preliminary search.<br>This help checks current availability and supplies the live contract. |
+| `tool` | `ToolApiStringBatch` | ✓ | — | One exact execution-tool name, or a non-empty array of exact names, to<br>inspect. Use exact names known from the prompt/context or returned by<br>`tools_list`; known names need no preliminary lookup.<br>This help checks current availability and supplies the live contract. |
 
 **Input schema**:
 ```json
@@ -8743,7 +8743,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
           "type": "array"
         }
       ],
-      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use exact names known from the prompt/context or returned by\n`tools_list` or `tools_search`; known names need no preliminary search.\nThis help checks current availability and supplies the live contract.",
+      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use exact names known from the prompt/context or returned by\n`tools_list`; known names need no preliminary lookup.\nThis help checks current availability and supplies the live contract.",
       "x-agena-order": "000000"
     }
   },
@@ -8751,7 +8751,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
   "properties": {
     "tool": {
       "$ref": "#/$defs/ToolApiStringBatch",
-      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use exact names known from the prompt/context or returned by\n`tools_list` or `tools_search`; known names need no preliminary search.\nThis help checks current availability and supplies the live contract."
+      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use exact names known from the prompt/context or returned by\n`tools_list`; known names need no preliminary lookup.\nThis help checks current availability and supplies the live contract."
     }
   },
   "required": [
@@ -8951,111 +8951,6 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 }
 ```
 
-### plugins_search
-
-`agena.tools.plugins_search` · **Tool API gateway handler** · **Summary**: Search loaded plugins with one or many queries and optional multi-plugin scope.
-
-**Tags**: `query` `discovery` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `limit` | `integer / null` | — | — | Maximum number of search results to return. |
-| `offset` | `integer / null` | — | — | Number of matching tools to skip before returning results. |
-| `plugin` | `ToolApiStringBatch / null` | — | — | Optional plugin selector: one plugin id or a non-empty array of ids,<br>with OR semantics. It scopes tools by owner for `tools_search` and<br>plugin records directly for `plugins_search`. |
-| `query` | `ToolApiStringBatch` | ✓ | — | One search query, or a non-empty array of queries, used to rank matching<br>tool names and summaries. Batched queries are evaluated independently. |
-| `tag` | `string / null` | — | — | Optional single tag filter such as `query` or `network`. |
-| `tags` | `array<string>` | — | — | Optional tag filters. When present, all normalized tags must match. |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ToolApiStringBatch": {
-      "anyOf": [
-        {
-          "minLength": 1,
-          "type": "string"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array"
-        }
-      ],
-      "description": "One search query, or a non-empty array of queries, used to rank matching\ntool names and summaries. Batched queries are evaluated independently.",
-      "x-agena-order": "000000"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "limit": {
-      "description": "Maximum number of search results to return.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "offset": {
-      "description": "Number of matching tools to skip before returning results.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "plugin": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ToolApiStringBatch"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Optional plugin selector: one plugin id or a non-empty array of ids,\nwith OR semantics. It scopes tools by owner for `tools_search` and\nplugin records directly for `plugins_search`.",
-      "x-agena-order": "000003"
-    },
-    "query": {
-      "$ref": "#/$defs/ToolApiStringBatch",
-      "description": "One search query, or a non-empty array of queries, used to rank matching\ntool names and summaries. Batched queries are evaluated independently."
-    },
-    "tag": {
-      "description": "Optional single tag filter such as `query` or `network`.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "tags": {
-      "description": "Optional tag filters. When present, all normalized tags must match.",
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    }
-  },
-  "required": [
-    "query"
-  ],
-  "type": "object"
-}
-```
-
 ### plugins_tags
 
 `agena.tools.plugins_tags` · **Tool API gateway handler** · **Summary**: List plugin tags across one plugin or a batch of plugin targets.
@@ -9126,111 +9021,6 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
       "x-agena-order": "000002"
     }
   },
-  "type": "object"
-}
-```
-
-### search
-
-`agena.tools.search` · **Tool API gateway handler** · **Summary**: Search execution tools with one or many queries across one or many plugin targets.
-
-**Tags**: `query` `discovery` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `limit` | `integer / null` | — | — | Maximum number of search results to return. |
-| `offset` | `integer / null` | — | — | Number of matching tools to skip before returning results. |
-| `plugin` | `ToolApiStringBatch / null` | — | — | Optional plugin selector: one plugin id or a non-empty array of ids,<br>with OR semantics. It scopes tools by owner for `tools_search` and<br>plugin records directly for `plugins_search`. |
-| `query` | `ToolApiStringBatch` | ✓ | — | One search query, or a non-empty array of queries, used to rank matching<br>tool names and summaries. Batched queries are evaluated independently. |
-| `tag` | `string / null` | — | — | Optional single tag filter such as `query` or `network`. |
-| `tags` | `array<string>` | — | — | Optional tag filters. When present, all normalized tags must match. |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "ToolApiStringBatch": {
-      "anyOf": [
-        {
-          "minLength": 1,
-          "type": "string"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array"
-        }
-      ],
-      "description": "One search query, or a non-empty array of queries, used to rank matching\ntool names and summaries. Batched queries are evaluated independently.",
-      "x-agena-order": "000000"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "limit": {
-      "description": "Maximum number of search results to return.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "offset": {
-      "description": "Number of matching tools to skip before returning results.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "plugin": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ToolApiStringBatch"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Optional plugin selector: one plugin id or a non-empty array of ids,\nwith OR semantics. It scopes tools by owner for `tools_search` and\nplugin records directly for `plugins_search`.",
-      "x-agena-order": "000003"
-    },
-    "query": {
-      "$ref": "#/$defs/ToolApiStringBatch",
-      "description": "One search query, or a non-empty array of queries, used to rank matching\ntool names and summaries. Batched queries are evaluated independently."
-    },
-    "tag": {
-      "description": "Optional single tag filter such as `query` or `network`.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "tags": {
-      "description": "Optional tag filters. When present, all normalized tags must match.",
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    }
-  },
-  "required": [
-    "query"
-  ],
   "type": "object"
 }
 ```

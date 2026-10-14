@@ -1,13 +1,16 @@
-//! Deterministic reproduction harness for the production `plugins_search`
-//! hang (sessions 5/6/7 froze exactly on `plugins_search` + `plugins_tags`
-//! with all threads parked and the run task awaiting a no-deadline future).
+//! End-to-end harness for the `agena.tools` discovery family through the real
+//! Tool API plugin: `plugins_list` (paged plugin inventory) -> `tools_list`
+//! (paged per-plugin tool inventory) -> `tools_help` -> `tools_tags`.
+//!
+//! There is no search function: capability discovery walks the plugin
+//! inventory and then the owning plugin's tool inventory, page by page.
 //!
 //! This drives the *exact* production dispatch route for these tools:
 //! ToolApiPlugin (`agena.tools`) as an in-proc static plugin, resolved
-//! through the ToolExecutor's non-payload path (plugins_search/tags are not
+//! through the ToolExecutor's non-payload path (the plugins_* family is not
 //! in `ToolPayloadInput::from_executor_backed_invocation`'s builtin set) into
 //! `invoke_tool_cancellable` -> in-proc transport dispatch -> the plugin's
-//! `list_plugins` host callback.
+//! `list_plugins`/`list_tools` host callbacks.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -171,50 +174,140 @@ async fn execute_gateway(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn plugins_search_and_tags_resolve_through_the_real_tool_api_plugin() {
+async fn plugins_list_reports_tool_counts_instead_of_tool_names() {
     let (executor, workspace_root) = build_tool_api_executor().await;
-    for (name, function, arguments, input) in [
-        (
-            "plugins_search",
-            agena_domain::ToolApiFunction::PluginsSearch,
-            serde_json::json!({ "query": "context status" }),
-            serde_json::json!({ "query": "context status" }),
-        ),
-        (
-            "plugins_tags",
-            agena_domain::ToolApiFunction::PluginsTags,
-            serde_json::json!({}),
-            serde_json::json!({}),
-        ),
-    ] {
-        let invocation = plugins_invocation(function, name, arguments, input);
-        let prepared = executor
-            .prepare_invocation(&invocation, 7, 52)
-            .await
-            .unwrap_or_else(|error| panic!("prepare {name}: {error}"));
-        let (prepared_invocation, prepared_shell) = executor
-            .prepare_shell_invocation(&prepared.invocation, 7, 52)
-            .await
-            .unwrap_or_else(|error| panic!("prepare shell {name}: {error}"));
-        let execution = executor
-            .execute_invocation_detailed_with_prepared_shell(
-                &prepared_invocation,
-                7,
-                52,
-                prepared_shell,
-            )
-            .await
-            .unwrap_or_else(|error| panic!("execute {name}: {error}"));
-        assert!(
-            !execution.view.output_text.is_empty(),
-            "{name} produced empty output: {execution:?}"
-        );
-        tracing::info!(
-            tool = name,
-            output = %execution.view.output_text,
-            "plugins family tool resolved"
-        );
-    }
+    let execution = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::PluginsList,
+        "plugins_list",
+        serde_json::json!({ "plugin": ["agena.tools", "agena.monitor"] }),
+        52,
+    )
+    .await;
+    let text = execution.view.output_text.as_str();
+    assert!(text.contains("Available plugins: returned"), "{text}");
+    assert!(text.contains("agena.tools"), "{text}");
+    assert!(text.contains("agena.monitor"), "{text}");
+    assert!(text.contains("tool(s)"), "{text}");
+    assert!(
+        !text.contains("monitor.start") && !text.contains("monitor.stop"),
+        "plugins_list must report a tool count, not inline tool names: {text}"
+    );
+    assert!(
+        text.contains("List a plugin's tools with `tools_list`"),
+        "the plugin page must point at the per-plugin tool listing: {text}"
+    );
+    let _ = std::fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plugins_list_pagination_continues_the_plugin_inventory() {
+    let (executor, workspace_root) = build_tool_api_executor().await;
+    let first = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::PluginsList,
+        "plugins_list",
+        serde_json::json!({ "offset": 0, "limit": 1 }),
+        53,
+    )
+    .await;
+    let first_text = first.view.output_text.as_str();
+    assert!(first_text.contains("returned 1 of "), "{first_text}");
+    assert!(
+        first_text.contains("More available: yes. Continue with `plugins_list` using `offset: 1`."),
+        "a partial plugin page must say how to continue: {first_text}"
+    );
+
+    let second = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::PluginsList,
+        "plugins_list",
+        serde_json::json!({ "offset": 1, "limit": 1 }),
+        54,
+    )
+    .await;
+    let second_text = second.view.output_text.as_str();
+    assert!(
+        second_text.contains("starting at offset 1."),
+        "{second_text}"
+    );
+    assert!(second_text.contains("More available: no."), "{second_text}");
+    let _ = std::fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tools_list_pages_one_plugin_tool_inventory() {
+    let (executor, workspace_root) = build_tool_api_executor().await;
+    let complete = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::List,
+        "tools_list",
+        serde_json::json!({ "plugin": ["monitor", "agena.missing"], "limit": 1_000 }),
+        55,
+    )
+    .await;
+    let complete_text = complete.view.output_text.as_str();
+    assert!(complete_text.contains("monitor.start"), "{complete_text}");
+    assert!(complete_text.contains("monitor.stop"), "{complete_text}");
+    assert!(complete_text.contains("(agena.monitor)"), "{complete_text}");
+    assert!(
+        complete_text.contains("More available: no."),
+        "{complete_text}"
+    );
+
+    let page = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::List,
+        "tools_list",
+        serde_json::json!({ "plugin": ["monitor"], "offset": 0, "limit": 1 }),
+        56,
+    )
+    .await;
+    let page_text = page.view.output_text.as_str();
+    assert!(page_text.contains("returned 1 of 2"), "{page_text}");
+    assert!(
+        page_text.contains("Continue with `tools_list` using `offset: 1`."),
+        "a partial tool page must say how to continue: {page_text}"
+    );
+    let _ = std::fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tools_help_and_tags_accept_batches_through_the_real_gateway() {
+    let (executor, workspace_root) = build_tool_api_executor().await;
+
+    let execution = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::Help,
+        "tools_help",
+        serde_json::json!({ "tool": ["monitor.start", "monitor.stop"] }),
+        57,
+    )
+    .await;
+    assert!(execution.view.output_text.contains("Tool: monitor.start"));
+    assert!(execution.view.output_text.contains("Tool: monitor.stop"));
+    assert!(execution.view.output_text.contains("\n\n---\n\n"));
+
+    let execution = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::Tags,
+        "tools_tags",
+        serde_json::json!({ "plugin": ["monitor", "agena.missing"] }),
+        58,
+    )
+    .await;
+    assert!(execution.view.output_text.contains("Available tool tags"));
+
+    let execution = execute_gateway(
+        &executor,
+        agena_domain::ToolApiFunction::PluginsTags,
+        "plugins_tags",
+        serde_json::json!({ "plugin": ["agena.tools", "monitor"] }),
+        59,
+    )
+    .await;
+    assert!(execution.view.output_text.contains("Available plugin tags"));
+
     let _ = std::fs::remove_dir_all(workspace_root);
 }
 
@@ -231,187 +324,23 @@ async fn tool_api_host_callback_has_an_installed_client() {
         serde_json::json!({}),
     );
     let prepared = executor
-        .prepare_invocation(&invocation, 7, 53)
+        .prepare_invocation(&invocation, 7, 60)
         .await
         .expect("prepare plugins_list");
     let (prepared_invocation, prepared_shell) = executor
-        .prepare_shell_invocation(&prepared.invocation, 7, 53)
+        .prepare_shell_invocation(&prepared.invocation, 7, 60)
         .await
         .expect("prepare shell plugins_list");
     let execution = executor
         .execute_invocation_detailed_with_prepared_shell(
             &prepared_invocation,
             7,
-            53,
+            60,
             prepared_shell,
         )
         .await
         .expect("execute plugins_list");
     assert!(execution.view.output_text.contains("agena.tools"));
-    let _ = std::fs::remove_dir_all(workspace_root);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn tools_search_and_help_accept_batches_through_the_real_gateway() {
-    let (executor, workspace_root) = build_tool_api_executor().await;
-
-    let search_input = serde_json::json!({
-        "query": ["continuous monitor", "stop background monitor"],
-        "plugin": ["agena.monitor", "monitor"],
-        "limit": 1_000
-    });
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::Search,
-        "tools_search",
-        search_input,
-        54,
-    )
-    .await;
-    assert!(
-        execution
-            .view
-            .output_text
-            .contains("Matching tools for \"continuous monitor\"")
-    );
-    assert!(
-        execution
-            .view
-            .output_text
-            .contains("Matching tools for \"stop background monitor\"")
-    );
-    assert!(execution.view.output_text.contains("monitor.start"));
-    assert!(execution.view.output_text.contains("monitor.stop"));
-
-    let help_input = serde_json::json!({
-        "tool": ["monitor.start", "monitor.stop"]
-    });
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::Help,
-        "tools_help",
-        help_input,
-        55,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("Tool: monitor.start"));
-    assert!(execution.view.output_text.contains("Tool: monitor.stop"));
-    assert!(execution.view.output_text.contains("\n\n---\n\n"));
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::List,
-        "tools_list",
-        serde_json::json!({
-            "plugin": ["monitor", "agena.missing"],
-            "limit": 1_000
-        }),
-        56,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("monitor.start"));
-    assert!(execution.view.output_text.contains("monitor.stop"));
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::PluginsList,
-        "plugins_list",
-        serde_json::json!({
-            "plugin": ["agena.tools", "monitor"]
-        }),
-        57,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("agena.tools"));
-    assert!(execution.view.output_text.contains("agena.monitor"));
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::PluginsSearch,
-        "plugins_search",
-        serde_json::json!({
-            "query": ["tools", "monitor"],
-            "plugin": ["agena.tools", "monitor"]
-        }),
-        58,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("agena.tools"));
-    assert!(execution.view.output_text.contains("agena.monitor"));
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::Tags,
-        "tools_tags",
-        serde_json::json!({
-            "plugin": ["monitor", "agena.missing"]
-        }),
-        59,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("execute"));
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::PluginsTags,
-        "plugins_tags",
-        serde_json::json!({
-            "plugin": ["agena.tools", "monitor"]
-        }),
-        60,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("Available plugin tags"));
-
-    let _ = std::fs::remove_dir_all(workspace_root);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn tools_search_filters_opposite_and_unrelated_capabilities_before_pagination() {
-    let (executor, workspace_root) = build_tool_api_executor().await;
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::Search,
-        "tools_search",
-        serde_json::json!({
-            "query": "stop background monitor",
-            "limit": 10_000
-        }),
-        61,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("monitor.stop"));
-    assert!(
-        !execution.view.output_text.contains("monitor.start"),
-        "an opposite action must not survive relevance filtering: {}",
-        execution.view.output_text
-    );
-    assert!(
-        execution.view.output_text.contains("returned 1 of 1"),
-        "limit must cap relevant matches instead of filling with noise: {}",
-        execution.view.output_text
-    );
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::Search,
-        "tools_search",
-        serde_json::json!({
-            "query": "send customer email",
-            "limit": 10_000
-        }),
-        62,
-    )
-    .await;
-    assert!(
-        execution.view.output_text.contains("returned 0 of 0"),
-        "an unrelated query must produce an honest empty result: {}",
-        execution.view.output_text
-    );
-    assert!(!execution.view.output_text.contains("monitor.start"));
-    assert!(!execution.view.output_text.contains("monitor.stop"));
-
     let _ = std::fs::remove_dir_all(workspace_root);
 }
 

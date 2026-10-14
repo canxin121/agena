@@ -502,16 +502,8 @@ fn sample_input(tool: &str) -> Value {
         "web.browser_download" => json!({"url": "https://example.test/a.zip"}),
         "web.browser_close" => json!({"session_id": "s-1"}),
         "web.browser_list" | "web.browser_shutdown" => json!({}),
-        value
-            if value.starts_with("tools.plugins_search") || value.starts_with("plugins.search") =>
-        {
-            json!({"query": "filesystem"})
-        }
         value if value.starts_with("tools.plugins_tags") || value.starts_with("plugins.tags") => {
             json!({"tag": "filesystem"})
-        }
-        value if value.starts_with("tools.search") || value.starts_with("tools_search") => {
-            json!({"query": "filesystem"})
         }
         value if value.starts_with("tools.") || value.starts_with("plugins.") => json!({}),
         value
@@ -641,11 +633,7 @@ fn provider_sample_payload(tool: &str) -> Value {
 fn sample_text(tool: &str) -> String {
     match tool {
         "tools.plugins_list" => {
-            "Available plugins: returned 1 of 1 starting at offset 0.\n- agena.fs [filesystem, execute] (v0.1.0): Filesystem tools · tools: fs.read, fs.write"
-                .into()
-        }
-        "tools.plugins_search" => {
-            "Matching plugins for \"file\": returned 1 of 1 starting at offset 0.\n- agena.fs [filesystem]: Filesystem tools"
+            "Available plugins: returned 1 of 1 starting at offset 0.\n- agena.fs [filesystem, execute] (v0.1.0): Filesystem tools · 2 tool(s)"
                 .into()
         }
         "tools.plugins_tags" => {

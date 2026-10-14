@@ -1,8 +1,7 @@
 use super::{
     Fixture, Harness, PendingReply, SuiteReport, TOOLS_CALL_HANDLER_KEY, TOOLS_HELP_HANDLER_KEY,
-    TOOLS_LIST_HANDLER_KEY, TOOLS_SEARCH_HANDLER_KEY, TOOLS_TAGS_HANDLER_KEY, ToolApiOutcome,
-    assert_contains, baseline_permission, commit_fixture_change, operations_since, payload_string,
-    transcript_since,
+    TOOLS_LIST_HANDLER_KEY, TOOLS_TAGS_HANDLER_KEY, ToolApiOutcome, assert_contains,
+    baseline_permission, commit_fixture_change, operations_since, payload_string, transcript_since,
 };
 
 mod builtin_commands;

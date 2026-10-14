@@ -565,7 +565,7 @@ fn validate_execution_tool_name(
         return Ok(());
     }
     Err(ProviderError::Provider(format!(
-        "provider `{provider_id}` returned invalid execution-tool name {tool_name:?} for Tool API function `{function}`; use an exact name such as `fs.read` returned by `tools_list` or `tools_search`"
+        "provider `{provider_id}` returned invalid execution-tool name {tool_name:?} for Tool API function `{function}`; use an exact name such as `fs.read` returned by `tools_list`"
     )))
 }
 
@@ -625,10 +625,8 @@ fn validate_tool_api_argument_semantics(
             Ok(())
         }
         ToolApiFunction::List
-        | ToolApiFunction::Search
         | ToolApiFunction::Tags
         | ToolApiFunction::PluginsList
-        | ToolApiFunction::PluginsSearch
         | ToolApiFunction::PluginsTags => Ok(()),
     }
 }
@@ -2032,8 +2030,8 @@ mod tool_api_function_validation_tests {
         use agena_domain::CapabilitySupport;
 
         for (support, expected_tools) in [
-            (CapabilitySupport::Unknown, 5),
-            (CapabilitySupport::Supported, 5),
+            (CapabilitySupport::Unknown, 4),
+            (CapabilitySupport::Supported, 4),
             (CapabilitySupport::Unsupported, 0),
         ] {
             let provider = std::sync::Arc::new(ToolModeProbeProvider {
@@ -2175,7 +2173,7 @@ mod tool_api_function_validation_tests {
             .expect("requests lock")
             .pop()
             .expect("provider should receive a request");
-        assert_eq!(recorded.tool_api_functions.len(), 5);
+        assert_eq!(recorded.tool_api_functions.len(), 4);
         assert!(recorded.provider_native_tools.is_empty());
         assert!(
             !recorded
@@ -2191,7 +2189,7 @@ mod tool_api_function_validation_tests {
     }
 
     fn all_tool_api_definitions() -> Vec<agena_provider::ToolApiDefinition> {
-        ["list", "search", "help", "tags", "call"]
+        ["list", "help", "tags", "call"]
             .into_iter()
             .map(|name| {
                 let mut definition: ToolDefinition =
@@ -2557,7 +2555,7 @@ mod tool_api_function_validation_tests {
 
     #[test]
     fn stream_tool_validation_preserves_identity_across_empty_and_rekeyed_fragments() {
-        let declared = BTreeSet::from(["tools_search".to_owned()]);
+        let declared = BTreeSet::from(["tools_list".to_owned()]);
         let mut calls = StreamToolApiCalls::default();
         let provider_id = ProviderId::new("stream-fixture");
         let model = ModelId::new("test-model");
@@ -2567,8 +2565,8 @@ mod tool_api_function_validation_tests {
                 model: model.clone(),
                 stream_key: "idx:0".to_owned(),
                 id: Some("call_search".to_owned()),
-                name: Some("  tools_search  ".to_owned()),
-                arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
+                name: Some("  tools_list  ".to_owned()),
+                arguments_json: r#"{"plugin":"agena.fs"}"#.to_owned(),
             },
             CompletionStreamEvent::ToolCallDelta {
                 provider_id: provider_id.clone(),
@@ -2612,8 +2610,8 @@ mod tool_api_function_validation_tests {
         assert_eq!(
             stream_tool_api_calls(&calls),
             vec![super::RejectedToolApiCall {
-                name: "tools_search".to_owned(),
-                arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
+                name: "tools_list".to_owned(),
+                arguments_json: r#"{"plugin":"agena.fs"}"#.to_owned(),
             }]
         );
     }

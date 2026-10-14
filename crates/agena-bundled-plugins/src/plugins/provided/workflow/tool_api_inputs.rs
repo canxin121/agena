@@ -21,7 +21,7 @@ impl ToolApiStringBatch {
 pub(crate) struct ToolApiHelpInput {
     /// One exact execution-tool name, or a non-empty array of exact names, to
     /// inspect. Use exact names known from the prompt/context or returned by
-    /// `tools_list` or `tools_search`; known names need no preliminary search.
+    /// `tools_list`; known names need no preliminary lookup.
     /// This help checks current availability and supplies the live contract.
     pub tool: ToolApiStringBatch,
 }
@@ -38,31 +38,6 @@ pub(crate) struct ToolApiListInput {
     /// Optional plugin selector: one plugin id or a non-empty array of ids,
     /// with OR semantics. It scopes tools by owner for `tools_list` and selects
     /// plugin records directly for `plugins_list`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin: Option<ToolApiStringBatch>,
-    /// Optional single tag filter such as `query` or `network`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tag: Option<String>,
-    /// Optional tag filters. When present, all normalized tags must match.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ToolApiSearchInput {
-    /// One search query, or a non-empty array of queries, used to rank matching
-    /// tool names and summaries. Batched queries are evaluated independently.
-    pub query: ToolApiStringBatch,
-    /// Number of matching tools to skip before returning results.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offset: Option<u32>,
-    /// Maximum number of search results to return.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    /// Optional plugin selector: one plugin id or a non-empty array of ids,
-    /// with OR semantics. It scopes tools by owner for `tools_search` and
-    /// plugin records directly for `plugins_search`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<ToolApiStringBatch>,
     /// Optional single tag filter such as `query` or `network`.

@@ -1397,14 +1397,14 @@ mod parts_projection_tests {
         let mut operation = agena_runtime_contracts::part::OperationPart::pending(
             7,
             agena_domain::ToolInvocation::new(
-                "tools_search",
+                "tools_list",
                 agena_domain::StructuredObject::default(),
             ),
             agena_domain::TimeRange::default(),
         );
         operation.metadata.insert(
             "agena.operation_id".to_owned(),
-            serde_json::json!("call_tools_search_7"),
+            serde_json::json!("call_tools_list_7"),
         );
         let pending = part(
             42,
@@ -1420,9 +1420,9 @@ mod parts_projection_tests {
             .pending_tool_calls
             .first()
             .expect("pending tool runtime snapshot");
-        assert_eq!(snapshot.operation_id, "call_tools_search_7");
+        assert_eq!(snapshot.operation_id, "call_tools_list_7");
         assert_eq!(snapshot.call_id, 7);
-        assert_eq!(snapshot.tool_name, "tools_search");
+        assert_eq!(snapshot.tool_name, "tools_list");
         assert_eq!(snapshot.part.part_id, 42);
     }
 

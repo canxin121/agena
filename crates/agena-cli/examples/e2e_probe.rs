@@ -7,7 +7,7 @@
 //!
 //! This is the harness used to verify model behavior end-to-end (e.g. that
 //! the model goes straight to `tools_help`/`tools_call` for `session.model`
-//! instead of calling `tools_search`), which CLI-only unit assertions cannot
+//! instead of enumerating the plugin inventory), which CLI-only unit assertions cannot
 //! prove.
 //!
 //! Usage:

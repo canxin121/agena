@@ -1944,8 +1944,8 @@ async fn projection_preserves_precise_part_kind() {
                     kind: "tool_call".to_owned(),
                     role: PartRole::Assistant,
                     content: serde_json::json!({
-                        "name": "tools_search",
-                        "input": {"query": "x"},
+                        "name": "tools_list",
+                        "input": {"limit": 5},
                         "call_id": 1,
                         "state": "completed",
                         "output": {"payload": {"text": "search complete"}, "truncated": false},
@@ -2503,7 +2503,23 @@ async fn subtask_timeout_persists_a_complete_timeout_failure_even_when_cleanup_i
 }
 
 #[derive(Default)]
-struct ToolSearchFixture;
+struct ToolListFixture;
+
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    agena_plugin_host::sdk::ToolInput,
+)]
+#[serde(deny_unknown_fields)]
+struct ToolListFixtureInput {
+    #[serde(default)]
+    plugin: Option<Vec<String>>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
 
 #[derive(
     Debug,
@@ -2525,20 +2541,19 @@ struct ToolHelpFixtureInput {
     version = "test",
     summary = "Tool API stable-loop regression fixture."
 )]
-impl ToolSearchFixture {
+impl ToolListFixture {
     #[tool(
-        name = "search",
-        summary = "Search live tools.",
+        name = "list",
+        summary = "List live tools.",
         tags(discovery, read_only)
     )]
-    async fn search(
+    async fn list(
         &self,
-        input: &agena_runtime_contracts::part::ToolSearchToolInput,
+        _input: &ToolListFixtureInput,
     ) -> agena_plugin_host::sdk::ToolInvokeOutput {
-        agena_plugin_host::sdk::ToolInvokeOutput::text(format!(
-            "Matching tools for {:?}:\n- fs.read [filesystem, query]: Read workspace files.",
-            input.query
-        ))
+        agena_plugin_host::sdk::ToolInvokeOutput::text(
+            "Available tools: returned 1 of 1 starting at offset 0.\n- fs.read [filesystem, query] (agena.fs): Read workspace files.",
+        )
     }
 
     #[tool(
@@ -2578,10 +2593,10 @@ impl FilesystemFixture {
     }
 }
 
-/// Stateful fake provider for the complete model -> tools_search -> model
+/// Stateful fake provider for the complete model -> tools_list -> model
 /// loop. The first request emits reasoning plus one gateway call; the second
 /// captures the replayed transcript and emits the final answer.
-struct ToolSearchLoopProvider {
+struct ToolListLoopProvider {
     model: ModelId,
     requests: std::sync::Mutex<Vec<CompletionRequest>>,
 }
@@ -2599,7 +2614,7 @@ struct AssistantHookBoundaryProvider {
     release_first_request: tokio::sync::Notify,
 }
 
-impl ToolSearchLoopProvider {
+impl ToolListLoopProvider {
     fn new() -> Self {
         Self {
             model: ModelId::new("tool-loop-model"),
@@ -2636,7 +2651,7 @@ impl AssistantHookBoundaryProvider {
 }
 
 #[async_trait::async_trait]
-impl ModelRuntime for ToolSearchLoopProvider {
+impl ModelRuntime for ToolListLoopProvider {
     fn id(&self) -> &str {
         "tool-loop"
     }
@@ -2660,7 +2675,7 @@ impl ModelRuntime for ToolSearchLoopProvider {
         Ok(CompletionResponse {
             provider_id: ProviderId::new(self.id()),
             model: self.model.clone(),
-            text: "TOOL_SEARCH_OK fs.read".to_owned(),
+            text: "TOOL_LIST_OK fs.read".to_owned(),
             reasoning_text: None,
             finish_reason: Some(CompletionFinishReason::Stop),
             tool_calls: Vec::new(),
@@ -2700,9 +2715,9 @@ impl ModelRuntime for ToolSearchLoopProvider {
                     provider_id: provider_id.clone(),
                     model: model.clone(),
                     stream_key: "call:0".to_owned(),
-                    id: Some("call_tools_search_1".to_owned()),
-                    name: Some("tools_search".to_owned()),
-                    arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
+                    id: Some("call_tools_list_1".to_owned()),
+                    name: Some("tools_list".to_owned()),
+                    arguments_json: r#"{}"#.to_owned(),
                 }),
                 // Some gateways repeat registration metadata in a trailer but
                 // serialize an absent name as whitespace. The valid earlier
@@ -2740,7 +2755,7 @@ impl ModelRuntime for ToolSearchLoopProvider {
                 Ok(CompletionStreamEvent::TextDelta {
                     provider_id: provider_id.clone(),
                     model: model.clone(),
-                    delta: "TOOL_SEARCH_OK fs.read".to_owned(),
+                    delta: "TOOL_LIST_OK fs.read".to_owned(),
                 }),
                 Ok(CompletionStreamEvent::Completed {
                     provider_id,
@@ -2822,8 +2837,8 @@ impl ModelRuntime for AssistantHookBoundaryProvider {
                             model: model.clone(),
                             stream_key: "call:boundary-tool".to_owned(),
                             id: Some("call_boundary_tool".to_owned()),
-                            name: Some("tools_search".to_owned()),
-                            arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
+                            name: Some("tools_list".to_owned()),
+                            arguments_json: r#"{}"#.to_owned(),
                         }),
                         Ok(CompletionStreamEvent::Completed {
                             provider_id,
@@ -3003,7 +3018,7 @@ impl ModelRuntime for MixedToolHelpBatchProvider {
     }
 }
 
-async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> SessionManager {
+async fn manager_with_tool_list_fixture(provider: Arc<dyn ModelRuntime>) -> SessionManager {
     let workspace_root = std::env::current_dir().expect("resolve test workspace");
     let mut plugins_config = PluginsConfig::default();
     for plugin_id in ["agena.tools", "agena.fs"] {
@@ -3015,7 +3030,7 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
         static_plugins: vec![
             StaticPluginRegistration::new(
                 "agena.tools".parse().expect("valid Tool API plugin key"),
-                ToolSearchFixture,
+                ToolListFixture,
             ),
             StaticPluginRegistration::new(
                 "agena.fs".parse().expect("valid filesystem plugin key"),
@@ -3063,7 +3078,7 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
 
 #[tokio::test]
 async fn unresolved_usage_model_still_budgets_tool_api_declarations() {
-    let manager = manager_with_tool_search_fixture(Arc::new(FakeProvider {
+    let manager = manager_with_tool_list_fixture(Arc::new(FakeProvider {
         provider_id: "fake",
         model: ModelId::new("model"),
         deltas: Vec::new(),
@@ -3259,10 +3274,10 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
-    let provider = Arc::new(ToolSearchLoopProvider::new());
-    let manager = manager_with_tool_search_fixture(provider.clone()).await;
-    let session = create(&manager, "tools_search stable loop").await;
+async fn stable_run_executes_in_progress_tools_list_and_replays_reasoning() {
+    let provider = Arc::new(ToolListLoopProvider::new());
+    let manager = manager_with_tool_list_fixture(provider.clone()).await;
+    let session = create(&manager, "tools_list stable loop").await;
     let request = SessionUserRunRequest::new(
         session.id,
         agena_runtime::SessionRunOptions {
@@ -3278,7 +3293,7 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
             max_output_tokens: Some(256),
         },
         vec![TypedContent::Text(text_content(
-            "Call tools_search for filesystem tools.",
+            "Call tools_list for filesystem tools.",
         ))],
     );
 
@@ -3294,7 +3309,7 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
         .parts()
         .iter()
         .find(|part| part.kind == "tool_call")
-        .unwrap_or_else(|| panic!("tools_search part missing from {:#?}", completed.parts()));
+        .unwrap_or_else(|| panic!("tools_list part missing from {:#?}", completed.parts()));
     assert_eq!(
         tool_part.state,
         PartState::Completed,
@@ -3302,7 +3317,7 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
     );
     let TypedContent::ToolCall(tool_call) =
         crate::session::store::typed_content_from_value(&tool_part.kind, &tool_part.content)
-            .expect("decode tools_search part")
+            .expect("decode tools_list part")
     else {
         panic!("expected tool_call content");
     };
@@ -3311,7 +3326,7 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
         "completed tool call keeps its raw output"
     );
     let texts = resource_part_texts(&manager, completed.parts()).await;
-    assert!(texts.values().any(|text| text == "TOOL_SEARCH_OK fs.read"));
+    assert!(texts.values().any(|text| text == "TOOL_LIST_OK fs.read"));
 
     let requests = provider.requests();
     assert_eq!(
@@ -3323,8 +3338,8 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
         requests[0]
             .tool_api_functions
             .iter()
-            .any(|tool| tool.name == "tools_search"),
-        "tools_search must be advertised to the model"
+            .any(|tool| tool.name == "tools_list"),
+        "tools_list must be advertised to the model"
     );
     let replayed_tool_turn = requests[1]
         .turns
@@ -3335,7 +3350,7 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
                     matches!(
                         part,
                         CompletionInputPart::ToolCall { function, .. }
-                            if function.function_name() == "tools_search"
+                            if function.function_name() == "tools_list"
                     )
                 })
         })
@@ -3360,15 +3375,15 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
         .iter()
         .find_map(|part| match part {
             CompletionInputPart::ToolCall { id, function, .. }
-                if function.function_name() == "tools_search" =>
+                if function.function_name() == "tools_list" =>
             {
                 Some(id.as_str())
             }
             _ => None,
         })
-        .expect("replayed tools_search call id");
+        .expect("replayed tools_list call id");
     assert_eq!(
-        replayed_call_id, "call_tools_search_1",
+        replayed_call_id, "call_tools_list_1",
         "the persisted replay must keep the provider-issued call id rather than replacing it with the local call sequence"
     );
     let replayed_results: Vec<&String> = replayed_tool_turn
@@ -3404,7 +3419,7 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stable_run_continues_after_mixed_failed_and_completed_parallel_tool_batch() {
     let provider = Arc::new(MixedToolHelpBatchProvider::new());
-    let manager = manager_with_tool_search_fixture(provider.clone()).await;
+    let manager = manager_with_tool_list_fixture(provider.clone()).await;
     let session = create(&manager, "mixed Tool API batch").await;
     let request = SessionUserRunRequest::new(
         session.id,
@@ -5232,7 +5247,7 @@ async fn install_test_background_operation(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn assistant_hook_mid_model_part_waits_for_the_boundary_and_keeps_the_turn_continuous() {
     let provider = Arc::new(AssistantHookBoundaryProvider::new());
-    let manager = Arc::new(manager_with_tool_search_fixture(provider.clone()).await);
+    let manager = Arc::new(manager_with_tool_list_fixture(provider.clone()).await);
     let session = create(&manager, "assistant hook turn continuation").await;
     let session_id = session.id;
 
@@ -5362,7 +5377,7 @@ async fn assistant_hook_mid_model_part_waits_for_the_boundary_and_keeps_the_turn
                     .ok()
                     .and_then(|content| match content {
                         TypedContent::ToolCall(tool_call) => {
-                            (operation_from_tool_call(&tool_call).invocation.name == "tools_search")
+                            (operation_from_tool_call(&tool_call).invocation.name == "tools_list")
                                 .then_some(())
                         }
                         _ => None,
@@ -5475,7 +5490,7 @@ async fn assistant_hook_mid_model_part_waits_for_the_boundary_and_keeps_the_turn
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn assistant_hook_after_a_terminal_text_part_opens_a_clean_follow_up_run() {
     let provider = Arc::new(AssistantHookBoundaryProvider::text_only());
-    let manager = Arc::new(manager_with_tool_search_fixture(provider.clone()).await);
+    let manager = Arc::new(manager_with_tool_list_fixture(provider.clone()).await);
     let session = create(&manager, "assistant hook after terminal text part").await;
     let session_id = session.id;
 

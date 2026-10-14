@@ -79,7 +79,7 @@ pub fn detect(parts: &[Part], policy: DoomLoopPolicy) -> Option<DoomLoopHit> {
             latest_output = Some((part.content.get("output"), part.content.get("error")));
         }
         let latest_is_help = latest_signature.as_ref().is_some_and(|(name, _)| {
-            matches!(name.as_str(), "tools_help" | "tools_list" | "tools_search")
+            matches!(name.as_str(), "tools_help" | "tools_list" | "plugins_list")
         });
         if !latest_is_help && Some(part.run_id) != latest_run_id {
             break;

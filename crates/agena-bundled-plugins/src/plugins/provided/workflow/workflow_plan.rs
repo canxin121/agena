@@ -64,7 +64,7 @@ impl WorkflowPlugin {
             )
         };
         let message = format!(
-            "unknown tool '{requested}'.{suggestion_text} Do not guess a replacement name or its arguments. Call Tool API function `tools_search` for the capability you need, choose an exact returned identifier, call `tools_help` for its live input contract, then retry `tools_call`."
+            "unknown tool '{requested}'.{suggestion_text} Do not guess a replacement name or its arguments. Enumerate the loaded plugins with `plugins_list`, list the owning plugin's tools with `tools_list`, choose an exact returned identifier, call `tools_help` for its live input contract, then retry `tools_call`."
         );
         Err(PluginError::invalid_params_with_data(
             message,
@@ -74,12 +74,16 @@ impl WorkflowPlugin {
                 "suggestions": suggestions,
                 "recovery": [
                     {
-                        "function": "tools_search",
-                        "arguments": { "query": requested }
+                        "function": "plugins_list",
+                        "arguments": { "offset": 0 }
+                    },
+                    {
+                        "function": "tools_list",
+                        "arguments": { "plugin": "plugin id returned by plugins_list" }
                     },
                     {
                         "function": "tools_help",
-                        "tool_from": "exact identifier returned by tools_search"
+                        "tool_from": "exact identifier returned by tools_list"
                     },
                     {
                         "function": "tools_call",
@@ -177,17 +181,6 @@ impl WorkflowPlugin {
         })
         .collect::<Vec<_>>();
         (!tools.is_empty()).then(|| format!("Available Shell tools: {}. Read detailed contracts with tools_help (batch supported).", tools.join("; ")))
-    }
-
-    pub(in crate::plugins::provided::workflow) fn plugin_search_document(
-        record: &AvailablePluginRecord,
-    ) -> ToolSearchDocument {
-        ToolSearchDocument::new(
-            record.plugin_id.clone(),
-            record.summary.clone(),
-            record.tags.clone(),
-            Some(record.plugin_id.clone()),
-        )
     }
 
     pub(in crate::plugins::provided::workflow) fn filter_available_plugins_by_tag(

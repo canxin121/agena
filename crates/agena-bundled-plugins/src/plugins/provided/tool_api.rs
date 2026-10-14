@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::plugins::provided::workflow::{
-    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolDiscoveryConfig,
-    WorkflowPlanConfig, WorkflowPlugin, WorkflowPluginConfig,
+    ToolApiHelpInput, ToolApiListInput, ToolApiTagsInput, ToolDiscoveryConfig, WorkflowPlanConfig,
+    WorkflowPlugin, WorkflowPluginConfig,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
@@ -98,56 +98,6 @@ impl ToolApiPlugin {
     )]
     async fn list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_tool_api_list(input).await
-    }
-
-    #[tool(
-        tags(query, discovery, read_only),
-        summary = "Search execution tools with one or many queries across one or many plugin targets.",
-        translations(
-            locale(
-                "zh-CN",
-                summary = "使用一个或多个关键词搜索一个或多个插件中的可执行工具。"
-            ),
-            locale(
-                "zh-TW",
-                summary = "使用一個或多個關鍵字搜尋一個或多個外掛中的可執行工具。"
-            ),
-            locale(
-                "ja-JP",
-                summary = "1 つ以上の検索語を使って、複数のプラグインから実行可能なツールを検索します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "하나 이상의 검색어로 여러 플러그인의 실행 도구를 검색합니다."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Rechercher des outils exécutables dans un ou plusieurs plugins avec une ou plusieurs requêtes."
-            ),
-            locale(
-                "de-DE",
-                summary = "Ausführbare Werkzeuge in einem oder mehreren Plugins mit einer oder mehreren Suchanfragen finden."
-            ),
-            locale(
-                "es-ES",
-                summary = "Busca herramientas ejecutables en uno o varios plugins con una o varias consultas."
-            ),
-            locale(
-                "hi-IN",
-                summary = "एक या अधिक खोज प्रश्नों से एक या अधिक प्लगइन में निष्पादन योग्य टूल खोजें।"
-            ),
-            locale(
-                "ar-SA",
-                summary = "ابحث عن أدوات قابلة للتنفيذ في إضافة واحدة أو عدة إضافات باستخدام استعلام واحد أو أكثر."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Pesquise ferramentas executáveis em um ou mais plugins usando uma ou mais consultas."
-            )
-        )
-    )]
-    async fn search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_tool_api_search(input).await
     }
 
     #[tool(
@@ -290,56 +240,6 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery, read_only),
-        summary = "Search loaded plugins with one or many queries and optional multi-plugin scope.",
-        translations(
-            locale(
-                "zh-CN",
-                summary = "使用一个或多个关键词搜索已加载的插件，可限定在多个插件范围内。"
-            ),
-            locale(
-                "zh-TW",
-                summary = "使用一個或多個關鍵字搜尋已載入的外掛，也可限定多個外掛範圍。"
-            ),
-            locale(
-                "ja-JP",
-                summary = "1 つ以上の検索語で読み込み済みのプラグインを検索し、必要に応じて対象を複数指定します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "하나 이상의 검색어로 로드된 플러그인을 검색하고 필요한 경우 여러 플러그인으로 범위를 제한합니다."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Rechercher parmi les plugins chargés avec une ou plusieurs requêtes et, si besoin, plusieurs plugins ciblés."
-            ),
-            locale(
-                "de-DE",
-                summary = "Geladene Plugins mit einer oder mehreren Suchanfragen durchsuchen und optional auf mehrere Plugins eingrenzen."
-            ),
-            locale(
-                "es-ES",
-                summary = "Busca entre los plugins cargados con una o varias consultas y, si quieres, limita la búsqueda a varios plugins."
-            ),
-            locale(
-                "hi-IN",
-                summary = "एक या अधिक प्रश्नों से लोड किए गए प्लगइन खोजें और चाहें तो खोज को कई प्लगइन तक सीमित करें।"
-            ),
-            locale(
-                "ar-SA",
-                summary = "ابحث في الإضافات المحمّلة باستعلام واحد أو أكثر، مع إمكانية حصر البحث في عدة إضافات."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Pesquise entre os plugins carregados com uma ou mais consultas e, se quiser, limite a busca a vários plugins."
-            )
-        )
-    )]
-    async fn plugins_search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_plugins_search(input).await
-    }
-
-    #[tool(
-        tags(query, discovery, read_only),
         summary = "List plugin tags across one plugin or a batch of plugin targets.",
         translations(
             locale("zh-CN", summary = "列出一个或多个插件声明的标签。"),
@@ -405,6 +305,6 @@ mod tests {
             .expect("help tool-name description");
         assert!(help_tool_description.contains("exact execution-tool name"));
         assert!(help_tool_description.contains("non-empty array"));
-        assert!(help_tool_description.contains("`tools_list` or `tools_search`"));
+        assert!(help_tool_description.contains("`tools_list`; known names need no preliminary lookup"));
     }
 }

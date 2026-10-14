@@ -196,7 +196,9 @@ export function useChatSessionActions(opts: {
     compactingSessionId.value = sid
     try {
       await chat.compactSession(sid)
-      if (chat.getSessionState(sid).kind !== 'running') compactingSessionId.value = null
+      // The POST acknowledges that the execution was accepted; it is not the
+      // completion signal. Keep the optimistic activity visible until the
+      // session-state observer has seen running -> terminal.
       toasts.push('success', t('chat.toasts.compactionStarted'))
     } catch (err) {
       if (compactingSessionId.value === sid) compactingSessionId.value = null

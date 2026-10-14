@@ -1224,6 +1224,7 @@ const runUi = useChatRunUi({
   onCancellation: restoreCancelledComposer,
   collapseAllActivities,
   activityAutoCollapseOnIdle,
+  compacting: computed(() => compactingSessionId.value === chat.selectedSessionId),
 })
 
 const {

@@ -25,6 +25,14 @@ describe('assistant reply identity', () => {
     expect(assistant?.info?.turnId).toBe('t-1')
   })
 
+  test('a durable compaction run marker becomes a normal transcript part', () => {
+    const entries = entriesFromParts('1', [
+      runMarker(9, 'assistant', { run_kind: 'compaction', summary: 'Checkpoint summary' }),
+    ] as never)
+    expect(entries[0]?.parts).toHaveLength(1)
+    expect(entries[0]?.parts?.[0]).toMatchObject({ type: 'compaction', text: 'Checkpoint summary' })
+  })
+
   test('the accepted send reports the assistant reply it created', () => {
     const state = {
       session: { id: 1 },

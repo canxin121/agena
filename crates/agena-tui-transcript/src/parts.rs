@@ -229,6 +229,24 @@ pub fn last_assistant_reply_text(parts: &[PartResource]) -> Option<String> {
 }
 
 fn run_marker_entry(marker: &PartResource) -> TranscriptEntry<'static> {
+    let mut parts = Vec::new();
+    if string_field(&marker.content, "run_kind").as_deref() == Some("compaction") {
+        // The checkpoint payload is stored on the durable run marker itself,
+        // not in a child content row. Project only its human-facing summary;
+        // the private checkpoint/native provider state stays out of the UI.
+        let content = serde_json::json!({
+            "summary": string_field(&marker.content, "summary"),
+        });
+        if let Ok(compaction) = CompactionContent::try_from(&content) {
+            parts.push(TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(marker.part_id),
+                status: part_status_from_string(&marker.state),
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(
+                    Box::new(compaction),
+                )),
+            });
+        }
+    }
     TranscriptEntry {
         id: TranscriptEntryId::StoredMessage(marker.part_id),
         role: role_from_string(&marker.role),
@@ -236,7 +254,7 @@ fn run_marker_entry(marker: &PartResource) -> TranscriptEntry<'static> {
         created_at: timestamp(marker.created_at_ms),
         reply_id: string_field(&marker.content, "reply_id")
             .and_then(|reply_id| reply_id.parse::<AssistantReplyId>().ok()),
-        parts: Vec::new(),
+        parts,
     }
 }
 
@@ -894,6 +912,24 @@ mod tests {
             entries[1].parts[1].content,
             TranscriptPartContent::Activity(TranscriptActivityContent::Answer(_))
         ));
+    }
+
+    #[test]
+    fn compaction_run_marker_projects_its_checkpoint_as_a_transcript_part() {
+        let mut marker = run(3, "assistant", "completed");
+        marker.content = serde_json::json!({
+            "run_kind": "compaction",
+            "summary": "Durable continuation record",
+            "checkpoint": { "private": "not rendered" },
+        });
+        let entries = parts_entries(&[marker]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].parts.len(), 1);
+        assert!(matches!(
+            entries[0].parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(_))
+        ));
+        assert_eq!(entries[0].parts[0].id, TranscriptContentId::StoredPart(3));
     }
 
     #[test]

@@ -163,6 +163,7 @@ export function useChatRunUi(opts: {
   onCancellation?: (outcome: CancellationOutcome) => void | Promise<void>
   collapseAllActivities: () => void
   activityAutoCollapseOnIdle: ComputedRef<boolean>
+  compacting?: ComputedRef<boolean>
 }) {
   const {
     chat,
@@ -181,6 +182,7 @@ export function useChatRunUi(opts: {
     onCancellation,
     collapseAllActivities,
     activityAutoCollapseOnIdle,
+    compacting,
   } = opts
 
   void _directorySessions
@@ -197,7 +199,7 @@ export function useChatRunUi(opts: {
     // The tagged server state is authoritative. Local submit/optimistic
     // flags describe request delivery only and must not manufacture a running
     // runtime phase before the server reports one.
-    if (canonicalRunActive.value) return 'busy'
+    if (canonicalRunActive.value || compacting?.value) return 'busy'
     return 'idle'
   })
 
@@ -373,7 +375,9 @@ export function useChatRunUi(opts: {
   })
 
   const sessionEnded = computed(() => {
-    return !canonicalRunActive.value && (stateKind.value === 'ready' || stateKind.value === 'failed')
+    return (
+      !canonicalRunActive.value && !compacting?.value && (stateKind.value === 'ready' || stateKind.value === 'failed')
+    )
   })
 
   const aborting = ref(false)
@@ -382,6 +386,7 @@ export function useChatRunUi(opts: {
     return (
       aborting.value === false &&
       (canonicalRunActive.value ||
+        compacting?.value ||
         Boolean(sessionState.value.kind === 'awaiting_interaction' && sessionState.value.data.execution))
     )
   })

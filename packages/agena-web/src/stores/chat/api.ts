@@ -326,7 +326,19 @@ function entriesFromParts(
       if (typeof ordinalRaw === 'number' && Number.isFinite(ordinalRaw) && ordinalRaw > 0) {
         info.userMessageOrdinal = Math.floor(ordinalRaw)
       }
-      ensure(partIdStr, info)
+      const entry = ensure(partIdStr, info)
+      // Compaction checkpoints are stored on their durable run marker (rather
+      // than as a child content row). Materialize that payload as an ordinary
+      // transcript Part so it is rendered and navigated like every other part.
+      if (str(content.run_kind) === 'compaction') {
+        const compactionPart = {
+          ...part,
+          kind: 'compaction',
+          content: { summary: str(content.summary) },
+        } as unknown as JsonValue
+        const normalized = normalizeAgenaPart(partIdStr, sessionId, partIdStr, compactionPart)
+        if (normalized) entry.parts.push(normalized)
+      }
       continue
     }
 

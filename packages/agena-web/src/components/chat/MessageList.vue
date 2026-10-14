@@ -391,25 +391,20 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
       </article>
     </div>
 
-    <article
+    <div
       v-if="compactionPart"
-      class="mt-3 px-1 py-2"
+      class="min-w-0 px-1"
       data-transcript-node="part"
       :data-transcript-key="compactionPart.key"
       data-part-kind="compaction"
     >
-      <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
-        <span class="font-semibold">system</span>
-      </header>
-      <div class="min-w-0 px-1 text-sm">
-        <AgenaTranscriptPart
-          :part="compactionPart"
-          :expanded="true"
-          :collapse-signal="activityCollapseSignal"
-          :session-id="selectedSessionId"
-        />
-      </div>
-    </article>
+      <AgenaTranscriptPart
+        :part="compactionPart"
+        :expanded="true"
+        :collapse-signal="activityCollapseSignal"
+        :session-id="selectedSessionId"
+      />
+    </div>
 
     <article
       v-if="retryPart"

@@ -54,6 +54,7 @@ pub struct MarketplaceSearchResponse {
     pub registry_url: String,
     pub marketplace: MarketplaceIdentityResource,
     pub entries: Vec<MarketplacePluginResource>,
+    pub renames: std::collections::BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

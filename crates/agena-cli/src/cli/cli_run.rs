@@ -410,10 +410,14 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
     use agena_plugin_marketplace::{
         DEFAULT_MARKETPLACE_SOURCE, InstallRequest, MarketplaceCache, MarketplaceClient,
         PluginInstallLocator, RegistrySpec, default_cache_root, parse_plugin_install_locator,
+        trusted_keys_from_config,
     };
 
     let cache = MarketplaceCache::new(default_cache_root());
-    let client = MarketplaceClient::new(cache, std::collections::BTreeMap::new());
+    let config_path = agena_runtime::default_config_path(&agena_runtime::ProcessEnvironment);
+    let trusted_keys =
+        trusted_keys_from_config(&config_path).map_err(|error| AppError::config_error(&error))?;
+    let client = MarketplaceClient::new(cache, trusted_keys);
 
     match command {
         PluginSubcommand::Install(args) => {
@@ -461,8 +465,6 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
                     version,
                 ),
             };
-            let config_path =
-                agena_runtime::default_config_path(&agena_runtime::ProcessEnvironment);
             let outcome = client
                 .install(InstallRequest {
                     registry,

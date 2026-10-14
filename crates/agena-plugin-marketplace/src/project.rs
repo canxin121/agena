@@ -44,6 +44,15 @@ pub struct MarketplaceProjectManifest {
     pub marketplace: MarketplaceMetadata,
     #[serde(default)]
     pub plugins: BTreeMap<String, MarketplacePluginPolicy>,
+    /// Historical plugin ids mapped to their current id, or `None` when a
+    /// plugin has been intentionally removed. Destinations are validated
+    /// against the generated release index during marketplace builds.
+    #[serde(default)]
+    pub renames: BTreeMap<String, String>,
+    /// Historical ids that now point to no plugin. TOML has no null value, so
+    /// removals are recorded separately and emitted as null in the JSON index.
+    #[serde(default)]
+    pub removed_plugins: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -79,6 +88,21 @@ impl MarketplaceProjectManifest {
         for plugin_id in self.plugins.keys() {
             agena_plugin_contracts::validate_plugin_identity(plugin_id)
                 .map_err(|error| MarketplaceError::project_error(&error))?;
+        }
+        for (plugin_id, destination) in &self.renames {
+            agena_plugin_contracts::validate_plugin_identity(plugin_id)
+                .map_err(|error| MarketplaceError::project_error(&error))?;
+            agena_plugin_contracts::validate_plugin_identity(destination)
+                .map_err(|error| MarketplaceError::project_error(&error))?;
+        }
+        for plugin_id in &self.removed_plugins {
+            agena_plugin_contracts::validate_plugin_identity(plugin_id)
+                .map_err(|error| MarketplaceError::project_error(&error))?;
+            if self.renames.contains_key(plugin_id) {
+                return Err(MarketplaceError::Project(format!(
+                    "plugin id `{plugin_id}` cannot be both renamed and marked as removed"
+                )));
+            }
         }
         Ok(())
     }
@@ -132,6 +156,8 @@ pub fn scaffold_marketplace(request: ScaffoldMarketplaceRequest) -> Result<(), M
             }),
         },
         plugins: BTreeMap::new(),
+        renames: BTreeMap::new(),
+        removed_plugins: BTreeSet::new(),
     };
     write_text(
         &request.destination.join(AGENA_MARKETPLACE_PROJECT_FILENAME),
@@ -356,6 +382,8 @@ pub fn build_marketplace(
             schema_version: 1,
             marketplace: MarketplaceMetadata::default(),
             plugins: BTreeMap::new(),
+            renames: BTreeMap::new(),
+            removed_plugins: BTreeSet::new(),
         }
     };
     let mut index = RegistryIndex {
@@ -363,6 +391,14 @@ pub fn build_marketplace(
         ..RegistryIndex::default()
     };
     let plugin_policies = project.plugins;
+    let mut plugin_renames = project
+        .renames
+        .into_iter()
+        .map(|(old_id, new_id)| (old_id, Some(new_id)))
+        .collect::<BTreeMap<_, _>>();
+    for removed_id in project.removed_plugins {
+        plugin_renames.insert(removed_id, None);
+    }
     let mut release_ids = BTreeSet::new();
     for path in paths {
         let release: PluginReleaseManifest = serde_json::from_slice(&fs::read(&path)?)?;
@@ -392,6 +428,7 @@ pub fn build_marketplace(
         record.review_tier = policy.review_tier;
         record.featured = policy.featured;
     }
+    index.renames = plugin_renames;
     if request.github_only {
         index.validate_github_distribution()?;
     } else {
@@ -1753,6 +1790,7 @@ mod tests {
             MarketplaceProjectManifest::load(&destination.join(AGENA_MARKETPLACE_PROJECT_FILENAME))
                 .unwrap();
         assert_eq!(project.marketplace.name, "Example Marketplace");
+        assert!(project.removed_plugins.is_empty());
         let workflow_path = destination.join(".github/workflows/validate.yml");
         assert!(workflow_path.is_file());
         assert_eq!(
@@ -1772,6 +1810,10 @@ mod tests {
                 featured: true,
             },
         );
+        project
+            .renames
+            .insert("example.old_hello".to_owned(), "example.hello".to_owned());
+        project.removed_plugins.insert("example.retired".to_owned());
         write_text(
             &destination.join(AGENA_MARKETPLACE_PROJECT_FILENAME),
             toml::to_string_pretty(&project).unwrap().as_str(),
@@ -1817,6 +1859,11 @@ mod tests {
             MarketplaceReviewTier::Verified
         );
         assert!(indexed.plugins[0].featured);
+        assert_eq!(
+            indexed.renames.get("example.old_hello"),
+            Some(&Some("example.hello".to_owned()))
+        );
+        assert_eq!(indexed.renames.get("example.retired"), Some(&None));
         let second = add_marketplace_release(request.clone()).unwrap();
         assert!(second.already_present);
         assert_eq!(first_index, fs::read(&second.index_path).unwrap());

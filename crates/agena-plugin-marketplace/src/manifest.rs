@@ -41,10 +41,83 @@ mod current_shape_tests {
         });
 
         let mut value = serde_json::to_value(index).expect("serialize current registry");
+        assert_eq!(value["renames"], serde_json::json!({}));
         value["plugins"][0]["obsolete"] = serde_json::json!(true);
         let error = serde_json::from_value::<RegistryIndex>(value)
             .expect_err("unknown plugin-record fields must be rejected");
         assert!(error.to_string().contains("unknown field `obsolete`"));
+    }
+
+    #[test]
+    fn registry_accepts_empty_rename_metadata_and_resolves_historical_ids() {
+        let value = serde_json::json!({
+            "version": 1,
+            "marketplace": {},
+            "plugins": [{
+                "id": "new.plugin",
+                "versions": [{
+                    "version": "0.1.0",
+                    "kind": "stdio",
+                    "platform": "any",
+                    "url": "https://example.com/plugin.tar.gz",
+                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }]
+            }],
+            "renames": {
+                "old.plugin": "new.plugin",
+                "removed.plugin": null
+            }
+        });
+        let index: RegistryIndex = serde_json::from_value(value).unwrap();
+
+        index.validate().unwrap();
+        assert_eq!(
+            index.resolve_plugin_id("new.plugin"),
+            Some("new.plugin".to_owned())
+        );
+        assert_eq!(
+            index.resolve_plugin_id("old.plugin"),
+            Some("new.plugin".to_owned())
+        );
+        assert_eq!(index.resolve_plugin_id("removed.plugin"), None);
+        assert_eq!(index.resolve_plugin_id("unknown.plugin"), None);
+    }
+
+    #[test]
+    fn registry_rejects_dangling_or_circular_renames() {
+        let base = serde_json::json!({
+            "version": 1,
+            "marketplace": {},
+            "plugins": [{
+                "id": "current.plugin",
+                "versions": [{
+                    "version": "0.1.0",
+                    "kind": "stdio",
+                    "platform": "any",
+                    "url": "https://example.com/plugin.tar.gz",
+                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }]
+            }]
+        });
+
+        let mut dangling = base.clone();
+        dangling["renames"] = serde_json::json!({ "old.plugin": "missing.plugin" });
+        let index: RegistryIndex = serde_json::from_value(dangling).unwrap();
+        assert!(
+            index
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("does not resolve")
+        );
+
+        let mut circular = base;
+        circular["renames"] = serde_json::json!({
+            "old.plugin": "next.plugin",
+            "next.plugin": "old.plugin"
+        });
+        let index: RegistryIndex = serde_json::from_value(circular).unwrap();
+        assert!(index.validate().unwrap_err().to_string().contains("cycle"));
     }
 }
 
@@ -74,6 +147,11 @@ pub struct MarketplaceOwner {
 pub struct RegistryIndex {
     pub version: u32,
     pub marketplace: MarketplaceMetadata,
+    /// Optional migration history for plugin ids removed or renamed in this
+    /// registry. A `null` destination marks an id as intentionally removed.
+    /// The map is append-only so cached installs can still resolve old ids.
+    #[serde(default)]
+    pub renames: BTreeMap<String, Option<String>>,
     pub plugins: Vec<PluginRecord>,
 }
 
@@ -94,6 +172,7 @@ impl Default for RegistryIndex {
         Self {
             version: default_index_version(),
             marketplace: MarketplaceMetadata::default(),
+            renames: BTreeMap::new(),
             plugins: Vec::new(),
         }
     }
@@ -386,6 +465,7 @@ impl PluginReleaseManifest {
             version: 1,
             marketplace: MarketplaceMetadata::default(),
             plugins: vec![self.to_plugin_record(manifest_source)?],
+            renames: BTreeMap::new(),
         })
     }
 
@@ -579,6 +659,42 @@ impl RegistryIndex {
                 )));
             }
         }
+        for (old_id, destination) in &self.renames {
+            agena_plugin_contracts::validate_plugin_identity(old_id.as_str())
+                .map_err(|error| MarketplaceError::index_error(&error))?;
+            if plugin_ids.contains(old_id.as_str()) {
+                return Err(MarketplaceError::Index(format!(
+                    "plugin id `{old_id}` cannot be both current and renamed"
+                )));
+            }
+            let Some(destination) = destination else {
+                continue;
+            };
+            agena_plugin_contracts::validate_plugin_identity(destination.as_str())
+                .map_err(|error| MarketplaceError::index_error(&error))?;
+
+            let mut current = destination.as_str();
+            let mut visited = std::collections::BTreeSet::from([old_id.as_str()]);
+            loop {
+                if plugin_ids.contains(current) {
+                    break;
+                }
+                if !visited.insert(current) {
+                    return Err(MarketplaceError::Index(format!(
+                        "plugin id rename chain for `{old_id}` contains a cycle"
+                    )));
+                }
+                match self.renames.get(current) {
+                    Some(Some(next)) => current = next,
+                    Some(None) => break,
+                    None => {
+                        return Err(MarketplaceError::Index(format!(
+                            "plugin id rename `{old_id}` does not resolve to a current plugin or a removed id"
+                        )));
+                    }
+                }
+            }
+        }
         if let Some(repository) = self.marketplace.repository.as_deref()
             && normalize_github_repository_url(repository).is_none()
         {
@@ -587,6 +703,32 @@ impl RegistryIndex {
             )));
         }
         Ok(())
+    }
+
+    /// Resolve a current or historical plugin id to the current id. Returns
+    /// `None` for unknown ids and ids the marketplace explicitly removed.
+    /// Callers should validate the index before using this lookup.
+    pub fn resolve_plugin_id(&self, plugin_id: &str) -> Option<String> {
+        let mut current = plugin_id;
+        let mut visited = std::collections::BTreeSet::new();
+        loop {
+            match self.renames.get(current) {
+                Some(Some(next)) => {
+                    if !visited.insert(current) {
+                        return None;
+                    }
+                    current = next;
+                }
+                Some(None) => return None,
+                None => {
+                    return self
+                        .plugins
+                        .iter()
+                        .any(|plugin| plugin.id == current)
+                        .then(|| current.to_owned());
+                }
+            }
+        }
     }
 
     /// Public GitHub-backed registries are stricter than mirror/local indexes:

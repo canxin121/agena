@@ -65,8 +65,25 @@ fn verify_signature_bytes(
 
 #[cfg(test)]
 mod source_tests {
-    use super::{PluginInstallLocator, RegistrySpec, parse_plugin_install_locator};
+    use super::{
+        InstallRequest, MarketplaceCache, MarketplaceClient, PluginInstallLocator, RegistrySpec,
+        parse_plugin_install_locator, registry_cache_key,
+    };
     use crate::manifest::parse_registry_document_with_policy;
+    use crate::{HttpFetcher, MarketplaceError};
+    use sha2::Digest;
+    use std::collections::BTreeMap;
+
+    struct TestFetcher(BTreeMap<String, Vec<u8>>);
+
+    impl HttpFetcher for TestFetcher {
+        fn fetch(&self, url: &str) -> Result<Vec<u8>, MarketplaceError> {
+            self.0
+                .get(url)
+                .cloned()
+                .ok_or_else(|| MarketplaceError::Http(format!("unexpected test URL `{url}`")))
+        }
+    }
 
     #[test]
     fn github_and_marketplace_sources_have_one_closed_parser() {
@@ -107,6 +124,81 @@ mod source_tests {
             "https://github.com/owner/plugin/releases/download/v0.2.0/agena-plugin-release.json"
         );
         assert!(release.require_github_distribution);
+    }
+
+    #[test]
+    fn marketplace_cache_keys_are_source_scoped_and_keep_the_official_cache() {
+        let first = registry_cache_key(
+            "custom",
+            "https://raw.githubusercontent.com/acme/one/main/agena-marketplace.json",
+        );
+        let second = registry_cache_key(
+            "custom",
+            "https://raw.githubusercontent.com/acme/two/main/agena-marketplace.json",
+        );
+        assert_ne!(first, second);
+        assert_eq!(
+            registry_cache_key(
+                "official",
+                "https://raw.githubusercontent.com/canxin121/agena-plugin-marketplace/main/agena-marketplace.json"
+            ),
+            "official"
+        );
+        assert!(!registry_cache_key("../unsafe", "https://example.com/index.json").contains('/'));
+    }
+
+    #[test]
+    fn install_resolves_a_renamed_plugin_id_before_planning() {
+        let artifact = b"signed by sha256".to_vec();
+        let artifact_url = "https://example.com/plugin.bin";
+        let registry_url = "https://example.com/index.json";
+        let index = serde_json::json!({
+            "version": 1,
+            "marketplace": {},
+            "renames": { "old.plugin": "new.plugin" },
+            "plugins": [{
+                "id": "new.plugin",
+                "versions": [{
+                    "version": "0.1.0",
+                    "kind": "stdio",
+                    "platform": "any",
+                    "url": artifact_url,
+                    "sha256": hex::encode(sha2::Sha256::digest(&artifact)),
+                    "command": "plugin"
+                }]
+            }]
+        });
+        let index_bytes = serde_json::to_vec(&index).unwrap();
+        let fetcher = TestFetcher(BTreeMap::from([
+            (registry_url.to_owned(), index_bytes),
+            (artifact_url.to_owned(), artifact),
+        ]));
+        let directory = tempfile::tempdir().unwrap();
+        let client = MarketplaceClient::from_parts(
+            MarketplaceCache::new(directory.path().join("cache")),
+            fetcher,
+            BTreeMap::new(),
+        );
+        let outcome = client
+            .install(InstallRequest {
+                registry: RegistrySpec {
+                    id: "test".to_owned(),
+                    url: registry_url.to_owned(),
+                    require_signature: false,
+                    require_github_distribution: false,
+                },
+                plugin_id: "old.plugin".to_owned(),
+                version: None,
+                config_path: directory.path().join("agena.json"),
+                force: false,
+                dry_run: true,
+                allow_unverified: false,
+                refresh_index: true,
+            })
+            .unwrap();
+
+        assert_eq!(outcome.plugin_id, "new.plugin");
+        assert!(outcome.dry_run);
     }
 
     #[test]
@@ -295,12 +387,17 @@ impl<'a, F: HttpFetcher> RegistryHandle<'a, F> {
         self.fetch_index_using_cache(force_refresh, true)
     }
 
+    fn cache_key(&self) -> String {
+        registry_cache_key(&self.spec.id, &self.spec.url)
+    }
+
     fn fetch_index_using_cache(
         &self,
         force_refresh: bool,
         persist_cache: bool,
     ) -> Result<RegistryIndex, MarketplaceError> {
-        if !force_refresh && let Some(bytes) = self.cache.load_index_raw(&self.spec.id)? {
+        let cache_key = self.cache_key();
+        if !force_refresh && let Some(bytes) = self.cache.load_index_raw(&cache_key)? {
             return parse_registry_document_with_policy(
                 &bytes,
                 self.spec.url.as_str(),
@@ -314,10 +411,35 @@ impl<'a, F: HttpFetcher> RegistryHandle<'a, F> {
             self.spec.require_github_distribution,
         )?;
         if persist_cache {
-            self.cache.save_index(&self.spec.id, &bytes)?;
+            self.cache.save_index(&cache_key, &bytes)?;
         }
         Ok(index)
     }
+}
+
+fn registry_cache_key(registry_id: &str, registry_url: &str) -> String {
+    let official_url = format!(
+        "https://raw.githubusercontent.com/{DEFAULT_MARKETPLACE_SOURCE}/main/{AGENA_MARKETPLACE_FILENAME}"
+    );
+    if registry_id == "official" && registry_url == official_url {
+        // Keep the established official cache path so existing installations
+        // can use their last successful catalog after upgrading Agena.
+        return "official".to_owned();
+    }
+
+    let prefix = registry_id
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        .take(24)
+        .collect::<String>();
+    let prefix = if prefix.is_empty() {
+        "registry".to_owned()
+    } else {
+        prefix
+    };
+    let identity = format!("{registry_id}\n{registry_url}");
+    let digest = Sha256::digest(identity.as_bytes());
+    format!("{prefix}-{}", &hex::encode(digest)[..16])
 }
 
 fn normalize_marketplace_source(source: &str) -> Result<String, MarketplaceError> {
@@ -422,7 +544,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         }
     }
 
-    pub fn install(&self, req: InstallRequest) -> Result<InstallOutcome, MarketplaceError> {
+    pub fn install(&self, mut req: InstallRequest) -> Result<InstallOutcome, MarketplaceError> {
         // Build the dependency plan first: any DependencySpec in the
         // resolved version is followed transitively through the same
         // registry, with cycle detection. Each dependency is installed
@@ -432,6 +554,9 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         }
         let registry_handle = self.registry(req.registry.clone());
         let index = registry_handle.fetch_index_using_cache(req.refresh_index, !req.dry_run)?;
+        req.plugin_id = index
+            .resolve_plugin_id(&req.plugin_id)
+            .ok_or_else(|| MarketplaceError::PluginNotFound(req.plugin_id.clone()))?;
         let installed = self.cache.load_installed()?;
 
         let mut plan: Vec<(String, Option<String>)> = Vec::new();
@@ -510,23 +635,26 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             )
         })?;
         for dep in &version.dependencies {
+            let resolved_dep_id = index.resolve_plugin_id(&dep.plugin_id).ok_or_else(|| {
+                MarketplaceError::MissingDependency(dep.plugin_id.clone(), plugin_id.to_string())
+            })?;
             // Skip already-installed deps that satisfy the requirement.
-            if let Some(record) = installed.records.get(&dep.plugin_id)
+            if let Some(record) = installed.records.get(&resolved_dep_id)
                 && dep_satisfied(&record.version, &dep.version_req)
             {
-                visited.insert(dep.plugin_id.clone());
+                visited.insert(resolved_dep_id.clone());
                 continue;
             }
             // Otherwise recurse, picking the highest matching version.
-            let dep_version = pick_version_for_req(index, &dep.plugin_id, &dep.version_req)
+            let dep_version = pick_version_for_req(index, &resolved_dep_id, &dep.version_req)
                 .ok_or_else(|| {
                     MarketplaceError::MissingDependency(
-                        dep.plugin_id.clone(),
+                        resolved_dep_id.clone(),
                         plugin_id.to_string(),
                     )
                 })?;
             self.collect_install_plan(
-                &dep.plugin_id,
+                &resolved_dep_id,
                 Some(dep_version),
                 index,
                 installed,

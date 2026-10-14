@@ -96,6 +96,26 @@ The generated marketplace CI:
   and checks it equals the recorded source commit;
 - verifies the corresponding GitHub Release exists.
 
+The generated index carries a `renames` map for historical plugin ids. Map an
+old id to its current id, or to `null` when the plugin was removed. Agena
+validates that rename chains resolve to a current plugin or an explicit
+removal, and rejects cycles, dangling targets, or ids that are both current
+and renamed. Keep this history when regenerating the index so installs using
+an older id can be directed to the current plugin.
+
+Maintain the map in `agena-marketplace.toml`; list removed ids separately
+because TOML has no `null` value:
+
+```toml
+removed_plugins = ["acme.retired"]
+
+[renames]
+"acme.old_name" = "acme.new_name"
+```
+
+The generated `agena-marketplace.json` stores both forms in its `renames` map,
+with `null` for `acme.retired`.
+
 This mirrors the stable-slug / independently reviewed catalog boundary used by
 mature agent plugin ecosystems while keeping Agena's binary distribution fully
 reproducible.
@@ -113,6 +133,13 @@ Installed records persist their trust policy:
 - whether a trusted Ed25519 signature was required;
 - whether strict GitHub provenance was required.
 
+Marketplace release signatures use the existing plugin host trust store:
+`plugins.host.trusted_keys` in `agena.json`, mapping key IDs to hex-encoded
+Ed25519 public keys. The Web and CLI installers load the same configured keys.
+The marketplace checkbox can then require a trusted signature for an install;
+SHA-256 verification and immutable GitHub provenance remain enforced by the
+public GitHub distribution policy.
+
 `upgrade` and `outdated` reuse that policy. They never silently downgrade a
 previously strict install to an unverified registry lookup.
 
@@ -124,8 +151,9 @@ than hidden in cache metadata.
 
 - Plugin id is a long-lived slug, independent of repository name.
 - A published plugin-id/version is immutable.
-- Marketplace indexes contain only current plugin ids; there is no plugin-id
-  rename or alias migration graph.
+- Marketplace indexes contain current plugin ids plus an append-only `renames`
+  map for old ids; the stable install identity is still a plugin id, not a
+  repository name.
 - Plugin project, Cargo package, release tag and release manifest versions must
   agree.
 - Public release/source version remains `0.1.0` until the project intentionally

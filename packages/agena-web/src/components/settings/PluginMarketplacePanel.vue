@@ -42,6 +42,7 @@ type MarketplaceSearchResponse = {
     owner_url?: string | null
   }
   entries?: MarketplacePlugin[]
+  renames?: Record<string, string | null>
 }
 
 type InstalledPlugin = {
@@ -83,6 +84,8 @@ const allowUnverified = ref(false)
 const searchResponse = ref<MarketplaceSearchResponse | null>(null)
 const installed = ref<InstalledPlugin[]>([])
 const outdated = ref<OutdatedPlugin[]>([])
+const responseQuery = ref('')
+const responseSource = ref('')
 const taskWaitController = new AbortController()
 let disposed = false
 onScopeDispose(() => {
@@ -90,7 +93,39 @@ onScopeDispose(() => {
   taskWaitController.abort()
 })
 
-const entries = computed(() => searchResponse.value?.entries || [])
+const responseMatchesInputs = computed(
+  () => responseQuery.value === query.value.trim() && responseSource.value === source.value.trim(),
+)
+const entries = computed(() => {
+  if (!responseMatchesInputs.value) return []
+  return [...(searchResponse.value?.entries || [])].sort((left, right) => {
+    if (left.featured !== right.featured) return left.featured ? -1 : 1
+    const tierRank = { official: 0, verified: 1, community: 2 }
+    const tierDifference =
+      (tierRank[left.review_tier as keyof typeof tierRank] ?? 3) -
+      (tierRank[right.review_tier as keyof typeof tierRank] ?? 3)
+    return tierDifference || left.plugin_id.localeCompare(right.plugin_id)
+  })
+})
+const matchingReleaseCount = computed(() => entries.value.reduce((sum, plugin) => sum + plugin.version_count, 0))
+const renamedQuery = computed(() => {
+  if (!responseMatchesInputs.value || entries.value.length > 0) return null
+  const normalizedQuery = query.value.trim().toLowerCase()
+  if (!normalizedQuery) return null
+  const rename = Object.entries(searchResponse.value?.renames || {}).find(
+    ([oldId]) => oldId.toLowerCase() === normalizedQuery,
+  )
+  if (!rename) return null
+  const renames = searchResponse.value?.renames || {}
+  let newId = rename[1]
+  const visited = new Set([rename[0]])
+  while (newId && Object.prototype.hasOwnProperty.call(renames, newId)) {
+    if (visited.has(newId)) return null
+    visited.add(newId)
+    newId = renames[newId]
+  }
+  return { oldId: rename[0], newId }
+})
 const installedById = computed(() => new Map(installed.value.map((entry) => [entry.plugin_id, entry])))
 const outdatedById = computed(() => new Map(outdated.value.map((entry) => [entry.plugin_id, entry])))
 
@@ -133,8 +168,7 @@ async function runTask(key: string, request: Promise<BackgroundTaskStart>) {
     } else {
       throw new Error(taskFailure(task) || st('Marketplace operation failed'))
     }
-    await refreshInstalled()
-    await search(false)
+    await refresh(false)
   } catch (reason) {
     if (disposed) return
     const message = reason instanceof Error ? reason.message : String(reason)
@@ -145,32 +179,41 @@ async function runTask(key: string, request: Promise<BackgroundTaskStart>) {
   }
 }
 
-async function refreshInstalled() {
-  const [installedResponse, outdatedResponse] = await Promise.all([
-    apiJson<ItemEnvelope<InstalledPlugin>>('/api/v1/plugins/marketplace/installed'),
-    apiJson<ItemEnvelope<OutdatedPlugin>>('/api/v1/plugins/marketplace/outdated'),
-  ])
-  installed.value = [...(installedResponse.items || [])].sort((left, right) =>
-    left.plugin_id.localeCompare(right.plugin_id),
-  )
-  outdated.value = [...(outdatedResponse.items || [])].sort((left, right) =>
-    left.plugin_id.localeCompare(right.plugin_id),
-  )
+function searchRequest(refresh: boolean) {
+  const requestedQuery = query.value.trim()
+  const requestedSource = source.value.trim()
+  const registryBody = requestedSource ? { registry_id: 'custom', registry_url: requestedSource } : {}
+  return {
+    query: requestedQuery,
+    source: requestedSource,
+    promise: apiJson<MarketplaceSearchResponse>('/api/v1/plugins/marketplace/search', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...registryBody,
+        query: requestedQuery || null,
+        refresh,
+      }),
+    }),
+  }
+}
+
+function setSearchResponse(
+  response: MarketplaceSearchResponse,
+  requestedQuery = query.value.trim(),
+  requestedSource = source.value.trim(),
+) {
+  searchResponse.value = response
+  responseQuery.value = requestedQuery
+  responseSource.value = requestedSource
 }
 
 async function search(refresh = false) {
   loading.value = true
   error.value = ''
   try {
-    searchResponse.value = await apiJson<MarketplaceSearchResponse>('/api/v1/plugins/marketplace/search', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        ...marketplaceRegistryBody(),
-        query: query.value.trim() || null,
-        refresh,
-      }),
-    })
+    const request = searchRequest(refresh)
+    setSearchResponse(await request.promise, request.query, request.source)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -235,19 +278,41 @@ async function upgradePlugin(pluginId?: string) {
   )
 }
 
-async function refresh() {
+async function refresh(forceSearch = true) {
   loading.value = true
   error.value = ''
-  try {
-    await Promise.all([refreshInstalled(), search(false)])
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
-  } finally {
-    loading.value = false
+  const catalogRequest = searchRequest(forceSearch)
+  const [catalogResult, installedResult] = await Promise.allSettled([
+    catalogRequest.promise,
+    Promise.all([
+      apiJson<ItemEnvelope<InstalledPlugin>>('/api/v1/plugins/marketplace/installed'),
+      apiJson<ItemEnvelope<OutdatedPlugin>>('/api/v1/plugins/marketplace/outdated'),
+    ]),
+  ])
+  const failures: string[] = []
+  if (catalogResult.status === 'fulfilled') {
+    setSearchResponse(catalogResult.value, catalogRequest.query, catalogRequest.source)
+  } else {
+    failures.push(catalogResult.reason instanceof Error ? catalogResult.reason.message : String(catalogResult.reason))
   }
+  if (installedResult.status === 'fulfilled') {
+    const [installedResponse, outdatedResponse] = installedResult.value
+    installed.value = [...(installedResponse.items || [])].sort((left, right) =>
+      left.plugin_id.localeCompare(right.plugin_id),
+    )
+    outdated.value = [...(outdatedResponse.items || [])].sort((left, right) =>
+      left.plugin_id.localeCompare(right.plugin_id),
+    )
+  } else {
+    failures.push(
+      installedResult.reason instanceof Error ? installedResult.reason.message : String(installedResult.reason),
+    )
+  }
+  error.value = failures.join(' · ')
+  loading.value = false
 }
 
-onMounted(() => void refresh())
+onMounted(() => void refresh(false))
 </script>
 
 <template>
@@ -267,9 +332,12 @@ onMounted(() => void refresh())
 
     <div
       v-if="error"
-      class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
     >
-      {{ error }}
+      <span class="min-w-0 flex-1">{{ error }}</span>
+      <Button size="sm" variant="outline" :disabled="loading || Boolean(actionKey)" @click="refresh">
+        <RiRefreshLine class="mr-1.5 h-4 w-4" />{{ $st('Refresh marketplace') }}
+      </Button>
     </div>
 
     <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-4">
@@ -310,6 +378,9 @@ onMounted(() => void refresh())
           {{ searchResponse.registry_url }}
         </span>
       </div>
+      <p class="text-[11px] leading-4 text-muted-foreground">
+        {{ $st('Trusted signing keys are read from plugins.host.trusted_keys in your Agena config.') }}
+      </p>
       <div
         v-if="searchResponse?.marketplace?.name"
         class="rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs"
@@ -366,8 +437,8 @@ onMounted(() => void refresh())
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 class="text-sm font-semibold">{{ $st('Marketplace catalog') }}</h3>
-          <p class="mt-0.5 text-xs text-muted-foreground">
-            {{ $st('{count} plugin releases match the current query.', { count: entries.length }) }}
+          <p v-if="responseMatchesInputs" class="mt-0.5 text-xs text-muted-foreground">
+            {{ $st('{count} plugin releases match the current query.', { count: matchingReleaseCount }) }}
           </p>
         </div>
       </div>
@@ -375,7 +446,19 @@ onMounted(() => void refresh())
         {{ $st('Loading marketplace plugins…') }}
       </div>
       <div
-        v-else-if="entries.length === 0"
+        v-else-if="entries.length === 0 && !error && responseMatchesInputs && renamedQuery"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 p-5"
+      >
+        <p v-if="renamedQuery.newId" class="text-sm text-muted-foreground">
+          {{ $st('This plugin was renamed to {pluginId}.', { pluginId: renamedQuery.newId }) }}
+        </p>
+        <p v-else class="text-sm text-muted-foreground">{{ $st('This plugin was removed from the marketplace.') }}</p>
+        <Button v-if="renamedQuery.newId" size="sm" @click="installPlugin(renamedQuery.newId)">
+          <RiDownloadCloud2Line class="mr-1.5 h-4 w-4" />{{ $st('Install') }}
+        </Button>
+      </div>
+      <div
+        v-else-if="entries.length === 0 && !error && responseMatchesInputs"
         class="rounded-md border border-border/60 p-6 text-center text-sm text-muted-foreground"
       >
         {{ $st('No marketplace plugins match this query.') }}

@@ -6,8 +6,8 @@ pub mod installer;
 pub mod manifest;
 pub mod project;
 
-use std::io::Read;
 use std::time::Duration;
+use std::{collections::BTreeMap, io::Read, path::Path};
 
 pub use cache::{
     InstalledRecord, InstalledRecords, MarketplaceCache, default_cache_root, write_secure_file,
@@ -34,6 +34,77 @@ pub use project::{
     build_marketplace, generate_plugin_lockfile, package_plugin, scaffold_marketplace,
     scaffold_plugin,
 };
+
+/// Read marketplace Ed25519 keys from Agena's existing plugin host trust
+/// configuration (`plugins.host.trusted_keys`). The public keys are not
+/// secrets, and sharing this trust store keeps plugin package and marketplace
+/// artifact verification under one explicit operator-managed policy.
+pub fn trusted_keys_from_config(
+    config_path: &Path,
+) -> Result<BTreeMap<String, String>, MarketplaceError> {
+    if !config_path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let bytes = std::fs::read(config_path)?;
+    let document: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        MarketplaceError::Config(format!(
+            "could not read marketplace trust keys from {}: {error}",
+            config_path.display()
+        ))
+    })?;
+    let Some(value) = document.pointer("/plugins/host/trusted_keys") else {
+        return Ok(BTreeMap::new());
+    };
+    let Some(keys) = value.as_object() else {
+        return Err(MarketplaceError::Config(format!(
+            "plugins.host.trusted_keys in {} must be an object of key IDs and hex public keys",
+            config_path.display()
+        )));
+    };
+    keys.iter()
+        .map(|(key_id, value)| {
+            let public_key = value.as_str().ok_or_else(|| {
+                MarketplaceError::Config(format!(
+                    "trusted marketplace key `{key_id}` in {} must be a hex string",
+                    config_path.display()
+                ))
+            })?;
+            Ok((key_id.clone(), public_key.to_owned()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod trust_config_tests {
+    use super::trusted_keys_from_config;
+
+    #[test]
+    fn loads_plugin_host_marketplace_trusted_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("agena.json");
+        std::fs::write(
+            &config,
+            r#"{"plugins":{"host":{"trusted_keys":{"release-key":"010203"}}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            trusted_keys_from_config(&config).unwrap(),
+            [("release-key".to_owned(), "010203".to_owned())]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[test]
+    fn missing_marketplace_trust_keys_default_to_an_empty_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("agena.json");
+        std::fs::write(&config, r#"{"plugins":{"list":{}}}"#).unwrap();
+
+        assert!(trusted_keys_from_config(&config).unwrap().is_empty());
+    }
+}
 
 /// Pluggable HTTP fetcher so tests can supply local bytes without a network.
 pub trait HttpFetcher: Send + Sync {

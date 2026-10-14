@@ -26,8 +26,8 @@ defineEmits<{ (event: 'update:open', value: boolean): void }>()
         type="button"
         data-oc-keyboard-tap="blur"
         data-session-chip
-        class="pointer-events-auto flex min-h-7 shrink-0 touch-manipulation items-center gap-1.5 rounded-md border border-border/60 bg-background px-1.5 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        :class="open ? 'border-ring/50 bg-secondary/60 text-foreground' : ''"
+        class="pointer-events-auto flex min-h-7 shrink-0 touch-manipulation items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        :class="open ? 'bg-secondary/60 text-foreground' : ''"
         :title="hint || title"
         :aria-label="hint || title"
         :aria-expanded="open"

@@ -66,7 +66,7 @@ watch(
     @update:open="expanded = $event"
   >
     <template #icon>
-      <RiFileTextLine class="h-3.5 w-3.5 shrink-0" />
+      <RiFileTextLine class="h-3 w-3 shrink-0" />
     </template>
     <template #actions>
       <IconButton

@@ -31,7 +31,7 @@ const hint = computed(() => {
     @update:open="$emit('update:open', $event)"
   >
     <template #icon>
-      <RiCheckboxMultipleLine class="h-3.5 w-3.5 shrink-0" />
+      <RiCheckboxMultipleLine class="h-3 w-3 shrink-0" />
     </template>
     <template #actions>
       <IconButton

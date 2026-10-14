@@ -572,7 +572,7 @@ defineExpose({
     </div>
     <div
       v-if="$slots.bottomLeft || $slots.bottomRight"
-      class="pointer-events-none absolute inset-x-2 bottom-0 z-10 flex min-w-0 translate-y-1/2 items-center gap-2 font-mono text-[11px]"
+      class="pointer-events-none absolute inset-x-2 bottom-0 z-10 flex min-w-0 -translate-y-1/2 items-center gap-2 font-mono text-[11px]"
     >
       <div
         v-if="$slots.bottomLeft"

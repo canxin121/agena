@@ -599,7 +599,10 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
           :style="{ paddingInlineEnd: `${scrollbarGutter}px` }"
           :data-keyboard-avoid="composerFullscreenActive ? 'resize' : 'shift'"
         >
-          <div class="chat-column flex flex-col min-h-0 h-full" :class="ui.isCompactLayout ? 'py-1' : 'py-1.5'">
+          <div
+            class="chat-column flex flex-col min-h-0 h-full"
+            :class="ui.isCompactLayout ? 'pt-1 pb-4' : 'pt-1.5 pb-4'"
+          >
             <div class="relative flex flex-1 flex-col min-h-0">
               <div v-if="failedAttachmentDraft" role="status" class="mb-2 rounded border border-border p-2 text-sm">
                 <p>{{ t('chat.attachments.failedDraftSaved') }}</p>

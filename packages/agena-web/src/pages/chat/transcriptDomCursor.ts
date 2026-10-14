@@ -101,28 +101,77 @@ function rectCenterWithinClip(rect: DOMRect, clip: ClipBounds): boolean {
 }
 
 function visibleSlicesForNode(node: Text, root: HTMLElement): VisibleTextSlice[] {
-  if (!node.data || !node.parentElement || !rangeRects(node).length) return []
+  if (!node.data || !node.parentElement) return []
+  const rects = rangeRects(node)
+  if (!rects.length) return []
   const clip = clippingBounds(node, root)
   if (clip === 'hidden') return []
   if (!clip) return [{ node, nodeStart: 0, nodeEnd: node.data.length }]
+  // overflow:hidden is also used on fully visible headers and code blocks.
+  // Only partially clipped text needs the expensive grapheme-level fallback.
+  if (
+    rects.every(
+      (rect) =>
+        rect.left >= clip.left && rect.right <= clip.right && rect.top >= clip.top && rect.bottom <= clip.bottom,
+    )
+  ) {
+    return [{ node, nodeStart: 0, nodeEnd: node.data.length }]
+  }
+  if (
+    rects.every(
+      (rect) =>
+        rect.right <= clip.left || rect.left >= clip.right || rect.bottom <= clip.top || rect.top >= clip.bottom,
+    )
+  )
+    return []
 
   const slices: VisibleTextSlice[] = []
-  let sliceStart = -1
-  let sliceEnd = -1
-  for (const grapheme of transcriptGraphemes(node.data)) {
-    const visible = rangeRects(node, grapheme.start, grapheme.end).some((rect) => rectCenterWithinClip(rect, clip))
-    if (visible) {
-      if (sliceStart < 0) sliceStart = grapheme.start
-      sliceEnd = grapheme.end
-      continue
-    }
-    if (sliceStart >= 0) {
-      slices.push({ node, nodeStart: sliceStart, nodeEnd: sliceEnd })
-      sliceStart = -1
-      sliceEnd = -1
-    }
+  const graphemes = transcriptGraphemes(node.data)
+  const bounds: ClipBounds = clip
+  function append(start: number, end: number) {
+    const previous = slices.at(-1)
+    if (previous?.nodeEnd === start) previous.nodeEnd = end
+    else slices.push({ node, nodeStart: start, nodeEnd: end })
   }
-  if (sliceStart >= 0) slices.push({ node, nodeStart: sliceStart, nodeEnd: sliceEnd })
+  // Accept/reject whole ranges away from clipping edges. Only the boundary
+  // graphemes need individual geometry, even in a very long truncated line.
+  function visit(first: number, end: number) {
+    if (first >= end) return
+    const startOffset = graphemes[first]!.start
+    const endOffset = graphemes[end - 1]!.end
+    const boxes = rangeRects(node, startOffset, endOffset)
+    if (!boxes.length) return
+    if (
+      boxes.every(
+        (rect) =>
+          rect.left >= bounds.left &&
+          rect.right <= bounds.right &&
+          rect.top >= bounds.top &&
+          rect.bottom <= bounds.bottom,
+      )
+    ) {
+      append(startOffset, endOffset)
+      return
+    }
+    if (
+      boxes.every(
+        (rect) =>
+          rect.right <= bounds.left ||
+          rect.left >= bounds.right ||
+          rect.bottom <= bounds.top ||
+          rect.top >= bounds.bottom,
+      )
+    )
+      return
+    if (end - first === 1) {
+      if (boxes.some((rect) => rectCenterWithinClip(rect, bounds))) append(startOffset, endOffset)
+      return
+    }
+    const middle = (first + end) >>> 1
+    visit(first, middle)
+    visit(middle, end)
+  }
+  visit(0, graphemes.length)
   return slices
 }
 

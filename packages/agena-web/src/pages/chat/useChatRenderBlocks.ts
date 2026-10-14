@@ -35,10 +35,12 @@ export function useChatRenderBlocks(opts: {
     showReasoning: showThinking.value,
     ...(opts.labels ? { labels: opts.labels() } : {}),
   }))
-  const renderBlocks = computed<RenderBlock[]>(() => {
+  const renderBlocks = computed<RenderBlock[]>((previous) => {
     if (pane && !pane.isVisible.value) {
-      project([])
-      return []
+      // Retain the DOM and projection while a visited tab is hidden. Clearing
+      // this list unmounted the entire transcript during the tab click, then
+      // rebuilt every message when switching back.
+      return previous ?? []
     }
     return project(chat.messages || [])
   })

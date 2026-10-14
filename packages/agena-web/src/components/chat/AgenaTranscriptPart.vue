@@ -7,6 +7,7 @@ import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
 import AgenaOperationPart from '@/components/chat/AgenaOperationPart.vue'
 import AgenaContentText from '@/components/chat/AgenaContentText.vue'
+import DeferredPartBody from './DeferredPartBody.vue'
 import type { ContentRef } from '@/lib/content'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { durablePartContent, transcriptPartText } from '@/pages/chat/transcriptProjection'
@@ -151,8 +152,8 @@ function openAttachment(path: string, url: string) {
       >
     </button>
 
-    <div
-      v-if="expanded"
+    <DeferredPartBody
+      :active="expanded"
       class="transcript-content bg-muted/[0.08]"
       :class="part.role === 'user' ? 'border-primary/35' : ''"
     >
@@ -244,6 +245,6 @@ function openAttachment(path: string, url: string) {
       </div>
 
       <CodeBlock v-else :code="prettyJson(content)" lang="json" compact />
-    </div>
+    </DeferredPartBody>
   </div>
 </template>

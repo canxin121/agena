@@ -7,6 +7,7 @@ import AgenaDiffBlock from './AgenaDiffBlock.vue'
 import PartLoadingIndicator from './PartLoadingIndicator.vue'
 import { type ContentFormat, type ContentRef } from '@/lib/content'
 import { observeContent } from '@/lib/contentSubscriptions'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 const props = defineProps<{
   resource: ContentRef
@@ -16,6 +17,7 @@ const props = defineProps<{
   format?: ContentFormat
 }>()
 const { t } = useI18n()
+const pane = useWorkspacePaneContext()
 const body = shallowRef('')
 const active = ref(true)
 const gap = ref(false)
@@ -28,6 +30,7 @@ function selected() {
   return !!(selection && !selection.isCollapsed && selection.anchorNode && root.value?.contains(selection.anchorNode))
 }
 function updateSelection() {
+  if (pane && !pane.isVisible.value) return
   if (!selected()) body.value = latestBody
 }
 const jsonBody = computed(() => {
@@ -42,6 +45,8 @@ let stop: (() => void) | undefined
 let mounted = false
 function connect() {
   stop?.()
+  stop = undefined
+  if (pane && !pane.isVisible.value) return
   stop = observeContent(props.sessionId, props.resource, (frame) => {
     latestBody = frame.text
     if (!selected()) body.value = latestBody
@@ -51,6 +56,10 @@ function connect() {
     loading.value = !frame.buffer.resource && !frame.error
   })
 }
+if (pane)
+  watch(pane.isVisible, () => {
+    if (mounted) connect()
+  })
 onMounted(() => {
   mounted = true
   document.addEventListener('selectionchange', updateSelection)

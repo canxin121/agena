@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test, { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
-import { computed, createRenderer, h, nextTick, reactive, ssrContextKey } from 'vue'
+import { computed, createRenderer, h, nextTick, reactive, ref, ssrContextKey } from 'vue'
 import { createI18n } from 'vue-i18n'
 import type { MessageLike, TranscriptDisplayPart } from '../src/components/chat/messageList.types'
 import { projectLocalPart } from '../src/pages/chat/transcriptProjection'
@@ -24,6 +24,7 @@ const vite = await createServer({
 after(() => vite.close())
 const { default: component } = await vite.ssrLoadModule('/src/components/chat/MessageItem.vue')
 const { useChatRenderBlocks } = await vite.ssrLoadModule('/src/pages/chat/useChatRenderBlocks.ts')
+const { workspacePaneContextKey } = await vite.ssrLoadModule('/src/app/workspace/workspacePaneContext.ts')
 const renderer = createRenderer<object, object>({
   patchProp() {},
   insert() {},
@@ -303,4 +304,57 @@ test('a new request reopens its previously collapsed operation, while repeated u
   } finally {
     subject.app.unmount()
   }
+})
+
+test('hiding a tab retains message instances and resumes with the latest transcript', async () => {
+  const visible = ref(true)
+  const messages = reactive([
+    { info: { id: '1', role: 'assistant' }, parts: [{ id: '2', agenaKind: 'text', text: 'before' }] },
+  ])
+  let state: any
+  let mounts = 0,
+    unmounts = 0
+  const row = {
+    setup() {
+      mounts++
+      return () => null
+    },
+    unmounted() {
+      unmounts++
+    },
+  }
+  const app = renderer.createApp({
+    setup() {
+      state = useChatRenderBlocks({
+        chat: { messages },
+        settings: {},
+        showThinking: computed(() => true),
+        formatTime: () => '',
+      })
+      return () =>
+        h(
+          'div',
+          state.renderBlocks.value.map((block: any) => h(row, { key: block.key })),
+        )
+    },
+  })
+  app.provide(workspacePaneContextKey, { isVisible: computed(() => visible.value) })
+  app.mount({})
+  try {
+    const previous = state.renderBlocks.value
+    visible.value = false
+    await settle()
+    assert.equal(state.renderBlocks.value, previous)
+    messages[0]!.parts[0]!.text = 'streamed while hidden'
+    await settle()
+    assert.equal(state.renderBlocks.value, previous)
+    assert.equal(unmounts, 0, 'a tab switch must not tear down its transcript')
+    visible.value = true
+    await settle()
+    assert.equal(mounts, 1, 'reopening reuses the keyed message')
+    assert.equal(state.renderBlocks.value[0].displayParts[0].source.text, 'streamed while hidden')
+  } finally {
+    app.unmount()
+  }
+  assert.equal(unmounts, 1)
 })

@@ -19,12 +19,14 @@ test('workspace editor group pane keeps tab strip droppable without hover drag c
 
 test('workspace editor group pane renders retained SPA views and propagates pane focus', () => {
   const paneSource = readFileSync(resolve(import.meta.dir, '../src/layout/WorkspaceEditorGroupPane.vue'), 'utf8')
+  const hostSource = readFileSync(resolve(import.meta.dir, '../src/layout/WorkspacePaneHost.vue'), 'utf8')
 
   assert.ok(paneSource.includes('@pointerdown.capture="handlePanePointerDown"'))
   assert.ok(paneSource.includes('ui.setFocusedWorkspaceWindow(targetWindowId)'))
-  assert.ok(paneSource.includes('<WorkspacePaneView'))
-  assert.ok(paneSource.includes('v-for="windowTab in mountedTabs"'))
-  assert.ok(paneSource.includes('v-show="isWindowActive(windowTab.id)"'))
+  assert.ok(paneSource.includes(':ref="registerPaneHost"'))
+  assert.ok(hostSource.includes('<WorkspacePaneView'))
+  assert.ok(hostSource.includes('v-for="windowId in mountedWindowIds"'))
+  assert.ok(hostSource.includes('v-show="visibleIds.has(windowId) && !suspended"'))
   assert.ok(!paneSource.includes('<iframe'))
   assert.ok(!paneSource.includes("window.addEventListener('message'"))
   assert.ok(paneSource.includes('border-border/70 bg-secondary/40 text-foreground/85'))

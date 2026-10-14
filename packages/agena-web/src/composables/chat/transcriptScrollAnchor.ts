@@ -9,12 +9,24 @@ export type TranscriptScrollAnchor = {
 export function captureTranscriptScrollAnchor(scroller: HTMLElement): TranscriptScrollAnchor {
   const top = scroller.getBoundingClientRect().top
   const rows = Array.from(scroller.querySelectorAll<HTMLElement>('[data-transcript-key]'))
-  const visible = (row: HTMLElement) => {
-    const bounds = row.getBoundingClientRect()
-    return bounds.bottom > top && bounds.top < top + scroller.clientHeight
+  const bottom = top + scroller.clientHeight
+  // Transcript siblings are vertically ordered. Read O(log n) boxes instead
+  // of laying out every preceding content-visibility subtree when a tab hides.
+  const firstVisible = (candidates: HTMLElement[]) => {
+    let low = 0
+    let high = candidates.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (candidates[middle]!.getBoundingClientRect().bottom <= top) low = middle + 1
+      else high = middle
+    }
+    const row = candidates[low]
+    return row && row.getBoundingClientRect().top < bottom ? row : null
   }
-  const element =
-    rows.find((row) => !row.querySelector('[data-transcript-key]') && visible(row)) || rows.find(visible) || null
+  const leaves: HTMLElement[] = []
+  const parents: HTMLElement[] = []
+  for (const row of rows) (row.querySelector('[data-transcript-key]') ? parents : leaves).push(row)
+  const element = firstVisible(leaves) || firstVisible(parents)
   return {
     element,
     offset: element ? element.getBoundingClientRect().top - top : 0,

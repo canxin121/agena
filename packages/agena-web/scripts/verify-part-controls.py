@@ -102,6 +102,9 @@ def verify(page, output, url):
         page.evaluate("sequence => { partControlsFixture.emit(`live line ${sequence}\\n`); partControlsFixture.revise(); }", sequence)
     page.wait_for_function("partControlsFixture.terminals.at(-1).buffer.active.getLine(19)?.translateToString(true).includes('live line 19')")
     assert page.evaluate("savedOutput === document.querySelector('[data-part-id=\"8\"] .xterm')")
+    # A part disclosure does not pin the reply's sliding part window. Reveal
+    # the list explicitly before asserting that older output remains mounted.
+    all_parts.click()
     page.evaluate("partControlsFixture.append(20)")
     expect(shell).to_be_attached()
     expect(headline).to_have_attribute("aria-expanded", "true")

@@ -20,11 +20,14 @@ import OperationBlock from './AgenaOperationBlock.vue'
 import { observeContent } from '@/lib/contentSubscriptions'
 import { contentDocumentText, type ContentDocument } from '@/lib/contentDocument'
 import { readContentForCopy, terminalBufferPlainText } from '@/lib/contentCopy'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 const semanticDocument = shallowRef<ContentDocument | null>(null)
 
 const props = defineProps<{ resource: ContentRef; sessionId: string; format?: ContentFormat }>()
 const { t } = useI18n()
+const pane = useWorkspacePaneContext()
+const isVisible = () => !pane || pane.isVisible.value
 const surface = ref<HTMLDivElement>()
 const outputRoot = ref<HTMLDivElement>()
 const status = ref('active')
@@ -50,6 +53,8 @@ let needsReplay = false
 let pending: ContentChunk[] = []
 let pendingBytes = 0
 let fitting = false
+let mounted = false
+let resizeFrame = 0
 
 function updateLogHeight() {
   if (props.resource.kind !== 'log' || !terminal || paused.value || selectionActive.value) return
@@ -63,7 +68,7 @@ function updateLogHeight() {
 }
 
 function applyTheme() {
-  if (!surface.value || !terminal) return
+  if (!isVisible() || !surface.value || !terminal) return
   const style = getComputedStyle(surface.value)
   // CSS themes use OKLCH. Xterm accepts RGB/hex, so resolve through the
   // browser's color engine rather than letting unsupported colors become black.
@@ -242,7 +247,7 @@ async function copy() {
 }
 
 function flushOutput() {
-  if (stopped || writing) return
+  if (stopped || writing || !isVisible()) return
   if (!terminal) {
     pending = []
     pendingBytes = 0
@@ -283,7 +288,7 @@ function flushOutput() {
   pendingBytes = 0
   terminal.write(pieces.join(''), () => {
     writing = false
-    if (stopped) return
+    if (stopped || !isVisible()) return
     updateLogHeight()
     if (!paused.value && !terminal?.getSelection()) terminal?.scrollToBottom()
     flushOutput()
@@ -292,6 +297,8 @@ function flushOutput() {
 
 function connect() {
   stop?.()
+  stop = undefined
+  if (!isVisible() || stopped) return
   stop = observeContent(props.sessionId, props.resource, (frame) => {
     buffer = frame.buffer
     if (!paused.value && !selectionActive.value) semanticDocument.value = buffer.document
@@ -318,6 +325,7 @@ function connect() {
 }
 
 function updateSelection() {
+  if (!isVisible()) return
   const selection = document.getSelection()
   selectionActive.value =
     Boolean(terminal?.getSelection()) ||
@@ -332,6 +340,8 @@ function updateSelection() {
 
 onMounted(async () => {
   await nextTick()
+  if (stopped) return
+  mounted = true
   document.addEventListener('selectionchange', updateSelection)
   if (!surface.value) {
     connect()
@@ -360,13 +370,16 @@ onMounted(async () => {
   })
   terminal.onSelectionChange(updateSelection)
   resize = new ResizeObserver(() => {
-    if (props.resource.kind === 'log') {
+    if (!isVisible() || props.resource.kind !== 'log' || resizeFrame) return
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0
+      if (!isVisible() || stopped || !surface.value?.clientWidth) return
       fitting = true
       fit.fit()
       updateLogHeight()
       if (!paused.value && !selectionActive.value) terminal?.scrollToBottom()
       fitting = false
-    }
+    })
   })
   resize.observe(surface.value)
   theme = new MutationObserver(applyTheme)
@@ -374,11 +387,35 @@ onMounted(async () => {
   connect()
 })
 
+if (pane)
+  watch(
+    pane.isVisible,
+    (visible) => {
+      if (!mounted) return
+      if (!visible) {
+        stop?.()
+        stop = undefined
+        pending = []
+        pendingBytes = 0
+        resize?.disconnect()
+        if (resizeFrame) cancelAnimationFrame(resizeFrame)
+        resizeFrame = 0
+        return
+      }
+      if (surface.value) resize?.observe(surface.value)
+      applyTheme()
+      updateSelection()
+      connect()
+    },
+    { flush: 'post' },
+  )
+
 onBeforeUnmount(() => {
   stopped = true
   document.removeEventListener('selectionchange', updateSelection)
   stop?.()
   resize?.disconnect()
+  if (resizeFrame) cancelAnimationFrame(resizeFrame)
   theme?.disconnect()
   terminal?.dispose()
 })

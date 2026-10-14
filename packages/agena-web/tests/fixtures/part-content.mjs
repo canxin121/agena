@@ -1,12 +1,13 @@
 // Deterministic browser fixture using the production components and SSE
 // reducer. No server/client-specific storage or alternate renderer is involved.
-import { createApp, h, reactive, ref } from 'vue'
+import { computed, createApp, h, provide, reactive, ref } from 'vue'
 import { createPinia } from 'pinia'
 import { Terminal } from '@xterm/xterm'
 import { i18n } from '../../src/i18n'
 import OperationPart from '../../src/components/chat/AgenaOperationPart.vue'
 import Markdown from '../../src/components/Markdown.vue'
 import CodeBlock from '../../src/components/ui/CodeBlock.vue'
+import { workspacePaneContextKey } from '../../src/app/workspace/workspacePaneContext'
 import '../../src/style.css'
 import '@fontsource/ibm-plex-sans/400.css'
 import '@fontsource/ibm-plex-mono/400.css'
@@ -116,11 +117,18 @@ fixture.markdown = (value) => { text.value = value }
 fixture.setCode = (value) => { code.value = value }
 fixture.theme = (dark) => document.documentElement.classList.toggle('dark', dark)
 
-createApp({render:() => h('main', {class:'mx-auto max-w-4xl space-y-6 p-6',style:'font-family:var(--font-sans)'}, [
+createApp({setup() {
+  const visible = ref(true)
+  fixture.setVisible = (value) => { visible.value = value }
+  provide(workspacePaneContextKey, {
+    windowId: computed(() => 'content-fixture'), isFocused: computed(() => visible.value), isVisible: computed(() => visible.value),
+    route: computed(() => ({ path: '/chat', query: { sessionId: '1' } })), navigate: async () => {},
+  })
+  return () => h('main', {class:'mx-auto max-w-4xl space-y-6 p-6',style:`font-family:var(--font-sans);${visible.value ? '' : 'display:none'}`}, [
   h('h1',{class:'text-xl font-semibold'},'Part streaming'),
   h('section',{'data-fixture':'shell'},[h(OperationPart,{part:shell,expanded:expanded.shell,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.shell=!expanded.shell})]),
   h('section',{'data-fixture':'pty'},[h(OperationPart,{part:pty,expanded:expanded.pty,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.pty=!expanded.pty})]),
   h('section',{'data-fixture':'task'},[h(OperationPart,{part:task,expanded:expanded.task,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.task=!expanded.task})]),
   h('section',{'data-fixture':'markdown'},[h(Markdown,{content:text.value,stream:true})]),
   h('section',{'data-fixture':'code'},[h(CodeBlock,{code:code.value,lang:'text',compact:true})]),
-])}).use(createPinia()).use(i18n).mount('#app')
+])}}).use(createPinia()).use(i18n).mount('#app')

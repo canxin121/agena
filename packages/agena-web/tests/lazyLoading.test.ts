@@ -40,6 +40,8 @@ const { useChatAttachments } = (await vite.ssrLoadModule(
 
 test('Markdown worker serializes parses, cancels queued bodies, and recovers after failure or an over-budget parse', async () => {
   const original = globalThis.Worker
+  let failStartup = false
+  let failPost = false
   const workers: Array<{
     onmessage?: (event: unknown) => void
     onerror?: () => void
@@ -52,9 +54,11 @@ test('Markdown worker serializes parses, cancels queued bodies, and recovers aft
     sent: Array<{ id: number; content: string }> = []
     terminated = false
     constructor() {
+      if (failStartup) throw new Error('worker startup blocked')
       workers.push(this)
     }
     postMessage(value: { id: number; content: string }) {
+      if (failPost) throw new Error('worker post failed')
       this.sent.push(value)
     }
     terminate() {
@@ -71,6 +75,10 @@ test('Markdown worker serializes parses, cancels queued bodies, and recovers aft
     cancelled.abort()
     await rejection
     const worker = workers[0]!
+    // A cold worker can still be loading its module after the parse budget.
+    await new Promise((resolve) => setTimeout(resolve, 280))
+    assert.equal(worker.terminated, false)
+    worker.onmessage?.({ data: { ready: true } })
     assert.deepEqual(
       worker.sent.map((work) => work.content),
       ['first'],
@@ -102,8 +110,20 @@ test('Markdown worker serializes parses, cancels queued bodies, and recovers aft
     assert.equal(fresh.terminated, false)
     fresh.onmessage?.({ data: { id: fresh.sent[0]!.id, parts: ['<p>another Part</p>'] } })
     assert.deepEqual(await nextPart, ['<p>another Part</p>'])
-    // Leave no fake worker in the shared renderer after this test.
     fresh.onerror?.()
+    failStartup = true
+    await assert.rejects(renderMarkdownAsync('blocked', {}, signal.signal), /startup blocked/)
+    failStartup = false
+    failPost = true
+    await assert.rejects(renderMarkdownAsync('post failed', {}, signal.signal), /post failed/)
+    assert.equal(workers.at(-1)!.terminated, true)
+    failPost = false
+    const recovered = renderMarkdownAsync('recovered', {}, signal.signal)
+    const recoveredWorker = workers.at(-1)!
+    recoveredWorker.onmessage?.({ data: { id: recoveredWorker.sent[0]!.id, parts: ['<p>recovered</p>'] } })
+    assert.deepEqual(await recovered, ['<p>recovered</p>'])
+    // Leave no fake worker in the shared renderer after this test.
+    recoveredWorker.onerror?.()
   } finally {
     globalThis.Worker = original
   }

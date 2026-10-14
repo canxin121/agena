@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, provide, ref, shallowReactive, watch } from 'vue'
+import { computed, onBeforeUnmount, provide, ref, shallowReactive, watch } from 'vue'
 import {
   loadRouteLocation,
   RouterView,
@@ -15,6 +15,7 @@ import {
 import { mainTabFromPath, mainTabPath } from '@/app/navigation/mainTabs'
 import { workspacePaneContextKey } from '@/app/workspace/workspacePaneContext'
 import { useUiStore } from '@/stores/ui'
+import { afterPaint } from '@/lib/afterPaint'
 
 const props = withDefaults(
   defineProps<{
@@ -46,8 +47,9 @@ function normalizeQuery(raw: LocationQuery | Record<string, unknown> | null | un
   return out
 }
 
-const resolvedRoute = computed(() => {
+const resolvedRoute = computed((previous: ReturnType<Router['resolve']> | undefined) => {
   const target = windowTab.value
+  if (!target && previous) return previous
   const path = String(target?.routePath || '').trim() || mainTabPath(target?.mainTab || 'chat')
   const query = {
     ...(target?.routeQuery || {}),
@@ -62,6 +64,21 @@ const resolvedRoute = computed(() => {
 
 const scopedRoute = shallowReactive({ ...resolvedRoute.value }) as RouteLocationNormalizedLoaded
 const routeReady = ref(false)
+const pageMounted = ref(false)
+let cancelMount: (() => void) | undefined
+watch([routeReady, isVisible], ([ready, visible]) => {
+  cancelMount?.()
+  cancelMount = undefined
+  if (ready && visible && !pageMounted.value) {
+    cancelMount = afterPaint(() => {
+      pageMounted.value = true
+    })
+  }
+})
+onBeforeUnmount(() => {
+  cancelMount?.()
+  routeLoadSequence++
+})
 let routeLoadSequence = 0
 let loadedRouteFullPath = ''
 let pendingRouteFullPath = ''
@@ -181,7 +198,7 @@ provide(workspacePaneContextKey, {
 <template>
   <section class="flex h-full min-h-0 flex-col bg-background" :data-workspace-pane-window="windowId">
     <div class="min-h-0 flex-1 overflow-hidden">
-      <RouterView v-if="routeReady" :route="scopedRoute" />
+      <RouterView v-if="routeReady && pageMounted" :route="scopedRoute" />
       <div v-else class="h-full min-h-0 animate-pulse bg-muted/20" aria-hidden="true" />
     </div>
   </section>

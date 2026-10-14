@@ -10,6 +10,7 @@ import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
 import ActivityLogView from '@/components/chat/ActivityLogView.vue'
 import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
+import DeferredPartBody from './DeferredPartBody.vue'
 import { useChatStore } from '@/stores/chat'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { ContentRef } from '@/lib/content'
@@ -81,7 +82,10 @@ const sectionErrors = ref<Partial<Record<ToolDetailSection, string>>>({})
 const loadedPartKey = ref('')
 const toolDetailSections: ToolDetailSection[] = ['input', 'output', 'metadata', 'presentation']
 
-const operation = computed(() => operationPresentation(props.part, sectionValues.value, props.expanded))
+const operation = computed<ReturnType<typeof operationPresentation>>((previous) => {
+  if (pane && !pane.isVisible.value && previous) return previous
+  return operationPresentation(props.part, sectionValues.value, props.expanded)
+})
 const unpresentedContentResources = computed<ContentRef[]>(() => {
   if (!props.expanded || !props.sessionId) return []
   const content = jsonRecord(props.part.source.agenaContent)
@@ -538,7 +542,7 @@ function toggleOuter() {
       </span>
     </button>
 
-    <div v-if="expanded" class="transcript-content bg-muted/[0.08]">
+    <DeferredPartBody :active="expanded" class="transcript-content bg-muted/[0.08]">
       <div v-if="operation.userInputs.length" class="space-y-2 py-0.5 text-sm">
         <AgenaInteractionPart
           v-for="interaction in operation.userInputs"
@@ -687,6 +691,6 @@ function toggleOuter() {
           </div>
         </section>
       </div>
-    </div>
+    </DeferredPartBody>
   </div>
 </template>

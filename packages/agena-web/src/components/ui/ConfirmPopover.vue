@@ -153,8 +153,11 @@ function resolveViewportTop(): number {
 const popoverSide = computed<'top' | 'bottom'>(() => {
   if (useDialog.value) return 'bottom'
   const rect = anchorRect.value
+  // A closed/unanchored popover needs no geometry. Reading visualViewport
+  // while hundreds of message controls mount forces layout between inserts.
+  if (!rect) return 'bottom'
   const viewportHeight = resolveViewportHeight()
-  if (!rect || !viewportHeight) return 'bottom'
+  if (!viewportHeight) return 'bottom'
 
   const viewportTop = resolveViewportTop()
   const viewportBottom = viewportTop + viewportHeight

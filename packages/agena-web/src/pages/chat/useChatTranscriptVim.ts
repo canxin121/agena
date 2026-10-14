@@ -280,7 +280,22 @@ export function useChatTranscriptVim(opts: {
     return cachedTextModel
   }
 
+  // Pointer selection and cursor painting only need one row. Building the
+  // document model here forces layout of every offscreen message, including
+  // content-visibility subtrees, on every disclosure click.
+  function textEntryForKey(key: string): TextEntry | null {
+    const element = elementForKey(key)
+    if (!element || element.offsetParent === null) return null
+    if (element.dataset.transcriptNode === 'message' && element.querySelector('[data-transcript-node="part"]'))
+      return null
+    const projection = textProjection(element)
+    if (!projection.text) return null
+    return { key, offset: 0, element, projection, text: projection.text, start: 0, end: projection.text.length }
+  }
+
   function activeTextEntry(preferTail = false): TextEntry | null {
+    const active = textEntryForKey(activeNodeKey.value)
+    if (active) return active
     const model = textEntries()
     let entry = model.entries.find((candidate) => candidate.key === activeNodeKey.value)
     if (!entry) {
@@ -395,7 +410,9 @@ export function useChatTranscriptVim(opts: {
       visualAnchorKey.value = key
       visualAnchorOffset.value = cursorOffset.value
     }
-    syncNativeSelection()
+    // pointerdown, focus and click can all select the same disclosure. Wait
+    // for Vue's patch and paint the cursor once against the final DOM.
+    scheduleCursorPlacement()
   }
 
   function nodeIndex(key: string, nodes = nodeElements()): number {
@@ -762,17 +779,17 @@ export function useChatTranscriptVim(opts: {
   function domBoundary(
     point: CursorPoint,
     direction: 'forward' | 'backward' = 'forward',
-    model = textEntries(),
+    model?: TextModel,
   ): TranscriptDomBoundary | null {
-    const entry = model.entries.find((candidate) => candidate.key === point.key)
+    const entry = model ? model.entries.find((candidate) => candidate.key === point.key) : textEntryForKey(point.key)
     if (!entry) return null
     return transcriptDomBoundaryForOffset(entry.element, point.offset, direction, entry.projection)
   }
 
   function rangeBetweenPoints(anchor: CursorPoint, head: CursorPoint, includeHead: boolean): Range | null {
-    const model = textEntries()
-    const anchorGlobal = globalOffsetForPoint(anchor, model)
-    const headGlobal = globalOffsetForPoint(head, model)
+    const model = anchor.key === head.key ? undefined : textEntries()
+    const anchorGlobal = model ? globalOffsetForPoint(anchor, model) : anchor.offset
+    const headGlobal = model ? globalOffsetForPoint(head, model) : head.offset
     if (anchorGlobal === null || headGlobal === null) return null
     const startPoint = anchorGlobal <= headGlobal ? anchor : head
     const endPoint = anchorGlobal <= headGlobal ? head : anchor

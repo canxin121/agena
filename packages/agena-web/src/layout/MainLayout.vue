@@ -9,6 +9,8 @@ import AppHeader from '@/layout/AppHeader.vue'
 import ChatSidebar from '@/layout/ChatSidebar.vue'
 import BottomNav from '@/layout/BottomNav.vue'
 import WorkspaceEditorGroupPane from '@/layout/WorkspaceEditorGroupPane.vue'
+import WorkspacePaneHost from '@/layout/WorkspacePaneHost.vue'
+import { provideWorkspacePaneHosts } from '@/layout/workspacePaneHosts'
 import WorkspacePrimaryPaneView from '@/layout/WorkspacePrimaryPaneView.vue'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import {
@@ -35,6 +37,7 @@ import { useAppRuntime } from '@/app/runtime/useAppRuntime'
 import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
 
 const ui = useUiStore()
+provideWorkspacePaneHosts()
 const toasts = useToastsStore()
 const route = useRoute()
 const router = useRouter()
@@ -878,6 +881,7 @@ watch(
                 <div v-else class="flex h-full items-center justify-center px-4 text-xs text-muted-foreground">
                   {{ t('header.windowTabs.splitNoContent') }}
                 </div>
+                <WorkspacePaneHost v-if="isGroupPaneMode" :suspended="isAnySidebarResizing || isGroupPaneResizing" />
               </div>
 
               <div

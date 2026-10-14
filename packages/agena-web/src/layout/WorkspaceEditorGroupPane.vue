@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, type Component } from 'vue'
+import { computed, ref, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiChat4Line,
@@ -24,7 +24,7 @@ import {
 } from '@/layout/workspaceWindowDrag'
 import { cn } from '@/lib/utils'
 import { useUiStore, type WorkspaceWindowTab } from '@/stores/ui'
-import WorkspacePaneView from '@/layout/WorkspacePaneView.vue'
+import { useWorkspacePaneHosts } from '@/layout/workspacePaneHosts'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 
 const props = defineProps<{
@@ -32,6 +32,7 @@ const props = defineProps<{
 }>()
 
 const ui = useUiStore()
+const paneHosts = useWorkspacePaneHosts()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 
@@ -90,7 +91,6 @@ const activeWindow = computed<WorkspaceWindowTab | null>(() => {
 const activeWindowId = computed(() => String(activeWindow.value?.id || '').trim())
 const canDragTabs = computed(() => !ui.isCompactLayout)
 const isTabStripDropActive = ref(false)
-const mountedWindowIds = ref<string[]>([])
 const tabContextMenuOpen = ref(false)
 const tabContextWindowId = ref('')
 const tabContextMenuAnchorEl = ref<HTMLElement | null>(null)
@@ -146,29 +146,10 @@ const tabContextMenuGroups = computed<OptionMenuGroup[]>(() => {
   ]
 })
 
-watch(
-  activeWindowId,
-  (windowId) => {
-    if (!windowId || mountedWindowIds.value.includes(windowId)) return
-    mountedWindowIds.value = [...mountedWindowIds.value, windowId]
-  },
-  { immediate: true },
-)
-
-watch(
-  () => groupTabs.value.map((item) => item.id),
-  (windowIds) => {
-    const valid = new Set(windowIds)
-    const next = mountedWindowIds.value.filter((windowId) => valid.has(windowId))
-    if (next.length !== mountedWindowIds.value.length) mountedWindowIds.value = next
-  },
-  { deep: true },
-)
-
-const mountedTabs = computed(() => {
-  const mounted = new Set(mountedWindowIds.value)
-  return groupTabs.value.filter((item) => mounted.has(item.id))
-})
+function registerPaneHost(element: unknown) {
+  if (element instanceof HTMLElement) paneHosts?.set(props.groupId, element)
+  else paneHosts?.delete(props.groupId)
+}
 
 function resolvePaneFocusWindowId(): string {
   const target = group.value
@@ -599,15 +580,7 @@ async function handleTabStripDrop(event: DragEvent) {
       </div>
     </div>
 
-    <div class="relative min-h-0 flex-1 overflow-hidden bg-background">
-      <WorkspacePaneView
-        v-for="windowTab in mountedTabs"
-        v-show="isWindowActive(windowTab.id)"
-        :visible="isWindowActive(windowTab.id)"
-        :key="windowTab.id"
-        :window-id="windowTab.id"
-        class="absolute inset-0"
-      />
+    <div :ref="registerPaneHost" class="relative min-h-0 flex-1 overflow-hidden bg-background">
       <div v-if="!activeWindowId" class="flex h-full items-center justify-center px-4 text-xs text-muted-foreground">
         {{ t('header.windowTabs.splitNoContent') }}
       </div>

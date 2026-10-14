@@ -38,7 +38,8 @@ const props = withDefaults(
 
 const html = ref<string[]>([])
 const markdownStreamKey = createMarkdownStreamKey()
-let hasStreamed = false
+let renderedContent: string | undefined
+let renderedLabels = ''
 const pane = useWorkspacePaneContext()
 let parseController: AbortController | undefined
 let renderVersion = 0
@@ -298,19 +299,27 @@ async function updateNow() {
   parseController = request
   const version = ++renderVersion
   const labels = buildMarkdownLabels()
-  hasStreamed ||= props.stream
+  const labelKey = JSON.stringify({ ...labels, expandLinesTitle: labels.expandLinesTitle?.(1) })
+  if (renderedContent === props.content && renderedLabels === labelKey && html.value.length) {
+    scheduleHydrateMermaid()
+    return
+  }
+  const content = props.content
   let rendered: string[]
   try {
-    rendered =
-      hasStreamed || props.content.length > 8192
-        ? await renderMarkdownAsync(props.content, labels, request.signal, markdownStreamKey)
-        : [renderMarkdown(props.content, labels)]
+    // Small code/math bodies can be expensive too, especially when opening a
+    // transcript with many parts. Keep all rich parsing on the shared worker.
+    rendered = import.meta.env.SSR
+      ? [renderMarkdown(content, labels)]
+      : await renderMarkdownAsync(content, labels, request.signal, markdownStreamKey)
   } catch (error) {
     if (request.signal.aborted) return
     console.error('Markdown rendering failed', error)
     rendered = [renderMarkdownPlainText(props.content)]
   }
   if (version !== renderVersion || request.signal.aborted) return
+  renderedContent = content
+  renderedLabels = labelKey
   resetMermaid()
   if (imageObserver) {
     imageObserver.disconnect()

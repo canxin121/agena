@@ -5,12 +5,19 @@ export type MarkdownWork = { id: number; content: string; labels: WorkerMarkdown
 const streams = new Map<number, MarkdownStreamRenderer>()
 const workerGlobal = globalThis as unknown as {
   onmessage: (event: MessageEvent<MarkdownWork | { release: number }>) => void
-  postMessage: (value: { id: number; parts?: string[]; error?: string }) => void
+  postMessage: (value: { id: number; parts?: string[]; error?: string } | { ready: true }) => void
 }
+workerGlobal.postMessage({ ready: true })
 workerGlobal.onmessage = ({ data }) => {
-  if ('release' in data) { streams.delete(data.release); return }
+  if ('release' in data) {
+    streams.delete(data.release)
+    return
+  }
   try {
-    const labels = { ...data.labels, expandLinesTitle: (lines: number) => data.labels.expandLinesTemplate.replace('__AGENA_LINES__', String(lines)) }
+    const labels = {
+      ...data.labels,
+      expandLinesTitle: (lines: number) => data.labels.expandLinesTemplate.replace('__AGENA_LINES__', String(lines)),
+    }
     let parts: string[]
     if (data.streamKey !== undefined) {
       const stream = streams.get(data.streamKey) || new MarkdownStreamRenderer()
@@ -23,7 +30,9 @@ workerGlobal.onmessage = ({ data }) => {
         retained -= oldest[1].retainedCharacters * 2
         streams.delete(oldest[0])
       }
-    } else { parts = [renderMarkdown(data.content, labels)] }
+    } else {
+      parts = [renderMarkdown(data.content, labels)]
+    }
     workerGlobal.postMessage({
       id: data.id,
       parts,

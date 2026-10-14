@@ -33,7 +33,7 @@ test('workspace panes own page rendering without a hidden duplicate route host',
   const paneSource = readFileSync(resolve(import.meta.dir, '../src/layout/WorkspacePaneView.vue'), 'utf8')
 
   assert.ok(!mainLayoutSource.includes('class="hidden" aria-hidden="true"'))
-  assert.ok(paneSource.includes('<RouterView v-if="routeReady" :route="scopedRoute"'))
+  assert.ok(paneSource.includes('<RouterView v-if="routeReady && pageMounted" :route="scopedRoute"'))
   assert.ok(paneSource.includes('provide(routeLocationKey, scopedRoute)'))
   assert.ok(paneSource.includes('provide(routerKey, scopedRouter)'))
 })

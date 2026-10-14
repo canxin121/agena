@@ -40,3 +40,25 @@ test('missing anchors fall back to height compensation', () => {
   restoreTranscriptScrollAnchor(scroller as unknown as HTMLElement, { element: null, top: 12, height: 500, offset: 0 })
   assert.equal(scroller.scrollTop, 412)
 })
+
+test('anchoring near the end of a long transcript reads logarithmically many row boxes', () => {
+  let reads = 0
+  const rows = Array.from({ length: 8192 }, (_, index) => ({
+    querySelector: () => null,
+    getBoundingClientRect: () => {
+      reads++
+      return { top: index * 30 - 240000, bottom: (index + 1) * 30 - 240000 }
+    },
+  }))
+  const scroller = {
+    scrollTop: 240000,
+    scrollHeight: 8192 * 30,
+    clientHeight: 600,
+    getBoundingClientRect: () => ({ top: 0 }),
+    querySelectorAll: () => rows,
+  }
+  const anchor = captureTranscriptScrollAnchor(scroller as unknown as HTMLElement)
+  assert.equal(anchor.element, rows[8000] as unknown as HTMLElement)
+  assert.equal(anchor.offset, 0)
+  assert.ok(reads < 20, `read ${reads} row boxes for one tab switch`)
+})

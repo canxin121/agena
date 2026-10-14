@@ -5,6 +5,7 @@ import { transcriptDiffFiles } from '@/pages/chat/transcriptDiff'
 import { highlightCodeToHtml } from '@/lib/highlight'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useToastsStore } from '@/stores/toasts'
+import AgenaDiffViewport from './AgenaDiffViewport.vue'
 
 const props = defineProps<{ diff: string }>()
 const { t } = useI18n()
@@ -54,61 +55,64 @@ const visibleFiles = computed(() => {
 
 <template>
   <div class="min-w-0 space-y-1.5" data-transcript-diff>
-    <section
-      v-for="(file, index) in visibleFiles"
-      :key="`${file.path}:${index}`"
-      class="overflow-hidden rounded-md border border-border/60"
-    >
-      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 bg-muted/30 px-3 py-1 font-mono text-xs">
-        <span class="text-muted-foreground" :title="t(`chat.toolDetails.diffChange${file.change}`)">{{
-          file.change
-        }}</span>
-        <span class="min-w-0 break-all font-medium">
-          <span v-if="file.oldPath && file.oldPath !== file.path" class="text-muted-foreground"
-            >{{ file.oldPath }} → </span
-          >{{ file.path || t('chat.toolDetails.diff') }}
-        </span>
-        <span class="text-emerald-700 dark:text-emerald-400">+{{ file.additions }}</span>
-        <span class="text-rose-700 dark:text-rose-400">−{{ file.deletions }}</span>
-      </div>
-      <div class="overflow-x-auto" tabindex="0" :aria-label="file.path || t('chat.toolDetails.diff')">
-        <div class="min-w-full w-max font-mono text-xs leading-[1.4]">
-          <div
-            v-for="(row, rowIndex) in file.rows"
-            :key="rowIndex"
-            class="flex"
-            :class="{
-              'bg-emerald-500/10': row.kind === 'added',
-              'bg-rose-500/10': row.kind === 'removed',
-              'bg-muted/30 text-muted-foreground': row.kind === 'hunk' || row.kind === 'note',
-            }"
-            :data-diff-line="row.kind"
-          >
-            <span class="w-12 shrink-0 select-none pr-2 text-right text-muted-foreground/70" aria-hidden="true">{{
-              row.kind === 'removed' ? row.oldLine : row.newLine
-            }}</span>
-            <span
-              class="w-5 shrink-0 select-none text-center"
-              aria-hidden="true"
-              :class="
-                row.kind === 'added'
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : row.kind === 'removed'
-                    ? 'text-rose-700 dark:text-rose-400'
-                    : ''
-              "
-              >{{ row.kind === 'added' ? '+' : row.kind === 'removed' ? '−' : '' }}</span
+    <AgenaDiffViewport v-if="expanded && totalRows > 160" :files="files" :label="t('chat.toolDetails.diff')" />
+    <template v-else>
+      <section
+        v-for="(file, index) in visibleFiles"
+        :key="`${file.path}:${index}`"
+        class="overflow-hidden rounded-md border border-border/60"
+      >
+        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 bg-muted/30 px-3 py-1 font-mono text-xs">
+          <span class="text-muted-foreground" :title="t(`chat.toolDetails.diffChange${file.change}`)">{{
+            file.change
+          }}</span>
+          <span class="min-w-0 break-all font-medium">
+            <span v-if="file.oldPath && file.oldPath !== file.path" class="text-muted-foreground"
+              >{{ file.oldPath }} → </span
+            >{{ file.path || t('chat.toolDetails.diff') }}
+          </span>
+          <span class="text-emerald-700 dark:text-emerald-400">+{{ file.additions }}</span>
+          <span class="text-rose-700 dark:text-rose-400">−{{ file.deletions }}</span>
+        </div>
+        <div class="overflow-x-auto" tabindex="0" :aria-label="file.path || t('chat.toolDetails.diff')">
+          <div class="min-w-full w-max font-mono text-xs leading-[1.4]">
+            <div
+              v-for="(row, rowIndex) in file.rows"
+              :key="rowIndex"
+              class="flex"
+              :class="{
+                'bg-emerald-500/10': row.kind === 'added',
+                'bg-rose-500/10': row.kind === 'removed',
+                'bg-muted/30 text-muted-foreground': row.kind === 'hunk' || row.kind === 'note',
+              }"
+              :data-diff-line="row.kind"
             >
-            <code
-              v-if="row.kind !== 'hunk' && row.kind !== 'note'"
-              class="block whitespace-pre pr-3"
-              v-html="row.html"
-            />
-            <span v-else class="whitespace-pre pr-3">{{ row.text }}</span>
+              <span class="w-12 shrink-0 select-none pr-2 text-right text-muted-foreground/70" aria-hidden="true">{{
+                row.kind === 'removed' ? row.oldLine : row.newLine
+              }}</span>
+              <span
+                class="w-5 shrink-0 select-none text-center"
+                aria-hidden="true"
+                :class="
+                  row.kind === 'added'
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : row.kind === 'removed'
+                      ? 'text-rose-700 dark:text-rose-400'
+                      : ''
+                "
+                >{{ row.kind === 'added' ? '+' : row.kind === 'removed' ? '−' : '' }}</span
+              >
+              <code
+                v-if="row.kind !== 'hunk' && row.kind !== 'note'"
+                class="block whitespace-pre pr-3"
+                v-html="row.html"
+              />
+              <span v-else class="whitespace-pre pr-3">{{ row.text }}</span>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </template>
     <div class="flex flex-wrap items-center gap-3">
       <button
         type="button"

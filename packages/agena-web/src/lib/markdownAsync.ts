@@ -9,12 +9,14 @@ type Work = {
   finish: () => void
 }
 let worker: Worker | undefined
+let workerReady = false
 let sequence = 0
 let streamSequence = 0
 let running: Work | undefined
 const pending = new Map<number, Work>()
 // One expensive Markdown body must not hold every Part's renderer forever.
 const WORK_BUDGET_MS = 250
+const STARTUP_BUDGET_MS = 5000
 let deadline: ReturnType<typeof setTimeout> | undefined
 
 function clearDeadline() {
@@ -29,15 +31,8 @@ export function releaseMarkdownStream(key: number) {
   worker?.postMessage({ release: key })
 }
 
-function next() {
-  if (running) return
-  const entry = pending.entries().next().value
-  if (!entry) return
-  pending.delete(entry[0])
-  running = entry[1]
-  if (!worker) createWorker()
-  const currentWorker = worker!
-  const work = running!
+function armDeadline(currentWorker: Worker, work: Work, budget: number) {
+  clearDeadline()
   deadline = setTimeout(() => {
     if (worker !== currentWorker || running !== work) return
     currentWorker.terminate()
@@ -48,15 +43,57 @@ function next() {
     // Preserve all source text when rich interpretation exceeds its budget.
     work.resolve([renderMarkdownPlainText(work.request.content)])
     next()
-  }, WORK_BUDGET_MS)
-  currentWorker.postMessage(work.request)
+  }, budget)
+}
+
+function next() {
+  if (running) return
+  const entry = pending.entries().next().value
+  if (!entry) return
+  pending.delete(entry[0])
+  running = entry[1]
+  try {
+    if (!worker) createWorker()
+    const currentWorker = worker!
+    const work = running!
+    // Module download/initialization is not parsing time. In particular, a cold
+    // dev worker must not be killed every 250 ms before it finishes loading.
+    armDeadline(currentWorker, work, workerReady ? WORK_BUDGET_MS : STARTUP_BUDGET_MS)
+    currentWorker.postMessage(work.request)
+  } catch (error) {
+    // Worker construction/postMessage can throw before an error event exists.
+    // Release the running slot so subsequent bodies can retry normally.
+    failWorker(error instanceof Error ? error : new Error(String(error)))
+  }
+}
+
+function failWorker(error: Error) {
+  worker?.terminate()
+  worker = undefined
+  clearDeadline()
+  const work = [running, ...pending.values()]
+  running = undefined
+  pending.clear()
+  for (const item of work) {
+    if (!item) continue
+    item.finish()
+    item.reject(error)
+  }
 }
 
 function createWorker() {
   const created = new Worker(new URL('./markdown.worker.ts', import.meta.url), { type: 'module' })
   worker = created
-  created.onmessage = ({ data }: MessageEvent<{ id: number; parts?: string[]; error?: string }>) => {
-    if (worker !== created || data.id !== running?.request.id) return
+  workerReady = false
+  created.onmessage = ({ data }: MessageEvent<{ ready?: boolean; id?: number; parts?: string[]; error?: string }>) => {
+    if (worker !== created) return
+    if (data.ready) {
+      workerReady = true
+      if (running) armDeadline(created, running, WORK_BUDGET_MS)
+      return
+    }
+    if (!running || data.id !== running.request.id) return
+    workerReady = true
     const work = running
     running = undefined
     clearDeadline()
@@ -67,17 +104,7 @@ function createWorker() {
   }
   created.onerror = () => {
     if (worker !== created) return
-    created.terminate()
-    worker = undefined
-    clearDeadline()
-    const work = [running, ...pending.values()]
-    running = undefined
-    pending.clear()
-    for (const item of work) {
-      if (!item) continue
-      item.finish()
-      item.reject(new Error(i18n.global.t('errors.markdown.workerFailed')))
-    }
+    failWorker(new Error(i18n.global.t('errors.markdown.workerFailed')))
   }
 }
 

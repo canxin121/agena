@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { RiArrowGoBackLine, RiCheckLine, RiClipboardLine, RiGitBranchLine, RiLoader4Line } from '@remixicon/vue'
 
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
@@ -29,6 +29,7 @@ import { useI18n } from 'vue-i18n'
 import { transcriptFoldKey } from '@/stores/chat/transcriptFolds'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useNearViewport } from '@/composables/useNearViewport'
+import { afterPaint } from '@/lib/afterPaint'
 
 const props = defineProps<{
   message: MessageLike
@@ -65,6 +66,22 @@ const { t } = useI18n()
 const pane = useWorkspacePaneContext()
 const articleRef = ref<HTMLElement | null>(null)
 const nearViewport = useNearViewport(articleRef)
+// Closed action popovers contain several components each. Mount them when
+// their message approaches the viewport, then retain them so an open menu or
+// keyboard focus is never lost while scrolling.
+const actionsMounted = ref(nearViewport.value)
+let cancelActionsMount: (() => void) | undefined
+watch(nearViewport, (near) => {
+  cancelActionsMount?.()
+  cancelActionsMount = undefined
+  if (near && !actionsMounted.value) {
+    cancelActionsMount = afterPaint(() => {
+      actionsMounted.value = true
+      cancelActionsMount = undefined
+    })
+  }
+})
+onBeforeUnmount(() => cancelActionsMount?.())
 const role = computed(() => String(props.message.info.role || 'assistant'))
 const messageId = computed(() => String(props.message.info.id || ''))
 const messageNodeKey = computed(() => `message:${messageId.value}`)
@@ -370,60 +387,62 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
 
       <div
         v-if="role === 'user' || role === 'assistant'"
-        class="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/message:opacity-100"
+        class="flex h-6 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/message:opacity-100"
         data-transcript-chrome="true"
       >
-        <ConfirmPopover
-          v-if="role === 'user'"
-          :title="t('chat.messageItem.fork.confirmTitle')"
-          :description="t('chat.messageItem.fork.confirmDescription')"
-          :confirm-text="t('chat.messageItem.fork.confirmAction')"
-          :cancel-text="t('common.cancel')"
-          :anchor-to-cursor="false"
-          @confirm="$emit('fork', messageId)"
-        >
+        <template v-if="actionsMounted">
+          <ConfirmPopover
+            v-if="role === 'user'"
+            :title="t('chat.messageItem.fork.confirmTitle')"
+            :description="t('chat.messageItem.fork.confirmDescription')"
+            :confirm-text="t('chat.messageItem.fork.confirmAction')"
+            :cancel-text="t('common.cancel')"
+            :anchor-to-cursor="false"
+            @confirm="$emit('fork', messageId)"
+          >
+            <IconButton
+              variant="ghost"
+              class="h-6 w-6"
+              :tooltip="t('chat.messageItem.fork.actionTitle')"
+              :aria-label="t('chat.messageItem.fork.actionTitle')"
+            >
+              <RiGitBranchLine class="h-3.5 w-3.5" />
+            </IconButton>
+          </ConfirmPopover>
+
+          <ConfirmPopover
+            v-if="role === 'user'"
+            :title="t('chat.messageItem.revert.confirmTitle')"
+            :description="t('chat.messageItem.revert.confirmDescription')"
+            :confirm-text="t('chat.messageItem.revert.confirmAction')"
+            :cancel-text="t('common.cancel')"
+            variant="destructive"
+            :anchor-to-cursor="false"
+            @confirm="$emit('revert', messageId)"
+          >
+            <IconButton
+              variant="ghost"
+              class="h-6 w-6"
+              :tooltip="t('chat.messageItem.revert.actionTitle')"
+              :aria-label="t('chat.messageItem.revert.actionTitle')"
+              :disabled="revertBusyMessageId === messageId"
+            >
+              <RiLoader4Line v-if="revertBusyMessageId === messageId" class="h-3.5 w-3.5 animate-spin" />
+              <RiArrowGoBackLine v-else class="h-3.5 w-3.5" />
+            </IconButton>
+          </ConfirmPopover>
+
           <IconButton
             variant="ghost"
             class="h-6 w-6"
-            :tooltip="t('chat.messageItem.fork.actionTitle')"
-            :aria-label="t('chat.messageItem.fork.actionTitle')"
+            :tooltip="t('chat.messageItem.copy.actionTitle')"
+            :aria-label="t('chat.messageItem.copy.actionTitle')"
+            @click="$emit('copy', message)"
           >
-            <RiGitBranchLine class="h-3.5 w-3.5" />
+            <RiCheckLine v-if="copiedMessageId === messageId" class="h-3.5 w-3.5 text-emerald-500" />
+            <RiClipboardLine v-else class="h-3.5 w-3.5" />
           </IconButton>
-        </ConfirmPopover>
-
-        <ConfirmPopover
-          v-if="role === 'user'"
-          :title="t('chat.messageItem.revert.confirmTitle')"
-          :description="t('chat.messageItem.revert.confirmDescription')"
-          :confirm-text="t('chat.messageItem.revert.confirmAction')"
-          :cancel-text="t('common.cancel')"
-          variant="destructive"
-          :anchor-to-cursor="false"
-          @confirm="$emit('revert', messageId)"
-        >
-          <IconButton
-            variant="ghost"
-            class="h-6 w-6"
-            :tooltip="t('chat.messageItem.revert.actionTitle')"
-            :aria-label="t('chat.messageItem.revert.actionTitle')"
-            :disabled="revertBusyMessageId === messageId"
-          >
-            <RiLoader4Line v-if="revertBusyMessageId === messageId" class="h-3.5 w-3.5 animate-spin" />
-            <RiArrowGoBackLine v-else class="h-3.5 w-3.5" />
-          </IconButton>
-        </ConfirmPopover>
-
-        <IconButton
-          variant="ghost"
-          class="h-6 w-6"
-          :tooltip="t('chat.messageItem.copy.actionTitle')"
-          :aria-label="t('chat.messageItem.copy.actionTitle')"
-          @click="$emit('copy', message)"
-        >
-          <RiCheckLine v-if="copiedMessageId === messageId" class="h-3.5 w-3.5 text-emerald-500" />
-          <RiClipboardLine v-else class="h-3.5 w-3.5" />
-        </IconButton>
+        </template>
       </div>
     </header>
 

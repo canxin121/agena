@@ -69,7 +69,7 @@ async function control(activity: SessionActivity, action: string) {
     @update:open="expanded = $event"
   >
     <template #icon>
-      <RiTaskLine class="h-3.5 w-3.5 shrink-0" />
+      <RiTaskLine class="h-3 w-3 shrink-0" />
     </template>
     <div class="space-y-2">
       <p v-if="mutationError" role="alert" class="text-xs text-destructive">{{ mutationError }}</p>

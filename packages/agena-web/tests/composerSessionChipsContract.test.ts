@@ -41,12 +41,14 @@ test('the footer chips stay short: an icon, a number, and a tooltip', () => {
   assert.match(chipSource, /data-session-chip/)
   assert.match(chipSource, /max-w-32 truncate/)
   assert.match(chipSource, /:title="hint \|\| title"/)
-  // Each chip owns a boundary, so two neighbouring chips never read as one button.
-  assert.match(chipSource, /rounded-md border border-border\/60 bg-background/)
+  // Footer triggers reuse the same compact, borderless treatment and spacing as model controls.
+  assert.match(chipSource, /min-h-7[^\n]*gap-1 rounded px-1 py-0\.5/)
+  assert.doesNotMatch(chipSource, /rounded-md border border-border\/60 bg-background/)
   for (const [name, source] of Object.entries(sectionSources)) {
     assert.match(source, /<SessionChip/, `${name} must render through the shared chip`)
     assert.doesNotMatch(source, /SessionSection/, `${name} must not use the removed docked section`)
     assert.match(source, /<template #icon>/, `${name} must render a chip icon`)
+    assert.match(source, /class="h-3 w-3 shrink-0"/, `${name} must use model-sized icons`)
   }
 })
 

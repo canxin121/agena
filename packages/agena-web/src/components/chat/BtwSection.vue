@@ -49,7 +49,7 @@ function handleKeydown(event: KeyboardEvent) {
     @update:open="state.expanded = $event"
   >
     <template #icon>
-      <RiQuestionLine class="h-3.5 w-3.5 shrink-0" />
+      <RiQuestionLine class="h-3 w-3 shrink-0" />
     </template>
     <template #actions>
       <IconButton

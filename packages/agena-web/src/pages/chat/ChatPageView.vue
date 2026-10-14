@@ -85,7 +85,6 @@ const {
   sessionEnded,
   retryStatus,
   currentPhase,
-  compactingSessionId,
   awaitingAssistant,
   showAssistantPlaceholder,
   optimisticUser,
@@ -488,7 +487,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   :session-ended="sessionEnded"
                   :retry-status="retryStatus"
                   :retry-countdown="retryCountdownLabel"
-                  :is-compacting="compactingSessionId === chat.selectedSessionId"
                   :current-phase="currentPhase"
                   :awaiting-assistant="awaitingAssistant"
                   :activity-collapse-signal="activityCollapseSignal"

@@ -1661,6 +1661,7 @@ flash-steer-sent = steered into the active run
 flash-steer-failed-fallback-queue = could not steer the active run; the message was kept
 flash-run-cancelled = run cancelled
 
+message-compaction-unchanged = Context is already compact; the existing history was kept.
 message-compaction-title-manual = Context compacted
 message-compaction-title-auto = Context compacted automatically
 message-compaction-title-reactive = Context compacted after context overflow

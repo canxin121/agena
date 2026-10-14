@@ -2220,6 +2220,23 @@ impl ProviderCompactionOutput {
             Self::OpenAiResponses { items } => items.is_empty(),
         }
     }
+
+    /// A successful HTTP envelope or ordinary assistant message is not proof
+    /// of compaction. Never replace history without an actual native checkpoint.
+    pub fn has_checkpoint(&self) -> bool {
+        match self {
+            Self::OpenAiResponses { items } => {
+                items.iter().all(serde_json::Value::is_object)
+                    && items.iter().any(|item| {
+                        item.get("type").and_then(serde_json::Value::as_str) == Some("compaction")
+                            && item
+                                .get("encrypted_content")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|content| !content.trim().is_empty())
+                    })
+            }
+        }
+    }
 }
 
 /// Opaque provider-native compacted input replayed on a later completion.

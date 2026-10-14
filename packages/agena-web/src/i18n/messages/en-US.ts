@@ -1136,6 +1136,8 @@ export default {
       error: 'Error',
       notice: 'Notice',
       compaction: 'Compaction',
+      compactionUnchanged: 'Context is already compact; the existing history was kept.',
+      compactionTokens: '{before} → {after} tokens',
       responseRunning: 'Response running',
       responseCompleted: 'Response completed',
       responseCancelled: 'Response cancelled',

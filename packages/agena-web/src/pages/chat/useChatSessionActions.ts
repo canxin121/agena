@@ -1,10 +1,12 @@
 import { i18n } from '@/i18n'
-import { computed, type ComputedRef, ref, type Ref, watch } from 'vue'
+import { computed, type ComputedRef, ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { formatTranscript } from '@/lib/transcript'
 import { listSessionMessages } from '@/stores/chat/api'
 import type { JsonValue } from '@/types/json'
+import type { MessageLike } from '@/components/chat/messageList.types'
+import { isRunInFlight } from '@/lib/chatRunState'
 
 type ToastKind = 'info' | 'success' | 'error'
 
@@ -23,7 +25,7 @@ type ChatLike = {
   renameSession: (sessionId: string, title: string) => Promise<JsonValue>
   forkSession: (sessionId: string) => Promise<JsonValue>
   compactSession: (sessionId: string) => Promise<JsonValue>
-  getSessionState: (sessionId: string) => { kind: string }
+  messages: MessageLike[]
 }
 
 export function useChatSessionActions(opts: {
@@ -48,20 +50,16 @@ export function useChatSessionActions(opts: {
 
   const forkBusy = ref(false)
   const compactBusy = ref(false)
-  const compactingSessionId = ref<string | null>(null)
-  let compactionWasObservedRunning = false
-  watch(compactingSessionId, (sessionId, _previous, onCleanup) => {
-    compactionWasObservedRunning = false
-    if (!sessionId) return
-    const stop = watch(
-      () => opts.chat.getSessionState(sessionId).kind,
-      (kind) => {
-        if (kind === 'running') compactionWasObservedRunning = true
-        else if (compactionWasObservedRunning) compactingSessionId.value = null
-      },
-      { immediate: true },
+  const submittingCompactionSessionId = ref<string | null>(null)
+  const compactingSessionId = computed(() => {
+    if (submittingCompactionSessionId.value) return submittingCompactionSessionId.value
+    // Read the durable attempt itself. Fast completion can skip the running
+    // snapshot entirely, and a remounted page must recover an ongoing attempt.
+    return chat.messages.some((message) =>
+      message.parts.some((part) => part.agenaKind === 'compaction' && isRunInFlight(part.partState)),
     )
-    onCleanup(stop)
+      ? chat.selectedSessionId
+      : null
   })
   const transcriptBusy = ref(false)
 
@@ -191,20 +189,17 @@ export function useChatSessionActions(opts: {
 
   async function handleCompactSession() {
     const sid = chat.selectedSessionId
-    if (!sid) return
+    if (!sid || compactBusy.value || compactingSessionId.value === sid) return
     compactBusy.value = true
-    compactingSessionId.value = sid
+    submittingCompactionSessionId.value = sid
     try {
       await chat.compactSession(sid)
-      // The POST acknowledges that the execution was accepted; it is not the
-      // completion signal. Keep the optimistic activity visible until the
-      // session-state observer has seen running -> terminal.
       toasts.push('success', t('chat.toasts.compactionStarted'))
     } catch (err) {
-      if (compactingSessionId.value === sid) compactingSessionId.value = null
       toasts.push('error', err instanceof Error ? err.message : String(err))
     } finally {
       compactBusy.value = false
+      submittingCompactionSessionId.value = null
     }
   }
 

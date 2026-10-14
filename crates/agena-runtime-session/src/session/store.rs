@@ -556,19 +556,12 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
-    /// Start a compaction run; returns the compaction run marker part id. The
-    /// checkpoint `summary` (and optional `window` description) are recorded
-    /// on the marker's content (4.1.1 `CompactionContent`).
-    pub(crate) async fn compact_session(
-        &self,
-        session_id: i64,
-        summary: Option<String>,
-        window: Option<String>,
-        checkpoint: Value,
-    ) -> Result<i64, AppError> {
+    /// Invalidate provider continuations when installing a durable checkpoint.
+    pub(crate) async fn clear_provider_anchors(&self, session_id: i64) -> Result<(), AppError> {
         self.facade
-            .compact_session(session_id, summary, window, Some(checkpoint))
+            .set_provider_anchors(session_id, None)
             .await
+            .map(|_| ())
             .map_err(store_error)
     }
 
@@ -811,7 +804,7 @@ pub(crate) async fn session_from_view_async(view: SessionView) -> Result<Session
         .map_err(|error| AppError::Internal(format!("session projection worker failed: {error}")))?
 }
 
-/// The compaction marker is the durable prompt boundary. Restore the exact
+/// The compaction content part is the durable prompt boundary. Restore the exact
 /// checkpoint alongside it so loading a session cannot discard the history
 /// that the boundary removed from the active suffix.
 fn restore_prompt_window_from_parts(
@@ -825,27 +818,23 @@ fn restore_prompt_window_from_parts(
     let mut generation = 0u64;
     let mut latest = None;
     for (index, part) in parts.iter().enumerate() {
-        if part.kind != "run"
-            || part.content.get("run_kind").and_then(Value::as_str) != Some("compaction")
-        {
+        if part.kind != "compaction" {
             continue;
         }
-        if let Some(value) = part
+        if part
             .content
-            .get("remote_compaction_disabled_models")
-            .or_else(|| {
-                part.content
-                    .pointer("/checkpoint/remote_compaction_disabled_models")
-            })
+            .get("compaction_policy_version")
+            .and_then(Value::as_u64)
+            == Some(crate::COMPACTION_POLICY_VERSION)
+            && let Some(value) = part.content.get("remote_compaction_disabled_models")
         {
             let models: std::collections::BTreeSet<String> = serde_json::from_value(value.clone())
                 .map_err(|error| {
                     AppError::Internal(format!("decode compaction capability: {error}"))
                 })?;
-            runtime
-                .prompt_window
-                .remote_compaction_disabled_models
-                .extend(models);
+            // Each completed attempt carries the current snapshot. A manual
+            // success can remove a previously unavailable route.
+            runtime.prompt_window.remote_compaction_disabled_models = models;
         }
         let has_checkpoint = part
             .content
@@ -856,11 +845,13 @@ fn restore_prompt_window_from_parts(
             .get("summary")
             .and_then(Value::as_str)
             .is_some_and(|summary| !summary.trim().is_empty());
-        let legacy_summary = has_summary
-            && (part.content.get("checkpoint").is_none() || part.state == PartState::Completed);
-        if (has_checkpoint && part.state == PartState::Completed) || legacy_summary {
+        if (has_checkpoint || has_summary) && part.state == PartState::Completed {
             generation = generation.saturating_add(1);
             latest = Some((index, part));
+            runtime.prompt_window.record_compaction_success();
+        } else if part.state == PartState::Completed
+            && part.content.get("outcome").and_then(Value::as_str) == Some("unchanged")
+        {
             runtime.prompt_window.record_compaction_success();
         } else if part.state == PartState::Failed
             && part.content.get("attempt_failure").and_then(Value::as_bool) == Some(true)
@@ -890,10 +881,8 @@ fn restore_prompt_window_from_parts(
                 )?,
             )
         } else {
-            // Earlier Agena builds persisted only the summary. Recover the
-            // latest verbatim user request from the immutable transcript so
-            // existing sessions remain usable even when a later summary was
-            // inaccurate or contradicted that request.
+            // A summary-only checkpoint retains the latest verbatim user
+            // request from the canonical transcript.
             let recent_user = parts_into_runs(&parts[..index])
                 .into_iter()
                 .rev()
@@ -918,10 +907,12 @@ fn restore_prompt_window_from_parts(
                 None
             } else {
                 Some(PromptCompactionRuntime {
-                    checkpoint_id: format!("legacy:{session_id}:{}", marker.part_id),
+                    checkpoint_id: format!("summary:{session_id}:{}", marker.part_id),
                     compacted_through_message_id: marker
                         .content
                         .get("window")
+                        .and_then(Value::as_array)
+                        .and_then(|window| window.first())
                         .and_then(Value::as_str)
                         .and_then(|window| window.strip_prefix("through_message:"))
                         .and_then(|id| id.parse().ok())

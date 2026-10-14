@@ -448,6 +448,14 @@ pub struct CompactionContent {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<UserProblem>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -455,6 +463,17 @@ pub struct CompactionContent {
 impl CompactionContent {
     pub const fn kind() -> &'static str {
         "compaction"
+    }
+
+    /// Human-facing text. The checkpoint owns its summary; never serialize a
+    /// second copy or expose opaque native provider items as display text.
+    pub fn summary_text(&self) -> Option<&str> {
+        self.summary.as_deref().or_else(|| {
+            self.checkpoint
+                .as_ref()?
+                .pointer("/content/summary")?
+                .as_str()
+        })
     }
 }
 

@@ -33,6 +33,8 @@ export type TranscriptProjectionLabels = {
   error?: string
   notice?: string
   compaction?: string
+  compactionUnchanged?: string
+  compactionTokens?: (before: number, after: number) => string
   answer?: string
   reasoning?: string
   textSegment?: string
@@ -121,7 +123,12 @@ export function transcriptPartText(part: MessagePartLike): string {
     return rawText(part.text) || fragmentText(content, 'summary') || fragmentText(content, 'raw')
   }
   if (kind === 'compaction') {
-    return firstText(content, ['summary', 'detail']) || text(part.agenaSummary) || rawText(part.text)
+    return (
+      firstText(record(record(content.checkpoint).content), ['summary']) ||
+      firstText(content, ['summary', 'detail']) ||
+      text(part.agenaSummary) ||
+      rawText(part.text)
+    )
   }
   if (kind === 'error') {
     const problem = record(content.problem)
@@ -329,6 +336,7 @@ function noticeTitle(part: MessagePartLike, labels?: TranscriptProjectionLabels)
 
 function noticeSummary(part: MessagePartLike): string {
   const content = durablePartContent(part)
+  if (durablePartKind(part) === 'compaction') return transcriptPartText(part)
   return firstText(content, ['summary', 'body', 'message', 'detail']) || text(part.agenaSummary)
 }
 
@@ -487,7 +495,21 @@ function displayFields(
   }
   if (kind === 'notice' || kind === 'compaction') {
     const title = shownTitle(part, presentedTitle, noticeTitle(part, presentationLabels))
-    const summary = shownSummary(part, presentedSummary, noticeSummary(part))
+    let summary =
+      kind === 'compaction' && durablePartContent(part).outcome === 'unchanged'
+        ? text(presentationLabels?.compactionUnchanged) || 'Context is already compact; the existing history was kept.'
+        : shownSummary(part, presentedSummary, noticeSummary(part))
+    const checkpoint = record(durablePartContent(part).checkpoint)
+    if (
+      kind === 'compaction' &&
+      !summary &&
+      typeof checkpoint.before_tokens === 'number' &&
+      typeof checkpoint.after_tokens === 'number'
+    ) {
+      summary =
+        presentationLabels?.compactionTokens?.(checkpoint.before_tokens, checkpoint.after_tokens) ||
+        `${checkpoint.before_tokens} → ${checkpoint.after_tokens} tokens`
+    }
     return { title, summary, copyText: [title, summary].filter(Boolean).join('\n') }
   }
   const content = durablePartContent(part)
@@ -587,6 +609,14 @@ export function foldAssistantMessages(messages: MessageLike[]): Array<{ message:
       }
       previous.runIds.push(id)
 
+      // Compaction owns its status on its own part. Maintenance of the prompt
+      // must never relabel the preceding answer as failed/running/cancelled.
+      if (
+        record(message.info.runContent).run_kind === 'compaction' &&
+        record(previous.message.info.runContent).run_kind !== 'compaction'
+      )
+        continue
+
       // Adjacent assistant runs form one visual reply, but their lifecycle is
       // not cumulative. Keep the latest run marker's server-owned metadata
       // instead of promoting an older failure over a newer running/completed
@@ -645,7 +675,7 @@ export function projectTranscriptBlocks(
         return true
       })
     const runState = text(message.info.runState) || text(message.info.finish)
-    if (runNeedsLifecycle(runState, displayParts)) {
+    if (record(message.info.runContent).run_kind !== 'compaction' && runNeedsLifecycle(runState, displayParts)) {
       const lifecycle = lifecyclePart(message, runIds)
       if (lifecycle) displayParts.push(lifecycle)
     }

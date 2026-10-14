@@ -466,6 +466,9 @@ impl<'a> RequestHeaderContext<'a> {
 mod client_identity_tests;
 
 #[cfg(test)]
+mod compaction_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         CapabilityFamily, ManagedCredential, OpenAiChatCompletionsAdapter,
@@ -491,6 +494,12 @@ mod tests {
     }
 
     async fn read_http_request_body(stream: &mut tokio::net::TcpStream) -> serde_json::Value {
+        read_http_request(stream).await.1
+    }
+
+    pub(super) async fn read_http_request(
+        stream: &mut tokio::net::TcpStream,
+    ) -> (String, serde_json::Value) {
         use tokio::io::AsyncReadExt as _;
 
         let mut bytes = Vec::new();
@@ -505,7 +514,7 @@ mod tests {
                 break;
             }
         }
-        let headers = String::from_utf8_lossy(&bytes[..body_start]);
+        let headers = String::from_utf8_lossy(&bytes[..body_start]).into_owned();
         let content_length = headers
             .lines()
             .find_map(|line| {
@@ -520,8 +529,11 @@ mod tests {
             assert!(read > 0, "request closed before body");
             bytes.extend_from_slice(&buffer[..read]);
         }
-        serde_json::from_slice(&bytes[body_start..body_start + content_length])
-            .expect("request JSON")
+        (
+            headers,
+            serde_json::from_slice(&bytes[body_start..body_start + content_length])
+                .expect("request JSON"),
+        )
     }
 
     async fn complete_responses_fixture(

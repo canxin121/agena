@@ -5,9 +5,9 @@ use futures_util::StreamExt;
 use super::{
     CHAT_COMPLETIONS_ADAPTER_KIND, CapabilitySupport, CompletionFinishReason, CompletionRequest,
     CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelCapabilities, ModelId,
-    ModelRuntime, OpenAiChatCompletionsAdapter, OpenAiInputContent,
-    OpenAiInputMessage, OpenAiModelListResponse, OpenAiProfile, OpenAiResponsesAdapter,
-    OpenAiResponsesBackend, OpenAiResponsesCompactResponse, OpenAiResponsesInputItem,
+    ModelRuntime, OpenAiChatCompletionsAdapter, OpenAiInputContent, OpenAiInputMessage,
+    OpenAiModelListResponse, OpenAiProfile, OpenAiResponsesAdapter, OpenAiResponsesBackend,
+    OpenAiResponsesCompactRequest, OpenAiResponsesCompactResponse, OpenAiResponsesInputItem,
     OpenAiResponsesRequest, OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage, ProviderError,
     ProviderId, ProviderImageCapabilities, ProviderImageOperation, ProviderImageRequest,
     ProviderImageResponse, ProviderNativeToolArtifact, RESPONSES_ADAPTER_KIND,
@@ -551,35 +551,32 @@ impl ModelRuntime for OpenAiResponsesAdapter {
 
         let adapter = self.clone();
         let (request, body_json) = utils::prepare_request_with(move || {
-            let mut request = request;
-            let system = request.system.take();
-            let previous_response_id = request.previous_response_id.take();
             let input = adapter.responses_input_for_request(&request)?;
-            request.system = system;
-            request.previous_response_id = previous_response_id;
-            let tool_plan = adapter.responses_tool_plan_for_request(&request)?;
-            let body = OpenAiResponsesRequest {
+            let body = OpenAiResponsesCompactRequest {
                 model: model.to_string(),
                 instructions: OpenAiTransport::responses_instructions(&request),
                 input,
-                tools: tool_plan.tools,
-                tool_choice: None,
-                parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
-                include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
-                max_output_tokens: None,
-                temperature: None,
                 prompt_cache_key: request.prompt_cache_key.clone(),
-                previous_response_id: None,
-                store: None,
-                stream: None,
-                top_p: None,
-                reasoning: OpenAiTransport::responses_reasoning_config(&request, model.as_ref()),
-                service_tier: OpenAiTransport::responses_service_tier(&request),
-                text: OpenAiTransport::responses_text_config(&request),
-                client_metadata: None,
             };
-            let body_json =
-                utils::prepare_request_body_sync(&body, &request.request_override.body_patch)?;
+            // Model speed overrides are shared with ordinary generation. Keep
+            // only compact-supported cache/serving options; the runtime owns
+            // the model, instructions, complete input and continuation boundary.
+            let patch = request
+                .request_override
+                .body_patch
+                .iter()
+                .filter(|(key, _)| {
+                    matches!(
+                        key.as_str(),
+                        "prompt_cache_key"
+                            | "prompt_cache_options"
+                            | "prompt_cache_retention"
+                            | "service_tier"
+                    )
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            let body_json = utils::prepare_request_body_sync(&body, &patch)?;
             Ok((request, body_json))
         })
         .await?;
@@ -591,11 +588,20 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 RequestHeaderContext::from_request(&request),
             )
             .await?;
-        Ok(
-            (!response.output.is_empty()).then_some(ProviderCompactionOutput::OpenAiResponses {
-                items: response.output,
-            }),
-        )
+        let output = ProviderCompactionOutput::OpenAiResponses {
+            items: response.output,
+        };
+        if !output.has_checkpoint() {
+            return Err(ProviderError::ProviderClassified {
+                provider: self.id.clone(),
+                message:
+                    "compact response did not contain a usable encrypted compaction checkpoint"
+                        .to_owned(),
+                kind: agena_provider::ProviderErrorKind::MalformedResponse,
+                retryable: false,
+            });
+        }
+        Ok(Some(output))
     }
 
     #[tracing::instrument(

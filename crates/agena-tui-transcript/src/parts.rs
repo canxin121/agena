@@ -113,29 +113,57 @@ pub fn parts_entries_with_folds(
             if let Some(content) = content_by_run.remove(&part.part_id) {
                 entry.parts.extend(content.into_iter().map(entry_part));
             }
-            projected.push(entry);
+            // Maintenance runs have their own content lifecycle, separate
+            // from the assistant reply that they are displayed beneath.
+            let is_reply = string_field(&part.content, "run_kind").as_deref() != Some("compaction");
+            projected.push((entry, is_reply));
         }
     }
 
-    let mut entries: Vec<TranscriptEntry<'static>> = Vec::new();
-    for entry in projected {
-        if let Some(previous) = entries.last_mut()
+    let mut entries: Vec<(TranscriptEntry<'static>, bool)> = Vec::new();
+    for (entry, is_reply) in projected {
+        if let Some((previous, previous_is_reply)) = entries.last_mut()
             && previous.role == Some(RunRole::Assistant)
             && entry.role == Some(RunRole::Assistant)
         {
             // Fold adjacent assistant rounds only after exact ownership has
             // been resolved. Runtime/System ingress remains a hard boundary.
-            previous.state = fold_run_status(previous.state, entry.state);
+            if is_reply {
+                previous.state = if *previous_is_reply {
+                    fold_run_status(previous.state, entry.state)
+                } else {
+                    entry.state
+                };
+                previous.reply_id = entry.reply_id;
+                *previous_is_reply = true;
+            } else if !*previous_is_reply {
+                previous.state = entry.state;
+            }
             previous.parts.extend(entry.parts);
             continue;
         }
-        entries.push(entry);
+        entries.push((entry, is_reply));
+    }
+    let positions = parts
+        .iter()
+        .enumerate()
+        .map(|(index, part)| (part.part_id, index))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for (entry, _) in &mut entries {
+        // A run can resume after another assistant activity has started.
+        // Once adjacent runs are folded, retain the durable content order.
+        entry.parts.sort_by_key(|part| match part.id {
+            TranscriptContentId::StoredPart(id) => {
+                positions.get(&id).copied().unwrap_or(usize::MAX)
+            }
+            _ => usize::MAX,
+        });
     }
     for fold in folds {
         let anchor = TranscriptContentId::StoredPart(fold.anchor_part_id);
-        let Some(entry) = entries
+        let Some((entry, _)) = entries
             .iter_mut()
-            .find(|entry| entry.parts.iter().any(|part| part.id == anchor))
+            .find(|(entry, _)| entry.parts.iter().any(|part| part.id == anchor))
         else {
             continue;
         };
@@ -156,7 +184,10 @@ pub fn parts_entries_with_folds(
             },
         );
     }
-    entries.into_iter().map(finalize_run_entry).collect()
+    entries
+        .into_iter()
+        .map(|(entry, is_reply)| finalize_run_entry(entry, is_reply))
+        .collect()
 }
 
 /// Whether any run marker in the part list has a non-terminal state. The app
@@ -189,64 +220,22 @@ pub fn parts_visible_user_inputs(parts: &[PartResource]) -> usize {
 /// of the final assistant `run` marker (design §4.1.1 marker == turn), joined
 /// with newlines. Returns `None` when no assistant run carries text.
 pub fn last_assistant_reply_text(parts: &[PartResource]) -> Option<String> {
-    let mut last: Option<(i64, String)> = None;
-    let mut current_run: Option<(i64, &str)> = None;
-    let mut current_text = String::new();
-    for part in parts {
-        if part.kind == "run" {
-            // The previous run just ended: keep its text only when it is an
-            // assistant run, replacing any earlier assistant reply.
-            if let Some((run_id, role)) = current_run.take() {
-                if role == "assistant" {
-                    last = Some((run_id, std::mem::take(&mut current_text)));
-                } else {
-                    current_text.clear();
-                }
-            }
-            current_run = Some((part.part_id, part.role.as_str()));
-        } else if let Some((run_id, _)) = current_run
-            && part.run_id == Some(run_id)
-            && part.kind == "text"
-            && let Some(text) = string_field(&part.content, "text")
-        {
-            if !current_text.is_empty() {
-                current_text.push('\n');
-            }
-            current_text.push_str(&text);
-        }
-    }
-    // Flush the trailing run.
-    if let Some((run_id, role)) = current_run
-        && role == "assistant"
-    {
-        last = Some((run_id, current_text));
-    }
-    let (_, text) = last?;
-    if text.trim().is_empty() {
-        return None;
-    }
-    Some(text)
+    let marker = parts.iter().rev().find(|part| {
+        part.kind == "run"
+            && part.role == "assistant"
+            && part.content.get("run_kind").and_then(Value::as_str) != Some("compaction")
+    })?;
+    // Resolve by owner, including output appended after a maintenance run.
+    let text = parts
+        .iter()
+        .filter(|part| part.run_id == Some(marker.part_id) && part.kind == "text")
+        .filter_map(|part| string_field(&part.content, "text"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then_some(text)
 }
 
 fn run_marker_entry(marker: &PartResource) -> TranscriptEntry<'static> {
-    let mut parts = Vec::new();
-    if string_field(&marker.content, "run_kind").as_deref() == Some("compaction") {
-        // The checkpoint payload is stored on the durable run marker itself,
-        // not in a child content row. Project only its human-facing summary;
-        // the private checkpoint/native provider state stays out of the UI.
-        let content = serde_json::json!({
-            "summary": string_field(&marker.content, "summary"),
-        });
-        if let Ok(compaction) = CompactionContent::try_from(&content) {
-            parts.push(TranscriptEntryPart {
-                id: TranscriptContentId::StoredPart(marker.part_id),
-                status: part_status_from_string(&marker.state),
-                content: TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(
-                    Box::new(compaction),
-                )),
-            });
-        }
-    }
     TranscriptEntry {
         id: TranscriptEntryId::StoredMessage(marker.part_id),
         role: role_from_string(&marker.role),
@@ -254,11 +243,14 @@ fn run_marker_entry(marker: &PartResource) -> TranscriptEntry<'static> {
         created_at: timestamp(marker.created_at_ms),
         reply_id: string_field(&marker.content, "reply_id")
             .and_then(|reply_id| reply_id.parse::<AssistantReplyId>().ok()),
-        parts,
+        parts: Vec::new(),
     }
 }
 
-fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'static> {
+fn finalize_run_entry(
+    mut entry: TranscriptEntry<'static>,
+    is_reply: bool,
+) -> TranscriptEntry<'static> {
     if entry.role == Some(RunRole::Assistant) {
         // The final assistant text part is the answer and must render as a
         // default-expanded part ([`TranscriptActivityContent::Answer`]); every
@@ -308,7 +300,7 @@ fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'s
             )
         });
         let requires_outcome = assistant_reply_state_requires_outcome(state);
-        if entry.parts.is_empty() || (requires_outcome && !has_error_part) {
+        if is_reply && (entry.parts.is_empty() || (requires_outcome && !has_error_part)) {
             let marker_id = match entry.id {
                 TranscriptEntryId::StoredMessage(id) => id,
                 _ => 0,
@@ -915,21 +907,171 @@ mod tests {
     }
 
     #[test]
-    fn compaction_run_marker_projects_its_checkpoint_as_a_transcript_part() {
-        let mut marker = run(3, "assistant", "completed");
-        marker.content = serde_json::json!({
-            "run_kind": "compaction",
-            "summary": "Durable continuation record",
-            "checkpoint": { "private": "not rendered" },
-        });
+    fn compaction_envelopes_do_not_fabricate_content_parts() {
+        let mut marker = run(3, "assistant", "pending");
+        marker.content = serde_json::json!({"run_kind": "compaction"});
         let entries = parts_entries(&[marker]);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].parts.len(), 1);
-        assert!(matches!(
-            entries[0].parts[0].content,
-            TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(_))
-        ));
-        assert_eq!(entries[0].parts[0].id, TranscriptContentId::StoredPart(3));
+        assert!(entries[0].parts.is_empty());
+    }
+
+    #[test]
+    fn compaction_status_stays_on_its_part_without_replacing_the_answer_lifecycle() {
+        for state in ["pending", "in_progress", "completed", "failed", "cancelled"] {
+            let mut marker = run(5, "assistant", state);
+            marker.content = serde_json::json!({"run_kind": "compaction"});
+            let mut compact = content_part_for(
+                5,
+                6,
+                "compaction",
+                "assistant",
+                serde_json::json!({
+                    "detail": "Compaction detail",
+                    "checkpoint": { "content": {"type": "text_summary", "summary": "Checkpoint summary"} },
+                }),
+            );
+            compact.state = state.to_owned();
+            let answer = content_part_for(
+                3,
+                4,
+                "text",
+                "assistant",
+                serde_json::json!({"text": "Hello"}),
+            );
+            let parts = vec![
+                run(3, "assistant", "completed"),
+                answer,
+                marker.clone(),
+                compact.clone(),
+            ];
+            let entries = parts_entries(&parts);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].state, RunStatus::Completed);
+            assert_eq!(entries[0].parts.len(), 2);
+            assert_eq!(entries[0].parts[1].id, TranscriptContentId::StoredPart(6));
+            assert_eq!(entries[0].parts[1].status, part_status_from_string(state));
+            let TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(content)) =
+                &entries[0].parts[1].content
+            else {
+                panic!("expected compaction part");
+            };
+            assert_eq!(content.detail.as_deref(), Some("Compaction detail"));
+            assert_eq!(content.summary_text(), Some("Checkpoint summary"));
+            assert_eq!(last_assistant_reply_text(&parts).as_deref(), Some("Hello"));
+            assert_eq!(parts_entries(&[marker, compact])[0].parts.len(), 1);
+        }
+        let mut marker = run(3, "assistant", "failed");
+        marker.content = serde_json::json!({"run_kind": "compaction"});
+        let compact = content_part_for(
+            3,
+            4,
+            "compaction",
+            "assistant",
+            serde_json::json!({"detail": "failed"}),
+        );
+        let answer = content_part_for(
+            5,
+            6,
+            "text",
+            "assistant",
+            serde_json::json!({"text": "Recovered answer"}),
+        );
+        let entries = parts_entries(&[marker, compact, run(5, "assistant", "completed"), answer]);
+        assert_eq!(entries[0].state, RunStatus::Completed);
+        assert_eq!(entries[0].parts.len(), 2);
+    }
+
+    #[test]
+    fn compaction_renders_as_a_standard_localized_navigable_part_in_content_order() {
+        use crate::{TranscriptDetailDefaults, TranscriptNodeKey, render_entry_detailed};
+        let mut marker = run(5, "assistant", "completed");
+        marker.content = serde_json::json!({"run_kind": "compaction"});
+        let parts = vec![
+            run(3, "assistant", "completed"),
+            content_part_for(
+                3,
+                4,
+                "think",
+                "assistant",
+                serde_json::json!({"summary": ["Working"]}),
+            ),
+            marker,
+            content_part_for(
+                5,
+                6,
+                "compaction",
+                "assistant",
+                serde_json::json!({"outcome": "unchanged"}),
+            ),
+            content_part_for(
+                3,
+                7,
+                "text",
+                "assistant",
+                serde_json::json!({"text": "Final answer"}),
+            ),
+        ];
+        let entries = parts_entries(&parts);
+        let entry = &entries[0];
+        assert_eq!(
+            entry.parts.iter().map(|part| part.id).collect::<Vec<_>>(),
+            vec![
+                TranscriptContentId::StoredPart(4),
+                TranscriptContentId::StoredPart(6),
+                TranscriptContentId::StoredPart(7)
+            ]
+        );
+        assert_eq!(
+            last_assistant_reply_text(&parts).as_deref(),
+            Some("Final answer")
+        );
+        let key = TranscriptNodeKey::Activity {
+            entry_id: entry.id,
+            content_id: TranscriptContentId::StoredPart(6),
+        };
+        let i18n = agena_tui::i18n::I18n::resolve(Some("zh-CN"), None);
+        let defaults = TranscriptDetailDefaults::default();
+        let collapsed = render_entry_detailed(entry, 100, &i18n, &defaults, &Default::default());
+        let node = collapsed.nodes.iter().find(|node| node.key == key).unwrap();
+        assert!(node.toggleable);
+        assert!(!node.expanded);
+        let expanded = render_entry_detailed(
+            entry,
+            100,
+            &i18n,
+            &defaults,
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let text = expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("上下文压缩"), "{text}");
+        assert!(text.contains("无需压缩"), "{text}");
+        assert!(!text.contains("回复进行中"), "{text}");
+        let node = expanded.nodes.iter().find(|node| node.key == key).unwrap();
+        assert!(node.expanded);
+        assert!(node.copy_text.contains("无需压缩"));
+
+        let mut native_parts = parts.clone();
+        native_parts[3].content = serde_json::json!({"outcome": "compacted", "checkpoint": {
+            "before_tokens": 10000, "after_tokens": 3000,
+            "content": {"type": "open_ai_responses", "items": [{"encrypted_content": "opaque provider data"}]}
+        }});
+        let native_entry = parts_entries(&native_parts).remove(0);
+        let native = render_entry_detailed(
+            &native_entry,
+            100,
+            &i18n,
+            &defaults,
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let node = native.nodes.iter().find(|node| node.key == key).unwrap();
+        assert!(node.copy_text.contains("10000"));
+        assert!(node.copy_text.contains("3000"));
+        assert!(!node.copy_text.contains("opaque provider data"));
     }
 
     #[test]

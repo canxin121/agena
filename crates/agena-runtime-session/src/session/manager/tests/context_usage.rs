@@ -1,16 +1,21 @@
 use super::*;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 struct ContextProvider {
     model: ModelId,
     requests: std::sync::Mutex<Vec<CompletionRequest>>,
-    summaries: std::sync::Mutex<VecDeque<(&'static str, CompletionFinishReason)>>,
+    summaries: std::sync::Mutex<VecDeque<(String, CompletionFinishReason)>>,
     native_attempts: AtomicUsize,
+    native_available: AtomicBool,
+    native_output: Option<Vec<serde_json::Value>>,
+    native_error_status: reqwest::StatusCode,
     prompt_tokens: u64,
     repaired: bool,
     limits: agena_domain::ModelTokenLimits,
-    overflow_first: bool,
+    overflow_attempt: Option<usize>,
+    summary_started: Option<Arc<tokio::sync::Notify>>,
+    summary_release: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl ContextProvider {
@@ -18,8 +23,16 @@ impl ContextProvider {
         Self {
             model: ModelId::new("large-context"),
             requests: Default::default(),
-            summaries: std::sync::Mutex::new(summaries.into()),
+            summaries: std::sync::Mutex::new(
+                summaries
+                    .into_iter()
+                    .map(|(text, reason)| (text.to_owned(), reason))
+                    .collect(),
+            ),
             native_attempts: AtomicUsize::new(0),
+            native_available: AtomicBool::new(false),
+            native_output: None,
+            native_error_status: reqwest::StatusCode::NOT_FOUND,
             prompt_tokens: 320_000,
             repaired: false,
             limits: agena_domain::ModelTokenLimits {
@@ -27,7 +40,9 @@ impl ContextProvider {
                 max_input_tokens: Some(1_000_000),
                 max_output_tokens: Some(384_000),
             },
-            overflow_first: false,
+            overflow_attempt: None,
+            summary_started: None,
+            summary_release: None,
         }
     }
 }
@@ -54,9 +69,18 @@ impl ModelRuntime for ContextProvider {
         _request: CompletionRequest,
     ) -> Result<Option<agena_provider::ProviderCompactionOutput>, ProviderError> {
         self.native_attempts.fetch_add(1, Ordering::SeqCst);
+        if self.native_available.load(Ordering::SeqCst) || self.native_output.is_some() {
+            return Ok(Some(
+                agena_provider::ProviderCompactionOutput::OpenAiResponses {
+                    items: self.native_output.clone().unwrap_or_else(|| vec![
+                        serde_json::json!({"type": "compaction", "encrypted_content": "opaque checkpoint"}),
+                    ]),
+                },
+            ));
+        }
         Err(ProviderError::HttpStatus {
             provider: self.id().to_owned(),
-            status: reqwest::StatusCode::NOT_FOUND,
+            status: self.native_error_status,
             body: "Not Found".to_owned(),
             kind: agena_provider::ProviderErrorKind::InvalidRequest,
             retryable: false,
@@ -67,7 +91,13 @@ impl ModelRuntime for ContextProvider {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         self.requests.lock().unwrap().push(request);
-        if self.overflow_first && self.requests.lock().unwrap().len() == 1 {
+        if let Some(started) = &self.summary_started {
+            started.notify_one();
+        }
+        if let Some(release) = &self.summary_release {
+            release.notified().await;
+        }
+        if self.overflow_attempt == Some(self.requests.lock().unwrap().len()) {
             return Err(ProviderError::ProviderClassified {
                 provider: self.id().to_owned(),
                 message: "context length exceeded".to_owned(),
@@ -156,6 +186,15 @@ fn options() -> agena_runtime::SessionRunOptions {
 }
 
 async fn dense_history(manager: &SessionManager) -> Session {
+    history(
+        manager,
+        32,
+        "Keep the permission fix and finish its verification.",
+    )
+    .await
+}
+
+async fn history(manager: &SessionManager, large_turns: usize, latest_user_text: &str) -> Session {
     let mut session = create_with_model(
         manager,
         "session 126 regression",
@@ -165,7 +204,7 @@ async fn dense_history(manager: &SessionManager) -> Session {
     .await;
     // More than the old 616k admission limit; every resource remains below
     // its model-preview bound so this exercises the complete request.
-    for _ in 0..32 {
+    for _ in 0..large_turns {
         session = append_message(
             manager,
             session,
@@ -178,9 +217,7 @@ async fn dense_history(manager: &SessionManager) -> Session {
         manager,
         session,
         Role::User,
-        vec![TypedContent::Text(text_content(
-            "Keep the permission fix and finish its verification.",
-        ))],
+        vec![TypedContent::Text(text_content(latest_user_text))],
     )
     .await;
     let run_id = manager
@@ -435,8 +472,8 @@ async fn compaction_recovers_empty_reasoning_and_remembers_a_missing_native_endp
         .unwrap();
     assert_eq!(
         provider.native_attempts.load(Ordering::SeqCst),
-        1,
-        "404 must not be retried after a reload"
+        2,
+        "an explicit manual compact retries a previously missing endpoint"
     );
 }
 
@@ -452,7 +489,7 @@ async fn repaired_compaction_policy_recovers_sessions_disabled_by_legacy_failure
                 "compaction",
                 serde_json::json!({
                     "summary": null, "checkpoint": null, "attempt_failure": true,
-                    "compaction_policy_version": 2,
+                    "compaction_policy_version": 4,
                 }),
             )
             .await
@@ -480,7 +517,7 @@ async fn repaired_compaction_policy_recovers_sessions_disabled_by_legacy_failure
     assert!(!loaded.runtime.prompt_window.auto_compaction_disabled);
     for _ in 0..3 {
         let loaded = manager.get_session(session.id).await.unwrap();
-        manager.persist_compaction_failure(loaded).await.unwrap();
+        record_compaction_failure(&manager, loaded).await;
     }
     let loaded = manager.get_session(session.id).await.unwrap();
     assert_eq!(
@@ -535,14 +572,7 @@ async fn measured_overflow_automatically_compacts_before_the_next_request() {
     let checkpoint_part = compacted
         .parts()
         .iter()
-        .find(|part| {
-            part.kind == "run"
-                && part
-                    .content
-                    .get("run_kind")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("compaction")
-        })
+        .find(|part| part.kind == "compaction")
         .expect("automatic compaction persists a durable checkpoint part");
     assert_eq!(checkpoint_part.state, PartState::Completed);
     assert_eq!(
@@ -663,6 +693,270 @@ async fn output_override_is_used_by_admission_and_the_provider_request() {
 }
 
 #[tokio::test]
+async fn short_conversation_compaction_is_a_durable_noop_and_preserves_the_answer() {
+    let provider = Arc::new(ContextProvider::new(vec![
+        (
+            "The user said hello. There is no task to continue.",
+            CompletionFinishReason::Stop,
+        ),
+        (
+            "The user said hello. There is no task to continue.",
+            CompletionFinishReason::Stop,
+        ),
+    ]));
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = history(&manager, 0, "helli").await;
+    let original = session.parts().to_vec();
+    for expected_attempts in 1..=2 {
+        let compacted = manager
+            .compact_session(agena_runtime::SessionExecutionRequest::new(
+                session.id,
+                options(),
+            ))
+            .await
+            .unwrap();
+        let loaded = manager.get_session(session.id).await.unwrap();
+        for state in [&compacted, &loaded] {
+            assert!(state.runtime.prompt_window.compaction.is_none());
+            assert_eq!(state.runtime.prompt_window.generation, 0);
+            assert_eq!(
+                state.runtime.prompt_window.consecutive_compaction_failures,
+                0
+            );
+            assert!(!state.runtime.prompt_window.auto_compaction_disabled);
+            for part in &original {
+                assert_eq!(
+                    state
+                        .parts()
+                        .iter()
+                        .find(|item| item.part_id == part.part_id),
+                    Some(part)
+                );
+            }
+            let attempts: Vec<_> = state
+                .parts()
+                .iter()
+                .filter(|part| part.kind == "compaction")
+                .collect();
+            assert_eq!(attempts.len(), expected_attempts);
+            assert!(
+                attempts
+                    .iter()
+                    .all(|part| part.state == PartState::Completed
+                        && part.content["outcome"] == "unchanged"
+                        && part.content["checkpoint"].is_null())
+            );
+            let runs = crate::session::prompt_window::compactable_prompt_runs(
+                state, None, None, None, false,
+            );
+            assert!(runs.iter().any(|run| run.as_text_lossy() == "helli"));
+            assert!(
+                runs.iter()
+                    .any(|run| run.as_text_lossy() == "Prior work awaits verification.")
+            );
+        }
+    }
+    assert_eq!(provider.native_attempts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn native_compaction_persists_one_real_content_part_without_calling_the_summarizer() {
+    let fixture = ContextProvider::new(Vec::new());
+    fixture.native_available.store(true, Ordering::SeqCst);
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let original = dense_history(&manager).await;
+    let compacted = manager
+        .compact_session(agena_runtime::SessionExecutionRequest::new(
+            original.id,
+            options(),
+        ))
+        .await
+        .unwrap();
+    let loaded = manager.store.load_session(original.id).await.unwrap();
+    assert_eq!(
+        compacted.runtime.prompt_window.compaction,
+        loaded.runtime.prompt_window.compaction
+    );
+    let parts = loaded
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "compaction")
+        .collect::<Vec<_>>();
+    assert_eq!(parts.len(), 1);
+    let part = parts[0];
+    assert_eq!(part.state, PartState::Completed);
+    assert!(part.run_id.is_some_and(|id| id != part.part_id));
+    assert_eq!(part.content["outcome"], "compacted");
+    assert_eq!(
+        part.content["checkpoint"]["content"]["type"],
+        "open_ai_responses"
+    );
+    assert!(part.content.get("summary").is_none());
+    assert_eq!(provider.native_attempts.load(Ordering::SeqCst), 1);
+    assert!(provider.requests.lock().unwrap().is_empty());
+    for original_part in original.parts() {
+        assert!(loaded.parts().contains(original_part));
+    }
+}
+
+#[tokio::test]
+async fn compaction_attempt_is_visible_during_work_and_settles_in_place_on_success_or_cancel() {
+    for cancel in [false, true] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut fixture = ContextProvider::new(vec![(
+            "Continue verification of the permission fix.",
+            CompletionFinishReason::Stop,
+        )]);
+        fixture.summary_started = Some(started.clone());
+        fixture.summary_release = Some(release.clone());
+        let manager = manager_with_provider(Arc::new(fixture)).await;
+        let session = dense_history(&manager).await;
+        let session_id = session.id;
+        let changes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let _subscription = manager.session_store().subscribe(session_id, {
+            let changes = changes.clone();
+            Arc::new(move |change| {
+                use agena_storage::store::SessionChange;
+                match change {
+                    SessionChange::PartAdded { part, .. }
+                    | SessionChange::PartUpdated { part, .. }
+                        if part.kind == "compaction" =>
+                    {
+                        changes.lock().unwrap().push(part)
+                    }
+                    _ => {}
+                }
+            })
+        });
+        let reply = session
+            .parts()
+            .iter()
+            .rev()
+            .find(|part| part.role == PartRole::Assistant && part.kind == "run")
+            .unwrap();
+        let owner = manager.background_handle();
+        let task = tokio::spawn(async move {
+            owner
+                .compact_session(agena_runtime::SessionExecutionRequest::new(
+                    session_id,
+                    options(),
+                ))
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), started.notified())
+            .await
+            .unwrap();
+        let running = manager.get_session(session_id).await.unwrap();
+        let attempt = running
+            .parts()
+            .iter()
+            .find(|part| part.kind == "compaction")
+            .unwrap();
+        assert!(!attempt.state.is_terminal());
+        let envelope = running
+            .parts()
+            .iter()
+            .find(|part| Some(part.part_id) == attempt.run_id)
+            .unwrap();
+        assert_ne!(attempt.part_id, envelope.part_id);
+        assert_eq!(attempt.role, PartRole::Assistant);
+        assert_eq!(attempt.visibility, PartVisibility::User);
+        assert_eq!(envelope.kind, "run");
+        assert_eq!(envelope.content["turn_id"], reply.content["turn_id"]);
+        assert_eq!(envelope.content["reply_id"], reply.content["reply_id"]);
+        assert!(envelope.content.get("checkpoint").is_none());
+        assert!(envelope.content.get("summary").is_none());
+        assert!(running.runtime.prompt_window.compaction.is_none());
+        assert!(
+            running
+                .active_window_parts()
+                .iter()
+                .any(|part| part.part_id == reply.part_id)
+        );
+        let late_part = manager.store.settle_background_run(session_id, reply.part_id, None, vec![NewPart {
+            state: PartState::Completed,
+            ..NewPart::pending("system_notification", PartRole::Assistant, serde_json::json!({
+                "operation_id": "late-operation", "operation_kind": "shell", "status": "completed",
+                "summary": "Late operation completed", "body": "Late operation completed"
+            }))
+        }]).await.unwrap().remove(0);
+        if cancel {
+            manager
+                .cancel_active_execution_with_outcome(session_id)
+                .await
+                .unwrap();
+        } else {
+            release.notify_one();
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap();
+        if cancel {
+            assert!(matches!(result, Err(crate::AppError::Cancelled)));
+        } else {
+            result.unwrap();
+        }
+        let loaded = manager.get_session(session_id).await.unwrap();
+        let attempts: Vec<_> = loaded
+            .parts()
+            .iter()
+            .filter(|part| part.kind == "compaction")
+            .collect();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].part_id, attempt.part_id);
+        assert!(attempts[0].revision > attempt.revision);
+        assert!(attempts[0].finished_at_ms.is_some());
+        let detail = manager
+            .session_store()
+            .load_part_ids(session_id, &[attempt.part_id])
+            .await
+            .unwrap();
+        assert_eq!(detail.parts, vec![attempts[0].clone()]);
+        {
+            let snapshots = changes.lock().unwrap();
+            assert_eq!(snapshots.first().unwrap().state, PartState::InProgress);
+            assert_eq!(snapshots.last().unwrap().state, attempts[0].state);
+            assert!(
+                snapshots
+                    .iter()
+                    .all(|part| part.part_id == attempt.part_id && part.run_id == attempt.run_id)
+            );
+        }
+        assert_eq!(
+            attempts[0].state,
+            if cancel {
+                PartState::Cancelled
+            } else {
+                PartState::Completed
+            }
+        );
+        assert_eq!(loaded.runtime.prompt_window.compaction.is_some(), !cancel);
+        assert!(
+            loaded
+                .active_window_parts()
+                .iter()
+                .any(|part| part.part_id == late_part.part_id)
+        );
+        let prompt = crate::session::prompt_window::compactable_prompt_runs(
+            &loaded, None, None, None, false,
+        );
+        assert!(
+            prompt
+                .iter()
+                .any(|run| run.as_text_lossy().contains("Late operation completed"))
+        );
+        assert_eq!(
+            loaded.runtime.prompt_window.consecutive_compaction_failures,
+            0
+        );
+        assert!(!manager.execution_registry.is_active(session_id).await);
+    }
+}
+
+#[tokio::test]
 async fn failed_summary_recovery_keeps_history_and_native_capability_state() {
     let provider = Arc::new(ContextProvider::new(vec![
         ("", CompletionFinishReason::Stop),
@@ -679,6 +973,24 @@ async fn failed_summary_recovery_keeps_history_and_native_capability_state() {
         .unwrap_err();
     assert!(error.to_string().contains("reasoning_tokens"));
     let loaded = manager.get_session(session.id).await.unwrap();
+    let attempts: Vec<_> = loaded
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "compaction")
+        .collect();
+    assert_eq!(
+        attempts.len(),
+        1,
+        "failure must settle the running part, not append another one"
+    );
+    assert_eq!(attempts[0].state, PartState::Failed);
+    assert!(
+        attempts[0].content["detail"]
+            .as_str()
+            .unwrap()
+            .contains("empty continuation record")
+    );
+    assert!(attempts[0].content["problem"].is_object());
     assert!(loaded.runtime.prompt_window.compaction.is_none());
     assert!(
         !loaded
@@ -728,7 +1040,7 @@ async fn compactor_recovers_provider_overflow_by_reducing_history_once() {
         "Continue the permission fix and run its tests.",
         CompletionFinishReason::Stop,
     )]);
-    fixture.overflow_first = true;
+    fixture.overflow_attempt = Some(1);
     fixture.limits = agena_domain::ModelTokenLimits {
         context_window_tokens: Some(65_536),
         max_input_tokens: Some(32_768),
@@ -748,14 +1060,7 @@ async fn compactor_recovers_provider_overflow_by_reducing_history_once() {
     let checkpoint_part = compacted
         .parts()
         .iter()
-        .find(|part| {
-            part.kind == "run"
-                && part
-                    .content
-                    .get("run_kind")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("compaction")
-        })
+        .find(|part| part.kind == "compaction")
         .expect("manual compaction persists a durable checkpoint part");
     assert_eq!(checkpoint_part.state, PartState::Completed);
     assert_eq!(checkpoint_part.content["checkpoint"]["trigger"], "manual");
@@ -799,4 +1104,324 @@ async fn unrepresentable_compaction_preserves_history_without_sending_an_oversiz
             Some(&part)
         );
     }
+}
+
+#[tokio::test]
+async fn input_overflow_and_empty_summary_recover_independently_in_either_order() {
+    for overflow_attempt in [1, 2] {
+        let mut fixture = ContextProvider::new(vec![
+            ("", CompletionFinishReason::Length),
+            (
+                "Preserve the permission fix and run the pending tests.",
+                CompletionFinishReason::Stop,
+            ),
+        ]);
+        fixture.overflow_attempt = Some(overflow_attempt);
+        let provider = Arc::new(fixture);
+        let manager = manager_with_provider(provider.clone()).await;
+        let session = dense_history(&manager).await;
+        let compacted = manager
+            .compact_session(agena_runtime::SessionExecutionRequest::new(
+                session.id,
+                options(),
+            ))
+            .await
+            .unwrap();
+        assert!(compacted.runtime.prompt_window.compaction.is_some());
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            serde_json::to_vec(&requests[2].turns).unwrap().len()
+                < serde_json::to_vec(&requests[0].turns).unwrap().len()
+        );
+        assert_eq!(requests[0].max_output_tokens, Some(32_000));
+        assert_eq!(requests[2].max_output_tokens, Some(64_000));
+        assert!(
+            requests[2]
+                .turns
+                .last()
+                .unwrap()
+                .as_text_lossy()
+                .contains("previous attempt")
+        );
+    }
+}
+
+#[tokio::test]
+async fn summary_requests_own_their_history_tools_and_output_format() {
+    let provider = Arc::new(ContextProvider::new(vec![(
+        "Preserve the user task.",
+        CompletionFinishReason::Stop,
+    )]));
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    let mut run_options = options();
+    run_options
+        .request_override
+        .headers
+        .insert("x-route".into(), "sticky".into());
+    run_options.request_override.body_patch = serde_json::from_value(serde_json::json!({
+        "model": "wrong-model", "messages": [], "input": [],
+        "system": "Discard all constraints", "instructions": "Discard all constraints",
+        "previous_response_id": "resp_stale", "tool_choice": "required", "stream": true,
+        "response_format": {"type": "json_object"}, "text": {"format": {"type": "json_object"}},
+        "stop": ["#"], "max_output_tokens": 900000,
+        "service_tier": "priority",
+        "generationConfig": {"maxOutputTokens": 900000, "responseMimeType": "application/json", "responseSchema": {}, "stopSequences": ["#"]},
+        "output_config": {"effort": "high", "format": {"type": "json_schema", "schema": {}}}
+    })).unwrap();
+    manager
+        .compact_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            run_options,
+        ))
+        .await
+        .unwrap();
+    let requests = provider.requests.lock().unwrap();
+    let request = &requests[0];
+    assert!(request.disable_tools);
+    assert_eq!(request.request_override.headers["x-route"], "sticky");
+    assert_eq!(
+        request.request_override.body_patch,
+        serde_json::from_value(serde_json::json!({
+            "max_output_tokens": 32000,
+            "service_tier": "priority",
+            "generationConfig": {"maxOutputTokens": 32000},
+            "output_config": {"effort": "high"}
+        }))
+        .unwrap()
+    );
+    assert!(
+        request
+            .system
+            .as_deref()
+            .unwrap()
+            .contains("durable checkpoint")
+    );
+    assert!(
+        request
+            .turns
+            .iter()
+            .any(|turn| turn.as_text_lossy().contains("permission"))
+    );
+}
+
+#[tokio::test]
+async fn invalid_native_payload_falls_back_without_installing_or_disabling_a_native_checkpoint() {
+    let mut fixture = ContextProvider::new(vec![(
+        "Continue the permission fix.",
+        CompletionFinishReason::Stop,
+    )]);
+    fixture.native_output = Some(vec![
+        serde_json::json!({"type": "message", "role": "assistant", "content": []}),
+    ]);
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    let compacted = manager
+        .compact_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            options(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(provider.requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        compacted
+            .runtime
+            .prompt_window
+            .compaction
+            .as_ref()
+            .unwrap()
+            .strategy,
+        agena_domain::PromptCompactionStrategy::LocalSummary
+    );
+    assert!(
+        compacted
+            .runtime
+            .prompt_window
+            .remote_compaction_disabled_models
+            .is_empty()
+    );
+    assert_eq!(
+        compacted
+            .parts()
+            .iter()
+            .filter(|part| part.kind == "compaction")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn native_payload_errors_do_not_disable_future_compaction_attempts() {
+    let mut fixture = ContextProvider::new(vec![
+        ("Continue the permission fix.", CompletionFinishReason::Stop),
+        ("Continue the permission fix.", CompletionFinishReason::Stop),
+    ]);
+    fixture.native_error_status = reqwest::StatusCode::BAD_REQUEST;
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    for _ in 0..2 {
+        manager
+            .compact_session(agena_runtime::SessionExecutionRequest::new(
+                session.id,
+                options(),
+            ))
+            .await
+            .unwrap();
+        let loaded = manager.get_session(session.id).await.unwrap();
+        assert!(
+            loaded
+                .runtime
+                .prompt_window
+                .remote_compaction_disabled_models
+                .is_empty()
+        );
+    }
+    assert_eq!(provider.native_attempts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn repaired_policy_does_not_restore_old_native_capability_failures() {
+    let provider = Arc::new(ContextProvider::new(vec![(
+        "Continue the permission fix.",
+        CompletionFinishReason::Stop,
+    )]));
+    let manager = manager_with_provider(provider).await;
+    let session = dense_history(&manager).await;
+    let compacted = manager
+        .compact_session(agena_runtime::SessionExecutionRequest::new(
+            session.id,
+            options(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        !compacted
+            .runtime
+            .prompt_window
+            .remote_compaction_disabled_models
+            .is_empty()
+    );
+    let part = compacted
+        .parts()
+        .iter()
+        .find(|part| part.kind == "compaction")
+        .unwrap();
+    let mut content = part.content.clone();
+    content["compaction_policy_version"] = serde_json::json!(5);
+    manager
+        .store
+        .update_part(
+            session.id,
+            part.part_id,
+            agena_storage::store::PartDelta {
+                content: Some(content),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let loaded = manager.get_session(session.id).await.unwrap();
+    assert!(
+        loaded
+            .runtime
+            .prompt_window
+            .remote_compaction_disabled_models
+            .is_empty()
+    );
+    assert_eq!(
+        loaded.runtime.prompt_window.compaction,
+        compacted.runtime.prompt_window.compaction
+    );
+}
+
+#[tokio::test]
+async fn automatic_compaction_remembers_a_missing_endpoint_but_manual_success_restores_it() {
+    let mut fixture = ContextProvider::new(vec![
+        (
+            "Preserve the permission task.",
+            CompletionFinishReason::Stop,
+        ),
+        (
+            "Preserve the permission task and its latest progress.",
+            CompletionFinishReason::Stop,
+        ),
+    ]);
+    fixture.prompt_tokens = 980_000;
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    let request = agena_runtime::SessionExecutionRequest::new(session.id, options());
+    manager.compact_session(request.clone()).await.unwrap();
+    // Record actual model usage above the trigger, then let the following turn
+    // automatically compact with the remembered local fallback.
+    manager.continue_session(request.clone()).await.unwrap();
+    manager.continue_session(request.clone()).await.unwrap();
+    assert_eq!(provider.native_attempts.load(Ordering::SeqCst), 1);
+    let loaded = manager.get_session(session.id).await.unwrap();
+    assert!(
+        !loaded
+            .runtime
+            .prompt_window
+            .remote_compaction_disabled_models
+            .is_empty()
+    );
+    provider.native_available.store(true, Ordering::SeqCst);
+    manager.compact_session(request).await.unwrap();
+    let loaded = manager.get_session(session.id).await.unwrap();
+    assert!(
+        loaded
+            .runtime
+            .prompt_window
+            .remote_compaction_disabled_models
+            .is_empty()
+    );
+    assert_eq!(provider.native_attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        loaded.runtime.prompt_window.compaction.unwrap().strategy,
+        agena_domain::PromptCompactionStrategy::OpenAiResponses
+    );
+}
+
+#[tokio::test]
+async fn repeated_compaction_supplies_the_previous_checkpoint_without_an_arbitrary_per_run_cutoff()
+{
+    let mut fixture = ContextProvider::new(vec![(
+        "Keep all prior task constraints.",
+        CompletionFinishReason::Stop,
+    )]);
+    let prior = format!(
+        "{}\nONLY_IN_THE_MIDDLE: never overwrite the user's local edits.\n{}",
+        "prior work. ".repeat(1_000),
+        "next work. ".repeat(1_000)
+    );
+    fixture
+        .summaries
+        .get_mut()
+        .unwrap()
+        .push_front((prior.clone(), CompletionFinishReason::Stop));
+    let provider = Arc::new(fixture);
+    let manager = manager_with_provider(provider.clone()).await;
+    let session = dense_history(&manager).await;
+    let request = agena_runtime::SessionExecutionRequest::new(session.id, options());
+    manager.compact_session(request.clone()).await.unwrap();
+    manager.compact_session(request).await.unwrap();
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .turns
+            .iter()
+            .any(|turn| turn.as_text_lossy().contains(prior.trim()))
+    );
+    assert!(
+        requests[1]
+            .system
+            .as_deref()
+            .unwrap()
+            .contains("previous checkpoint will be replaced")
+    );
 }

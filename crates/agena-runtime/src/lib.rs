@@ -184,7 +184,7 @@ pub(crate) use agena_runtime_session::{
 pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
 pub(crate) use agena_runtime_session::{
     DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTION_OUTPUT_TOKENS,
-    MAX_COMPACTOR_RUN_CHARS, MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
+    MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
 };
 pub(crate) use agena_runtime_session::{
     ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry,

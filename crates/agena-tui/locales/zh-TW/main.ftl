@@ -2669,6 +2669,7 @@ message-compaction-strategy-line = 策略：{$strategy}
 message-compaction-strategy-local = 本機摘要
 message-compaction-strategy-native = 服務提供者原生檢查點
 message-compaction-title-auto = 已自動濃縮上下文
+message-compaction-unchanged = 目前上下文已足夠精簡，無需壓縮。
 message-compaction-title-manual = 已濃縮上下文
 message-compaction-title-reactive = 上下文超出限制後已濃縮
 message-compaction-token-summary = {$before} → {$after} 個 token · 減少 {$percent}%

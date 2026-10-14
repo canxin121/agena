@@ -132,6 +132,19 @@ function formatPart(part: JsonValue, options: TranscriptOptions): string {
     return `_Attachment:_ ${label}\n\n`
   }
 
+  if (rec?.type === 'compaction') {
+    if (!options.toolDetails) return ''
+    const content = asPartRecord(rec.agenaContent)
+    const checkpoint = asPartRecord(content?.checkpoint)
+    const body =
+      partText(part) ||
+      (typeof checkpoint?.before_tokens === 'number' && typeof checkpoint?.after_tokens === 'number'
+        ? `${checkpoint.before_tokens} → ${checkpoint.after_tokens} tokens`
+        : '')
+    const status = normalizeText(rec.partState)
+    return `_Compaction${status ? ` (${status})` : ''}:_\n\n${body}\n\n`
+  }
+
   if (isToolPart(part)) {
     if (!options.toolDetails) return ''
     const tool = normalizeText(rec?.tool) || 'tool'

@@ -25,12 +25,23 @@ describe('assistant reply identity', () => {
     expect(assistant?.info?.turnId).toBe('t-1')
   })
 
-  test('a durable compaction run marker becomes a normal transcript part', () => {
+  test('compaction is owned by its run without fabricating content from the marker', () => {
+    const marker = runMarker(9, 'assistant', { run_kind: 'compaction' })
+    expect(entriesFromParts('1', [marker] as never)[0]?.parts).toHaveLength(0)
     const entries = entriesFromParts('1', [
-      runMarker(9, 'assistant', { run_kind: 'compaction', summary: 'Checkpoint summary' }),
+      marker,
+      {
+        part_id: 10,
+        run_id: 9,
+        kind: 'compaction',
+        role: 'assistant',
+        state: 'completed',
+        content: { checkpoint: { content: { type: 'text_summary', summary: 'Checkpoint summary' } } },
+        created_at_ms: 100,
+      },
     ] as never)
     expect(entries[0]?.parts).toHaveLength(1)
-    expect(entries[0]?.parts?.[0]).toMatchObject({ type: 'compaction', text: 'Checkpoint summary' })
+    expect(entries[0]?.parts?.[0]).toMatchObject({ id: '10', type: 'compaction', text: 'Checkpoint summary' })
   })
 
   test('the accepted send reports the assistant reply it created', () => {

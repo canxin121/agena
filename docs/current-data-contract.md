@@ -95,6 +95,18 @@ session / execution / background-activity / notification 的状态类型只有�
 
 ## 会话历史操作
 
+上下文压缩使用普通的 assistant 内容 part：`kind = "compaction"`，独立的 `part_id`，以及指向执行 envelope 的 `run_id`。`run_kind = "compaction"` 的 run marker 只记录执行归属与结束原因，不保存正文或 checkpoint，也不能由客户端转换成内容 part。
+
+- 压缩开始通过标准 `append_parts` 写入 `in_progress` part；原生压缩、本地回退、成功、无需压缩、失败、取消都通过标准 `update_part` 更新同一身份，并通过通用 PartAdded / PartUpdated 同步。
+- checkpoint 及其摘要只存一份，位于内容 part 的 `content.checkpoint`。成功提交的内容 part 才能关闭之前的 prompt window；仍在运行、失败、取消及 `outcome = "unchanged"` 均保留原窗口。run 的重启收敛不会撤销已经完成的 checkpoint。
+- part 的 `visibility = "user"`；模型由 prompt-window 投影读取 checkpoint，不把展示 part 当成新一条 assistant 回复重放。原生 provider 的 opaque 数据不作为展示或复制正文。
+- Web 与 TUI 按 `run_id` 归属、按持久化内容顺序合并相邻 assistant run，使用各自标准 part 的状态、折叠、复制与导航。压缩执行状态由压缩 part 表达，不改写同一可视消息中已有回复的结果，也不创建“回复进行中”占位正文。
+- 原生压缩的独立 `/responses/compact` 请求使用自己的协议结构，不复用普通生成请求的工具定义、推理、输出格式或流式控制字段。共享请求覆盖仅传递该接口支持的缓存和服务等级选项，模型、系统指令、完整输入与 continuation 边界由 runtime 持有。
+- 只有包含有效加密 compaction 项的原生输出才可成为 checkpoint；返回的整个窗口原样保留，后续工具结果可以引用窗口内保留下来的调用。普通成功响应、空输出或普通 assistant 回答不会被当成压缩成功。
+- 自动压缩记忆明确的原生路由不可用状态（404 / 405 / 501）；参数错误、输入溢出、认证或临时服务错误不构成能力判定。手动压缩可重新探测，成功后持久化清除旧记录；能力快照与失败抑制均受压缩策略版本约束。
+- 本地摘要使用独立的无工具文本请求，保留路由和速度选项，移除普通回答的内容覆盖、格式、停止条件和 continuation 参数。完整历史能装入预算时不按固定单条长度截断；重复压缩必须把上一轮 checkpoint 的有效约束和状态交给摘要模型。历史 system / tool 文本作为带来源标记的 assistant 历史数据，不能变成新的系统指令或用户轮次。
+- 近期窗口保留实际用户任务；输入溢出与空摘要／输出耗尽分别允许一次有界恢复。候选未减小且原窗口仍可用时完成为 `unchanged`，超限、失败、取消时保留原历史和 checkpoint。
+
 历史操作使用持久化 `run` marker 的数值 `part_id` 作为消息身份，HTTP、command、Web 与 TUI 都通过 `at_message_id` 指定目标。
 
 - `fork` 创建子会话，保留截至目标消息末尾的历史（包含目标消息）；省略目标时保留源会话的完整历史。源会话必须已有可用的历史边界。

@@ -2612,6 +2612,7 @@ command-usage-summary = 대화형 토큰 및 비용 분석 열기
 command-user-input-summary = 대기 중인 첫 사용자 입력 요청에 답변
 message-input-activity-attachment = 첨부 파일
 message-input-activity-skill = 명령
+message-compaction-unchanged = 컨텍스트가 이미 간결하여 기존 기록을 유지했습니다.
 message-compaction-title-manual = 컨텍스트 압축 완료
 message-compaction-title-auto = 컨텍스트 자동 압축 완료
 message-compaction-title-reactive = 컨텍스트 초과로 컨텍스트 압축 완료

@@ -122,18 +122,6 @@ impl OpenAiTransport {
         request: &CompletionRequest,
     ) -> Result<Vec<OpenAiResponsesInputItem>, ProviderError> {
         let mut input = Self::to_responses_input_with_system(request, false)?;
-        if let Some(ProviderCompactionContext::OpenAiResponses { items }) =
-            request.provider_compaction.as_ref()
-        {
-            let mut compacted = items
-                .iter()
-                .cloned()
-                .map(OpenAiResponsesInputItem::Raw)
-                .collect::<Vec<_>>();
-            compacted.append(&mut input);
-            input = compacted;
-            validate_responses_input(input.as_slice())?;
-        }
         clear_responses_prompt_cache_hints(input.as_mut_slice());
         Ok(input)
     }
@@ -243,6 +231,14 @@ impl OpenAiTransport {
         include_system: bool,
     ) -> Result<Vec<OpenAiResponsesInputItem>, ProviderError> {
         let mut input = Vec::new();
+
+        // Validate the full window together. A newly completed tool result can
+        // reference a call retained verbatim in the native compacted prefix.
+        if let Some(ProviderCompactionContext::OpenAiResponses { items }) =
+            request.provider_compaction.as_ref()
+        {
+            input.extend(items.iter().cloned().map(OpenAiResponsesInputItem::Raw));
+        }
 
         if include_system
             && let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty())

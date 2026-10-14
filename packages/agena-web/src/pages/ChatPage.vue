@@ -942,6 +942,9 @@ const renderBlocksApi = useChatRenderBlocks({
     error: String(t('chat.partTitles.error')),
     notice: String(t('chat.partTitles.notice')),
     compaction: String(t('chat.partTitles.compaction')),
+    compactionUnchanged: String(t('chat.partTitles.compactionUnchanged')),
+    compactionTokens: (before: number, after: number) =>
+      String(t('chat.partTitles.compactionTokens', { before, after })),
     answer: String(t('chat.partTitles.answer')),
     reasoning: String(t('chat.partTitles.reasoning')),
     textSegment: String(t('chat.partTitles.textSegment')),
@@ -2401,7 +2404,6 @@ const viewCtx = {
   isStreamingAssistantMessage,
   showAssistantPlaceholder,
   currentPhase,
-  compactingSessionId,
   awaitingAssistant,
   optimisticUser,
   showOptimisticUser,

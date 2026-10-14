@@ -2286,6 +2286,7 @@ message-activity-input-failed = Übermittlung der Benutzereingabe fehlgeschlagen
 
 message-activity-input-cancelled = Übermittlung der Benutzereingabe abgebrochen
 
+message-compaction-unchanged = Der Kontext ist bereits kompakt. Der bisherige Verlauf wurde beibehalten.
 message-compaction-title-manual = Kontext komprimiert
 
 message-compaction-title-auto = Kontext automatisch komprimiert

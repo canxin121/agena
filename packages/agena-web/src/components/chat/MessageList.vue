@@ -45,7 +45,6 @@ const props = defineProps<{
   retryStatus: RetryStatusLike
   retryCountdown?: string
   currentPhase: string
-  isCompacting?: boolean
   awaitingAssistant: boolean
   activityCollapseSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
@@ -152,25 +151,6 @@ const assistantPlaceholderPart = computed<TranscriptDisplayPart>(() => {
       agenaContent: { state: 'in_progress' },
     },
     'assistant',
-  )
-})
-
-const compactionPart = computed<TranscriptDisplayPart | null>(() => {
-  if (!props.isCompacting) return null
-  return projectLocalPart(
-    {
-      id: `compaction:active:${props.selectedSessionId || 'session'}`,
-      type: 'tool',
-      partState: 'in_progress',
-      agenaKind: 'compaction',
-      agenaRole: 'runtime',
-      agenaContent: { state: 'in_progress' },
-      agenaPresentation: {
-        title: String(t('chat.partTitles.compaction')),
-        summary: String(t('chat.partTitles.responseRunning')),
-      },
-    },
-    'runtime',
   )
 })
 
@@ -389,21 +369,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           />
         </div>
       </article>
-    </div>
-
-    <div
-      v-if="compactionPart"
-      class="min-w-0 px-1"
-      data-transcript-node="part"
-      :data-transcript-key="compactionPart.key"
-      data-part-kind="compaction"
-    >
-      <AgenaTranscriptPart
-        :part="compactionPart"
-        :expanded="true"
-        :collapse-signal="activityCollapseSignal"
-        :session-id="selectedSessionId"
-      />
     </div>
 
     <article

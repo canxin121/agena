@@ -375,7 +375,7 @@ struct WindowItem {
 /// the parts strictly after the last compaction checkpoint (13.4) — run by
 /// run into the provider input contract. A local-summary compaction's
 /// durable checkpoint summary and retained recent suffix are injected at the
-/// front (the summary lives on the compaction marker part; the bounded recent
+/// front (the summary lives on the compaction content part; the bounded recent
 /// suffix snapshot lives in the runtime).
 fn prompt_window_items(
     session: &Session,
@@ -2575,22 +2575,21 @@ mod compaction_tests {
         ]
     }
 
-    /// A durable compaction checkpoint run marker closing the preceding window.
+    /// A durable compaction checkpoint content part closing the preceding window.
     fn compaction_marker(id: i64, summary: &str, now: DateTime<Utc>) -> Part {
         Part {
             part_id: id,
-            kind: "run".to_owned(),
+            kind: "compaction".to_owned(),
             role: PartRole::Assistant,
             state: PartState::Completed,
             content: serde_json::json!({
-                "run_kind": "compaction",
                 "summary": summary,
-                "window": "through_message:2"
+                "window": ["through_message:2"]
             }),
             summary: None,
-            visibility: PartVisibility::Both,
+            visibility: PartVisibility::User,
             parent_part_id: None,
-            run_id: None,
+            run_id: Some(2),
             origin_session_id: 7,
             revision: 0,
             started_at_ms: now.timestamp_millis(),

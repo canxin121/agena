@@ -233,7 +233,11 @@ function openAttachment(path: string, url: string) {
 
       <div v-else-if="part.kind === 'notice' || part.kind === 'compaction'" class="py-1 text-sm">
         <MarkdownRenderer
-          :content="String(content.detail || content.message || content.body || content.summary || part.summary || '')"
+          :content="
+            part.kind === 'compaction'
+              ? part.summary
+              : String(content.detail || content.message || content.body || content.summary || part.summary || '')
+          "
           mode="markdown"
           :stream="false"
         />

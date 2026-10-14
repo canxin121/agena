@@ -740,17 +740,11 @@ impl SessionManager {
                 .await
                 .map_err(execution_control_to_app_error)?;
 
-            // The compaction marker is appended after the boundary run, so an
+            // The compaction part is appended after the boundary run, so an
             // already-compacted boundary is exactly a trailing compaction
             // checkpoint part (the window it closes is empty of new input).
             let already_auto_compacted_at_boundary = session.parts().last().is_some_and(|part| {
-                part.kind == "run"
-                    && part
-                        .content
-                        .get("run_kind")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("compaction")
-                    && session.active_window_parts().is_empty()
+                part.kind == "compaction" && session.active_window_parts().is_empty()
             });
             let session_usage = self
                 .session_usage_for_run_options(

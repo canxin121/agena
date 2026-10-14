@@ -626,13 +626,9 @@ pub trait SessionStore: Send + Sync {
     /// own work. Idempotent.
     async fn reconcile(&self, session_id: i64, run_ids: &[i64]) -> Result<(), StoreError>;
 
-    /// Compact the session: a `compaction` run marker closes the preceding
-    /// window and records the durable checkpoint (13.3 / 13.4); provider
-    /// anchors are cleared. The marker's content is the 4.1.1
-    /// `CompactionContent` shape — `{"summary": ..., "window": ...}` — where
-    /// `summary` is the continuation record and `window` describes the span of
-    /// conversation the compaction covered (absent or null when the caller has
-    /// nothing to report). Returns the compaction run's part id.
+    /// Persist a completed compaction content part under an assistant run and
+    /// clear provider anchors. The returned id belongs to the content part,
+    /// which owns the checkpoint and closes the preceding prompt window.
     async fn compact_session(
         &self,
         session_id: i64,
@@ -2001,43 +1997,35 @@ where
         window: Option<String>,
         checkpoint: Option<Value>,
     ) -> Result<i64, StoreError> {
-        // A compaction run marker closes the preceding window and records the
-        // durable checkpoint as its content (4.1.1 `CompactionContent`,
-        // 13.4); provider anchors are cleared because compaction changes the
-        // prompt window (13.3).
-        let outcome = self
-            .engine
-            .start_run(
-                session_id,
-                "compaction",
-                json!({ "summary": summary, "window": window, "checkpoint": checkpoint }),
-                None,
-                self.now(),
-            )
-            .await?;
-        // A compaction checkpoint is complete as soon as its marker and
-        // payload are durable. Leaving the marker in progress lets restart
-        // reconciliation mark a successful checkpoint failed, which obscures
-        // the prompt boundary and its summary in later projections.
-        let marker = self
-            .engine
-            .complete_run(
-                session_id,
-                outcome.run_id,
-                RunOutcome {
-                    status: PartState::Completed,
-                    abort_reason: None,
-                    content: None,
-                    provider_state: None,
-                },
-                self.now(),
-            )
-            .await?;
+        // Use the same content-part write path as live compaction. The marker
+        // owns execution only; the child is the durable prompt boundary.
+        let outcome =
+            SessionStore::start_run(self, session_id, "compaction", json!({}), None).await?;
         self.engine.set_provider_anchors(session_id, None).await?;
-        let meta = self.engine.session_meta(session_id).await?;
-        self.publish_parts(session_id, meta, marker, std::slice::from_ref, true)
-            .await?;
-        Ok(outcome.run_id)
+        let summary = if checkpoint.is_some() { None } else { summary };
+        let window = if checkpoint.is_some() { None } else { window };
+        let mut part = NewPart::pending(
+            "compaction",
+            super::PartRole::Assistant,
+            json!({ "summary": summary, "window": window.map(|value| vec![value]), "checkpoint": checkpoint }),
+        );
+        part.state = PartState::Completed;
+        part.visibility = super::PartVisibility::User;
+        let parts =
+            SessionStore::append_parts(self, session_id, outcome.run_id, vec![part]).await?;
+        SessionStore::complete_run(
+            self,
+            session_id,
+            outcome.run_id,
+            RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: None,
+            },
+        )
+        .await?;
+        Ok(parts[0].part_id)
     }
 
     async fn delete(&self, session_id: i64) -> Result<(), StoreError> {
@@ -2655,7 +2643,7 @@ mod tests {
         let compaction = view
             .parts
             .iter()
-            .find(|part| part.content["run_kind"] == json!("compaction"))
+            .find(|part| part.kind == "compaction")
             .expect("compaction run marker");
         assert_eq!(
             compaction.content["summary"],
@@ -2664,7 +2652,7 @@ mod tests {
         );
         assert_eq!(
             compaction.content["window"],
-            json!("through:42"),
+            json!(["through:42"]),
             "window description persisted on the compaction part"
         );
     }

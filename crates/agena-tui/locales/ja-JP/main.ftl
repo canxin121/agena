@@ -2735,6 +2735,7 @@ message-activity-input-running = ユーザー入力を送信中
 message-activity-input-completed = ユーザー入力を送信しました
 message-activity-input-failed = ユーザー入力の送信に失敗しました
 message-activity-input-cancelled = ユーザー入力の送信をキャンセルしました
+message-compaction-unchanged = コンテキストはすでに簡潔です。既存の履歴を保持しました。
 message-compaction-title-manual = コンテキストを圧縮しました
 message-compaction-title-auto = コンテキストを自動圧縮しました
 message-compaction-title-reactive = コンテキストの上限超過後に圧縮しました

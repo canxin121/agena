@@ -54,6 +54,43 @@ use agena_runtime_contracts::part_content::{
     SystemNotificationContent, TypedContent, operation_from_tool_call,
 };
 
+/// Seed durable failures for the retry-suppression tests.
+async fn record_compaction_failure(manager: &SessionManager, session: Session) {
+    let run_id = manager
+        .store
+        .start_run(session.id, "compaction", serde_json::json!({}))
+        .await
+        .unwrap();
+    let mut part = agena_storage::store::NewPart::pending(
+        "compaction",
+        PartRole::Assistant,
+        serde_json::json!({
+            "attempt_failure": true,
+            "compaction_policy_version": crate::COMPACTION_POLICY_VERSION,
+        }),
+    );
+    part.state = PartState::Failed;
+    manager
+        .store
+        .append_parts(session.id, run_id, vec![part])
+        .await
+        .unwrap();
+    manager
+        .store
+        .complete_run(
+            session.id,
+            run_id,
+            agena_storage::store::RunOutcome {
+                status: PartState::Failed,
+                abort_reason: Some("compaction_failed".into()),
+                content: None,
+                provider_state: None,
+            },
+        )
+        .await
+        .unwrap();
+}
+
 async fn test_manager() -> SessionManager {
     test_manager_with_database().await.0
 }
@@ -300,12 +337,12 @@ async fn compaction_checkpoint_and_user_request_survive_a_store_reload() {
         created_at_ms: 1,
     };
     let marker_id = manager
-        .store
+        .session_store()
         .compact_session(
             session.id,
             Some("The agent has inspected the repository.".to_owned()),
             Some("through_message:1".to_owned()),
-            serde_json::to_value(&checkpoint).expect("serialize checkpoint"),
+            Some(serde_json::to_value(&checkpoint).expect("serialize checkpoint")),
         )
         .await
         .expect("commit compaction checkpoint");
@@ -464,10 +501,7 @@ async fn failed_compaction_attempts_survive_reload_without_closing_history() {
             .load_session(session.id)
             .await
             .expect("reload before failed attempt");
-        manager
-            .persist_compaction_failure(loaded)
-            .await
-            .expect("persist failed attempt");
+        record_compaction_failure(&manager, loaded).await;
         let reloaded = manager
             .store
             .load_session(session.id)
@@ -496,25 +530,27 @@ async fn failed_compaction_attempts_survive_reload_without_closing_history() {
     }
 
     manager
-        .store
+        .session_store()
         .compact_session(
             session.id,
             Some("The original task remains active.".to_owned()),
             None,
-            serde_json::to_value(PromptCompactionRuntime {
-                checkpoint_id: "recovered".to_owned(),
-                compacted_through_message_id: 1,
-                trigger: PromptCompactionTrigger::Manual,
-                strategy: PromptCompactionStrategy::LocalSummary,
-                content: PromptCompactionContent::TextSummary {
-                    summary: "The original task remains active.".to_owned(),
-                    recent_messages: Vec::new(),
-                },
-                before_tokens: 100,
-                after_tokens: 20,
-                created_at_ms: 1,
-            })
-            .expect("serialize checkpoint"),
+            Some(
+                serde_json::to_value(PromptCompactionRuntime {
+                    checkpoint_id: "recovered".to_owned(),
+                    compacted_through_message_id: 1,
+                    trigger: PromptCompactionTrigger::Manual,
+                    strategy: PromptCompactionStrategy::LocalSummary,
+                    content: PromptCompactionContent::TextSummary {
+                        summary: "The original task remains active.".to_owned(),
+                        recent_messages: Vec::new(),
+                    },
+                    before_tokens: 100,
+                    after_tokens: 20,
+                    created_at_ms: 1,
+                })
+                .expect("serialize checkpoint"),
+            ),
         )
         .await
         .expect("persist successful checkpoint");
@@ -645,17 +681,23 @@ async fn incomplete_new_checkpoint_does_not_hide_history() {
     };
     let marker_id = manager
         .store
-        .start_run(
-            session.id,
-            "compaction",
-            serde_json::json!({
-                "summary": "unfinished write",
-                "window": "through_message:1",
-                "checkpoint": serde_json::to_value(&checkpoint).expect("serialize checkpoint"),
-            }),
-        )
+        .start_run(session.id, "compaction", serde_json::json!({}))
         .await
-        .expect("write in-progress checkpoint marker");
+        .unwrap();
+    let mut pending_part = agena_storage::store::NewPart::pending(
+        "compaction",
+        PartRole::Assistant,
+        serde_json::json!({
+            "checkpoint": &checkpoint,
+        }),
+    );
+    pending_part.state = PartState::InProgress;
+    let part_id = manager
+        .store
+        .append_parts(session.id, marker_id, vec![pending_part])
+        .await
+        .unwrap()[0]
+        .part_id;
     let incomplete = manager
         .store
         .load_session(session.id)
@@ -669,26 +711,121 @@ async fn incomplete_new_checkpoint_does_not_hide_history() {
 
     manager
         .store
-        .complete_run(
+        .update_part(
             session.id,
-            marker_id,
-            agena_storage::store::RunOutcome {
-                status: PartState::Completed,
-                abort_reason: None,
-                content: None,
-                provider_state: None,
+            part_id,
+            agena_storage::store::PartDelta {
+                state: Some(PartState::Completed),
+                ..Default::default()
             },
         )
         .await
-        .expect("finish checkpoint write");
+        .unwrap();
+    // A crash after the content commit, before envelope completion, must
+    // preserve the successful checkpoint while reconciling the orphaned run.
+    manager
+        .session_store()
+        .reconcile(session.id, &[marker_id])
+        .await
+        .unwrap();
     let complete = manager
         .store
         .load_session(session.id)
         .await
         .expect("reload completed checkpoint");
+    assert_eq!(
+        complete
+            .parts()
+            .iter()
+            .find(|part| part.part_id == marker_id)
+            .unwrap()
+            .state,
+        PartState::Failed
+    );
+    assert_eq!(
+        complete
+            .parts()
+            .iter()
+            .find(|part| part.part_id == part_id)
+            .unwrap()
+            .state,
+        PartState::Completed
+    );
     assert_eq!(complete.runtime.prompt_window.generation, 1);
     assert_eq!(complete.runtime.prompt_window.compaction, Some(checkpoint));
     assert!(complete.active_window_parts().is_empty());
+}
+
+#[tokio::test]
+async fn abandoned_compaction_reconciles_its_content_without_hiding_history() {
+    let manager = test_manager().await;
+    let session = create(&manager, "abandoned compaction").await;
+    manager
+        .store
+        .submit_user_run(
+            session.id,
+            vec![NewPart {
+                state: PartState::Completed,
+                ..NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    serde_json::json!({"text": "Keep this task"}),
+                )
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+    let run_id = manager
+        .store
+        .start_run(session.id, "compaction", serde_json::json!({}))
+        .await
+        .unwrap();
+    let parts = manager
+        .store
+        .append_parts(
+            session.id,
+            run_id,
+            vec![NewPart {
+                state: PartState::InProgress,
+                visibility: PartVisibility::User,
+                ..NewPart::pending("compaction", PartRole::Assistant, serde_json::json!({}))
+            }],
+        )
+        .await
+        .unwrap();
+    manager
+        .session_store()
+        .reconcile(session.id, &[run_id])
+        .await
+        .unwrap();
+    let loaded = manager.store.load_session(session.id).await.unwrap();
+    let content = loaded
+        .parts()
+        .iter()
+        .find(|part| part.part_id == parts[0].part_id)
+        .unwrap();
+    assert_eq!(content.state, PartState::Cancelled);
+    assert!(content.finished_at_ms.is_some());
+    assert!(loaded.runtime.prompt_window.compaction.is_none());
+    assert_eq!(
+        loaded.runtime.prompt_window.consecutive_compaction_failures,
+        0
+    );
+    assert!(
+        loaded
+            .active_window_parts()
+            .iter()
+            .any(|part| part.content["text"] == "Keep this task")
+    );
+    assert!(
+        manager
+            .session_store()
+            .in_flight_run_ids(session.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

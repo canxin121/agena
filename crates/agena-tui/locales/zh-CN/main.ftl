@@ -1661,6 +1661,7 @@ flash-steer-sent = 已注入当前运行
 flash-steer-failed-fallback-queue = 无法注入当前运行，消息已保留
 flash-run-cancelled = 已取消当前运行
 
+message-compaction-unchanged = 当前上下文已足够精简，无需压缩。
 message-compaction-title-manual = 已压缩上下文
 message-compaction-title-auto = 已自动压缩上下文
 message-compaction-title-reactive = 上下文溢出后已压缩

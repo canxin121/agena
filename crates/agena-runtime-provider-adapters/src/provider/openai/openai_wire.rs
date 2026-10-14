@@ -54,8 +54,19 @@ pub(super) struct OpenAiResponsesReasoningConfig {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct OpenAiResponsesCompactResponse {
-    #[serde(default)]
     pub(super) output: Vec<serde_json::Value>,
+}
+
+/// The standalone compact endpoint has its own schema. Generation controls,
+/// tool definitions and streaming options from `/responses` are not accepted.
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiResponsesCompactRequest {
+    pub(super) model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) instructions: Option<String>,
+    pub(super) input: Vec<OpenAiResponsesInputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) prompt_cache_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,6 +208,11 @@ pub(super) fn validate_responses_input(
                     return Err(ProviderError::Internal(format!(
                         "OpenAI compacted Responses item at input[{index}] is not an object"
                     )));
+                }
+                if item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+                    && let Some(call_id) = item.get("call_id").and_then(serde_json::Value::as_str)
+                {
+                    seen_tool_calls.insert(call_id.to_owned());
                 }
             }
         }

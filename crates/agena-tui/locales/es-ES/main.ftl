@@ -2810,6 +2810,7 @@ message-activity-input-running = Enviando la respuesta del usuario
 message-activity-input-completed = Respuesta del usuario enviada
 message-activity-input-failed = Error al enviar la respuesta del usuario
 message-activity-input-cancelled = Envío de la respuesta del usuario cancelado
+message-compaction-unchanged = El contexto ya es compacto. Se conservó el historial existente.
 message-compaction-title-manual = Contexto compactado
 message-compaction-title-auto = Contexto compactado automáticamente
 message-compaction-title-reactive = Contexto compactado tras superar el límite

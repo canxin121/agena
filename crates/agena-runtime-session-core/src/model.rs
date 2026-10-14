@@ -759,34 +759,20 @@ pub struct Session {
     pending_operations: Vec<SessionPendingOperation>,
 }
 
-/// True for a compaction checkpoint: the run marker emitted by
-/// `start_run("compaction", …)` — `kind == "run"` with
-/// `content.run_kind == "compaction"` (engine.rs maps the compaction run kind
-/// to an assistant marker and stamps `content.run_kind`).
-fn is_compaction_marker(part: &Part) -> bool {
-    if part.kind != "run" || part.content.get("run_kind") != Some(&serde_json::json!("compaction"))
-    {
+/// A completed compaction content part installs a prompt boundary. Its run
+/// marker is only an execution envelope and cannot hide conversation history.
+fn is_compaction_checkpoint(part: &Part) -> bool {
+    if part.kind != "compaction" || part.state != agena_storage::store::PartState::Completed {
         return false;
     }
-    match part.content.get("checkpoint") {
-        Some(value) if !value.is_null() => part.state == agena_storage::store::PartState::Completed,
-        // Historical summary-only markers were not terminalized by older
-        // builds. Keep them readable; new checkpoints become active only once
-        // their run has committed successfully.
-        None => part
+    part.content
+        .get("checkpoint")
+        .is_some_and(|value| !value.is_null())
+        || part
             .content
             .get("summary")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|summary| !summary.trim().is_empty()),
-        Some(_) => {
-            part.state == agena_storage::store::PartState::Completed
-                && part
-                    .content
-                    .get("summary")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|summary| !summary.trim().is_empty())
-        }
-    }
+            .is_some_and(|summary| !summary.trim().is_empty())
 }
 
 /// Decode the [`OperationPart`] carried by a `tool_call` part's content: the
@@ -952,14 +938,13 @@ impl Session {
     }
 
     /// The active model window: parts strictly after the last compaction
-    /// checkpoint. A compaction checkpoint is the run marker emitted by
-    /// `start_run("compaction", …)` — `kind == "run"` with
-    /// `content.run_kind == "compaction"` — and the marker itself is excluded
-    /// from the window; with no compaction checkpoint the window is the full
+    /// checkpoint. Only a completed `compaction` content part containing a
+    /// checkpoint closes the window; pending, failed and unchanged attempts
+    /// do not. The checkpoint itself is excluded; with none the window is the full
     /// projection. Cheap slice view — parts are already ordered, so the
     /// window is a contiguous suffix (13.4).
     pub fn active_window_parts(&self) -> &[Part] {
-        match self.parts.iter().rposition(is_compaction_marker) {
+        match self.parts.iter().rposition(is_compaction_checkpoint) {
             Some(index) => &self.parts[index + 1..],
             None => &self.parts[..],
         }
@@ -1764,10 +1749,10 @@ mod parts_projection_tests {
             ),
             part(
                 2,
-                "run",
+                "compaction",
                 PartRole::Assistant,
                 PartState::Completed,
-                json!({"run_kind": "compaction", "summary": "cp"}),
+                json!({"summary": "cp"}),
             ),
             part(
                 3,
@@ -1803,10 +1788,10 @@ mod parts_projection_tests {
             ),
             part(
                 2,
-                "run",
+                "compaction",
                 PartRole::Assistant,
                 PartState::Completed,
-                json!({"run_kind": "compaction", "summary": "cp1"}),
+                json!({"summary": "cp1"}),
             ),
             part(
                 3,
@@ -1817,10 +1802,10 @@ mod parts_projection_tests {
             ),
             part(
                 4,
-                "run",
+                "compaction",
                 PartRole::Assistant,
                 PartState::Completed,
-                json!({"run_kind": "compaction", "summary": "cp2"}),
+                json!({"summary": "cp2"}),
             ),
             part(
                 5,
@@ -1848,10 +1833,10 @@ mod parts_projection_tests {
             ),
             part(
                 2,
-                "run",
+                "compaction",
                 PartRole::Assistant,
                 PartState::Completed,
-                json!({"run_kind": "compaction", "summary": "cp"}),
+                json!({"summary": "cp"}),
             ),
         ]);
 
@@ -1870,10 +1855,10 @@ mod parts_projection_tests {
             ),
             part(
                 2,
-                "run",
+                "compaction",
                 PartRole::Assistant,
                 PartState::Failed,
-                json!({"run_kind": "compaction", "summary": null, "checkpoint": null}),
+                json!({"summary": null, "checkpoint": null}),
             ),
         ]);
         assert_eq!(session.active_window_parts().len(), 2);
@@ -1901,10 +1886,10 @@ mod parts_projection_tests {
             ),
             part(
                 3,
-                "run",
+                "compaction",
                 PartRole::Assistant,
                 PartState::Completed,
-                json!({"run_kind": "compaction", "summary": "cp"}),
+                json!({"summary": "cp"}),
             ),
             part(
                 4,

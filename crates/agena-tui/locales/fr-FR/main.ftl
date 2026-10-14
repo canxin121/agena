@@ -261,6 +261,7 @@ message-permission = autorisation
 message-tool-summary = [outil] {$status} | {$label}
 message-tool-output-collapsed =     … {$lines} de plus
 message-activity-run-collapsed = Entrée : charger 5 · n Entrée · Ctrl+Maj+Entrée : tout charger · … {$count} anciennes parties masquées
+message-compaction-unchanged = Le contexte est déjà compact. L’historique existant a été conservé.
 message-compaction-title-manual = Contexte condensé
 message-compaction-title-auto = Contexte condensé automatiquement
 message-compaction-title-reactive = Contexte condensé après dépassement de la fenêtre

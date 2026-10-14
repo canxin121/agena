@@ -1568,16 +1568,39 @@ pub(crate) fn render_part_node(
             )
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(compaction)) => {
+            let summary = if compaction.outcome.as_deref() == Some("unchanged") {
+                i18n.text("message-compaction-unchanged")
+            } else if let Some(text) = compaction.summary_text().or(compaction.detail.as_deref()) {
+                text.to_owned()
+            } else if let Some((before, after)) =
+                compaction.checkpoint.as_ref().and_then(|checkpoint| {
+                    Some((
+                        checkpoint.get("before_tokens")?.as_u64()?,
+                        checkpoint.get("after_tokens")?.as_u64()?,
+                    ))
+                })
+            {
+                let percent = before
+                    .saturating_sub(after)
+                    .saturating_mul(100)
+                    .checked_div(before)
+                    .unwrap_or_default();
+                let args = agena_tui::i18n::FluentArgs::from([
+                    ("before".into(), before.to_string().into()),
+                    ("after".into(), after.to_string().into()),
+                    ("percent".into(), percent.to_string().into()),
+                ]);
+                i18n.text_args("message-compaction-token-summary", &args)
+            } else {
+                String::new()
+            };
             render_notice_row(
                 message,
                 part,
                 agena_domain::NoticeActivity {
                     kind: "compaction".to_owned(),
-                    summary: compaction.summary.clone().unwrap_or_default(),
-                    detail: compaction
-                        .window
-                        .as_ref()
-                        .map(|window| serde_json::Value::Array(window.clone()).to_string()),
+                    summary,
+                    detail: None,
                     occurred_at_ms: None,
                     title: None,
                 },

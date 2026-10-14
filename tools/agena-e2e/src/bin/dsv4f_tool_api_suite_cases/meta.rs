@@ -4,8 +4,8 @@ use serde_json::json;
 
 use super::{
     Harness, PendingReply, SuiteReport, TOOLS_CALL_HANDLER_KEY, TOOLS_HELP_HANDLER_KEY,
-    TOOLS_LIST_HANDLER_KEY, TOOLS_TAGS_HANDLER_KEY, assert_contains, baseline_permission,
-    operations_since, transcript_since,
+    TOOLS_LIST_HANDLER_KEY, assert_contains, baseline_permission, operations_since,
+    transcript_since,
 };
 
 pub(crate) async fn run_tool_api_meta_suite(
@@ -26,7 +26,7 @@ pub(crate) async fn run_tool_api_meta_suite(
                 "tools.list",
                 "tools_list",
                 TOOLS_LIST_HANDLER_KEY,
-                json!({"offset": 0, "limit": 5, "tags": ["read_only"]}),
+                json!({"offset": 0, "limit": 5}),
                 None,
             )
             .await?;
@@ -36,31 +36,6 @@ pub(crate) async fn run_tool_api_meta_suite(
         );
         report.pass("tools.list");
     }
-    if harness.selector.enabled("tools.tags") {
-        let session = harness
-            .create_session(
-                "dsv4f tools.tags",
-                &[TOOLS_TAGS_HANDLER_KEY],
-                baseline_permission(PermissionMode::Allow),
-            )
-            .await?;
-        let outcome = harness
-            .run_native_tool_api_function(
-                session,
-                "tools.tags",
-                "tools_tags",
-                TOOLS_TAGS_HANDLER_KEY,
-                json!({"offset": 0, "limit": 10}),
-                None,
-            )
-            .await?;
-        ensure!(
-            outcome.payload().get("tags").is_some(),
-            "tools.tags did not return a tags payload"
-        );
-        report.pass("tools.tags");
-    }
-
     if harness.selector.enabled("tools.help") {
         let session = harness
             .create_session(

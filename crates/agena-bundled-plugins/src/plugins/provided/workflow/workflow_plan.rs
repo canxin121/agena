@@ -183,26 +183,6 @@ impl WorkflowPlugin {
         (!tools.is_empty()).then(|| format!("Available Shell tools: {}. Read detailed contracts with tools_help (batch supported).", tools.join("; ")))
     }
 
-    pub(in crate::plugins::provided::workflow) fn filter_available_plugins_by_tag(
-        mut records: Vec<AvailablePluginRecord>,
-        tag: Option<&str>,
-        tags: Option<&[String]>,
-    ) -> Vec<AvailablePluginRecord> {
-        let required_tags = Self::normalized_tag_filters(tag, tags);
-        if required_tags.is_empty() {
-            return records;
-        }
-        records.retain(|record| {
-            required_tags.iter().all(|required_tag| {
-                record
-                    .tags
-                    .iter()
-                    .any(|candidate| candidate.eq_ignore_ascii_case(required_tag.as_str()))
-            })
-        });
-        records
-    }
-
     pub(in crate::plugins::provided::workflow) fn filter_available_plugins_by_id(
         mut records: Vec<AvailablePluginRecord>,
         plugin: Option<&ToolApiStringBatch>,
@@ -217,31 +197,6 @@ impl WorkflowPlugin {
                 .any(|filter| plugin_id_matches(record.plugin_id.as_str(), filter))
         });
         records
-    }
-
-    pub(in crate::plugins::provided::workflow) fn normalized_tag_filters(
-        tag: Option<&str>,
-        tags: Option<&[String]>,
-    ) -> Vec<String> {
-        let mut filters = Vec::new();
-        if let Some(tag) = tag
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_ascii_lowercase())
-        {
-            filters.push(tag);
-        }
-        if let Some(tags) = tags {
-            for tag in tags {
-                let normalized = tag.trim().to_ascii_lowercase();
-                if !normalized.is_empty() {
-                    filters.push(normalized);
-                }
-            }
-        }
-        filters.sort();
-        filters.dedup();
-        filters
     }
 
     pub(in crate::plugins::provided::workflow) fn paginate<T: Clone>(
@@ -333,45 +288,6 @@ impl WorkflowPlugin {
             tags_by_name.insert(visible_name, tags);
         }
         tags_by_name
-    }
-
-    pub(in crate::plugins::provided::workflow) fn filter_available_tools_by_tag(
-        mut records: Vec<AvailableToolRecord>,
-        tag: Option<&str>,
-        tags: Option<&[String]>,
-    ) -> Vec<AvailableToolRecord> {
-        let required_tags = Self::normalized_tag_filters(tag, tags);
-        if required_tags.is_empty() {
-            return records;
-        }
-        records.retain(|record| {
-            required_tags.iter().all(|required_tag| {
-                record
-                    .tags
-                    .iter()
-                    .any(|candidate| candidate.eq_ignore_ascii_case(required_tag.as_str()))
-            })
-        });
-        records
-    }
-
-    pub(in crate::plugins::provided::workflow) fn available_tool_tag_records(
-        records: &[AvailableToolRecord],
-    ) -> Vec<ToolTagRecord> {
-        let mut counts = BTreeMap::<String, usize>::new();
-        for record in records {
-            for tag in &record.tags {
-                *counts.entry(tag.clone()).or_default() += 1;
-            }
-        }
-        counts
-            .into_iter()
-            .map(|(tag, tool_count)| ToolTagRecord {
-                tag,
-                tool_count,
-                plugin_count: None,
-            })
-            .collect()
     }
 
     pub(in crate::plugins::provided::workflow) fn pretty_json_text(
@@ -1417,7 +1333,7 @@ impl WorkflowPlugin {
     }
 }
 use super::{
-    Arc, AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
+    Arc, AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord,
     ContributionKind, HashMap, HashSet, HostAskUserOption, HostAskUserQuestion, HostClient,
     HostDisplayContributeRequest, HostDisplayRemoveRequest, HostGetSessionRequest,
     HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStorageGetRequest,
@@ -1430,7 +1346,7 @@ use super::{
     PlanEditTarget, PlanGetView, PlanPhaseInput, PlanReviewKind, PluginDisplayContent,
     PluginDisplayContribution, PluginError, RwLock, SdkResult, SessionRenameToolInput,
     SessionToolResponse, ToolApiStringBatch, ToolDescriptor, ToolInvokeOutput, ToolSearchDocument,
-    ToolTagRecord, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
+    WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
     WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus, WorkflowPlugin,
     WorkflowPluginConfig,
 };

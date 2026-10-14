@@ -1,6 +1,6 @@
 //! End-to-end harness for the `agena.tools` discovery family through the real
 //! Tool API plugin: `plugins_list` (paged plugin inventory) -> `tools_list`
-//! (paged per-plugin tool inventory) -> `tools_help` -> `tools_tags`.
+//! (paged per-plugin tool inventory) -> `tools_help` -> `tools_call`.
 //!
 //! There is no search function: capability discovery walks the plugin
 //! inventory and then the owning plugin's tool inventory, page by page.
@@ -273,7 +273,7 @@ async fn tools_list_pages_one_plugin_tool_inventory() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn tools_help_and_tags_accept_batches_through_the_real_gateway() {
+async fn tools_help_accepts_batches_through_the_real_gateway() {
     let (executor, workspace_root) = build_tool_api_executor().await;
 
     let execution = execute_gateway(
@@ -287,26 +287,6 @@ async fn tools_help_and_tags_accept_batches_through_the_real_gateway() {
     assert!(execution.view.output_text.contains("Tool: monitor.start"));
     assert!(execution.view.output_text.contains("Tool: monitor.stop"));
     assert!(execution.view.output_text.contains("\n\n---\n\n"));
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::Tags,
-        "tools_tags",
-        serde_json::json!({ "plugin": ["monitor", "agena.missing"] }),
-        58,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("Available tool tags"));
-
-    let execution = execute_gateway(
-        &executor,
-        agena_domain::ToolApiFunction::PluginsTags,
-        "plugins_tags",
-        serde_json::json!({ "plugin": ["agena.tools", "monitor"] }),
-        59,
-    )
-    .await;
-    assert!(execution.view.output_text.contains("Available plugin tags"));
 
     let _ = std::fs::remove_dir_all(workspace_root);
 }

@@ -379,10 +379,8 @@ type ToolExpansionOption = {
 const toolApiFunctions = computed<ToolExpansionOption[]>(() => [
   { id: 'tools_list', label: 'tools_list', description: st('Enumerate execution tools.') },
   { id: 'tools_help', label: 'tools_help', description: st('Inspect execution-tool contracts.') },
-  { id: 'tools_tags', label: 'tools_tags', description: st('List execution-tool tags.') },
   { id: 'tools_call', label: 'tools_call', description: st('Invoke an execution tool.') },
   { id: 'plugins_list', label: 'plugins_list', description: st('Enumerate tool plugins.') },
-  { id: 'plugins_tags', label: 'plugins_tags', description: st('List tool-plugin tags.') },
 ])
 
 const toolCatalogItems = ref<ToolCatalogItem[]>([])

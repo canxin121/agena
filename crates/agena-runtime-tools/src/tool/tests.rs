@@ -621,10 +621,6 @@ impl ToolApiFixture {
         String::new()
     }
 
-    #[tool(name = "tags", summary = "List tool tags.")]
-    async fn tags(&self, _input: &crate::part::AskUserToolInput) -> String {
-        String::new()
-    }
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -1031,7 +1027,7 @@ async fn only_fixture_gateways_and_synthesized_call_are_provider_visible() {
     );
 
     let bindings = executor.available_tool_api_bindings();
-    assert_eq!(bindings.len(), 4);
+    assert_eq!(bindings.len(), 3);
     let list_description = bindings
         .iter()
         .find(|binding| binding.function() == agena_domain::ToolApiFunction::List)

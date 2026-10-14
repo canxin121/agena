@@ -235,13 +235,9 @@ pub(crate) fn settings_studio_activity_tool_items(
             let summary_key = match function {
                 agena_domain::ToolApiFunction::List => "settings-tool-api-list-description",
                 agena_domain::ToolApiFunction::Help => "settings-tool-api-help-description",
-                agena_domain::ToolApiFunction::Tags => "settings-tool-api-tags-description",
                 agena_domain::ToolApiFunction::Call => "settings-tool-api-call-description",
                 agena_domain::ToolApiFunction::PluginsList => {
                     "settings-tool-api-plugins-list-description"
-                }
-                agena_domain::ToolApiFunction::PluginsTags => {
-                    "settings-tool-api-plugins-tags-description"
                 }
             };
             (function.function_name().to_owned(), i18n.text(summary_key))

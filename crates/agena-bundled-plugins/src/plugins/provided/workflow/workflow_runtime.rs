@@ -563,13 +563,9 @@ impl WorkflowPlugin {
         validate_plugin_selector(input.plugin.as_ref())?;
         let limit = discovery_limit(input.limit, config.tool_discovery.list.default_limit);
         let max_summary_chars = config.tool_discovery.list.max_summary_chars as usize;
-        let records = Self::filter_available_tools_by_tag(
-            Self::filter_available_tools_by_plugin(
-                self.available_tool_records().await?,
-                input.plugin.as_ref(),
-            ),
-            input.tag.as_deref(),
-            input.tags.as_deref(),
+        let records = Self::filter_available_tools_by_plugin(
+            self.available_tool_records().await?,
+            input.plugin.as_ref(),
         );
         let (tools, total, offset) = Self::paginate(&records, input.offset, Some(limit));
         let mut lines = vec![format!(
@@ -607,42 +603,6 @@ impl WorkflowPlugin {
         ))
     }
 
-    pub(crate) async fn invoke_tool_api_tags(
-        &self,
-        input: &ToolApiTagsInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let config = self.config()?;
-        validate_plugin_selector(input.plugin.as_ref())?;
-        let limit = discovery_limit(input.limit, config.tool_discovery.tags.default_limit);
-        let records = Self::filter_available_tools_by_plugin(
-            self.available_tool_records().await?,
-            input.plugin.as_ref(),
-        );
-        let tags = Self::available_tool_tag_records(records.as_slice());
-        let (tags, total, offset) = Self::paginate(&tags, input.offset, Some(limit));
-        let mut lines = vec![format!(
-            "Available tool tags: returned {} of {} starting at offset {}.",
-            tags.len(),
-            total,
-            offset
-        )];
-        for tag in &tags {
-            lines.push(format!("- {}: {}", tag.tag, tag.tool_count));
-        }
-        append_discovery_page_hint(
-            &mut lines,
-            agena_domain::ToolApiFunction::Tags.function_name(),
-            total,
-            offset,
-            tags.len(),
-        );
-        Ok(discovery_text_output(
-            format!("List tool tags · {}/{}", tags.len(), total),
-            discovery_page_summary("tool tags", total, offset, tags.len()),
-            lines.join("\n"),
-        ))
-    }
-
     /// Enumerate the current live plugin inventory for the plugins_* family.
     async fn available_plugin_records(&self) -> SdkResult<Vec<AvailablePluginRecord>> {
         Ok(self
@@ -669,13 +629,9 @@ impl WorkflowPlugin {
         validate_plugin_selector(input.plugin.as_ref())?;
         let limit = discovery_limit(input.limit, config.tool_discovery.list.default_limit);
         let max_summary_chars = config.tool_discovery.list.max_summary_chars as usize;
-        let records = Self::filter_available_plugins_by_tag(
-            Self::filter_available_plugins_by_id(
-                self.available_plugin_records().await?,
-                input.plugin.as_ref(),
-            ),
-            input.tag.as_deref(),
-            input.tags.as_deref(),
+        let records = Self::filter_available_plugins_by_id(
+            self.available_plugin_records().await?,
+            input.plugin.as_ref(),
         );
         let (plugins, total, offset) = Self::paginate(&records, input.offset, Some(limit));
         let mut lines = vec![format!(
@@ -718,59 +674,6 @@ impl WorkflowPlugin {
         Ok(discovery_text_output(
             format!("List plugins · {}/{}", plugins.len(), total),
             discovery_page_summary("plugins", total, offset, plugins.len()),
-            lines.join("\n"),
-        ))
-    }
-
-    pub(crate) async fn invoke_plugins_tags(
-        &self,
-        input: &ToolApiTagsInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let config = self.config()?;
-        validate_plugin_selector(input.plugin.as_ref())?;
-        let limit = discovery_limit(input.limit, config.tool_discovery.tags.default_limit);
-        let records = Self::filter_available_plugins_by_id(
-            self.available_plugin_records().await?,
-            input.plugin.as_ref(),
-        );
-        let mut counts = std::collections::BTreeMap::<String, usize>::new();
-        for plugin in &records {
-            for tag in &plugin.tags {
-                *counts.entry(tag.clone()).or_default() += 1;
-            }
-        }
-        let tags = counts
-            .into_iter()
-            .map(|(tag, plugin_count)| ToolTagRecord {
-                tag,
-                tool_count: 0,
-                plugin_count: Some(plugin_count),
-            })
-            .collect::<Vec<_>>();
-        let (tags, total, offset) = Self::paginate(&tags, input.offset, Some(limit));
-        let mut lines = vec![format!(
-            "Available plugin tags: returned {} of {} starting at offset {}.",
-            tags.len(),
-            total,
-            offset
-        )];
-        for tag in &tags {
-            lines.push(format!(
-                "- {}: {}",
-                tag.tag,
-                tag.plugin_count.unwrap_or(tag.tool_count)
-            ));
-        }
-        append_discovery_page_hint(
-            &mut lines,
-            agena_domain::ToolApiFunction::PluginsTags.function_name(),
-            total,
-            offset,
-            tags.len(),
-        );
-        Ok(discovery_text_output(
-            format!("List plugin tags · {}/{}", tags.len(), total),
-            discovery_page_summary("plugin tags", total, offset, tags.len()),
             lines.join("\n"),
         ))
     }
@@ -973,10 +876,10 @@ use super::{
     CommandBeforeInput, HashMap, PlanEditInput, PlanEditTarget, PlanGetInput, PlanPhaseInput,
     PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError, RunSubtaskModelSelection,
     RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskToolInput, ToolApiHelpInput,
-    ToolApiListInput, ToolApiTagsInput, ToolBeforeInput, ToolDescriptor, ToolExecutionView,
-    ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput, ToolTag, ToolTagRecord,
-    WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin,
-    ask_user, compact_tool_summary, search_tools, tags_summary,
+    ToolApiListInput, ToolBeforeInput, ToolDescriptor, ToolExecutionView, ToolInvokeOutput,
+    ToolPayloadExecution, ToolPayloadOutput, ToolTag, WorkflowPlan, WorkflowPlanPhase,
+    WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin, ask_user, compact_tool_summary,
+    search_tools, tags_summary,
 };
 
 fn validate_plugin_selector(plugin: Option<&super::ToolApiStringBatch>) -> SdkResult<()> {

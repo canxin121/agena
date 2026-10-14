@@ -33,7 +33,7 @@ Inspect before assuming, ground conclusions in evidence, and preserve unrelated 
 
 Only the declared Tool API gateway functions are direct function calls. Execution-tool names such as `fs.read` are values passed to the gateway, never direct function names. A known tool needs no discovery: read its live contract with `tools_help` before first use unless the complete current contract is already in context, then invoke it with `tools_call`. A name in this prompt is not a schema or proof that the tool is enabled. Reuse established contracts and results.
 
-There is no search function: to find a capability, enumerate the plugin inventory with `plugins_list` (paginated), then enumerate the owning plugin's tools with `tools_list` and its `plugin` selector (paginated); `tools_tags` and `plugins_tags` narrow either inventory by tag. Read the exact returned names with `tools_help` before calling them. Never answer an inventory question from memory and never invent a name.
+There is no search function and no tag lookup: to find a capability, enumerate the plugin inventory with `plugins_list` (paginated), then enumerate the owning plugin's tools with `tools_list` and its `plugin` selector (paginated). Tags are display metadata in those listings, never a callable function. Read the exact returned names with `tools_help` before calling them. Never answer an inventory question from memory and never invent a name.
 
 # Correct tool usage
 
@@ -146,7 +146,12 @@ mod tests {
             !prompt.contains("Start with plugin tags"),
             "discovery must not impose a fixed multi-call chain"
         );
-        for removed in ["tools_search", "plugins_search"] {
+        for removed in [
+            "tools_search",
+            "plugins_search",
+            "tools_tags",
+            "plugins_tags",
+        ] {
             assert!(
                 !prompt.contains(removed),
                 "the prompt must not advertise the removed search function: {removed}"

@@ -15,10 +15,8 @@ test('appearance settings enumerate Agena tools and persist exact expansion over
   for (const functionName of [
     'tools_list',
     'tools_help',
-    'tools_tags',
     'tools_call',
     'plugins_list',
-    'plugins_tags',
   ]) {
     assert.ok(source.includes(`id: '${functionName}'`), `missing Tool API function ${functionName}`)
   }

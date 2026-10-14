@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::plugins::provided::workflow::{
-    ToolApiHelpInput, ToolApiListInput, ToolApiTagsInput, ToolDiscoveryConfig, WorkflowPlanConfig,
-    WorkflowPlugin, WorkflowPluginConfig,
+    ToolApiHelpInput, ToolApiListInput, ToolDiscoveryConfig, WorkflowPlanConfig, WorkflowPlugin,
+    WorkflowPluginConfig,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
@@ -152,44 +152,6 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery, read_only),
-        summary = "List tool tags across one plugin or a batch of plugin targets.",
-        translations(
-            locale("zh-CN", summary = "列出一个或多个插件中工具使用的标签。"),
-            locale("zh-TW", summary = "列出一個或多個外掛中工具使用的標籤。"),
-            locale(
-                "ja-JP",
-                summary = "1 つ以上のプラグインに含まれるツールのタグを一覧表示します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "하나 이상의 플러그인에 포함된 도구의 태그를 나열합니다."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Lister les étiquettes des outils d’un ou plusieurs plugins."
-            ),
-            locale(
-                "de-DE",
-                summary = "Die Tags der Werkzeuge eines oder mehrerer Plugins auflisten."
-            ),
-            locale(
-                "es-ES",
-                summary = "Enumera las etiquetas de las herramientas de uno o varios plugins."
-            ),
-            locale("hi-IN", summary = "एक या अधिक प्लगइन के टूल टैग की सूची दें।"),
-            locale("ar-SA", summary = "اعرض وسوم الأدوات في إضافة واحدة أو عدة إضافات."),
-            locale(
-                "pt-BR",
-                summary = "Liste as tags das ferramentas de um ou mais plugins."
-            )
-        )
-    )]
-    async fn tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_tool_api_tags(input).await
-    }
-
-    #[tool(
-        tags(query, discovery, read_only),
         summary = "Enumerate one or many selected plugins with version, summary, tags, and tool count.",
         translations(
             locale(
@@ -237,41 +199,6 @@ impl ToolApiPlugin {
     async fn plugins_list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_plugins_list(input).await
     }
-
-    #[tool(
-        tags(query, discovery, read_only),
-        summary = "List plugin tags across one plugin or a batch of plugin targets.",
-        translations(
-            locale("zh-CN", summary = "列出一个或多个插件声明的标签。"),
-            locale("zh-TW", summary = "列出一個或多個外掛宣告的標籤。"),
-            locale(
-                "ja-JP",
-                summary = "1 つ以上のプラグインが宣言しているタグを一覧表示します。"
-            ),
-            locale("ko-KR", summary = "하나 이상의 플러그인이 선언한 태그를 나열합니다."),
-            locale(
-                "fr-FR",
-                summary = "Lister les étiquettes déclarées par un ou plusieurs plugins."
-            ),
-            locale(
-                "de-DE",
-                summary = "Die von einem oder mehreren Plugins deklarierten Tags auflisten."
-            ),
-            locale(
-                "es-ES",
-                summary = "Enumera las etiquetas declaradas por uno o varios plugins."
-            ),
-            locale("hi-IN", summary = "एक या अधिक प्लगइन द्वारा घोषित टैग की सूची दें।"),
-            locale(
-                "ar-SA",
-                summary = "اعرض الوسوم التي تعلنها إضافة واحدة أو عدة إضافات."
-            ),
-            locale("pt-BR", summary = "Liste as tags declaradas por um ou mais plugins.")
-        )
-    )]
-    async fn plugins_tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_plugins_tags(input).await
-    }
 }
 
 #[cfg(test)]
@@ -305,6 +232,8 @@ mod tests {
             .expect("help tool-name description");
         assert!(help_tool_description.contains("exact execution-tool name"));
         assert!(help_tool_description.contains("non-empty array"));
-        assert!(help_tool_description.contains("`tools_list`; known names need no preliminary lookup"));
+        assert!(
+            help_tool_description.contains("`tools_list`; known names need no preliminary lookup")
+        );
     }
 }

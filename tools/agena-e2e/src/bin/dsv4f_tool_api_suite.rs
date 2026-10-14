@@ -45,7 +45,6 @@ const DEFAULT_MODEL: &str = "cline/cline-pass/deepseek-v4-flash";
 const TOOLS_HELP_HANDLER_KEY: &str = "agena.tools.help";
 const TOOLS_CALL_HANDLER_KEY: &str = "agena.tools.call";
 const TOOLS_LIST_HANDLER_KEY: &str = "agena.tools.list";
-const TOOLS_TAGS_HANDLER_KEY: &str = "agena.tools.tags";
 const MAX_EXACT_INVOCATION_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Parser)]

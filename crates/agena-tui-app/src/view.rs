@@ -129,14 +129,14 @@ mod permission_overlay_presentation_tests {
     fn overview_focuses_on_the_action_and_reason_and_hides_audit_noise() {
         let i18n = I18n::default();
         let request = request(PermissionAction::Tool {
-            tool_name: "tools_tags".to_string(),
+            tool_name: "tools_list".to_string(),
             qualifier: Some("workspace=/repo".to_string()),
         });
         let content = permission_prompt_content(&i18n, &request);
         let text = rendered(content.overview.as_slice());
 
         // One-line action, primary reason, and risk only.
-        assert!(text.contains("tools_tags"));
+        assert!(text.contains("tools_list"));
         assert!(text.contains("workspace=/repo"));
         // `reason` is authoritative; the `explanation` moved behind Details.
         assert!(text.contains("policy requires confirmation"));

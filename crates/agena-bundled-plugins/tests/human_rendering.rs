@@ -502,9 +502,6 @@ fn sample_input(tool: &str) -> Value {
         "web.browser_download" => json!({"url": "https://example.test/a.zip"}),
         "web.browser_close" => json!({"session_id": "s-1"}),
         "web.browser_list" | "web.browser_shutdown" => json!({}),
-        value if value.starts_with("tools.plugins_tags") || value.starts_with("plugins.tags") => {
-            json!({"tag": "filesystem"})
-        }
         value if value.starts_with("tools.") || value.starts_with("plugins.") => json!({}),
         value
             if value.starts_with("chatgpt.")
@@ -634,10 +631,6 @@ fn sample_text(tool: &str) -> String {
     match tool {
         "tools.plugins_list" => {
             "Available plugins: returned 1 of 1 starting at offset 0.\n- agena.fs [filesystem, execute] (v0.1.0): Filesystem tools · 2 tool(s)"
-                .into()
-        }
-        "tools.plugins_tags" => {
-            "Available plugin tags: returned 2 of 2 starting at offset 0.\n- filesystem: 3\n- execute: 2"
                 .into()
         }
         "memory.delete" => "Deleted memory 'release-notes'.".into(),
@@ -828,8 +821,6 @@ fn high_risk_tool_families_use_stable_operation_blocks() {
 
     let ids = render_ids("tools.plugins_list", sample_raw("tools.plugins_list"));
     assert_has("tools.plugins_list", &ids, "discovery-plugins");
-    let ids = render_ids("tools.plugins_tags", sample_raw("tools.plugins_tags"));
-    assert_has("tools.plugins_tags", &ids, "discovery-tags");
 
     for tool in ["mcp.prompts.list", "mcp.prompts.get"] {
         let ids = render_ids(tool, sample_raw(tool));

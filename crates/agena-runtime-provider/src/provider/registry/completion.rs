@@ -624,10 +624,7 @@ fn validate_tool_api_argument_semantics(
             }
             Ok(())
         }
-        ToolApiFunction::List
-        | ToolApiFunction::Tags
-        | ToolApiFunction::PluginsList
-        | ToolApiFunction::PluginsTags => Ok(()),
+        ToolApiFunction::List | ToolApiFunction::PluginsList => Ok(()),
     }
 }
 
@@ -2030,8 +2027,8 @@ mod tool_api_function_validation_tests {
         use agena_domain::CapabilitySupport;
 
         for (support, expected_tools) in [
-            (CapabilitySupport::Unknown, 4),
-            (CapabilitySupport::Supported, 4),
+            (CapabilitySupport::Unknown, 3),
+            (CapabilitySupport::Supported, 3),
             (CapabilitySupport::Unsupported, 0),
         ] {
             let provider = std::sync::Arc::new(ToolModeProbeProvider {
@@ -2173,7 +2170,7 @@ mod tool_api_function_validation_tests {
             .expect("requests lock")
             .pop()
             .expect("provider should receive a request");
-        assert_eq!(recorded.tool_api_functions.len(), 4);
+        assert_eq!(recorded.tool_api_functions.len(), 3);
         assert!(recorded.provider_native_tools.is_empty());
         assert!(
             !recorded
@@ -2189,7 +2186,7 @@ mod tool_api_function_validation_tests {
     }
 
     fn all_tool_api_definitions() -> Vec<agena_provider::ToolApiDefinition> {
-        ["list", "help", "tags", "call"]
+        ["list", "help", "call"]
             .into_iter()
             .map(|name| {
                 let mut definition: ToolDefinition =

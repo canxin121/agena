@@ -40,28 +40,6 @@ pub(crate) struct ToolApiListInput {
     /// plugin records directly for `plugins_list`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<ToolApiStringBatch>,
-    /// Optional single tag filter such as `query` or `network`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tag: Option<String>,
-    /// Optional tag filters. When present, all normalized tags must match.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ToolApiTagsInput {
-    /// Number of tags to skip before returning results.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offset: Option<u32>,
-    /// Maximum number of tags to return.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    /// Optional plugin selector: one plugin id or a non-empty array of ids.
-    /// Only tags belonging to tools or plugins from any selected plugin are
-    /// counted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin: Option<ToolApiStringBatch>,
 }
 
 use super::{Deserialize, JsonSchema, Serialize};

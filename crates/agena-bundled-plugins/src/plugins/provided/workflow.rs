@@ -41,7 +41,6 @@ pub(crate) struct WorkflowPluginConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ToolDiscoveryConfig {
     pub(crate) list: ToolListConfig,
-    pub(crate) tags: ToolTagsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -57,18 +56,6 @@ impl Default for ToolListConfig {
             default_limit: 20,
             max_summary_chars: 160,
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct ToolTagsConfig {
-    pub(crate) default_limit: u32,
-}
-
-impl Default for ToolTagsConfig {
-    fn default() -> Self {
-        Self { default_limit: 20 }
     }
 }
 
@@ -99,9 +86,7 @@ pub(crate) use planning_tools::{
     WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
 };
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
-pub(crate) use tool_api_inputs::{
-    ToolApiHelpInput, ToolApiListInput, ToolApiStringBatch, ToolApiTagsInput,
-};
+pub(crate) use tool_api_inputs::{ToolApiHelpInput, ToolApiListInput, ToolApiStringBatch};
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
@@ -148,14 +133,6 @@ struct AvailableToolRecord {
     summary: String,
     tags: Vec<String>,
     plugin_id: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ToolTagRecord {
-    tag: String,
-    tool_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    plugin_count: Option<usize>,
 }
 
 /// One loaded plugin projected for discovery (plugins_* family).
@@ -315,7 +292,6 @@ fn validate_tool_discovery_config(config: &ToolDiscoveryConfig) -> SdkResult<()>
     for (path, value) in [
         ("list.default_limit", config.list.default_limit),
         ("list.max_summary_chars", config.list.max_summary_chars),
-        ("tags.default_limit", config.tags.default_limit),
     ] {
         if value == 0 {
             return Err(PluginError::internal(format!(
@@ -349,16 +325,15 @@ mod tests {
         let config = ToolDiscoveryConfig::default();
         assert_eq!(config.list.default_limit, 20);
         assert_eq!(config.list.max_summary_chars, 160);
-        assert_eq!(config.tags.default_limit, 20);
         validate_tool_discovery_config(&config).expect("valid discovery defaults");
     }
 
     #[test]
     fn discovery_config_rejects_zero_limits() {
         let mut config = ToolDiscoveryConfig::default();
-        config.tags.default_limit = 0;
+        config.list.default_limit = 0;
         let error = validate_tool_discovery_config(&config).expect_err("zero limit must fail");
-        assert!(error.diagnostic.message.contains("tags.default_limit"));
+        assert!(error.diagnostic.message.contains("list.default_limit"));
     }
 
     #[test]
@@ -408,33 +383,6 @@ mod tests {
             tool_key,
             tool,
         }
-    }
-
-    #[test]
-    fn filtering_available_tools_supports_multiple_tags() {
-        let records = vec![
-            AvailableToolRecord {
-                name: "agena.fs/read".to_string(),
-                summary: "Read file".to_string(),
-                tags: vec!["query".to_string(), "filesystem".to_string()],
-                plugin_id: "agena.fs".to_string(),
-            },
-            AvailableToolRecord {
-                name: "agena.web/search".to_string(),
-                summary: "Search web".to_string(),
-                tags: vec!["query".to_string(), "network".to_string()],
-                plugin_id: "agena.web".to_string(),
-            },
-        ];
-
-        let filtered = WorkflowPlugin::filter_available_tools_by_tag(
-            records,
-            Some("query"),
-            Some(&["filesystem".to_string()]),
-        );
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "agena.fs/read");
     }
 
     #[test]

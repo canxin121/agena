@@ -25,7 +25,7 @@ test('plugin workbench consumes the neutral surface and server-owned command end
   assert.ok(!source.includes('<iframe'))
 })
 
-test('plugin contents are selected through fixed settings sidebar destinations', () => {
+test('plugin tabs belong to the selected plugin and support accessible keyboard navigation', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/components/settings/PluginsPanel.vue'), 'utf8')
   assert.deepEqual(Object.values(PLUGIN_SETTINGS_VIEWS), [
     'overview',
@@ -36,8 +36,10 @@ test('plugin contents are selected through fixed settings sidebar destinations',
     'diagnostics',
   ])
   assert.ok(source.includes('props.tab'))
-  assert.ok(!source.includes('role="tablist"'))
-  assert.ok(!source.includes('selectTab('))
+  assert.ok(source.includes('role="tablist"'))
+  assert.ok(source.includes('role="tabpanel"'))
+  assert.ok(source.includes('onTabKeydown'))
+  assert.ok(source.includes('selectTab('))
 })
 
 test('plugin workbench prefers a plugin with a declared command', () => {

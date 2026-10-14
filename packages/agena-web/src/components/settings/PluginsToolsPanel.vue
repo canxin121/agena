@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
@@ -9,6 +10,13 @@ const PluginMarketplacePanel = defineAsyncComponent(() => import('@/components/s
 const PluginsPanel = defineAsyncComponent(() => import('@/components/settings/PluginsPanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('plugins-tools'))
+const route = useRoute()
+const panel = ref<{ refresh: () => Promise<void> } | null>(null)
+defineExpose({
+  refresh: async () => {
+    await panel.value?.refresh()
+  },
+})
 defineProps<{ activePage: string }>()
 </script>
 
@@ -20,7 +28,11 @@ defineProps<{ activePage: string }>()
     :default-page="SETTINGS_DEFAULT_SUBPAGE['plugins-tools']"
     v-slot="{ activePage }"
   >
-    <PluginsPanel v-if="pluginTabForSettingsView(activePage)" :tab="pluginTabForSettingsView(activePage)!" />
+    <PluginsPanel
+      v-if="activePage === 'plugin-workbench'"
+      ref="panel"
+      :tab="pluginTabForSettingsView(activePage, route.query.pluginTab)!"
+    />
     <PluginMarketplacePanel v-else-if="activePage === 'marketplace'" />
     <McpServerControlPanel v-else />
   </SettingsSectionWorkbench>

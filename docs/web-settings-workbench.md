@@ -27,16 +27,19 @@ The source selector shows a compact summary for every loaded layer so the user c
 
 ### Plugins & Tools
 
-- **Plugin Workbench** — searchable/filterable plugin list with Overview, Config, Tools, Commands, Views, Controls, Capabilities, Logs, and Diagnostics tabs.
-  - Plugin Config materializes JSON Schema defaults, applies localized schema overlays, renders nested objects/arrays/enums/unions, supports array reorder/copy/delete, and falls back to raw JSON for open-ended structures.
-  - Saves contain the minimal plugin-owned override rather than a copy of every schema default.
-  - Dry-run validation and the saved/draft override diff are available before a runtime-reloading save.
-  - Manifest tools can be invoked in the active Session with JSON input while their schemas and declared tags remain visible.
+- **Installed plugins** — one searchable/filterable plugin list with Overview, Settings, Tools, Commands, Logs, and Diagnostics tabs inside the selected plugin. The desktop list and detail content scroll independently, keeping the plugin identity and tabs visible; narrow layouts use a searchable plugin picker. Plugin configuration fills the detail pane with the same edge spacing as the plugin header, using full-width cards for top-level settings groups. Each card has a distinct title/description/action header and compact label/control rows; deeper groups use lighter headings and dividers inside the same card. Controls adapt to the editor pane width, with two columns on wide panes. Optional fields retain their labels and descriptions when unset; resetting removes the value rather than storing the displayed default. The saved status sits beside the configuration title, while the sticky save/discard bar appears only for pending edits, saving, or errors.
+  - Plugin rows show the localized manifest summary, with up to two lines and full text on hover. Search matches plugin names, purposes, and status; the only list filter is runtime state. Summary text comes with the list response, without per-plugin detail requests. A plugin without documentation falls back to its status. The detail header shows version, state, and the full summary.
+  - Overview offers shortcuts to the plugin's configuration and capabilities. Runtime internals (profiles, reload decisions, dependencies, services, registrations, effects, and trust) live in Diagnostics, with runtime details collapsed by default.
+  - Settings use the server-owned contract and localized documentation. A save bar exposes save/discard state; refreshing preserves an unsaved draft, and leaving the plugin checks before discarding it.
+  - Commands are searchable, expandable forms that retain server-owned invocation and host effects. Tools are searchable by name, description, and tags.
+  - Logs load on demand, with text/level filters and a dedicated refresh. Log failures do not prevent configuring a plugin. Requests from a previous plugin cannot replace the current selection's details.
+  - Plugin identity and tab are addressable as `?view=plugin-workbench&plugin=agena.web&pluginTab=settings`. Previous `view=plugin-settings`, `plugin-commands`, `plugin-tools`, `plugin-logs`, and `plugin-diagnostics` links migrate to the same workbench and preserve their tab.
+- **Plugin Marketplace** — discover, install, upgrade, and remove GitHub-hosted plugins.
 - **MCP Server** — listener enablement, authentication mode, mixed-auth anonymous access, OAuth client registration, public resource URL, issuer URL, OAuth password, endpoint inspection, and tool exposure.
 
 #### Bundled web search configuration
 
-In **Plugin Workbench → agena.web → Config → Search**, choose the backend used when `web.search` omits `engine` or sets it to `auto`. These are plugin-owned settings; the examples below are the contents of `agena.web`'s settings object.
+In **Installed plugins → agena.web → Settings → Search**, choose the backend used when `web.search` omits `engine` or sets it to `auto`. These are plugin-owned settings; the examples below are the contents of `agena.web`'s settings object.
 
 | `search.provider` | Default endpoint | Server credential environment variable | Behavior |
 | --- | --- | --- | --- |

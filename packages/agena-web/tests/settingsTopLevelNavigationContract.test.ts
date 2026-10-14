@@ -30,7 +30,8 @@ test('settings navigation preserves workspace scope and clears unrelated deep-li
   assert.deepEqual(
     settingsQueryForDestination({ section: 'plugins-tools', view: 'plugin-logs' }, 'plugins-tools', current),
     {
-      view: 'plugin-logs',
+      view: 'plugin-workbench',
+      pluginTab: 'logs',
       plugin: 'fs',
       workspaceId: '42',
       windowId: 'settings',
@@ -72,16 +73,38 @@ test('settings navigation preserves workspace scope and clears unrelated deep-li
   )
 })
 
-test('old plugin tab links normalize to matching second-level destinations', () => {
+test('old plugin sidebar links and current plugin tabs resolve to one workbench', () => {
   for (const [view, tab] of Object.entries(PLUGIN_SETTINGS_VIEWS)) {
-    assert.equal(normalizePluginSettingsView('plugin-workbench', tab), view)
+    assert.equal(normalizePluginSettingsView(view), 'plugin-workbench')
     assert.equal(pluginTabForSettingsView(view), tab)
-    assert.equal(normalizePluginSettingsView(view, 'invalid'), view)
+    assert.equal(pluginTabForSettingsView('plugin-workbench', tab), tab)
   }
-  assert.equal(normalizePluginSettingsView('plugin-workbench', 'untrusted-tab'), 'plugin-workbench')
+  assert.equal(pluginTabForSettingsView('plugin-workbench', 'untrusted-tab'), 'overview')
+  assert.equal(pluginTabForSettingsView('plugin-workbench', 'constructor'), 'overview')
+  assert.equal(pluginTabForSettingsView('plugin-logs', 'settings'), 'logs')
+  assert.equal(normalizePluginSettingsView('marketplace'), 'marketplace')
+  assert.equal(normalizePluginSettingsView(' PLUGIN-SETTINGS '), 'plugin-workbench')
   assert.equal(pluginTabForSettingsView('untrusted-tab'), null)
   assert.equal(pluginTabForSettingsView('constructor'), null)
   assert.equal(pluginTabForSettingsView('marketplace'), null)
+})
+
+test('returning to the installed plugin page preserves its selection and tab, while other pages clear both', () => {
+  const query = { view: 'plugin-workbench', plugin: 'agena.web', pluginTab: 'settings', workspaceId: '42' }
+  assert.deepEqual(
+    settingsQueryForDestination({ section: 'plugins-tools', view: 'plugin-workbench' }, 'plugins-tools', query),
+    query,
+  )
+  for (const view of ['marketplace', 'mcp-server']) {
+    assert.deepEqual(settingsQueryForDestination({ section: 'plugins-tools', view }, 'plugins-tools', query), {
+      view,
+      workspaceId: '42',
+    })
+  }
+  assert.deepEqual(
+    settingsQueryForDestination({ section: 'plugins-tools', view: 'plugin-workbench' }, 'interface', query),
+    { view: 'plugin-workbench', workspaceId: '42' },
+  )
 })
 
 test('settings sidebar and content share one normalized routing state', () => {

@@ -28,17 +28,11 @@ test('the shared catalog exposes the high-value models and plugin subpages', () 
   for (const id of ['provider-studio', 'model-catalog', 'defaults', 'approval-model']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing models subpage ${id}`)
   }
-  for (const id of [
-    'plugin-workbench',
-    'plugin-settings',
-    'plugin-commands',
-    'plugin-tools',
-    'plugin-logs',
-    'plugin-diagnostics',
-    'marketplace',
-    'mcp-server',
-  ]) {
+  for (const id of ['plugin-workbench', 'marketplace', 'mcp-server']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing plugins subpage ${id}`)
+  }
+  for (const id of ['plugin-settings', 'plugin-commands', 'plugin-tools', 'plugin-logs', 'plugin-diagnostics']) {
+    assert.ok(!catalog.includes(`id: '${id}'`), `${id} belongs inside the selected plugin`)
   }
   for (const id of ['filesystem', 'network', 'tools']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing permission subpage ${id}`)

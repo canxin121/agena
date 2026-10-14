@@ -1098,6 +1098,52 @@ mod router_contract_tests {
         let response = app
             .clone()
             .oneshot(
+                Request::get("/api/v1/plugins")
+                    .body(axum::body::Body::empty())
+                    .expect("build plugin list request"),
+            )
+            .await
+            .expect("serve plugin list request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read plugin list response");
+        let plugin_list: serde_json::Value =
+            serde_json::from_slice(&body).expect("decode plugin list response");
+        let web_plugin = plugin_list["items"]
+            .as_array()
+            .and_then(|plugins| {
+                plugins
+                    .iter()
+                    .find(|plugin| plugin["plugin_id"] == "agena.web")
+            })
+            .expect("web plugin appears in the plugin list");
+        assert!(
+            web_plugin["summary"]
+                .as_str()
+                .is_some_and(|summary| !summary.is_empty())
+        );
+        assert!(
+            web_plugin["translations"]["zh-CN"]["summary"]
+                .as_str()
+                .is_some_and(|summary| !summary.is_empty())
+        );
+        assert_ne!(
+            web_plugin["translations"]["zh-CN"]["summary"],
+            web_plugin["summary"]
+        );
+        assert!(web_plugin.get("manifest").is_none());
+        assert!(
+            web_plugin["translations"]["zh-CN"]
+                .get("settings")
+                .is_none()
+        );
+        serde_json::from_value::<agena_plugin_host::status::PluginStatus>(web_plugin.clone())
+            .expect("list documentation preserves the status response for existing clients");
+
+        let response = app
+            .clone()
+            .oneshot(
                 Request::get("/api/v1/plugins/surface")
                     .body(axum::body::Body::empty())
                     .expect("build plugin surface request"),

@@ -1,4 +1,49 @@
 #[derive(Debug, Clone, Serialize)]
+/// Plugin status with the compact documentation needed by plugin lists.
+/// Status fields stay flat for existing clients; full manifests remain in inspect.
+pub struct PluginListItem {
+    #[serde(flatten)]
+    pub status: agena_plugin_host::status::PluginStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub translations: std::collections::BTreeMap<String, PluginSummaryTranslation>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginSummaryTranslation {
+    pub summary: String,
+}
+
+impl PluginListItem {
+    pub fn new(
+        status: agena_plugin_host::status::PluginStatus,
+        manifest: Option<agena_plugin_host::sdk::PluginManifest>,
+    ) -> Self {
+        let mut item = Self {
+            status,
+            summary: None,
+            translations: std::collections::BTreeMap::new(),
+        };
+        if let Some(manifest) = manifest {
+            item.summary = manifest
+                .summary
+                .map(|summary| summary.trim().to_owned())
+                .filter(|summary| !summary.is_empty());
+            item.translations = manifest
+                .translations
+                .into_iter()
+                .filter_map(|(locale, translation)| {
+                    let summary = translation.summary?.trim().to_owned();
+                    (!summary.is_empty()).then_some((locale, PluginSummaryTranslation { summary }))
+                })
+                .collect();
+        }
+        item
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 /// Inspection details of a loaded plugin.
 pub struct PluginInspectResponse {
     pub plugin: agena_plugin_host::PluginInspect,
@@ -113,3 +158,47 @@ pub struct PluginLogListQuery {
     pub limit: Option<usize>,
 }
 use super::{Deserialize, Serialize};
+
+#[cfg(test)]
+mod tests {
+    use super::PluginListItem;
+    use agena_plugin_host::{sdk::PluginManifest, status::PluginStatus};
+
+    #[test]
+    fn plugin_list_without_manifest_keeps_the_original_status() {
+        let status = PluginStatus::initial(&"example.plugin".parse().unwrap(), "stdio");
+        let expected = serde_json::to_value(&status).unwrap();
+        let item = serde_json::to_value(PluginListItem::new(status, None)).unwrap();
+        assert_eq!(item, expected);
+    }
+
+    #[test]
+    fn plugin_list_only_includes_nonempty_summary_translations() {
+        let status = PluginStatus::initial(&"example.plugin".parse().unwrap(), "stdio");
+        let mut manifest = PluginManifest::new("example", "plugin", "1.0.0");
+        manifest.summary = Some("  \n ".into());
+        let chinese = manifest.translations.entry("zh-CN".into()).or_default();
+        chinese.summary = Some("  搜索文档  ".into());
+        chinese.help = Some("Full help".into());
+        chinese.settings.insert("Key".into(), "设置".into());
+        manifest
+            .translations
+            .entry("en-US".into())
+            .or_default()
+            .summary = Some("  ".into());
+        manifest
+            .translations
+            .entry("fr-FR".into())
+            .or_default()
+            .help = Some("Help only".into());
+
+        let item = serde_json::to_value(PluginListItem::new(status, Some(manifest))).unwrap();
+        assert!(item.get("summary").is_none());
+        assert_eq!(
+            item["translations"],
+            serde_json::json!({"zh-CN": {"summary": "搜索文档"}})
+        );
+        assert!(item.get("manifest").is_none());
+        assert!(item.get("settings").is_none());
+    }
+}

@@ -1,5 +1,16 @@
 pub async fn list_plugins(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
-    Ok(items_json(state.plugin_runtime().plugin_statuses()))
+    let plugin_runtime = state.plugin_runtime();
+    let items = plugin_runtime
+        .plugin_statuses()
+        .into_iter()
+        .map(|status| {
+            let manifest = plugin_runtime
+                .plugin_inspect(status.plugin_id.to_string().as_str())
+                .and_then(|plugin| plugin.manifest);
+            agena_application::dto::PluginListItem::new(status, manifest)
+        })
+        .collect::<Vec<_>>();
+    Ok(items_json(items))
 }
 
 pub async fn get_plugin_architecture_catalog(

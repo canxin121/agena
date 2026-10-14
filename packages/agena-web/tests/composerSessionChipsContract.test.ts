@@ -52,12 +52,18 @@ test('the footer chips stay short: an icon, a number, and a tooltip', () => {
   }
 })
 
-test('the composer footer keeps its chips apart', () => {
+test('the composer footer keeps its chips apart and straddles the bottom border', () => {
   const composerSource = readFileSync(resolve(import.meta.dir, '../src/components/chat/Composer.vue'), 'utf8')
   const at = composerSource.indexOf('$slots.bottomLeft')
   assert.notEqual(at, -1, 'the composer must declare its footer chip slot')
   const footer = composerSource.slice(at, at + 400)
   assert.match(footer, /gap-2/, 'the footer row must space adjacent chips')
+  assert.ok(
+    composerSource.includes('bottom-0 z-10 flex min-w-0 translate-y-1/2'),
+    'chips must break the bottom border like the model row',
+  )
+  assert.match(composerSource, /max-w-full[^\"]*overflow-x-auto[^\"]*bg-background/)
+  assert.ok(chipSource.includes('font-mono text-[11px] font-medium'), 'chip labels should match model typography')
 })
 
 test('a chip panel is portalled and bounded so the composer cannot clip it', () => {

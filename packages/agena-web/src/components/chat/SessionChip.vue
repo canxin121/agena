@@ -33,7 +33,7 @@ defineEmits<{ (event: 'update:open', value: boolean): void }>()
         :aria-expanded="open"
       >
         <slot name="icon" />
-        <span v-if="label" class="max-w-32 truncate">{{ label }}</span>
+        <span v-if="label" class="max-w-32 truncate font-mono text-[11px] font-medium">{{ label }}</span>
         <RiLoader4Line v-if="busy" class="h-3 w-3 shrink-0 animate-spin" />
       </button>
     </PopoverTrigger>

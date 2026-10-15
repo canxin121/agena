@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use axum::{
@@ -31,6 +31,8 @@ pub struct GitBranchDetails {
     pub ahead: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub behind: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,32 +85,6 @@ fn parse_track_counts(track: &str) -> (Option<i32>, Option<i32>) {
     (a, b)
 }
 
-async fn list_remote_heads(dir: &Path, remote: &str) -> Option<HashSet<String>> {
-    let (code, out, error) = git_command_result_or_log(
-        run_git(dir, &["ls-remote", "--heads", remote]).await,
-        "list remote Git branch heads",
-    )?;
-    if code != 0 {
-        tracing::debug!(
-            remote,
-            exit_code = code,
-            stderr = %error,
-            "remote Git branch-head filtering is unavailable"
-        );
-        return None;
-    }
-    let mut set = HashSet::new();
-    for line in out.lines() {
-        if let Some((_, r)) = line.split_once("\trefs/heads/") {
-            let name = r.trim();
-            if !name.is_empty() {
-                set.insert(name.to_string());
-            }
-        }
-    }
-    Some(set)
-}
-
 fn parse_remote_branch(name: &str) -> Option<(String, String)> {
     let rest = name.strip_prefix("remotes/")?;
     let (remote, branch) = rest.split_once('/')?;
@@ -140,80 +116,30 @@ pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
     let local_only = q.local_only;
     let page_requested = q.page.is_some() || q.page_size.is_some() || !normalized_search.is_empty();
 
-    // Determine current branch.
-    let current = git_command_result_or_log(
-        run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).await,
-        "resolve current Git branch",
-    )
-    .map(|(c, out, _)| {
-        if c == 0 {
-            out.trim().to_string()
-        } else {
-            "".to_string()
-        }
-    })
-    .unwrap_or_default();
-
-    // Collect list like `git branch -a` provides (including remotes/ prefix).
-    let (code, out, err) = match run_git(&dir, &["branch", "-a"]).await {
-        Ok(v) => v,
-        Err(e) => {
-            return git_command_transport_error_response(
-                "list Git branches",
-                &e,
-                Some("git_branch_list_process_failed"),
-            );
-        }
-    };
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to get branches"})),
-        )
-            .into_response();
-    }
-
-    let mut all: Vec<String> = out
-        .lines()
-        .map(|l| l.trim_start_matches('*').trim())
-        .map(|l| l.to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-
-    // Filter remote branches to ones that actually exist on origin when possible.
-    let remote_heads = list_remote_heads(&dir, "origin").await;
-    if let Some(active) = remote_heads {
-        all.retain(|b| {
-            if let Some(rest) = b.strip_prefix("remotes/") {
-                // rest looks like origin/foo
-                if let Some((remote, name)) = rest.split_once('/')
-                    && remote == "origin"
-                {
-                    return active.contains(name);
-                }
+    // Listing branches is entirely local. Remote refs reflect the last fetch;
+    // network authentication must never delay a branch picker.
+    let fmt = "%(refname)%00%(objectname)%00%(HEAD)%00%(upstream:short)%00%(upstream:track)%00%(subject)%00%(worktreepath)%00%(symref)";
+    let ref_args = [
+        "for-each-ref",
+        "--format",
+        fmt,
+        "refs/heads",
+        "refs/remotes",
+    ];
+    let (head, refs) = tokio::join!(
+        run_git(&dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]),
+        run_git(&dir, &ref_args),
+    );
+    let current = git_command_result_or_log(head, "resolve current Git branch")
+        .map(|(code, out, _)| {
+            if code == 0 {
+                out.trim().to_owned()
+            } else {
+                "HEAD".to_owned()
             }
-            true
-        });
-    }
-
-    // Build branch details for local + remote refs.
-    // Use for-each-ref for stable fields.
-    let fmt = "%(*refname:short)\t%(refname:short)\t%(objectname)\t%(HEAD)\t%(upstream:short)\t%(upstream:track)\t%(subject)";
-    let (code, out, error) = match run_git(
-        &dir,
-        &[
-            "for-each-ref",
-            "--format",
-            fmt,
-            "refs/heads",
-            "refs/remotes",
-        ],
-    )
-    .await
-    {
+        })
+        .unwrap_or_default();
+    let (code, out, error) = match refs {
         Ok(result) => result,
         Err(error) => {
             return git_command_transport_error_response(
@@ -237,56 +163,40 @@ pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
         )
             .into_response();
     }
-    {
-        for line in out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 7 {
-                continue;
-            }
-            let short = parts[1];
-            let commit = parts[2];
-            let head_flag = parts[3];
-            let upstream = parts[4];
-            let track = parts[5];
-            let subject = parts[6];
-
-            // Match simple-git naming: remotes/origin/foo
-            let name = if short.starts_with("origin/") || short.starts_with("upstream/") {
-                format!("remotes/{short}")
-            } else {
-                short.to_string()
-            };
-
-            let (ahead, behind) = parse_track_counts(track);
-            let tracking = if upstream.trim().is_empty() {
-                None
-            } else {
-                Some(upstream.to_string())
-            };
-            let label = if let Some(ref trk) = tracking {
-                format!("{} [{}] {}", &commit[..commit.len().min(7)], trk, subject)
-            } else {
-                format!("{} {}", &commit[..commit.len().min(7)], subject)
-            };
-
-            branches.insert(
-                name.clone(),
-                GitBranchDetails {
-                    current: head_flag == "*" || name == current,
-                    name,
-                    commit: commit.to_string(),
-                    label,
-                    tracking,
-                    ahead,
-                    behind,
-                },
-            );
+    for line in out.lines() {
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() != 8 || !parts[7].is_empty() {
+            continue;
         }
+        let name = if let Some(local) = parts[0].strip_prefix("refs/heads/") {
+            local.to_owned()
+        } else if let Some(remote) = parts[0].strip_prefix("refs/remotes/") {
+            format!("remotes/{remote}")
+        } else {
+            continue;
+        };
+        let commit = parts[1];
+        let tracking = (!parts[3].is_empty()).then(|| parts[3].to_owned());
+        let (ahead, behind) = parse_track_counts(parts[4]);
+        let label = format!("{} {}", &commit[..commit.len().min(7)], parts[5]);
+        branches.insert(
+            name.clone(),
+            GitBranchDetails {
+                current: parts[2] == "*" || name == current,
+                name,
+                commit: commit.to_owned(),
+                label,
+                tracking,
+                ahead,
+                behind,
+                worktree_path: (!parts[6].is_empty()).then(|| parts[6].to_owned()),
+            },
+        );
     }
 
     let mut branch_names: Vec<String> = branches.keys().cloned().collect();
     if local_only {
-        branch_names.retain(|name| !name.starts_with("remotes/") && !name.ends_with("/HEAD"));
+        branch_names.retain(|name| !name.starts_with("remotes/"));
     }
     if !normalized_search.is_empty() {
         branch_names.retain(|name| name.to_lowercase().contains(&normalized_search));
@@ -314,22 +224,18 @@ pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
             Vec::new()
         }
     } else {
-        all.clone()
+        branch_names.clone()
     };
 
-    let branches_for_output: BTreeMap<String, GitBranchDetails> = if page_requested {
-        names_for_output
-            .iter()
-            .filter_map(|name| {
-                branches
-                    .get(name)
-                    .cloned()
-                    .map(|details| (name.clone(), details))
-            })
-            .collect()
-    } else {
-        branches
-    };
+    let branches_for_output: BTreeMap<String, GitBranchDetails> = names_for_output
+        .iter()
+        .filter_map(|name| {
+            branches
+                .get(name)
+                .cloned()
+                .map(|details| (name.clone(), details))
+        })
+        .collect();
 
     Json(GitBranchesResponse {
         all: names_for_output,

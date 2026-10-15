@@ -114,7 +114,7 @@ pub async fn git_worktrees(Query(q): Query<DirectoryQuery>) -> Response {
         Err(resp) => return *resp,
     };
 
-    let (code, out, err) = match run_git(&dir, &["worktree", "list", "--porcelain"]).await {
+    let (code, out, err) = match run_git(&dir, &["worktree", "list", "--porcelain", "-z"]).await {
         Ok(result) => result,
         Err(error) => {
             return git_command_transport_error_response(
@@ -140,13 +140,13 @@ pub async fn git_worktrees(Query(q): Query<DirectoryQuery>) -> Response {
 
     let mut worktrees = Vec::new();
     let mut current: Option<GitWorktreeInfo> = None;
-    for line in out.lines() {
+    for line in out.split('\0') {
         if let Some(rest) = line.strip_prefix("worktree ") {
             if let Some(wt) = current.take() {
                 worktrees.push(wt);
             }
             current = Some(GitWorktreeInfo {
-                worktree: rest.trim().to_string(),
+                worktree: rest.to_string(),
                 head: None,
                 branch: None,
                 locked: false,
@@ -207,7 +207,8 @@ fn default_true() -> bool {
 }
 
 fn resolve_worktree_path(repo: &Path, raw: &str) -> Result<PathBuf, Box<Response>> {
-    let trimmed = raw.trim();
+    let expanded = crate::normalize_directory_path(raw);
+    let trimmed = expanded.trim();
     if trimmed.is_empty() {
         return Err(Box::new(
             (
@@ -221,26 +222,10 @@ fn resolve_worktree_path(repo: &Path, raw: &str) -> Result<PathBuf, Box<Response
     let full = if p.is_absolute() {
         p.to_path_buf()
     } else {
-        if !is_safe_repo_rel_path(trimmed) {
-            return Err(Box::new(
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Invalid path", "code": "invalid_path"})),
-                )
-                    .into_response(),
-            ));
-        }
         repo.join(trimmed)
     };
-    if !full.starts_with(repo) {
-        return Err(Box::new((
-            StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Worktree path must be within repo", "code": "path_outside_repo"}),
-            ),
-        )
-            .into_response()));
-    }
+    // A worktree is a separate checkout, often a sibling (`../feature`). Its
+    // explicitly chosen location is not a file path inside this repository.
     Ok(full)
 }
 
@@ -304,7 +289,8 @@ pub async fn git_worktree_add(
         return resp;
     }
 
-    Json(serde_json::json!({"success": true, "path": target.to_string_lossy()})).into_response()
+    let created = tokio::fs::canonicalize(&target).await.unwrap_or(target);
+    Json(serde_json::json!({"success": true, "path": super::path_slash(&created)})).into_response()
 }
 
 #[derive(Debug, Deserialize)]

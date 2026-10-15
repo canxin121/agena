@@ -20,13 +20,14 @@ use axum::{
 use bytes::Bytes;
 use dashmap::DashMap;
 use portable_pty::ChildKiller;
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::{Semaphore, broadcast, watch};
 
 use crate::{ApiResult, AppError};
 
+use super::shell::{shell_command, tmux_command};
 use crate::server::persistence::db;
 
 const MAX_TERMINAL_SESSIONS: usize = 20;
@@ -897,19 +898,11 @@ impl TerminalSession {
 
         let mut backend = TerminalBackend::Shell;
         let mut tmux_session_name_value = None;
+        let shell = shell_command(&cwd);
 
         let child = if prefer_tmux {
             let tmux_name = tmux_session_name(&session_id);
-            let mut tmux_cmd = CommandBuilder::new("tmux");
-            tmux_cmd.arg("new-session");
-            tmux_cmd.arg("-A");
-            tmux_cmd.arg("-s");
-            tmux_cmd.arg(&tmux_name);
-            tmux_cmd.arg("-c");
-            tmux_cmd.arg(&cwd);
-            tmux_cmd.cwd(&cwd);
-            tmux_cmd.env("TERM", "xterm-256color");
-            tmux_cmd.env("COLORTERM", "truecolor");
+            let tmux_cmd = tmux_command(&tmux_name, &cwd, &shell);
 
             match pair.slave.spawn_command(tmux_cmd) {
                 Ok(child) => {
@@ -924,23 +917,11 @@ impl TerminalSession {
                         "failed to spawn tmux-backed terminal; falling back to shell"
                     );
 
-                    let shell = default_shell();
-                    let mut cmd = CommandBuilder::new(shell);
-                    cmd.cwd(&cwd);
-                    cmd.env("TERM", "xterm-256color");
-                    cmd.env("COLORTERM", "truecolor");
-                    pair.slave.spawn_command(cmd)?
+                    pair.slave.spawn_command(shell)?
                 }
             }
         } else {
-            let shell = default_shell();
-            let mut cmd = CommandBuilder::new(shell);
-            cmd.cwd(&cwd);
-
-            // Parity-ish environment.
-            cmd.env("TERM", "xterm-256color");
-            cmd.env("COLORTERM", "truecolor");
-            pair.slave.spawn_command(cmd)?
+            pair.slave.spawn_command(shell)?
         };
 
         let killer = child.clone_killer();
@@ -1283,28 +1264,6 @@ fn sse_json(payload: serde_json::Value, id: Option<u64>) -> Bytes {
     out.push_str(&payload.to_string());
     out.push_str("\n\n");
     Bytes::from(out)
-}
-
-fn default_shell() -> String {
-    if cfg!(windows) {
-        return "powershell.exe".to_string();
-    }
-
-    // Prefer $SHELL when it exists.
-    if let Ok(shell) = std::env::var("SHELL")
-        && !shell.trim().is_empty()
-    {
-        return shell;
-    }
-
-    // Fallbacks that exist on most Linux distros.
-    for candidate in ["/bin/bash", "/usr/bin/bash", "/bin/sh"] {
-        if Path::new(candidate).is_file() {
-            return candidate.to_string();
-        }
-    }
-
-    "/bin/sh".to_string()
 }
 
 #[derive(Debug, Deserialize)]

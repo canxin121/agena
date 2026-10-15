@@ -2002,6 +2002,12 @@ export default {
     },
   },
   git: {
+    navigation: {
+      chooseFolder: '选择文件夹',
+      scanRepositories: '扫描子目录中的仓库',
+      remoteBranch: '远程分支',
+      branchHistory: '查看分支历史',
+    },
     noCommitTemplateConfigured: '未配置提交模板',
     actions: {
       fetch: '获取',
@@ -2137,7 +2143,7 @@ export default {
             migrateChanges: '迁移更改',
           },
           hints: {
-            pathRelativeToRepoRoot: '路径相对仓库根目录，且必须位于其中。',
+            pathRelativeToRepoRoot: '支持绝对路径，或相对仓库根目录的路径（例如 ../feature）。',
           },
           placeholders: {
             branchName: '分支名',

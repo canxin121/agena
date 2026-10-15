@@ -2011,6 +2011,12 @@ export default {
     },
   },
   git: {
+    navigation: {
+      chooseFolder: 'Choose folder',
+      scanRepositories: 'Scan nested repositories',
+      remoteBranch: 'Remote branch',
+      branchHistory: 'Browse branch history',
+    },
     noCommitTemplateConfigured: 'No commit template configured',
     actions: {
       fetch: 'Fetch',
@@ -2147,7 +2153,7 @@ export default {
             migrateChanges: 'Migrate changes',
           },
           hints: {
-            pathRelativeToRepoRoot: 'Path is relative to the repository root and must stay inside it.',
+            pathRelativeToRepoRoot: 'Use an absolute path or a path relative to the repository root (for example ../feature).',
           },
           placeholders: {
             branchName: 'Branch name',

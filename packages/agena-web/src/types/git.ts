@@ -60,6 +60,7 @@ export interface GitWatchStatusPayload {
 }
 
 export interface GitBranch {
+  worktreePath?: string | null
   name: string
   current: boolean
   label?: string | null

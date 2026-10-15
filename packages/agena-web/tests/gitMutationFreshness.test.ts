@@ -94,7 +94,8 @@ for (const [file, factory, load, field, oldValue, newValue] of [
     root.value = '/other-repo'
     requests[4]!.resolve(oldValue)
     await retired
-    expect(snapshot()).toEqual(expected)
+    // Navigation lists clear the previous repository's rows as scope changes.
+    expect(snapshot()).toEqual(field === 'worktrees' ? [] : field === 'branches' ? null : expected)
   })
 }
 

@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { i18n } from '@/i18n'
 
 import type { GitCompareResponse } from '@/types/git'
@@ -26,6 +26,17 @@ export function useGitCompareOps(opts: { repoRoot: { value: string | null }; git
   const compareDiff = ref('')
   const compareLoading = ref(false)
   const compareError = ref<string | null>(null)
+  let compareSequence = 0
+  watch(
+    () => repoRoot.value,
+    () => {
+      compareSequence++
+      compareLoading.value = false
+      compareOpen.value = false
+      compareDiff.value = ''
+      compareError.value = null
+    },
+  )
 
   function openCompareDialog() {
     compareOpen.value = true
@@ -57,6 +68,7 @@ export function useGitCompareOps(opts: { repoRoot: { value: string | null }; git
     compareBase.value = base
     compareHead.value = head
     comparePath.value = path
+    const sequence = ++compareSequence
     compareLoading.value = true
     compareError.value = null
     try {
@@ -66,14 +78,16 @@ export function useGitCompareOps(opts: { repoRoot: { value: string | null }; git
         path: path || undefined,
         contextLines: 3,
       })
+      if (sequence !== compareSequence || dir !== repoRoot.value) return
       compareDiff.value = resp?.diff || ''
       if (!compareDiff.value.trim()) {
         toasts.push('info', i18n.global.t('git.toasts.noDifferencesFound'))
       }
     } catch (err) {
+      if (sequence !== compareSequence || dir !== repoRoot.value) return
       compareError.value = err instanceof Error ? err.message : String(err)
     } finally {
-      compareLoading.value = false
+      if (sequence === compareSequence) compareLoading.value = false
     }
   }
 

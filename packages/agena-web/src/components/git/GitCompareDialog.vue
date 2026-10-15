@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, useId } from 'vue'
 import { RiArrowLeftRightLine, RiTextWrap } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -12,9 +12,11 @@ import { buildUnifiedMonacoDiffModel } from '@/features/git/diff/unifiedDiff'
 
 const { t } = useI18n()
 const wrapLines = ref(true)
+const referencesId = useId()
 
 const props = defineProps<{
   open: boolean
+  references?: string[]
   base: string
   head: string
   path: string
@@ -24,7 +26,7 @@ const props = defineProps<{
 }>()
 
 const compareDiffModel = computed(() => buildUnifiedMonacoDiffModel(props.diff || ''))
-const compareModelId = computed(() => `git-compare:${compareDiffModel.value.path}`)
+const compareModelId = computed(() => `git-compare:${referencesId}:${compareDiffModel.value.path}`)
 
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void
@@ -56,9 +58,13 @@ function onUpdateText(key: 'base' | 'head' | 'path', v: string | number) {
     @update:open="onUpdateOpen"
   >
     <div class="space-y-3">
+      <datalist :id="referencesId">
+        <option v-for="reference in references || []" :key="reference" :value="reference" />
+      </datalist>
       <div class="grid gap-2 lg:grid-cols-[1fr_1fr_auto_auto]">
         <Input
           :model-value="base"
+          :list="referencesId"
           class="h-9 font-mono text-xs"
           :placeholder="t('git.ui.dialogs.compare.placeholders.base')"
           :aria-label="t('git.ui.dialogs.compare.placeholders.base')"
@@ -66,6 +72,7 @@ function onUpdateText(key: 'base' | 'head' | 'path', v: string | number) {
         />
         <Input
           :model-value="head"
+          :list="referencesId"
           class="h-9 font-mono text-xs"
           :placeholder="t('git.ui.dialogs.compare.placeholders.head')"
           :aria-label="t('git.ui.dialogs.compare.placeholders.head')"

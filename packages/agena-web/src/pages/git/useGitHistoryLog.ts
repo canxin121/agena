@@ -40,6 +40,7 @@ export function useGitHistoryLog(opts: { repoRoot: { value: string | null }; git
   const historyFilesLimit = 100
 
   const historyFilterPath = ref<string | null>(null)
+  const historyRef = ref('HEAD')
   const historySearchDraft = ref('')
   const historySearchQuery = ref('')
 
@@ -82,10 +83,12 @@ export function useGitHistoryLog(opts: { repoRoot: { value: string | null }; git
   function historyPageKey(directory: string, page: number): string {
     const path = (historyFilterPath.value || '').trim()
     const search = historySearchQuery.value.trim().toLowerCase()
-    return `${directory}::${path}::${search}::${page}`
+    return `${directory}::${historyRef.value}::${path}::${search}::${page}`
   }
 
   function resetHistoryListState() {
+    historyLoadSeq += 1
+    historyLoading.value = false
     activeHistoryAbort?.abort()
     activeHistoryAbort = null
     historyCommits.value = []
@@ -98,6 +101,7 @@ export function useGitHistoryLog(opts: { repoRoot: { value: string | null }; git
   }
 
   function clearHistorySelectionState() {
+    selectCommitSeq += 1
     historySelected.value = null
     historyFiles.value = []
     historyFilesLoading.value = false
@@ -167,6 +171,7 @@ export function useGitHistoryLog(opts: { repoRoot: { value: string | null }; git
           path: historyFilterPath.value || undefined,
           search: historySearchQuery.value.trim() || undefined,
           graph: true,
+          ref: historyRef.value || 'HEAD',
         },
         {
           signal: abortController.signal,
@@ -448,17 +453,26 @@ export function useGitHistoryLog(opts: { repoRoot: { value: string | null }; git
   }
 
   watch(
-    () => repoRoot.value,
-    () => {
-      commitDetailsCache.clear()
+    () => [repoRoot.value, historyRef.value] as const,
+    ([directory], [previousDirectory]) => {
+      const changedRepository = directory !== previousDirectory
+      if (changedRepository) {
+        commitDetailsCache.clear()
+        historyFilterPath.value = null
+      }
       resetHistoryListState()
       clearHistorySelectionState()
-      if (!historyOpen.value) return
+      if (changedRepository && historyRef.value !== 'HEAD') {
+        historyRef.value = 'HEAD'
+        return
+      }
+      if (changedRepository && !historyOpen.value) return
       void loadHistoryPage(1, true)
     },
   )
 
   return {
+    historyRef,
     historyOpen,
     historyLoading,
     historyError,

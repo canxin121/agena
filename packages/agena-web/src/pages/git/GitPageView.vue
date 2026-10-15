@@ -8,6 +8,7 @@ import {
   RiArrowRightSLine,
   RiCloseLine,
   RiGitBranchLine,
+  RiFolderOpenLine,
   RiClipboardLine,
   RiMore2Line,
   RiRefreshLine,
@@ -15,6 +16,7 @@ import {
 import { useI18n } from 'vue-i18n'
 
 import MiniActionButton from '@/components/ui/MiniActionButton.vue'
+import DirectoryPathDialog from '@/components/ui/DirectoryPathDialog.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
@@ -89,6 +91,7 @@ const {
   root,
   repoRoot,
   projectRoot,
+  switchProjectRoot,
   gitReady,
   repoBusy,
   loading,
@@ -485,6 +488,7 @@ const {
   historyFilesExactLastPage,
   historyFilterPath,
   historySearchDraft,
+  historyRef,
   openFileHistory,
   refreshHistory,
   clearHistoryFilter,
@@ -1060,7 +1064,10 @@ function onHistoryRevert(commit: HistoryCommitLike) {
 }
 
 const mergeRebaseBranchOptions = computed(() => {
-  const map = (branches?.value?.branches ?? {}) as Record<string, { name?: string; current?: boolean }>
+  const map = (branches?.value?.branches ?? {}) as Record<
+    string,
+    { name?: string; current?: boolean; worktreePath?: string; tracking?: string }
+  >
   const items = Object.values(map)
   const options: { label: string; value: string }[] = []
   const seen = new Set<string>()
@@ -1077,14 +1084,33 @@ const mergeRebaseBranchOptions = computed(() => {
   return options
 })
 
+const directoryPickerOpen = ref(false)
+const directoryPickerPath = ref('')
+function chooseDirectory() {
+  directoryPickerPath.value = projectRoot.value || ''
+  directoryPickerOpen.value = true
+}
+function confirmDirectory() {
+  const path = directoryPickerPath.value.trim()
+  if (!path) return
+  directoryPickerOpen.value = false
+  void switchProjectRoot(path)
+}
+function openCompareWithBranches() {
+  void loadBranches()
+  if (!compareBase.value) compareBase.value = status.value?.tracking || 'HEAD~1'
+  if (!compareHead.value) compareHead.value = 'HEAD'
+  openCompareDialog()
+}
+
 const REPO_MENU_PAGE_SIZE = 30
+const scanNestedRepos = ref(false)
 const repoMenuOpen = ref(false)
 const repoMenuQuery = ref('')
 const repoMenuAnchorEl = ref<HTMLElement | null>(null)
 let repoMenuSearchTimer: ReturnType<typeof setTimeout> | undefined
 
 const repoMenuGroups = computed<OptionMenuGroup[]>(() => {
-  const selected = String(selectedRepoRelative.value || '.').trim() || '.'
   const repoList = Array.isArray(repoPickerRepos.value) ? repoPickerRepos.value : []
   const repoItems: OptionMenuItem[] = repoList.map((repo: { relative?: string; root?: string }) => {
     const relative = String(repo.relative || '.').trim() || '.'
@@ -1092,7 +1118,7 @@ const repoMenuGroups = computed<OptionMenuGroup[]>(() => {
       id: `repo:${relative}`,
       label: relative,
       description: repo.root,
-      checked: relative === selected,
+      checked: repo.root === repoRoot.value,
       monospace: true,
     }
   })
@@ -1124,13 +1150,37 @@ const repoMenuGroups = computed<OptionMenuGroup[]>(() => {
     })
   }
 
+  const query = repoMenuQuery.value.trim().toLowerCase()
+  const linked = (worktrees.value || []).filter(
+    (item: { worktree: string; branch?: string; prunable?: boolean }) =>
+      !item.prunable && (!query || `${item.worktree} ${item.branch || ''}`.toLowerCase().includes(query)),
+  )
+  if (linked.length)
+    groups.push({
+      id: 'worktrees',
+      title: t('git.ui.dialogs.worktrees.title'),
+      items: linked.map((item: { worktree: string; branch?: string }) => ({
+        id: `worktree:${item.worktree}`,
+        label: item.branch || t('git.ui.dialogs.worktrees.detached'),
+        description: item.worktree,
+        checked: item.worktree === repoRoot.value,
+        monospace: true,
+      })),
+    })
+  groups.push({
+    id: 'navigation',
+    items: [
+      { id: 'browse-directory', label: t('git.navigation.chooseFolder') },
+      { id: 'scan-nested', label: t('git.navigation.scanRepositories') },
+    ],
+  })
   return groups
 })
 
 async function requestRepoMenuPage(page: number, query = repoMenuQuery.value, refresh = false) {
   if (repoMenuSearchTimer) clearTimeout(repoMenuSearchTimer)
   repoMenuSearchTimer = undefined
-  await loadRepoPickerPage({ page, pageSize: REPO_MENU_PAGE_SIZE, search: query, refresh })
+  await loadRepoPickerPage({ page, pageSize: REPO_MENU_PAGE_SIZE, search: query, refresh, scan: scanNestedRepos.value })
 }
 
 function refreshRepoMenuOptions() {
@@ -1147,6 +1197,7 @@ function toggleRepoMenu() {
     return
   }
   void requestRepoMenuPage(1, repoMenuQuery.value)
+  if (gitReady.value) void loadWorktrees()
 }
 
 function setRepoMenuOpen(open: boolean) {
@@ -1158,6 +1209,7 @@ function setRepoMenuOpen(open: boolean) {
     return
   }
   void requestRepoMenuPage(1, repoMenuQuery.value)
+  if (gitReady.value) void loadWorktrees()
 }
 
 function onRepoMenuQueryChange(value: string) {
@@ -1169,12 +1221,34 @@ function onRepoMenuQueryChange(value: string) {
   }, 180)
 }
 
+watch(projectRoot, () => {
+  scanNestedRepos.value = false
+  repoMenuOpen.value = false
+  repoMenuQuery.value = ''
+  if (repoMenuSearchTimer) clearTimeout(repoMenuSearchTimer)
+})
+
 onBeforeUnmount(() => {
   if (repoMenuSearchTimer) clearTimeout(repoMenuSearchTimer)
 })
 
 function onRepoMenuSelect(item: OptionMenuItem) {
   const id = String(item.id || '')
+  if (id === 'browse-directory') {
+    repoMenuOpen.value = false
+    chooseDirectory()
+    return
+  }
+  if (id === 'scan-nested') {
+    scanNestedRepos.value = true
+    void requestRepoMenuPage(1, repoMenuQuery.value, true)
+    return
+  }
+  if (id.startsWith('worktree:')) {
+    openWorktree(id.slice('worktree:'.length))
+    repoMenuOpen.value = false
+    return
+  }
   if (id.startsWith('parent:')) {
     void openParentRepo(id.slice('parent:'.length))
     repoMenuOpen.value = false
@@ -1190,17 +1264,28 @@ function onRepoMenuSelect(item: OptionMenuItem) {
 const branchMenuOpen = ref(false)
 const branchMenuQuery = ref('')
 const branchMenuAnchorEl = ref<HTMLElement | null>(null)
+watch(repoRoot, () => {
+  branchMenuOpen.value = false
+  branchMenuQuery.value = ''
+})
 
 const branchSwitcherOptions = computed<OptionMenuItem[]>(() => {
-  const map = (branchPicker.value?.branches ?? {}) as Record<string, { name?: string; current?: boolean }>
+  const map = (branchPicker.value?.branches ?? {}) as Record<
+    string,
+    { name?: string; current?: boolean; worktreePath?: string; tracking?: string }
+  >
   const options: OptionMenuItem[] = []
 
   for (const branch of Object.values(map)) {
     const name = String(branch?.name || '').trim()
-    if (!name || name.startsWith('remotes/') || name.endsWith('/HEAD')) continue
+    if (!name || name.endsWith('/HEAD')) continue
     options.push({
       id: name,
-      label: name,
+      label: name.replace(/^remotes\//, ''),
+      description:
+        branch.worktreePath ||
+        branch.tracking ||
+        (name.startsWith('remotes/') ? t('git.navigation.remoteBranch') : undefined),
       checked: Boolean(branch?.current),
       monospace: true,
     })
@@ -1517,6 +1602,15 @@ void diffPaneRef
         </div>
 
         <div class="border-b border-sidebar-border/50 px-2 py-1.5">
+          <button
+            type="button"
+            class="mb-1.5 flex w-full items-center gap-1.5 rounded-sm px-1 py-1 text-left text-xs text-muted-foreground hover:bg-sidebar-accent/40"
+            :title="projectRoot || t('git.navigation.chooseFolder')"
+            @click="chooseDirectory"
+          >
+            <RiFolderOpenLine class="h-3.5 w-3.5 shrink-0" />
+            <span class="truncate font-mono">{{ projectRoot || t('git.navigation.chooseFolder') }}</span>
+          </button>
           <!-- Repository Selector -->
           <div class="relative">
             <button
@@ -1575,6 +1669,23 @@ void diffPaneRef
 
           <div v-else-if="error" class="mt-1.5 text-xs text-destructive/90 whitespace-pre-line">
             {{ error }}
+          </div>
+
+          <div v-if="gitReady" class="mt-1.5 flex gap-2">
+            <button
+              type="button"
+              class="rounded-sm px-2 py-1 text-xs hover:bg-sidebar-accent/40"
+              @click="openWorktrees"
+            >
+              {{ t('git.ui.dialogs.worktrees.title') }}
+            </button>
+            <button
+              type="button"
+              class="rounded-sm px-2 py-1 text-xs hover:bg-sidebar-accent/40"
+              @click="openCompareWithBranches"
+            >
+              {{ t('git.ui.dialogs.compare.title') }}
+            </button>
           </div>
 
           <div v-if="gitReady" class="mt-1.5">
@@ -2053,6 +2164,25 @@ void diffPaneRef
                 </div>
 
                 <div class="grid gap-2">
+                  <label class="grid gap-1 text-xs text-muted-foreground">
+                    {{ t('git.navigation.branchHistory') }}
+                    <select
+                      v-model="historyRef"
+                      class="h-8 w-full min-w-0 rounded-sm border border-sidebar-border bg-sidebar px-2 font-mono text-xs text-foreground"
+                    >
+                      <option value="HEAD">HEAD</option>
+                      <option
+                        v-for="name in branches?.all || []"
+                        :key="name"
+                        :value="name.startsWith('remotes/') ? `refs/${name}` : `refs/heads/${name}`"
+                      >
+                        {{ name.replace(/^remotes\//, '') }}
+                      </option>
+                      <option v-for="tag in tagsList || []" :key="`tag:${tag.name}`" :value="`refs/tags/${tag.name}`">
+                        {{ tag.name }}
+                      </option>
+                    </select>
+                  </label>
                   <SearchInput
                     v-model="historySearchDraft"
                     class="flex-1 text-xs"
@@ -2374,6 +2504,11 @@ void diffPaneRef
     />
 
     <GitCompareDialog
+      :references="
+        (branches?.all || []).map((name: string) =>
+          name.startsWith('remotes/') ? `refs/${name}` : `refs/heads/${name}`,
+        )
+      "
       :open="compareOpen"
       v-model:base="compareBase"
       v-model:head="compareHead"
@@ -2548,7 +2683,7 @@ void diffPaneRef
       :openRemotesDialog="openRemotes"
       :openWorktreesDialog="openWorktrees"
       :openHistoryDialog="openHistoryWithRefs"
-      :openCompareDialog="openCompareDialog"
+      :openCompareDialog="openCompareWithBranches"
       :compareWithUpstream="compareWithUpstream"
       :openMergeDialog="openMergeDialogWithBranches"
       :openRebaseDialog="openRebaseDialogWithBranches"
@@ -2626,9 +2761,18 @@ void diffPaneRef
       @copyUrl="copyRemoteUrl"
     />
 
+    <DirectoryPathDialog
+      v-model:open="directoryPickerOpen"
+      v-model:path="directoryPickerPath"
+      :title="t('git.navigation.chooseFolder')"
+      :confirm-label="t('common.open')"
+      :base-path="projectRoot || ''"
+      @confirm="confirmDirectory"
+    />
+
     <GitWorktreesDialog
       :open="worktreesOpen"
-      :worktrees-loading="worktreesLoading"
+      :worktrees-loading="worktreesLoading || repoBusy"
       :worktrees-error="worktreesError"
       :worktrees="worktrees"
       :repo-root="repoRoot"

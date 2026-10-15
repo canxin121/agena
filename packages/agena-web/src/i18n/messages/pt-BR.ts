@@ -1614,6 +1614,12 @@ export default {
     }
   },
   "git": {
+    navigation: {
+      chooseFolder: 'Escolher pasta',
+      scanRepositories: 'Buscar repositórios aninhados',
+      remoteBranch: 'Branch remota',
+      branchHistory: 'Ver histórico da branch',
+    },
     "noCommitTemplateConfigured": "Nenhum modelo de commit configurado",
     "actions": {
       "fetch": "Buscar",
@@ -1911,7 +1917,7 @@ export default {
             "migrateChanges": "Migrar alterações"
           },
           "hints": {
-            "pathRelativeToRepoRoot": "O caminho é relativo à raiz do repositório e deve permanecer dentro dela."
+            "pathRelativeToRepoRoot": "Use um caminho absoluto ou relativo à raiz do repositório (por exemplo, ../feature)."
           },
           "placeholders": {
             "branchName": "Nome da branch",

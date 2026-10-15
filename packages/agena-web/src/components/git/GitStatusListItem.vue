@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
+import { gitPaneContextKey } from '@/features/git/gitPaneContext'
+import { fsPathStartsWith } from '@/lib/path'
 import { RiFileTextLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import ListItemFrame from '@/components/ui/ListItemFrame.vue'
@@ -40,6 +42,7 @@ const props = withDefaults(
 )
 
 const { t } = useI18n()
+const gitPane = inject(gitPaneContextKey, null)
 
 const emit = defineEmits<{
   (e: 'select', event: MouseEvent): void
@@ -105,11 +108,15 @@ function handleRowDragStart(event: DragEvent) {
 
   transfer.effectAllowed = 'copyMove'
   const fileName = path.split(/[\\/]/).filter(Boolean).pop() || path
+  const root = gitPane?.repoRoot.value || ''
+  const filePath = root ? `${root.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}` : path
+  const project = gitPane?.projectRoot.value || ''
+  const directory = fsPathStartsWith(filePath, project) ? project : root
   const ok = writeWorkspaceWindowTemplateToDataTransfer(transfer, {
     tab: 'files',
-    query: { filePath: path },
+    query: { directory, filePath },
     title: fileName,
-    matchKeys: ['filePath'],
+    matchKeys: ['directory', 'filePath'],
   })
   if (!ok) {
     event.preventDefault()

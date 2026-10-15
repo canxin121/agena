@@ -1,4 +1,4 @@
-import { ref, type Ref } from 'vue'
+import { ref, watch, type Ref } from 'vue'
 import { i18n } from '@/i18n'
 import { createLatestRequestGuard } from '@/lib/latestRequest'
 
@@ -24,6 +24,7 @@ export function useGitBranches(opts: {
   withRepoBusy: (op: string, fn: () => Promise<void>) => Promise<void>
   handleGitBusy: <T>(err: T, op: string, retry: () => Promise<void>) => boolean
   load: () => Promise<void>
+  openWorktree?: (path: string) => void
 }) {
   const { root, toasts, gitJson, withRepoBusy, handleGitBusy, load } = opts
 
@@ -63,6 +64,14 @@ export function useGitBranches(opts: {
   }
 
   const beginLoadBranchPicker = createLatestRequestGuard(() => root.value, branchPicker)
+  watch(root, () => {
+    beginLoadBranches()
+    beginLoadBranchPicker()
+    branches.value = null
+    branchPicker.value = null
+    branchesLoading.value = false
+    branchPickerLoading.value = false
+  })
 
   async function loadBranchPicker(opts?: { page?: number; pageSize?: number; search?: string }) {
     const dir = root.value
@@ -80,7 +89,7 @@ export function useGitBranches(opts: {
         page,
         pageSize,
         search: search || undefined,
-        localOnly: true,
+        localOnly: false,
       })
       if (!isCurrent()) return
       branchPicker.value = resp
@@ -127,6 +136,11 @@ export function useGitBranches(opts: {
   async function checkoutBranch(branch: string) {
     const dir = root.value
     if (!dir) return
+    const details = branchPicker.value?.branches[branch] || branches.value?.branches[branch]
+    if (details?.worktreePath && details.worktreePath !== dir && opts.openWorktree) {
+      opts.openWorktree(details.worktreePath)
+      return
+    }
     await withRepoBusy('Checkout branch', async () => {
       try {
         await gitJson('checkout', dir, undefined, {

@@ -9,6 +9,7 @@ import type { SseEvent } from '@/lib/sse'
 import { DEFAULT_WINDOW_SCOPE_ID, normalizeWindowScopeId, resolveWindowScopeId } from '@/app/windowScope'
 import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useUiStore } from '@/stores/ui'
+import { resourceDirectory } from '@/app/workspace/resourceDirectory'
 
 const STORAGE_CURRENT_DIRECTORY_BY_WINDOW = localStorageKeys.directory.currentDirectoryByWindow
 
@@ -98,11 +99,13 @@ const useDirectoryStoreDefinition = defineStore('directory', () => {
   const fsEventSeq = ref(0)
   const lastFsChangeEvent = ref<FsChangeEvent | null>(null)
 
-  const currentWindowScopeId = computed(() =>
-    resolveWindowScopeId({
-      fallback: ui.activeWorkspaceWindowId,
-      defaultScope: DEFAULT_WINDOW_SCOPE_ID,
-    }),
+  const currentWindowScopeId = computed(
+    () =>
+      ui.activeWorkspaceWindowId ||
+      resolveWindowScopeId({
+        fallback: ui.activeWorkspaceWindowId,
+        defaultScope: DEFAULT_WINDOW_SCOPE_ID,
+      }),
   )
 
   const currentDirectory = computed<string | null>({
@@ -174,6 +177,19 @@ const useDirectoryStoreDefinition = defineStore('directory', () => {
   function setDirectory(path: string | null | undefined) {
     setDirectoryForWindow(currentWindowScopeId.value, path)
   }
+
+  // Restore a resource's original folder synchronously with tab activation,
+  // before its lazy page mounts or the shell router finishes navigating.
+  watch(
+    () => [ui.activeWorkspaceWindowId, ui.activeWorkspaceWindow?.routeQuery.directory] as const,
+    ([windowId]) => {
+      const tab = ui.activeWorkspaceWindow
+      if (!windowId || tab?.id !== windowId) return
+      const directory = resourceDirectory(tab.routeQuery, getDirectoryForWindow(windowId) || '')
+      if (directory) setDirectoryForWindow(windowId, directory)
+    },
+    { immediate: true, flush: 'sync' },
+  )
 
   function applyGlobalEvent(evt: SseEvent) {
     const changed = parseFsChangedEvent(evt)

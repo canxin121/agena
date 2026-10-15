@@ -1410,6 +1410,12 @@ export default {
     },
   },
   git: {
+    navigation: {
+      chooseFolder: 'اختيار مجلد',
+      scanRepositories: 'البحث عن المستودعات المتداخلة',
+      remoteBranch: 'فرع بعيد',
+      branchHistory: 'عرض سجل الفرع',
+    },
     noCommitTemplateConfigured: 'لم يتم ضبط قالب لرسالة الإيداع',
     actions: { fetch: 'جلب', pull: 'سحب', push: 'دفع', sync: 'مزامنة', merge: 'دمج', rebase: 'إعادة تأسيس', stash: 'إيداع مؤقت' },
     fields: { remote: 'المستودع البعيد', branch: 'الفرع', refspecOptional: 'مواصفة المرجع (اختياري)', messageOptional: 'الرسالة (اختياري)' },
@@ -1741,7 +1747,7 @@ export default {
             migrateChanges: 'نقل التغييرات',
           },
           hints: {
-            pathRelativeToRepoRoot: 'يجب أن يكون المسار نسبيًا إلى جذر المستودع وأن يبقى ضمنه.',
+            pathRelativeToRepoRoot: 'استخدم مسارًا مطلقًا أو مسارًا نسبيًا إلى جذر المستودع (مثل ../feature).',
           },
           placeholders: {
             branchName: 'اسم الفرع',

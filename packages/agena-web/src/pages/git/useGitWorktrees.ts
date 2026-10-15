@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { i18n } from '@/i18n'
 import { createLatestRequestGuard } from '@/lib/latestRequest'
 
@@ -25,6 +25,7 @@ export function useGitWorktrees(opts: {
   withRepoBusy: (op: string, fn: () => Promise<void>) => Promise<void>
   handleGitBusy: <T>(err: T, op: string, retry: () => Promise<void>) => boolean
   refreshWorkingTree: () => Promise<void>
+  openWorktree?: (path: string) => void
 }) {
   const { repoRoot, gitJson, toasts, withRepoBusy, handleGitBusy } = opts
 
@@ -39,6 +40,13 @@ export function useGitWorktrees(opts: {
   const newWorktreeCreateBranch = ref(false)
 
   const beginLoadWorktrees = createLatestRequestGuard(() => repoRoot.value, worktrees)
+  watch(repoRoot, () => {
+    beginLoadWorktrees()
+    worktrees.value = []
+    worktreesError.value = null
+    worktreesLoading.value = false
+    if (worktreesOpen.value) void loadWorktrees()
+  })
 
   async function loadWorktrees() {
     const dir = repoRoot.value
@@ -76,7 +84,7 @@ export function useGitWorktrees(opts: {
 
     await withRepoBusy('Add worktree', async () => {
       try {
-        await gitJson('worktrees', dir, undefined, {
+        const created = await gitJson<{ path: string }>('worktrees', dir, undefined, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -86,9 +94,11 @@ export function useGitWorktrees(opts: {
             createBranch,
           }),
         })
+        if (repoRoot.value !== dir) return
         toasts.push('success', i18n.global.t('git.toasts.addedWorktree', { path }))
         newWorktreePath.value = ''
         await loadWorktrees()
+        if (repoRoot.value === dir && created.path) opts.openWorktree?.(created.path)
       } catch (err) {
         if (handleGitBusy(err, 'Add worktree', addWorktree)) return
         toasts.push('error', err instanceof Error ? err.message : String(err))

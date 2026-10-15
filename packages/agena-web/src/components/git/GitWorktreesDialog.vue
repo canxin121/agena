@@ -6,6 +6,7 @@ import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
 import Input from '@/components/ui/Input.vue'
+import PathPicker from '@/components/ui/PathPicker.vue'
 import ScrollArea from '@/components/ui/ScrollArea.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
@@ -57,20 +58,11 @@ function onUpdateCreateBranch(ev: Event) {
   emit('update:newWorktreeCreateBranch', Boolean(el?.checked))
 }
 
-const projectRootTrimmed = computed(() => (props.projectRoot || '').trim().replace(/\/+$/g, ''))
 const repoRootTrimmed = computed(() => (props.repoRoot || '').trim().replace(/\/+$/g, ''))
 
 function isCurrentWorktree(path: string): boolean {
   const current = repoRootTrimmed.value
   return Boolean(current) && path.trim().replace(/\/+$/g, '') === current
-}
-
-function worktreeRelativePath(path: string): string | null {
-  const base = projectRootTrimmed.value
-  if (!base) return null
-  if (!path.startsWith(base)) return null
-  const rel = path.slice(base.length).replace(/^\/+/, '')
-  return rel || '.'
 }
 </script>
 
@@ -101,10 +93,14 @@ function worktreeRelativePath(path: string): string | null {
         <div class="text-[11px] text-muted-foreground">
           {{ t('git.ui.dialogs.worktrees.hints.pathRelativeToRepoRoot') }}
         </div>
-        <Input
+        <PathPicker
           :model-value="newWorktreePath"
-          class="h-9 font-mono text-xs"
-          placeholder="worktrees/feature-branch"
+          mode="directory"
+          :base-path="repoRoot || ''"
+          :resolve-to-absolute="true"
+          :allow-create-directory="true"
+          input-class="h-9 font-mono text-xs"
+          :placeholder="t('ui.pathPicker.placeholders.path')"
           @update:model-value="(v) => onUpdateText('newWorktreePath', v)"
         />
         <div class="grid gap-2 lg:grid-cols-[1fr_1fr]">
@@ -116,6 +112,7 @@ function worktreeRelativePath(path: string): string | null {
           />
           <Input
             :model-value="newWorktreeStartPoint"
+            :disabled="!newWorktreeCreateBranch"
             class="h-9 font-mono text-xs"
             :placeholder="t('git.ui.dialogs.worktrees.placeholders.startPoint')"
             @update:model-value="(v) => onUpdateText('newWorktreeStartPoint', v)"
@@ -133,7 +130,9 @@ function worktreeRelativePath(path: string): string | null {
         <div class="flex justify-end">
           <Button
             size="sm"
-            :disabled="!newWorktreePath.trim() || (newWorktreeCreateBranch && !newWorktreeBranch.trim())"
+            :disabled="
+              worktreesLoading || !newWorktreePath.trim() || (newWorktreeCreateBranch && !newWorktreeBranch.trim())
+            "
             @click="$emit('add')"
           >
             {{ t('git.ui.dialogs.worktrees.actions.addWorktree') }}
@@ -175,9 +174,6 @@ function worktreeRelativePath(path: string): string | null {
                     <span v-else class="font-mono">{{ t('git.ui.dialogs.worktrees.detached') }}</span>
                     <span v-if="wt.head" class="ml-2 font-mono">{{ wt.head.slice(0, 8) }}</span>
                   </div>
-                  <div v-if="worktreeRelativePath(wt.worktree)" class="text-[11px] text-muted-foreground">
-                    {{ worktreeRelativePath(wt.worktree) }}
-                  </div>
                   <div v-if="wt.locked || wt.prunable" class="text-[10px] text-muted-foreground">
                     <span v-if="wt.locked">{{ t('git.ui.dialogs.worktrees.status.locked') }}</span>
                     <span v-if="wt.prunable" :class="wt.locked ? 'ml-2' : ''">{{
@@ -190,7 +186,7 @@ function worktreeRelativePath(path: string): string | null {
                     variant="secondary"
                     size="sm"
                     class="h-7"
-                    :disabled="!worktreeRelativePath(wt.worktree)"
+                    :disabled="wt.prunable"
                     @click="$emit('openWorktree', wt.worktree)"
                   >
                     {{ t('common.open') }}
@@ -209,7 +205,7 @@ function worktreeRelativePath(path: string): string | null {
                       variant="secondary"
                       size="sm"
                       class="h-7"
-                      :disabled="isCurrentWorktree(wt.worktree)"
+                      :disabled="worktreesLoading || wt.prunable || isCurrentWorktree(wt.worktree)"
                       @click="() => {}"
                     >
                       {{ t('git.ui.dialogs.worktrees.actions.migrateChanges') }}
@@ -223,9 +219,19 @@ function worktreeRelativePath(path: string): string | null {
                     variant="destructive"
                     @confirm="$emit('remove', wt.worktree)"
                   >
-                    <Button variant="secondary" size="sm" class="h-7" @click="() => {}">{{
-                      t('common.remove')
-                    }}</Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      class="h-7"
+                      :disabled="
+                        worktreesLoading ||
+                        wt.locked ||
+                        isCurrentWorktree(wt.worktree) ||
+                        wt.worktree === worktrees[0]?.worktree
+                      "
+                      @click="() => {}"
+                      >{{ t('common.remove') }}</Button
+                    >
                   </ConfirmPopover>
                 </div>
               </div>

@@ -16,6 +16,8 @@ import { mainTabFromPath, mainTabPath } from '@/app/navigation/mainTabs'
 import { workspacePaneContextKey } from '@/app/workspace/workspacePaneContext'
 import { useUiStore } from '@/stores/ui'
 import { afterPaint } from '@/lib/afterPaint'
+import { useDirectoryStoreUnscoped } from '@/stores/directory'
+import { resourceDirectory } from '@/app/workspace/resourceDirectory'
 
 const props = withDefaults(
   defineProps<{
@@ -26,6 +28,7 @@ const props = withDefaults(
 )
 
 const ui = useUiStore()
+const directories = useDirectoryStoreUnscoped()
 const globalRouter = useRouter()
 const paneNavigationInFlightByPath = new Map<string, Promise<unknown>>()
 
@@ -33,6 +36,15 @@ const windowId = computed(() => String(props.windowId || '').trim())
 const windowTab = computed(() => ui.getWorkspaceWindowById(windowId.value))
 const isFocused = computed(() => windowId.value !== '' && windowId.value === ui.focusedWorkspaceWindowId)
 const isVisible = computed(() => props.visible !== false)
+
+function focusResource() {
+  ui.setFocusedWorkspaceWindow(windowId.value)
+  const directory = resourceDirectory(
+    windowTab.value?.routeQuery || {},
+    directories.getDirectoryForWindow(windowId.value) || '',
+  )
+  if (directory) directories.setDirectoryForWindow(windowId.value, directory)
+}
 
 function normalizeQuery(raw: LocationQuery | Record<string, unknown> | null | undefined): Record<string, string> {
   const out: Record<string, string> = {}
@@ -207,7 +219,8 @@ provide(workspacePaneContextKey, {
     :aria-label="ui.isCompactLayout ? windowTab?.title : undefined"
     data-keyboard-region
     tabindex="-1"
-    @focusin="ui.setFocusedWorkspaceWindow(windowId)"
+    @focusin="focusResource"
+    @pointerdown.capture="focusResource"
   >
     <div class="min-h-0 flex-1 overflow-hidden">
       <RouterView v-if="routeReady && pageMounted" :route="scopedRoute" />

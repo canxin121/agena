@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { resourceDirectory } from '@/app/workspace/resourceDirectory'
 import { connectSse, type SseClient } from '@/lib/sse'
 import { createRevalidator } from '@/lib/revalidation'
 import { apiUrl } from '@/lib/api'
@@ -155,7 +156,7 @@ const configuredProjectRoots = computed(() => {
   const projects = Array.isArray(settings.data?.projects) ? settings.data?.projects : []
   return projects.map((entry) => trimTrailingSlashes(normalizePath(String(entry?.path || '').trim()))).filter(Boolean)
 })
-const explorerRootPath = ref('')
+const explorerRootPath = ref(resourceDirectory(route.query, preferredProjectRoot.value))
 const root = computed(() => trimTrailingSlashes(normalizePath((explorerRootPath.value || '').trim())))
 const isCompactLayout = computed(() => ui.isCompactLayout)
 const isMobileFormFactor = computed(() => ui.isCompactTouch)
@@ -550,6 +551,7 @@ const selectionAnchorPath = ref('')
 
 const confirmDiscardOpen = ref(false)
 const pendingSelect = ref<FileNode | null>(null)
+const pendingRoot = ref<string | null>(null)
 const fileRefreshConflict = ref<FileRefreshConflictState | null>(null)
 
 let syncingFilesVisibilityPreferencesFromSettings = false
@@ -1296,9 +1298,40 @@ const explorerRootOptions = computed(() => {
 function setExplorerRoot(path: string, opts?: { source?: string }) {
   const next = trimTrailingSlashes(normalizePath(String(path || '').trim()))
   if (!next || next === root.value) return
+  if (workspacePane && !embeddedMode.value && !isCompactLayout.value) {
+    void workspaceNavigation.openWorkspaceLocation('files', { query: { directory: next } })
+    return
+  }
+  if (dirty.value) {
+    pendingRoot.value = next
+    confirmDiscardOpen.value = true
+    return
+  }
+  applyExplorerRoot(next, opts?.source)
+}
+
+function applyExplorerRoot(next: string, source?: string) {
   explorerRootPath.value = next
+  directoryStore.setDirectory(next)
+  if (!embeddedMode.value) {
+    const query = { ...route.query }
+    query.directory = next
+    for (const key of [
+      'filePath',
+      'fileLine',
+      'fileColumn',
+      'fileAnchor',
+      'gitPath',
+      'gitAction',
+      'gitLine',
+      'gitColumn',
+      'gitAnchor',
+    ])
+      delete query[key]
+    void router.replace({ query })
+  }
   ui.setGlobalSelection('files-root', next, {
-    meta: { source: String(opts?.source || 'files-root-switch') },
+    meta: { source: String(source || 'files-root-switch') },
   })
 }
 
@@ -1309,9 +1342,13 @@ function navigateRootUp() {
 }
 
 watch(
-  () => [preferredProjectRoot.value, configuredProjectRoots.value] as const,
+  () =>
+    [preferredProjectRoot.value, configuredProjectRoots.value, route.query.directory, route.query.filePath] as const,
   ([preferred, configured]) => {
-    if (root.value) return
+    if (route.query.filePath || route.query.gitPath) {
+      explorerRootPath.value = resourceDirectory(route.query, preferred)
+      return
+    }
     const nextPreferred = trimTrailingSlashes(normalizePath(String(preferred || '').trim()))
     if (nextPreferred) {
       explorerRootPath.value = nextPreferred
@@ -3182,12 +3219,12 @@ async function loadMoreFileContent() {
 }
 
 function shouldOpenFileInNewWorkspaceWindow(): boolean {
-  return !workspacePane && !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value
+  return !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value
 }
 
 function buildFileWindowRouteQuery(path: string): Record<string, string> {
   const normalizedPath = normalizePath(String(path || '').trim())
-  return normalizedPath ? { filePath: normalizedPath } : {}
+  return normalizedPath ? { directory: root.value, filePath: normalizedPath } : {}
 }
 
 async function openFileInWorkspaceWindow(path: string) {
@@ -3938,20 +3975,26 @@ async function insertSelectionIntoChatComposer() {
 
 async function discardAndContinue() {
   const next = pendingSelect.value
+  const nextRoot = pendingRoot.value
   pendingSelect.value = null
+  pendingRoot.value = null
   confirmDiscardOpen.value = false
   draftContent.value = displayedContent.value
-  if (next) {
+  if (nextRoot) applyExplorerRoot(nextRoot)
+  else if (next) {
     await openFile(next)
   }
 }
 
 async function saveAndContinue() {
   const next = pendingSelect.value
+  const nextRoot = pendingRoot.value
   pendingSelect.value = null
+  pendingRoot.value = null
   confirmDiscardOpen.value = false
   const ok = await save()
-  if (ok && next) {
+  if (ok && nextRoot) applyExplorerRoot(nextRoot)
+  else if (ok && next) {
     await openFile(next)
   }
 }
@@ -4335,6 +4378,7 @@ onMounted(async () => {
           if (!v) {
             confirmDiscardOpen = false
             pendingSelect = null
+            pendingRoot = null
           }
         }
       "

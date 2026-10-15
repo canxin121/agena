@@ -34,5 +34,5 @@ export function fsPathStartsWith(path: string, prefix: string): boolean {
   const base = pathForCompare(prefix)
   if (!p || !base) return false
   if (p === base) return true
-  return p.startsWith(`${base}/`)
+  return p.startsWith(base.endsWith('/') ? base : `${base}/`)
 }

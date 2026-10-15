@@ -1328,6 +1328,12 @@ export default {
     },
   },
   git: {
+    navigation: {
+      chooseFolder: 'Choisir un dossier',
+      scanRepositories: 'Rechercher les dépôts imbriqués',
+      remoteBranch: 'Branche distante',
+      branchHistory: 'Historique de la branche',
+    },
     actionsMenu: {
       groups: { commit: 'Commit', stage: 'Indexation', sync: 'Synchronisation', inspect: 'Inspection', branching: 'Branches', cleanup: 'Nettoyage' },
       commit: {
@@ -1649,7 +1655,7 @@ export default {
             migrateChanges: 'Migrer les modifications',
           },
           hints: {
-            pathRelativeToRepoRoot: 'Le chemin est relatif à la racine du dépôt et doit rester à l’intérieur de celui-ci.',
+            pathRelativeToRepoRoot: 'Utilisez un chemin absolu ou relatif à la racine du dépôt (par exemple ../feature).',
           },
           placeholders: {
             branchName: 'Nom de la branche',

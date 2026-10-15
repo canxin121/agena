@@ -12,6 +12,8 @@ import { copyTextToClipboard } from '@/lib/clipboard'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { resolveWorkspaceFileLink, resolveWorkspaceMediaUrl } from '@/lib/workspaceLinks'
 import { useDirectoryStore } from '@/stores/directory'
+import { useChatStore } from '@/stores/chat'
+import { queryText, resourceDirectory } from '@/app/workspace/resourceDirectory'
 import { useToastsStore } from '@/stores/toasts'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
 
@@ -267,6 +269,14 @@ function scrollToHeading(id: string) {
 
 const toasts = useToastsStore()
 const directoryStore = useDirectoryStore()
+const chat = useChatStore()
+const linkWorkspaceRoot = computed(() => {
+  const query = pane?.route.value.query || {}
+  return (
+    chat.getSessionDirectory(queryText(query.sessionId)) ||
+    resourceDirectory(query, directoryStore.currentDirectory || '')
+  )
+})
 const ui = useUiStore()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
@@ -523,7 +533,7 @@ function resolveImageSrcForViewer(rawSrc: string): string {
   if (!src) return ''
   if (src.startsWith('data:') || src.startsWith('blob:')) return src
 
-  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  const workspaceRoot = linkWorkspaceRoot.value
   if (!workspaceRoot) return src
 
   const mediaUrl = resolveWorkspaceMediaUrl(src, {
@@ -569,7 +579,7 @@ function openMarkdownImagePreview(targetImage: HTMLImageElement): boolean {
 }
 
 function openWorkspaceLink(href: string): boolean {
-  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  const workspaceRoot = linkWorkspaceRoot.value
   if (!workspaceRoot) return false
 
   const resolved = resolveWorkspaceFileLink(href, {
@@ -579,6 +589,7 @@ function openWorkspaceLink(href: string): boolean {
   if (!resolved?.path) return false
 
   const query: Record<string, string> = {
+    directory: workspaceRoot,
     filePath: resolved.path,
   }
   if (resolved.line) query.fileLine = String(resolved.line)

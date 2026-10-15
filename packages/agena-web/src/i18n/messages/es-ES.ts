@@ -2315,6 +2315,12 @@ export default {
     }
   },
   "git": {
+    navigation: {
+      chooseFolder: 'Elegir carpeta',
+      scanRepositories: 'Buscar repositorios anidados',
+      remoteBranch: 'Rama remota',
+      branchHistory: 'Ver historial de rama',
+    },
     "noCommitTemplateConfigured": "No hay ninguna plantilla de commit configurada",
     "actions": {
       "fetch": "Obtener (fetch)",
@@ -2552,7 +2558,7 @@ export default {
             "migrateChanges": "Migrar cambios"
           },
           "hints": {
-            "pathRelativeToRepoRoot": "La ruta es relativa a la raíz del repositorio y debe permanecer dentro de ella."
+            "pathRelativeToRepoRoot": "Usa una ruta absoluta o relativa a la raíz del repositorio (por ejemplo, ../feature)."
           },
           "placeholders": {
             "branchName": "Nombre de la rama",

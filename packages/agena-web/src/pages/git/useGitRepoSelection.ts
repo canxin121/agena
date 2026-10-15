@@ -33,6 +33,7 @@ export function useGitRepoSelection(opts: {
   // Page-owned load functions; used after init.
   load: () => Promise<void>
   switchProjectRoot: (path: string) => Promise<void> | void
+  openRepo?: (root: string) => Promise<void> | void
 }) {
   const { projectRoot, selectedRepoRelative, gitRepos, toasts, gitJson, load, switchProjectRoot } = opts
 
@@ -74,7 +75,7 @@ export function useGitRepoSelection(opts: {
     reposLoading.value = true
     reposError.value = null
     try {
-      const resp = await gitJson<GitRepoListResponse>('repos', dir, { refresh: refresh || undefined })
+      const resp = await gitJson<GitRepoListResponse>('repos', dir, { refresh: refresh || undefined, scope: 'current' })
       if (!isCurrent()) return
       const allRepos = Array.isArray(resp.repos) ? resp.repos : []
       repoDiscoveryTruncated.value = resp.discoveryTruncated === true
@@ -125,6 +126,7 @@ export function useGitRepoSelection(opts: {
     pageSize?: number
     search?: string
     refresh?: boolean
+    scan?: boolean
   }) {
     const dir = projectRoot.value
     if (!dir) return
@@ -139,6 +141,7 @@ export function useGitRepoSelection(opts: {
     reposError.value = null
     try {
       const resp = await gitJson<GitRepoListResponse>('repos', dir, {
+        scope: opts?.scan ? 'all' : 'current',
         page,
         pageSize,
         search: search || undefined,
@@ -238,6 +241,12 @@ export function useGitRepoSelection(opts: {
   function selectRepo(relative: string) {
     const base = projectRoot.value
     if (!base) return
+    const repo = [...repoPickerRepos.value, ...repos.value].find((item) => item.relative === relative)
+    if (repo?.root && opts.openRepo) {
+      void opts.openRepo(repo.root)
+      repoPickerOpen.value = false
+      return
+    }
     gitRepos.setSelectedRelative(base, (relative || '.').trim() || '.')
     repoPickerOpen.value = false
   }

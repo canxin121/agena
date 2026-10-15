@@ -513,6 +513,12 @@ export default {
     },
   },
   git: {
+    navigation: {
+      chooseFolder: 'फ़ोल्डर चुनें',
+      scanRepositories: 'उपनिर्देशिकाओं में रिपॉज़िटरी खोजें',
+      remoteBranch: 'रिमोट शाखा',
+      branchHistory: 'शाखा का इतिहास देखें',
+    },
     noCommitTemplateConfigured: 'कोई commit template कॉन्फ़िगर नहीं है',
     actions: { fetch: 'Fetch करें', pull: 'Pull करें', push: 'Push करें', sync: 'Sync करें', merge: 'Merge करें', rebase: 'Rebase करें', stash: 'Stash करें' },
     fields: { remote: 'Remote', branch: 'Branch', refspecOptional: 'Refspec (वैकल्पिक)', messageOptional: 'Message (वैकल्पिक)' },
@@ -893,7 +899,7 @@ export default {
             migrateChanges: 'बदलाव स्थानांतरित करें',
           },
           hints: {
-            pathRelativeToRepoRoot: 'पाथ repository root के सापेक्ष है और इसी के भीतर रहना चाहिए।',
+            pathRelativeToRepoRoot: 'पूरा पाथ या repository root के सापेक्ष पाथ दें (उदाहरण: ../feature)।',
           },
           placeholders: {
             branchName: 'ब्रांच का नाम',

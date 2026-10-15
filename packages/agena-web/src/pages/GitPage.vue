@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { gitPaneContextKey } from '@/features/git/gitPaneContext'
 import { useRoute, useRouter } from 'vue-router'
+import { queryText, resourceDirectory } from '@/app/workspace/resourceDirectory'
+import { fsPathEquals, fsPathStartsWith } from '@/lib/path'
 
 import { apiErrorBodyRecord, ApiError } from '@/lib/api'
 import { gitJson, gitWatchUrl } from '@/lib/gitApi'
@@ -72,17 +75,34 @@ const settings = useSettingsStore()
 const toasts = useToastsStore()
 const { t } = useI18n()
 const directoryStore = useDirectoryStore()
-const gitRepos = useGitReposStore()
+const gitReposStore = useGitReposStore()
 const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
 const workspaceNavigation = useWorkspaceNavigation()
 const workspacePane = useWorkspacePaneContext()
+const viewId = () => workspacePane?.windowId.value || queryText(route.query.windowId)
+const gitRepos = {
+  getSelectedRelative: (root: string) => gitReposStore.getSelectedRelative(root, viewId()),
+  setSelectedRelative: (root: string, relative: string) => gitReposStore.setSelectedRelative(root, relative, viewId()),
+  getClosedRelatives: gitReposStore.getClosedRelatives,
+  closeRepo: gitReposStore.closeRepo,
+  reopenRepo: gitReposStore.reopenRepo,
+  getOpenItem: (root: string) => gitReposStore.getOpenItem(root, viewId()),
+  setOpenItem: (root: string | null, path: string | null, source: 'working' | 'staged') =>
+    gitReposStore.setOpenItem(root, path, source, viewId()),
+}
 const isVisibleWorkspacePane = computed(() => !workspacePane || workspacePane.isVisible.value)
 const isGitVisible = () => isVisibleWorkspacePane.value && isDocumentVisible()
 const isEmbeddedWorkspacePane = computed(() => props.embedded || isEmbeddedWorkspacePaneContext(route.query))
 
-const projectRoot = computed(() => directoryStore.currentDirectory)
+const projectRoot = computed(() =>
+  queryText(route.query.gitFile)
+    ? resourceDirectory(route.query, directoryStore.currentDirectory || '')
+    : directoryStore.currentDirectory,
+)
+const resolvedProjectRoot = ref<string | null>(null)
+let discoverySequence = 0
 
 // Unified SCM actions menu.
 const actionsOpen = ref(false)
@@ -169,17 +189,13 @@ const selectedRepoRelative = computed(() => {
 
 const selectedRepoLabel = computed(() => {
   if (!projectRoot.value) return '(no project)'
-  return selectedRepoRelative.value || '(none)'
+  return repoRoot.value || selectedRepoRelative.value || '(none)'
 })
 
 async function switchProjectRoot(path: string) {
   const target = (path || '').trim()
   if (!target) return
-  const existing = settings.data?.projects || []
-  if (!existing.some((project) => project.path.trim() === target)) {
-    await settings.addProject(target)
-  }
-  directoryStore.setDirectory(target)
+  await workspaceNavigation.openWorkspaceLocation('git', { query: { directory: target } })
 }
 
 const repoSelection = useGitRepoSelection({
@@ -190,16 +206,28 @@ const repoSelection = useGitRepoSelection({
   gitJson,
   load,
   switchProjectRoot,
+  openRepo: (root) =>
+    workspaceNavigation
+      .openWorkspaceLocation('git', {
+        query: { directory: projectRoot.value, repoRoot: root },
+      })
+      .then(() => {}),
 })
 
 const repoRoot = computed(() => {
+  const bound = queryText(route.query.repoRoot)
+  const origin = queryText(route.query.directory)
+  if (bound && (!origin || fsPathEquals(origin, projectRoot.value || ''))) return bound
   const base = projectRoot.value || ''
   const rel = selectedRepoRelative.value || '.'
+  const resolved = repoSelection.repos.value.find((repo) => repo.relative === rel)
+  if (resolved?.root) return resolved.root
   const out = joinFs(base, rel)
   return out || null
 })
 
 const root = repoRoot
+provide(gitPaneContextKey, { projectRoot, repoRoot })
 
 const status = ref<GitStatusResponse | null>(null)
 const loading = ref(false)
@@ -332,10 +360,27 @@ const diffPaneRef = ref<{ refreshDiff: () => Promise<void> } | null>(null)
 function refreshDiff() {
   return diffPaneRef.value?.refreshDiff?.() ?? Promise.resolve()
 }
-const { selectedFile, diffSource, selectedIsConflict, selectFile } = useGitDiffSelection({
+const {
+  selectedFile,
+  diffSource,
+  selectedIsConflict,
+  selectFile: selectInlineFile,
+} = useGitDiffSelection({
   conflictPaths,
   refresh: refreshDiff,
 })
+
+function selectFile(path: string, source?: 'working' | 'staged') {
+  const nextSource = source || diffSource.value
+  if (!ui.isCompactLayout && !isEmbeddedWorkspacePane.value) {
+    void workspaceNavigation.openWorkspaceLocation('git', {
+      query: { directory: projectRoot.value, repoRoot: repoRoot.value, gitFile: path, gitSource: nextSource },
+      matchKeys: ['repoRoot', 'gitFile', 'gitSource'],
+    })
+    return
+  }
+  selectInlineFile(path, nextSource)
+}
 
 const restoringOpenItem = ref(false)
 
@@ -348,8 +393,13 @@ watch(
 
     const saved = gitRepos.getOpenItem(nextKey)
     restoringOpenItem.value = true
-    selectedFile.value = saved?.path || null
-    diffSource.value = saved?.source || 'working'
+    selectedFile.value = queryText(route.query.gitFile) || saved?.path || null
+    diffSource.value =
+      route.query.gitSource === 'staged'
+        ? 'staged'
+        : queryText(route.query.gitFile)
+          ? 'working'
+          : saved?.source || 'working'
     restoringOpenItem.value = false
   },
   { immediate: true },
@@ -547,6 +597,7 @@ const branchesOps = useGitBranches({
   withRepoBusy: auth.withRepoBusy,
   handleGitBusy: auth.handleGitBusy,
   load,
+  openWorktree,
 })
 
 const { branches, loadBranches } = branchesOps
@@ -639,6 +690,7 @@ const remotesOps = useGitRemotesOps({
 
 const worktreesOps = useGitWorktrees({
   repoRoot,
+  openWorktree,
   gitJson,
   toasts,
   withRepoBusy: auth.withRepoBusy,
@@ -1152,15 +1204,12 @@ async function trustUnsafeRepo() {
 }
 
 async function load() {
-  if (!isGitVisible()) return
+  if (!isGitVisible() || resolvedProjectRoot.value !== projectRoot.value) return
   const seq = ++loadSeq
   const dir = root.value
   error.value = null
   loading.value = true
   try {
-    await settings.refresh()
-    if (seq !== loadSeq || dir !== root.value) return
-
     if (!dir) {
       resetRepoState()
       clearUnsafeRepo()
@@ -1188,6 +1237,8 @@ async function load() {
       .map(([scope]) => scope)
     await loadStatusSummary(dir, initialScopes)
     if (seq !== loadSeq || dir !== root.value) return
+    // Render changed files immediately; secondary metadata can finish later.
+    loading.value = false
     const applyFallback = (error: unknown, fallback: () => void) => {
       if (seq === loadSeq && dir === root.value && !(error instanceof DOMException && error.name === 'AbortError'))
         fallback()
@@ -1261,6 +1312,16 @@ function scheduleLoad() {
   })
 }
 
+async function discoverAndLoad() {
+  const sequence = ++discoverySequence
+  const project = projectRoot.value
+  resolvedProjectRoot.value = null
+  await repoSelection.loadRepos()
+  if (sequence !== discoverySequence || project !== projectRoot.value) return
+  resolvedProjectRoot.value = project
+  scheduleLoad()
+}
+
 async function copyCommitHash(hash: string) {
   const value = (hash || '').trim()
   if (!value) return
@@ -1311,6 +1372,7 @@ function openFileInFiles(path: string) {
   }
 
   const query = {
+    directory: fsPathStartsWith(abs, projectRoot.value || '') ? projectRoot.value : repoRoot.value,
     filePath: abs,
   }
   const fileName = abs.split('/').filter(Boolean).pop() || String(t('nav.files'))
@@ -1330,6 +1392,7 @@ function revealFileInFiles(path: string) {
   }
 
   const query = {
+    directory: fsPathStartsWith(abs, projectRoot.value || '') ? projectRoot.value : repoRoot.value,
     filePath: abs,
   }
   const fileName = abs.split('/').filter(Boolean).pop() || String(t('nav.files'))
@@ -1341,15 +1404,10 @@ function revealFileInFiles(path: string) {
 }
 
 function openWorktree(path: string) {
-  const base = (projectRoot.value || '').trim().replace(/\/+$/g, '')
   const p = (path || '').trim()
-  if (!base || !p) return
-  if (!p.startsWith(base)) {
-    toasts.push('error', t('git.errors.worktreeOutsideProjectRoot'))
-    return
-  }
-  const rel = p.slice(base.length).replace(/^\/+/, '') || '.'
-  gitRepos.setSelectedRelative(base, rel)
+  if (!p) return
+  worktreesOps.worktreesOpen.value = false
+  void workspaceNavigation.openWorkspaceLocation('git', { query: { directory: p } })
 }
 
 watch(
@@ -1367,22 +1425,22 @@ watch(
     untrackedList.value = []
     repoSelection.repos.value = []
     repoSelection.reposError.value = null
-    // Start repository discovery and the currently selected repository read
-    // together. Discovery can later change the selection; the selection
-    // watcher schedules the follow-up read in that case.
-    void repoSelection.loadRepos()
-    scheduleLoad()
+    void discoverAndLoad()
   },
 )
 
 watch(
-  () => selectedRepoRelative.value,
+  () => repoRoot.value,
   (next, prev) => {
     const n = (next || '').trim()
     const p = (prev || '').trim()
     if (n === p) return
+    isGitRepository.value = null
+    remoteInfo.value = null
+    signingInfo.value = null
+    gitState.value = null
     status.value = null
-    selectedFile.value = null
+    selectedFile.value = queryText(route.query.gitFile) || null
     branches.value = null
     mergeList.value = []
     stagedList.value = []
@@ -1535,6 +1593,7 @@ const viewCtx = composeGitPageViewContext([
       ui,
       toasts,
       projectRoot,
+      switchProjectRoot,
       selectedRepoRelative,
       selectedRepoLabel,
       repoRoot,
@@ -1649,11 +1708,12 @@ defineExpose({
 })
 
 onMounted(() => {
-  void Promise.all([repoSelection.loadRepos(), load()])
+  void discoverAndLoad()
   document.addEventListener('visibilitychange', syncWatch)
 })
 
 onBeforeUnmount(() => {
+  discoverySequence++
   document.removeEventListener('visibilitychange', syncWatch)
   stopWatch()
   watchReadController?.abort()

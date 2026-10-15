@@ -77,15 +77,20 @@ export const useGitReposStore = defineStore('gitRepos', () => {
     }
   }
 
-  function getSelectedRelative(projectRoot: string | null | undefined): string {
-    const key = (projectRoot || '').trim()
+  function selectionKey(projectRoot: string | null | undefined, viewId?: string): string {
+    const root = (projectRoot || '').trim()
+    return root && viewId ? JSON.stringify([viewId, root]) : root
+  }
+
+  function getSelectedRelative(projectRoot: string | null | undefined, viewId?: string): string {
+    const key = selectionKey(projectRoot, viewId)
     if (!key) return '.'
     const rel = (selectedByProject.value[key] || '').trim()
     return rel || '.'
   }
 
-  function setSelectedRelative(projectRoot: string, relative: string) {
-    const key = (projectRoot || '').trim()
+  function setSelectedRelative(projectRoot: string, relative: string, viewId?: string) {
+    const key = selectionKey(projectRoot, viewId)
     if (!key) return
     const rel = (relative || '').trim() || '.'
     selectedByProject.value = { ...selectedByProject.value, [key]: rel }
@@ -124,8 +129,8 @@ export const useGitReposStore = defineStore('gitRepos', () => {
     persistClosed()
   }
 
-  function getOpenItem(repoRoot: string | null | undefined): GitOpenItem | null {
-    const key = (repoRoot || '').trim()
+  function getOpenItem(repoRoot: string | null | undefined, viewId?: string): GitOpenItem | null {
+    const key = selectionKey(repoRoot, viewId)
     if (!key) return null
     const state = openItemByRepo.value[key]
     if (!state) return null
@@ -137,8 +142,13 @@ export const useGitReposStore = defineStore('gitRepos', () => {
     }
   }
 
-  function setOpenItem(repoRoot: string | null | undefined, path: string | null, source: GitDiffSource) {
-    const key = (repoRoot || '').trim()
+  function setOpenItem(
+    repoRoot: string | null | undefined,
+    path: string | null,
+    source: GitDiffSource,
+    viewId?: string,
+  ) {
+    const key = selectionKey(repoRoot, viewId)
     if (!key) return
     const nextPath = (path || '').trim()
     if (!nextPath) {

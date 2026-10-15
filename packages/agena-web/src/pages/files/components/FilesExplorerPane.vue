@@ -27,6 +27,7 @@ import {
 } from '@remixicon/vue'
 
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
+import DirectoryPathDialog from '@/components/ui/DirectoryPathDialog.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import SegmentedButton from '@/components/ui/SegmentedButton.vue'
@@ -222,6 +223,20 @@ function isNodeSelected(path: string): boolean {
 }
 
 const selectedRootPath = computed(() => String(props.root || '').trim())
+const directoryPickerOpen = ref(false)
+const directoryPickerPath = ref('')
+
+function openDirectoryPicker() {
+  directoryPickerPath.value = props.root
+  directoryPickerOpen.value = true
+}
+
+function confirmDirectoryPicker() {
+  const path = directoryPickerPath.value.trim()
+  if (!path) return
+  directoryPickerOpen.value = false
+  void props.switchRoot?.(path)
+}
 
 function onRootSelect(ev: Event) {
   const target = ev.target as HTMLSelectElement | null
@@ -1049,9 +1064,9 @@ function handleWorkspaceItemDragStart(ev: DragEvent, row: FlatRow) {
   transfer.effectAllowed = 'copyMove'
   const ok = writeWorkspaceWindowTemplateToDataTransfer(transfer, {
     tab: 'files',
-    query: { filePath: path },
+    query: { directory: props.root, filePath: path },
     title: String(row.node.name || '').trim() || undefined,
-    matchKeys: ['filePath'],
+    matchKeys: ['directory', 'filePath'],
   })
   if (!ok) {
     ev.preventDefault()
@@ -1218,8 +1233,24 @@ onBeforeUnmount(() => {
         >
           <option v-for="option in rootOptions || []" :key="option.id" :value="option.id">{{ option.label }}</option>
         </select>
+        <SidebarIconButton
+          :title="t('ui.pathPicker.actions.browse')"
+          :aria-label="t('ui.pathPicker.actions.browse')"
+          @click="openDirectoryPicker"
+        >
+          <RiFolderOpenFill class="h-3.5 w-3.5" />
+        </SidebarIconButton>
       </div>
     </div>
+
+    <DirectoryPathDialog
+      v-model:open="directoryPickerOpen"
+      v-model:path="directoryPickerPath"
+      :title="t('ui.pathPicker.actions.browse')"
+      :confirm-label="t('common.open')"
+      :base-path="root"
+      @confirm="confirmDirectoryPicker"
+    />
 
     <div v-if="multiSelectEnabled" class="border-b border-sidebar-border/60 px-2 py-1.5">
       <div class="flex flex-wrap items-center justify-between gap-1.5">

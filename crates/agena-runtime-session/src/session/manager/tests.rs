@@ -962,14 +962,16 @@ async fn cancelling_an_unanswered_user_turn_withdraws_it_and_restores_the_docume
     let expected_document = document.clone();
     let session_id = session.id;
     manager
-        .start_registered_with_restore(
+        .start_registered_with_admission(
             session_id,
             agena_domain::ExecutionSource::User,
             ExecutionConversationTarget::NewTurn,
             "unanswered user cancellation fixture",
-            Some(document),
-            Some("restore-cancel-key".to_owned()),
-            None,
+            ExecutionAdmission {
+                restore_document: Some(document),
+                user_idempotency_key: Some("restore-cancel-key".to_owned()),
+                ..Default::default()
+            },
             move |manager, control, _steer_rx| async move {
                 let part = new_part_from_content(
                     "text",

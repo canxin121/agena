@@ -1298,8 +1298,9 @@ pub struct SessionExecutionResource {
     pub session: SessionResource,
     /// The session's parts (ordered parts, including `run` markers).
     pub parts: Vec<crate::part::PartResource>,
-    /// `None` means Parts were not requested. A bounded selection always
-    /// carries page metadata, including when its returned window is empty.
+    /// `None` means no transcript page was requested. Status shells may still
+    /// include the durable owners of pending interactions. A bounded history
+    /// selection always carries metadata, including when its window is empty.
     pub part_page: Option<crate::pagination::PageInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_event_seq: Option<i64>,

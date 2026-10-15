@@ -1,7 +1,7 @@
 use super::{
-    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
-    PromptCompactionRuntime, SessionExecutionRequest, SessionManager, SessionManagerState,
-    SessionRunOptions, Utc,
+    AppError, Arc, ExecutionAdmission, ExecutionControl, ExecutionConversationTarget,
+    ExecutionSource, PromptCompactionRuntime, SessionExecutionRequest, SessionManager,
+    SessionManagerState, SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
@@ -66,7 +66,7 @@ impl SessionManager {
             ExecutionConversationTarget::LatestReply,
             "compaction execution",
             move |manager, control, _steer_rx| async move {
-                manager.compact_session_inner(request, control).await
+                manager.compact_session_inner(request, control, None).await
             },
         )
         .await
@@ -77,13 +77,20 @@ impl SessionManager {
         request: SessionExecutionRequest,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
         let session_id = request.session_id;
-        self.start_registered(
+        let (submitted_tx, submitted_rx) = tokio::sync::oneshot::channel();
+        self.start_registered_with_admission(
             session_id,
             ExecutionSource::Compaction,
             ExecutionConversationTarget::LatestReply,
             "compaction execution",
+            ExecutionAdmission {
+                submission: Some(submitted_rx),
+                ..Default::default()
+            },
             move |manager, control, _steer_rx| async move {
-                manager.compact_session_inner(request, control).await
+                manager
+                    .compact_session_inner(request, control, Some(submitted_tx))
+                    .await
             },
         )
         .await
@@ -93,6 +100,7 @@ impl SessionManager {
         &self,
         request: SessionExecutionRequest,
         control: Arc<ExecutionControl>,
+        submitted: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         let state = self.execution_state();
@@ -107,6 +115,7 @@ impl SessionManager {
             PromptCompactionTrigger::Manual,
             state.clone(),
             control,
+            submitted,
         )
         .await
         .map_err(|(_, error)| error)
@@ -124,7 +133,7 @@ impl SessionManager {
             return Ok(session);
         }
         match self
-            .compact_with_lifecycle(session, options, trigger, state.clone(), control)
+            .compact_with_lifecycle(session, options, trigger, state.clone(), control, None)
             .await
         {
             Ok(session) => Ok(session),
@@ -155,6 +164,7 @@ impl SessionManager {
         trigger: PromptCompactionTrigger,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
+        submitted: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<Session, (Session, AppError)> {
         // The run is only the execution envelope. The child content part owns
         // the attempt and checkpoint, exactly like other assistant activities.
@@ -219,6 +229,11 @@ impl SessionManager {
             part_id: part.part_id,
             content,
         };
+        if let Some(submitted) = submitted {
+            // Return the accepted command only after its visible activity is
+            // committed. Compression continues under the detached owner.
+            let _ = submitted.send(());
+        }
         match self
             .compact_candidate(session, options, trigger, state, control)
             .await

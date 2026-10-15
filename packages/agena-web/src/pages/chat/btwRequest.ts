@@ -1,7 +1,7 @@
 import { i18n } from '@/i18n'
 import { apiResponse } from '../../lib/api'
 
-export type BtwAnswer = { text: string; done: boolean; error?: string | null }
+export type BtwAnswer = { question?: string | null; text: string; done: boolean; error?: string | null }
 
 export function parseBtwFrame(frame: string): BtwAnswer | null {
   let event = ''
@@ -20,6 +20,7 @@ export function parseBtwFrame(frame: string): BtwAnswer | null {
     typeof answer.text !== 'string' ||
     !('done' in answer) ||
     typeof answer.done !== 'boolean' ||
+    ('question' in answer && answer.question !== null && typeof answer.question !== 'string') ||
     ('error' in answer && answer.error !== null && typeof answer.error !== 'string')
   ) {
     throw new Error(i18n.global.t('chat.errors.btwInvalidAnswer'))

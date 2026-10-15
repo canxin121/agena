@@ -14,6 +14,10 @@ pub struct BtwRequest {
 /// clients must never automatically replay this POST.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BtwAnswer {
+    /// The question read from its committed user part. Absent before admission
+    /// or when reporting an error that prevented submission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
     pub text: String,
     pub done: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

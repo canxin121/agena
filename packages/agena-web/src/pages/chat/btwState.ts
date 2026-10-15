@@ -22,6 +22,8 @@ export type BtwConversation = {
   expanded: boolean
   focusRequest: number
   exchanges: BtwExchange[]
+  pending: boolean
+  error: string
 }
 
 export const BTW_HISTORY_LIMIT = 20
@@ -30,7 +32,7 @@ const SESSION_LIMIT = 32
 /** Owned by the store, not by a mounted panel or the selected session. */
 export function useBtw(ask: Ask) {
   const sessions = reactive(new Map<string, BtwConversation>())
-  const requests = new Map<string, { controller: AbortController; exchange: BtwExchange }>()
+  const requests = new Map<string, { controller: AbortController; question: string; exchange: BtwExchange | null }>()
   let nextId = 0
 
   function ensure(sessionId: string) {
@@ -41,7 +43,7 @@ export function useBtw(ask: Ask) {
         if (sessions.size < SESSION_LIMIT) break
         if (!requests.has(id) && !entry.draft.trim()) sessions.delete(id)
       }
-      state = reactive({ draft: '', expanded: true, focusRequest: 0, exchanges: [] })
+      state = reactive({ draft: '', expanded: true, focusRequest: 0, exchanges: [], pending: false, error: '' })
     }
     sessions.delete(sessionId)
     sessions.set(sessionId, state)
@@ -63,8 +65,17 @@ export function useBtw(ask: Ask) {
     const request = requests.get(sessionId)
     if (!request) return
     requests.delete(sessionId)
-    request.exchange.status = 'stopped'
+    const state = sessions.get(sessionId)
+    if (state) {
+      state.pending = false
+      if (!request.exchange) restoreQuestion(state, request.question)
+    }
+    if (request.exchange) request.exchange.status = 'stopped'
     request.controller.abort()
+  }
+
+  function restoreQuestion(state: BtwConversation, question: string) {
+    state.draft = state.draft && state.draft !== question ? `${question}\n\n${state.draft}` : question
   }
 
   function clear(sessionId: string) {
@@ -77,35 +88,54 @@ export function useBtw(ask: Ask) {
     const question = state?.draft.trim()
     if (!state || !question || requests.has(sessionId)) return
     for (const exchange of state.exchanges) exchange.expanded = false
-    const exchange = reactive<BtwExchange>({
-      id: ++nextId,
-      question,
-      markdown: '',
-      error: '',
-      status: 'running',
-      expanded: true,
-    })
-    state.exchanges.push(exchange)
-    state.exchanges.splice(0, Math.max(0, state.exchanges.length - BTW_HISTORY_LIMIT))
     state.draft = ''
     state.expanded = true
-    const request = { controller: new AbortController(), exchange }
+    state.pending = true
+    state.error = ''
+    const request: { controller: AbortController; question: string; exchange: BtwExchange | null } = {
+      controller: new AbortController(),
+      question,
+      exchange: null,
+    }
     requests.set(sessionId, request)
     const isCurrent = () => requests.get(sessionId) === request
     try {
       await ask(sessionId, question, request.controller.signal, (answer) => {
         if (!isCurrent()) return
-        if (answer.text || !answer.error) exchange.markdown = answer.text
-        exchange.error = answer.error || ''
+        if (!request.exchange && (typeof answer.question === 'string' || answer.text)) {
+          request.exchange = reactive<BtwExchange>({
+            id: ++nextId,
+            question: answer.question || '',
+            markdown: '',
+            error: '',
+            status: 'running',
+            expanded: true,
+          })
+          state.exchanges.push(request.exchange)
+          state.exchanges.splice(0, Math.max(0, state.exchanges.length - BTW_HISTORY_LIMIT))
+        }
+        const exchange = request.exchange
+        if (exchange) {
+          if (typeof answer.question === 'string') exchange.question = answer.question
+          if (answer.text || !answer.error) exchange.markdown = answer.text
+          exchange.error = answer.error || ''
+        } else state.error = answer.error || ''
       })
-      if (isCurrent()) exchange.status = exchange.error ? 'failed' : 'complete'
+      if (isCurrent() && request.exchange) request.exchange.status = request.exchange.error ? 'failed' : 'complete'
     } catch (reason) {
       if (isCurrent()) {
-        exchange.error = reason instanceof Error ? reason.message : String(reason)
-        exchange.status = 'failed'
+        const message = reason instanceof Error ? reason.message : String(reason)
+        if (request.exchange) {
+          request.exchange.error = message
+          request.exchange.status = 'failed'
+        } else state.error = message
       }
     } finally {
-      if (isCurrent()) requests.delete(sessionId)
+      if (isCurrent()) {
+        state.pending = false
+        if (!request.exchange) restoreQuestion(state, question)
+        requests.delete(sessionId)
+      }
     }
   }
 

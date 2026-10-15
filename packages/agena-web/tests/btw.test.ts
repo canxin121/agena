@@ -22,7 +22,13 @@ function fixture() {
   async function submit(id: string, question: string) {
     state.open(id)
     state.sessions.get(id)!.draft = question
-    return state.submit(id)
+    const previous = calls.length
+    const pending = state.submit(id)
+    if (calls.length > previous) {
+      const call = calls.at(-1)!
+      call.update({ question: call.question, text: '', done: false })
+    }
+    return pending
   }
   return { calls, scope, state, submit }
 }

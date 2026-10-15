@@ -292,6 +292,61 @@ impl Application {
         mut resource: SessionExecutionResource,
         session_id: i64,
     ) -> Result<SessionExecutionResource, ApplicationError> {
+        if resource
+            .session
+            .state
+            .pending_interactive_requests()
+            .iter()
+            .any(|request| request.session_id == session_id)
+        {
+            // Attention and transcript travel independently. Include the real
+            // operation owners even in a status shell, so clients never have
+            // to fabricate a tool call while waiting for the transcript page.
+            let store = self.session_store_facade()?;
+            let controls = store
+                .load_control_parts(session_id)
+                .await
+                .map_err(|error| ApplicationError::internal_error(&error))?;
+            let run_ids = controls
+                .parts
+                .iter()
+                .filter_map(|part| part.run_id)
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let mut facts = controls.parts;
+            if !run_ids.is_empty() {
+                facts.extend(
+                    store
+                        .load_part_ids(session_id, &run_ids)
+                        .await
+                        .map_err(|error| ApplicationError::internal_error(&error))?
+                        .parts,
+                );
+            }
+            for fact in facts {
+                if !fact.visibility.visible_to_user() {
+                    continue;
+                }
+                let part = crate::session::part_resource_from_fact(&fact);
+                if let Some(existing) = resource
+                    .parts
+                    .iter_mut()
+                    .find(|old| old.part_id == part.part_id)
+                {
+                    if (existing.revision, existing.updated_at_ms)
+                        < (part.revision, part.updated_at_ms)
+                    {
+                        *existing = part;
+                    }
+                } else {
+                    resource.parts.push(part);
+                }
+            }
+            resource
+                .parts
+                .sort_unstable_by_key(|part| (part.created_at_ms, part.part_id));
+        }
         if let Ok(activities) = self.runtime_activities() {
             let filter = agena_domain::BackgroundActivityFilter {
                 session_id: Some(session_id),

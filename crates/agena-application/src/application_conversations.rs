@@ -22,6 +22,7 @@ static BTW_CAPACITY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(
 
 #[derive(Default)]
 struct AnswerProjection {
+    question: Option<String>,
     parts: BTreeMap<(i64, i64), String>,
     resources: BTreeMap<(i64, i64), Vec<agena_domain::ContentId>>,
     bytes: usize,
@@ -31,6 +32,17 @@ struct AnswerProjection {
 impl AnswerProjection {
     fn apply(&mut self, change: SessionChange, session_id: i64) {
         match change {
+            SessionChange::PartAdded { part, .. }
+                if part.origin_session_id == session_id
+                    && part.role == PartRole::User
+                    && part.kind == "text" =>
+            {
+                self.question = part
+                    .content
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+            }
             SessionChange::PartAdded { part, .. } | SessionChange::PartUpdated { part, .. }
                 if part.origin_session_id == session_id
                     && part.role == PartRole::Assistant
@@ -206,6 +218,24 @@ impl Application {
             .submit_user_run(run)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        let question = projection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .question
+            .clone()
+            .ok_or_else(|| {
+                ApplicationError::internal("The committed BTW question was not observed.")
+            })?;
+        if tx
+            .send(BtwAnswer {
+                question: Some(question.clone()),
+                ..Default::default()
+            })
+            .await
+            .is_err()
+        {
+            return Ok(());
+        }
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let timeout = tokio::time::sleep(Duration::from_secs(600));
@@ -313,11 +343,19 @@ impl Application {
                 }
             };
             if done {
-                let _ = tx.send(BtwAnswer { text, done, error }).await;
+                let _ = tx
+                    .send(BtwAnswer {
+                        question: Some(question.clone()),
+                        text,
+                        done,
+                        error,
+                    })
+                    .await;
                 return Ok(());
             }
             if text != last_text {
                 match tx.try_send(BtwAnswer {
+                    question: Some(question.clone()),
                     text: text.clone(),
                     done: false,
                     error: None,

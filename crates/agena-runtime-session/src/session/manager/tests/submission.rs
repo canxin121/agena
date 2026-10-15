@@ -145,16 +145,18 @@ async fn submission_failure_is_returned_and_releases_the_execution_slot() {
     let (submitted_tx, submitted_rx) = tokio::sync::oneshot::channel();
     let error = tokio::time::timeout(
         Duration::from_secs(5),
-        manager.start_registered_with_restore(
+        manager.start_registered_with_admission(
             session.id,
             agena_domain::ExecutionSource::User,
             ExecutionConversationTarget::NewTurn,
             "rejected user input fixture",
-            Some(ComposerDocument(vec![ComposerNode::Text {
-                text: "restore this draft".to_owned(),
-            }])),
-            None,
-            Some(submitted_rx),
+            ExecutionAdmission {
+                restore_document: Some(ComposerDocument(vec![ComposerNode::Text {
+                    text: "restore this draft".to_owned(),
+                }])),
+                submission: Some(submitted_rx),
+                ..Default::default()
+            },
             move |_manager, _control, _steer_rx| async move {
                 let _submission = submitted_tx;
                 Err::<(), _>(crate::AppError::Config(

@@ -42,6 +42,8 @@ pub(crate) struct BtwState {
     selected: usize,
     request: Option<BtwTask>,
     request_id: u64,
+    pending_question: Option<String>,
+    error: Option<String>,
     scroll: u16,
     max_scroll: u16,
     render_key: Option<(u64, u64, u16, ratatui::style::Color)>,
@@ -58,11 +60,28 @@ impl Default for BtwState {
             selected: 0,
             request: None,
             request_id: 0,
+            pending_question: None,
+            error: None,
             scroll: 0,
             max_scroll: 0,
             render_key: None,
             rendered: Vec::new(),
             last_used: Instant::now(),
+        }
+    }
+}
+
+impl BtwState {
+    fn restore_pending_question(&mut self) {
+        if let Some(question) = self.pending_question.take() {
+            let current = self.input.text();
+            let draft = if current.is_empty() || current == question {
+                question
+            } else {
+                format!("{question}\n\n{current}")
+            };
+            self.input = Editor::default();
+            self.input.insert_str(&draft);
         }
     }
 }
@@ -114,15 +133,8 @@ impl App {
         self.next_usage_request_id = self.next_usage_request_id.saturating_add(1);
         let request_id = self.next_usage_request_id;
         state.request_id = request_id;
-        state.exchanges.push(BtwExchange {
-            id: request_id,
-            question: question.clone(),
-            ..Default::default()
-        });
-        if state.exchanges.len() > HISTORY_LIMIT {
-            state.exchanges.remove(0);
-        }
-        state.selected = state.exchanges.len() - 1;
+        state.pending_question = Some(question.clone());
+        state.error = None;
         state.input = Editor::default();
         state.scroll = 0;
         let backend = self.application.clone();
@@ -197,7 +209,43 @@ impl App {
         if state.request_id != request_id || state.request.is_none() {
             return;
         }
-        let Some(entry) = state.exchanges.last_mut() else {
+        if let Some(question) = answer
+            .question
+            .or_else(|| (!answer.text.is_empty()).then(String::new))
+        {
+            if state
+                .exchanges
+                .last()
+                .is_none_or(|entry| entry.id != request_id)
+            {
+                state.exchanges.push(BtwExchange {
+                    id: request_id,
+                    question,
+                    ..Default::default()
+                });
+                if state.exchanges.len() > HISTORY_LIMIT {
+                    state.exchanges.remove(0);
+                }
+                state.selected = state.exchanges.len() - 1;
+                state.pending_question = None;
+            } else if !question.is_empty() {
+                state
+                    .exchanges
+                    .last_mut()
+                    .expect("current BTW exchange")
+                    .question = question;
+            }
+        }
+        let Some(entry) = state
+            .exchanges
+            .last_mut()
+            .filter(|entry| entry.id == request_id)
+        else {
+            state.error = answer.error;
+            if answer.done {
+                state.request = None;
+                state.restore_pending_question();
+            }
             return;
         };
         if (!answer.text.is_empty() || answer.error.is_none()) && entry.answer != answer.text {
@@ -289,9 +337,11 @@ impl App {
             "btw-stop" => {
                 if state.request.take().is_some()
                     && let Some(entry) = state.exchanges.last_mut()
+                    && entry.id == state.request_id
                 {
                     entry.stopped = true;
                 }
+                state.restore_pending_question();
             }
             "btw-older" => {
                 state.selected = state.selected.saturating_sub(1);
@@ -415,7 +465,11 @@ impl App {
                     ),
                 );
             }
-            if state.request.is_some() && entry.id == state.request_id {
+            if state.request.is_some()
+                && entry.id == state.request_id
+                && entry.answer.is_empty()
+                && entry.error.is_none()
+            {
                 lines.push(
                     Line::from(self.i18n.text("btw-loading"))
                         .style(agena_tui_components::theme::muted_style()),
@@ -431,6 +485,17 @@ impl App {
                 Line::from(self.i18n.text("btw-description"))
                     .style(agena_tui_components::theme::muted_style()),
             );
+        }
+        if state.request.is_some() && state.pending_question.is_some() {
+            lines.push(
+                Line::from(self.i18n.text("btw-loading"))
+                    .style(agena_tui_components::theme::muted_style()),
+            );
+        }
+        if let Some(error) = &state.error {
+            lines.push(Line::from(error.clone()).style(
+                ratatui::style::Style::default().fg(agena_tui_components::theme::danger_color()),
+            ));
         }
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         state.max_scroll = paragraph
@@ -527,6 +592,7 @@ mod tests {
             text: text.into(),
             done,
             error: None,
+            ..Default::default()
         }
     }
 

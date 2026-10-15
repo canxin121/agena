@@ -13,7 +13,10 @@ const props = defineProps<{ sessionId: string }>()
 const { t } = useI18n()
 const btw = useBtwStore()
 const state = computed(() => btw.sessions.get(props.sessionId))
-const loading = computed(() => state.value?.exchanges.some((entry) => entry.status === 'running') ?? false)
+const running = computed(() => state.value?.pending ?? false)
+const loading = computed(
+  () => running.value && !state.value?.exchanges.some((entry) => entry.status === 'running' && entry.markdown),
+)
 const input = ref<HTMLTextAreaElement | null>(null)
 
 watch(
@@ -98,7 +101,11 @@ function handleKeydown(event: KeyboardEvent) {
           <p v-if="entry.error" role="alert" class="text-sm text-destructive [overflow-wrap:anywhere]">
             {{ entry.error }}
           </p>
-          <p v-if="entry.status === 'running'" role="status" class="text-xs text-muted-foreground">
+          <p
+            v-if="entry.status === 'running' && !entry.markdown && !entry.error"
+            role="status"
+            class="text-xs text-muted-foreground"
+          >
             {{ t('chat.btw.loading') }}
           </p>
           <p v-else-if="entry.status === 'stopped'" class="text-xs text-muted-foreground">
@@ -106,6 +113,14 @@ function handleKeydown(event: KeyboardEvent) {
           </p>
         </div>
       </article>
+      <p
+        v-if="running && !state.exchanges.some((entry) => entry.status === 'running')"
+        role="status"
+        class="text-xs text-muted-foreground"
+      >
+        {{ t('chat.btw.loading') }}
+      </p>
+      <p v-if="state.error" role="alert" class="text-sm text-destructive">{{ state.error }}</p>
       <form class="flex items-end gap-2" @submit.prevent="btw.submit(sessionId)">
         <textarea
           ref="input"
@@ -117,7 +132,7 @@ function handleKeydown(event: KeyboardEvent) {
           class="min-h-12 min-w-0 flex-1 resize-y rounded-md border border-input bg-background px-3 py-1 text-sm outline-none focus:ring-1 focus:ring-ring"
           @keydown="handleKeydown"
         />
-        <Button v-if="loading" type="button" size="sm" variant="outline" @click="btw.stop(sessionId)">{{
+        <Button v-if="running" type="button" size="sm" variant="outline" @click="btw.stop(sessionId)">{{
           t('chat.btw.stop')
         }}</Button>
         <Button v-else type="submit" size="sm" variant="outline" :disabled="!state.draft.trim()">{{

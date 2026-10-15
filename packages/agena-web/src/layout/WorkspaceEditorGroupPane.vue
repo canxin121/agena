@@ -215,14 +215,23 @@ function focusPaneWindow(windowId?: string) {
   ui.setFocusedWorkspaceWindow(targetWindowId)
 }
 
-function handlePanePointerDown() {
+function handlePanePointerDown(event: PointerEvent) {
+  // Tab controls own activation. Opening their context menu or focusing an
+  // action button must not select the tab before the user chooses an action.
+  if (event.button !== 0 || event.ctrlKey) return
+  if (event.target instanceof Element && event.target.closest('[data-workspace-tab-id]')) return
   focusPaneWindow()
 }
 
 function handlePaneFocusIn(event: FocusEvent) {
   const target = event.target
   const tab = target instanceof HTMLElement ? target.closest<HTMLElement>('[data-workspace-tab-id]') : null
-  focusPaneWindow(tab?.dataset.workspaceTabId)
+  if (tab) return
+  focusPaneWindow()
+}
+
+function handleTabPointerDown(event: PointerEvent) {
+  if (event.button !== 0 || event.ctrlKey) event.preventDefault()
 }
 
 function tabLabel(tab: MainTabId): string {
@@ -658,6 +667,7 @@ async function handleTabStripDrop(event: DragEvent) {
           :data-workspace-tab-main="windowTab.mainTab"
           :class="tabClass(windowTab.id)"
           :draggable="canDragTabs"
+          @pointerdown="handleTabPointerDown"
           @contextmenu.prevent.stop="openTabContextMenu($event, windowTab.id)"
           @dragstart="handleTabDragStart($event, windowTab.id)"
           @dragend="handleTabDragEnd($event)"

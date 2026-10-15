@@ -360,7 +360,7 @@ onMounted(() => {
   dispose = installKeyboardShortcuts()
 })
 onBeforeUnmount(() => dispose?.())
-window.keyboardWorkflows = { state, ui, preview, tree, router, deferred, alpha }
+window.keyboardWorkflows = { state, ui, preview, directory, tree, router, deferred, alpha }
 </script>
 
 <template>

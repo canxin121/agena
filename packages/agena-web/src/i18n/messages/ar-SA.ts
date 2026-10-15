@@ -269,7 +269,7 @@ export default {
     },
   },
   chat: {
-    partTitles: { answer: 'الإجابة', reasoning: 'التفكير', textSegment: 'نص', operation: 'عملية', command: 'أمر', error: 'خطأ', notice: 'إشعار', compaction: 'تلخيص', responseRunning: 'الرد قيد الإنشاء', responseCompleted: 'اكتمل الرد', responseCancelled: 'أُلغي الرد', responseFailed: 'تعذّر الرد', runFailed: 'فشل التشغيل.' },
+    partTitles: { answer: 'الإجابة', reasoning: 'التفكير', textSegment: 'نص', operation: 'عملية', command: 'أمر', error: 'خطأ', notice: 'إشعار', compaction: 'تلخيص', compactionUnchanged: 'السياق مضغوط بالفعل؛ تم الاحتفاظ بالسجل الحالي.', compactionTokens: '{before} → {after} رمزًا', responseRunning: 'الرد قيد الإنشاء', responseCompleted: 'اكتمل الرد', responseCancelled: 'أُلغي الرد', responseFailed: 'تعذّر الرد', runFailed: 'فشل التشغيل.' },
     partStatus: { running: 'قيد التشغيل', completed: 'مكتمل', policyDenied: 'مرفوض وفق السياسة', declined: 'مرفوض', unavailable: 'غير متاح', failed: 'فشل', cancelled: 'أُلغي', pending: 'قيد الانتظار' },
     activityLog: { exitCode: 'رمز الخروج {code}', errorBand: 'خطأ' },
     selectedModelFallback: 'النموذج المحدد',

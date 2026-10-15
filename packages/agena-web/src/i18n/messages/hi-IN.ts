@@ -1115,6 +1115,8 @@ export default {
       error: 'त्रुटि',
       notice: 'सूचना',
       compaction: 'संक्षिप्तीकरण',
+      compactionUnchanged: 'संदर्भ पहले से संक्षिप्त है; मौजूदा इतिहास बनाए रखा गया।',
+      compactionTokens: '{before} → {after} टोकन',
       responseRunning: 'जवाब जारी है',
       responseCompleted: 'जवाब पूरा हुआ',
       responseCancelled: 'जवाब रद्द किया गया',

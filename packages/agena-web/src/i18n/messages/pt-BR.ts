@@ -1321,7 +1321,9 @@ export default {
       "responseCompleted": "Resposta concluída",
       "responseCancelled": "Resposta cancelada",
       "responseFailed": "Falha na resposta",
-      "runFailed": "A execução falhou."
+      "runFailed": "A execução falhou.",
+      "compactionUnchanged": "O contexto já está compactado; o histórico existente foi mantido.",
+      "compactionTokens": "De {before} para {after} tokens"
     },
     "partStatus": {
       "running": "Em andamento",
@@ -1929,6 +1931,80 @@ export default {
             "enable": "Ativar quebra de linha",
             "disable": "Desativar quebra de linha"
           }
+        },
+        "selectChangedFileTitle": "Selecione um arquivo alterado",
+        "selectChangedFileDescription": "Escolha um arquivo no controle do código-fonte para inspecionar o diff.",
+        "openSourceControlPanel": "Abrir o painel de controle do código-fonte",
+        "mergeBranchTitle": "Mesclar branch",
+        "mergeBranchDescription": "Mesclar uma branch à branch atual",
+        "rebaseBranchTitle": "Rebase da branch",
+        "rebaseBranchDescription": "Fazer rebase da branch atual sobre outra",
+        "commitErrorDescription": "O Git informou um erro",
+        "tags": {
+          "title": "Tags",
+          "description": "Criar e gerenciar tags",
+          "sections": {
+            "createTag": "Criar tag",
+            "remoteForDeletingTags": "Remoto para excluir tags",
+            "existingTags": "Tags existentes"
+          },
+          "placeholders": {
+            "annotatedMessageOptional": "(mensagem anotada opcional)"
+          },
+          "actions": {
+            "deleteRemote": "Excluir do remoto"
+          },
+          "confirmDeleteLocal": {
+            "title": "Excluir tag local?",
+            "description": "Isso remove a tag apenas localmente."
+          },
+          "confirmDeleteRemote": {
+            "title": "Excluir tag remota?",
+            "description": "Isso enviará uma solicitação de exclusão ao remoto."
+          },
+          "empty": "Nenhuma tag"
+        },
+        "autoFetchSync": {
+          "title": "Busca / sincronização automática",
+          "description": "Atualizações do Git em segundo plano",
+          "autoFetch": "Busca automática",
+          "fetchIntervalMinutes": "Intervalo de busca (minutos)",
+          "autoSync": "Sincronização automática (pull + push)",
+          "syncWarning": "Use com cuidado: a sincronização pode falhar se houver alterações locais ou conflitos.",
+          "syncIntervalMinutes": "Intervalo de sincronização (minutos)",
+          "postCommitAction": "Ação após o commit",
+          "postCommitHint": "Após o commit, execute uma ação quando a branch tiver upstream e estiver à frente."
+        },
+        "stashDiff": {
+          "title": "Diff do stash",
+          "titleWithRef": "Diff do stash: {ref}",
+          "description": "Inspecionar o conteúdo do patch do stash",
+          "loading": "Carregando diff do stash...",
+          "empty": "Nenhum diff disponível."
+        },
+        "createBranchFrom": {
+          "title": "Criar branch a partir de",
+          "description": "Criar uma branch em uma referência específica",
+          "fields": {
+            "branchName": "Nome da branch",
+            "startPoint": "Ponto inicial"
+          },
+          "checkoutAfterCreate": "Fazer checkout da branch após criá-la"
+        },
+        "renameBranch": {
+          "title": "Renomear branch",
+          "description": "Renomear uma branch local"
+        },
+        "renameFile": {
+          "title": "Renomear",
+          "description": "Renomear um arquivo no repositório"
+        },
+        "checkoutDetached": {
+          "title": "Checkout em estado destacado",
+          "description": "Fazer checkout de uma referência em estado HEAD destacado",
+          "placeholders": {
+            "ref": "HEAD~1"
+          }
         }
       },
       "workingTree": {
@@ -1988,6 +2064,54 @@ export default {
           "title": "Excluir arquivo?",
           "description": "Esta ação não pode ser desfeita."
         }
+      },
+      "sourceControl": "Controle de código-fonte",
+      "sourceControlActions": "Ações de controle de código-fonte",
+      "repository": "Repositório",
+      "moreActions": "Mais ações",
+      "noProjectSelectedTitle": "Nenhum projeto selecionado",
+      "noProjectSelectedDescription": "Abra um projeto primeiro para usar o controle do código-fonte.",
+      "noGitRepositoryTitle": "Nenhum repositório Git",
+      "noGitRepositoryDescription": "Selecione um repositório ou inicialize um neste projeto.",
+      "selectRepo": "Selecionar repositório",
+      "initialize": "Inicializar",
+      "historySidebar": {
+        "title": "Histórico",
+        "empty": "Ainda não há commits",
+        "loadMore": "Carregar mais commits ({count})",
+        "openDetails": "Abrir detalhes do histórico"
+      },
+      "branchAction": {
+        "branchNamePlaceholder": "Nome da branch"
+      },
+      "unsafeRepo": {
+        "trustRequiredTitle": "É necessário confiar no repositório",
+        "blockedDefaultHint": "O Git bloqueou este repositório porque ele não está marcado como seguro nesta máquina.",
+        "trustThisRepository": "Confiar neste repositório"
+      },
+      "signing": {
+        "sshMayFailTitle": "A assinatura de commit por SSH pode falhar",
+        "sshMayFailDescription": "O agente SSH não está disponível ou não tem chaves. Use um terminal para carregar as chaves (ssh-agent/ssh-add) e tente novamente."
+      },
+      "postCommit": {
+        "description": "Próximas etapas",
+        "globalDefault": "Padrão global: {label}",
+        "rememberChoice": "Lembrar esta escolha para este repositório",
+        "prompt": "Perguntar"
+      },
+      "searchRemotes": "Buscar remotos",
+      "protectedBranchCommitConfirm": "A branch «{branch}» está protegida. Fazer o commit mesmo assim?",
+      "protectedBranchNewBranchTitle": "Criar uma nova branch",
+      "protectedBranchNewBranchDescription": "A branch «{branch}» está protegida. Informe o nome de uma nova branch para este commit.",
+      "diffPane": {
+        "selectFileHint": "Selecione um arquivo para ver as alterações",
+        "openConflictEditor": "Abrir editor de conflitos"
+      },
+      "commitBox": {
+        "messagePlaceholder": "Mensagem (Cmd+Enter para fazer commit)",
+        "gitmojiTitle": "Gitmoji",
+        "searchEmojis": "Buscar emojis",
+        "emojiEmptyLabel": "Emoji"
       }
     },
     "toasts": {
@@ -2396,6 +2520,21 @@ export default {
           "confirmDescription": "Isso redefine o índice e a árvore de trabalho dos arquivos rastreados."
         }
       }
+    },
+    "fields": {
+      "remote": "Remoto",
+      "branch": "Branch",
+      "refspecOptional": "Refspec (opcional)",
+      "messageOptional": "Mensagem (opcional)"
+    },
+    "errors": {
+      "worktreeOutsideProjectRoot": "A árvore de trabalho está fora da raiz do projeto",
+      "forcePushDisabledByPolicy": "Push forçado desativado pela política",
+      "commitsWithoutVerificationDisabledByPolicy": "Commits sem verificação estão desativados pela política",
+      "nowOnNewBranchCommitAgain": "Agora você está em uma nova branch. Faça o commit novamente para continuar.",
+      "blockedTerminalUnsupportedRepoPath": "Comando do terminal bloqueado: caminho de repositório não compatível",
+      "blockedTerminalOutsideAllowlist": "Comando do terminal bloqueado por estar fora da lista de permissões confiáveis",
+      "failedToPrepareTerminalHandoff": "Falha ao preparar a transferência do comando para o terminal"
     }
   },
   "files": {

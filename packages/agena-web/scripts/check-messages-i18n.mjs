@@ -3,7 +3,8 @@
 // - Every statically referenced `t()` / `$t()` / `i18n.global.t()` key must
 //   exist in en-US (vue-i18n would otherwise render the raw key).
 // - en-US and zh-CN carry the same leaf keys with the same placeholders;
-//   the other locales are intentionally partial and fall back to en-US.
+//   every supported locale has a complete catalog, checked separately by
+//   check-message-locales-i18n.mjs.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 

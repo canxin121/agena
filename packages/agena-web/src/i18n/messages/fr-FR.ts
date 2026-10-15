@@ -261,6 +261,7 @@ export default {
     },
     partTitles: {
       answer: 'Réponse', reasoning: 'réflexion', textSegment: 'Texte', operation: 'Opération', command: 'Commande', error: 'Erreur', notice: 'Avis', compaction: 'Condensation',
+      compactionUnchanged: 'Le contexte est déjà condensé ; l’historique existant a été conservé.', compactionTokens: '{before} → {after} jetons',
       responseRunning: 'Réponse en cours', responseCompleted: 'Réponse terminée', responseCancelled: 'Réponse annulée', responseFailed: 'Échec de la réponse', runFailed: 'L’exécution a échoué.',
     },
     partStatus: { running: 'En cours', completed: 'Terminé', policyDenied: 'Refusé par la politique', declined: 'Refusé', unavailable: 'Indisponible', failed: 'Échec', cancelled: 'Annulé', pending: 'En attente' },

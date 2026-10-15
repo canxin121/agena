@@ -1329,7 +1329,9 @@ export default {
       "responseCompleted": "Respuesta completada",
       "responseCancelled": "Respuesta cancelada",
       "responseFailed": "Error en la respuesta",
-      "runFailed": "La ejecución ha fallado."
+      "runFailed": "La ejecución ha fallado.",
+      "compactionUnchanged": "El contexto ya está compactado; se ha conservado el historial existente.",
+      "compactionTokens": "De {before} a {after} tokens"
     },
     "partStatus": {
       "running": "En curso",
@@ -2705,6 +2707,112 @@ export default {
             "ref": "HEAD~1"
           }
         }
+      },
+      "sourceControl": "Control de código fuente",
+      "sourceControlActions": "Acciones de control de código fuente",
+      "repository": "Repositorio",
+      "moreActions": "Más acciones",
+      "noProjectSelectedTitle": "No hay ningún proyecto seleccionado",
+      "noProjectSelectedDescription": "Abre primero un proyecto para usar el control de código fuente.",
+      "noGitRepositoryTitle": "No hay ningún repositorio de Git",
+      "noGitRepositoryDescription": "Selecciona un repositorio o inicializa uno en este proyecto.",
+      "selectRepo": "Seleccionar repositorio",
+      "initialize": "Inicializar",
+      "historySidebar": {
+        "title": "Historial",
+        "empty": "Aún no hay commits",
+        "loadMore": "Cargar más commits ({count})",
+        "openDetails": "Abrir detalles del historial"
+      },
+      "branchAction": {
+        "branchNamePlaceholder": "Nombre de la rama"
+      },
+      "unsafeRepo": {
+        "trustRequiredTitle": "Se requiere confiar en el repositorio",
+        "blockedDefaultHint": "Git ha bloqueado este repositorio porque no está marcado como seguro en este equipo.",
+        "trustThisRepository": "Confiar en este repositorio"
+      },
+      "signing": {
+        "sshMayFailTitle": "Puede que falle la firma de commits con SSH",
+        "sshMayFailDescription": "El agente SSH no está disponible o no tiene claves. Usa un terminal para cargar claves (ssh-agent/ssh-add) y vuelve a intentarlo."
+      },
+      "postCommit": {
+        "description": "Pasos siguientes",
+        "globalDefault": "Valor global predeterminado: {label}",
+        "rememberChoice": "Recordar esta opción para este repositorio",
+        "prompt": "Preguntar"
+      },
+      "searchRemotes": "Buscar remotos",
+      "protectedBranchCommitConfirm": "La rama «{branch}» está protegida. ¿Crear el commit de todos modos?",
+      "protectedBranchNewBranchTitle": "Crear una rama nueva",
+      "protectedBranchNewBranchDescription": "La rama «{branch}» está protegida. Introduce el nombre de una rama nueva para este commit.",
+      "diffPane": {
+        "selectFileHint": "Selecciona un archivo para ver los cambios",
+        "openConflictEditor": "Abrir el editor de conflictos"
+      },
+      "commitBox": {
+        "messagePlaceholder": "Mensaje (Cmd+Enter para crear el commit)",
+        "gitmojiTitle": "Gitmoji",
+        "searchEmojis": "Buscar emojis",
+        "emojiEmptyLabel": "Emoji"
+      },
+      "workingTree": {
+        "fileActionsTitle": "Acciones de archivo",
+        "showMoreCount": "Mostrar más ({shown}/{total})",
+        "sections": {
+          "changes": "Cambios",
+          "stagedChanges": "Cambios preparados",
+          "untracked": "Archivos sin seguimiento",
+          "mergeChanges": "Cambios de fusión",
+          "stashChanges": "Cambios guardados en stash"
+        },
+        "empty": {
+          "mergeChanges": "No hay cambios de fusión",
+          "stagedChanges": "No hay cambios preparados",
+          "changes": "No hay cambios",
+          "untracked": "No hay archivos sin seguimiento"
+        },
+        "actions": {
+          "stageAll": "Preparar todo",
+          "stage": "Preparar",
+          "stageSelected": "Preparar selección",
+          "unstageAll": "Retirar todo del área de preparación",
+          "unstage": "Retirar del área de preparación",
+          "unstageSelected": "Retirar la selección del área de preparación",
+          "enterMultiSelect": "Selección múltiple",
+          "exitMultiSelect": "Listo",
+          "history": "Historial",
+          "ignore": "Ignorar",
+          "discardChanges": "Descartar cambios",
+          "discardSelected": "Descartar selección",
+          "deleteFile": "Eliminar archivo",
+          "deleteSelected": "Eliminar selección"
+        },
+        "multiSelect": {
+          "on": "Selección múltiple activada",
+          "off": "Selección múltiple desactivada",
+          "selectedCount": "{count} seleccionados"
+        },
+        "confirmDiscard": {
+          "title": "¿Descartar los cambios?",
+          "description": "Esta acción no se puede deshacer."
+        },
+        "confirmDiscardSelected": {
+          "title": "¿Descartar los cambios seleccionados?",
+          "description": "¿Descartar los cambios de {count} archivo(s) seleccionado(s)? Esta acción no se puede deshacer."
+        },
+        "confirmDeleteSelected": {
+          "title": "¿Eliminar los archivos seleccionados?",
+          "description": "¿Eliminar {count} archivos seleccionados? Esta acción no se puede deshacer."
+        },
+        "confirmDeleteTracked": {
+          "title": "¿Eliminar el archivo?",
+          "description": "Los archivos con seguimiento se eliminarán y se preparará su eliminación (git rm)."
+        },
+        "confirmDeleteUntracked": {
+          "title": "¿Eliminar el archivo?",
+          "description": "Esta acción no se puede deshacer."
+        }
       }
     },
     "toasts": {
@@ -2775,7 +2883,359 @@ export default {
       "addedSubmodule": "Submódulo {path} añadido",
       "initializedItem": "{name} inicializado",
       "updatedSubmodule": "Submódulo {path} actualizado",
-      "updatedSubmodules": "Submódulos actualizados"
+      "updatedSubmodules": "Submódulos actualizados",
+      "copiedCommitHash": "Hash del commit copiado",
+      "copiedRemoteUrl": "URL del remoto copiada",
+      "copiedWorktreePath": "Ruta del árbol de trabajo copiada",
+      "selectedCommitForCompare": "Se ha seleccionado {hash} para compararlo",
+      "selectedCommitHasNoParent": "El commit seleccionado no tiene un padre con el que compararlo",
+      "noUpstreamTrackingBranch": "No hay ninguna rama de seguimiento upstream",
+      "noConflictsFound": "No se han encontrado conflictos",
+      "repositoryMarkedSafe": "El repositorio se ha marcado como seguro",
+      "fetched": "Cambios obtenidos",
+      "pulled": "Cambios extraídos",
+      "pushedFollowTags": "Cambios publicados (incluidas las etiquetas)",
+      "synced": "Sincronización completada",
+      "committed": "Commit creado",
+      "changesDiscarded": "Cambios descartados",
+      "prunedWorktrees": "Árboles de trabajo podados",
+      "clonedRepository": "Repositorio clonado",
+      "mergeAborted": "Fusión cancelada",
+      "revertContinued": "Reversión continuada",
+      "gitLfsInstalled": "Git LFS instalado para el repositorio",
+      "disabledGpgSigningForRepo": "Se ha desactivado la firma GPG para este repositorio",
+      "trackedPattern": "Patrón con seguimiento: {pattern}",
+      "closedRepository": "Repositorio {relative} cerrado",
+      "authenticationRequiredForAction": "{action}: se requiere autenticación",
+      "stashAppliedRef": "Stash {ref} aplicado",
+      "pushNeedsRemoteSetup": "No se ha encontrado ningún remoto ni upstream. ¿Crear un repositorio en GitHub y publicarlo ahora?"
+    },
+    "fields": {
+      "remote": "Remoto",
+      "branch": "Rama",
+      "refspecOptional": "Refspec (opcional)",
+      "messageOptional": "Mensaje (opcional)"
+    },
+    "remoteTargetDialogs": {
+      "chooseRemoteAndBranch": "Elige un remoto y una rama",
+      "push": {
+        "title": "Publicar en...",
+        "advancedHint": "O indica un refspec abajo (para una publicación avanzada).",
+        "tipTerminal": "Consejo: si necesitas autenticarte o firmar, usa el terminal.",
+        "setUpstream": "Establecer upstream (-u)"
+      },
+      "pull": {
+        "title": "Extraer de...",
+        "advancedHint": "O indica un refspec abajo (para una extracción avanzada)."
+      },
+      "fetch": {
+        "title": "Obtener de...",
+        "description": "Elige un remoto y una rama de la que obtener cambios",
+        "advancedHint": "O indica un refspec abajo (para una obtención avanzada)."
+      },
+      "loadingRemoteBranches": "Cargando ramas remotas...",
+      "stash": {
+        "title": "Guardar cambios en stash",
+        "description": "Guardar los cambios locales para más tarde",
+        "stagedOnly": "Solo cambios preparados",
+        "includeUntracked": "Incluir archivos sin seguimiento",
+        "keepIndex": "Mantener preparados (conservar el índice)"
+      }
+    },
+    "authDialogs": {
+      "useTerminal": "Usar el terminal",
+      "ssoBrowserHint": "Completa la autorización SSO en el navegador y vuelve a intentar la operación.",
+      "credentials": {
+        "title": "Autenticación de Git",
+        "description": "Introduce las credenciales para continuar",
+        "githubTokenOptionalTitle": "Token de GitHub (opcional)",
+        "githubTokenOptionalDescription": "Si guardas aquí un token, Fetch/Pull/Push podrá autenticarse automáticamente, como en VS Code.",
+        "rememberForRepo": "Recordar para este repositorio (localStorage)",
+        "username": "Nombre de usuario",
+        "passwordOrToken": "Contraseña / token"
+      },
+      "gitBusy": {
+        "description": "Hay otra operación de Git en curso"
+      },
+      "sso": {
+        "title": "Se requiere autorización SSO",
+        "description": "Tu organización requiere SSO para este remoto"
+      },
+      "terminalHelp": {
+        "title": "Se requiere un terminal",
+        "description": "Esta acción requiere un terminal interactivo"
+      },
+      "gpgPassphrase": {
+        "title": "Contraseña de GPG",
+        "description": "Introduce la contraseña de tu clave GPG para firmar el commit",
+        "passphraseLabel": "Contraseña",
+        "signAndCommit": "Firmar y crear commit"
+      },
+      "gpgEnablePreset": {
+        "title": "¿Activar el almacenamiento de la contraseña de GPG?",
+        "description": "Esto actualizará la configuración de gpg-agent",
+        "confirmEnableRetry": "Activar y reintentar",
+        "body": "gpg-agent no permite guardar la contraseña de antemano. Para que Agena pueda firmar commits después de que introduzcas la contraseña en la interfaz, podemos añadir allow-preset-passphrase a ~/.gnupg/gpg-agent.conf y reiniciar gpg-agent."
+      },
+      "gpgMissingKey": {
+        "title": "No hay ninguna clave de firma GPG",
+        "description": "La firma está activada, pero no hay ninguna clave secreta disponible",
+        "defaultExplain": "No se ha encontrado ninguna clave secreta GPG para firmar.",
+        "setSigningKeyLocal": "Establecer user.signingkey (local)",
+        "placeholderKeyIdOrFingerprint": "ID de clave o huella digital",
+        "setSigningKeyButton": "Establecer clave de firma",
+        "disableSigningButton": "Desactivar la firma"
+      }
+    },
+    "actionsMenu": {
+      "groups": {
+        "commit": "Commit",
+        "stage": "Preparación",
+        "sync": "Sincronización",
+        "inspect": "Explorar",
+        "branching": "Ramas",
+        "cleanup": "Limpieza"
+      },
+      "commit": {
+        "noVerify": {
+          "label": "Sin verificaciones",
+          "description": "Omitir los hooks previos al commit"
+        },
+        "signoff": {
+          "label": "Añadir sign-off",
+          "description": "Añadir el pie Signed-off-by"
+        },
+        "amend": {
+          "label": "Modificar último commit",
+          "description": "Modificar el commit más reciente"
+        },
+        "noGpgSign": {
+          "label": "Sin firma",
+          "description": "Omitir la firma GPG de este commit"
+        },
+        "restoreTemplate": {
+          "label": "Restaurar plantilla",
+          "description": "Restaurar la plantilla del mensaje de commit"
+        },
+        "discardMessage": {
+          "label": "Descartar mensaje",
+          "description": "Borrar el borrador actual del mensaje de commit",
+          "confirmTitle": "¿Descartar el mensaje del commit?",
+          "confirmDescription": "Esto borrará el borrador actual del mensaje de commit."
+        },
+        "undoLastCommit": {
+          "label": "Deshacer último commit",
+          "description": "Ejecutar git reset --soft HEAD~1",
+          "confirmTitle": "¿Deshacer el último commit?",
+          "confirmDescription": "Se conservarán los cambios de los archivos, pero se eliminará el commit más reciente."
+        },
+        "commitAll": {
+          "label": "Crear commit con todo",
+          "description": "Crear commit con los cambios con y sin seguimiento"
+        },
+        "commitEmpty": {
+          "label": "Crear commit vacío",
+          "description": "Crear un commit vacío con el mensaje actual"
+        }
+      },
+      "stage": {
+        "stageAll": {
+          "label": "Preparar todo",
+          "description": "Preparar todos los cambios con y sin seguimiento"
+        },
+        "stageAllTracked": {
+          "label": "Preparar archivos con seguimiento",
+          "description": "Preparar solo los cambios en archivos con seguimiento"
+        },
+        "stageAllUntracked": {
+          "label": "Preparar archivos sin seguimiento",
+          "description": "Preparar solo archivos sin seguimiento"
+        },
+        "stageAllMerge": {
+          "label": "Preparar todos los cambios de fusión",
+          "description": "Preparar las resoluciones de conflictos de fusión"
+        }
+      },
+      "sync": {
+        "fetch": {
+          "label": "Obtener",
+          "description": "Obtener actualizaciones del remoto"
+        },
+        "fetchFrom": {
+          "label": "Obtener de...",
+          "description": "Elegir un remoto y una rama de la que obtener cambios"
+        },
+        "fetchPrune": {
+          "label": "Obtener y podar",
+          "description": "Obtener cambios y podar referencias eliminadas"
+        },
+        "fetchAll": {
+          "label": "Obtener de todos",
+          "description": "Obtener cambios de todos los remotos"
+        },
+        "pull": {
+          "label": "Extraer",
+          "description": "Extraer cambios remotos"
+        },
+        "pullRebase": {
+          "label": "Extraer y reaplicar",
+          "description": "Extraer cambios y reaplicar sobre la rama actual"
+        },
+        "pullFrom": {
+          "label": "Extraer de...",
+          "description": "Elegir un remoto y una rama de la que extraer cambios"
+        },
+        "push": {
+          "label": "Publicar",
+          "description": "Publicar commits locales en el remoto"
+        },
+        "pushForce": {
+          "label": "Publicar por la fuerza",
+          "description": "Forzar la publicación del historial de la rama remota",
+          "confirmTitle": "¿Forzar la publicación?",
+          "confirmDescription": "Esto puede sobrescribir el historial remoto.",
+          "confirmText": "Forzar publicación"
+        },
+        "pushForceWithLease": {
+          "label": "Publicar por la fuerza con protección",
+          "description": "Forzar la publicación y comprobar que las referencias remotas no estén desactualizadas",
+          "confirmTitle": "¿Forzar la publicación con protección?",
+          "confirmDescription": "Esto puede sobrescribir el historial remoto.",
+          "confirmText": "Forzar publicación"
+        },
+        "pushTags": {
+          "label": "Publicar etiquetas",
+          "description": "Publicar etiquetas locales en el remoto"
+        },
+        "pushFollowTags": {
+        "label": "Publicar con etiquetas alcanzables",
+          "description": "Publicar commits y las etiquetas alcanzables"
+        },
+        "pushTo": {
+          "label": "Publicar en...",
+          "description": "Elegir un remoto y una rama en la que publicar cambios"
+        },
+        "syncNow": {
+          "label": "Sincronizar",
+          "description": "Obtener y publicar en un solo paso"
+        },
+        "syncRebase": {
+          "label": "Sincronizar y reaplicar",
+          "description": "Extraer con --rebase y publicar en un solo paso"
+        }
+      },
+      "inspect": {
+        "branches": {
+          "label": "Ramas...",
+          "description": "Explorar y cambiar de rama"
+        },
+        "remotes": {
+          "label": "Remotos...",
+          "description": "Gestionar los remotos de Git"
+        },
+        "worktrees": {
+          "label": "Árboles de trabajo...",
+          "description": "Gestionar árboles de trabajo vinculados"
+        },
+        "history": {
+          "label": "Historial...",
+          "description": "Consultar el historial de commits"
+        },
+        "compare": {
+          "label": "Comparar...",
+          "description": "Comparar referencias y ramas"
+        },
+        "compareUpstream": {
+          "label": "Comparar con upstream",
+          "description": "Comparar la rama actual con la rama de seguimiento"
+        },
+        "tags": {
+          "label": "Etiquetas...",
+          "description": "Crear y gestionar etiquetas"
+        },
+        "submodules": {
+          "label": "Submódulos...",
+          "description": "Consultar el estado de los submódulos"
+        },
+        "lfs": {
+          "label": "Git LFS...",
+          "description": "Consultar el estado de Git LFS"
+        },
+        "autoFetch": {
+          "label": "Obtención automática...",
+          "description": "Configurar la obtención de cambios en segundo plano"
+        },
+        "stash": {
+          "label": "Stash...",
+          "description": "Abrir las operaciones del stash"
+        },
+        "stashStagedOnly": {
+          "label": "Stash (solo cambios preparados)",
+          "description": "Guardar en stash solo los cambios preparados"
+        },
+        "stashKeepIndex": {
+          "label": "Stash (conservar índice)",
+          "description": "Guardar en stash solo los cambios sin preparar"
+        },
+        "stashIncludeUntracked": {
+          "label": "Stash (incluir archivos sin seguimiento)",
+          "description": "Guardar en stash los cambios con y sin seguimiento"
+        },
+        "stashDropAll": {
+          "label": "Stash (eliminar todo)",
+          "description": "Eliminar todas las entradas del stash",
+          "confirmTitle": "¿Eliminar todos los stashes?",
+          "confirmDescription": "Esto eliminará permanentemente todas las entradas del stash.",
+          "confirmText": "Eliminar todo"
+        }
+      },
+      "branching": {
+        "mergeBranch": {
+          "label": "Fusionar rama...",
+          "description": "Fusionar otra rama con la rama actual"
+        },
+        "rebaseBranch": {
+          "label": "Reaplicar rama...",
+          "description": "Reaplicar la rama actual sobre otra rama"
+        },
+        "createBranchFrom": {
+          "label": "Crear rama a partir de...",
+          "description": "Crear una rama a partir de la referencia seleccionada"
+        },
+        "checkoutDetached": {
+          "label": "Cambiar a una referencia sin rama...",
+          "description": "Cambiar a un commit o referencia sin rama asociada"
+        }
+      },
+      "cleanup": {
+        "cleanUntracked": {
+          "label": "Limpiar archivos sin seguimiento",
+          "description": "Eliminar archivos y carpetas sin seguimiento",
+          "confirmTitle": "¿Limpiar archivos sin seguimiento?",
+          "confirmDescription": "Se eliminarán los archivos y carpetas sin seguimiento."
+        },
+        "cleanAll": {
+          "label": "Limpiar todo (incluidos los ignorados)",
+          "description": "Eliminar archivos sin seguimiento e ignorados",
+          "confirmTitle": "¿Limpiar todo, incluidos los ignorados?",
+          "confirmDescription": "Se eliminarán los archivos sin seguimiento e ignorados."
+        },
+        "discardAllTracked": {
+          "label": "Descartar todos los cambios con seguimiento",
+          "description": "Restablecer el índice y el árbol de trabajo para los archivos con seguimiento",
+          "confirmTitle": "¿Descartar todos los cambios con seguimiento?",
+          "confirmDescription": "Se restablecerán el índice y el árbol de trabajo de los archivos con seguimiento."
+        }
+      }
+    },
+    "errors": {
+      "worktreeOutsideProjectRoot": "El árbol de trabajo está fuera de la raíz del proyecto",
+      "forcePushDisabledByPolicy": "La directiva ha desactivado la publicación forzada",
+      "commitsWithoutVerificationDisabledByPolicy": "La directiva no permite crear commits sin verificación",
+      "nowOnNewBranchCommitAgain": "Ya estás en una rama nueva. Vuelve a crear el commit para continuar.",
+      "blockedTerminalUnsupportedRepoPath": "Se ha bloqueado el comando del terminal: ruta del repositorio no compatible",
+      "blockedTerminalOutsideAllowlist": "Se ha bloqueado el comando del terminal por estar fuera de la lista de permitidos de confianza",
+      "failedToPrepareTerminalHandoff": "No se ha podido preparar el traspaso del comando al terminal"
     }
   },
   "command-activities-summary": "Abrir el panel de actividad en segundo plano",

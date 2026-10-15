@@ -3408,5 +3408,25 @@ export default {
         "noMatches": "No hay coincidencias."
       }
     }
-  }
+  },
+  interactive: {
+    run: 'Ejecutar',
+    stop: 'Detener',
+    starting: 'Iniciando…',
+    reload: 'Recargar',
+    source: 'Código',
+    logs: 'Registros',
+    openPreview: 'Abrir vista previa',
+    fullscreen: 'Pantalla completa',
+    services: '{count} servicios',
+    running: 'En ejecución',
+    stopped: 'Detenido',
+    noLogs: 'Sin registros',
+    loading: 'Cargando…',
+    missingSession: 'Esta aplicación necesita una conversación.',
+    chart: 'Gráfico',
+    data: 'Tabla de datos',
+    label: 'Etiqueta',
+    download: 'Descargar SVG',
+  },
 } as const;

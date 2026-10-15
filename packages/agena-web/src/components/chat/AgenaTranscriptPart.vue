@@ -20,6 +20,7 @@ import {
 } from '@/pages/chat/transcriptPartPresentation'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
+import { useChatStore } from '@/stores/chat'
 
 const props = defineProps<{
   part: TranscriptDisplayPart
@@ -43,6 +44,8 @@ const emit = defineEmits<{
 
 const directory = useDirectoryStore()
 const ui = useUiStore()
+const chat = useChatStore()
+const appDirectory = computed(() => chat.getSessionDirectory(props.sessionId) || '')
 const status = computed(() => partStatusPresentation(props.part.status))
 const body = computed(() => transcriptPartText(props.part.source))
 const content = computed(() => durablePartContent(props.part.source))
@@ -84,7 +87,15 @@ function openAttachment(path: string, url: string) {
     class="transcript-content py-0.5 text-sm leading-snug"
     :class="part.role === 'user' ? 'border-primary/35' : ''"
   >
-    <MarkdownRenderer :content="body" mode="markdown" :stream="Boolean(streaming)" :source-path="sourcePath || ''" />
+    <MarkdownRenderer
+      :content="body"
+      mode="markdown"
+      :stream="Boolean(streaming)"
+      :source-path="sourcePath || ''"
+      :allow-apps="part.role === 'assistant'"
+      :app-owner="sessionId || ''"
+      :app-directory="appDirectory"
+    />
   </div>
 
   <div v-else-if="part.kind === 'lifecycle'" class="flex min-w-0 items-baseline gap-2 py-1 px-1">
@@ -165,6 +176,7 @@ function openAttachment(path: string, url: string) {
             :resource="resource"
             :session-id="sessionId"
             :source-path="sourcePath"
+            :allow-apps="part.role === 'assistant'"
           />
         </template>
         <MarkdownRenderer
@@ -173,6 +185,9 @@ function openAttachment(path: string, url: string) {
           mode="markdown"
           :stream="Boolean(streaming)"
           :source-path="sourcePath || ''"
+          :allow-apps="part.role === 'assistant'"
+          :app-owner="sessionId || ''"
+          :app-directory="appDirectory"
         />
       </div>
 

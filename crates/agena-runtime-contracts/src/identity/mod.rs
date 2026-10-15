@@ -17,6 +17,7 @@ pub const AGENA_AGENT_ID: &str = "agena";
 /// This applies even when a session lacks shell or interaction capabilities:
 /// an unavailable tool must not silently waive the recovery/approval policy.
 pub const AGENA_GIT_WORKFLOW_PROMPT: &str = include_str!("git_workflow.md");
+pub const AGENA_RICH_OUTPUT_PROMPT: &str = include_str!("rich_output.md");
 
 /// Fixed head of the Agena identity prompt: identity through workflow decision
 /// sections. Dynamic per-session sections are inserted right after
@@ -95,6 +96,8 @@ pub fn system_prompt_with_sections(sections: &[String]) -> String {
     prompt.push_str(AGENA_GIT_WORKFLOW_PROMPT.trim());
     prompt.push_str("\n\n");
     prompt.push_str(AGENA_CORE_PROMPT_MID);
+    prompt.push_str("\n\n");
+    prompt.push_str(AGENA_RICH_OUTPUT_PROMPT.trim());
     prompt.push_str("\n\n");
     prompt.push_str(AGENA_CORE_PROMPT_TAIL);
     prompt
@@ -200,7 +203,12 @@ mod tests {
         // always included, even without workflow tools. Keep the original
         // core budget rather than cutting upstream policy to fit it.
         let git_bytes = AGENA_GIT_WORKFLOW_PROMPT.trim().len() + 2;
-        let core_bytes = system_prompt().len() - git_bytes;
+        let rich_bytes = AGENA_RICH_OUTPUT_PROMPT.trim().len() + 2;
+        let core_bytes = system_prompt().len() - git_bytes - rich_bytes;
+        assert!(
+            rich_bytes <= 3000,
+            "rich output guidance grew to {rich_bytes} bytes"
+        );
         assert!(
             core_bytes <= 7_500,
             "core prompt grew to {core_bytes} bytes"

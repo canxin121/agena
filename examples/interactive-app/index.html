@@ -1,0 +1,474 @@
+<style>
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: #0c1019;
+    color: #edf1fc;
+    font:
+      14px/1.5 system-ui,
+      -apple-system,
+      sans-serif;
+  }
+  button,
+  input {
+    font: inherit;
+  }
+  button {
+    cursor: pointer;
+  }
+  button:focus-visible,
+  input:focus-visible {
+    outline: 2px solid #9d8afa;
+    outline-offset: 3px;
+  }
+  .board {
+    max-width: 1000px;
+    margin: auto;
+    padding: 32px;
+  }
+  .top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    background: #b7a1ff;
+    color: #211334;
+    border-radius: 13px;
+    font-size: 25px;
+    font-weight: 800;
+  }
+  .brand {
+    font-size: 20px;
+    font-weight: 750;
+    letter-spacing: -0.6px;
+  }
+  .badge {
+    margin-left: auto;
+    color: #9ca9c4;
+    font-size: 11px;
+    border: 1px solid #2b3349;
+    border-radius: 20px;
+    padding: 4px 9px;
+  }
+  .eyebrow {
+    color: #b8a7ff;
+    font-size: 11px;
+    letter-spacing: 2px;
+    margin-top: 30px;
+  }
+  h1 {
+    font-size: clamp(25px, 5vw, 37px);
+    line-height: 1.15;
+    letter-spacing: -1.1px;
+    margin: 8px 0 10px;
+  }
+  .sub {
+    color: #8d9ab4;
+    margin: 0 0 25px;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .stat {
+    background: linear-gradient(135deg, #1a2031, #141a28);
+    border: 1px solid #252d41;
+    border-radius: 15px;
+    padding: 15px 18px;
+  }
+  .stat-label {
+    font-size: 11px;
+    color: #94a1bc;
+  }
+  .stat-number {
+    font-size: 27px;
+    font-weight: 700;
+    margin-top: 3px;
+  }
+  .stat-number.purple {
+    color: #baa4ff;
+  }
+  .stat-number.green {
+    color: #76d9c0;
+  }
+  .progress {
+    height: 5px;
+    border-radius: 10px;
+    background: #242b3c;
+    margin-top: 12px;
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    width: 0;
+    background: #b5a0ff;
+    transition: width 0.25s;
+  }
+  .toolbar {
+    display: flex;
+    gap: 10px;
+    margin: 23px 0 15px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .search {
+    min-width: 140px;
+    flex: 1;
+    border: 1px solid #2c344a;
+    border-radius: 10px;
+    background: #131a29;
+    color: #e8edfb;
+    padding: 10px 12px;
+  }
+  .filters {
+    display: flex;
+    gap: 3px;
+    border: 1px solid #252e43;
+    border-radius: 10px;
+    padding: 3px;
+  }
+  .filter {
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #8d9ab4;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .filter.active {
+    color: #e8ddff;
+    background: #302741;
+  }
+  .task-list {
+    display: grid;
+    gap: 8px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .task {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    background: #151c2b;
+    border: 1px solid #252e42;
+    padding: 14px;
+    border-radius: 11px;
+  }
+  .task input {
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border: 1.5px solid #556079;
+    border-radius: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin: 0;
+  }
+  .task input:checked {
+    border-color: #9f8aea;
+    background: #9f8aea;
+  }
+  .task input:checked:after {
+    content: '✓';
+    display: block;
+    text-align: center;
+    color: #171222;
+    font-size: 13px;
+    line-height: 15px;
+  }
+  .task label {
+    flex: 1;
+    word-break: break-word;
+    cursor: pointer;
+  }
+  .task.done label {
+    text-decoration: line-through;
+    color: #738099;
+  }
+  .delete {
+    border: 0;
+    color: #8490a7;
+    background: transparent;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    font-size: 20px;
+  }
+  .delete:hover {
+    background: #382637;
+    color: #fda4b6;
+  }
+  .add {
+    display: flex;
+    gap: 9px;
+    margin-top: 13px;
+  }
+  .add input {
+    flex: 1;
+    min-width: 0;
+    border: 1px dashed #424c67;
+    border-radius: 10px;
+    color: #e8edfb;
+    background: #101725;
+    padding: 11px 12px;
+  }
+  .add button {
+    background: #b9a4fb;
+    color: #241a39;
+    border: 0;
+    border-radius: 10px;
+    padding: 10px 17px;
+    font-weight: 650;
+  }
+  .add button:disabled {
+    opacity: 0.5;
+  }
+  .footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 19px;
+    color: #67758f;
+    font-size: 11px;
+  }
+  .dot {
+    width: 6px;
+    height: 6px;
+    background: #67c8aa;
+    border-radius: 50%;
+  }
+  .error {
+    display: none;
+    background: #352330;
+    border: 1px solid #63364d;
+    color: #f3b3c8;
+    border-radius: 10px;
+    padding: 10px 13px;
+    margin-top: 15px;
+    font-size: 12px;
+  }
+  .empty {
+    text-align: center;
+    color: #7f8ba6;
+    padding: 26px;
+  }
+  .retry {
+    color: #bdabff;
+    background: transparent;
+    border: 0;
+    text-decoration: underline;
+  }
+  @media (max-width: 480px) {
+    .board {
+      padding: 20px;
+    }
+    .stats {
+      gap: 8px;
+    }
+    .stat {
+      padding: 12px;
+    }
+    .stat-number {
+      font-size: 23px;
+    }
+    .toolbar {
+      align-items: stretch;
+    }
+    .filters {
+      flex-shrink: 0;
+    }
+    .badge {
+      font-size: 9px;
+    }
+    .task {
+      padding: 12px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fill {
+      transition: none;
+    }
+  }
+</style>
+<main class="board">
+  <div class="top">
+    <span class="logo" aria-hidden="true">f</span><span class="brand">Flowboard</span
+    ><span class="badge">A LITTLE FOCUS, EVERY DAY</span>
+  </div>
+  <div class="eyebrow">YOUR SPACE TO MAKE PROGRESS</div>
+  <h1>Good things take a little focus.</h1>
+  <p class="sub">Clear your head. Choose what matters. Make a little room for progress.</p>
+  <div class="stats">
+    <section class="stat">
+      <div class="stat-label">Total tasks</div>
+      <div class="stat-number" id="total">—</div>
+    </section>
+    <section class="stat">
+      <div class="stat-label">Completed</div>
+      <div class="stat-number green" id="completed">—</div>
+    </section>
+    <section class="stat">
+      <div class="stat-label">Your progress</div>
+      <div class="stat-number purple" id="percent">—</div>
+      <div class="progress"><div class="fill" id="fill"></div></div>
+    </section>
+  </div>
+  <div class="error" id="error" role="alert"></div>
+  <div class="toolbar">
+    <input class="search" id="search" type="search" placeholder="Find a task…" aria-label="Search tasks" />
+    <div class="filters" role="group" aria-label="Task filter">
+      <button class="filter active" data-filter="all">All</button
+      ><button class="filter" data-filter="active">Active</button
+      ><button class="filter" data-filter="done">Done</button>
+    </div>
+  </div>
+  <ul class="task-list" id="tasks" aria-label="Tasks"></ul>
+  <p class="empty" id="empty" hidden>No tasks here. Make space for something good.</p>
+  <form class="add" id="add">
+    <input
+      id="title"
+      maxlength="200"
+      placeholder="What would you like to make happen?"
+      aria-label="New task"
+      required
+    /><button id="submit">+ Add task</button>
+  </form>
+  <div class="footer">
+    <span class="dot"></span><span id="connection">Waiting for your backend</span
+    ><button class="retry" id="retry">Reconnect</button>
+  </div>
+</main>
+<script>
+  ;(() => {
+    const $ = (id) => document.getElementById(id)
+    let tasks = [],
+      filter = 'all',
+      search = '',
+      working = false
+    function fail(error) {
+      $('error').textContent = error.message || String(error)
+      $('error').style.display = 'block'
+    }
+    async function request(path, method = 'GET', body) {
+      const response = await agena.fetch('api', path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'The request could not be completed.')
+      return result
+    }
+    function render() {
+      const done = tasks.filter((task) => task.done).length,
+        percent = tasks.length ? Math.round((done / tasks.length) * 100) : 0
+      $('total').textContent = tasks.length
+      $('completed').textContent = done
+      $('percent').textContent = percent + '%'
+      $('fill').style.width = percent + '%'
+      const visible = tasks.filter(
+        (task) =>
+          (filter === 'all' || task.done === (filter === 'done')) &&
+          task.title.toLowerCase().includes(search.toLowerCase()),
+      )
+      $('tasks').replaceChildren()
+      for (const task of visible) {
+        const row = document.createElement('li')
+        row.className = 'task' + (task.done ? ' done' : '')
+        const check = document.createElement('input')
+        check.type = 'checkbox'
+        check.checked = task.done
+        check.id = 'task-' + task.id
+        check.setAttribute('aria-label', 'Complete ' + task.title)
+        check.onchange = () => mutate(() => request('/tasks/' + task.id, 'PATCH', { done: check.checked }))
+        const label = document.createElement('label')
+        label.htmlFor = check.id
+        label.textContent = task.title
+        const remove = document.createElement('button')
+        remove.className = 'delete'
+        remove.textContent = '×'
+        remove.setAttribute('aria-label', 'Delete ' + task.title)
+        remove.onclick = () => mutate(() => request('/tasks/' + task.id, 'DELETE'))
+        row.append(check, label, remove)
+        $('tasks').append(row)
+      }
+      $('empty').hidden = !!visible.length
+      document.querySelectorAll('[data-filter]').forEach((button) => {
+        const active = button.dataset.filter === filter
+        button.classList.toggle('active', active)
+        button.setAttribute('aria-pressed', active)
+      })
+    }
+    async function load() {
+      const result = await request('/tasks')
+      tasks = result.tasks
+      $('error').style.display = 'none'
+      $('connection').textContent = 'Connected · Changes saved in SQLite'
+      render()
+    }
+    async function mutate(action) {
+      if (working) return render()
+      working = true
+      $('submit').disabled = true
+      try {
+        await action()
+        await load()
+      } catch (error) {
+        fail(error)
+        render()
+      } finally {
+        working = false
+        $('submit').disabled = false
+      }
+    }
+    async function saveUi() {
+      try {
+        await agena.setState({ filter, search })
+      } catch (error) {
+        fail(error)
+      }
+    }
+    $('add').onsubmit = (event) => {
+      event.preventDefault()
+      const title = $('title').value.trim()
+      if (title)
+        mutate(async () => {
+          await request('/tasks', 'POST', { title })
+          $('title').value = ''
+        })
+    }
+    $('search').oninput = (event) => {
+      search = event.target.value
+      render()
+      saveUi()
+    }
+    document.querySelectorAll('[data-filter]').forEach((button) => {
+      button.onclick = () => {
+        filter = button.dataset.filter
+        render()
+        saveUi()
+      }
+    })
+    $('retry').onclick = () => load().catch(fail)
+    agena.ready
+      .then((state) => {
+        if (state) {
+          filter = ['all', 'active', 'done'].includes(state.filter) ? state.filter : 'all'
+          search = typeof state.search === 'string' ? state.search : ''
+          $('search').value = search
+        }
+        render()
+        return load()
+      })
+      .catch((error) => fail(new Error('Start the app services above, then reconnect. ' + error.message)))
+  })()
+</script>

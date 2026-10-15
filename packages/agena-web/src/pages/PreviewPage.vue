@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
@@ -10,12 +10,17 @@ import { useUiStore } from '@/stores/ui'
 import { useWorkspacePreviewStore } from '@/stores/workspacePreview'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+const InteractiveAppPreview = defineAsyncComponent(() => import('@/features/interactive/InteractiveAppPreview.vue'))
 
 const ui = useUiStore()
 const workspacePane = useWorkspacePaneContext()
 const preview = useWorkspacePreviewStore()
 const route = useRoute()
 const { t } = useI18n()
+const appTitle = ref('')
+const isInteractiveApp = computed(
+  () => typeof route.query.appOwner === 'string' && typeof route.query.appId === 'string',
+)
 
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
 const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
@@ -53,6 +58,10 @@ function hostFromUrl(rawUrl: string): string {
 
 function syncPreviewWindowTitle() {
   const base = String(t('nav.preview'))
+  if (isInteractiveApp.value) {
+    ui.setWorkspaceWindowTitleFromRoute(route.query, appTitle.value || String(route.query.appId))
+    return
+  }
   const active = preview.activeSession
   const detail = active
     ? basenameFromPath(active.runDirectory) || basenameFromPath(active.directory) || hostFromUrl(active.targetUrl)
@@ -63,7 +72,13 @@ function syncPreviewWindowTitle() {
 }
 
 watch(
-  () => [preview.activeSessionId, preview.activeSession?.id, route.query],
+  () => [route.query.appOwner, route.query.appId],
+  () => {
+    appTitle.value = ''
+  },
+)
+watch(
+  () => [preview.activeSessionId, preview.activeSession?.id, route.query, appTitle.value],
   () => {
     syncPreviewWindowTitle()
   },
@@ -85,7 +100,13 @@ watch(
     </Teleport>
 
     <div class="min-w-0 flex-1 overflow-hidden" v-show="!ui.isCompactLayout || !ui.isSessionSwitcherOpen">
-      <WorkspacePreviewDockPanel controls-variant="viewport" viewer-mode="responsive" />
+      <InteractiveAppPreview
+        v-if="isInteractiveApp"
+        :owner="String(route.query.appOwner)"
+        :app-id="String(route.query.appId)"
+        @title="appTitle = $event"
+      />
+      <WorkspacePreviewDockPanel v-else controls-variant="viewport" viewer-mode="responsive" />
     </div>
   </div>
 </template>

@@ -116,18 +116,25 @@ export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, Json
   return asRecord(error.bodyJson)
 }
 
-export async function apiResponse(url: string, init?: RequestInit): Promise<Response> {
+/** Authenticated fetch with standard HTTP status semantics and an unread body.
+ * Callers that consume streamed bodies can impose a limit before reading them. */
+export async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
   const authHeaders = buildActiveUiAuthHeaders()
-  const authTokenVersion = readUiAuthTokenVersion()
   const headers = new Headers(init?.headers)
   if (!headers.has('accept')) headers.set('accept', 'application/json')
-  if (authHeaders.authorization && !headers.has('authorization')) headers.set('authorization', authHeaders.authorization)
-  const resp = await fetch(apiUrl(url), {
+  if (authHeaders.authorization && !headers.has('authorization'))
+    headers.set('authorization', authHeaders.authorization)
+  return await fetch(apiUrl(url), {
     ...init,
     // Token auth works without cookies; keep cookie compatibility unless caller overrides.
     credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
     headers,
   })
+}
+
+export async function apiResponse(url: string, init?: RequestInit): Promise<Response> {
+  const authTokenVersion = readUiAuthTokenVersion()
+  const resp = await apiFetch(url, init)
 
   if (!resp.ok && resp.status !== 304) {
     const txt = await readBodyText(resp)

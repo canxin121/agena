@@ -266,7 +266,7 @@ impl App {
         state.dirty = false;
         state.request = Some(PlanTask(tokio::spawn(async move {
             let operation = async {
-                if let Some(autorun) = autorun {
+                let response = if let Some(autorun) = autorun {
                     application
                         .invoke_plugin_tool(
                             "agena.plan",
@@ -274,16 +274,17 @@ impl App {
                             serde_json::json!({"autorun": autorun}),
                             Some(id),
                         )
-                        .await?;
-                }
-                let response = application
-                    .invoke_plugin_tool(
-                        "agena.plan",
-                        "get",
-                        serde_json::json!({"view": "full"}),
-                        Some(id),
-                    )
-                    .await?;
+                        .await?
+                } else {
+                    application
+                        .invoke_plugin_tool(
+                            "agena.plan",
+                            "get",
+                            serde_json::json!({"view": "full"}),
+                            Some(id),
+                        )
+                        .await?
+                };
                 Ok::<_, anyhow::Error>(InlinePlanData::from_response(
                     response.output_text,
                     response.payload.as_ref(),
@@ -466,11 +467,13 @@ impl App {
         if !expanded {
             return;
         }
-        let refresh = self.i18n.text(if state.request.is_some() {
-            "plan-viewer-loading"
-        } else {
-            "plan-viewer-refresh"
-        });
+        let refresh = self
+            .i18n
+            .text(if state.request.is_some() && state.data.is_none() {
+                "plan-viewer-loading"
+            } else {
+                "plan-viewer-refresh"
+            });
         let autorun = self.i18n.text(
             if state.data.as_ref().and_then(|data| data.autorun) == Some(true) {
                 "plan-viewer-autorun-on"
@@ -522,11 +525,14 @@ impl App {
         }
         if lines.is_empty() {
             lines.push(
-                Line::from(self.i18n.text(if state.request.is_some() {
-                    "plan-viewer-loading"
-                } else {
-                    "plan-viewer-empty"
-                }))
+                Line::from(
+                    self.i18n
+                        .text(if state.request.is_some() && state.data.is_none() {
+                            "plan-viewer-loading"
+                        } else {
+                            "plan-viewer-empty"
+                        }),
+                )
                 .style(theme::muted_style()),
             );
         }

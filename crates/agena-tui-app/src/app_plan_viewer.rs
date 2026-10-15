@@ -100,7 +100,7 @@ impl App {
     pub(crate) fn handle_plan_autorun_toggled(
         &mut self,
         request_id: u64,
-        result: super::UiResult<bool>,
+        result: super::UiResult<PlanViewerData>,
     ) {
         let ok = result.is_ok();
         {
@@ -112,14 +112,23 @@ impl App {
             }
             state.toggle_request_id = 0;
             match result {
-                Ok(_) => {}
+                Ok(data) => {
+                    state.markdown = Some(data.markdown);
+                    state.autorun = data.autorun;
+                    state.error = None;
+                }
                 Err(error) => state.error = Some(error.to_string()),
             }
         }
         if ok {
-            // Re-fetch so the title badge and the display summary reflect
-            // the new autorun value.
-            self.refresh_plan_viewer();
+            let session_id = match &self.current_route {
+                Route::PlanViewer(state) => state.session_id,
+                _ => return,
+            };
+            let summary = self.plan_viewer_summary(session_id);
+            if let Route::PlanViewer(state) = &mut self.current_route {
+                state.summary = summary;
+            }
         }
     }
 
@@ -168,7 +177,7 @@ impl App {
     }
 
     /// Toggle autorun for the active plan through the application-side
-    /// session tool executor (no permission prompt), then refresh the view.
+    /// session tool executor, applying the returned plan immediately.
     fn toggle_plan_autorun(&mut self, state: &mut PlanViewerState) {
         if state.loading || state.toggle_request_id != 0 {
             return;
@@ -192,7 +201,15 @@ impl App {
                     Some(session_id),
                 )
                 .await
-                .map(|_| true)
+                .map(|response| PlanViewerData {
+                    markdown: crate::app_plan_inline::plan_document(&response.output_text),
+                    autorun: response
+                        .payload
+                        .as_ref()
+                        .and_then(|payload| payload.get("plan"))
+                        .and_then(|plan| plan.get("autorun"))
+                        .and_then(serde_json::Value::as_bool),
+                })
                 .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::PlanAutorunToggled { request_id, result })

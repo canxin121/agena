@@ -87,6 +87,9 @@ pub struct TranscriptEntryPart<'a> {
 pub struct ToolCallView {
     pub operation: OperationPart,
     pub presentation: PartDocument,
+    pub input_loaded: bool,
+    pub output_loaded: bool,
+    pub metadata_loaded: bool,
     /// Bounded client-local frames; never serialized into Part facts.
     pub contents: std::collections::BTreeMap<
         agena_domain::ContentId,
@@ -179,6 +182,9 @@ impl ToolCallView {
         Self {
             operation,
             presentation,
+            input_loaded: true,
+            output_loaded: true,
+            metadata_loaded: true,
             contents: Default::default(),
             content_errors: Default::default(),
         }

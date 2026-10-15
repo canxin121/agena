@@ -510,16 +510,27 @@ impl App {
                 .await?;
                 if !known_ids.is_empty() {
                     let mut parts = Vec::new();
+                    let mut reconciled_ids = Vec::new();
                     for ids in known_ids.chunks(256) {
-                        parts.extend(
-                            application
-                                .client()
-                                .session_parts_by_ids(session_id, ids)
-                                .await?
-                                .parts,
-                        );
+                        match application
+                            .client()
+                            .session_parts_by_ids(session_id, ids)
+                            .await
+                        {
+                            Ok(resource) => {
+                                reconciled_ids.extend_from_slice(ids);
+                                parts.extend(resource.parts);
+                            }
+                            Err(error) => {
+                                refresh.reconciliation_error = Some(error.to_string());
+                                break;
+                            }
+                        }
                     }
-                    refresh.reconciled_parts = Some((known_ids, parts));
+                    // Only successful membership reads may confirm removals.
+                    // An auxiliary failure must not discard the snapshot or
+                    // earlier chunks that already supplied usable parts.
+                    refresh.reconciled_parts = Some((reconciled_ids, parts));
                 }
                 Ok::<_, anyhow::Error>(refresh)
             }

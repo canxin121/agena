@@ -52,6 +52,7 @@ fn snapshot(anchor: i64, end: i64, version: i64) -> SessionStateWithTranscriptPa
         .collect::<Vec<_>>();
     SessionStateWithTranscriptPage {
         execution: execution(parts.clone(), version),
+        needs_reconciliation: false,
         page: SessionTranscriptPage {
             parts,
             folds: vec![TranscriptFold {
@@ -458,6 +459,7 @@ async fn multi_round_reply_expansion_keeps_its_cursor_across_run_boundaries() {
         .collect::<Vec<_>>();
     let load = |version| SessionStateWithTranscriptPage {
         execution: execution(parts.clone(), version),
+        needs_reconciliation: false,
         page: SessionTranscriptPage {
             parts: parts.clone(),
             folds: vec![TranscriptFold {
@@ -538,6 +540,7 @@ async fn a_state_only_refresh_keeps_the_transcript_the_session_was_opened_with()
         Ok(crate::app_backend::SessionRefresh {
             execution_only: Some(execution(Vec::new(), 1)),
             reconciled_parts: None,
+            reconciliation_error: None,
             snapshot: None,
             latest_event_seq: Some(1),
             event_count: 0,
@@ -912,6 +915,7 @@ async fn completed_refreshes_wait_for_the_tick_gate_and_failures_back_off() {
         Ok(crate::app_backend::SessionRefresh {
             execution_only: None,
             reconciled_parts: None,
+            reconciliation_error: None,
             snapshot: None,
             latest_event_seq: Some(1),
             event_count: 0,
@@ -1083,6 +1087,7 @@ async fn obsolete_state_refresh_and_subscription_tokens_cannot_change_a_reopened
             execution_only: None,
             snapshot: Some(snapshot(10, 12, 2)),
             reconciled_parts: None,
+            reconciliation_error: None,
             latest_event_seq: Some(2),
             event_count: 0,
         })),
@@ -1128,6 +1133,7 @@ async fn obsolete_state_refresh_and_subscription_tokens_cannot_change_a_reopened
             execution_only: None,
             snapshot: Some(snapshot(10, 12, 2)),
             reconciled_parts: None,
+            reconciliation_error: None,
             latest_event_seq: Some(2),
             event_count: 0,
         }),
@@ -1198,6 +1204,7 @@ async fn reconnect_removes_missed_memberships_without_resurrecting_them_from_old
             execution_only: None,
             snapshot: None,
             reconciled_parts: Some((vec![12, 13], current)),
+            reconciliation_error: None,
             latest_event_seq: Some(8),
             event_count: 0,
         }),

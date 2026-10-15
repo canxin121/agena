@@ -837,7 +837,7 @@ impl App {
     pub(crate) fn composer_status_parts(&self) -> Vec<crate::app_status_context::StatusRow> {
         let mut parts: Vec<crate::app_status_context::StatusRow> = Vec::new();
         parts.extend(self.current_session_status_parts());
-        if self.transcript.state_loading {
+        if self.transcript.state_loading && self.transcript.parts.is_empty() {
             parts.push(crate::app_status_context::StatusRow::normal(
                 "transcript-header-loading",
                 ui_text::t(&self.i18n, "transcript-header-loading"),

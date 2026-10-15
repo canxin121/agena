@@ -114,7 +114,7 @@ pub fn render_plan_viewer_with_document(
         Some(true) => i18n.text("plan-viewer-autorun-on"),
         _ => i18n.text("plan-viewer-autorun-off"),
     };
-    let refresh_label = i18n.text(if loading {
+    let refresh_label = i18n.text(if loading && markdown.is_none() {
         "plan-viewer-loading"
     } else {
         "plan-viewer-refresh"

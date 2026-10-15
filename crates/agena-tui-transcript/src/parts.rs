@@ -579,10 +579,15 @@ fn tool_call_view_from_part(part: &PartResource) -> Option<ToolCallView> {
         }
     };
     let operation = operation_from_tool_call(&content);
-    Some(ToolCallView::from_operation(
-        operation,
-        part.presentation.clone(),
-    ))
+    let mut view = ToolCallView::from_operation(operation, part.presentation.clone());
+    let loaded = |section, field| {
+        part.content.get(field).is_some()
+            || part.sections.iter().any(|loaded| loaded.section == section)
+    };
+    view.input_loaded = loaded(agena_api::live::ToolDetailSection::Input, "input");
+    view.output_loaded = loaded(agena_api::live::ToolDetailSection::Output, "output");
+    view.metadata_loaded = loaded(agena_api::live::ToolDetailSection::Metadata, "metadata");
+    Some(view)
 }
 
 /// Project a typed domain request onto the API presentation resource,

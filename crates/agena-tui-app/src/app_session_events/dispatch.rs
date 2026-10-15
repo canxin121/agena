@@ -173,6 +173,12 @@ impl App {
                 request_id,
                 result,
             } => self.handle_user_input_replied(session_id, request_id, result),
+            AppMessage::InteractiveRequestPresented {
+                session_id,
+                execution,
+            } => {
+                self.handle_session_execution_updated(session_id, *execution, false);
+            }
             AppMessage::SessionSearchPageLoaded {
                 mode,
                 query,
@@ -636,7 +642,15 @@ impl App {
 
         match result {
             Ok(refresh) => {
-                self.transcript.refresh_failures = 0;
+                if let Some(error) = refresh.reconciliation_error {
+                    self.transcript.reconcile_loaded_parts = true;
+                    self.transcript.refresh_failures =
+                        self.transcript.refresh_failures.saturating_add(1).min(7);
+                    self.pending_refresh_for(session_id);
+                    self.flash_error(crate::UiFailure::internal(error));
+                } else {
+                    self.transcript.refresh_failures = 0;
+                }
                 if let Some((requested, current)) = refresh.reconciled_parts {
                     let present = current
                         .iter()
@@ -657,13 +671,22 @@ impl App {
                     merged.extend(current);
                     merged.sort_by_key(|part| (part.created_at_ms, part.part_id));
                     self.transcript.merge_parts(merged);
+                    if let Some(execution) = &mut self.transcript.execution {
+                        execution.parts = self.transcript.parts.clone();
+                    }
                 }
                 if execution_update_is_stale(
                     self.transcript.last_event_seq,
                     refresh.latest_event_seq,
                 ) {
                     // A late read cannot lower the durable watermark. The
-                    // session has no separate live-event sequence to clamp.
+                    // parts may still add previously unloaded factual content.
+                    if let Some(snapshot) = refresh.snapshot {
+                        self.transcript
+                            .merge_execution_parts(snapshot.execution.parts);
+                    } else if let Some(execution) = refresh.execution_only {
+                        self.transcript.merge_execution_parts(execution.parts);
+                    }
                     return;
                 }
                 if let Some(snapshot) = refresh.snapshot {
@@ -682,9 +705,8 @@ impl App {
                         }
                     }
                 } else if let Some(execution) = refresh.execution_only {
-                    // A no-change refresh answers with the execution shell, which
-                    // carries no parts. It updates run state and status without
-                    // replacing the transcript the user is reading.
+                    // Shells can supplement pending-operation owners without
+                    // replacing the transcript pages the user is reading.
                     self.apply_transcript_execution_shell(execution);
                 }
                 if refresh.event_count > 0 {

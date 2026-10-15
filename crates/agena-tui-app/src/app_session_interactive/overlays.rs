@@ -456,19 +456,28 @@ impl App {
         request_id: String,
     ) {
         let application = self.application.clone();
+        let tx = self.tx.clone();
         tokio::spawn(async move {
-            if let Err(error) = crate::app_backend::operations::present_interactive_request(
+            match crate::app_backend::operations::present_interactive_request(
                 &application,
                 session_id,
                 request_id,
             )
             .await
             {
-                tracing::debug!(
+                Ok(execution) => {
+                    let _ = tx
+                        .send(crate::AppMessage::InteractiveRequestPresented {
+                            session_id,
+                            execution: Box::new(execution),
+                        })
+                        .await;
+                }
+                Err(error) => tracing::debug!(
                     target: "agena::tui::interactive",
                     %error,
                     "failed to mark interactive request presented"
-                );
+                ),
             }
         });
     }

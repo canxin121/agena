@@ -101,6 +101,11 @@ impl App {
         &mut self,
         snapshot: crate::app_backend::SessionStateWithTranscriptPage,
     ) -> bool {
+        if self.transcript.session_id == Some(snapshot.execution.session.id)
+            && snapshot.needs_reconciliation
+        {
+            self.pending_refresh_for(snapshot.execution.session.id);
+        }
         let changed_tool_parts = snapshot
             .page
             .parts
@@ -139,8 +144,8 @@ impl App {
         self.apply_transcript_execution_with(execution, ExecutionTranscript::Window)
     }
 
-    /// Apply an execution-only refresh. The shell carries no transcript window,
-    /// so the loaded messages stay exactly as they are.
+    /// Apply an execution shell, including any real pending-operation owners,
+    /// while retaining the loaded transcript pages.
     pub(crate) fn apply_transcript_execution_shell(
         &mut self,
         execution: SessionExecutionResource,
@@ -160,6 +165,7 @@ impl App {
             current.session.id == execution.session.id
                 && current.session.version > execution.session.version
         }) {
+            self.transcript.merge_execution_parts(execution.parts);
             return false;
         }
         let is_terminal = execution.session.state.active_execution().is_none();
@@ -170,6 +176,7 @@ impl App {
             is_terminal,
             current_execution_absent,
         ) {
+            self.transcript.merge_execution_parts(execution.parts);
             return false;
         }
         let was_running = self

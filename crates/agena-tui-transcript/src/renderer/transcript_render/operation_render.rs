@@ -251,8 +251,12 @@ pub(crate) fn render_tool_detail_sections_with_sections(
     // raw JSON dump. `compact_tool_identity` also unwraps a `tools.call` wrapper
     // to the inner tool + its real input.
     let tool_input = compact_tool_identity(&tool.operation.invocation).1;
-    let input_markdown = json_value_to_markdown(&tool_input);
-    let input = render_markdown_detail_section(
+    let input_markdown = if tool.input_loaded {
+        json_value_to_markdown(&tool_input)
+    } else {
+        ui_text::t(i18n, "content-loading")
+    };
+    let mut input = render_markdown_detail_section(
         out,
         &ui_text::t(i18n, "tool-detail-input"),
         &input_markdown,
@@ -260,19 +264,30 @@ pub(crate) fn render_tool_detail_sections_with_sections(
         width,
         i18n,
     );
-    if input_expanded {
+    if !tool.input_loaded {
+        input.copy_text.clear();
+    }
+    if input_expanded && tool.input_loaded {
         visible_copy_sections.push(format!(
             "{}\n{input_markdown}",
             ui_text::t(i18n, "activity-section-input")
         ));
     }
 
-    let output_json = serde_json::to_string_pretty(&tool.operation.output)
-        .expect("raw tool output is JSON serializable");
-    let output_copy_text = format!(
-        "{}\n{output_json}",
-        ui_text::t(i18n, "activity-section-output")
-    );
+    let output_json = if tool.output_loaded {
+        serde_json::to_string_pretty(&tool.operation.output)
+            .expect("raw tool output is JSON serializable")
+    } else {
+        ui_text::t(i18n, "content-loading")
+    };
+    let output_copy_text = if tool.output_loaded {
+        format!(
+            "{}\n{output_json}",
+            ui_text::t(i18n, "activity-section-output")
+        )
+    } else {
+        String::new()
+    };
     let output = render_detail_section_with_body(
         out,
         &ui_text::t(i18n, "tool-detail-output"),
@@ -281,21 +296,36 @@ pub(crate) fn render_tool_detail_sections_with_sections(
         |body| push_expanded_tool_text(body, "      ", &output_json, Style::default(), width),
         output_copy_text.clone(),
     );
-    if output_expanded {
+    if output_expanded && tool.output_loaded {
         visible_copy_sections.push(output_copy_text);
     }
 
     let metadata_value = serde_json::to_value(&tool.operation.metadata)
         .unwrap_or(Value::Object(serde_json::Map::new()));
     let metadata_copy = json_detail_copy_text("Metadata", &metadata_value);
-    let metadata = render_json_detail_section(
-        out,
-        &ui_text::t(i18n, "tool-detail-metadata"),
-        &metadata_value,
-        metadata_expanded,
-        width,
-    );
-    if metadata_expanded {
+    let metadata = if tool.metadata_loaded {
+        render_json_detail_section(
+            out,
+            &ui_text::t(i18n, "tool-detail-metadata"),
+            &metadata_value,
+            metadata_expanded,
+            width,
+        )
+    } else {
+        render_markdown_detail_section(
+            out,
+            &ui_text::t(i18n, "tool-detail-metadata"),
+            &ui_text::t(i18n, "content-loading"),
+            metadata_expanded,
+            width,
+            i18n,
+        )
+    };
+    let mut metadata = metadata;
+    if !tool.metadata_loaded {
+        metadata.copy_text.clear();
+    }
+    if metadata_expanded && tool.metadata_loaded {
         visible_copy_sections.push(metadata_copy);
     }
 

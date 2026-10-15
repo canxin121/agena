@@ -133,31 +133,51 @@ fn preserve_loaded_tool_sections(
     ] {
         if (section == agena_api::live::ToolDetailSection::Input
             || previous.state == incoming.state)
-            && !incoming
-                .sections
-                .iter()
-                .any(|loaded| loaded.section == section)
             && let Some(loaded) = previous
                 .sections
                 .iter()
                 .find(|loaded| loaded.section == section)
+            && incoming
+                .sections
+                .iter()
+                .find(|current| current.section == section)
+                .is_none_or(|current| current.revision < loaded.revision)
             && let Some(value) = previous_content.get(section.as_str())
         {
             incoming_content.insert(section.as_str().to_owned(), value.clone());
+            incoming
+                .sections
+                .retain(|current| current.section != section);
             incoming.sections.push(loaded.clone());
         }
     }
-    if !incoming
+    if let Some(loaded) = previous
         .sections
         .iter()
-        .any(|loaded| loaded.section == agena_api::live::ToolDetailSection::Presentation)
-        && let Some(loaded) = previous
+        .find(|loaded| loaded.section == agena_api::live::ToolDetailSection::Presentation)
+        && incoming
             .sections
             .iter()
-            .find(|loaded| loaded.section == agena_api::live::ToolDetailSection::Presentation)
+            .find(|current| current.section == loaded.section)
+            .is_none_or(|current| current.revision < loaded.revision)
     {
         incoming.presentation = previous.presentation.clone();
+        incoming
+            .sections
+            .retain(|current| current.section != loaded.section);
         incoming.sections.push(loaded.clone());
+    }
+}
+
+pub(crate) fn merge_part_snapshot(
+    previous: &agena_api::part::PartResource,
+    incoming: &mut agena_api::part::PartResource,
+) {
+    if (incoming.revision, incoming.updated_at_ms) < (previous.revision, previous.updated_at_ms) {
+        let older = std::mem::replace(incoming, previous.clone());
+        preserve_loaded_tool_sections(&older, incoming);
+    } else {
+        preserve_loaded_tool_sections(previous, incoming);
     }
 }
 
@@ -637,27 +657,20 @@ impl TranscriptState {
     }
 
     pub(crate) fn apply_execution(&mut self, execution: SessionExecutionResource) {
-        self.apply_execution_with(execution, true)
+        self.apply_execution_with(execution)
     }
 
     /// Apply an execution shell (`GET /state`): session state, usage and run
-    /// status without a transcript window. The loaded pages must survive
-    /// untouched — a no-change refresh would otherwise empty a session the user
-    /// just opened.
+    /// status without a transcript window. Supplemental pending-operation
+    /// parts are merged by identity while every loaded history page survives.
     pub(crate) fn apply_execution_shell(&mut self, execution: SessionExecutionResource) {
-        self.apply_execution_with(execution, false)
+        self.apply_execution_with(execution)
     }
 
-    fn apply_execution_with(&mut self, execution: SessionExecutionResource, merge_parts: bool) {
+    fn apply_execution_with(&mut self, execution: SessionExecutionResource) {
         self.session_title = execution.session.title.clone();
         self.last_event_seq = execution.latest_event_seq;
-        if merge_parts {
-            if self.transcript_older_pages_loaded || !self.transcript_revealed_part_ids.is_empty() {
-                self.merge_recent_parts(execution.parts.clone());
-            } else {
-                self.merge_parts(execution.parts.clone());
-            }
-        }
+        self.merge_execution_parts(execution.parts.clone());
         let mut execution = execution;
         execution.parts = self.parts.clone();
         self.execution = Some(execution);
@@ -725,35 +738,12 @@ impl TranscriptState {
             .collect::<BTreeMap<_, _>>();
         for part in &mut parts {
             if let Some(previous) = previous.get(&part.part_id) {
-                if (part.revision, part.updated_at_ms) < (previous.revision, previous.updated_at_ms)
-                {
-                    *part = (*previous).clone();
-                } else {
-                    preserve_loaded_tool_sections(previous, part);
-                }
+                merge_part_snapshot(previous, part);
             }
         }
         let changed = parts
             .iter()
-            .filter(|part| {
-                previous.get(&part.part_id).is_none_or(|old| {
-                    (
-                        old.revision,
-                        old.updated_at_ms,
-                        old.kind.as_str(),
-                        old.role.as_str(),
-                        old.state.as_str(),
-                        &old.content,
-                    ) != (
-                        part.revision,
-                        part.updated_at_ms,
-                        part.kind.as_str(),
-                        part.role.as_str(),
-                        part.state.as_str(),
-                        &part.content,
-                    )
-                })
-            })
+            .filter(|part| previous.get(&part.part_id).is_none_or(|old| *old != *part))
             .map(|part| part.part_id)
             .collect::<BTreeSet<_>>();
         let restructured = parts.len() != self.parts.len()
@@ -888,6 +878,13 @@ impl TranscriptState {
         else {
             return false;
         };
+        if part
+            .sections
+            .iter()
+            .any(|loaded| loaded.section == resource.section && loaded.revision > resource.revision)
+        {
+            return false;
+        }
         if resource.section == agena_api::live::ToolDetailSection::Output
             && agena_tui_transcript::part_state_is_terminal(&part.state)
             && resource.part_state.as_ref().map_or(
@@ -911,14 +908,13 @@ impl TranscriptState {
         changed
     }
 
-    /// Update the newest snapshot while preserving pages the user has already
-    /// loaded from the beginning of the transcript. Part ids are monotonic, so
-    /// everything before the oldest incoming recent part belongs to the older
-    /// window and can be retained safely.
-    fn merge_recent_parts(&mut self, recent: Vec<agena_api::part::PartResource>) {
-        let Some(oldest_recent_id) = recent.iter().map(|part| part.part_id).min() else {
+    /// A bounded window or an execution shell cannot remove memberships by
+    /// omission. Keep loaded history and live parts that arrived after the
+    /// snapshot; explicit removals and membership reconciliation own deletion.
+    pub(crate) fn merge_execution_parts(&mut self, recent: Vec<agena_api::part::PartResource>) {
+        if recent.is_empty() {
             return;
-        };
+        }
         let recent_ids = recent
             .iter()
             .map(|part| part.part_id)
@@ -926,16 +922,15 @@ impl TranscriptState {
         let mut preserved = self
             .parts
             .iter()
-            .filter(|part| {
-                !recent_ids.contains(&part.part_id)
-                    && (part.part_id < oldest_recent_id
-                        || self.transcript_revealed_part_ids.contains(&part.part_id))
-            })
+            .filter(|part| !recent_ids.contains(&part.part_id))
             .cloned()
             .collect::<Vec<_>>();
         preserved.extend(recent);
         preserved.sort_by_key(|part| part.part_id);
         self.merge_parts(preserved);
+        if let Some(execution) = &mut self.execution {
+            execution.parts = self.parts.clone();
+        }
     }
 
     pub(crate) fn set_transcript_page(&mut self, next_cursor: Option<String>, has_more: bool) {

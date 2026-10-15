@@ -54,6 +54,8 @@ pub(crate) struct SessionTranscriptPage {
 pub(crate) struct SessionStateWithTranscriptPage {
     pub execution: SessionExecutionResource,
     pub page: SessionTranscriptPage,
+    /// State and page were read across a mutation; retain their parts and retry.
+    pub needs_reconciliation: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1897,7 +1899,8 @@ impl TuiBackend {
         // `/state` is an execution shell. Load only the newest bounded
         // run windows separately. Disclosure and role grouping are local.
         let mut attempts = 0;
-        let (mut execution, page_resource) = loop {
+        let mut retained_parts = std::collections::BTreeMap::new();
+        let (mut execution, page_resource, needs_reconciliation) = loop {
             let (execution, page) = tokio::try_join!(
                 async {
                     if let Some(execution) = initial.take() {
@@ -1915,12 +1918,22 @@ impl TuiBackend {
                     None
                 ),
             )?;
+            for part in execution.parts.iter().chain(&page.parts) {
+                let mut part = part.clone();
+                if let Some(previous) = retained_parts.get(&part.part_id) {
+                    crate::transcript_state::merge_part_snapshot(previous, &mut part);
+                }
+                retained_parts.insert(part.part_id, part);
+            }
             if execution.session.version == page.version {
-                break (execution, page);
+                break (execution, page, false);
             }
             attempts += 1;
             if attempts >= 3 {
-                bail!("session changed while loading the transcript snapshot");
+                // Streaming can advance on every read. The returned parts
+                // remain useful by identity and revision; show them now and
+                // request another bounded refresh for the state/page boundary.
+                break (execution, page, true);
             }
         };
         let folds = agena_tui_transcript::folds_from_run_window(&page_resource);
@@ -1930,10 +1943,16 @@ impl TuiBackend {
             next_cursor: page_resource.page.next_cursor,
             has_more: page_resource.page.has_more,
         };
-        execution.parts = page.parts.clone();
+        // The shell can carry pending owners outside the paged tail; command
+        // responses can also contain useful committed parts. Preserve both.
+        execution.parts = retained_parts.into_values().collect();
         self.localize_workspace_images(&mut execution).await;
         page.parts = execution.parts.clone();
-        Ok(SessionStateWithTranscriptPage { execution, page })
+        Ok(SessionStateWithTranscriptPage {
+            execution,
+            page,
+            needs_reconciliation,
+        })
     }
 
     pub(crate) async fn list_session_transcript_page(
@@ -2019,6 +2038,7 @@ impl TuiBackend {
             return Ok(SessionRefresh {
                 execution_only: Some(execution),
                 reconciled_parts: None,
+                reconciliation_error: None,
                 latest_event_seq: after_seq,
                 event_count: 0,
                 snapshot: None,
@@ -2035,6 +2055,7 @@ impl TuiBackend {
         Ok(SessionRefresh {
             execution_only: None,
             reconciled_parts: None,
+            reconciliation_error: None,
             latest_event_seq,
             event_count,
             snapshot: Some(snapshot),

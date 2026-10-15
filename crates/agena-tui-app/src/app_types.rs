@@ -631,7 +631,7 @@ pub(super) enum AppMessage {
     },
     PlanAutorunToggled {
         request_id: u64,
-        result: UiResult<bool>,
+        result: UiResult<PlanViewerData>,
     },
     SessionWorkLoaded {
         session_id: i64,
@@ -734,6 +734,10 @@ pub(super) enum AppMessage {
         session_id: i64,
         request_id: String,
         result: UiResult<SessionExecutionResource>,
+    },
+    InteractiveRequestPresented {
+        session_id: i64,
+        execution: Box<SessionExecutionResource>,
     },
     ProvidersLoaded {
         purpose: ProviderPickerPurpose,

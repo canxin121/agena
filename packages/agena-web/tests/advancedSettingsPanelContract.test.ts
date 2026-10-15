@@ -33,8 +33,7 @@ test('diagnostics workbench exposes advanced settings as a real subpage', () => 
   assert.ok(source.includes("buildSettingsSubpages('diagnostics')"))
   assert.ok(catalog.includes("id: 'advanced-settings'"))
   assert.ok(source.includes('<AdvancedSettingsPanel'))
-  assert.ok(
-    source.includes('<AdvancedSettingsPanel v-else-if="activePage === \'advanced-settings\'" :scope="scope" />'),
-  )
+  assert.match(source, /<AdvancedSettingsPanel[^>]*v-else-if="activePage === 'advanced-settings'"[^>]*:scope="scope"/)
+  assert.ok(source.includes('scope-layout="toolbar"'))
   assert.ok(source.includes('defineProps<{ activePage: string; scope: string }>()'))
 })

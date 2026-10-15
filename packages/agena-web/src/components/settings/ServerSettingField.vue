@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RiCheckboxCircleLine, RiDeleteBinLine, RiLoader4Line, RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
+import SettingsToggle from './SettingsToggle.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import {
@@ -255,8 +256,8 @@ function onTextInput(event: Event) {
   scheduleAutoSave()
 }
 
-function onBooleanCheckbox(event: Event) {
-  localValue.value = (event.target as HTMLInputElement).checked
+function onBooleanCheckbox(value: boolean) {
+  localValue.value = value
   scheduleAutoSave(0)
 }
 
@@ -319,126 +320,159 @@ onBeforeUnmount(() => {
   readSequence++
   readController?.abort()
 })
+// A page refresh must not cancel an auto-save or replace a pending edit.
+async function refreshIfClean() {
+  if (!dirty.value && !busy.value) await refresh()
+}
+defineExpose({ refresh: refreshIfClean })
 </script>
 
 <template>
   <div
     :class="
       compact
-        ? 'grid gap-2 border-b border-border/50 py-3 last:border-b-0'
-        : 'grid gap-3 rounded-lg border border-border/60 bg-background/50 p-4'
+        ? 'min-w-0 border-b border-border/50 py-4 first:pt-0 last:border-b-0 last:pb-0'
+        : 'min-w-0 rounded-xl border border-border/60 bg-background/30 p-4'
     "
   >
-    <div class="flex min-w-0 items-start justify-between gap-3">
+    <div class="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,0.65fr)] sm:items-start">
       <div class="min-w-0">
-        <div class="font-medium">{{ label }}</div>
-        <div v-if="description" class="mt-1 text-xs leading-5 text-muted-foreground">{{ description }}</div>
-        <code class="mt-1 block break-all font-mono text-[10px] text-muted-foreground/80">{{ path }}</code>
+        <div class="text-sm font-medium">{{ label }}</div>
+        <p v-if="description" class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ description }}</p>
       </div>
-      <IconButton
-        variant="ghost"
-        size="sm"
-        :tooltip="loading ? $st('Refreshing setting') : $st('Refresh setting')"
-        :aria-label="loading ? $st('Refreshing setting') : $st('Refresh setting')"
-        :disabled="loading || saving || disabled"
-        @click="refresh"
+      <div class="min-w-0 space-y-2">
+        <div class="flex min-w-0 items-center gap-2">
+          <div v-if="kind === 'boolean' && !includeEmpty" class="flex min-h-9 flex-1 items-center gap-2 sm:justify-end">
+            <span class="text-xs text-muted-foreground">{{ localValue ? $st('Enabled') : $st('Disabled') }}</span>
+            <SettingsToggle
+              :model-value="localValue === true"
+              :label="label"
+              :disabled="busy"
+              @update:model-value="onBooleanCheckbox"
+            />
+          </div>
+          <OptionPicker
+            v-else-if="kind === 'boolean' && includeEmpty"
+            class="min-w-0 flex-1"
+            :model-value="localValue === true ? 'true' : localValue === false ? 'false' : ''"
+            :options="booleanOptions"
+            :title="label"
+            :placeholder="placeholder || $st('Select value')"
+            :search-placeholder="placeholder || label"
+            :include-empty="true"
+            :empty-label="emptyLabel || $st('No value')"
+            :disabled="busy"
+            @update:model-value="onBooleanSelect"
+          />
+          <OptionPicker
+            v-else-if="kind === 'select'"
+            class="min-w-0 flex-1"
+            :model-value="String(localValue)"
+            :options="selectOptions"
+            :title="label"
+            :placeholder="placeholder || $st('Select value')"
+            :search-placeholder="placeholder || label"
+            :include-empty="includeEmpty"
+            :empty-label="emptyLabel || $st('No value')"
+            :allow-custom="allowCustom"
+            :disabled="busy"
+            :monospace="monospace"
+            @update:model-value="onSelectValue"
+          />
+          <input
+            v-else-if="kind === 'number'"
+            :value="localValue"
+            type="number"
+            :aria-label="label"
+            :placeholder="placeholder"
+            :disabled="busy"
+            class="h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring"
+            @input="onNumberInput"
+            @blur="flushAutoSave"
+            @keydown.enter="flushAutoSave"
+          />
+          <input
+            v-else
+            :value="localValue"
+            type="text"
+            :aria-label="label"
+            :placeholder="placeholder"
+            :disabled="busy"
+            :class="[
+              'h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring',
+              monospace ? 'font-mono' : '',
+            ]"
+            @input="onTextInput"
+            @blur="flushAutoSave"
+            @keydown.enter="flushAutoSave"
+          />
+        </div>
+        <div
+          class="flex min-h-5 flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground sm:justify-end"
+          aria-live="polite"
+        >
+          <RiLoader4Line v-if="saving || loading" class="h-3.5 w-3.5 animate-spin text-primary" />
+          <span v-else-if="dirty || error" class="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          <RiCheckboxCircleLine v-else class="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+          <span>{{
+            loading
+              ? $st('Loading...')
+              : error
+                ? $st('Error')
+                : saving
+                  ? $st('Saving automatically…')
+                  : dirty
+                    ? $st('Waiting to save…')
+                    : $st('Saved automatically')
+          }}</span>
+        </div>
+      </div>
+    </div>
+    <details class="mt-2 text-[11px] text-muted-foreground">
+      <summary
+        class="w-fit cursor-pointer rounded py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-    </div>
-
-    <div class="flex min-w-0 flex-wrap items-end gap-2">
-      <label v-if="kind === 'boolean' && !includeEmpty" class="inline-flex min-h-9 items-center gap-2 text-sm">
-        <input :checked="localValue === true" type="checkbox" :disabled="busy" @change="onBooleanCheckbox" />
-        <span>{{ localValue ? $st('Enabled') : $st('Disabled') }}</span>
-      </label>
-      <OptionPicker
-        v-else-if="kind === 'boolean' && includeEmpty"
-        :model-value="localValue === true ? 'true' : localValue === false ? 'false' : ''"
-        :options="booleanOptions"
-        :title="label"
-        :placeholder="placeholder || $st('Select value')"
-        :search-placeholder="placeholder || label"
-        :include-empty="true"
-        :empty-label="emptyLabel || $st('No value')"
-        :disabled="busy"
-        @update:model-value="onBooleanSelect"
-      />
-      <OptionPicker
-        v-else-if="kind === 'select'"
-        :model-value="String(localValue)"
-        :options="selectOptions"
-        :title="label"
-        :placeholder="placeholder || $st('Select value')"
-        :search-placeholder="placeholder || label"
-        :include-empty="includeEmpty"
-        :empty-label="emptyLabel || $st('No value')"
-        :allow-custom="allowCustom"
-        :disabled="busy"
-        :monospace="monospace"
-        class="min-w-[14rem] flex-1"
-        @update:model-value="onSelectValue"
-      />
-      <input
-        v-else-if="kind === 'number'"
-        :value="localValue"
-        type="number"
-        :placeholder="placeholder"
-        :disabled="busy"
-        class="h-9 min-w-[10rem] flex-1 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus:border-ring"
-        @input="onNumberInput"
-        @blur="flushAutoSave"
-        @keydown.enter="flushAutoSave"
-      />
-      <input
-        v-else
-        :value="localValue"
-        type="text"
-        :placeholder="placeholder"
-        :disabled="busy"
-        :class="[
-          'h-9 min-w-[14rem] flex-1 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus:border-ring',
-          monospace ? 'font-mono' : '',
-        ]"
-        @input="onTextInput"
-        @blur="flushAutoSave"
-        @keydown.enter="flushAutoSave"
-      />
-      <div class="inline-flex min-h-8 items-center gap-1.5 px-1 text-[11px]" aria-live="polite">
-        <RiLoader4Line v-if="saving" class="h-3.5 w-3.5 animate-spin text-primary" />
-        <span v-else-if="dirty" class="h-1.5 w-1.5 rounded-full bg-amber-500" />
-        <RiCheckboxCircleLine v-else class="h-3.5 w-3.5 text-emerald-500" />
-        <span :class="error ? 'text-destructive' : 'text-muted-foreground'">{{
-          saving ? $st('Saving automatically…') : dirty ? $st('Waiting to save…') : $st('Saved automatically')
-        }}</span>
+        {{ $st('Configuration sources') }}
+      </summary>
+      <div class="mt-2 space-y-2 rounded-lg border border-border/50 bg-muted/20 p-3">
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <code class="min-w-0 flex-1 break-all font-mono">{{ path }}</code>
+          <IconButton
+            variant="ghost"
+            size="sm"
+            :tooltip="$st('Refresh setting')"
+            :aria-label="$st('Refresh setting')"
+            :disabled="busy || dirty"
+            @click="refreshIfClean"
+            ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''"
+          /></IconButton>
+          <Button
+            v-if="hasOverride"
+            variant="ghost"
+            size="sm"
+            :disabled="busy"
+            :title="$st('Clear {layer} override', { layer: targetLayer })"
+            @click="clearOverride"
+          >
+            <RiDeleteBinLine class="mr-1.5 h-4 w-4" />{{ $st('Clear') }}
+          </Button>
+        </div>
+        <dl class="grid gap-2 sm:grid-cols-3">
+          <div>
+            <dt class="font-medium">{{ $st('Effective:') }}</dt>
+            <dd class="mt-1 break-all font-mono">{{ effectiveLabel(effectiveResponse) }}</dd>
+          </div>
+          <div>
+            <dt class="font-medium">{{ $st('Global layer:') }}</dt>
+            <dd class="mt-1 break-all font-mono">{{ effectiveLabel(globalResponse) }}</dd>
+          </div>
+          <div>
+            <dt class="font-medium">{{ $st('Workspace layer:') }}</dt>
+            <dd class="mt-1 break-all font-mono">{{ effectiveLabel(workspaceResponse) }}</dd>
+          </div>
+        </dl>
       </div>
-      <Button
-        v-if="hasOverride"
-        variant="ghost"
-        size="sm"
-        :disabled="busy"
-        :title="$st('Clear {layer} override', { layer: targetLayer })"
-        @click="clearOverride"
-      >
-        <RiDeleteBinLine class="mr-1.5 h-4 w-4" />
-        {{ $st('Clear') }}
-      </Button>
-    </div>
-
-    <div class="grid gap-x-4 gap-y-1 text-[11px] text-muted-foreground sm:grid-cols-3">
-      <div>
-        <span class="font-medium text-foreground/80">{{ $st('Effective:') }}</span>
-        <code class="break-all">{{ effectiveLabel(effectiveResponse) }}</code>
-      </div>
-      <div>
-        <span class="font-medium text-foreground/80">{{ $st('Global layer:') }}</span>
-        <code class="break-all">{{ effectiveLabel(globalResponse) }}</code>
-      </div>
-      <div>
-        <span class="font-medium text-foreground/80">{{ $st('Workspace layer:') }}</span>
-        <code class="break-all">{{ effectiveLabel(workspaceResponse) }}</code>
-      </div>
-    </div>
-    <div v-if="error" class="break-words text-xs text-destructive">{{ error }}</div>
+    </details>
+    <div v-if="error" role="alert" class="mt-2 break-words text-xs text-destructive">{{ error }}</div>
   </div>
 </template>

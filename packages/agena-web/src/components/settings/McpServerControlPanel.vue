@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { RiRefreshLine } from '@remixicon/vue'
 
 import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
+import SettingsCard from './SettingsCard.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
@@ -73,16 +75,16 @@ const controlDirty = computed(() => {
 const mcpSurfaceSummary = computed(() => {
   const value = control.value
   if (!value) return ''
-  if (!enabled.value) {
+  if (!value.enabled) {
     return st('The /mcp endpoint is disabled. The management API remains available so it can be enabled again.')
   }
-  if (authMode.value === 'oauth') {
+  if (value.authMode === 'oauth') {
     return st('The /mcp endpoint is available. Full OAuth protects the complete MCP transport.')
   }
-  if (authMode.value === 'mixed' && anonymousAccess.value === 'read_only') {
+  if (value.authMode === 'mixed' && value.anonymousAccess === 'read_only') {
     return st('The /mcp endpoint is available. Mixed auth keeps discovery and opted-in read-only tools public.')
   }
-  if (authMode.value === 'mixed') {
+  if (value.authMode === 'mixed') {
     return st('The /mcp endpoint is available. Mixed auth keeps discovery public and protects every tool call.')
   }
   return st('The /mcp endpoint is available. MCP calls are anonymous.')
@@ -125,8 +127,10 @@ function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value)
 }
 
-function applyControl(value: McpServerControl) {
+function applyControl(value: McpServerControl, preserveDraft = false) {
+  const keepDraft = preserveDraft && controlDirty.value
   control.value = value
+  if (keepDraft) return
   enabled.value = value.enabled
   publicUrl.value = value.publicUrl || ''
   oauthIssuerUrl.value = value.oauthIssuerUrl || ''
@@ -147,12 +151,12 @@ async function copyEndpoint(label: string, value: string | undefined) {
   }
 }
 
-async function refresh(force = false) {
-  if (!force && controlDirty.value && !(await confirmAction(st('Discard unsaved MCP changes and refresh?')))) return
+async function refresh() {
+  if (loading.value || saving.value) return
   loading.value = true
   error.value = ''
   try {
-    applyControl(await apiJson<McpServerControl>('/api/v1/server/mcp'))
+    applyControl(await apiJson<McpServerControl>('/api/v1/server/mcp'), true)
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
@@ -223,7 +227,7 @@ async function setPassword() {
       body: JSON.stringify({ password }),
     })
     oauthPassword.value = ''
-    applyControl(next)
+    applyControl(next, true)
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
@@ -238,7 +242,7 @@ async function clearPassword() {
   try {
     const next = await apiJson<McpServerControl>('/api/v1/server/mcp/oauth/password', { method: 'DELETE' })
     oauthPassword.value = ''
-    applyControl(next)
+    applyControl(next, true)
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
@@ -246,33 +250,28 @@ async function clearPassword() {
   }
 }
 
+async function canLeave() {
+  if (saving.value) return false
+  if (!controlDirty.value && !oauthPassword.value) return true
+  return confirmAction({
+    title: st('Discard unsaved changes?'),
+    confirmText: st('Discard changes'),
+    cancelText: st('Keep editing'),
+  })
+}
+onBeforeRouteUpdate((to, from) => {
+  if (to.path === from.path && to.query.view === from.query.view) return true
+  return canLeave()
+})
+onBeforeRouteLeave(canLeave)
+defineExpose({ refresh })
 onMounted(() => {
-  void refresh(true)
+  void refresh()
 })
 </script>
 
 <template>
-  <section class="grid gap-4 rounded-lg border border-border/60 bg-background/30 p-4 lg:p-5">
-    <div class="flex flex-wrap items-center justify-between gap-3">
-      <div class="max-w-3xl text-sm text-muted-foreground">
-        {{
-          $st(
-            'Manage the live MCP surface served by the connected Agena server process. Web and TUI are control clients; they do not run a second MCP server.',
-          )
-        }}
-      </div>
-      <IconButton
-        variant="outline"
-        size="md"
-        :tooltip="loading ? $st('Refreshing MCP server status') : $st('Refresh MCP server status')"
-        :aria-label="loading ? $st('Refreshing MCP server status') : $st('Refresh MCP server status')"
-        :disabled="loading || saving"
-        @click="refresh"
-      >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-    </div>
-
+  <div class="min-w-0 space-y-4">
     <div
       v-if="error"
       class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -283,164 +282,187 @@ onMounted(() => {
     <div v-if="loading && !control" class="text-sm text-muted-foreground">
       {{ $st('Loading MCP server status...') }}
     </div>
-    <div v-else-if="!control" class="text-sm text-muted-foreground">{{ $st('MCP server status is unavailable.') }}</div>
+    <div
+      v-else-if="!control"
+      class="flex flex-wrap items-center gap-3 rounded-xl border border-border/60 p-4 text-sm text-muted-foreground"
+    >
+      {{ $st('MCP server status is unavailable.')
+      }}<Button variant="outline" size="sm" @click="refresh()">{{ $st('Refresh') }}</Button>
+    </div>
 
-    <template v-else>
-      <div
-        class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 bg-background/50 px-3 py-3"
+    <fieldset v-else :disabled="loading || saving" class="min-w-0 space-y-4">
+      <SettingsCard
+        :title="$st('MCP surface')"
+        :description="
+          $st(
+            'Manage the live MCP surface served by the connected Agena server process. Web and TUI are control clients; they do not run a second MCP server.',
+          )
+        "
       >
-        <div>
-          <div class="text-sm font-medium">{{ $st('MCP surface') }}</div>
-          <div class="mt-1 text-xs text-muted-foreground">
-            {{ mcpSurfaceSummary }}
+        <template #actions
+          ><IconButton
+            variant="outline"
+            size="sm"
+            :tooltip="$st('Refresh MCP server status')"
+            :aria-label="$st('Refresh MCP server status')"
+            :disabled="loading || saving"
+            @click="refresh()"
+            ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" /></IconButton
+        ></template>
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div class="mt-1 text-xs text-muted-foreground">
+              {{ mcpSurfaceSummary }}
+            </div>
+          </div>
+          <Button :variant="enabled ? 'outline' : 'default'" :disabled="saving" @click="toggleEnabled">
+            {{ enabled ? $st('Disable MCP') : $st('Enable MCP') }}
+          </Button>
+        </div>
+
+        <div
+          class="rounded-md border px-3 py-3 text-xs"
+          :class="control.ready ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="font-medium">
+              {{ control.ready ? $st('MCP connection ready') : $st('MCP connection needs attention') }}
+            </div>
+            <code class="break-all">{{ control.resourceUrl }}</code>
+          </div>
+          <ul v-if="control.warnings.length" class="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
+            <li v-for="warning in control.warnings" :key="warning">{{ warning }}</li>
+          </ul>
+          <div v-else class="mt-1 text-muted-foreground">
+            {{ $st('The live Agena server is ready to serve the selected MCP mode.') }}
           </div>
         </div>
-        <Button :variant="enabled ? 'outline' : 'default'" :disabled="saving" @click="toggleEnabled">
-          {{ enabled ? $st('Disable MCP') : $st('Enable MCP') }}
-        </Button>
-      </div>
-
-      <div
-        class="rounded-md border px-3 py-3 text-xs"
-        :class="control.ready ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'"
-      >
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div class="font-medium">
-            {{ control.ready ? $st('MCP connection ready') : $st('MCP connection needs attention') }}
+      </SettingsCard>
+      <SettingsCard :title="$st('Connection addresses')">
+        <div class="grid min-w-0 gap-4 xl:grid-cols-2">
+          <div class="min-w-0 space-y-2">
+            <label for="mcp-public-url" class="text-sm font-medium">{{ $st('Public MCP resource URL') }}</label>
+            <div>
+              <Input
+                id="mcp-public-url"
+                v-model="publicUrl"
+                class="font-mono text-xs"
+                placeholder="https://your-domain.example/mcp or https://tunnel-service.../v1/mcp/tunnel_id"
+                :disabled="saving"
+              />
+            </div>
+            <details class="text-xs leading-relaxed text-muted-foreground">
+              <summary class="cursor-pointer">{{ $st('Details') }}</summary>
+              <div class="mt-2">
+                {{ $st('Enter the canonical HTTPS MCP resource. Secure MCP Tunnel URLs may include the full') }}
+                <code>/v1/mcp/tunnel_id</code>
+                {{
+                  $st(
+                    'path and must be kept intact. Leaving this empty keeps the listener-local URL; request Host and forwarded headers are never trusted to define OAuth identity. Current effective resource:',
+                  )
+                }}
+                <code class="break-all">{{ control.resourceUrl }}</code>
+              </div>
+            </details>
           </div>
-          <code>{{ control.resourceUrl }}</code>
-        </div>
-        <ul v-if="control.warnings.length" class="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
-          <li v-for="warning in control.warnings" :key="warning">{{ warning }}</li>
-        </ul>
-        <div v-else class="mt-1 text-muted-foreground">
-          {{ $st('The live Agena server is ready to serve the selected MCP mode.') }}
-        </div>
-      </div>
 
-      <div class="grid gap-2">
-        <div class="text-sm font-medium">{{ $st('Public MCP resource URL') }}</div>
-        <div>
-          <Input
-            v-model="publicUrl"
-            class="font-mono text-xs"
-            placeholder="https://your-domain.example/mcp or https://tunnel-service.../v1/mcp/tunnel_id"
-            :disabled="saving"
-          />
+          <div class="min-w-0 space-y-2">
+            <label for="mcp-issuer-url" class="text-sm font-medium">{{ $st('OAuth issuer URL') }}</label>
+            <div>
+              <Input
+                id="mcp-issuer-url"
+                v-model="oauthIssuerUrl"
+                class="font-mono text-xs"
+                placeholder="https://auth.your-domain.example"
+                :disabled="saving"
+              />
+            </div>
+            <details class="text-xs leading-relaxed text-muted-foreground">
+              <summary class="cursor-pointer">{{ $st('Details') }}</summary>
+              <div class="mt-2">
+                {{
+                  $st('This is the stable authorization-server identity placed in OAuth discovery, signed access-token')
+                }}
+                <code>iss</code>
+                {{
+                  $st(
+                    'claims, and the RFC 9207 authorization callback. Use a canonical public HTTPS URL. A path is supported only when the reverse proxy preserves that prefix and routes the matching path-aware RFC 8414 well-known URL. Leave it empty when OAuth and MCP use the same domain; Agena derives the resource origin. Request headers are never trusted.',
+                  )
+                }}
+              </div>
+            </details>
+          </div>
         </div>
-        <div class="text-xs text-muted-foreground">
-          {{ $st('Enter the canonical HTTPS MCP resource. Secure MCP Tunnel URLs may include the full') }}
-          <code>/v1/mcp/tunnel_id</code>
-          {{
-            $st(
-              'path and must be kept intact. Leaving this empty keeps the listener-local URL; request Host and forwarded headers are never trusted to define OAuth identity. Current effective resource:',
-            )
-          }}
-          <code class="break-all">{{ control.resourceUrl }}</code>
-        </div>
-      </div>
-
-      <div class="grid gap-2">
-        <div class="text-sm font-medium">{{ $st('OAuth issuer URL') }}</div>
-        <div>
-          <Input
-            v-model="oauthIssuerUrl"
-            class="font-mono text-xs"
-            placeholder="https://auth.your-domain.example"
-            :disabled="saving"
-          />
-        </div>
-        <div class="text-xs text-muted-foreground">
-          {{ $st('This is the stable authorization-server identity placed in OAuth discovery, signed access-token') }}
-          <code>iss</code>
-          {{
-            $st(
-              'claims, and the RFC 9207 authorization callback. Use a canonical public HTTPS URL. A path is supported only when the reverse proxy preserves that prefix and routes the matching path-aware RFC 8414 well-known URL. Leave it empty when OAuth and MCP use the same domain; Agena derives the resource origin. Request headers are never trusted.',
-            )
-          }}
-        </div>
-      </div>
-
-      <div class="grid gap-2">
-        <div class="text-sm font-medium">{{ $st('MCP authentication mode') }}</div>
-        <div>
-          <OptionPicker
-            v-model="authMode"
-            class="min-w-0 flex-1"
-            :options="authModeOptions"
-            :include-empty="false"
-            :title="$st('MCP authentication mode')"
-            :disabled="saving"
-          />
-        </div>
-        <div
-          v-if="authMode === 'none'"
-          class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
-        >
-          {{
-            $st(
-              'High-risk mode: every exposed tool is anonymous. Anyone who can reach the public MCP URL can invoke the exposed catalog without an Agena login.',
-            )
-          }}
-        </div>
-        <div v-else-if="authMode === 'mixed'" class="text-xs text-muted-foreground">
-          {{
-            $st(
-              'ChatGPT can initialize and discover tools without signing in. Tool calls remain OAuth-protected unless the anonymous-access policy below explicitly opts in a class of tools.',
-            )
-          }}
-        </div>
-      </div>
-
-      <div v-if="authMode === 'mixed'" class="grid gap-2">
-        <div class="text-sm font-medium">{{ $st('Anonymous tool access in mixed mode') }}</div>
-        <div>
-          <OptionPicker
-            v-model="anonymousAccess"
-            class="min-w-0 flex-1"
-            :options="anonymousAccessOptions"
-            :include-empty="false"
-            :title="$st('Mixed-auth anonymous tool access')"
-            :disabled="saving"
-          />
-        </div>
-        <div
-          v-if="anonymousAccess === 'read_only'"
-          class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
-        >
-          {{
-            $st(
-              'High-risk opt-in: read-only does not mean public. Anonymous tools can still reveal private workspace files, configuration, diagnostics, or other sensitive data. Keep this set to “none” for ordinary Agena workspaces.',
-            )
-          }}
-        </div>
-        <div v-else class="text-xs text-muted-foreground">
-          {{ $st('Safe default: initialize and tool discovery are public, but every tool call requires OAuth.') }}
-        </div>
-      </div>
-
-      <SettingsSaveBar
-        :dirty="controlDirty"
-        :saving="saving"
-        :error="error"
-        :save-label="$st('Save MCP configuration')"
-        sticky
-        @save="saveControlDraft"
-        @discard="discardControlDraft"
-      />
-
-      <div v-if="authMode !== 'none'" class="grid gap-3 border-t border-border/60 pt-4">
-        <div>
-          <div class="text-sm font-medium">{{ $st('OAuth authorization') }}</div>
-          <div class="mt-1 text-xs text-muted-foreground">
+      </SettingsCard>
+      <SettingsCard :title="$st('MCP authentication mode')">
+        <div class="space-y-3">
+          <div>
+            <OptionPicker
+              v-model="authMode"
+              class="min-w-0 flex-1"
+              :options="authModeOptions"
+              :include-empty="false"
+              :title="$st('MCP authentication mode')"
+              :disabled="saving"
+            />
+          </div>
+          <div
+            v-if="authMode === 'none'"
+            class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+          >
             {{
               $st(
-                'ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.',
+                'High-risk mode: every exposed tool is anonymous. Anyone who can reach the public MCP URL can invoke the exposed catalog without an Agena login.',
+              )
+            }}
+          </div>
+          <div v-else-if="authMode === 'mixed'" class="text-xs leading-relaxed text-muted-foreground">
+            {{
+              $st(
+                'ChatGPT can initialize and discover tools without signing in. Tool calls remain OAuth-protected unless the anonymous-access policy below explicitly opts in a class of tools.',
               )
             }}
           </div>
         </div>
-        <div class="grid gap-2 sm:grid-cols-2">
+
+        <div v-if="authMode === 'mixed'" class="mt-4 grid gap-2 border-t border-border/50 pt-4">
+          <div class="text-sm font-medium">{{ $st('Anonymous tool access in mixed mode') }}</div>
+          <div>
+            <OptionPicker
+              v-model="anonymousAccess"
+              class="min-w-0 flex-1"
+              :options="anonymousAccessOptions"
+              :include-empty="false"
+              :title="$st('Mixed-auth anonymous tool access')"
+              :disabled="saving"
+            />
+          </div>
+          <div
+            v-if="anonymousAccess === 'read_only'"
+            class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+          >
+            {{
+              $st(
+                'High-risk opt-in: read-only does not mean public. Anonymous tools can still reveal private workspace files, configuration, diagnostics, or other sensitive data. Keep this set to “none” for ordinary Agena workspaces.',
+              )
+            }}
+          </div>
+          <div v-else class="text-xs leading-relaxed text-muted-foreground">
+            {{ $st('Safe default: initialize and tool discovery are public, but every tool call requires OAuth.') }}
+          </div>
+        </div>
+      </SettingsCard>
+
+      <SettingsCard
+        v-if="authMode !== 'none'"
+        :title="$st('OAuth authorization')"
+        :description="
+          $st(
+            'ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.',
+          )
+        "
+      >
+        <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           <div class="rounded-md border border-border/60 p-3 text-xs">
             <div class="text-muted-foreground">{{ $st('Password status') }}</div>
             <div class="mt-1 font-medium">
@@ -482,12 +504,13 @@ onMounted(() => {
         <ul v-if="oauth?.warnings.length" class="list-disc space-y-1 pl-4 text-xs text-amber-700 dark:text-amber-300">
           <li v-for="warning in oauth.warnings" :key="warning">{{ warning }}</li>
         </ul>
-        <div class="flex flex-col gap-2 sm:flex-row">
+        <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Input
             v-model="oauthPassword"
+            :aria-label="$st('New MCP OAuth password')"
             type="password"
             autocomplete="new-password"
-            class="font-mono text-xs"
+            class="min-w-0 sm:min-w-40 sm:flex-1 font-mono text-xs"
             :placeholder="$st('New MCP OAuth password')"
             :disabled="saving"
           />
@@ -498,9 +521,9 @@ onMounted(() => {
             $st('Clear')
           }}</Button>
         </div>
-      </div>
+      </SettingsCard>
 
-      <details v-if="authMode !== 'none' && oauth" class="border-t border-border/60 pt-4">
+      <details v-if="authMode !== 'none' && oauth" class="min-w-0 rounded-xl border border-border/60 bg-card/30 p-4">
         <summary class="cursor-pointer text-sm font-medium">{{ $st('OAuth discovery endpoints') }}</summary>
         <dl class="mt-3 grid gap-2 text-xs">
           <div
@@ -530,6 +553,17 @@ onMounted(() => {
           </div>
         </dl>
       </details>
-    </template>
-  </section>
+    </fieldset>
+    <SettingsSaveBar
+      v-if="controlDirty || saving"
+      :dirty="controlDirty"
+      :saving="saving"
+      :disabled="loading"
+      :error="error"
+      :save-label="$st('Save MCP configuration')"
+      sticky
+      @save="saveControlDraft"
+      @discard="discardControlDraft"
+    />
+  </div>
 </template>

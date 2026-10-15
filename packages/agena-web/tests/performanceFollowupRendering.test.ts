@@ -487,7 +487,7 @@ test('a settings write captures its original path and its late completion cannot
   }
 })
 
-test('Settings loads the chat catalog only for conversation display and language changes do not remount the workbench', async () => {
+test('Settings loads the chat catalog only for conversation display and preserves page state across language changes', async () => {
   prepareRuntime()
   const originalFetch = globalThis.fetch
   let catalogs = 0
@@ -509,9 +509,10 @@ test('Settings loads the chat catalog only for conversation display and language
   try {
     await flush()
     assert.equal(catalogs, 0)
+    pane.state.toolCatalogQuery.value = 'retained search'
     pane.i18n.global.locale.value = locale === 'en-US' ? 'zh-CN' : 'en-US'
     await flush()
-    assert.equal(pane.state.settingsRefreshNonce.value, 0)
+    assert.equal(pane.state.toolCatalogQuery.value, 'retained search')
     assert.equal(catalogs, 0)
     await pane.router!.replace('/settings/interface?view=conversation')
     await flush()
@@ -842,9 +843,7 @@ for (const [name, path, initialize, sentinel] of [
     'permissions',
     '/src/components/settings/PermissionsPanel.vue',
     (state: any) => {
-      state.rules.value = [
-        { id: 1, subject_kind: 'tool', tool_name: 'retained-permission-sentinel', scope: 'global' },
-      ]
+      state.rules.value = [{ id: 1, subject_kind: 'tool', tool_name: 'retained-permission-sentinel', scope: 'global' }]
     },
     'retained-permission-sentinel',
   ],

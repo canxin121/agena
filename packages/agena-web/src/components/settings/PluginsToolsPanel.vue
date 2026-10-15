@@ -33,7 +33,7 @@ defineProps<{ activePage: string }>()
       ref="panel"
       :tab="pluginTabForSettingsView(activePage, route.query.pluginTab)!"
     />
-    <PluginMarketplacePanel v-else-if="activePage === 'marketplace'" />
-    <McpServerControlPanel v-else />
+    <PluginMarketplacePanel ref="panel" v-else-if="activePage === 'marketplace'" />
+    <McpServerControlPanel ref="panel" v-else />
   </SettingsSectionWorkbench>
 </template>

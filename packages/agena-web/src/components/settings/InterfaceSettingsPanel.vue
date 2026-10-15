@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiRefreshLine } from '@remixicon/vue'
+import { RiRefreshLine, RiTranslate2, RiPaletteLine } from '@remixicon/vue'
 
+import SettingsCard from './SettingsCard.vue'
 import Button from '@/components/ui/Button.vue'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import { apiJson } from '@/lib/api'
@@ -33,6 +34,7 @@ const themeOptions = computed(() =>
     description: pluginId ? st('Plugin: {pluginId}', { pluginId }) : undefined,
   })),
 )
+const fields = ref<InstanceType<typeof ServerSettingField>[]>([])
 const visible = usePaneVisibility()
 let catalogController: AbortController | undefined
 let pendingCatalog = true
@@ -99,6 +101,58 @@ async function loadCatalog() {
   }
 }
 
+const groups = computed(() => [
+  {
+    title: t('settings.appearance.language.label'),
+    icon: RiTranslate2,
+    description: st(
+      'This locale is consumed by server-backed TUI clients. The Web interface language is configured separately on the Web appearance page.',
+    ),
+    fields: [
+      {
+        path: 'ui.locale',
+        label: t('settings.tui.fields.locale'),
+        description: t('settings.tui.fields.localeDescription'),
+        options: localeOptions.value,
+        defaultValue: '',
+        includeEmpty: true,
+        emptyLabel: st('Use runtime/default locale'),
+      },
+    ],
+  },
+  {
+    title: st('Terminal appearance'),
+    icon: RiPaletteLine,
+    fields: [
+      {
+        path: 'ui.tui.color_scheme',
+        label: t('settings.tui.fields.colorScheme'),
+        description: t('settings.tui.fields.colorSchemeDescription'),
+        options: colorSchemeOptions.value,
+        defaultValue: 'auto',
+      },
+      {
+        path: 'ui.tui.theme',
+        label: t('settings.tui.fields.theme'),
+        description: t('settings.tui.fields.themeDescription'),
+        options: themeOptions.value,
+        includeEmpty: true,
+        emptyLabel: st('Default TUI theme'),
+      },
+      {
+        path: 'ui.tui.graphics',
+        label: t('settings.tui.fields.graphics'),
+        description: t('settings.tui.fields.graphicsDescription'),
+        options: graphicsOptions.value,
+        defaultValue: 'auto',
+      },
+    ],
+  },
+])
+async function refresh() {
+  await Promise.all([loadCatalog(), ...fields.value.map((field) => field.refresh())])
+}
+defineExpose({ refresh })
 onMounted(() => void loadCatalog())
 watch(
   visible,
@@ -118,60 +172,36 @@ onBeforeUnmount(() => catalogController?.abort())
 </script>
 
 <template>
-  <div class="space-y-6">
-    <!-- The page header already describes this page; only the action remains. -->
-    <div class="flex flex-wrap items-center justify-end gap-3">
-      <Button variant="outline" size="sm" :disabled="loadingCatalog" @click="loadCatalog">
-        <RiRefreshLine class="mr-2 h-4 w-4" :class="loadingCatalog ? 'animate-spin' : ''" />
-        {{ t('settings.refresh') }}
-      </Button>
-    </div>
-
-    <section class="grid gap-3">
-      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">TUI</div>
-      <div class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
-        {{
-          $st(
-            'This locale is consumed by server-backed TUI clients. The Web interface language is configured separately on the Web appearance page.',
-          )
-        }}
-      </div>
+  <div class="space-y-4">
+    <SettingsCard
+      v-for="(group, index) in groups"
+      :key="index"
+      :title="group.title"
+      :description="group.description"
+      :icon="group.icon"
+    >
+      <template v-if="index === 1" #actions>
+        <Button variant="outline" size="sm" :disabled="loadingCatalog" @click="loadCatalog">
+          <RiRefreshLine class="mr-1.5 h-4 w-4 shrink-0" :class="loadingCatalog ? 'animate-spin' : ''" />{{
+            t('settings.refresh')
+          }}
+        </Button>
+      </template>
+      <p
+        v-if="index === 1 && catalogError"
+        role="alert"
+        class="mb-3 break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+      >
+        {{ catalogError }}
+      </p>
       <ServerSettingField
-        path="ui.locale"
-        :label="t('settings.tui.fields.locale')"
-        :description="t('settings.tui.fields.localeDescription')"
+        v-for="field in group.fields"
+        :key="field.path"
+        ref="fields"
+        v-bind="field"
         kind="select"
-        :options="localeOptions"
-        default-value=""
-        :include-empty="true"
-        :empty-label="$st('Use runtime/default locale')"
+        compact
       />
-      <ServerSettingField
-        path="ui.tui.color_scheme"
-        :label="t('settings.tui.fields.colorScheme')"
-        :description="t('settings.tui.fields.colorSchemeDescription')"
-        kind="select"
-        :options="colorSchemeOptions"
-        default-value="auto"
-      />
-      <ServerSettingField
-        path="ui.tui.graphics"
-        :label="t('settings.tui.fields.graphics')"
-        :description="t('settings.tui.fields.graphicsDescription')"
-        kind="select"
-        :options="graphicsOptions"
-        default-value="auto"
-      />
-      <ServerSettingField
-        path="ui.tui.theme"
-        :label="t('settings.tui.fields.theme')"
-        :description="t('settings.tui.fields.themeDescription')"
-        kind="select"
-        :options="themeOptions"
-        :include-empty="true"
-        :empty-label="$st('Default TUI theme')"
-        monospace
-      />
-    </section>
+    </SettingsCard>
   </div>
 </template>

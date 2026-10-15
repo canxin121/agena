@@ -8,7 +8,7 @@ defineProps<{ title: string; description?: string; count?: number; icon?: Compon
   <section class="min-w-0 rounded-xl border border-border/70 bg-card/30" data-settings-card>
     <header class="flex flex-wrap items-center gap-3 rounded-t-xl border-b border-border/60 bg-muted/20 px-4 py-3.5">
       <component :is="icon" v-if="icon" class="h-4.5 w-4.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0 flex-1 basis-40">
         <h2 class="flex items-center gap-2 text-[15px] font-semibold">
           {{ title }}
           <span

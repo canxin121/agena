@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
-import { RiDownloadCloud2Line, RiRefreshLine, RiSearchLine, RiUploadCloud2Line } from '@remixicon/vue'
+import {
+  RiDownloadCloud2Line,
+  RiRefreshLine,
+  RiSearchLine,
+  RiUploadCloud2Line,
+  RiStore2Line,
+  RiCheckboxCircleLine,
+  RiGithubLine,
+} from '@remixicon/vue'
 
+import SettingsCard from './SettingsCard.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
@@ -249,6 +258,7 @@ function setSearchResponse(
 }
 
 async function search(refresh = false) {
+  if (loading.value || actionKey.value) return
   loading.value = true
   error.value = ''
   try {
@@ -262,9 +272,8 @@ async function search(refresh = false) {
 }
 
 async function syncRegistry() {
-  await runTask(
-    'sync',
-    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/sync', {
+  await runTask('sync', () =>
+    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/sync', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(marketplaceRegistryBody()),
@@ -275,9 +284,8 @@ async function syncRegistry() {
 async function installPlugin(spec: string, dryRun = false) {
   const trimmed = spec.trim()
   if (!trimmed) return
-  await runTask(
-    `${dryRun ? 'dry-run' : 'install'}:${trimmed}`,
-    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/install', {
+  await runTask(`${dryRun ? 'dry-run' : 'install'}:${trimmed}`, () =>
+    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/install', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -293,9 +301,8 @@ async function installPlugin(spec: string, dryRun = false) {
 }
 
 async function uninstallPlugin(pluginId: string) {
-  await runTask(
-    `uninstall:${pluginId}`,
-    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/uninstall', {
+  await runTask(`uninstall:${pluginId}`, () =>
+    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/uninstall', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ plugin_id: pluginId, cascade: false }),
@@ -385,147 +392,122 @@ async function refresh(forceSearch = true) {
   loading.value = false
 }
 
+defineExpose({
+  refresh: async () => {
+    if (!loading.value && !actionKey.value) await refresh()
+  },
+})
 onMounted(() => void refresh(false))
 </script>
 
 <template>
-  <div class="grid min-w-0 gap-5">
-    <header class="flex flex-wrap items-center justify-between gap-3">
-      <IconButton
-        variant="outline"
-        size="md"
-        :tooltip="loading ? $st('Refreshing marketplace') : $st('Refresh marketplace')"
-        :aria-label="loading ? $st('Refreshing marketplace') : $st('Refresh marketplace')"
-        :disabled="loading || Boolean(actionKey)"
-        @click="refresh"
-      >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-    </header>
-
-    <div
+  <div class="min-w-0 space-y-4">
+    <p
       v-if="error"
-      class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      role="alert"
+      class="break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
     >
-      <span class="min-w-0 flex-1">{{ error }}</span>
-      <Button size="sm" variant="outline" :disabled="loading || Boolean(actionKey)" @click="refresh">
-        <RiRefreshLine class="mr-1.5 h-4 w-4" />{{ $st('Refresh marketplace') }}
-      </Button>
-    </div>
-
-    <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-4">
-      <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(14rem,0.7fr)_auto]">
+      {{ error }}
+    </p>
+    <SettingsCard
+      :title="$st('Marketplace catalog')"
+      :icon="RiStore2Line"
+      :count="entries.length"
+      :description="responseMatchesInputs ? searchResponse?.marketplace?.description : undefined"
+    >
+      <template #actions>
+        <IconButton
+          variant="outline"
+          size="sm"
+          :tooltip="$st('Refresh marketplace')"
+          :aria-label="$st('Refresh marketplace')"
+          :disabled="loading || Boolean(actionKey)"
+          @click="refresh()"
+          ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''"
+        /></IconButton>
+      </template>
+      <div class="flex min-w-0 flex-col gap-2 sm:flex-row">
         <SearchInput
           v-model="query"
+          class="min-w-0 flex-1"
           :placeholder="$st('Search plugin id, name, category, repository, or tags')"
-          :show-search-button="false"
           :input-aria-label="$st('Search plugin marketplace')"
-          @keydown.enter.prevent="search(false)"
+          :show-search-button="false"
+          @search="search(false)"
         />
-        <input
-          v-model="source"
-          class="h-9 min-w-0 rounded-md border border-input bg-background px-3 font-mono text-xs"
-          :placeholder="$st('Official marketplace or owner/repository@ref')"
-          :aria-label="$st('Marketplace source')"
-          @keydown.enter.prevent="search(true)"
-        />
-        <div class="flex gap-2">
-          <Button size="sm" :disabled="loading || Boolean(actionKey)" @click="search(false)">
-            <RiSearchLine class="mr-1.5 h-4 w-4" />{{ $st('Search') }}
-          </Button>
-          <Button size="sm" variant="outline" :disabled="loading || Boolean(actionKey)" @click="syncRegistry">
-            <RiUploadCloud2Line class="mr-1.5 h-4 w-4" />{{ $st('Sync') }}
-          </Button>
-        </div>
-      </div>
-      <div class="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
-        <label class="inline-flex items-center gap-2">
-          <input v-model="requireSignature" type="checkbox" />
-          {{ $st('Require a trusted Ed25519 signature') }}
-        </label>
-        <label class="inline-flex items-center gap-2">
-          <input v-model="allowUnverified" type="checkbox" />
-          {{ $st('Allow artifacts without SHA-256 only when explicitly requested') }}
-        </label>
-        <span v-if="searchResponse?.registry_url" class="break-all font-mono text-[10px]">
-          {{ searchResponse.registry_url }}
-        </span>
-      </div>
-      <p class="text-[11px] leading-4 text-muted-foreground">
-        {{ $st('Trusted signing keys are read from plugins.host.trusted_keys in your Agena config.') }}
-      </p>
-      <div
-        v-if="searchResponse?.marketplace?.name"
-        class="rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs"
-      >
-        <div class="font-medium">{{ searchResponse.marketplace.name }}</div>
-        <div v-if="searchResponse.marketplace.description" class="mt-1 text-muted-foreground">
-          {{ searchResponse.marketplace.description }}
-        </div>
-        <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-          <span v-if="searchResponse.marketplace.owner_name">
-            {{ $st('Maintainer') }}: {{ searchResponse.marketplace.owner_name }}
-          </span>
-          <a
-            v-if="searchResponse.marketplace.repository"
-            :href="searchResponse.marketplace.repository"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="font-mono text-primary underline-offset-4 hover:underline"
-          >
-            {{ searchResponse.marketplace.repository }}
-          </a>
-        </div>
-      </div>
-    </section>
-
-    <section class="grid gap-3 rounded-lg border border-border/60 p-4">
-      <div>
-        <h3 class="text-sm font-semibold">{{ $st('Install directly from GitHub Releases') }}</h3>
-        <p class="mt-1 text-xs leading-5 text-muted-foreground">
-          {{
-            $st('Enter owner/repository for the latest release or owner/repository@tag for an exact immutable version.')
-          }}
-        </p>
-      </div>
-      <div class="flex flex-col gap-2 sm:flex-row">
-        <input
-          v-model="directRepository"
-          class="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 font-mono text-sm"
-          :placeholder="$st('owner/repository@v0.1.0')"
-          :aria-label="$st('GitHub plugin repository')"
-          @keydown.enter.prevent="installPlugin(directRepository)"
-        />
-        <Button
-          size="sm"
-          :disabled="!directRepository.trim() || Boolean(actionKey)"
-          @click="installPlugin(directRepository)"
+        <Button size="sm" :disabled="loading || Boolean(actionKey)" @click="search(false)"
+          ><RiSearchLine class="mr-1.5 h-4 w-4 shrink-0" />{{ $st('Search') }}</Button
         >
-          <RiDownloadCloud2Line class="mr-1.5 h-4 w-4" />{{ $st('Install from GitHub') }}
-        </Button>
       </div>
-    </section>
-
-    <section class="grid gap-3">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 class="text-sm font-semibold">{{ $st('Marketplace catalog') }}</h3>
-          <p v-if="responseMatchesInputs" class="mt-0.5 text-xs text-muted-foreground">
-            {{ $st('{count} plugin releases match the current query.', { count: matchingReleaseCount }) }}
+      <details class="my-3 rounded-lg border border-border/50 bg-muted/10">
+        <summary class="cursor-pointer px-3 py-2.5 text-xs font-medium">{{ $st('Installation options') }}</summary>
+        <div class="space-y-3 border-t border-border/50 p-3">
+          <label class="block text-xs font-medium" for="marketplace-source">{{ $st('Marketplace source') }}</label>
+          <div class="flex min-w-0 flex-col gap-2 sm:flex-row">
+            <input
+              id="marketplace-source"
+              v-model="source"
+              class="h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-3 font-mono text-xs outline-none focus:border-ring"
+              :placeholder="$st('Official marketplace or owner/repository@ref')"
+              @keydown.enter.prevent="search(true)"
+            />
+            <Button size="sm" variant="outline" :disabled="loading || Boolean(actionKey)" @click="syncRegistry"
+              ><RiUploadCloud2Line class="mr-1.5 h-4 w-4 shrink-0" />{{ $st('Sync') }}</Button
+            >
+          </div>
+          <div class="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+            <label class="flex items-start gap-2"
+              ><input v-model="requireSignature" type="checkbox" class="mt-0.5 shrink-0" />{{
+                $st('Require a trusted Ed25519 signature')
+              }}</label
+            >
+            <label class="flex items-start gap-2"
+              ><input v-model="allowUnverified" type="checkbox" class="mt-0.5 shrink-0" />{{
+                $st('Allow artifacts without SHA-256 only when explicitly requested')
+              }}</label
+            >
+          </div>
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            {{ $st('Trusted signing keys are read from plugins.host.trusted_keys in your Agena config.') }}
           </p>
+          <div
+            v-if="searchResponse?.marketplace"
+            class="flex min-w-0 flex-wrap items-center gap-2 border-t border-border/50 pt-3 text-xs text-muted-foreground"
+          >
+            <span class="font-medium text-foreground">{{ searchResponse.marketplace.name }}</span>
+            <span v-if="searchResponse.marketplace.owner_name"
+              >{{ $st('Maintainer') }}: {{ searchResponse.marketplace.owner_name }}</span
+            >
+            <a
+              v-if="searchResponse.marketplace.repository"
+              :href="searchResponse.marketplace.repository"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="break-all text-primary hover:underline"
+              >{{ searchResponse.marketplace.repository }}</a
+            >
+            <code v-if="searchResponse.registry_url" class="w-full break-all text-[11px]">{{
+              searchResponse.registry_url
+            }}</code>
+          </div>
         </div>
-      </div>
-      <div v-if="loading && entries.length === 0" class="text-sm text-muted-foreground">
+      </details>
+      <p v-if="responseMatchesInputs && entries.length" class="mb-3 text-xs text-muted-foreground">
+        {{ $st('{count} plugin releases match the current query.', { count: matchingReleaseCount }) }}
+      </p>
+      <div v-if="loading && entries.length === 0" class="py-4 text-sm text-muted-foreground">
         {{ $st('Loading marketplace plugins…') }}
       </div>
       <div
         v-else-if="entries.length === 0 && !error && responseMatchesInputs && renamedQuery"
         class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 p-5"
       >
-        <p v-if="renamedQuery.newId" class="text-sm text-muted-foreground">
+        <p v-if="renamedQuery.newId" class="py-4 text-sm text-muted-foreground">
           {{ $st('This plugin was renamed to {pluginId}.', { pluginId: renamedQuery.newId }) }}
         </p>
-        <p v-else class="text-sm text-muted-foreground">{{ $st('This plugin was removed from the marketplace.') }}</p>
+        <p v-else class="py-4 text-sm text-muted-foreground">
+          {{ $st('This plugin was removed from the marketplace.') }}
+        </p>
         <Button v-if="renamedQuery.newId" size="sm" @click="installPlugin(renamedQuery.newId)">
           <RiDownloadCloud2Line class="mr-1.5 h-4 w-4" />{{ $st('Install') }}
         </Button>
@@ -536,16 +518,24 @@ onMounted(() => void refresh(false))
       >
         {{ $st('No marketplace plugins match this query.') }}
       </div>
-      <div v-else class="grid gap-3 xl:grid-cols-2">
+      <p
+        v-else-if="!responseMatchesInputs"
+        class="rounded-lg bg-muted/20 p-5 text-center text-sm text-muted-foreground"
+      >
+        {{ $st('Search to update the results.') }}
+      </p>
+      <div v-else class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
         <article
           v-for="plugin in entries"
           :key="plugin.plugin_id"
-          class="grid gap-3 rounded-lg border border-border/60 p-4"
+          class="flex min-w-0 flex-col gap-3 rounded-xl border border-border/60 bg-background/30 p-4 transition-colors hover:border-primary/30"
         >
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0">
-              <h4 class="break-all font-mono text-sm font-semibold">{{ plugin.plugin_id }}</h4>
-              <p v-if="plugin.name" class="mt-1 text-sm">{{ plugin.name }}</p>
+              <h3 class="break-words text-sm font-semibold">{{ plugin.name || plugin.plugin_id }}</h3>
+              <p v-if="plugin.name" class="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                {{ plugin.plugin_id }}
+              </p>
             </div>
             <span v-if="plugin.latest_version" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
               v{{ plugin.latest_version }}
@@ -563,12 +553,18 @@ onMounted(() => void refresh(false))
               {{ $st('Featured') }}
             </span>
           </div>
-          <p class="text-xs leading-5 text-muted-foreground">
+          <p class="break-words text-xs leading-5 text-muted-foreground">
             {{ plugin.description || $st('No marketplace description was provided.') }}
           </p>
           <div class="flex flex-wrap gap-1.5">
-            <span v-if="plugin.category" class="rounded bg-muted px-2 py-1 text-[10px]">{{ plugin.category }}</span>
-            <span v-for="tag in plugin.tags || []" :key="tag" class="rounded bg-muted px-2 py-1 font-mono text-[10px]">
+            <span v-if="plugin.category" class="max-w-full break-words rounded bg-muted px-2 py-1 text-[10px]">{{
+              plugin.category
+            }}</span>
+            <span
+              v-for="tag in plugin.tags || []"
+              :key="tag"
+              class="max-w-full break-words rounded bg-muted px-2 py-1 font-mono text-[10px]"
+            >
               {{ tag }}
             </span>
           </div>
@@ -586,11 +582,11 @@ onMounted(() => void refresh(false))
               {{ plugin.repository }}
             </a>
           </div>
-          <div
+          <details
             v-if="plugin.latest_source_repository || plugin.latest_source_commit"
             class="rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-[10px] text-muted-foreground"
           >
-            <div class="font-medium text-foreground">{{ $st('Release provenance') }}</div>
+            <summary class="cursor-pointer font-medium text-foreground">{{ $st('Release provenance') }}</summary>
             <div v-if="plugin.latest_source_repository" class="mt-1 break-all font-mono">
               {{ plugin.latest_source_repository
               }}<template v-if="plugin.latest_source_tag">@{{ plugin.latest_source_tag }}</template>
@@ -598,8 +594,8 @@ onMounted(() => void refresh(false))
             <div v-if="plugin.latest_source_commit" class="mt-1 font-mono">
               {{ $st('Source commit') }}: {{ plugin.latest_source_commit.slice(0, 12) }}
             </div>
-          </div>
-          <div class="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-3">
+          </details>
+          <div class="mt-auto flex flex-wrap justify-end gap-2 border-t border-border/60 pt-3">
             <Button
               size="sm"
               variant="outline"
@@ -628,26 +624,24 @@ onMounted(() => void refresh(false))
           </div>
         </article>
       </div>
-    </section>
-
-    <section class="grid gap-3 border-t border-border/60 pt-5">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 class="text-sm font-semibold">{{ $st('Installed marketplace plugins') }}</h3>
-          <p class="mt-0.5 text-xs text-muted-foreground">
-            {{ $st('{count} plugin installations are managed by the marketplace.', { count: installed.length }) }}
-          </p>
-        </div>
-        <Button
+    </SettingsCard>
+    <SettingsCard
+      :title="$st('Installed marketplace plugins')"
+      :icon="RiCheckboxCircleLine"
+      :count="installed.length"
+      :description="$st('{count} plugin installations are managed by the marketplace.', { count: installed.length })"
+    >
+      <template #actions
+        ><Button
           v-if="outdated.length"
           size="sm"
           variant="outline"
+          class="h-auto whitespace-normal"
           :disabled="Boolean(actionKey)"
           @click="upgradePlugin()"
-        >
-          {{ $st('Upgrade all outdated plugins') }}
-        </Button>
-      </div>
+          >{{ $st('Upgrade all outdated plugins') }}</Button
+        ></template
+      >
       <div
         v-if="upgradeableInstalled.length"
         class="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
@@ -678,14 +672,14 @@ onMounted(() => void refresh(false))
           </Button>
         </div>
       </div>
-      <div v-if="installed.length === 0" class="text-sm text-muted-foreground">
+      <div v-if="installed.length === 0" class="rounded-lg bg-muted/20 p-5 text-center text-sm text-muted-foreground">
         {{ $st('No marketplace plugins are installed.') }}
       </div>
-      <div v-else class="divide-y divide-border/60 rounded-lg border border-border/60">
+      <div v-else class="mt-3 divide-y divide-border/60">
         <div
           v-for="plugin in installed"
           :key="plugin.plugin_id"
-          class="grid gap-2 px-4 py-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+          class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 py-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
         >
           <label v-if="outdatedById.has(plugin.plugin_id)" class="flex items-start justify-center pt-1">
             <input
@@ -699,7 +693,7 @@ onMounted(() => void refresh(false))
           <span v-else class="w-4" />
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
-              <span class="font-mono text-xs font-semibold">{{ plugin.plugin_id }}</span>
+              <span class="break-all font-mono text-xs font-semibold">{{ plugin.plugin_id }}</span>
               <span class="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">v{{ plugin.version }}</span>
               <span v-if="outdatedById.has(plugin.plugin_id)" class="text-[10px] text-warning">
                 {{
@@ -727,7 +721,7 @@ onMounted(() => void refresh(false))
               </span>
             </div>
           </div>
-          <div class="flex items-center justify-end gap-2">
+          <div class="col-start-2 flex flex-wrap items-center justify-end gap-2 sm:col-auto">
             <Button
               v-if="outdatedById.has(plugin.plugin_id)"
               size="sm"
@@ -743,6 +737,29 @@ onMounted(() => void refresh(false))
           </div>
         </div>
       </div>
-    </section>
+    </SettingsCard>
+    <SettingsCard
+      :title="$st('Install directly from GitHub Releases')"
+      :icon="RiGithubLine"
+      :description="
+        $st('Enter owner/repository for the latest release or owner/repository@tag for an exact immutable version.')
+      "
+    >
+      <div class="flex min-w-0 flex-col gap-2 sm:flex-row">
+        <input
+          v-model="directRepository"
+          class="h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus:border-ring"
+          :placeholder="$st('owner/repository@v0.1.0')"
+          :aria-label="$st('GitHub plugin repository')"
+          @keydown.enter.prevent="installPlugin(directRepository)"
+        />
+        <Button
+          size="sm"
+          :disabled="!directRepository.trim() || Boolean(actionKey)"
+          @click="installPlugin(directRepository)"
+          ><RiDownloadCloud2Line class="mr-1.5 h-4 w-4 shrink-0" />{{ $st('Install from GitHub') }}</Button
+        >
+      </div>
+    </SettingsCard>
   </div>
 </template>

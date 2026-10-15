@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RiRefreshLine } from '@remixicon/vue'
+import { RiRefreshLine, RiBarChartBoxLine, RiCoinsLine, RiTokenSwapLine } from '@remixicon/vue'
 
+import SettingsCard from './SettingsCard.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '@/lib/api'
 import { settingsText as st } from '@/i18n/settingsText'
@@ -56,6 +57,7 @@ type UsageSection = {
 }
 
 const stats = ref<UsageStats | null>(null)
+const selectedBreakdown = ref<UsageSection['key']>('by_day')
 
 const sections = computed<UsageSection[]>(() => {
   const value = stats.value
@@ -75,6 +77,10 @@ const sections = computed<UsageSection[]>(() => {
     },
   ].filter((section) => section.rows.length > 0) as UsageSection[]
 })
+
+const activeBreakdown = computed(
+  () => sections.value.find((section) => section.key === selectedBreakdown.value) || sections.value[0],
+)
 
 function finiteNumber(value: unknown): number {
   const number = Number(value)
@@ -115,125 +121,178 @@ const { loading, error, refresh } = usePaneRead(
     stats.value = data && typeof data === 'object' ? data : null
   },
 )
+defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="space-y-6">
-    <div class="flex items-start justify-between gap-3">
-      <div>
-        <div class="text-sm text-muted-foreground">{{ $st('Provider usage recorded by the Agena server.') }}</div>
-        <div v-if="stats?.period_label" class="mt-1 text-[11px] text-muted-foreground">
-          {{ stats.period_label }} · {{ stats.active_days }} {{ $st('active days') }}
-        </div>
-      </div>
-      <IconButton
-        variant="outline"
-        size="md"
-        :tooltip="loading ? $st('Refreshing usage') : $st('Refresh usage')"
-        :aria-label="loading ? $st('Refreshing usage') : $st('Refresh usage')"
-        :disabled="loading"
-        @click="refresh"
-      >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-    </div>
-
-    <div v-if="loading && !stats" class="text-sm text-muted-foreground">{{ $st('Loading usage...') }}</div>
-    <div
-      v-if="error"
-      class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+  <div class="min-w-0 space-y-4">
+    <SettingsCard
+      :title="$st('Usage overview')"
+      :icon="RiBarChartBoxLine"
+      :description="
+        stats?.period_label ? `${stats.period_label} · ${stats.active_days} ${$st('active days')}` : undefined
+      "
     >
-      {{ error }}
-    </div>
-    <div v-if="!loading && !stats" class="text-sm text-muted-foreground">{{ $st('No usage data available.') }}</div>
-
-    <template v-if="stats">
-      <dl class="grid grid-cols-2 gap-x-6 gap-y-4 border-y border-border/60 py-4 sm:grid-cols-4">
-        <div>
+      <template #actions
+        ><IconButton
+          variant="outline"
+          size="sm"
+          :tooltip="$st('Refresh usage')"
+          :aria-label="$st('Refresh usage')"
+          :disabled="loading"
+          @click="refresh"
+          ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" /></IconButton
+      ></template>
+      <p
+        v-if="error"
+        role="alert"
+        class="mb-3 break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+      >
+        {{ error }}
+      </p>
+      <p v-if="loading && !stats" class="py-6 text-center text-sm text-muted-foreground">
+        {{ $st('Loading usage...') }}
+      </p>
+      <p v-else-if="!stats" class="py-6 text-center text-sm text-muted-foreground">
+        {{ $st('No usage data available.') }}
+      </p>
+      <dl v-else class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3 sm:p-4">
           <dt class="text-xs text-muted-foreground">{{ $st('Requests') }}</dt>
-          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">{{ formatInteger(stats.totals.requests) }}</dd>
+          <dd class="mt-2 break-all font-mono text-xl font-semibold tabular-nums">
+            {{ formatInteger(stats.totals.requests) }}
+          </dd>
         </div>
-        <div>
+        <div class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3 sm:p-4">
           <dt class="text-xs text-muted-foreground">{{ $st('Sessions') }}</dt>
-          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">{{ formatInteger(stats.totals.sessions) }}</dd>
+          <dd class="mt-2 break-all font-mono text-xl font-semibold tabular-nums">
+            {{ formatInteger(stats.totals.sessions) }}
+          </dd>
         </div>
-        <div>
+        <div class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3 sm:p-4">
           <dt class="text-xs text-muted-foreground">{{ $st('Tokens') }}</dt>
-          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">
+          <dd class="mt-2 break-all font-mono text-xl font-semibold tabular-nums">
             {{ formatInteger(stats.totals.total_tokens) }}
           </dd>
         </div>
-        <div>
+        <div class="min-w-0 rounded-lg border border-primary/20 bg-primary/5 p-3 sm:p-4">
           <dt class="text-xs text-muted-foreground">{{ $st('Cost') }}</dt>
-          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">
+          <dd class="mt-2 break-all font-mono text-xl font-semibold tabular-nums">
             {{ formatUsd(stats.totals.total_cost_usd) }}
           </dd>
         </div>
       </dl>
-
-      <div class="grid gap-4 sm:grid-cols-3">
-        <div>
-          <div class="text-xs text-muted-foreground">{{ $st('Input / output tokens') }}</div>
-          <div class="mt-1 font-mono text-sm">
-            {{ formatInteger(stats.totals.input_tokens) }} / {{ formatInteger(stats.totals.output_tokens) }}
-          </div>
-        </div>
-        <div>
-          <div class="text-xs text-muted-foreground">{{ $st('Reasoning / cache read') }}</div>
-          <div class="mt-1 font-mono text-sm">
-            {{ formatInteger(stats.totals.reasoning_tokens) }} / {{ formatInteger(stats.totals.cache_read_tokens) }}
-          </div>
-        </div>
-        <div>
-          <div class="text-xs text-muted-foreground">{{ $st('Average per request') }}</div>
-          <div class="mt-1 font-mono text-sm">
-            {{ formatInteger(stats.average_tokens_per_request) }} · {{ formatUsd(stats.average_cost_per_request_usd) }}
-          </div>
-        </div>
+    </SettingsCard>
+    <template v-if="stats">
+      <div class="grid gap-4 xl:grid-cols-2">
+        <SettingsCard :title="$st('Token details')" :icon="RiTokenSwapLine">
+          <dl class="divide-y divide-border/50 text-xs">
+            <div class="flex flex-wrap justify-between gap-2 pb-3">
+              <dt class="text-muted-foreground">{{ $st('Input / output tokens') }}</dt>
+              <dd class="break-all font-mono tabular-nums">
+                {{ formatInteger(stats.totals.input_tokens) }} / {{ formatInteger(stats.totals.output_tokens) }}
+              </dd>
+            </div>
+            <div class="flex flex-wrap justify-between gap-2 py-3">
+              <dt class="text-muted-foreground">{{ $st('Reasoning / cache read') }}</dt>
+              <dd class="break-all font-mono tabular-nums">
+                {{ formatInteger(stats.totals.reasoning_tokens) }} / {{ formatInteger(stats.totals.cache_read_tokens) }}
+              </dd>
+            </div>
+            <div class="flex flex-wrap justify-between gap-2 pt-3">
+              <dt class="text-muted-foreground">{{ $st('Average per request') }}</dt>
+              <dd class="break-all font-mono tabular-nums">
+                {{ formatInteger(stats.average_tokens_per_request) }} {{ $st('tokens') }}
+              </dd>
+            </div>
+          </dl>
+        </SettingsCard>
+        <SettingsCard :title="$st('Cost details')" :icon="RiCoinsLine">
+          <dl class="divide-y divide-border/50 text-xs">
+            <div class="flex flex-wrap justify-between gap-2 pb-3">
+              <dt class="text-muted-foreground">{{ $st('Recorded cost') }}</dt>
+              <dd class="break-all font-mono tabular-nums">{{ formatUsd(stats.totals.recorded_cost_usd) }}</dd>
+            </div>
+            <div class="flex flex-wrap justify-between gap-2 py-3">
+              <dt class="text-muted-foreground">{{ $st('Estimated cost') }}</dt>
+              <dd class="break-all font-mono tabular-nums">{{ formatUsd(stats.totals.estimated_cost_usd) }}</dd>
+            </div>
+            <div class="flex flex-wrap justify-between gap-2 pt-3">
+              <dt class="text-muted-foreground">{{ $st('Average per request') }}</dt>
+              <dd class="break-all font-mono tabular-nums">{{ formatUsd(stats.average_cost_per_request_usd) }}</dd>
+            </div>
+          </dl>
+          <p
+            v-if="stats.totals.unpriced_requests"
+            class="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:text-amber-200"
+          >
+            {{
+              $st('{count} requests have incomplete pricing; the total may be understated.', {
+                count: formatInteger(stats.totals.unpriced_requests),
+              })
+            }}
+          </p>
+        </SettingsCard>
       </div>
-
-      <div v-if="sections.length === 0" class="text-sm text-muted-foreground">
-        {{ $st('No usage breakdown is available.') }}
-      </div>
-      <div v-else class="space-y-4">
-        <section
-          v-for="section in sections"
-          :key="section.key"
-          class="overflow-hidden rounded-md border border-border/60 bg-background/50"
-        >
-          <h3 class="border-b border-border/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
-            {{ section.label }}
-          </h3>
-          <div class="overflow-x-auto">
-            <table class="min-w-full text-xs">
-              <thead class="bg-muted/20 text-muted-foreground">
-                <tr>
-                  <th class="px-3 py-2 text-left font-medium">{{ $st('Name') }}</th>
-                  <th class="px-3 py-2 text-right font-medium">{{ $st('Requests') }}</th>
-                  <th class="px-3 py-2 text-right font-medium">{{ $st('Tokens') }}</th>
-                  <th class="px-3 py-2 text-right font-medium">{{ $st('Cost') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in section.rows" :key="rowLabel(section.key, row)" class="border-t border-border/50">
-                  <td class="max-w-[22rem] break-words px-3 py-2 font-mono text-foreground/80">
-                    {{ rowLabel(section.key, row) }}
-                  </td>
-                  <td class="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">
-                    {{ formatInteger(row.requests) }}
-                  </td>
-                  <td class="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">
-                    {{ formatInteger(row.total_tokens) }}
-                  </td>
-                  <td class="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">
-                    {{ formatUsd(row.total_cost_usd) }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+      <SettingsCard :title="$st('Usage breakdown')" :count="activeBreakdown?.rows.length">
+        <p v-if="!sections.length" class="rounded-lg bg-muted/20 p-5 text-center text-sm text-muted-foreground">
+          {{ $st('No usage breakdown is available.') }}
+        </p>
+        <template v-else-if="activeBreakdown">
+          <div
+            class="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-border/50 bg-muted/20 p-1 sm:flex sm:flex-wrap"
+            :aria-label="$st('Usage breakdown')"
+          >
+            <button
+              v-for="section in sections"
+              :key="section.key"
+              type="button"
+              class="min-w-0 rounded-md px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-1"
+              :class="
+                activeBreakdown.key === section.key
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              "
+              :aria-pressed="activeBreakdown.key === section.key"
+              @click="selectedBreakdown = section.key"
+            >
+              {{ section.label }}
+            </button>
           </div>
-        </section>
-      </div>
+          <div
+            class="hidden grid-cols-[minmax(0,1fr)_minmax(4rem,.35fr)_minmax(5rem,.4fr)_minmax(5rem,.4fr)] gap-3 rounded-lg bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground sm:grid"
+            aria-hidden="true"
+          >
+            <span>{{ $st('Name') }}</span
+            ><span class="text-right">{{ $st('Requests') }}</span
+            ><span class="text-right">{{ $st('Tokens') }}</span
+            ><span class="text-right">{{ $st('Cost') }}</span>
+          </div>
+          <dl class="divide-y divide-border/50">
+            <div
+              v-for="row in activeBreakdown.rows"
+              :key="rowLabel(activeBreakdown.key, row)"
+              class="grid min-w-0 grid-cols-3 gap-x-3 gap-y-2 px-1 py-3 text-xs sm:grid-cols-[minmax(0,1fr)_minmax(4rem,.35fr)_minmax(5rem,.4fr)_minmax(5rem,.4fr)] sm:items-center sm:px-3"
+            >
+              <dt class="col-span-3 break-all font-mono font-medium sm:col-span-1">
+                {{ rowLabel(activeBreakdown.key, row) }}
+              </dt>
+              <dd class="min-w-0 sm:text-right">
+                <span class="mb-1 block text-[10px] text-muted-foreground sm:sr-only">{{ $st('Requests') }}</span
+                ><span class="break-all font-mono tabular-nums">{{ formatInteger(row.requests) }}</span>
+              </dd>
+              <dd class="min-w-0 sm:text-right">
+                <span class="mb-1 block text-[10px] text-muted-foreground sm:sr-only">{{ $st('Tokens') }}</span
+                ><span class="break-all font-mono tabular-nums">{{ formatInteger(row.total_tokens) }}</span>
+              </dd>
+              <dd class="min-w-0 sm:text-right">
+                <span class="mb-1 block text-[10px] text-muted-foreground sm:sr-only">{{ $st('Cost') }}</span
+                ><span class="break-all font-mono tabular-nums">{{ formatUsd(row.total_cost_usd) }}</span>
+              </dd>
+            </div>
+          </dl>
+        </template>
+      </SettingsCard>
     </template>
   </div>
 </template>

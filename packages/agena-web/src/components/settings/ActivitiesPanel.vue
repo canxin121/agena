@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, ref, watch } from 'vue'
-import { RiRefreshLine } from '@remixicon/vue'
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
+import { RiRefreshLine, RiPulseLine } from '@remixicon/vue'
 
+import SettingsCard from './SettingsCard.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
+import { activityIsActive } from '@/types/activity'
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -147,24 +150,37 @@ function applyActivityEvent(event?: SseEvent): boolean {
   return true
 }
 
-const sortedActivities = activities
-
-function fieldNames(activity: Activity): Array<'kind' | 'session_id' | 'status'> {
-  const keys: Array<'kind' | 'session_id' | 'status'> = ['kind', 'session_id', 'status']
-  return keys.filter((key) => {
-    const value = activity[key]
-    return value !== undefined && value !== null && String(value).trim().length > 0
-  })
-}
-
-function displayValue(value: unknown): string {
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
-}
+const searchQuery = ref('')
+const statusFilter = ref('all')
+const activeCount = computed(() => activities.value.filter((activity) => activityIsActive(activity.status)).length)
+const finishedCount = computed(() => activities.value.length - activeCount.value)
+const filters = computed(() => [
+  { id: 'all', label: st('All'), count: activities.value.length },
+  { id: 'active', label: st('Active'), count: activeCount.value },
+  { id: 'finished', label: st('Finished'), count: finishedCount.value },
+])
+const sortedActivities = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase()
+  return activities.value.filter(
+    (activity) =>
+      (statusFilter.value === 'all' || activityIsActive(activity.status) === (statusFilter.value === 'active')) &&
+      (!query ||
+        [activity.title, activity.description, activity.id, activity.kind, activity.session_id]
+          .join(' ')
+          .toLowerCase()
+          .includes(query)),
+  )
+})
+const statusLabels = computed<Record<string, string>>(() => ({
+  pending: st('Pending'),
+  running: st('Running'),
+  waiting: st('Waiting'),
+  paused: st('Paused'),
+  succeeded: st('Succeeded'),
+  failed: st('Failed'),
+  cancelled: st('Cancelled'),
+  stopped: st('Stopped'),
+}))
 
 function activityId(activity: Activity): string {
   return String(activity.id || '')
@@ -179,7 +195,9 @@ function formatCreatedAt(value: number): string {
 }
 
 function controlLabel(control: ActivityControl): string {
-  return control.charAt(0).toUpperCase() + control.slice(1)
+  return { stop: st('Stop'), pause: st('Pause'), resume: st('Resume'), delete: st('Delete'), dismiss: st('Dismiss') }[
+    control
+  ]
 }
 
 const beginRead = createLatestRequestGuard(() => captureResourceObservation('activities').scope, activities)
@@ -315,113 +333,154 @@ onScopeDispose(() => {
   readController?.abort()
   beginRead()
 })
+function clearFilters() {
+  searchQuery.value = ''
+  statusFilter.value = 'all'
+}
+defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="space-y-6">
-    <div class="text-sm text-muted-foreground">
-      {{ $st('Background activities running on the Agena server.') }}
-    </div>
-
-    <div class="grid gap-3">
-      <div v-if="loading && activities.length === 0" class="text-sm text-muted-foreground">
-        {{ $st('Loading activities...') }}
+  <SettingsCard :title="$st('Background activities')" :icon="RiPulseLine" :count="activities.length">
+    <template #actions>
+      <div class="flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" :disabled="busyId !== null || finishedCount === 0" @click="clearFinished">{{
+          busyId === '__clear_finished__' ? $st('Clearing...') : $st('Clear finished')
+        }}</Button>
+        <IconButton
+          variant="outline"
+          size="sm"
+          :tooltip="$st('Refresh')"
+          :aria-label="$st('Refresh')"
+          :disabled="loading"
+          @click="refresh"
+          ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''"
+        /></IconButton>
       </div>
+    </template>
+    <div class="mb-4 flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center">
+      <SearchInput
+        v-model="searchQuery"
+        class="min-w-0 flex-1"
+        :placeholder="$st('Search activities')"
+        :input-aria-label="$st('Search activities')"
+        :show-search-button="false"
+      />
       <div
-        v-if="error"
-        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        class="grid grid-cols-3 gap-1 rounded-lg border border-border/50 bg-muted/20 p-1"
+        :aria-label="$st('Status')"
       >
-        {{ error }}
-      </div>
-      <div v-if="!loading && sortedActivities.length === 0" class="text-sm text-muted-foreground">
-        {{ $st('No background activities.') }}
-      </div>
-
-      <div v-if="sortedActivities.length > 0" class="space-y-2">
-        <div
-          v-for="activity in sortedActivities"
-          :key="activityId(activity)"
-          class="rounded-md border border-border/60 bg-background/50 px-3 py-2.5"
+        <button
+          v-for="filter in filters"
+          :key="filter.id"
+          type="button"
+          class="flex min-w-0 flex-wrap items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          :class="
+            statusFilter === filter.id
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          "
+          :aria-pressed="statusFilter === filter.id"
+          @click="statusFilter = filter.id"
         >
-          <div class="flex items-center justify-between gap-3">
-            <div class="min-w-0">
-              <div class="text-sm font-semibold break-words">{{ activity.title || activityId(activity) }}</div>
-              <div class="mt-0.5 font-mono text-[11px] text-muted-foreground break-all">{{ activityId(activity) }}</div>
-              <div v-if="activity.description" class="mt-1 text-xs text-muted-foreground break-words">
-                {{ activity.description }}
-              </div>
-              <div
-                v-if="fieldNames(activity).length"
-                class="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground"
-              >
-                <span v-for="key in fieldNames(activity)" :key="key" class="break-all">
-                  {{ key }}: {{ displayValue(activity[key]) }}
-                </span>
-                <span v-if="formatCreatedAt(activity.created_at_ms)">{{
-                  formatCreatedAt(activity.created_at_ms)
-                }}</span>
-              </div>
-              <div v-if="activity.message" class="mt-1 text-xs text-muted-foreground break-words">
-                {{ activity.message }}
-              </div>
-            </div>
-
-            <div class="flex shrink-0 items-center gap-1.5">
+          {{ filter.label }}<span class="text-[11px] tabular-nums text-muted-foreground">{{ filter.count }}</span>
+        </button>
+      </div>
+    </div>
+    <p
+      v-if="error"
+      role="alert"
+      class="mb-3 break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+    >
+      {{ error }}
+    </p>
+    <p v-if="loading && !activities.length" class="py-6 text-center text-sm text-muted-foreground">
+      {{ $st('Loading activities...') }}
+    </p>
+    <div
+      v-else-if="!sortedActivities.length"
+      class="rounded-lg border border-dashed border-border/60 bg-muted/10 px-4 py-8 text-center"
+    >
+      <RiPulseLine class="mx-auto mb-2 h-6 w-6 text-muted-foreground/60" />
+      <p class="text-sm text-muted-foreground">
+        {{ activities.length ? $st('No matching activities.') : $st('No background activities.') }}
+      </p>
+      <Button v-if="activities.length" variant="ghost" size="sm" class="mt-2" @click="clearFilters">{{
+        $st('Clear filters')
+      }}</Button>
+    </div>
+    <div v-else class="space-y-3">
+      <article
+        v-for="activity in sortedActivities"
+        :key="activityId(activity)"
+        class="min-w-0 rounded-xl border border-border/60 bg-background/30 p-3 sm:p-4"
+      >
+        <div class="flex min-w-0 flex-wrap items-start gap-3">
+          <div class="min-w-0 flex-1">
+            <h3 class="break-words text-sm font-semibold">{{ activity.title || activityId(activity) }}</h3>
+            <p v-if="activity.description" class="mt-1 break-words text-xs leading-relaxed text-muted-foreground">
+              {{ activity.description }}
+            </p>
+          </div>
+          <span
+            class="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]"
+            :class="
+              activity.status === 'failed'
+                ? 'border-destructive/20 bg-destructive/10 text-destructive'
+                : activityIsActive(activity.status)
+                  ? 'border-primary/20 bg-primary/10 text-foreground'
+                  : 'border-border/50 bg-muted/40 text-muted-foreground'
+            "
+          >
+            <span class="h-1.5 w-1.5 rounded-full bg-current" />{{ statusLabels[activity.status] || activity.status }}
+          </span>
+        </div>
+        <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <span class="break-all">{{ activity.kind }}</span
+          ><span v-if="activity.session_id">{{ $st('Session') }} #{{ activity.session_id }}</span
+          ><span>{{ formatCreatedAt(activity.created_at_ms) }}</span>
+        </div>
+        <p
+          v-if="activity.message"
+          class="mt-3 break-words rounded-lg bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground"
+        >
+          {{ activity.message }}
+        </p>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-3">
+          <details class="min-w-0 text-[11px] text-muted-foreground">
+            <summary class="cursor-pointer">{{ $st('Details') }}</summary>
+            <code class="mt-2 block break-all">{{ activityId(activity) }}</code>
+          </details>
+          <div class="flex flex-wrap items-center gap-2">
+            <Button
+              v-for="control in activityControls(activity).filter((item) => item !== 'delete')"
+              :key="control"
+              variant="outline"
+              size="sm"
+              :disabled="busyId !== null"
+              @click="runAction(activityId(activity), control)"
+              >{{ busyId === activityId(activity) ? $st('Working...') : controlLabel(control) }}</Button
+            >
+            <ConfirmPopover
+              v-if="activityControls(activity).includes('delete')"
+              :title="$st('Delete activity?')"
+              :description="activityId(activity)"
+              :confirm-text="$st('Delete')"
+              :cancel-text="$st('Cancel')"
+              variant="destructive"
+              @confirm="runAction(activityId(activity), 'delete')"
+            >
               <Button
-                v-for="control in activityControls(activity).filter((item) => item !== 'delete')"
-                :key="control"
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                :disabled="busyId === activityId(activity)"
-                @click="runAction(activityId(activity), control)"
+                class="text-destructive hover:bg-destructive/10"
+                :disabled="busyId !== null"
+                >{{ $st('Delete') }}</Button
               >
-                {{ busyId === activityId(activity) ? 'Working...' : controlLabel(control) }}
-              </Button>
-              <ConfirmPopover
-                v-if="activityControls(activity).includes('delete')"
-                :title="$st('Delete activity?')"
-                :description="activityId(activity)"
-                :confirm-text="'Delete'"
-                :cancel-text="'Cancel'"
-                variant="destructive"
-                @confirm="runAction(activityId(activity), 'delete')"
-              >
-                <Button
-                  variant="outline"
-                  size="sm"
-                  class="shrink-0 text-destructive border-destructive/30 hover:bg-destructive/10"
-                >
-                  {{ $st('Delete') }}
-                </Button>
-              </ConfirmPopover>
-            </div>
+            </ConfirmPopover>
           </div>
         </div>
-      </div>
+      </article>
     </div>
-
-    <div class="flex items-center gap-2 flex-wrap">
-      <IconButton
-        variant="outline"
-        size="md"
-        :tooltip="loading ? $st('Refreshing...') : $st('Refresh')"
-        :aria-label="loading ? $st('Refreshing...') : $st('Refresh')"
-        :disabled="loading"
-        @click="refresh"
-      >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-      <Button variant="outline" size="sm" :disabled="loading" @click="refresh">
-        {{ loading ? $st('Refreshing...') : $st('Refresh') }}
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        :disabled="busyId !== null || sortedActivities.length === 0"
-        @click="clearFinished"
-      >
-        {{ busyId === '__clear_finished__' ? $st('Clearing...') : $st('Clear finished') }}
-      </Button>
-    </div>
-  </div>
+  </SettingsCard>
 </template>

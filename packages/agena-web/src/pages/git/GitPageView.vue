@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'radix-vue'
 import {
@@ -12,6 +12,13 @@ import {
   RiClipboardLine,
   RiMore2Line,
   RiRefreshLine,
+  RiArrowDownLine,
+  RiArrowUpLine,
+  RiGitRepositoryLine,
+  RiGitPullRequestLine,
+  RiNodeTree,
+  RiArchiveLine,
+  RiCheckboxCircleLine,
 } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -97,7 +104,6 @@ const {
   loading,
   error,
   status,
-  headline,
   gitState,
   signingInfo,
   remoteInfo,
@@ -692,6 +698,24 @@ function onRevertActionMenuSelect(item: OptionMenuItem) {
 type SourceControlView = 'changes' | 'history' | 'historyCommit'
 
 const sourceControlView = ref<SourceControlView>('changes')
+const sourceControlId = useId()
+
+function onSourceControlTabKeydown(event: KeyboardEvent) {
+  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+  if (!keys.includes(event.key)) return
+  const tabs = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+  const index = tabs.indexOf(event.target as HTMLButtonElement)
+  if (index < 0 || tabs.length === 0) return
+  event.preventDefault()
+  const next =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? tabs.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+  tabs[next]?.focus()
+  tabs[next]?.click()
+}
 
 const mergeMultiSelect = useUnifiedMultiSelect()
 const stagedMultiSelect = useUnifiedMultiSelect()
@@ -1369,6 +1393,28 @@ function onBranchMenuSelect(item: OptionMenuItem) {
 }
 
 const actionsMenuAnchorEl = ref<HTMLElement | null>(null)
+const actionsCategory = ref('')
+const repositoryName = computed(
+  () =>
+    (repoRoot.value || projectRoot.value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() ||
+    t('git.sidebar.repository'),
+)
+const repositoryParent = computed(
+  () => (repoRoot.value || projectRoot.value || '').replace(/\\/g, '/').replace(/\/[^/]+\/?$/, '') || '/',
+)
+const totalChanges = computed(() => mergeCount.value + stagedCount.value + changesCount.value + untrackedCount.value)
+function openActionCategory(category: string) {
+  actionsCategory.value = category
+  actionsOpen.value = true
+}
+function manageBranches() {
+  isBranchDialogOpen.value = true
+  void loadBranches()
+}
+function toggleStashes() {
+  isStashExpanded.value = !isStashExpanded.value
+  if (isStashExpanded.value) void loadStash()
+}
 
 const embeddedView = ref<'list' | 'diff'>(props.embedded && selectedFile.value ? 'diff' : 'list')
 
@@ -1527,32 +1573,19 @@ void diffPaneRef
           tabindex="0"
           @keydown="resizeDesktopSidebarFromKeyboard"
         />
-        <div class="oc-vscode-pane-header">
-          <div class="oc-vscode-pane-title">{{ t('git.ui.sourceControl') }}</div>
-          <div class="oc-vscode-toolbar">
+        <div class="flex h-11 shrink-0 items-center justify-between gap-2 px-3" data-git-sidebar-header>
+          <div class="flex min-w-0 items-center gap-2 text-xs font-semibold tracking-wide">
+            <RiGitRepositoryLine class="size-4 text-muted-foreground" />
+            {{ t('git.ui.sourceControl') }}
+          </div>
+          <div class="flex items-center gap-0.5">
             <SidebarIconButton
-              :tooltip="t('git.actions.fetch')"
+              :tooltip="t('common.refresh')"
               :is-touch-pointer="ui.isTouchPointer"
-              :disabled="!gitReady || !root || repoBusy"
-              @click="fetchRemote"
+              :disabled="!projectRoot || repoBusy"
+              @click="refreshRepository"
             >
-              <RiRefreshLine class="h-3.5 w-3.5" :class="{ 'animate-spin': loading || repoBusy }" />
-            </SidebarIconButton>
-            <SidebarIconButton
-              :tooltip="t('git.actions.pull')"
-              :is-touch-pointer="ui.isTouchPointer"
-              :disabled="!gitReady || !root || repoBusy"
-              @click="pull"
-            >
-              <RiArrowDownSLine class="h-3.5 w-3.5" />
-            </SidebarIconButton>
-            <SidebarIconButton
-              :tooltip="t('git.actions.push')"
-              :is-touch-pointer="ui.isTouchPointer"
-              :disabled="!gitReady || !root || repoBusy"
-              @click="push"
-            >
-              <RiArrowRightSLine class="h-3.5 w-3.5 -rotate-45" />
+              <RiRefreshLine class="size-3.5" :class="{ 'animate-spin': loading }" />
             </SidebarIconButton>
             <PopoverRoot v-if="showSshSigningWarning">
               <PopoverTrigger as-child>
@@ -1587,124 +1620,106 @@ void diffPaneRef
                 </PopoverContent>
               </PopoverPortal>
             </PopoverRoot>
-            <div ref="actionsMenuAnchorEl" class="inline-flex">
+            <span ref="actionsMenuAnchorEl" class="inline-flex">
               <SidebarIconButton
-                :tooltip="t('git.ui.moreActions')"
+                :tooltip="t('git.sidebar.moreActions')"
                 :is-touch-pointer="ui.isTouchPointer"
-                :disabled="!gitReady || !root || repoBusy"
-                @mousedown.prevent
-                @click.stop="actionsOpen = !actionsOpen"
+                :disabled="!gitReady || repoBusy"
+                @click="openActionCategory('')"
               >
-                <RiMore2Line class="h-3.5 w-3.5" />
+                <RiMore2Line class="size-4" />
               </SidebarIconButton>
-            </div>
+            </span>
           </div>
         </div>
 
-        <div class="border-b border-sidebar-border/50 px-2 py-1.5">
-          <button
-            type="button"
-            class="mb-1.5 flex w-full items-center gap-1.5 rounded-sm px-1 py-1 text-left text-xs text-muted-foreground hover:bg-sidebar-accent/40"
-            :title="projectRoot || t('git.navigation.chooseFolder')"
-            @click="chooseDirectory"
-          >
-            <RiFolderOpenLine class="h-3.5 w-3.5 shrink-0" />
-            <span class="truncate font-mono">{{ projectRoot || t('git.navigation.chooseFolder') }}</span>
-          </button>
-          <!-- Repository Selector -->
-          <div class="relative">
-            <button
-              ref="repoMenuAnchorEl"
-              type="button"
-              class="w-full flex items-center gap-2 rounded-sm border border-sidebar-border/60 bg-sidebar-accent/20 px-2 py-1.5 text-left transition"
-              :class="projectRoot ? 'hover:bg-sidebar-accent/40' : 'opacity-70 cursor-not-allowed'"
-              :disabled="!projectRoot"
-              @mousedown.prevent
-              @click.stop="toggleRepoMenu"
-            >
-              <span class="shrink-0 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">{{
-                t('git.ui.repository')
-              }}</span>
-              <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground" :title="selectedRepoLabel">{{
-                selectedRepoLabel
-              }}</span>
-              <span v-if="repoPickerLoading || reposLoading" class="shrink-0 text-[10px] text-muted-foreground">{{
-                t('common.scanning')
-              }}</span>
-              <RiArrowDownSLine class="h-4 w-4 shrink-0 text-muted-foreground" />
-            </button>
-
-            <OptionMenu
-              :open="repoMenuOpen"
-              :query="repoMenuQuery"
-              :groups="repoMenuGroups"
-              :title="t('git.ui.dialogs.repoPicker.title')"
-              :mobile-title="t('git.ui.dialogs.repoPicker.title')"
-              :is-compact-touch="ui.isCompactTouch"
-              :filter-mode="'external'"
-              :close-on-select="false"
-              :desktop-fixed="true"
-              :desktop-anchor-el="repoMenuAnchorEl"
-              :external-page="repoPickerPage"
-              :external-page-count="repoPickerTotalPages"
-              :external-pager-loading="repoPickerLoading"
-              :loading="repoPickerLoading || reposLoading"
-              :refreshable="true"
-              :on-refresh="refreshRepoMenuOptions"
-              desktop-placement="bottom-start"
-              desktop-class="w-[26rem] max-w-[calc(100vw-1rem)]"
-              @update:open="setRepoMenuOpen"
-              @update:query="onRepoMenuQueryChange"
-              @request-page="requestRepoMenuPage"
-              @select="onRepoMenuSelect"
-            />
+        <div class="shrink-0 space-y-2.5 border-b border-border/55 px-3 pb-3">
+          <div class="flex min-w-0 items-center gap-1">
+            <div class="relative min-w-0 flex-1">
+              <button
+                ref="repoMenuAnchorEl"
+                type="button"
+                class="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-muted/60 disabled:opacity-50"
+                :disabled="!projectRoot"
+                :title="selectedRepoLabel"
+                @click.stop="toggleRepoMenu"
+              >
+                <span class="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary"
+                  ><RiFolderOpenLine class="size-4"
+                /></span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[13px] font-semibold text-foreground">{{ repositoryName }}</span>
+                  <span class="block truncate text-[10px] text-muted-foreground" :title="projectRoot || ''">{{
+                    repositoryParent
+                  }}</span>
+                </span>
+                <RiRefreshLine
+                  v-if="repoPickerLoading || reposLoading"
+                  class="size-3.5 shrink-0 animate-spin text-muted-foreground"
+                />
+                <RiArrowDownSLine v-else class="size-3.5 shrink-0 text-muted-foreground" />
+              </button>
+              <OptionMenu
+                :open="repoMenuOpen"
+                :query="repoMenuQuery"
+                :groups="repoMenuGroups"
+                :title="t('git.ui.dialogs.repoPicker.title')"
+                :mobile-title="t('git.ui.dialogs.repoPicker.title')"
+                :is-compact-touch="ui.isCompactTouch"
+                :filter-mode="'external'"
+                :close-on-select="false"
+                :desktop-fixed="true"
+                :desktop-anchor-el="repoMenuAnchorEl"
+                :external-page="repoPickerPage"
+                :external-page-count="repoPickerTotalPages"
+                :external-pager-loading="repoPickerLoading"
+                :loading="repoPickerLoading || reposLoading"
+                :refreshable="true"
+                :on-refresh="refreshRepoMenuOptions"
+                desktop-placement="bottom-start"
+                desktop-class="w-[26rem] max-w-[calc(100vw-1rem)]"
+                @update:open="setRepoMenuOpen"
+                @update:query="onRepoMenuQueryChange"
+                @request-page="requestRepoMenuPage"
+                @select="onRepoMenuSelect"
+              />
+            </div>
+            <SidebarIconButton
+              :tooltip="t('git.navigation.chooseFolder')"
+              :is-touch-pointer="ui.isTouchPointer"
+              @click="chooseDirectory"
+              ><RiFolderOpenLine class="size-3.5"
+            /></SidebarIconButton>
           </div>
-
-          <div v-if="repoDiscoveryTruncated" class="mt-1.5 text-xs text-amber-700 dark:text-amber-300">
+          <div v-if="repoDiscoveryTruncated" class="px-2 text-[11px] text-amber-600 dark:text-amber-300">
             {{ t('git.ui.dialogs.repoPicker.sections.discoveryLimited') }}
           </div>
-          <div v-if="reposError" class="mt-1.5 text-xs text-destructive/90">
-            {{ reposError }}
-          </div>
+          <div v-if="reposError" class="px-2 text-xs whitespace-pre-line text-destructive">{{ reposError }}</div>
+          <div v-if="error" class="px-2 text-xs whitespace-pre-line text-destructive" role="alert">{{ error }}</div>
 
-          <div v-else-if="error" class="mt-1.5 text-xs text-destructive/90 whitespace-pre-line">
-            {{ error }}
-          </div>
-
-          <div v-if="gitReady" class="mt-1.5 flex gap-2">
-            <button
-              type="button"
-              class="rounded-sm px-2 py-1 text-xs hover:bg-sidebar-accent/40"
-              @click="openWorktrees"
-            >
-              {{ t('git.ui.dialogs.worktrees.title') }}
-            </button>
-            <button
-              type="button"
-              class="rounded-sm px-2 py-1 text-xs hover:bg-sidebar-accent/40"
-              @click="openCompareWithBranches"
-            >
-              {{ t('git.ui.dialogs.compare.title') }}
-            </button>
-          </div>
-
-          <div v-if="gitReady" class="mt-1.5">
+          <template v-if="gitReady">
             <div class="relative">
               <button
                 ref="branchMenuAnchorEl"
                 type="button"
-                class="w-full flex items-center gap-1.5 rounded-sm px-1 py-1 text-[11px] transition-colors hover:bg-sidebar-accent/40"
+                class="flex w-full min-w-0 items-center gap-2 rounded-md border border-border/55 bg-background/35 px-2 py-1.5 hover:bg-muted/50 disabled:opacity-50"
                 :disabled="repoBusy"
-                @mousedown.prevent
                 @click.stop="toggleBranchMenu"
               >
-                <RiGitBranchLine class="h-3.5 w-3.5 shrink-0 text-primary" />
-                <span class="min-w-0 flex-1 truncate text-left font-mono text-foreground/90" :title="status?.current">{{
-                  headline
+                <RiGitBranchLine class="size-3.5 shrink-0 text-primary" />
+                <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px]" :title="status?.current">{{
+                  status?.current || 'HEAD'
                 }}</span>
-                <RiArrowDownSLine class="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span
+                  v-if="status?.behind"
+                  class="inline-flex items-center text-[10px] tabular-nums text-muted-foreground"
+                  ><RiArrowDownLine class="size-3" />{{ status.behind }}</span
+                >
+                <span v-if="status?.ahead" class="inline-flex items-center text-[10px] tabular-nums text-primary"
+                  ><RiArrowUpLine class="size-3" />{{ status.ahead }}</span
+                >
+                <RiArrowDownSLine class="size-3.5 shrink-0 text-muted-foreground" />
               </button>
-
               <OptionMenu
                 :open="branchMenuOpen"
                 :query="branchMenuQuery"
@@ -1730,38 +1745,133 @@ void diffPaneRef
                 @select="onBranchMenuSelect"
               />
             </div>
-          </div>
-
-          <div v-if="gitReady" class="mt-1.5 flex items-center gap-1 rounded-sm border border-sidebar-border/60 p-0.5">
-            <button
-              type="button"
-              class="flex-1 rounded-sm px-2 py-1 text-[11px] font-medium transition-colors"
-              :class="
-                sourceControlView === 'changes'
-                  ? 'bg-sidebar-accent/60 text-foreground'
-                  : 'text-muted-foreground hover:bg-sidebar-accent/35 hover:text-foreground'
-              "
-              @click="openChangesView"
-            >
-              {{ t('git.ui.workingTree.sections.changes') }}
-            </button>
-            <button
-              type="button"
-              class="flex-1 rounded-sm px-2 py-1 text-[11px] font-medium transition-colors"
-              :class="
-                sourceControlView !== 'changes'
-                  ? 'bg-sidebar-accent/60 text-foreground'
-                  : 'text-muted-foreground hover:bg-sidebar-accent/35 hover:text-foreground'
-              "
-              @click="openHistoryView"
-            >
-              {{ t('git.ui.dialogs.history.title') }}
-            </button>
-          </div>
+            <div class="grid grid-cols-[1fr_1fr_auto] gap-1.5" :aria-label="t('git.actionsMenu.groups.sync')">
+              <button
+                type="button"
+                class="flex h-8 items-center justify-center gap-1.5 rounded-md border border-border/55 text-xs hover:bg-muted/60 disabled:opacity-45"
+                :disabled="repoBusy"
+                @click="pull"
+              >
+                <RiArrowDownLine class="size-3.5" />{{ t('git.actions.pull')
+                }}<span v-if="status?.behind" class="font-mono text-[10px]">{{ status.behind }}</span>
+              </button>
+              <button
+                type="button"
+                class="flex h-8 items-center justify-center gap-1.5 rounded-md border text-xs disabled:opacity-45"
+                :class="
+                  status?.ahead
+                    ? 'border-primary/25 bg-primary/10 text-primary hover:bg-primary/15'
+                    : 'border-border/55 hover:bg-muted/60'
+                "
+                :disabled="repoBusy"
+                @click="push"
+              >
+                <RiArrowUpLine class="size-3.5" />{{ t('git.actions.push')
+                }}<span v-if="status?.ahead" class="font-mono text-[10px]">{{ status.ahead }}</span>
+              </button>
+              <SidebarIconButton
+                class="h-8 w-8"
+                :tooltip="t('git.actions.fetch')"
+                :is-touch-pointer="ui.isTouchPointer"
+                :disabled="repoBusy"
+                @click="fetchRemote"
+                ><RiRefreshLine class="size-3.5" :class="{ 'animate-spin': repoBusy }"
+              /></SidebarIconButton>
+            </div>
+            <div class="grid grid-cols-4 gap-1" role="group" :aria-label="t('git.sidebar.moreActions')">
+              <button
+                type="button"
+                class="git-shortcut"
+                :disabled="repoBusy"
+                :title="t('git.ui.dialogs.branches.title')"
+                @click="manageBranches"
+              >
+                <RiGitBranchLine class="size-3.5" /><span>{{ t('git.sidebar.branches') }}</span>
+              </button>
+              <button
+                type="button"
+                class="git-shortcut"
+                :disabled="repoBusy"
+                :title="t('git.ui.dialogs.worktrees.title')"
+                @click="openWorktrees"
+              >
+                <RiNodeTree class="size-3.5" /><span>{{ t('git.sidebar.worktrees') }}</span>
+              </button>
+              <button
+                type="button"
+                class="git-shortcut"
+                :disabled="repoBusy"
+                :title="t('git.ui.dialogs.compare.title')"
+                @click="openCompareWithBranches"
+              >
+                <RiGitPullRequestLine class="size-3.5" /><span>{{ t('git.sidebar.compare') }}</span>
+              </button>
+              <button
+                type="button"
+                class="git-shortcut"
+                :title="t('git.sidebar.stashes')"
+                :aria-pressed="isStashExpanded"
+                @click="toggleStashes"
+              >
+                <RiArchiveLine class="size-3.5" /><span
+                  >{{ t('git.sidebar.stashes')
+                  }}<span v-if="stashList?.length" class="ml-1 tabular-nums">{{ stashList.length }}</span></span
+                >
+              </button>
+            </div>
+          </template>
+        </div>
+        <div
+          v-if="gitReady"
+          class="flex h-10 shrink-0 items-stretch gap-4 border-b border-border/55 px-3"
+          role="tablist"
+          :aria-label="t('git.ui.sourceControl')"
+          @keydown="onSourceControlTabKeydown"
+        >
+          <button
+            :id="`${sourceControlId}-changes`"
+            type="button"
+            role="tab"
+            :aria-controls="`${sourceControlId}-panel`"
+            :tabindex="sourceControlView === 'changes' ? 0 : -1"
+            :aria-selected="sourceControlView === 'changes'"
+            class="flex items-center gap-1.5 border-b-2 px-1 text-xs"
+            :class="
+              sourceControlView === 'changes'
+                ? 'border-primary font-medium text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            "
+            @click="openChangesView"
+          >
+            {{ t('git.sidebar.changes')
+            }}<span class="rounded bg-muted px-1.5 text-[10px] tabular-nums">{{ totalChanges }}</span>
+          </button>
+          <button
+            :id="`${sourceControlId}-history`"
+            type="button"
+            role="tab"
+            :aria-controls="`${sourceControlId}-panel`"
+            :tabindex="sourceControlView !== 'changes' ? 0 : -1"
+            :aria-selected="sourceControlView !== 'changes'"
+            class="border-b-2 px-1 text-xs"
+            :class="
+              sourceControlView !== 'changes'
+                ? 'border-primary font-medium text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            "
+            @click="openHistoryView"
+          >
+            {{ t('git.ui.dialogs.history.title') }}
+          </button>
         </div>
 
-        <ScrollArea class="flex-1 min-h-0">
-          <div v-if="sourceControlView === 'changes'" class="space-y-2 p-1.5">
+        <ScrollArea
+          :id="`${sourceControlId}-panel`"
+          class="flex-1 min-h-0"
+          role="tabpanel"
+          :aria-labelledby="`${sourceControlId}-${sourceControlView === 'changes' ? 'changes' : 'history'}`"
+        >
+          <div v-if="sourceControlView === 'changes'" class="space-y-3 px-2 py-3">
             <!-- Commit Section -->
             <div v-if="gitReady" class="space-y-2">
               <div
@@ -1940,6 +2050,12 @@ void diffPaneRef
               <GitCommitBox
                 v-model:message="commitMessage"
                 :committing="committing"
+                :staged-count="stagedCount"
+                :pending-count="changesCount + untrackedCount"
+                :busy="repoBusy || mergeCount > 0"
+                :amend="commitAmend"
+                @stageAll="stageAll"
+                @options="openActionCategory('commit')"
                 :gitmoji-enabled="gitmojiEnabled"
                 :gitmojis="gitmojis"
                 v-model:selectedGitmoji="selectedGitmoji"
@@ -1989,22 +2105,6 @@ void diffPaneRef
             </div>
 
             <div v-if="gitReady" class="space-y-0">
-              <GitStashPanel
-                v-model:expanded="isStashExpanded"
-                :stashes="stashList"
-                :loading="stashLoading"
-                :can-operate="!!repoRoot"
-                :is-touch-pointer="ui.isTouchPointer"
-                :is-mobile-form-factor="ui.isCompactTouch"
-                @openCreate="stashDialogOpen = true"
-                @dropAll="stashDropAll"
-                @view="stashView"
-                @apply="(ref: string) => stashAction('apply', ref)"
-                @pop="(ref: string) => stashAction('pop', ref)"
-                @branch="stashBranchFrom"
-                @drop="(ref: string) => stashAction('drop', ref)"
-              />
-
               <GitMergeChangesSection
                 v-if="mergeCount > 0"
                 v-model:expanded="isMergeExpanded"
@@ -2032,6 +2132,7 @@ void diffPaneRef
               />
 
               <GitStagedChangesSection
+                v-if="stagedCount > 0 || stagedListLoading"
                 v-model:expanded="isStagedExpanded"
                 :count="stagedCount"
                 :files="stagedList"
@@ -2063,6 +2164,7 @@ void diffPaneRef
               />
 
               <GitChangesSection
+                v-if="changesCount > 0 || changesListLoading"
                 v-model:expanded="isChangesExpanded"
                 :count="changesCount"
                 :files="changesList"
@@ -2095,6 +2197,7 @@ void diffPaneRef
               />
 
               <GitUntrackedSection
+                v-if="untrackedCount > 0 || untrackedListLoading"
                 v-model:expanded="isUntrackedExpanded"
                 :count="untrackedCount"
                 :files="untrackedList"
@@ -2123,10 +2226,37 @@ void diffPaneRef
                 @ignore="(p: string) => ignorePath(p)"
                 @showMore="showMoreUntracked"
               />
+              <div
+                v-if="
+                  totalChanges === 0 && !loading && !stagedListLoading && !changesListLoading && !untrackedListLoading
+                "
+                class="flex flex-col items-center gap-2 px-4 py-9 text-center"
+                data-git-clean-state
+              >
+                <RiCheckboxCircleLine class="size-8 text-emerald-500/80" />
+                <span class="text-xs font-medium">{{ t('git.sidebar.clean') }}</span>
+                <span class="text-[11px] text-muted-foreground">{{ t('git.sidebar.cleanDescription') }}</span>
+              </div>
+              <GitStashPanel
+                v-if="isStashExpanded || stashList?.length"
+                v-model:expanded="isStashExpanded"
+                :stashes="stashList"
+                :loading="stashLoading"
+                :can-operate="!!repoRoot"
+                :is-touch-pointer="ui.isTouchPointer"
+                :is-mobile-form-factor="ui.isCompactTouch"
+                @openCreate="stashDialogOpen = true"
+                @dropAll="stashDropAll"
+                @view="stashView"
+                @apply="(ref: string) => stashAction('apply', ref)"
+                @pop="(ref: string) => stashAction('pop', ref)"
+                @branch="stashBranchFrom"
+                @drop="(ref: string) => stashAction('drop', ref)"
+              />
             </div>
           </div>
 
-          <div v-else-if="sourceControlView === 'history'" class="space-y-2 p-1.5">
+          <div v-else-if="sourceControlView === 'history'" class="space-y-3 px-2 py-3">
             <div
               v-if="!projectRoot"
               class="mx-1 rounded-sm border border-sidebar-border/60 bg-sidebar-accent/10 p-3 text-center"
@@ -2275,7 +2405,7 @@ void diffPaneRef
             </template>
           </div>
 
-          <div v-else class="space-y-2 p-1.5">
+          <div v-else class="space-y-3 px-2 py-3">
             <div class="flex items-center justify-between gap-2 rounded-sm border border-sidebar-border/60 px-2 py-1.5">
               <button
                 type="button"
@@ -2636,6 +2766,7 @@ void diffPaneRef
       :repoRoot="repoRoot"
       :is-compact-touch="ui.isCompactTouch"
       :actions-anchor-el="actionsMenuAnchorEl"
+      :initial-category="actionsCategory"
       :committing="committing"
       :commitNoVerify="commitNoVerify"
       :commitSignoff="commitSignoff"
@@ -2901,3 +3032,36 @@ void diffPaneRef
     />
   </div>
 </template>
+
+<style scoped>
+.git-shortcut {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 3px;
+  border-radius: 6px;
+  color: var(--color-muted-foreground);
+  font-size: 10px;
+}
+.git-shortcut > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-shortcut:hover,
+.git-shortcut[aria-pressed='true'] {
+  color: var(--color-foreground);
+  background: var(--color-muted);
+}
+.git-shortcut:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: -2px;
+}
+.git-shortcut:disabled {
+  opacity: 0.45;
+}
+</style>

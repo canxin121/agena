@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import ListItemFrame from '@/components/ui/ListItemFrame.vue'
 import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowActionButton.vue'
 import ListItemSelectionIndicator from '@/components/ui/ListItemSelectionIndicator.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
@@ -50,12 +51,16 @@ const emit = defineEmits<{
 }>()
 
 const hasStat = computed(() => (props.insertions ?? 0) > 0 || (props.deletions ?? 0) > 0)
+const fileName = computed(() => props.path.split(/[\\/]/).pop() || props.path)
+const parentPath = computed(() => props.path.slice(0, props.path.length - fileName.value.length).replace(/[\\/]$/, ''))
 const mobileActionMenuOpen = ref(false)
 const mobileActionMenuQuery = ref('')
+const actionAnchor = ref<HTMLElement | null>(null)
 const isMobileFormFactor = computed(() => Boolean(props.isMobileFormFactor ?? props.isCompactTouch))
 
-const hasMobileActions = computed(
-  () => isMobileFormFactor.value && Array.isArray(props.mobileActionItems) && props.mobileActionItems.length > 0,
+const hasMobileActions = computed(() => Array.isArray(props.mobileActionItems) && props.mobileActionItems.length > 0)
+const primaryAction = computed(() =>
+  props.mobileActionItems.find((item) => item.id === 'stage' || item.id === 'unstage'),
 )
 
 const mobileActionTitleText = computed(
@@ -132,9 +137,11 @@ function handleRowDragStart(event: DragEvent) {
     :primary-attrs="{ 'aria-pressed': showSelection ? selected : undefined }"
     draggable="true"
     :active="active"
-    :action-visibility="hasMobileActions ? 'always' : 'hover'"
-    class="select-none"
+    :action-visibility="isMobileFormFactor ? 'always' : 'hover'"
+    class="git-file-row select-none"
+    :title="path"
     @click="emit('select', $event)"
+    @contextmenu.prevent="openMobileActionMenu"
     @dragstart="handleRowDragStart"
   >
     <template #leading>
@@ -144,30 +151,41 @@ function handleRowDragStart(event: DragEvent) {
       </div>
     </template>
 
-    <div class="flex w-full items-center gap-1.5 min-w-0">
-      <span class="min-w-0 flex-1 truncate typography-ui-label" :title="path">{{ path }}</span>
-      <span v-if="statusLabel" class="oc-vscode-row-status" :class="statusClass">{{ statusLabel }}</span>
+    <div class="flex w-full min-w-0 items-center gap-2">
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-xs text-foreground/90">{{ fileName }}</div>
+        <div v-if="parentPath" class="truncate text-[10px] leading-4 text-muted-foreground/75">{{ parentPath }}</div>
+      </div>
+      <span v-if="statusLabel" class="shrink-0 font-mono text-[10px]" :class="statusClass">{{ statusLabel }}</span>
     </div>
 
     <template #meta>
-      <span v-if="hasStat" class="inline-flex min-w-[9ch] items-center justify-end gap-1 font-mono tabular-nums">
-        <span class="inline-flex min-w-[4ch] justify-end text-emerald-500">
-          {{ (insertions ?? 0) > 0 ? `+${insertions}` : '' }}
-        </span>
-        <span class="inline-flex min-w-[4ch] justify-end text-rose-500">
-          {{ (deletions ?? 0) > 0 ? `-${deletions}` : '' }}
-        </span>
+      <span v-if="hasStat" class="inline-flex items-center justify-end gap-1 font-mono text-[10px] tabular-nums">
+        <span v-if="insertions > 0" class="text-emerald-600 dark:text-emerald-400">+{{ insertions }}</span>
+        <span v-if="deletions > 0" class="text-rose-600 dark:text-rose-400">−{{ deletions }}</span>
       </span>
     </template>
 
     <template #actions>
       <template v-if="hasMobileActions">
-        <ListItemOverflowActionButton
-          data-keyboard-menu
-          mobile
-          :label="mobileActionTitleText"
-          @trigger="handleMobileActionTrigger"
-        />
+        <IconButton
+          v-if="primaryAction && !showSelection && !isMobileFormFactor"
+          size="xs"
+          :title="primaryAction.label"
+          :aria-label="primaryAction.label"
+          :disabled="primaryAction.disabled"
+          @click.stop="emit('mobileAction', primaryAction.id)"
+        >
+          <component :is="primaryAction.icon" class="size-3.5" />
+        </IconButton>
+        <span ref="actionAnchor" class="inline-flex">
+          <ListItemOverflowActionButton
+            data-keyboard-menu
+            :mobile="isMobileFormFactor"
+            :label="mobileActionTitleText"
+            @trigger="handleMobileActionTrigger"
+          />
+        </span>
 
         <OptionMenu
           :open="mobileActionMenuOpen"
@@ -177,6 +195,9 @@ function handleRowDragStart(event: DragEvent) {
           :mobile-title="mobileActionTitleText"
           :searchable="true"
           :is-compact-touch="isMobileFormFactor"
+          :desktop-fixed="true"
+          :desktop-anchor-el="actionAnchor"
+          desktop-placement="bottom-end"
           @update:open="setMobileActionMenuOpen"
           @update:query="(v) => (mobileActionMenuQuery = v)"
           @select="onMobileActionSelect"

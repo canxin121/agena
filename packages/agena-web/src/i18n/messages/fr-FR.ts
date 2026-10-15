@@ -1328,6 +1328,21 @@ export default {
     },
   },
   git: {
+    sidebar: {
+      changes: 'Modifications',
+      stagedHint: '{count} indexés',
+      noStaged: 'Indexez des fichiers pour valider',
+      stageAll: 'Tout indexer',
+      clean: 'Répertoire de travail propre',
+      cleanDescription: 'Vos modifications sont validées.',
+      repository: 'Dépôt',
+      moreActions: 'Autres actions Git',
+      branches: 'Branches',
+      worktrees: 'Arbres de travail',
+      compare: 'Comparer',
+      stashes: 'Remises',
+      backToActions: 'Toutes les actions',
+    },
     navigation: {
       chooseFolder: 'Choisir un dossier',
       scanRepositories: 'Rechercher les dépôts imbriqués',

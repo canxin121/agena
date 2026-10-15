@@ -2011,6 +2011,21 @@ export default {
     },
   },
   git: {
+    sidebar: {
+      changes: 'Changes',
+      stagedHint: '{count} staged',
+      noStaged: 'Stage files to commit',
+      stageAll: 'Stage all',
+      clean: 'Working tree clean',
+      cleanDescription: 'Your changes are committed.',
+      repository: 'Repository',
+      moreActions: 'More Git actions',
+      branches: 'Branches',
+      worktrees: 'Worktrees',
+      compare: 'Compare',
+      stashes: 'Stashes',
+      backToActions: 'Back to all actions',
+    },
     navigation: {
       chooseFolder: 'Choose folder',
       scanRepositories: 'Scan nested repositories',

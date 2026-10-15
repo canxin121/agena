@@ -2315,6 +2315,21 @@ export default {
     }
   },
   "git": {
+    sidebar: {
+      changes: 'Cambios',
+      stagedHint: '{count} preparados',
+      noStaged: 'Prepara archivos para confirmar',
+      stageAll: 'Preparar todo',
+      clean: 'Árbol de trabajo limpio',
+      cleanDescription: 'Tus cambios están confirmados.',
+      repository: 'Repositorio',
+      moreActions: 'Más acciones Git',
+      branches: 'Ramas',
+      worktrees: 'Árboles de trabajo',
+      compare: 'Comparar',
+      stashes: 'Reservas',
+      backToActions: 'Todas las acciones',
+    },
     navigation: {
       chooseFolder: 'Elegir carpeta',
       scanRepositories: 'Buscar repositorios anidados',

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RiArrowLeftLine, RiArrowRightSLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
@@ -13,6 +14,7 @@ const props = defineProps<{
   repoRoot: string | null
   isCompactTouch: boolean
   actionsAnchorEl?: HTMLElement | null
+  initialCategory?: string
   committing: boolean
   commitNoVerify: boolean
   commitSignoff: boolean
@@ -87,6 +89,7 @@ const props = defineProps<{
 
 const actionsOpen = defineModel<boolean>('actionsOpen', { required: true })
 const actionsQuery = ref('')
+const actionsCategory = ref('')
 
 const commitErrorOpen = defineModel<boolean>('commitErrorOpen', { required: true })
 const commitErrorTitle = defineModel<string>('commitErrorTitle', { required: true })
@@ -107,7 +110,8 @@ function closeActionsThen(fn: () => void) {
 }
 
 watch(actionsOpen, (open) => {
-  if (!open) actionsQuery.value = ''
+  actionsQuery.value = ''
+  actionsCategory.value = open ? props.initialCategory || '' : ''
 })
 
 const postCommitDefaultLabel = computed(() => {
@@ -473,9 +477,39 @@ const sourceControlActionGroups = computed<OptionMenuGroup[]>(() => [
   },
 ])
 
+const visibleActionGroups = computed<OptionMenuGroup[]>(() => {
+  // Searching always covers the complete inventory, including less common
+  // operations. Browsing starts with categories instead of dozens of commands.
+  if (actionsQuery.value.trim()) return sourceControlActionGroups.value
+  const selected = sourceControlActionGroups.value.find((group) => group.id === actionsCategory.value)
+  if (selected)
+    return [
+      { id: 'back', items: [{ id: 'category:back', label: t('git.sidebar.backToActions'), icon: RiArrowLeftLine }] },
+      selected,
+    ]
+  return [
+    {
+      id: 'categories',
+      items: sourceControlActionGroups.value.map((group) => ({
+        id: `category:${group.id}`,
+        label: group.title || group.id,
+        description: group.items
+          .slice(0, 3)
+          .map((item) => item.label)
+          .join(' · '),
+        icon: RiArrowRightSLine,
+      })),
+    },
+  ]
+})
+
 function runSourceControlAction(item: OptionMenuItem) {
   const id = String(item.id || '')
   if (!id) return
+  if (id.startsWith('category:')) {
+    actionsCategory.value = id === 'category:back' ? '' : id.slice('category:'.length)
+    return
+  }
 
   if (id === 'commit-no-verify') return closeActionsThen(() => props.setCommitNoVerify(!props.commitNoVerify))
   if (id === 'commit-signoff') return closeActionsThen(() => props.setCommitSignoff(!props.commitSignoff))
@@ -542,7 +576,8 @@ function runSourceControlAction(item: OptionMenuItem) {
   <OptionMenu
     :open="actionsOpen"
     v-model:query="actionsQuery"
-    :groups="sourceControlActionGroups"
+    :groups="visibleActionGroups"
+    :close-on-select="false"
     :title="t('git.ui.sourceControlActions')"
     :mobile-title="t('git.ui.sourceControlActions')"
     :searchable="true"
@@ -552,8 +587,7 @@ function runSourceControlAction(item: OptionMenuItem) {
     :search-placeholder="t('common.searchActions')"
     :empty-text="t('common.noActionsFound')"
     :is-compact-touch="props.isCompactTouch"
-    :paginated="true"
-    :page-size="20"
+    :paginated="false"
     pagination-mode="group"
     :collapsible-groups="true"
     filter-mode="internal"

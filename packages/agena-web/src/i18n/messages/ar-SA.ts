@@ -1410,6 +1410,21 @@ export default {
     },
   },
   git: {
+    sidebar: {
+      changes: 'التغييرات',
+      stagedHint: '{count} مُجهّزة',
+      noStaged: 'جهّز الملفات لإنشاء إيداع',
+      stageAll: 'تجهيز الكل',
+      clean: 'شجرة العمل نظيفة',
+      cleanDescription: 'تم إيداع تغييراتك.',
+      repository: 'المستودع',
+      moreActions: 'إجراءات Git أخرى',
+      branches: 'الفروع',
+      worktrees: 'أشجار العمل',
+      compare: 'مقارنة',
+      stashes: 'المخبّآت',
+      backToActions: 'كل الإجراءات',
+    },
     navigation: {
       chooseFolder: 'اختيار مجلد',
       scanRepositories: 'البحث عن المستودعات المتداخلة',

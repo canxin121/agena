@@ -11,6 +11,6 @@ test('git page view shows core load error message when present', () => {
   assert.match(source, /\brepoBusy,\s*\n\s*loading,\s*\n\s*error,\s*\n\s*status,/m)
 
   // Ensure it is rendered (multiline friendly), so failures like git spawn errors aren't hidden.
-  assert.ok(source.includes('v-else-if="error"'))
+  assert.ok(source.includes('v-if="error"'))
   assert.ok(source.includes('whitespace-pre-line'))
 })

@@ -513,6 +513,21 @@ export default {
     },
   },
   git: {
+    sidebar: {
+      changes: 'बदलाव',
+      stagedHint: '{count} स्टेज किए गए',
+      noStaged: 'कमिट करने के लिए फ़ाइलें स्टेज करें',
+      stageAll: 'सभी स्टेज करें',
+      clean: 'कार्य ट्री साफ़ है',
+      cleanDescription: 'आपके बदलाव कमिट हो गए हैं।',
+      repository: 'रिपॉज़िटरी',
+      moreActions: 'अन्य Git कार्य',
+      branches: 'ब्रांच',
+      worktrees: 'वर्कट्री',
+      compare: 'तुलना',
+      stashes: 'स्टैश',
+      backToActions: 'सभी कार्यों पर वापस जाएँ',
+    },
     navigation: {
       chooseFolder: 'फ़ोल्डर चुनें',
       scanRepositories: 'उपनिर्देशिकाओं में रिपॉज़िटरी खोजें',

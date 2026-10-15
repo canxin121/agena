@@ -2002,6 +2002,21 @@ export default {
     },
   },
   git: {
+    sidebar: {
+      changes: '变更',
+      stagedHint: '已暂存 {count} 个文件',
+      noStaged: '暂存文件后即可提交',
+      stageAll: '全部暂存',
+      clean: '工作区干净',
+      cleanDescription: '所有变更均已提交。',
+      repository: '仓库',
+      moreActions: '更多 Git 操作',
+      branches: '分支',
+      worktrees: '工作树',
+      compare: '对比',
+      stashes: '储藏',
+      backToActions: '返回全部操作',
+    },
     navigation: {
       chooseFolder: '选择文件夹',
       scanRepositories: '扫描子目录中的仓库',
